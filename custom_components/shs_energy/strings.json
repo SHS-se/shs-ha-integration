@@ -1,0 +1,55 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Smart Home Solutions",
+        "description": "Generate a pairing code on your Account page in the SHS customer portal, then enter it here within 10 minutes.",
+        "data": {
+          "pairing_code": "Pairing code",
+          "device_name": "Name for this Home Assistant",
+          "base_url": "Server URL"
+        }
+      }
+    },
+    "error": {
+      "invalid_pairing_code": "The pairing code was not accepted. Codes are single-use and expire after 10 minutes — generate a new one in the portal.",
+      "cannot_connect": "Could not reach the Smart Home Solutions server."
+    },
+    "abort": {
+      "already_configured": "This connection is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Energy category mapping",
+        "description": "Pick the energy sensors (kWh, total_increasing) that belong to each category. Daily totals per category are pushed to your SHS energy history every night.",
+        "data": {
+          "entities_heating": "Heating (radiators, floor heating, heat pump heating)",
+          "entities_hot_water": "Hot water (boiler/water heater)",
+          "entities_cooling": "Comfort cooling",
+          "entities_property_energy": "Property energy (ventilation/FTX, fixed fans, pumps)",
+          "entities_pool_heating": "Pool heating",
+          "entities_ev_charging": "EV charging",
+          "entities_household": "Household (appliances, lighting, electronics)",
+          "entities_grid_import": "Grid import (mains meter, consumption)",
+          "entities_grid_export": "Grid export (sold to grid)",
+          "entities_solar_production": "Solar production",
+          "entities_total_consumption": "Total consumption (whole home)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "subscription": { "name": "Subscription" },
+      "last_push": { "name": "Last push" }
+    }
+  },
+  "issues": {
+    "subscription_inactive": {
+      "title": "Smart Home Solutions subscription inactive",
+      "description": "Your SHS subscription is no longer active, so energy data is not being pushed to your energy history. Renew the subscription in the customer portal to resume."
+    }
+  }
+}
