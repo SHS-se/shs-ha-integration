@@ -23,7 +23,7 @@
     "step": {
       "init": {
         "title": "Energy category mapping",
-        "description": "Pick the energy sensors (kWh, total_increasing) that belong to each category. Daily totals per category are pushed to your SHS energy history every night.",
+        "description": "Pick the energy sensors (kWh, total_increasing) that belong to each category. Grid import is required for automatic network-cost calculations. Daily category totals and monthly calculated costs are pushed to SHS every night.",
         "data": {
           "entities_heating": "Heating (radiators, floor heating, heat pump heating)",
           "entities_hot_water": "Hot water (boiler/water heater)",
@@ -43,6 +43,18 @@
   "entity": {
     "sensor": {
       "subscription": { "name": "Subscription" },
+      "tariff_status": {
+        "name": "Grid tariff",
+        "state": {
+          "configured": "Configured",
+          "not_configured": "Awaiting staff assignment",
+          "missing_grid_import": "Grid import sensor missing",
+          "calculation_error": "Calculation error",
+          "subscription_inactive": "Subscription inactive",
+          "error": "Catalogue error"
+        }
+      },
+      "current_grid_cost": { "name": "Current grid cost" },
       "last_push": { "name": "Last push" }
     }
   },

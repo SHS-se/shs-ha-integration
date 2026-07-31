@@ -29,7 +29,7 @@ class ShsPairingError(ShsApiError):
 
 
 class ShsApiClient:
-    """Minimal async client for pair/status/ingest endpoints."""
+    """Minimal async client for pairing, status, tariff, and ingest endpoints."""
 
     def __init__(
         self,
@@ -98,10 +98,21 @@ class ShsApiClient:
         """Fetch subscription status for the paired customer."""
         return await self._request("GET", "integration-status")
 
+    async def tariff(self) -> dict[str, Any]:
+        """Fetch the staff-assigned, effective-dated tariff catalogue."""
+        return await self._request("GET", "integration-tariff")
+
     async def push_readings(
-        self, readings: list[dict[str, Any]]
+        self,
+        readings: list[dict[str, Any]],
+        calculations: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Push daily category readings; idempotent server-side."""
+        """Push daily readings and monthly calculations; idempotent server-side."""
         return await self._request(
-            "POST", "ha-energy-ingest", json_body={"readings": readings}
+            "POST",
+            "ha-energy-ingest",
+            json_body={
+                "readings": readings,
+                "calculations": calculations or [],
+            },
         )
