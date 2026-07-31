@@ -119,15 +119,24 @@ jobs:
       - name: Install GitHub Copilot CLI
         run: npm install --global @github/copilot
 
+      - name: Build Copilot prompt
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          {
+            cat .github/prompts/release-notes.txt
+            printf '\n\nRelease version: %s\n\n<release-context>\n' "$VERSION"
+            cat release-context.txt
+            printf '\n</release-context>\n'
+          } > copilot-prompt.txt
+
       - name: Generate release notes
         id: release_notes
         uses: actions/ai-inference@v1
         with:
-          prompt-file: .github/prompts/release-notes.prompt.yml
-          input: |
-            version: ${{ steps.version.outputs.version }}
-          file_input: |
-            changes: ./release-context.txt
+          prompt-file: ./copilot-prompt.txt
+          provider: copilot
+          model: gpt-4.1
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
