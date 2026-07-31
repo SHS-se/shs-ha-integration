@@ -2,7 +2,7 @@
 
 Pushes daily energy use, split into energiprestanda categories, from Home
 Assistant to your [Smart Home Solutions](https://prod-smart-home-solutions.pages.dev)
-energy history. It also calculates the customer's assigned electricity-grid
+energy history. It also calculates the centrally published electricity-grid
 tariff locally and sends monthly component totals back to the portal graphs.
 
 ## How it works
@@ -20,17 +20,18 @@ tariff locally and sends monthly component totals back to the portal graphs.
   day's change for each mapped sensor from HA's long-term statistics and
   pushes one reading per category. Pushes are idempotent and missed days are
   backfilled automatically (up to 30 days) after downtime.
-- **Staff-managed tariffs**: SHS staff assign the applicable Ellevio agreement
-  and publish effective-dated rate versions. The integration downloads that
-  assignment automatically; customers do not enter, copy, or maintain tariff
-  terms in Home Assistant.
+- **Staff-managed tariffs**: SHS staff publish one global, effective-dated
+  Ellevio catalogue for every customer. The customer's main fuse and solar
+  status come from their SHS home-profile answers; customers do not select or
+  maintain tariff terms in Home Assistant.
 - **Local cost calculation**: hourly grid import/export statistics stay in Home
   Assistant and are evaluated locally for fixed fees, transfer charges, legacy
   demand peaks, energy tax, VAT, and grid-export credit. Only component-level
   monthly results are returned to the portal. A changed tariff catalogue
-  triggers historical recalculation (up to 400 days).
-- **Subscription aware**: the integration polls subscription status twice a
-  day. If the subscription lapses, pushing pauses and a repair issue appears
+  triggers recalculation from the earliest published version for which HA has
+  recorder statistics.
+- **Subscription aware**: the integration polls subscription and tariff status hourly. If the
+  subscription lapses, pushing pauses and a repair issue appears
   in HA; it clears automatically on renewal.
 
 ## Installation
@@ -54,9 +55,10 @@ directory and restart.
 3. Enter the code (within 10 minutes), then open **Configure** to map your
    sensors to categories.
 
-The integration creates *Subscription*, *Grid tariff*, *Current grid cost*, and
-*Last push* sensors. Tariff assignment remains an SHS staff responsibility;
-the tariff sensor is diagnostic only.
+The integration creates *Subscription*, *Grid tariff*, *Current grid cost*,
+*Last push*, and one monetary sensor for every component found anywhere in the
+published catalogue. Removed components remain as entities with an inactive
+state so Home Assistant retains their history.
 
 ## Notes
 

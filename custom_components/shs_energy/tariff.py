@@ -1,6 +1,6 @@
 """Strict, versioned Swedish grid-tariff calculation engine.
 
-The website owns tariff publication and customer assignment. This module only
+The website owns one global tariff publication timeline. This module only
 accepts the machine-readable contract delivered to a paired device; unknown
 schema versions, models, or rules fail explicitly instead of being guessed.
 """
@@ -16,8 +16,8 @@ import math
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-SCHEMA_VERSION = 1
-CALCULATION_VERSION = 1
+SCHEMA_VERSION = 2
+CALCULATION_VERSION = 2
 CALCULATION_MODEL = "se_grid_v1"
 EXPORT_SCHEDULE = "swedish_winter_weekday_06_22_v1"
 
@@ -31,7 +31,7 @@ class UnsupportedTariffError(TariffError):
 
 
 class MissingTariffError(TariffError):
-    """No unambiguous staff assignment/rate version covers the requested date."""
+    """No unambiguous published rate version covers the requested date."""
 
 
 class MissingTariffInputError(TariffError):
@@ -49,7 +49,7 @@ class HourlyGridReading:
 
 @dataclass(frozen=True)
 class _ResolvedTariff:
-    assignment_id: str
+    profile_id: str
     revision: str
     profile: dict[str, Any]
     version: dict[str, Any]
@@ -58,7 +58,7 @@ class _ResolvedTariff:
 
     @property
     def key(self) -> tuple[str, str]:
-        return (self.assignment_id, self.revision)
+        return (self.profile_id, self.revision)
 
 
 def _as_dict(value: Any, label: str) -> dict[str, Any]:
@@ -145,9 +145,15 @@ class _Catalog:
             ) from err
 
         self.payload = payload
-        assignments = _as_list(payload.get("assignments"), "assignments")
         profiles = _as_list(payload.get("profiles"), "profiles")
-        self.assignments = [_as_dict(value, "assignment") for value in assignments]
+        missing_inputs = _as_list(payload.get("missing_inputs"), "missing_inputs")
+        if any(not isinstance(value, str) or not value for value in missing_inputs):
+            raise UnsupportedTariffError("missing_inputs must contain names")
+        self.missing_inputs = missing_inputs
+        configuration = payload.get("configuration")
+        self.configuration = (
+            None if configuration is None else _as_dict(configuration, "configuration")
+        )
         self.profiles: dict[str, dict[str, Any]] = {}
         for raw_profile in profiles:
             profile = _as_dict(raw_profile, "profile")
@@ -163,36 +169,17 @@ class _Catalog:
 
     def resolve_optional(self, value: date) -> _ResolvedTariff | None:
         """Resolve a date, returning ``None`` when it is outside the catalogue."""
-        assignments: list[dict[str, Any]] = []
-        for assignment in self.assignments:
-            valid_from = _parse_date(
-                assignment.get("valid_from"), "assignment.valid_from"
-            )
-            valid_to_raw = assignment.get("valid_to")
-            valid_to = (
-                None
-                if valid_to_raw is None
-                else _parse_date(valid_to_raw, "assignment.valid_to")
-            )
-            if _date_is_active(value, valid_from, valid_to):
-                assignments.append(assignment)
-
-        if not assignments:
-            return None
-        if len(assignments) > 1:
+        if self.configuration is None:
             raise MissingTariffError(
-                f"expected one tariff assignment on {value.isoformat()}, "
-                f"found {len(assignments)}"
+                "customer tariff inputs missing: " + ", ".join(self.missing_inputs)
             )
-        assignment = assignments[0]
-        assignment_id = assignment.get("id")
-        profile_id = assignment.get("profile_id")
-        if not isinstance(assignment_id, str) or not isinstance(profile_id, str):
-            raise UnsupportedTariffError("tariff assignment identifiers are invalid")
+        profile_id = self.configuration.get("profile_id")
+        if not isinstance(profile_id, str) or not profile_id:
+            raise UnsupportedTariffError("configured tariff profile is missing")
         profile = self.profiles.get(profile_id)
         if profile is None:
             raise UnsupportedTariffError(
-                f"assigned tariff profile {profile_id} is missing"
+                f"configured tariff profile {profile_id} is missing"
             )
 
         versions: list[dict[str, Any]] = []
@@ -224,24 +211,21 @@ class _Catalog:
         if not isinstance(revision, str) or not revision:
             raise UnsupportedTariffError("tariff revision is missing")
         definition = _as_dict(version.get("definition"), "tariff definition")
-        if definition.get("schema_version") != SCHEMA_VERSION:
+        if definition.get("schema_version") != 1:
             raise UnsupportedTariffError(
                 f"unsupported definition schema {definition.get('schema_version')!r}"
             )
-        configuration = _as_dict(
-            assignment.get("configuration"), "tariff configuration"
-        )
         return _ResolvedTariff(
-            assignment_id=assignment_id,
+            profile_id=profile_id,
             revision=revision,
             profile=profile,
             version=version,
-            configuration=configuration,
+            configuration=self.configuration,
             definition=definition,
         )
 
     def resolve(self, value: date) -> _ResolvedTariff:
-        """Resolve a date or fail when it is outside the assigned catalogue."""
+        """Resolve a date or fail when it is outside the published catalogue."""
         resolved = self.resolve_optional(value)
         if resolved is None:
             raise MissingTariffError(f"no tariff covers {value.isoformat()}")
@@ -256,6 +240,53 @@ def validate_tariff_catalog(payload: dict[str, Any]) -> None:
 def tariff_timezone(payload: dict[str, Any]) -> ZoneInfo:
     """Return the contract timezone after validating the catalogue envelope."""
     return _Catalog(_as_dict(payload, "tariff payload")).timezone
+
+
+def earliest_tariff_date(payload: dict[str, Any]) -> date | None:
+    """Return the first globally published effective date."""
+    catalog = _Catalog(_as_dict(payload, "tariff payload"))
+    dates = [
+        _parse_date(version.get("valid_from"), "version.valid_from")
+        for profile in catalog.profiles.values()
+        for version in _as_list(profile.get("versions"), "profile versions")
+    ]
+    return min(dates) if dates else None
+
+
+def tariff_component_definitions(payload: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """Return every stable component key present anywhere in the catalogue."""
+    catalog = _Catalog(_as_dict(payload, "tariff payload"))
+    result: dict[str, dict[str, str]] = {}
+    for profile in catalog.profiles.values():
+        for raw_version in _as_list(profile.get("versions"), "profile versions"):
+            version = _as_dict(raw_version, "tariff version")
+            definition = _as_dict(version.get("definition"), "tariff definition")
+            result.update({
+                "fixed_grid_fee": {"label": "Fixed grid fee", "category": "fixed_fee"},
+                "grid_energy_transfer": {"label": "Grid energy transfer", "category": "energy_transfer"},
+                "energy_tax": {"label": "Swedish energy tax", "category": "energy_tax"},
+            })
+            plans = _as_dict(definition.get("plans"), "plans")
+            if any(
+                _as_dict(plan, "plan").get("demand") is not None
+                for plan in plans.values()
+            ):
+                result["peak_demand_fee"] = {
+                    "label": "Peak-demand fee",
+                    "category": "peak_demand",
+                }
+            if definition.get("export_credit") is not None:
+                result["export_credit_high"] = {
+                    "label": "Grid export credit (high load)",
+                    "category": "export_credit",
+                }
+                result["export_credit_low"] = {
+                    "label": "Grid export credit (low load)",
+                    "category": "export_credit",
+                }
+            if definition.get("vat_rate") is not None:
+                result["vat"] = {"label": "VAT", "category": "vat"}
+    return result
 
 
 def _expected_utc_hours(local_day: date, tariff_timezone: ZoneInfo) -> set[datetime]:
@@ -472,6 +503,7 @@ def _is_high_load_hour(local_start: datetime, schedule: Any) -> bool:
 
 
 def _component(
+    component_key: str,
     category: str,
     label: str,
     amount: float,
@@ -483,6 +515,7 @@ def _component(
     revision: str,
 ) -> dict[str, Any]:
     return {
+        "component_key": component_key,
         "category": category,
         "label": label,
         "amount_sek": _money(amount),
@@ -555,7 +588,7 @@ def calculate_month(
     ]
     if missing_internal:
         raise MissingTariffError(
-            f"tariff assignment has a gap on {missing_internal[0].isoformat()}"
+            f"tariff catalogue has a gap on {missing_internal[0].isoformat()}"
         )
     normalized = [
         reading
@@ -606,6 +639,7 @@ def calculate_month(
         fixed_fraction = len(days) / days_in_month
         group_components = [
             _component(
+                "fixed_grid_fee",
                 "fixed_fee",
                 "Fixed grid fee",
                 fixed_rate * fixed_fraction,
@@ -621,6 +655,7 @@ def calculate_month(
         transfer_rate = _transfer_rate(plan, selector_value)
         group_components.append(
             _component(
+                "grid_energy_transfer",
                 "energy_transfer",
                 "Grid energy transfer",
                 import_kwh * transfer_rate,
@@ -643,6 +678,7 @@ def calculate_month(
             peak_demand_values.append(demand_kw)
             group_components.append(
                 _component(
+                    "peak_demand_fee",
                     "peak_demand",
                     "Peak-demand fee",
                     demand_kw * demand_rate,
@@ -668,6 +704,7 @@ def calculate_month(
         tax_rate = max(0.0, tax_rate_ore / 100)
         group_components.append(
             _component(
+                "energy_tax",
                 "energy_tax",
                 "Swedish energy tax",
                 import_kwh * tax_rate,
@@ -709,6 +746,7 @@ def calculate_month(
                 credit_rate = _number(rates.get(band), f"export {band} rate") / 100
                 group_components.append(
                     _component(
+                        f"export_credit_{band}",
                         "export_credit",
                         f"Grid export credit ({band} load)",
                         -quantity * credit_rate,
@@ -744,6 +782,7 @@ def calculate_month(
                 )
             group_components.append(
                 _component(
+                    "vat",
                     "vat",
                     "VAT",
                     taxable * vat_rate,

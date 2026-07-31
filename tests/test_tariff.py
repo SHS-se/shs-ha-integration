@@ -12,8 +12,10 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_en
 
 from tariff import (  # noqa: E402
     HourlyGridReading,
+    MissingTariffError,
     UnsupportedTariffError,
     calculate_month,
+    tariff_component_definitions,
 )
 
 TZ = ZoneInfo("Europe/Stockholm")
@@ -89,18 +91,11 @@ def definition(
 
 def catalog(configuration: dict) -> dict:
     return {
-        "schema_version": 1,
-        "calculation_version": 1,
+        "schema_version": 2,
+        "calculation_version": 2,
         "timezone": "Europe/Stockholm",
-        "assignments": [
-            {
-                "id": "assignment",
-                "profile_id": "profile",
-                "valid_from": "2025-01-01",
-                "valid_to": None,
-                "configuration": configuration,
-            }
-        ],
+        "configuration": {"profile_id": "profile", **configuration},
+        "missing_inputs": [],
         "profiles": [
             {
                 "id": "profile",
@@ -222,7 +217,9 @@ class TariffCalculationTests(unittest.TestCase):
         result = calculate_month(catalog(config()), readings, date(2025, 1, 1))
 
         self.assertEqual(result["peak_demand_kw"], 7)
-        self.assertEqual(components(result, "peak_demand")[0]["amount_sek"], 455)
+        demand_component = components(result, "peak_demand")[0]
+        self.assertEqual(demand_component["component_key"], "peak_demand_fee")
+        self.assertEqual(demand_component["amount_sek"], 455)
         self.assertEqual(result["tariff_revisions"], ["ellevio-2025-01-01"])
 
     def test_june_2026_single_phase_selector_rate_has_no_demand(self) -> None:
@@ -293,9 +290,11 @@ class TariffCalculationTests(unittest.TestCase):
         self.assertEqual(result["coverage_start"], "2026-03-29")
         self.assertEqual(result["coverage_end"], "2026-03-29")
 
-    def test_first_assignment_can_start_partway_through_a_month(self) -> None:
+    def test_first_version_can_start_partway_through_a_month(self) -> None:
         payload = catalog(config())
-        payload["assignments"][0]["valid_from"] = "2026-06-15"
+        version = payload["profiles"][0]["versions"][-1]
+        version["valid_from"] = "2026-06-15"
+        payload["profiles"][0]["versions"] = [version]
         readings = hourly_readings(date(2026, 6, 1), date(2026, 6, 16))
         result = calculate_month(payload, readings, date(2026, 6, 1))
 
@@ -303,9 +302,22 @@ class TariffCalculationTests(unittest.TestCase):
         self.assertEqual(result["coverage_end"], "2026-06-16")
         self.assertEqual(components(result, "fixed_fee")[0]["amount_sek"], 24)
 
+    def test_component_keys_include_historical_demand(self) -> None:
+        definitions = tariff_component_definitions(catalog(config()))
+        self.assertIn("peak_demand_fee", definitions)
+        self.assertIn("grid_energy_transfer", definitions)
+
+    def test_missing_questionnaire_input_fails_explicitly(self) -> None:
+        payload = catalog(config())
+        payload["configuration"] = None
+        payload["missing_inputs"] = ["main_fuse_a"]
+        day = date(2026, 6, 1)
+        with self.assertRaises(MissingTariffError):
+            calculate_month(payload, hourly_readings(day, day), day)
+
     def test_unknown_schema_fails_instead_of_guessing(self) -> None:
         payload = catalog(config())
-        payload["schema_version"] = 2
+        payload["schema_version"] = 3
         day = date(2026, 6, 1)
         with self.assertRaises(UnsupportedTariffError):
             calculate_month(payload, hourly_readings(day, day), day)

@@ -33,6 +33,24 @@ async def async_setup_entry(
             ShsLastPushSensor(coordinator),
         ]
     )
+    added_component_keys: set[str] = set()
+
+    def add_component_entities() -> None:
+        new_keys = sorted(set(coordinator.tariff_components) - added_component_keys)
+        if not new_keys:
+            return
+        async_add_entities([
+            ShsTariffComponentSensor(
+                coordinator,
+                key,
+                coordinator.tariff_components[key],
+            )
+            for key in new_keys
+        ])
+        added_component_keys.update(new_keys)
+
+    add_component_entities()
+    entry.async_on_unload(coordinator.async_add_listener(add_component_entities))
 
 
 class ShsBaseSensor(CoordinatorEntity[ShsStatusCoordinator], SensorEntity):
@@ -111,10 +129,66 @@ class ShsTariffStatusSensor(ShsBaseSensor):
             if version.get("revision")
         ]
         return {
-            "assignments": len(catalog.get("assignments", [])),
+            "configuration_ready": catalog.get("configuration") is not None,
+            "missing_inputs": catalog.get("missing_inputs", []),
             "revisions": revisions,
             "last_error": self.coordinator.last_tariff_error,
             "last_calculation_error": self.coordinator.last_calculation_error,
+        }
+
+
+class ShsTariffComponentSensor(ShsBaseSensor):
+    """Monthly amount for one stable Ellevio tariff component."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "SEK"
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_entity_category = None
+    _attr_suggested_display_precision = 2
+
+    def __init__(
+        self,
+        coordinator: ShsStatusCoordinator,
+        component_key: str,
+        definition: dict[str, str],
+    ) -> None:
+        super().__init__(coordinator)
+        self.component_key = component_key
+        self.definition = definition
+        self._attr_name = definition["label"]
+        self._attr_unique_id = (
+            f"{coordinator.entry.entry_id}_tariff_component_{component_key}"
+        )
+
+    def _components(self) -> list[dict[str, Any]]:
+        calculation = self.coordinator.latest_calculation or {}
+        return [
+            component
+            for component in calculation.get("components", [])
+            if component.get("component_key") == self.component_key
+        ]
+
+    @property
+    def native_value(self) -> float | None:
+        calculation = self.coordinator.latest_calculation
+        if calculation is None:
+            return None
+        return round(sum(float(value["amount_sek"]) for value in self._components()), 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        calculation = self.coordinator.latest_calculation or {}
+        components = self._components()
+        return {
+            "component_key": self.component_key,
+            "category": self.definition["category"],
+            "active": bool(components),
+            "billing_month": calculation.get("billing_month"),
+            "coverage_start": calculation.get("coverage_start"),
+            "coverage_end": calculation.get("coverage_end"),
+            "is_complete": calculation.get("is_complete"),
+            "tariff_revisions": calculation.get("tariff_revisions"),
+            "details": components,
         }
 
 

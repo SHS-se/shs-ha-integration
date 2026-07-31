@@ -99,7 +99,7 @@ class ShsApiClient:
         return await self._request("GET", "integration-status")
 
     async def tariff(self) -> dict[str, Any]:
-        """Fetch the staff-assigned, effective-dated tariff catalogue."""
+        """Fetch the global catalogue and questionnaire-derived home inputs."""
         return await self._request("GET", "integration-tariff")
 
     async def push_readings(

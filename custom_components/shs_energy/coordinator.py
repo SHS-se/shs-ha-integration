@@ -33,12 +33,13 @@ from .const import (
     STATUS_POLL_INTERVAL_HOURS,
     STORAGE_KEY_TEMPLATE,
     STORAGE_VERSION,
-    TARIFF_BACKFILL_MAX_DAYS,
 )
 from .tariff import (
     HourlyGridReading,
     TariffError,
     calculate_month,
+    earliest_tariff_date,
+    tariff_component_definitions,
     tariff_timezone,
     validate_tariff_catalog,
 )
@@ -70,6 +71,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_tariff_error: str | None = None
         self.last_calculation_error: str | None = None
         self.latest_calculation: dict[str, Any] | None = None
+        self.tariff_components: dict[str, dict[str, str]] = {}
         self._push_lock = asyncio.Lock()
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, STORAGE_KEY_TEMPLATE.format(entry_id=entry.entry_id)
@@ -87,6 +89,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._sync_subscription_issue(active)
         if not active:
             self.tariff_catalog = None
+            self.tariff_components = {}
             self.tariff_status = "subscription_inactive"
             self.last_tariff_error = None
             return status
@@ -96,19 +99,22 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             validate_tariff_catalog(catalog)
         except ShsSubscriptionInactiveError:
             self.tariff_catalog = None
+            self.tariff_components = {}
             self.tariff_status = "subscription_inactive"
             self.last_tariff_error = "subscription_inactive"
             self._sync_subscription_issue(False)
         except (ShsApiError, TariffError) as err:
             self.tariff_catalog = None
+            self.tariff_components = {}
             self.tariff_status = "error"
             self.last_tariff_error = str(err)
             _LOGGER.warning("Tariff catalogue refresh failed: %s", err)
         else:
             self.tariff_catalog = catalog
+            self.tariff_components = tariff_component_definitions(catalog)
             self.last_tariff_error = None
-            if not catalog.get("assignments"):
-                self.tariff_status = "not_configured"
+            if catalog.get("configuration") is None:
+                self.tariff_status = "missing_customer_input"
             elif not self._configured_entities().get("grid_import"):
                 self.tariff_status = "missing_grid_import"
             else:
@@ -235,8 +241,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if catalog is None:
             return [], None, False
         catalog_hash = self._catalog_hash(catalog)
-        if not catalog.get("assignments"):
-            self.tariff_status = "not_configured"
+        if catalog.get("configuration") is None:
+            self.tariff_status = "missing_customer_input"
+            self.last_calculation_error = ", ".join(catalog.get("missing_inputs", []))
             return [], catalog_hash, True
         if not entities_by_category.get("grid_import"):
             self.tariff_status = "missing_grid_import"
@@ -246,25 +253,23 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             tariff_tz = tariff_timezone(catalog)
             yesterday = datetime.now(tariff_tz).date() - timedelta(days=1)
-            earliest_assignment = min(
-                date.fromisoformat(str(value["valid_from"]))
-                for value in catalog["assignments"]
-            )
+            first_published = earliest_tariff_date(catalog)
+            if first_published is None:
+                self.tariff_status = "not_configured"
+                self.last_calculation_error = "no_published_tariff_versions"
+                return [], catalog_hash, True
         except (KeyError, TypeError, ValueError, TariffError) as err:
             self.tariff_status = "calculation_error"
             self.last_calculation_error = str(err)
             return [], catalog_hash, True
-        if earliest_assignment > yesterday:
+        if first_published > yesterday:
             self.last_calculation_error = None
             self.tariff_status = "configured"
             return [], catalog_hash, True
 
         catalog_changed = stored.get("tariff_catalog_hash") != catalog_hash
         if catalog_changed:
-            first_affected = max(
-                earliest_assignment,
-                yesterday - timedelta(days=TARIFF_BACKFILL_MAX_DAYS - 1),
-            )
+            first_affected = first_published
         else:
             first_affected = yesterday - timedelta(days=max(1, days_back) - 1)
         query_start_date = date(first_affected.year, first_affected.month, 1)

@@ -47,7 +47,8 @@
         "name": "Grid tariff",
         "state": {
           "configured": "Configured",
-          "not_configured": "Awaiting staff assignment",
+          "not_configured": "No published tariff",
+          "missing_customer_input": "Home profile answer required",
           "missing_grid_import": "Grid import sensor missing",
           "calculation_error": "Calculation error",
           "subscription_inactive": "Subscription inactive",
