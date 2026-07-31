@@ -28,6 +28,7 @@ from .const import (
     BACKFILL_MAX_DAYS,
     CATEGORIES,
     DOMAIN,
+    ISSUE_MISSING_CUSTOMER_INPUT,
     ISSUE_SUBSCRIPTION_INACTIVE,
     OPT_PREFIX_ENTITIES,
     STATUS_POLL_INTERVAL_HOURS,
@@ -39,6 +40,7 @@ from .tariff import (
     TariffError,
     calculate_month,
     earliest_tariff_date,
+    missing_input_labels,
     tariff_component_definitions,
     tariff_timezone,
     validate_tariff_catalog,
@@ -68,6 +70,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_push_error: str | None = None
         self.tariff_catalog: dict[str, Any] | None = None
         self.tariff_status = "not_configured"
+        self.missing_questions: list[str] = []
         self.last_tariff_error: str | None = None
         self.last_calculation_error: str | None = None
         self.latest_calculation: dict[str, Any] | None = None
@@ -92,6 +95,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.tariff_components = {}
             self.tariff_status = "subscription_inactive"
             self.last_tariff_error = None
+            self.missing_questions = []
+            self._sync_missing_input_issue()
             return status
 
         try:
@@ -115,11 +120,34 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.last_tariff_error = None
             if catalog.get("configuration") is None:
                 self.tariff_status = "missing_customer_input"
+                self.missing_questions = missing_input_labels(
+                    catalog, self.hass.config.language
+                )
             elif not self._configured_entities().get("grid_import"):
                 self.tariff_status = "missing_grid_import"
+                self.missing_questions = []
             else:
                 self.tariff_status = "configured"
+                self.missing_questions = []
+            self._sync_missing_input_issue()
         return status
+
+    def _sync_missing_input_issue(self) -> None:
+        """Raise or clear the repair issue naming the unanswered questions."""
+        if not self.missing_questions:
+            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_MISSING_CUSTOMER_INPUT)
+            return
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            ISSUE_MISSING_CUSTOMER_INPUT,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_MISSING_CUSTOMER_INPUT,
+            translation_placeholders={
+                "questions": "\n".join(f"- {q}" for q in self.missing_questions)
+            },
+        )
 
     def _sync_subscription_issue(self, active: bool) -> None:
         """Raise or clear the subscription repair issue."""
@@ -154,11 +182,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Read non-negative recorder changes with UTC-aware timestamps."""
         if not entity_ids:
             return {}
+        end_utc = dt_util.as_utc(end)
         stats = await get_instance(self.hass).async_add_executor_job(
             statistics_during_period,
             self.hass,
             dt_util.as_utc(start),
-            dt_util.as_utc(end),
+            end_utc,
             set(entity_ids),
             period,
             {"energy": "kWh"},
@@ -177,6 +206,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     start_utc = start_value.astimezone(timezone.utc)
                 else:
                     start_utc = dt_util.utc_from_timestamp(float(start_value))
+                # The recorder returns the bucket that starts exactly on end,
+                # so the still-running current day/hour would otherwise be
+                # pushed as if it were complete. Keep the window half-open.
+                if start_utc >= end_utc:
+                    continue
                 values.append((start_utc, float(change)))
             result[entity_id] = values
         return result
@@ -243,7 +277,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         catalog_hash = self._catalog_hash(catalog)
         if catalog.get("configuration") is None:
             self.tariff_status = "missing_customer_input"
-            self.last_calculation_error = ", ".join(catalog.get("missing_inputs", []))
+            self.last_calculation_error = "; ".join(
+                missing_input_labels(catalog, self.hass.config.language)
+            )
             return [], catalog_hash, True
         if not entities_by_category.get("grid_import"):
             self.tariff_status = "missing_grid_import"

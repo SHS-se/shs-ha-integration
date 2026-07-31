@@ -60,6 +60,10 @@
     }
   },
   "issues": {
+    "missing_customer_input": {
+      "title": "Home profile answer required",
+      "description": "Grid costs cannot be calculated until these home profile questions are answered in the Smart Home Solutions customer portal:\n\n{questions}\n\nOpen the portal, go to Home profile, answer them and save. This integration picks it up within the hour, or immediately if you reload it."
+    },
     "subscription_inactive": {
       "title": "Smart Home Solutions subscription inactive",
       "description": "Your SHS subscription is no longer active, so energy data is not being pushed to your energy history. Renew the subscription in the customer portal to resume."

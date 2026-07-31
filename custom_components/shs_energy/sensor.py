@@ -131,6 +131,7 @@ class ShsTariffStatusSensor(ShsBaseSensor):
         return {
             "configuration_ready": catalog.get("configuration") is not None,
             "missing_inputs": catalog.get("missing_inputs", []),
+            "missing_questions": self.coordinator.missing_questions,
             "revisions": revisions,
             "last_error": self.coordinator.last_tariff_error,
             "last_calculation_error": self.coordinator.last_calculation_error,

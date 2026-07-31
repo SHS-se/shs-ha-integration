@@ -42,3 +42,4 @@ PUSH_TIME_MINUTE = 20
 BACKFILL_MAX_DAYS = 30
 
 ISSUE_SUBSCRIPTION_INACTIVE = "subscription_inactive"
+ISSUE_MISSING_CUSTOMER_INPUT = "missing_customer_input"

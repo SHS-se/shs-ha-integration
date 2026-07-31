@@ -72,9 +72,11 @@ class ShsApiClient:
                 if resp.status == 402:
                     raise ShsSubscriptionInactiveError("subscription_inactive")
                 if resp.status >= 400:
-                    raise ShsApiError(
-                        f"{path} failed: {resp.status} {payload.get('error', '')}"
-                    )
+                    # The server names the offending value in `detail`; without
+                    # it a rejected batch gives no clue which row was at fault.
+                    message = f"{path} failed: {resp.status} {payload.get('error', '')}"
+                    detail = payload.get("detail")
+                    raise ShsApiError(f"{message} ({detail})" if detail else message)
                 return payload
         except aiohttp.ClientError as err:
             raise ShsApiError(f"connection error calling {path}: {err}") from err

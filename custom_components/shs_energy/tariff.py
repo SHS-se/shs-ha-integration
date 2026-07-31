@@ -242,6 +242,44 @@ def tariff_timezone(payload: dict[str, Any]) -> ZoneInfo:
     return _Catalog(_as_dict(payload, "tariff payload")).timezone
 
 
+# Only used when the server sends no question text (older backend, or an input
+# that is not a home-profile question at all).
+_MISSING_INPUT_FALLBACKS = {
+    "main_fuse_a": "Main fuse size",
+    "has_solar": "Solar panels",
+    "central_tariff_settings": "Tariff catalogue not published yet",
+}
+
+
+def missing_input_labels(payload: dict[str, Any], language: str = "en") -> list[str]:
+    """Return readable names for the unanswered home-profile questions."""
+    details = payload.get("missing_input_details")
+    if isinstance(details, list) and details:
+        labels: list[str] = []
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            key = detail.get("key")
+            preferred = "question_sv" if language.startswith("sv") else "question_en"
+            text = detail.get(preferred) or detail.get("question_en") or detail.get(
+                "question_sv"
+            )
+            if isinstance(text, str) and text:
+                labels.append(text)
+            elif isinstance(key, str) and key:
+                labels.append(_MISSING_INPUT_FALLBACKS.get(key, key))
+        if labels:
+            return labels
+    keys = payload.get("missing_inputs")
+    if not isinstance(keys, list):
+        return []
+    return [
+        _MISSING_INPUT_FALLBACKS.get(key, key)
+        for key in keys
+        if isinstance(key, str) and key
+    ]
+
+
 def earliest_tariff_date(payload: dict[str, Any]) -> date | None:
     """Return the first globally published effective date."""
     catalog = _Catalog(_as_dict(payload, "tariff payload"))

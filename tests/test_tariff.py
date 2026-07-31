@@ -15,6 +15,7 @@ from tariff import (  # noqa: E402
     MissingTariffError,
     UnsupportedTariffError,
     calculate_month,
+    missing_input_labels,
     tariff_component_definitions,
 )
 
@@ -321,6 +322,41 @@ class TariffCalculationTests(unittest.TestCase):
         day = date(2026, 6, 1)
         with self.assertRaises(UnsupportedTariffError):
             calculate_month(payload, hourly_readings(day, day), day)
+
+
+class MissingInputLabelTests(unittest.TestCase):
+    def test_server_question_text_is_preferred_over_the_key(self) -> None:
+        payload = {
+            "missing_inputs": ["has_solar"],
+            "missing_input_details": [
+                {
+                    "key": "has_solar",
+                    "question_sv": "Finns det solceller på bostaden?",
+                    "question_en": "Does the home have solar panels?",
+                }
+            ],
+        }
+        self.assertEqual(
+            missing_input_labels(payload, "en"), ["Does the home have solar panels?"]
+        )
+        self.assertEqual(
+            missing_input_labels(payload, "sv"), ["Finns det solceller på bostaden?"]
+        )
+
+    def test_older_server_without_details_still_reads_usefully(self) -> None:
+        self.assertEqual(
+            missing_input_labels({"missing_inputs": ["main_fuse_a"]}),
+            ["Main fuse size"],
+        )
+
+    def test_unknown_key_falls_back_to_the_key_itself(self) -> None:
+        self.assertEqual(
+            missing_input_labels({"missing_inputs": ["something_new"]}),
+            ["something_new"],
+        )
+
+    def test_nothing_missing_yields_no_labels(self) -> None:
+        self.assertEqual(missing_input_labels({}), [])
 
 
 if __name__ == "__main__":
