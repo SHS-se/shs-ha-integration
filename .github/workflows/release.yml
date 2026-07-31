@@ -67,10 +67,10 @@ jobs:
 
       - name: Require Copilot access
         env:
-          COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          if [[ -z "$COPILOT_PAT" ]]; then
-            echo "::error title=Missing secret::Add a COPILOT_PAT repository secret with Copilot Requests permission."
+          if [[ -z "$RELEASE_TOKEN" ]]; then
+            echo "::error title=Missing secret::Add a RELEASE_TOKEN repository secret with Copilot Requests permission."
             exit 1
           fi
 
@@ -129,7 +129,7 @@ jobs:
           file_input: |
             changes: ./release-context.txt
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Prepare release notes
         env:

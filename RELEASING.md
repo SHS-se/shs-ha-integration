@@ -6,7 +6,7 @@ not create release tags manually.
 
 ## One-time setup
 
-Add a repository Actions secret named `COPILOT_PAT`. Its value must be a
+Add a repository Actions secret named `RELEASE_TOKEN`. Its value must be a
 fine-grained GitHub personal access token with the **Copilot Requests**
 permission.
 
