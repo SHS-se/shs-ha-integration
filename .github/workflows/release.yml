@@ -131,19 +131,19 @@ jobs:
           } > copilot-prompt.txt
 
       - name: Generate release notes
-        id: release_notes
-        uses: actions/ai-inference@v1
-        with:
-          prompt-file: ./copilot-prompt.txt
-          provider: copilot
-          model: gpt-4.1
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          copilot -p "$(cat copilot-prompt.txt)" \
+            -s \
+            --no-ask-user \
+            --no-custom-instructions \
+            > release-notes.generated.md
 
       - name: Prepare release notes
         env:
           CHANGELOG_URL: ${{ steps.context.outputs.changelog_url }}
-          RESPONSE_FILE: ${{ steps.release_notes.outputs.response-file }}
+          RESPONSE_FILE: release-notes.generated.md
         run: |
           if [[ ! -s "$RESPONSE_FILE" ]]; then
             echo "::error title=Empty release notes::Copilot returned no release notes."
