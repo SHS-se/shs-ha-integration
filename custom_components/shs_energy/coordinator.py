@@ -330,9 +330,22 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 1,
             )
 
+        # The catalogue reaches further back than any home's recorder history,
+        # so months from before this home started logging are simply out of
+        # range. Skipping them keeps the status clean instead of reporting a
+        # calculation error for every month the customer was never metered.
+        months_with_data = {
+            (local.year, local.month)
+            for local in (
+                reading.start.astimezone(tariff_tz) for reading in readings
+            )
+        }
+
         calculations: list[dict[str, Any]] = []
         errors: list[str] = []
         for month in months:
+            if (month.year, month.month) not in months_with_data:
+                continue
             try:
                 calculations.append(calculate_month(catalog, readings, month))
             except TariffError as err:
