@@ -46,10 +46,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="$(python -c 'import json; print(json.load(open("custom_components/shs_energy/manifest.json", encoding="utf-8"))["version"])')"
+          current="$(python -c 'import json; print(json.load(open("custom_components/shs_energy/manifest.json", encoding="utf-8"))["version"])')"
 
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error title=Invalid version::$version is not a supported semantic version."
+          # This workflow only ever publishes stable versions, so any beta
+          # suffix left behind by the Beta workflow is dropped: 0.4.0-beta.3
+          # releases as 0.4.0. Cutting the next series is a manifest bump.
+          version="${current%%-*}"
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Invalid version::$current has no usable X.Y.Z base."
             exit 1
           fi
 
@@ -63,17 +68,8 @@ jobs:
             exit 1
           fi
 
-          # A suffix (0.4.0-rc.1) publishes a GitHub pre-release, which HACS
-          # only offers to installs that opted into beta versions for this
-          # repository. A bare 0.4.0 publishes the stable release.
-          if [[ "$version" == *-* ]]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "Publishing $version as a pre-release." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
-
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "changed=$([[ "$current" == "$version" ]] && echo false || echo true)" >> "$GITHUB_OUTPUT"
 
       - name: Require Copilot access
         env:
@@ -164,24 +160,48 @@ jobs:
           printf '\n\n**Full Changelog**: %s\n' "$CHANGELOG_URL" >> release-notes.md
           cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Drop the beta suffix from the manifest
+        id: commit
+        if: steps.version.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+
+          path = "custom_components/shs_energy/manifest.json"
+          version = os.environ["VERSION"]
+          with open(path, encoding="utf-8") as handle:
+              text = handle.read()
+          updated, count = re.subn(
+              r'("version":\s*)"[^"]*"', rf'\1"{version}"', text, count=1
+          )
+          if count != 1:
+              raise SystemExit(f"could not find a version field in {path}")
+          with open(path, "w", encoding="utf-8") as handle:
+              handle.write(updated)
+          json.loads(updated)
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/shs_energy/manifest.json
+          git commit -m "Release $VERSION"
+          git push origin "HEAD:$GITHUB_REF_NAME"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          TARGET: ${{ steps.commit.outputs.sha || github.sha }}
         run: |
-          # No --fail-on-no-commits: promoting a tested release candidate to
-          # its stable version adds no commits, and that is the normal path.
-          if [[ "$PRERELEASE" == "true" ]]; then
-            gh release create "$VERSION" \
-              --target "$GITHUB_SHA" \
-              --title "$VERSION" \
-              --notes-file release-notes.md \
-              --prerelease
-          else
-            gh release create "$VERSION" \
-              --target "$GITHUB_SHA" \
-              --title "$VERSION" \
-              --notes-file release-notes.md \
-              --latest
-          fi
+          # No --fail-on-no-commits: promoting a tested beta to its stable
+          # version need not add commits, and that is the normal path.
+          gh release create "$VERSION" \
+            --target "$TARGET" \
+            --title "$VERSION" \
+            --notes-file release-notes.md \
+            --latest

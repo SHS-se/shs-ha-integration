@@ -1,43 +1,42 @@
 # Releasing
 
-The integration version in
-`custom_components/shs_energy/manifest.json` is the release source of truth. Do
-not create release tags manually.
+The integration version in `custom_components/shs_energy/manifest.json` is the
+release source of truth. Do not create release tags manually.
+
+Two workflows publish from that number, and both run the full test suite first:
+
+| Workflow    | Publishes                    | Visible to                          |
+| ----------- | ---------------------------- | ----------------------------------- |
+| **Beta**    | `0.4.0-beta.N` pre-release   | only HACS installs that opted in    |
+| **Release** | `0.4.0` stable               | everyone                            |
+
+Pushing to the default branch installs nothing on its own — HACS only ever
+offers published releases.
 
 ## One-time setup
 
 Add a repository Actions secret named `RELEASE_TOKEN`. Its value must be a
 fine-grained GitHub personal access token with the **Copilot Requests**
-permission.
+permission. Only **Release** needs it; **Beta** uses GitHub's generated notes so
+throwaway builds never depend on it.
 
-## Publish a release
+## Cut a beta to test on real hardware
 
-1. Update the manifest version and merge the release commit into the default
-   branch.
-2. Open **Actions → Release → Run workflow** and select the default branch.
+Open **Actions → Beta → Run workflow** on the default branch.
 
-The workflow validates the version, runs the integration tests, summarizes the
-changes since the most recent published *stable* release, creates the matching
-tag, and publishes the GitHub Release. It stops without publishing if the tests
-fail, the version already exists, the Copilot secret is unavailable, or the
-generated notes are empty.
+It works out the next number itself: it takes the base version from the
+manifest, finds the highest `base-beta.N` tag already published, and publishes
+the next one. From `0.4.0` or `0.4.0-beta.3` it targets `0.4.0`, so the first
+run gives `0.4.0-beta.1` and each later run increments. It then writes that
+version back into the manifest and commits it, because Home Assistant reads the
+version from the manifest and would otherwise disagree with HACS.
 
-## Release candidates
+So the loop is just: push your work, run **Beta**, install, test, repeat. No
+local version editing.
 
-Pushing to the default branch installs nothing — HACS only ever offers
-published releases. To get an untested build onto a real Home Assistant, cut a
-release candidate instead.
-
-Give the manifest a pre-release suffix, e.g. `0.4.0-beta.1`, and run the
-workflow exactly as above. Any version containing `-` is published as a GitHub
-pre-release rather than the stable one, so ordinary installs keep seeing the
-last stable version.
-
-**Use `-beta.N`, not `-rc.N`.** The workflow publishes either as a GitHub
-pre-release, but HACS also asks `AwesomeVersion` whether a version is a beta,
-and that only recognises `beta`/`b` as a marker — `0.4.0-rc.1` reports
-`beta=False` and risks being offered to installs that never opted in.
-`0.4.0-beta.1` reports `beta=True` and still sorts below `0.4.0`.
+Each beta is a real, immutable GitHub release. Versions are never reused —
+HACS compares version strings, so republishing the same number would leave an
+install that already has it thinking it is up to date.
 
 To install one, enable beta versions for this repository in HACS once:
 
@@ -47,7 +46,29 @@ To install one, enable beta versions for this repository in HACS once:
 Restart Home Assistant afterwards; `custom_components` changes never apply
 without it.
 
-Iterate with `-beta.2`, `-beta.3`, … as needed. When a candidate is good,
-promote it by setting the manifest to the bare version (`0.4.0`) and running the
-workflow again — no new commits are required, and that stable release is what
-every non-beta install then receives.
+**Why `beta` and not `rc`:** HACS asks `AwesomeVersion` whether a version is a
+beta, and it only recognises `beta`/`b` as a marker. `0.4.0-rc.1` reports
+`beta=False` and risks reaching installs that never opted in.
+
+## Publish the stable release
+
+Open **Actions → Release → Run workflow** on the default branch.
+
+It publishes the base version, dropping any beta suffix — after testing
+`0.4.0-beta.3` the release is simply `0.4.0`, with no manifest edit needed. It
+validates the version, summarizes the changes since the most recent published
+stable release, rewrites the manifest to the bare version and commits it,
+creates the tag, and publishes the release. It stops without publishing if the
+tests fail, the version already exists, the Copilot secret is unavailable, or
+the generated notes are empty.
+
+## Start the next series
+
+After `0.4.0` ships, decide what comes next:
+
+```bash
+scripts/bump.sh minor --commit
+```
+
+`major`, `minor`, `patch`, or an explicit `X.Y.Z`. Push it, and the next **Beta**
+run produces `0.5.0-beta.1`.
