@@ -63,6 +63,16 @@ jobs:
             exit 1
           fi
 
+          # A suffix (0.4.0-rc.1) publishes a GitHub pre-release, which HACS
+          # only offers to installs that opted into beta versions for this
+          # repository. A bare 0.4.0 publishes the stable release.
+          if [[ "$version" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Publishing $version as a pre-release." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Require Copilot access
@@ -158,10 +168,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
-          gh release create "$VERSION" \
-            --target "$GITHUB_SHA" \
-            --title "$VERSION" \
-            --notes-file release-notes.md \
-            --latest \
-            --fail-on-no-commits
+          # No --fail-on-no-commits: promoting a tested release candidate to
+          # its stable version adds no commits, and that is the normal path.
+          if [[ "$PRERELEASE" == "true" ]]; then
+            gh release create "$VERSION" \
+              --target "$GITHUB_SHA" \
+              --title "$VERSION" \
+              --notes-file release-notes.md \
+              --prerelease
+          else
+            gh release create "$VERSION" \
+              --target "$GITHUB_SHA" \
+              --title "$VERSION" \
+              --notes-file release-notes.md \
+              --latest
+          fi
