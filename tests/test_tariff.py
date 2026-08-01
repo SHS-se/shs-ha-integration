@@ -15,6 +15,7 @@ from tariff import (  # noqa: E402
     MissingTariffError,
     UnsupportedTariffError,
     calculate_month,
+    display_components,
     missing_input_labels,
     tariff_component_definitions,
 )
@@ -322,6 +323,129 @@ class TariffCalculationTests(unittest.TestCase):
         day = date(2026, 6, 1)
         with self.assertRaises(UnsupportedTariffError):
             calculate_month(payload, hourly_readings(day, day), day)
+
+
+def billed_components() -> dict:
+    """The July 2026 calculation this customer's invoice was verified against."""
+    common = {
+        "period_start": "2026-07-01",
+        "period_end": "2026-07-31",
+        "tariff_revision": "ellevio-2026-06-01",
+    }
+    return {
+        "components": [
+            {
+                "component_key": "fixed_grid_fee",
+                "category": "fixed_fee",
+                "amount_sek": 904.0,
+                "quantity": 1,
+                "unit": "month",
+                "unit_price_sek": 904.0,
+                **common,
+            },
+            {
+                "component_key": "grid_energy_transfer",
+                "category": "energy_transfer",
+                "amount_sek": 13.44,
+                "quantity": 64.621,
+                "unit": "kWh",
+                "unit_price_sek": 0.208,
+                **common,
+            },
+            {
+                "component_key": "energy_tax",
+                "category": "energy_tax",
+                "amount_sek": 23.26,
+                "quantity": 64.621,
+                "unit": "kWh",
+                "unit_price_sek": 0.36,
+                **common,
+            },
+            {
+                "component_key": "export_credit_low",
+                "category": "export_credit",
+                "amount_sek": -4.06,
+                "quantity": 122.928,
+                "unit": "kWh",
+                "unit_price_sek": -0.033,
+                **common,
+            },
+            {
+                "component_key": "vat",
+                "category": "vat",
+                "amount_sek": 235.18,
+                "quantity": None,
+                "unit": None,
+                "unit_price_sek": 0.25,
+                **common,
+            },
+        ]
+    }
+
+
+class DisplayComponentTests(unittest.TestCase):
+    def test_rates_match_the_invoice_once_vat_is_folded_in(self) -> None:
+        by_key = {
+            component["component_key"]: component
+            for component in display_components(billed_components())
+        }
+        # Ellevio's invoice quotes 1 130,00 kr/mån and 26,00 öre/kWh.
+        self.assertEqual(by_key["fixed_grid_fee"]["amount_sek"], 1130.0)
+        self.assertEqual(by_key["grid_energy_transfer"]["unit_price_sek"], 0.26)
+        self.assertEqual(by_key["grid_energy_transfer"]["amount_sek"], 16.8)
+
+    def test_the_standalone_vat_row_is_gone(self) -> None:
+        categories = {
+            component["category"] for component in display_components(billed_components())
+        }
+        self.assertNotIn("vat", categories)
+        self.assertNotIn("vat", tariff_component_definitions(catalog(config())))
+
+    def test_total_is_unchanged_by_the_presentation(self) -> None:
+        gross = sum(
+            component["amount_sek"]
+            for component in display_components(billed_components())
+        )
+        stored = sum(
+            component["amount_sek"]
+            for component in billed_components()["components"]
+        )
+        self.assertAlmostEqual(gross, stored, places=2)
+
+    def test_production_credit_stays_outside_vat_unless_registered(self) -> None:
+        plain = {
+            component["component_key"]: component
+            for component in display_components(billed_components())
+        }
+        self.assertEqual(plain["export_credit_low"]["amount_sek"], -4.06)
+        self.assertEqual(plain["export_credit_low"]["vat_rate"], 0.0)
+
+        registered = {
+            component["component_key"]: component
+            for component in display_components(billed_components(), True)
+        }
+        self.assertEqual(registered["export_credit_low"]["amount_sek"], -5.07)
+
+    def test_ex_vat_figures_stay_available_for_the_explanation(self) -> None:
+        fixed = next(
+            component
+            for component in display_components(billed_components())
+            if component["component_key"] == "fixed_grid_fee"
+        )
+        self.assertEqual(fixed["amount_sek_ex_vat"], 904.0)
+        self.assertEqual(fixed["vat_amount_sek"], 226.0)
+        self.assertEqual(fixed["unit_price_sek_ex_vat"], 904.0)
+
+    def test_no_vat_row_means_amounts_are_left_alone(self) -> None:
+        payload = billed_components()
+        payload["components"] = [
+            component
+            for component in payload["components"]
+            if component["category"] != "vat"
+        ]
+        fixed = display_components(payload)[0]
+        self.assertEqual(fixed["amount_sek"], 904.0)
+        self.assertEqual(fixed["vat_amount_sek"], 0.0)
 
 
 class MissingInputLabelTests(unittest.TestCase):

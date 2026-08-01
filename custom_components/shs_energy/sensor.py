@@ -138,6 +138,54 @@ class ShsTariffStatusSensor(ShsBaseSensor):
         }
 
 
+def _sum_field(components: list[dict[str, Any]], field: str) -> float | None:
+    values = [
+        value.get(field)
+        for value in components
+        if isinstance(value.get(field), (int, float))
+    ]
+    return round(sum(values), 2) if values else None
+
+
+def _number(value: Any) -> str:
+    """Trim trailing zeros so rates read like the invoice does."""
+    text = f"{float(value):.5f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _explain(component: dict[str, Any]) -> str:
+    """One plain sentence showing how this amount was reached."""
+    quantity = component.get("quantity")
+    unit = component.get("unit")
+    gross_rate = component.get("unit_price_sek")
+    ex_vat_rate = component.get("unit_price_sek_ex_vat")
+    vat_rate = component.get("vat_rate") or 0
+    amount = component.get("amount_sek")
+
+    if isinstance(quantity, (int, float)) and isinstance(gross_rate, (int, float)):
+        head = f"{_number(quantity)} {unit or ''}".strip()
+        head = f"{head} × {_number(gross_rate)} kr/{unit or 'unit'}"
+    else:
+        head = f"{_number(amount)} kr" if isinstance(amount, (int, float)) else "—"
+
+    if vat_rate:
+        basis = (
+            f"{_number(ex_vat_rate)} kr ex moms + {_number(vat_rate * 100)}% moms"
+            if isinstance(ex_vat_rate, (int, float))
+            else f"incl. {_number(vat_rate * 100)}% moms"
+        )
+        head = f"{head} incl. moms ({basis})"
+    else:
+        head = f"{head} (no moms — micro-production is not VAT-able)"
+
+    if isinstance(amount, (int, float)):
+        head = f"{head} = {_number(round(amount, 2))} kr"
+    period = component.get("period_start"), component.get("period_end")
+    if all(period):
+        head = f"{head}, {period[0]} → {period[1]}"
+    return head
+
+
 class ShsTariffComponentSensor(ShsBaseSensor):
     """Monthly amount for one stable Ellevio tariff component."""
 
@@ -162,10 +210,9 @@ class ShsTariffComponentSensor(ShsBaseSensor):
         )
 
     def _components(self) -> list[dict[str, Any]]:
-        calculation = self.coordinator.latest_calculation or {}
         return [
             component
-            for component in calculation.get("components", [])
+            for component in self.coordinator.latest_display_components
             if component.get("component_key") == self.component_key
         ]
 
@@ -180,6 +227,8 @@ class ShsTariffComponentSensor(ShsBaseSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         calculation = self.coordinator.latest_calculation or {}
         components = self._components()
+        total_ex_vat = _sum_field(components, "amount_sek_ex_vat")
+        total_vat = _sum_field(components, "vat_amount_sek")
         return {
             "component_key": self.component_key,
             "category": self.definition["category"],
@@ -189,6 +238,9 @@ class ShsTariffComponentSensor(ShsBaseSensor):
             "coverage_end": calculation.get("coverage_end"),
             "is_complete": calculation.get("is_complete"),
             "tariff_revisions": calculation.get("tariff_revisions"),
+            "amount_sek_ex_vat": total_ex_vat,
+            "vat_amount_sek": total_vat,
+            "how_this_is_calculated": [_explain(value) for value in components],
             "details": components,
         }
 
@@ -213,6 +265,7 @@ class ShsCurrentGridCostSensor(ShsBaseSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         calculation = self.coordinator.latest_calculation or {}
+        components = self.coordinator.latest_display_components
         return {
             "billing_month": calculation.get("billing_month"),
             "coverage_start": calculation.get("coverage_start"),
@@ -222,5 +275,8 @@ class ShsCurrentGridCostSensor(ShsBaseSensor):
             "grid_export_kwh": calculation.get("grid_export_kwh"),
             "peak_demand_kw": calculation.get("peak_demand_kw"),
             "tariff_revisions": calculation.get("tariff_revisions"),
-            "components": calculation.get("components"),
+            "amount_sek_ex_vat": _sum_field(components, "amount_sek_ex_vat"),
+            "vat_amount_sek": _sum_field(components, "vat_amount_sek"),
+            "how_this_is_calculated": [_explain(value) for value in components],
+            "components": components,
         }

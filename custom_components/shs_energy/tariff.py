@@ -322,9 +322,73 @@ def tariff_component_definitions(payload: dict[str, Any]) -> dict[str, dict[str,
                     "label": "Grid export credit (low load)",
                     "category": "export_credit",
                 }
-            if definition.get("vat_rate") is not None:
-                result["vat"] = {"label": "VAT", "category": "vat"}
+    # No "vat" entry on purpose: VAT is folded into each displayed component
+    # instead of standing on its own, so the sensors read like an invoice row.
     return result
+
+
+def display_components(
+    calculation: dict[str, Any],
+    export_vat_registered: bool = False,
+) -> list[dict[str, Any]]:
+    """Return invoice-style components with VAT folded into each amount.
+
+    The stored calculation keeps every rate ex-VAT plus a separate VAT
+    component, which is what gets pushed to the portal. Ellevio's own invoice
+    rows instead quote gross unit prices, so for display each VAT-able
+    component absorbs its share and the standalone VAT row disappears. Each
+    component keeps its ex-VAT figures so the derivation stays visible.
+    """
+    components = calculation.get("components")
+    if not isinstance(components, list):
+        return []
+
+    # A month can span revisions, and each group carries its own VAT row.
+    rate_by_group: dict[tuple[Any, Any, Any], float] = {}
+    for component in components:
+        if not isinstance(component, dict) or component.get("category") != "vat":
+            continue
+        rate = component.get("unit_price_sek")
+        if isinstance(rate, (int, float)):
+            rate_by_group[_display_group(component)] = float(rate)
+
+    displayed: list[dict[str, Any]] = []
+    for component in components:
+        if not isinstance(component, dict) or component.get("category") == "vat":
+            continue
+        rate = rate_by_group.get(_display_group(component), 0.0)
+        if component.get("category") == "export_credit" and not export_vat_registered:
+            rate = 0.0
+        amount_ex_vat = component.get("amount_sek")
+        unit_price_ex_vat = component.get("unit_price_sek")
+        gross = (
+            round(amount_ex_vat * (1 + rate), 2)
+            if isinstance(amount_ex_vat, (int, float))
+            else amount_ex_vat
+        )
+        entry = dict(component)
+        entry["amount_sek"] = gross
+        entry["amount_sek_ex_vat"] = amount_ex_vat
+        entry["vat_rate"] = rate
+        entry["vat_amount_sek"] = (
+            round(gross - amount_ex_vat, 2)
+            if isinstance(amount_ex_vat, (int, float))
+            and isinstance(gross, (int, float))
+            else None
+        )
+        entry["unit_price_sek_ex_vat"] = unit_price_ex_vat
+        if isinstance(unit_price_ex_vat, (int, float)):
+            entry["unit_price_sek"] = round(unit_price_ex_vat * (1 + rate), 5)
+        displayed.append(entry)
+    return displayed
+
+
+def _display_group(component: dict[str, Any]) -> tuple[Any, Any, Any]:
+    return (
+        component.get("tariff_revision"),
+        component.get("period_start"),
+        component.get("period_end"),
+    )
 
 
 def _expected_utc_hours(local_day: date, tariff_timezone: ZoneInfo) -> set[datetime]:

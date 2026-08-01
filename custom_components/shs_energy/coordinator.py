@@ -39,6 +39,7 @@ from .tariff import (
     HourlyGridReading,
     TariffError,
     calculate_month,
+    display_components,
     earliest_tariff_date,
     missing_input_labels,
     tariff_component_definitions,
@@ -161,6 +162,21 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             is_fixable=False,
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_SUBSCRIPTION_INACTIVE,
+        )
+
+    @property
+    def latest_display_components(self) -> list[dict[str, Any]]:
+        """Invoice-style (VAT-inclusive) view of the latest calculation.
+
+        Only the presentation changes: what gets pushed to the portal stays
+        ex-VAT with its own VAT component.
+        """
+        calculation = self.latest_calculation
+        if not calculation:
+            return []
+        configuration = (self.tariff_catalog or {}).get("configuration") or {}
+        return display_components(
+            calculation, bool(configuration.get("export_vat_registered"))
         )
 
     def _configured_entities(self) -> dict[str, list[str]]:
