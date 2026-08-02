@@ -5,13 +5,10 @@ release source of truth. Do not create release tags manually.
 
 Two workflows publish from that number, and both run the full test suite first:
 
-| Workflow    | Publishes                    | Visible to                          |
-| ----------- | ---------------------------- | ----------------------------------- |
-| **Beta**    | `0.4.0-beta.N` pre-release   | only HACS installs that opted in    |
-| **Release** | `0.4.0` stable               | everyone                            |
-
-Pushing to the default branch installs nothing on its own — HACS only ever
-offers published releases.
+| Workflow    | Runs on                    | Publishes                  | Visible to                       |
+| ----------- | -------------------------- | -------------------------- | -------------------------------- |
+| **Beta**    | every push to `main`       | `0.4.0-beta.N` pre-release | only HACS installs that opted in |
+| **Release** | manual run, when you say so | `0.4.0` stable             | everyone                         |
 
 ## One-time setup
 
@@ -22,7 +19,9 @@ throwaway builds never depend on it.
 
 ## Cut a beta to test on real hardware
 
-Open **Actions → Beta → Run workflow** on the default branch.
+Nothing to run — **every push to `main` publishes one**, so your loop is just
+push, install, test, repeat. (You can also start one by hand from
+**Actions → Beta → Run workflow**.)
 
 It works out the next number itself: it takes the base version from the
 manifest, finds the highest `base-beta.N` tag already published, and publishes
@@ -31,8 +30,8 @@ run gives `0.4.0-beta.1` and each later run increments. It then writes that
 version back into the manifest and commits it, because Home Assistant reads the
 version from the manifest and would otherwise disagree with HACS.
 
-So the loop is just: push your work, run **Beta**, install, test, repeat. No
-local version editing.
+Pushes that only touch `.md` files are skipped, and the workflow ignores its own
+`Release <version>` commits so publishing can never loop.
 
 Each beta is a real, immutable GitHub release. Versions are never reused —
 HACS compares version strings, so republishing the same number would leave an

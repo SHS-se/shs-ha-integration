@@ -1,6 +1,13 @@
 name: Beta
 
 on:
+  push:
+    branches:
+      - main
+    # Documentation cannot change what gets installed, so it does not earn a
+    # build. Any push that also touches code still publishes one.
+    paths-ignore:
+      - "**.md"
   workflow_dispatch:
 
 permissions:
@@ -17,6 +24,10 @@ jobs:
     name: Test and publish a beta
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Both workflows push their own "Release <version>" commit. Pushes made
+    # with GITHUB_TOKEN do not start new workflow runs, but this guard means a
+    # future switch to a PAT still cannot create a publish loop.
+    if: ${{ !startsWith(github.event.head_commit.message, 'Release ') }}
 
     steps:
       - name: Require the default branch
