@@ -39,6 +39,7 @@ from .tariff import (
     HourlyGridReading,
     TariffError,
     calculate_month,
+    current_grid_prices,
     display_components,
     earliest_tariff_date,
     missing_input_labels,
@@ -178,6 +179,18 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return display_components(
             calculation, bool(configuration.get("export_vat_registered"))
         )
+
+    @property
+    def grid_prices(self) -> dict[str, Any] | None:
+        """Per-kWh grid prices for right now, or None when unavailable."""
+        catalog = self.tariff_catalog
+        if not catalog:
+            return None
+        try:
+            return current_grid_prices(catalog, dt_util.utcnow())
+        except TariffError as err:
+            _LOGGER.debug("Grid price unavailable: %s", err)
+            return None
 
     def _configured_entities(self) -> dict[str, list[str]]:
         """Return category → entity ids from the options flow."""

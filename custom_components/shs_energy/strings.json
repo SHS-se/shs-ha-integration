@@ -42,7 +42,9 @@
   },
   "entity": {
     "sensor": {
-      "subscription": { "name": "Subscription" },
+      "subscription": {
+        "name": "Subscription"
+      },
       "tariff_status": {
         "name": "Grid tariff",
         "state": {
@@ -55,8 +57,18 @@
           "error": "Catalogue error"
         }
       },
-      "current_grid_cost": { "name": "Current grid cost" },
-      "last_push": { "name": "Last push" }
+      "current_grid_cost": {
+        "name": "Current grid cost"
+      },
+      "last_push": {
+        "name": "Last push"
+      },
+      "grid_import_price": {
+        "name": "Grid import price"
+      },
+      "grid_export_price": {
+        "name": "Grid export price"
+      }
     }
   },
   "issues": {

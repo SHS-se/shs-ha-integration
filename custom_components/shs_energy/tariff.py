@@ -383,6 +383,80 @@ def display_components(
     return displayed
 
 
+def current_grid_prices(
+    payload: dict[str, Any], when: datetime
+) -> dict[str, Any] | None:
+    """Marginal grid cost of one more kWh, in or out, at ``when``.
+
+    This is the network side only — transfer, energy tax and VAT. What the
+    electricity supplier charges for the energy itself is not part of the grid
+    tariff and is not included.
+
+    Returns ``None`` while the tariff is unconfigured or the date falls outside
+    the published catalogue.
+    """
+    catalog = _Catalog(_as_dict(payload, "tariff payload"))
+    if catalog.configuration is None:
+        return None
+    local = when.astimezone(catalog.timezone)
+    resolved = catalog.resolve_optional(local.date())
+    if resolved is None:
+        return None
+
+    plan, selector_value = _plan(resolved)
+    transfer_rate = _transfer_rate(plan, selector_value)
+    tax_rate = _energy_tax_rate(resolved)
+
+    include_vat = resolved.configuration.get("include_vat")
+    if not isinstance(include_vat, bool):
+        raise UnsupportedTariffError("include_vat must be boolean")
+    vat_rate = (
+        _number(resolved.definition.get("vat_rate"), "VAT rate") if include_vat else 0.0
+    )
+
+    import_ex_vat = transfer_rate + tax_rate
+    import_price = import_ex_vat * (1 + vat_rate)
+
+    export_price = 0.0
+    export_ex_vat = 0.0
+    band: str | None = None
+    production_enabled = resolved.configuration.get("production_enabled")
+    if production_enabled is True:
+        export_rule = _as_dict(
+            resolved.definition.get("export_credit"), "export credit"
+        )
+        area_rates = _as_dict(
+            export_rule.get("ore_per_kwh_ex_vat_by_area"), "export area rates"
+        )
+        area = resolved.configuration.get("grid_area")
+        rates = _as_dict(area_rates.get(area), f"export rates for {area}")
+        band = (
+            "high"
+            if _is_high_load_hour(local, export_rule.get("schedule"))
+            else "low"
+        )
+        export_ex_vat = _number(rates.get(band), f"export {band} rate") / 100
+        # Micro-production is outside VAT unless the customer registered for it.
+        export_vat_registered = resolved.configuration.get("export_vat_registered")
+        if not isinstance(export_vat_registered, bool):
+            raise UnsupportedTariffError("export_vat_registered must be boolean")
+        export_price = export_ex_vat * (
+            1 + vat_rate if export_vat_registered else 1.0
+        )
+
+    return {
+        "import_price_sek_per_kwh": round(import_price, 5),
+        "import_transfer_sek_per_kwh": round(transfer_rate * (1 + vat_rate), 5),
+        "import_energy_tax_sek_per_kwh": round(tax_rate * (1 + vat_rate), 5),
+        "import_price_sek_per_kwh_ex_vat": round(import_ex_vat, 5),
+        "export_price_sek_per_kwh": round(export_price, 5),
+        "export_price_sek_per_kwh_ex_vat": round(export_ex_vat, 5),
+        "load_period": band,
+        "vat_rate": vat_rate,
+        "tariff_revision": resolved.revision,
+    }
+
+
 def _display_group(component: dict[str, Any]) -> tuple[Any, Any, Any]:
     return (
         component.get("tariff_revision"),
@@ -504,6 +578,20 @@ def _transfer_rate(plan: dict[str, Any], selector_value: str) -> float:
             )
         return _number(rates[selector_value], "selector transfer rate") / 100
     raise UnsupportedTariffError(f"unsupported transfer mode {mode!r}")
+
+
+def _energy_tax_rate(resolved: _ResolvedTariff) -> float:
+    """Swedish energy tax in SEK/kWh ex VAT, after any municipal reduction."""
+    energy_tax = _as_dict(resolved.definition.get("energy_tax"), "energy tax")
+    rate_ore = _number(energy_tax.get("ore_per_kwh_ex_vat"), "energy tax rate")
+    reduced = resolved.configuration.get("energy_tax_reduced")
+    if reduced is True:
+        rate_ore -= _number(
+            energy_tax.get("reduction_ore_per_kwh"), "energy tax reduction"
+        )
+    elif reduced is not False:
+        raise UnsupportedTariffError("energy_tax_reduced must be boolean")
+    return max(0.0, rate_ore / 100)
 
 
 def _fixed_rate(plan: dict[str, Any], selector_value: str) -> float:
@@ -724,6 +812,17 @@ def calculate_month(
     peak_demand_values: list[float] = []
     revisions: list[str] = []
     seen_revisions: set[str] = set()
+    # The fixed fee follows how much of the month the tariff itself covers, not
+    # how much of it has been metered: a month in progress must not show a
+    # growing "fixed" fee, while a revision that genuinely starts mid-month
+    # still only charges its own share.
+    month_days = _date_range(month, _month_end(month))
+    days_in_month = len(month_days)
+    tariff_days: dict[tuple[str, str], int] = {}
+    for value in month_days:
+        resolved_day = catalog.resolve_optional(value)
+        if resolved_day is not None:
+            tariff_days[resolved_day.key] = tariff_days.get(resolved_day.key, 0) + 1
 
     for key, days in grouped_days.items():
         resolved = resolved_by_key[key]
@@ -737,8 +836,7 @@ def calculate_month(
         export_kwh = sum(value.export_kwh for value in group_readings)
 
         fixed_rate = _fixed_rate(plan, selector_value)
-        days_in_month = (_month_end(month) - month + timedelta(days=1)).days
-        fixed_fraction = len(days) / days_in_month
+        fixed_fraction = tariff_days.get(key, len(days)) / days_in_month
         group_components = [
             _component(
                 "fixed_grid_fee",
@@ -793,17 +891,7 @@ def calculate_month(
                 )
             )
 
-        energy_tax = _as_dict(resolved.definition.get("energy_tax"), "energy tax")
-        tax_rate_ore = _number(
-            energy_tax.get("ore_per_kwh_ex_vat"), "energy tax rate"
-        )
-        if resolved.configuration.get("energy_tax_reduced") is True:
-            tax_rate_ore -= _number(
-                energy_tax.get("reduction_ore_per_kwh"), "energy tax reduction"
-            )
-        elif resolved.configuration.get("energy_tax_reduced") is not False:
-            raise UnsupportedTariffError("energy_tax_reduced must be boolean")
-        tax_rate = max(0.0, tax_rate_ore / 100)
+        tax_rate = _energy_tax_rate(resolved)
         group_components.append(
             _component(
                 "energy_tax",

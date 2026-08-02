@@ -15,6 +15,7 @@ from tariff import (  # noqa: E402
     MissingTariffError,
     UnsupportedTariffError,
     calculate_month,
+    current_grid_prices,
     display_components,
     missing_input_labels,
     tariff_component_definitions,
@@ -252,7 +253,7 @@ class TariffCalculationTests(unittest.TestCase):
             day,
         )
 
-        self.assertEqual(components(result, "fixed_fee")[0]["amount_sek"], 2.4)
+        self.assertEqual(components(result, "fixed_fee")[0]["amount_sek"], 72)
         self.assertEqual(components(result, "energy_transfer")[0]["amount_sek"], 2.08)
 
     def test_export_credit_observes_holiday_and_high_load_hours(self) -> None:
@@ -281,8 +282,8 @@ class TariffCalculationTests(unittest.TestCase):
         )
 
         self.assertEqual(components(result, "energy_tax")[0]["amount_sek"], 3.6)
-        self.assertEqual(components(result, "vat")[0]["amount_sek"], 4.42)
-        self.assertEqual(result["total_amount_sek"], 22.1)
+        self.assertEqual(components(result, "vat")[0]["amount_sek"], 91.42)
+        self.assertEqual(result["total_amount_sek"], 457.1)
 
     def test_dst_day_with_23_real_hours_is_complete_input(self) -> None:
         day = date(2026, 3, 29)
@@ -302,7 +303,28 @@ class TariffCalculationTests(unittest.TestCase):
 
         self.assertEqual(result["coverage_start"], "2026-06-15")
         self.assertEqual(result["coverage_end"], "2026-06-16")
-        self.assertEqual(components(result, "fixed_fee")[0]["amount_sek"], 24)
+        # The tariff covers 16 of June's 30 days, so it charges 16/30 of the
+        # monthly fee even though only two of those days were metered.
+        self.assertEqual(components(result, "fixed_fee")[0]["amount_sek"], 192)
+
+    def test_month_in_progress_still_charges_the_whole_fixed_fee(self) -> None:
+        # A "fixed" fee that grows each day reads as anything but fixed, and
+        # the network operator bills the month in full regardless.
+        first = date(2026, 6, 1)
+        one_day = calculate_month(
+            catalog(config()), hourly_readings(first, first), first
+        )
+        half = calculate_month(
+            catalog(config()), hourly_readings(first, date(2026, 6, 15)), first
+        )
+        whole = calculate_month(
+            catalog(config()), hourly_readings(first, date(2026, 6, 30)), first
+        )
+
+        for result in (one_day, half, whole):
+            self.assertEqual(components(result, "fixed_fee")[0]["amount_sek"], 360)
+        self.assertFalse(one_day["is_complete"])
+        self.assertTrue(whole["is_complete"])
 
     def test_component_keys_include_historical_demand(self) -> None:
         definitions = tariff_component_definitions(catalog(config()))
@@ -446,6 +468,59 @@ class DisplayComponentTests(unittest.TestCase):
         fixed = display_components(payload)[0]
         self.assertEqual(fixed["amount_sek"], 904.0)
         self.assertEqual(fixed["vat_amount_sek"], 0.0)
+
+
+class GridPriceTests(unittest.TestCase):
+    def at(self, moment: datetime, **overrides) -> dict:
+        payload = catalog(config(**overrides))
+        return current_grid_prices(payload, moment)
+
+    def test_import_price_is_transfer_plus_tax_with_vat(self) -> None:
+        prices = self.at(datetime(2026, 6, 10, 12, tzinfo=TZ), include_vat=True)
+        # 20.8 öre transfer + 36 öre tax ex VAT, then 25% VAT — the same
+        # 26 öre and 45 öre rows the Ellevio invoice quotes.
+        self.assertAlmostEqual(prices["import_price_sek_per_kwh_ex_vat"], 0.568)
+        self.assertAlmostEqual(prices["import_price_sek_per_kwh"], 0.71)
+        self.assertAlmostEqual(prices["import_transfer_sek_per_kwh"], 0.26)
+        self.assertAlmostEqual(prices["import_energy_tax_sek_per_kwh"], 0.45)
+
+    def test_import_price_drops_vat_when_the_tariff_excludes_it(self) -> None:
+        prices = self.at(datetime(2026, 6, 10, 12, tzinfo=TZ), include_vat=False)
+        self.assertAlmostEqual(prices["import_price_sek_per_kwh"], 0.568)
+        self.assertEqual(prices["vat_rate"], 0.0)
+
+    def test_export_price_follows_the_load_period(self) -> None:
+        winter_day = self.at(
+            datetime(2026, 1, 2, 12, tzinfo=TZ), production_enabled=True
+        )
+        winter_night = self.at(
+            datetime(2026, 1, 2, 23, tzinfo=TZ), production_enabled=True
+        )
+        self.assertEqual(winter_day["load_period"], "high")
+        self.assertEqual(winter_night["load_period"], "low")
+        self.assertGreater(
+            winter_day["export_price_sek_per_kwh"],
+            winter_night["export_price_sek_per_kwh"],
+        )
+
+    def test_export_price_is_zero_without_production(self) -> None:
+        prices = self.at(datetime(2026, 6, 10, 12, tzinfo=TZ), production_enabled=False)
+        self.assertEqual(prices["export_price_sek_per_kwh"], 0.0)
+        self.assertIsNone(prices["load_period"])
+
+    def test_export_credit_stays_outside_vat_unless_registered(self) -> None:
+        plain = self.at(
+            datetime(2026, 6, 10, 12, tzinfo=TZ),
+            production_enabled=True,
+            include_vat=True,
+        )
+        self.assertAlmostEqual(
+            plain["export_price_sek_per_kwh"],
+            plain["export_price_sek_per_kwh_ex_vat"],
+        )
+
+    def test_no_price_before_the_catalogue_starts(self) -> None:
+        self.assertIsNone(self.at(datetime(2020, 1, 1, 12, tzinfo=TZ)))
 
 
 class MissingInputLabelTests(unittest.TestCase):

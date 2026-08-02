@@ -30,6 +30,8 @@ async def async_setup_entry(
             ShsSubscriptionSensor(coordinator),
             ShsTariffStatusSensor(coordinator),
             ShsCurrentGridCostSensor(coordinator),
+            ShsGridPriceSensor(coordinator, "import"),
+            ShsGridPriceSensor(coordinator, "export"),
             ShsLastPushSensor(coordinator),
         ]
     )
@@ -135,6 +137,51 @@ class ShsTariffStatusSensor(ShsBaseSensor):
             "revisions": revisions,
             "last_error": self.coordinator.last_tariff_error,
             "last_calculation_error": self.coordinator.last_calculation_error,
+        }
+
+
+class ShsGridPriceSensor(ShsBaseSensor):
+    """What one more kWh through the meter costs, or earns, right now."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "SEK/kWh"
+    _attr_entity_category = None
+    _attr_suggested_display_precision = 3
+
+    def __init__(self, coordinator: ShsStatusCoordinator, direction: str) -> None:
+        super().__init__(coordinator)
+        self.direction = direction
+        self._attr_translation_key = f"grid_{direction}_price"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_grid_{direction}_price"
+
+    @property
+    def native_value(self) -> float | None:
+        prices = self.coordinator.grid_prices
+        if prices is None:
+            return None
+        return prices.get(f"{self.direction}_price_sek_per_kwh")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        prices = self.coordinator.grid_prices or {}
+        shared = {
+            "load_period": prices.get("load_period"),
+            "vat_rate": prices.get("vat_rate"),
+            "tariff_revision": prices.get("tariff_revision"),
+            "excludes": "electricity supplier energy price",
+        }
+        if self.direction == "import":
+            return {
+                **shared,
+                "transfer_sek_per_kwh": prices.get("import_transfer_sek_per_kwh"),
+                "energy_tax_sek_per_kwh": prices.get("import_energy_tax_sek_per_kwh"),
+                "price_sek_per_kwh_ex_vat": prices.get(
+                    "import_price_sek_per_kwh_ex_vat"
+                ),
+            }
+        return {
+            **shared,
+            "price_sek_per_kwh_ex_vat": prices.get("export_price_sek_per_kwh_ex_vat"),
         }
 
 
