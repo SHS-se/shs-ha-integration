@@ -126,9 +126,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add custom_components/shs_energy/manifest.json
-          git commit -m "Release $VERSION"
-          # Push before publishing: a failed push must not leave a dangling tag.
-          git push origin "HEAD:$GITHUB_REF_NAME"
+          if git diff --cached --quiet; then
+            # The manifest can already name this version, e.g. the first beta of
+            # a series someone set by hand. Nothing to record, so tag as-is.
+            echo "Manifest already records $VERSION; tagging the current commit."
+          else
+            git commit -m "Release $VERSION"
+            # Push before publishing: a failed push must not leave a dangling tag.
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Publish the pre-release
