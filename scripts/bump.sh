@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Move the base version in the integration manifest.
+# Set the version in the integration manifest.
 #
-# Betas and stable releases are cut by the Beta and Release workflows, which
-# derive their versions from this number. The only thing a human decides is
-# which release series comes next, and that is what this script sets.
+# Every push to main publishes the version the manifest names, and the workflow
+# never edits it — so this must be bumped in the same commit as the change, or
+# the Beta run fails with "Version not bumped".
 #
-#   scripts/bump.sh minor     0.4.0 -> 0.5.0
+#   scripts/bump.sh beta      0.4.0-beta.3 -> 0.4.0-beta.4   (0.4.0 -> 0.4.0-beta.1)
+#   scripts/bump.sh minor     0.4.0-beta.3 -> 0.5.0
 #   scripts/bump.sh patch     0.4.0 -> 0.4.1
 #   scripts/bump.sh major     0.4.0 -> 1.0.0
+#   scripts/bump.sh release   0.4.0-beta.4 -> 0.4.0   (drop the suffix)
 #   scripts/bump.sh 1.2.3     set it explicitly
 #
 # Pass --commit to commit the change.
@@ -26,7 +28,7 @@ for argument in "$@"; do
 done
 
 if [[ -z "$part" ]]; then
-  echo "usage: scripts/bump.sh <major|minor|patch|X.Y.Z> [--commit]" >&2
+  echo "usage: scripts/bump.sh <beta|major|minor|patch|release|X.Y.Z> [--commit]" >&2
   exit 64
 fi
 
@@ -42,17 +44,31 @@ minor="${BASH_REMATCH[2]}"
 patch="${BASH_REMATCH[3]}"
 
 case "$part" in
+  beta)
+    # Continue the current series, or open one on a version without a suffix.
+    if [[ "$current" =~ -beta\.([0-9]+)$ ]]; then
+      next="${base}-beta.$(( BASH_REMATCH[1] + 1 ))"
+    else
+      next="${base}-beta.1"
+    fi
+    ;;
+  release) next="$base" ;;
   major) next="$(( major + 1 )).0.0" ;;
   minor) next="${major}.$(( minor + 1 )).0" ;;
   patch) next="${major}.${minor}.$(( patch + 1 ))" ;;
   *)
     if [[ ! "$part" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      echo "$part is not major, minor, patch, or an X.Y.Z version" >&2
+      echo "$part is not beta, release, major, minor, patch, or an X.Y.Z version" >&2
       exit 64
     fi
     next="$part"
     ;;
 esac
+
+if [[ "$next" == "$current" ]]; then
+  echo "manifest is already at $next; nothing to do" >&2
+  exit 66
+fi
 
 VERSION="$next" MANIFEST="$manifest" python3 - <<'PY'
 import json
@@ -75,7 +91,10 @@ echo "$current -> $next"
 
 if [[ "$commit" == true ]]; then
   git -C "$(dirname "$manifest")" add "$manifest"
-  git commit -m "Start the $next release series"
+  git commit -m "Set the version to $next"
 fi
 
-echo "Run the Beta workflow for $next-beta.1, or Release for $next."
+case "$next" in
+  *-*) echo "Push to main and the Beta workflow publishes $next." ;;
+  *) echo "Run the Release workflow to publish $next." ;;
+esac

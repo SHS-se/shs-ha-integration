@@ -5,10 +5,13 @@ release source of truth. Do not create release tags manually.
 
 Two workflows publish from that number, and both run the full test suite first:
 
-| Workflow    | Runs on                    | Publishes                  | Visible to                       |
-| ----------- | -------------------------- | -------------------------- | -------------------------------- |
-| **Beta**    | every push to `main`       | `0.4.0-beta.N` pre-release | only HACS installs that opted in |
+| Workflow    | Runs on                     | Publishes                  | Visible to                       |
+| ----------- | --------------------------- | -------------------------- | -------------------------------- |
+| **Beta**    | every push to `main`        | `0.4.0-beta.N` pre-release | only HACS installs that opted in |
 | **Release** | manual run, when you say so | `0.4.0` stable             | everyone                         |
+
+Neither invents a version: both publish exactly what the manifest names, so the
+number is bumped locally as part of the change.
 
 ## One-time setup
 
@@ -19,19 +22,23 @@ throwaway builds never depend on it.
 
 ## Cut a beta to test on real hardware
 
-Nothing to run — **every push to `main` publishes one**, so your loop is just
-push, install, test, repeat. (You can also start one by hand from
-**Actions → Beta → Run workflow**.)
+**Bump the version in the same commit as the change**, then push — the Beta
+workflow publishes whatever the manifest names:
 
-It works out the next number itself: it takes the base version from the
-manifest, finds the highest `base-beta.N` tag already published, and publishes
-the next one. From `0.4.0` or `0.4.0-beta.3` it targets `0.4.0`, so the first
-run gives `0.4.0-beta.1` and each later run increments. It then writes that
-version back into the manifest and commits it, because Home Assistant reads the
-version from the manifest and would otherwise disagree with HACS.
+```bash
+scripts/bump.sh beta --commit   # 0.4.0-beta.3 -> 0.4.0-beta.4
+```
 
-Pushes that only touch `.md` files are skipped, and the workflow ignores its own
-`Release <version>` commits so publishing can never loop.
+The workflow never edits the manifest. The version belongs to the commit that
+changed the code, so nothing is auto-incremented and no bot commits land on
+`main`. If the version was not bumped, the run fails with *Version not bumped*
+rather than publishing a second build under a number someone already installed
+— HACS compares version strings, so reusing one leaves that install thinking it
+is up to date.
+
+Pushes that only touch `.md` files are skipped, and the workflow ignores the
+Release workflow's own `Release <version>` commits so publishing cannot loop.
+You can also start a run by hand from **Actions → Beta → Run workflow**.
 
 Each beta is a real, immutable GitHub release. Versions are never reused —
 HACS compares version strings, so republishing the same number would leave an
@@ -66,8 +73,9 @@ the generated notes are empty.
 After `0.4.0` ships, decide what comes next:
 
 ```bash
-scripts/bump.sh minor --commit
+scripts/bump.sh minor --commit   # 0.4.0 -> 0.5.0
+scripts/bump.sh beta --commit    # 0.5.0 -> 0.5.0-beta.1
 ```
 
-`major`, `minor`, `patch`, or an explicit `X.Y.Z`. Push it, and the next **Beta**
-run produces `0.5.0-beta.1`.
+`bump.sh` takes `beta`, `release` (drop the suffix), `major`, `minor`, `patch`,
+or an explicit `X.Y.Z`, and refuses a no-op.

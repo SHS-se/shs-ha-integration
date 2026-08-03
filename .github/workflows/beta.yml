@@ -24,9 +24,9 @@ jobs:
     name: Test and publish a beta
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Both workflows push their own "Release <version>" commit. Pushes made
-    # with GITHUB_TOKEN do not start new workflow runs, but this guard means a
-    # future switch to a PAT still cannot create a publish loop.
+    # The Release workflow pushes its own "Release <version>" commit. Pushes
+    # made with GITHUB_TOKEN do not start new workflow runs, but this guard
+    # means a future switch to a PAT still cannot create a publish loop.
     if: ${{ !startsWith(github.event.head_commit.message, 'Release ') }}
 
     steps:
@@ -54,100 +54,41 @@ jobs:
           python -m unittest discover -s tests -v
           python -m compileall -q custom_components/shs_energy
 
-      - name: Pick the next beta version
+      - name: Read and validate the beta version
         id: version
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           manifest="custom_components/shs_energy/manifest.json"
-          current="$(python -c "import json; print(json.load(open('$manifest', encoding='utf-8'))['version'])")"
+          version="$(python -c "import json; print(json.load(open('$manifest', encoding='utf-8'))['version'])")"
 
-          # The base is the release this beta is working towards, so cutting a
-          # beta from 0.4.0 and from 0.4.0-beta.3 both target 0.4.0.
-          base="${current%%-*}"
-          if [[ ! "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error title=Invalid version::Manifest version $current has no usable X.Y.Z base."
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+            echo "::error title=Not a beta version::$version is not a pre-release. Betas need a suffix such as 0.4.0-beta.4; a bare version is published by the Release workflow."
             exit 1
           fi
 
-          # Continue the existing series rather than trusting the manifest,
-          # which may lag behind if a previous run was interrupted.
-          highest=0
-          while read -r tag; do
-            [[ -z "$tag" ]] && continue
-            suffix="${tag##*-beta.}"
-            if [[ "$suffix" =~ ^[0-9]+$ ]] && (( suffix > highest )); then
-              highest="$suffix"
-            fi
-          done < <(git tag -l "${base}-beta.*")
-
-          version="${base}-beta.$(( highest + 1 ))"
-
+          # The workflow never writes the manifest: the version belongs to the
+          # commit that changed the code, so it is bumped locally alongside it.
+          # An existing tag therefore means the bump was forgotten.
           if git show-ref --verify --quiet "refs/tags/$version" \
             || gh release view "$version" >/dev/null 2>&1; then
-            echo "::error title=Already exists::$version already exists."
+            echo "::error title=Version not bumped::$version is already published. Bump the version in $manifest (scripts/bump.sh beta) and push again."
             exit 1
           fi
 
-          echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Publishing pre-release $version (towards $base)." >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Record the version in the manifest
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          # Home Assistant reads the version from the manifest, so the tagged
-          # commit has to carry it or HA and HACS report different versions.
-          python - <<'PY'
-          import json
-          import os
-          import re
-
-          path = "custom_components/shs_energy/manifest.json"
-          version = os.environ["VERSION"]
-          with open(path, encoding="utf-8") as handle:
-              text = handle.read()
-          updated, count = re.subn(
-              r'("version":\s*)"[^"]*"', rf'\1"{version}"', text, count=1
-          )
-          if count != 1:
-              raise SystemExit(f"could not find a version field in {path}")
-          with open(path, "w", encoding="utf-8") as handle:
-              handle.write(updated)
-          json.loads(updated)
-          PY
-
-      - name: Commit and push the version
-        id: commit
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add custom_components/shs_energy/manifest.json
-          if git diff --cached --quiet; then
-            # The manifest can already name this version, e.g. the first beta of
-            # a series someone set by hand. Nothing to record, so tag as-is.
-            echo "Manifest already records $VERSION; tagging the current commit."
-          else
-            git commit -m "Release $VERSION"
-            # Push before publishing: a failed push must not leave a dangling tag.
-            git push origin "HEAD:$GITHUB_REF_NAME"
-          fi
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Publishing pre-release $version." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish the pre-release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
-          TARGET: ${{ steps.commit.outputs.sha }}
         run: |
           # Betas use GitHub's generated notes: they are throwaway builds, and
           # this keeps them independent of the Copilot secret the stable
           # release depends on.
           gh release create "$VERSION" \
-            --target "$TARGET" \
+            --target "$GITHUB_SHA" \
             --title "$VERSION" \
             --generate-notes \
             --prerelease
