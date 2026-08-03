@@ -50,7 +50,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         hass, coordinator.async_scheduled_push(), name="shs_energy_startup_push"
     )
 
-    # Re-push after the user changes the category→sensor mapping.
+    # React to a changed category→sensor mapping or price entity.
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
@@ -58,7 +58,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
 async def _async_options_updated(
     hass: HomeAssistant, entry: ShsEnergyConfigEntry
 ) -> None:
-    await entry.runtime_data.async_scheduled_push()
+    # A full reload, not just a re-push: entities subscribe to the configured
+    # supplier price sensor when they are added, so an entity picked after
+    # setup would never be watched and its total would only move on the hourly
+    # coordinator poll. Setting up again re-pushes on its own.
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:

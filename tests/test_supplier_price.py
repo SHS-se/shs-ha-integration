@@ -63,6 +63,19 @@ class SensorWiringTests(unittest.TestCase):
     def test_it_follows_the_supplier_sensor(self) -> None:
         self.assertIn("async_track_state_change_event", SENSOR)
 
+    def test_changing_the_options_reloads_the_entry(self) -> None:
+        # Entities subscribe to the supplier price sensor when they are added.
+        # A price entity chosen after setup is only watched if the entry is
+        # rebuilt, so re-pushing alone would leave totals on the hourly poll.
+        init = (
+            Path(__file__).parents[1]
+            / "custom_components"
+            / "shs_energy"
+            / "__init__.py"
+        ).read_text(encoding="utf-8")
+        listener = init[init.index("async def _async_options_updated") :]
+        self.assertIn("async_reload(entry.entry_id)", listener)
+
 
 if __name__ == "__main__":
     unittest.main()
