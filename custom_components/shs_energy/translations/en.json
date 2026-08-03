@@ -23,7 +23,7 @@
     "step": {
       "init": {
         "title": "Energy category mapping",
-        "description": "Pick the energy sensors (kWh, total_increasing) that belong to each category. Grid import is required for automatic network-cost calculations. Daily category totals and monthly calculated costs are pushed to SHS every night.",
+        "description": "Pick the energy sensors (kWh, total_increasing) that belong to each category. Grid import is required for automatic network-cost calculations. Daily category totals and monthly calculated costs are pushed to SHS every night. The two price sensors at the end are optional: set them to your supplier's per-kWh prices and the total import/export price sensors will add the grid tariff to them.",
         "data": {
           "entities_heating": "Heating (radiators, floor heating, heat pump heating)",
           "entities_hot_water": "Hot water (boiler/water heater)",
@@ -35,7 +35,9 @@
           "entities_grid_import": "Grid import (mains meter, consumption)",
           "entities_grid_export": "Grid export (sold to grid)",
           "entities_solar_production": "Solar production",
-          "entities_total_consumption": "Total consumption (whole home)"
+          "entities_total_consumption": "Total consumption (whole home)",
+          "supplier_import_price_entity": "Electricity price you pay (SEK/kWh, optional)",
+          "supplier_export_price_entity": "Electricity price you are paid for exports (SEK/kWh, optional)"
         }
       }
     }
@@ -68,6 +70,12 @@
       },
       "grid_export_price": {
         "name": "Grid export price"
+      },
+      "total_import_price": {
+        "name": "Total import price"
+      },
+      "total_export_price": {
+        "name": "Total export price"
       }
     }
   },

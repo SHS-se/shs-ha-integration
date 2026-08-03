@@ -28,6 +28,8 @@ from .const import (
     DEFAULT_BASE_URL,
     DOMAIN,
     OPT_PREFIX_ENTITIES,
+    OPT_SUPPLIER_EXPORT_PRICE,
+    OPT_SUPPLIER_IMPORT_PRICE,
 )
 
 
@@ -108,6 +110,17 @@ class ShsEnergyOptionsFlow(OptionsFlow):
                     device_class="energy",
                     multiple=True,
                 )
+            )
+
+        # Left unset, the all-in price sensors simply stay unavailable rather
+        # than reporting the grid share as if it were the whole price.
+        for key in (OPT_SUPPLIER_IMPORT_PRICE, OPT_SUPPLIER_EXPORT_PRICE):
+            current = self.config_entry.options.get(key)
+            field = (
+                vol.Optional(key, default=current) if current else vol.Optional(key)
+            )
+            schema[field] = selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
             )
 
         return self.async_show_form(step_id="init", data_schema=vol.Schema(schema))
