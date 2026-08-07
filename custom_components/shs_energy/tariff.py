@@ -483,7 +483,7 @@ def _normalize_readings(
     readings: list[HourlyGridReading],
     month: date,
     tariff_timezone: ZoneInfo,
-) -> tuple[list[HourlyGridReading], date, date, bool]:
+) -> tuple[list[HourlyGridReading], date, date, bool, list[date]]:
     buckets: dict[datetime, list[float]] = {}
     for reading in readings:
         if reading.start.tzinfo is None or reading.start.utcoffset() is None:
@@ -526,25 +526,28 @@ def _normalize_readings(
     if not complete_days:
         raise MissingTariffInputError(f"no complete hourly grid days for {month:%Y-%m}")
     coverage_start, coverage_end = complete_days[0], complete_days[-1]
-    incomplete_internal = [
+    # A meter that drops out for a few hours must not void the whole month.
+    # The days it did cover are still billable; the ones it missed are reported
+    # as such and left out of the energy sums rather than guessed at, and a
+    # part-metered day is dropped whole because its partial hours would read as
+    # a genuinely quiet day.
+    metered_days = set(complete_days)
+    missing_days = [
         value
         for value in _date_range(coverage_start, coverage_end)
-        if not day_complete.get(value, False)
+        if value not in metered_days
     ]
-    if incomplete_internal:
-        raise MissingTariffInputError(
-            f"hourly grid data has a gap on {incomplete_internal[0].isoformat()}"
-        )
-
     normalized = [
         HourlyGridReading(timestamp, values[0], values[1])
         for timestamp, values in sorted(buckets.items())
-        if coverage_start
-        <= timestamp.astimezone(tariff_timezone).date()
-        <= coverage_end
+        if timestamp.astimezone(tariff_timezone).date() in metered_days
     ]
-    is_complete = coverage_start == month and coverage_end == _month_end(month)
-    return normalized, coverage_start, coverage_end, is_complete
+    is_complete = (
+        coverage_start == month
+        and coverage_end == _month_end(month)
+        and not missing_days
+    )
+    return normalized, coverage_start, coverage_end, is_complete, missing_days
 
 
 def _plan(resolved: _ResolvedTariff) -> tuple[dict[str, Any], str]:
@@ -760,9 +763,13 @@ def calculate_month(
     if not isinstance(month, date) or month.day != 1:
         raise UnsupportedTariffError("billing_month must be the first of a month")
 
-    normalized, coverage_start, coverage_end, is_complete = _normalize_readings(
-        readings, month, catalog.timezone
-    )
+    (
+        normalized,
+        coverage_start,
+        coverage_end,
+        is_complete,
+        missing_days,
+    ) = _normalize_readings(readings, month, catalog.timezone)
     initial_days = _date_range(coverage_start, coverage_end)
     optional_by_day = {
         value: catalog.resolve_optional(value) for value in initial_days
@@ -787,7 +794,14 @@ def calculate_month(
         <= reading.start.astimezone(catalog.timezone).date()
         <= coverage_end
     ]
-    is_complete = coverage_start == month and coverage_end == _month_end(month)
+    missing_days = [
+        value for value in missing_days if coverage_start <= value <= coverage_end
+    ]
+    is_complete = (
+        coverage_start == month
+        and coverage_end == _month_end(month)
+        and not missing_days
+    )
     coverage_days = _date_range(coverage_start, coverage_end)
     resolved_by_day: dict[date, _ResolvedTariff] = {}
     for value in coverage_days:
@@ -995,6 +1009,7 @@ def calculate_month(
         "coverage_start": coverage_start.isoformat(),
         "coverage_end": coverage_end.isoformat(),
         "is_complete": is_complete,
+        "missing_days": [value.isoformat() for value in missing_days],
         "currency": "SEK",
         "calculation_model": CALCULATION_MODEL,
         "calculation_version": CALCULATION_VERSION,

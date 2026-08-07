@@ -30,6 +30,7 @@ from .const import (
     DOMAIN,
     ISSUE_MISSING_CUSTOMER_INPUT,
     ISSUE_SUBSCRIPTION_INACTIVE,
+    MAX_KWH_PER_READING,
     OPT_PREFIX_ENTITIES,
     STATUS_POLL_INTERVAL_HOURS,
     STORAGE_KEY_TEMPLATE,
@@ -70,6 +71,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client = client
         self.last_push_date: str | None = None
         self.last_push_error: str | None = None
+        self.skipped_readings: list[str] = []
         self.tariff_catalog: dict[str, Any] | None = None
         self.tariff_status = "not_configured"
         self.missing_questions: list[str] = []
@@ -394,6 +396,17 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_push_days_unlocked(self, days_back: int) -> None:
         """Run one serialized reading/calculation upload."""
+        try:
+            await self._collect_and_push(days_back)
+        finally:
+            # Every exit path has to reach the sensors, refusals and crashes
+            # included. Returning without this leaves them showing whatever
+            # they were created with — typically "unknown" after a restart —
+            # and hides the very error that explains why.
+            self.async_update_listeners()
+
+    async def _collect_and_push(self, days_back: int) -> None:
+        """Aggregate the recorder, calculate, and upload in one pass."""
         stored = await self._store.async_load() or {}
         entities_by_category = self._configured_entities()
         all_entities = sorted(
@@ -404,6 +417,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         start = today_start - timedelta(days=days_back)
         per_day = await self._daily_changes(all_entities, start, today_start)
         readings: list[dict[str, Any]] = []
+        skipped: list[str] = []
         for day, entity_changes in sorted(per_day.items()):
             for category, entity_ids in entities_by_category.items():
                 values = [
@@ -411,14 +425,20 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     for entity in entity_ids
                     if entity in entity_changes
                 ]
-                if values:
-                    readings.append(
-                        {
-                            "date": day,
-                            "category": category,
-                            "kwh": round(sum(values), 3),
-                        }
-                    )
+                if not values:
+                    continue
+                kwh = round(sum(values), 3)
+                if kwh > MAX_KWH_PER_READING:
+                    skipped.append(f"{category} {day} ({kwh} kWh)")
+                    continue
+                readings.append({"date": day, "category": category, "kwh": kwh})
+        self.skipped_readings = skipped
+        if skipped:
+            _LOGGER.warning(
+                "Skipped implausible daily readings, most likely a reset "
+                "counter behind one of the mapped sensors: %s",
+                "; ".join(skipped),
+            )
 
         calculations, catalog_hash, tariff_attempted = await self._tariff_calculations(
             entities_by_category, days_back, stored
@@ -428,7 +448,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 stored["tariff_catalog_hash"] = catalog_hash
                 await self._store.async_save(stored)
             _LOGGER.debug("No daily readings or tariff calculations to push")
-            self.async_update_listeners()
             return
 
         try:
@@ -452,7 +471,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self.latest_calculation:
             stored["latest_calculation"] = self.latest_calculation
         await self._store.async_save(stored)
-        self.async_update_listeners()
         _LOGGER.debug(
             "Pushed %s readings and %s calculations "
             "(accepted=%s, calculations_accepted=%s)",

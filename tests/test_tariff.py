@@ -293,6 +293,59 @@ class TariffCalculationTests(unittest.TestCase):
         self.assertEqual(result["coverage_start"], "2026-03-29")
         self.assertEqual(result["coverage_end"], "2026-03-29")
 
+    def test_a_meter_outage_costs_its_own_days_not_the_month(self) -> None:
+        # A dropout used to void the whole month, freezing the cost on its last
+        # good value. The metered days still bill; the gap is named instead.
+        first = date(2026, 6, 1)
+        outage = date(2026, 6, 2)
+        readings = [
+            reading
+            for reading in hourly_readings(
+                first,
+                date(2026, 6, 5),
+                {(first, 12): 10, (outage, 3): 5, (date(2026, 6, 5), 12): 10},
+            )
+            if not (
+                reading.start.astimezone(TZ).date() == outage
+                and reading.start.astimezone(TZ).hour >= 6
+            )
+        ]
+        result = calculate_month(catalog(config()), readings, first)
+
+        self.assertEqual(result["coverage_start"], "2026-06-01")
+        self.assertEqual(result["coverage_end"], "2026-06-05")
+        self.assertEqual(result["missing_days"], ["2026-06-02"])
+        self.assertFalse(result["is_complete"])
+        # The hours the outage day did record are dropped with it: passing them
+        # off as a whole day would read as a genuinely quiet Tuesday.
+        self.assertEqual(result["grid_import_kwh"], 20)
+        self.assertEqual(components(result, "fixed_fee")[0]["amount_sek"], 360)
+
+    def test_a_finished_month_with_an_internal_gap_is_not_complete(self) -> None:
+        # Coverage spans the whole month, so the gap is the only thing that can
+        # stop the portal storing this as the final, billable figure.
+        first = date(2026, 6, 1)
+        readings = [
+            reading
+            for reading in hourly_readings(first, date(2026, 6, 30))
+            if reading.start.astimezone(TZ).date() != date(2026, 6, 15)
+        ]
+        result = calculate_month(catalog(config()), readings, first)
+
+        self.assertEqual(result["coverage_start"], "2026-06-01")
+        self.assertEqual(result["coverage_end"], "2026-06-30")
+        self.assertEqual(result["missing_days"], ["2026-06-15"])
+        self.assertFalse(result["is_complete"])
+
+    def test_a_fully_metered_month_reports_no_missing_days(self) -> None:
+        first = date(2026, 6, 1)
+        result = calculate_month(
+            catalog(config()), hourly_readings(first, date(2026, 6, 30)), first
+        )
+
+        self.assertEqual(result["missing_days"], [])
+        self.assertTrue(result["is_complete"])
+
     def test_first_version_can_start_partway_through_a_month(self) -> None:
         payload = catalog(config())
         version = payload["profiles"][0]["versions"][-1]

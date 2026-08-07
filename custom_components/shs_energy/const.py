@@ -46,5 +46,11 @@ PUSH_TIME_HOUR = 0
 PUSH_TIME_MINUTE = 20
 BACKFILL_MAX_DAYS = 30
 
+# Mirrors the portal's own per-day sanity bound. Swapping a device behind a
+# total_increasing sensor resets its counter, and the recorder books the whole
+# new total as one day's change — the portal refuses the entire batch over that
+# single row, so it is dropped here instead.
+MAX_KWH_PER_READING = 10000
+
 ISSUE_SUBSCRIPTION_INACTIVE = "subscription_inactive"
 ISSUE_MISSING_CUSTOMER_INPUT = "missing_customer_input"

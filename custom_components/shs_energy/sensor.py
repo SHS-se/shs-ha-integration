@@ -117,6 +117,7 @@ class ShsLastPushSensor(ShsBaseSensor):
         return {
             "last_error": self.coordinator.last_push_error,
             "last_calculation_error": self.coordinator.last_calculation_error,
+            "skipped_readings": self.coordinator.skipped_readings,
         }
 
 
@@ -377,6 +378,7 @@ class ShsTariffComponentSensor(ShsBaseSensor):
             "coverage_start": calculation.get("coverage_start"),
             "coverage_end": calculation.get("coverage_end"),
             "is_complete": calculation.get("is_complete"),
+            "missing_days": calculation.get("missing_days"),
             "tariff_revisions": calculation.get("tariff_revisions"),
             "amount_sek_ex_vat": total_ex_vat,
             "vat_amount_sek": total_vat,
@@ -411,6 +413,7 @@ class ShsCurrentGridCostSensor(ShsBaseSensor):
             "coverage_start": calculation.get("coverage_start"),
             "coverage_end": calculation.get("coverage_end"),
             "is_complete": calculation.get("is_complete"),
+            "missing_days": calculation.get("missing_days"),
             "grid_import_kwh": calculation.get("grid_import_kwh"),
             "grid_export_kwh": calculation.get("grid_export_kwh"),
             "peak_demand_kw": calculation.get("peak_demand_kw"),
