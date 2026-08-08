@@ -108,6 +108,7 @@ class ShsApiClient:
         self,
         readings: list[dict[str, Any]],
         calculations: list[dict[str, Any]] | None = None,
+        supplier_costs: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Push daily readings and monthly calculations; idempotent server-side."""
         return await self._request(
@@ -116,5 +117,6 @@ class ShsApiClient:
             json_body={
                 "readings": readings,
                 "calculations": calculations or [],
+                "supplier_costs": supplier_costs or [],
             },
         )

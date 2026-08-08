@@ -32,6 +32,8 @@ from .const import (
     ISSUE_SUBSCRIPTION_INACTIVE,
     MAX_KWH_PER_READING,
     OPT_PREFIX_ENTITIES,
+    OPT_SUPPLIER_EXPORT_PRICE,
+    OPT_SUPPLIER_IMPORT_PRICE,
     STATUS_POLL_INTERVAL_HOURS,
     STORAGE_KEY_TEMPLATE,
     STORAGE_VERSION,
@@ -72,6 +74,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_push_date: str | None = None
         self.last_push_error: str | None = None
         self.skipped_readings: list[str] = []
+        self.supplier_cost_days = 0
         self.tariff_catalog: dict[str, Any] | None = None
         self.tariff_status = "not_configured"
         self.missing_questions: list[str] = []
@@ -288,6 +291,107 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for timestamp, change in sorted(import_by_hour.items())
         ]
 
+    async def _hourly_price_means(
+        self, entity_ids: list[str], start: datetime, end: datetime
+    ) -> dict[str, dict[datetime, float]]:
+        """Read hourly mean prices, keyed by entity then hour."""
+        if not entity_ids:
+            return {}
+        end_utc = dt_util.as_utc(end)
+        stats = await get_instance(self.hass).async_add_executor_job(
+            statistics_during_period,
+            self.hass,
+            dt_util.as_utc(start),
+            end_utc,
+            set(entity_ids),
+            "hour",
+            None,
+            {"mean"},
+        )
+        result: dict[str, dict[datetime, float]] = {}
+        for entity_id, rows in stats.items():
+            means: dict[datetime, float] = {}
+            for row in rows:
+                start_value = row.get("start")
+                mean = row.get("mean")
+                if start_value is None or mean is None:
+                    continue
+                if isinstance(start_value, datetime):
+                    start_utc = start_value.astimezone(timezone.utc)
+                else:
+                    start_utc = dt_util.utc_from_timestamp(float(start_value))
+                if start_utc >= end_utc:
+                    continue
+                means[start_utc] = float(mean)
+            result[entity_id] = means
+        return result
+
+    async def _supplier_daily_costs(
+        self,
+        entities_by_category: dict[str, list[str]],
+        start: datetime,
+        end: datetime,
+    ) -> list[dict[str, Any]]:
+        """Value each hour's grid energy at that hour's supplier price.
+
+        The grid tariff never covers the energy itself, so this is the missing
+        half of what a day actually cost. Pricing hour by hour rather than on a
+        daily average is the whole point: consumption correlates with price.
+        """
+        import_entity = self.entry.options.get(OPT_SUPPLIER_IMPORT_PRICE) or None
+        export_entity = self.entry.options.get(OPT_SUPPLIER_EXPORT_PRICE) or None
+        if not import_entity and not export_entity:
+            return []
+        readings = await self._hourly_grid_readings(entities_by_category, start, end)
+        if not readings:
+            return []
+        prices = await self._hourly_price_means(
+            sorted({entity for entity in (import_entity, export_entity) if entity}),
+            start,
+            end,
+        )
+        import_prices = prices.get(import_entity or "", {})
+        export_prices = prices.get(export_entity or "", {})
+
+        per_day: dict[str, dict[str, float]] = {}
+        for reading in readings:
+            import_price = import_prices.get(reading.start)
+            export_price = export_prices.get(reading.start)
+            if import_price is None and export_price is None:
+                # No price for this hour: leave the day short rather than
+                # valuing energy at a rate that was never quoted.
+                continue
+            day = dt_util.as_local(reading.start).date().isoformat()
+            totals = per_day.setdefault(
+                day,
+                {
+                    "import_kwh": 0.0,
+                    "import_cost_sek": 0.0,
+                    "export_kwh": 0.0,
+                    "export_credit_sek": 0.0,
+                    "priced_hours": 0.0,
+                },
+            )
+            if import_price is not None:
+                totals["import_kwh"] += reading.import_kwh
+                totals["import_cost_sek"] += reading.import_kwh * import_price
+            if export_price is not None:
+                totals["export_kwh"] += reading.export_kwh
+                totals["export_credit_sek"] += reading.export_kwh * export_price
+            totals["priced_hours"] += 1
+
+        return [
+            {
+                "date": day,
+                "import_kwh": round(totals["import_kwh"], 3),
+                "import_cost_sek": round(totals["import_cost_sek"], 2),
+                "export_kwh": round(totals["export_kwh"], 3),
+                "export_credit_sek": round(totals["export_credit_sek"], 2),
+                "priced_hours": int(totals["priced_hours"]),
+            }
+            for day, totals in sorted(per_day.items())
+        ]
+
     @staticmethod
     def _catalog_hash(catalog: dict[str, Any]) -> str:
         encoded = json.dumps(
@@ -443,7 +547,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         calculations, catalog_hash, tariff_attempted = await self._tariff_calculations(
             entities_by_category, days_back, stored
         )
-        if not readings and not calculations:
+        supplier_costs = await self._supplier_daily_costs(
+            entities_by_category, start, today_start
+        )
+        self.supplier_cost_days = len(supplier_costs)
+        if not readings and not calculations and not supplier_costs:
             if tariff_attempted and catalog_hash:
                 stored["tariff_catalog_hash"] = catalog_hash
                 await self._store.async_save(stored)
@@ -451,7 +559,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         try:
-            result = await self.client.push_readings(readings, calculations)
+            result = await self.client.push_readings(
+                readings, calculations, supplier_costs
+            )
         except ShsSubscriptionInactiveError:
             self.last_push_error = "subscription_inactive"
             self._sync_subscription_issue(False)
@@ -472,12 +582,14 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             stored["latest_calculation"] = self.latest_calculation
         await self._store.async_save(stored)
         _LOGGER.debug(
-            "Pushed %s readings and %s calculations "
-            "(accepted=%s, calculations_accepted=%s)",
+            "Pushed %s readings, %s calculations and %s supplier-cost days "
+            "(accepted=%s, calculations_accepted=%s, supplier_costs_accepted=%s)",
             len(readings),
             len(calculations),
+            len(supplier_costs),
             result.get("accepted"),
             result.get("calculations_accepted"),
+            result.get("supplier_costs_accepted"),
         )
 
     async def async_scheduled_push(self, _now: datetime | None = None) -> None:
