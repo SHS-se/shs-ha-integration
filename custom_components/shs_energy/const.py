@@ -51,6 +51,11 @@ PUSH_TIME_HOUR = 0
 PUSH_TIME_MINUTE = 20
 BACKFILL_MAX_DAYS = 30
 
+# Deep supplier-cost sweep. Under the portal's 500-row limit so a whole history
+# still fits in one push, and re-priced only on the first run and on catalogue
+# changes rather than nightly.
+SUPPLIER_BACKFILL_MAX_DAYS = 450
+
 # Mirrors the portal's own per-day sanity bound. Swapping a device behind a
 # total_increasing sensor resets its counter, and the recorder books the whole
 # new total as one day's change — the portal refuses the entire batch over that

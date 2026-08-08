@@ -38,6 +38,7 @@ from .const import (
     OPT_SUPPLIER_IMPORT_PRICE,
     STATUS_POLL_INTERVAL_HOURS,
     STORAGE_KEY_TEMPLATE,
+    SUPPLIER_BACKFILL_MAX_DAYS,
     STORAGE_VERSION,
 )
 from .tariff import (
@@ -375,6 +376,28 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result[entity_id] = means
         return result
 
+    @staticmethod
+    def _supplier_sweep_start(
+        stored: dict[str, Any], catalog_hash: str | None, today_start: datetime
+    ) -> tuple[datetime, bool]:
+        """How far back to re-price supplier cost, and whether that is a deep pass.
+
+        Normally the current month and the one before it: that is the window an
+        arriving invoice gets reconciled against, and recomputing it every night
+        repairs any day a failed push left behind. Once — and again whenever the
+        tariff catalogue changes, so both halves of the bill move together — it
+        sweeps the whole retained history instead, which is what recovers months
+        that predate the feature.
+        """
+        deep_sweep = (
+            not stored.get("supplier_costs_backfilled")
+            or stored.get("supplier_costs_catalog_hash") != catalog_hash
+        )
+        if deep_sweep:
+            return today_start - timedelta(days=SUPPLIER_BACKFILL_MAX_DAYS), True
+        first_of_month = today_start.replace(day=1)
+        return (first_of_month - timedelta(days=1)).replace(day=1), False
+
     async def _supplier_daily_costs(
         self,
         entities_by_category: dict[str, list[str]],
@@ -596,8 +619,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         calculations, catalog_hash, tariff_attempted = await self._tariff_calculations(
             entities_by_category, days_back, stored
         )
+        supplier_sweep_start, deep_sweep = self._supplier_sweep_start(
+            stored, catalog_hash, today_start
+        )
         supplier_costs = await self._supplier_daily_costs(
-            entities_by_category, start, today_start
+            entities_by_category, supplier_sweep_start, today_start
         )
         self.supplier_cost_days = len(supplier_costs)
         if not readings and not calculations and not supplier_costs:
@@ -627,6 +653,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             stored["last_push_date"] = self.last_push_date
         if tariff_attempted and catalog_hash:
             stored["tariff_catalog_hash"] = catalog_hash
+        if deep_sweep:
+            # Only once the portal has accepted it, so a failed push repeats the
+            # sweep rather than marking history done that never landed.
+            stored["supplier_costs_backfilled"] = True
+            stored["supplier_costs_catalog_hash"] = catalog_hash
         if self.latest_calculation:
             stored["latest_calculation"] = self.latest_calculation
         await self._store.async_save(stored)
