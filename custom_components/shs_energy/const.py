@@ -37,6 +37,11 @@ OPT_PREFIX_ENTITIES = "entities_"  # e.g. options["entities_heating"] = [...]
 OPT_SUPPLIER_IMPORT_PRICE = "supplier_import_price_entity"
 OPT_SUPPLIER_EXPORT_PRICE = "supplier_export_price_entity"
 
+# Price-forecast slot length. Swedish settlement moved to quarter-hours, and an
+# optimiser wants the series on its own timestep, so this is configurable.
+OPT_FORECAST_RESOLUTION_MINUTES = "forecast_resolution_minutes"
+DEFAULT_FORECAST_RESOLUTION_MINUTES = 60
+
 # Storage keys for push bookkeeping.
 STORAGE_VERSION = 1
 STORAGE_KEY_TEMPLATE = "shs_energy.{entry_id}"

@@ -15,8 +15,11 @@ from tariff import (  # noqa: E402
     MissingTariffError,
     UnsupportedTariffError,
     calculate_month,
+    current_demand_charge,
     current_grid_prices,
     display_components,
+    grid_operator,
+    grid_price_forecast,
     missing_input_labels,
     tariff_component_definitions,
 )
@@ -613,3 +616,69 @@ class MissingInputLabelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ForecastTests(unittest.TestCase):
+    def test_the_forecast_covers_every_slot_at_the_asked_resolution(self) -> None:
+        payload = catalog(config())
+        start = datetime(2026, 6, 1, 0, 0, tzinfo=TZ)
+        end = datetime(2026, 6, 1, 6, 0, tzinfo=TZ)
+
+        hourly = grid_price_forecast(payload, start, end)
+        quarterly = grid_price_forecast(payload, start, end, 15)
+
+        self.assertEqual(len(hourly), 6)
+        # Swedish settlement is quarter-hourly now, so the series has to follow
+        # the optimiser's timestep rather than assume 24 slots a day.
+        self.assertEqual(len(quarterly), 24)
+        self.assertEqual(hourly[0]["start"], "2026-05-31T22:00:00+00:00")
+
+    def test_the_forecast_prices_match_the_spot_price_for_the_same_moment(self) -> None:
+        payload = catalog(config(production_enabled=True))
+        moment = datetime(2026, 6, 1, 8, 0, tzinfo=TZ)
+        [slot] = grid_price_forecast(payload, moment, moment + timedelta(hours=1))
+        now = current_grid_prices(payload, moment)
+
+        self.assertEqual(slot["import_price_sek_per_kwh"], now["import_price_sek_per_kwh"])
+        self.assertEqual(slot["export_price_sek_per_kwh"], now["export_price_sek_per_kwh"])
+        self.assertEqual(slot["load_period"], now["load_period"])
+
+    def test_slots_outside_the_published_catalogue_are_left_out(self) -> None:
+        payload = catalog(config())
+        start = datetime(2024, 12, 31, 22, 0, tzinfo=TZ)
+        end = datetime(2025, 1, 1, 2, 0, tzinfo=TZ)
+
+        forecast = grid_price_forecast(payload, start, end)
+
+        # The catalogue opens on 2025-01-01; the two 2024 slots are omitted
+        # rather than guessed at.
+        self.assertEqual(len(forecast), 2)
+        self.assertTrue(all(slot["start"] >= "2024-12-31T23:00" for slot in forecast))
+
+    def test_a_naive_bound_is_refused(self) -> None:
+        payload = catalog(config())
+        with self.assertRaises(UnsupportedTariffError):
+            grid_price_forecast(
+                payload, datetime(2026, 6, 1), datetime(2026, 6, 2)
+            )
+
+    def test_the_demand_charge_is_absent_when_the_revision_dropped_it(self) -> None:
+        payload = catalog(config())
+        # June 2026 has no effektavgift; January 2025 does.
+        self.assertIsNone(
+            current_demand_charge(payload, datetime(2026, 6, 1, 12, tzinfo=TZ))
+        )
+        charge = current_demand_charge(payload, datetime(2025, 1, 15, 12, tzinfo=TZ))
+        self.assertIsNotNone(charge)
+        self.assertEqual(charge["rate_sek_per_kw_ex_vat"], 65)
+        self.assertEqual(charge["top_n"], 3)
+
+    def test_the_grid_operator_comes_from_the_configured_profile(self) -> None:
+        operator = grid_operator(catalog(config()))
+        self.assertEqual(operator["name"], "Ellevio")
+        self.assertEqual(operator["provider_key"], "ellevio")
+
+    def test_no_operator_without_a_configuration(self) -> None:
+        payload = catalog(config())
+        payload["configuration"] = None
+        self.assertIsNone(grid_operator(payload))

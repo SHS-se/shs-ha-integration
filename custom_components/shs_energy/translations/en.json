@@ -76,6 +76,9 @@
       },
       "total_export_price": {
         "name": "Total export price"
+      },
+      "grid_operator": {
+        "name": "Grid operator"
       }
     }
   },

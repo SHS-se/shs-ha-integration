@@ -457,6 +457,106 @@ def current_grid_prices(
     }
 
 
+def grid_price_forecast(
+    payload: dict[str, Any],
+    start: datetime,
+    end: datetime,
+    resolution_minutes: int = 60,
+) -> list[dict[str, Any]]:
+    """Marginal grid price for every slot from ``start`` up to ``end``.
+
+    Grid tariffs are published ahead of time, so this is exact rather than
+    predicted: revision boundaries and high/low load flips inside the window are
+    resolved slot by slot. The resolution is a parameter because Swedish
+    settlement moved to quarter-hours, and an optimiser wants the price series
+    on its own timestep rather than ours.
+
+    Slots outside the published catalogue are omitted rather than guessed.
+    """
+    if resolution_minutes <= 0:
+        raise UnsupportedTariffError("resolution must be a positive number of minutes")
+    if start.tzinfo is None or end.tzinfo is None:
+        raise UnsupportedTariffError("forecast bounds must be timezone-aware")
+
+    step = timedelta(minutes=resolution_minutes)
+    forecast: list[dict[str, Any]] = []
+    cursor = start
+    while cursor < end:
+        prices = current_grid_prices(payload, cursor)
+        if prices is not None:
+            forecast.append({
+                "start": cursor.astimezone(timezone.utc).isoformat(),
+                "import_price_sek_per_kwh": prices["import_price_sek_per_kwh"],
+                "export_price_sek_per_kwh": prices["export_price_sek_per_kwh"],
+                "load_period": prices["load_period"],
+                "tariff_revision": prices["tariff_revision"],
+            })
+        cursor += step
+    return forecast
+
+
+def current_demand_charge(
+    payload: dict[str, Any], when: datetime
+) -> dict[str, Any] | None:
+    """The effektavgift rule in force at ``when``, or None when there is none.
+
+    Ellevio dropped the demand charge in the June 2026 revision, so this is
+    routinely absent — but it has been present before and is expected back, and
+    an optimiser needs to know which of the two worlds it is in.
+    """
+    catalog = _Catalog(_as_dict(payload, "tariff payload"))
+    if catalog.configuration is None:
+        return None
+    resolved = catalog.resolve_optional(when.astimezone(catalog.timezone).date())
+    if resolved is None:
+        return None
+
+    plan, _selector = _plan(resolved)
+    demand_raw = plan.get("demand")
+    if demand_raw is None:
+        return None
+    demand = _as_dict(demand_raw, "demand rule")
+
+    include_vat = resolved.configuration.get("include_vat")
+    if not isinstance(include_vat, bool):
+        raise UnsupportedTariffError("include_vat must be boolean")
+    vat_rate = (
+        _number(resolved.definition.get("vat_rate"), "VAT rate") if include_vat else 0.0
+    )
+    rate_ex_vat = _number(demand.get("rate_sek_per_kw_ex_vat"), "demand rate")
+
+    return {
+        "rate_sek_per_kw": round(rate_ex_vat * (1 + vat_rate), 5),
+        "rate_sek_per_kw_ex_vat": round(rate_ex_vat, 5),
+        "top_n": demand.get("top_n"),
+        "distinct_local_days": demand.get("distinct_local_days"),
+        "night_start_hour": demand.get("night_start_hour"),
+        "night_end_hour": demand.get("night_end_hour"),
+        "night_factor": demand.get("night_factor"),
+        "tariff_revision": resolved.revision,
+    }
+
+
+def grid_operator(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Identify the network operator the configured tariff belongs to."""
+    catalog_payload = _as_dict(payload, "tariff payload")
+    configuration = catalog_payload.get("configuration")
+    if not isinstance(configuration, dict):
+        return None
+    profile_id = configuration.get("profile_id")
+    for profile in _as_list(catalog_payload.get("profiles", []), "profiles"):
+        if not isinstance(profile, dict) or profile.get("id") != profile_id:
+            continue
+        return {
+            "name": profile.get("display_name") or profile.get("provider_name"),
+            "provider_key": profile.get("provider_key"),
+            "provider_name": profile.get("provider_name"),
+            "tariff_key": profile.get("tariff_key"),
+            "currency": profile.get("currency"),
+        }
+    return None
+
+
 def _display_group(component: dict[str, Any]) -> tuple[Any, Any, Any]:
     return (
         component.get("tariff_revision"),

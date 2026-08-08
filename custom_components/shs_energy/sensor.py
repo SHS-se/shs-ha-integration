@@ -37,6 +37,7 @@ async def async_setup_entry(
         [
             ShsSubscriptionSensor(coordinator),
             ShsTariffStatusSensor(coordinator),
+            ShsGridOperatorSensor(coordinator),
             ShsCurrentGridCostSensor(coordinator),
             ShsGridPriceSensor(coordinator, "import"),
             ShsGridPriceSensor(coordinator, "export"),
@@ -119,6 +120,34 @@ class ShsLastPushSensor(ShsBaseSensor):
             "last_calculation_error": self.coordinator.last_calculation_error,
             "skipped_readings": self.coordinator.skipped_readings,
             "supplier_cost_days": self.coordinator.supplier_cost_days,
+        }
+
+
+class ShsGridOperatorSensor(ShsBaseSensor):
+    """Which network operator's tariff this home is billed on.
+
+    Read-only on purpose: the website owns who the customer's operator is,
+    because that is what the invoices and the tariff timeline are keyed to.
+    """
+
+    _attr_translation_key = "grid_operator"
+
+    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_grid_operator"
+
+    @property
+    def native_value(self) -> str | None:
+        operator = self.coordinator.grid_operator
+        return None if operator is None else operator["name"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        operator = self.coordinator.grid_operator or {}
+        return {
+            "provider_key": operator.get("provider_key"),
+            "tariff_key": operator.get("tariff_key"),
+            "currency": operator.get("currency"),
         }
 
 
@@ -259,13 +288,22 @@ class ShsGridPriceSensor(ShsBaseSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         prices = self.coordinator.grid_prices or {}
+        key = f"{self.direction}_price_sek_per_kwh"
         shared = {
             "load_period": prices.get("load_period"),
             "vat_rate": prices.get("vat_rate"),
             "tariff_revision": prices.get("tariff_revision"),
             "excludes": "electricity supplier energy price",
+            # Published ahead of time, so this is exact rather than predicted.
+            # Shaped for an optimiser: one entry per slot, UTC start, price.
+            "forecast": [
+                {"start": slot["start"], "price_sek_per_kwh": slot[key]}
+                for slot in self.coordinator.grid_price_forecast
+            ],
         }
         if self.direction == "import":
+            demand = self.coordinator.demand_charge
+            calculation = self.coordinator.latest_calculation or {}
             return {
                 **shared,
                 "transfer_sek_per_kwh": prices.get("import_transfer_sek_per_kwh"),
@@ -273,6 +311,14 @@ class ShsGridPriceSensor(ShsBaseSensor):
                 "price_sek_per_kwh_ex_vat": prices.get(
                     "import_price_sek_per_kwh_ex_vat"
                 ),
+                # An optimiser charging a peak needs the rate and the peak the
+                # month has already incurred, or it will re-buy a peak it is
+                # being billed for anyway.
+                "capacity_cost_per_kw": None if demand is None else demand[
+                    "rate_sek_per_kw"
+                ],
+                "demand_charge": demand,
+                "billing_period_peak_kw": calculation.get("peak_demand_kw"),
             }
         return {
             **shared,

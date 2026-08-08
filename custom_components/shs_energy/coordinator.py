@@ -27,10 +27,12 @@ from .api import (
 from .const import (
     BACKFILL_MAX_DAYS,
     CATEGORIES,
+    DEFAULT_FORECAST_RESOLUTION_MINUTES,
     DOMAIN,
     ISSUE_MISSING_CUSTOMER_INPUT,
     ISSUE_SUBSCRIPTION_INACTIVE,
     MAX_KWH_PER_READING,
+    OPT_FORECAST_RESOLUTION_MINUTES,
     OPT_PREFIX_ENTITIES,
     OPT_SUPPLIER_EXPORT_PRICE,
     OPT_SUPPLIER_IMPORT_PRICE,
@@ -42,7 +44,10 @@ from .tariff import (
     HourlyGridReading,
     TariffError,
     calculate_month,
+    current_demand_charge,
     current_grid_prices,
+    grid_operator,
+    grid_price_forecast,
     display_components,
     earliest_tariff_date,
     missing_input_labels,
@@ -195,6 +200,50 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return current_grid_prices(catalog, dt_util.utcnow())
         except TariffError as err:
             _LOGGER.debug("Grid price unavailable: %s", err)
+            return None
+
+    @property
+    def grid_price_forecast(self) -> list[dict[str, Any]]:
+        """Exact grid prices from this slot to the end of tomorrow."""
+        catalog = self.tariff_catalog
+        if not catalog:
+            return []
+        resolution = self.entry.options.get(
+            OPT_FORECAST_RESOLUTION_MINUTES, DEFAULT_FORECAST_RESOLUTION_MINUTES
+        )
+        now = dt_util.now()
+        start = now.replace(minute=0, second=0, microsecond=0) + timedelta(
+            minutes=resolution * (now.minute // resolution)
+        )
+        end = dt_util.start_of_local_day() + timedelta(days=2)
+        try:
+            return grid_price_forecast(catalog, start, end, resolution)
+        except TariffError as err:
+            _LOGGER.debug("Grid price forecast unavailable: %s", err)
+            return []
+
+    @property
+    def demand_charge(self) -> dict[str, Any] | None:
+        """The effektavgift rule in force right now, if the revision has one."""
+        catalog = self.tariff_catalog
+        if not catalog:
+            return None
+        try:
+            return current_demand_charge(catalog, dt_util.utcnow())
+        except TariffError as err:
+            _LOGGER.debug("Demand charge unavailable: %s", err)
+            return None
+
+    @property
+    def grid_operator(self) -> dict[str, Any] | None:
+        """The network operator whose tariff this home is on."""
+        catalog = self.tariff_catalog
+        if not catalog:
+            return None
+        try:
+            return grid_operator(catalog)
+        except TariffError as err:
+            _LOGGER.debug("Grid operator unavailable: %s", err)
             return None
 
     def _configured_entities(self) -> dict[str, list[str]]:
