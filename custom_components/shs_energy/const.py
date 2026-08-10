@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 DOMAIN = "shs_energy"
 
 # Supabase edge-functions origin (prod). Overridable in the config flow so the
 # same build can point at the test project (vxqpgbzseckgceopitpm).
 DEFAULT_BASE_URL = "https://oosxndduqzhvrorgogaw.supabase.co/functions/v1"
+PRODUCTION_BACKEND_HOST = "oosxndduqzhvrorgogaw.supabase.co"
+TEST_BACKEND_HOST = "vxqpgbzseckgceopitpm.supabase.co"
 CONF_BASE_URL = "base_url"
 CONF_DEVICE_TOKEN = "device_token"
 CONF_DEVICE_TOKEN_ID = "device_token_id"
@@ -14,6 +18,19 @@ CONF_CUSTOMER_NAME = "customer_name"
 CONF_HOME_ID = "home_id"
 CONF_PAIRING_CODE = "pairing_code"
 CONF_DEVICE_NAME = "device_name"
+
+
+def backend_attributes(base_url: str) -> dict[str, str | None]:
+    """Return non-secret connection details suitable for diagnostics."""
+    host = urlparse(base_url).hostname
+    environment = (
+        "production"
+        if host == PRODUCTION_BACKEND_HOST
+        else "test"
+        if host == TEST_BACKEND_HOST
+        else "custom"
+    )
+    return {"backend_environment": environment, "backend_host": host}
 
 # Options: each category maps to a list of energy sensor entity_ids
 # (total / total_increasing kWh sensors). Daily deltas are summed per category.

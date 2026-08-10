@@ -19,6 +19,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_BASE_URL,
     CONF_CUSTOMER_NAME,
     CONF_DEVICE_TOKEN_ID,
     CONF_HOME_ID,
@@ -33,6 +34,7 @@ from .const import (
     OPT_SUPPLIER_IMPORT_PRICE,
     OPT_PLANNING_MODE,
     PLANNING_MODE_DISABLED,
+    backend_attributes,
 )
 from .configuration import resolved_options
 from .optimisation import OptimisationInputError, validate_plan_contract
@@ -120,6 +122,7 @@ class ShsSubscriptionSensor(ShsBaseSensor):
             "home_id": data.get("home_id") or self.coordinator.entry.data.get(
                 CONF_HOME_ID
             ),
+            **backend_attributes(self.coordinator.entry.data[CONF_BASE_URL]),
         }
 
 
@@ -180,7 +183,7 @@ class ShsOptimisationStatusSensor(ShsBaseSensor):
                     return "expired"
                 if now >= datetime.fromisoformat(plan["binding_until"]):
                     return "advisory_only"
-                return "waiting"
+                return "ready"
             except (KeyError, TypeError, ValueError):
                 return "invalid"
         return "ready"
@@ -199,7 +202,9 @@ class ShsOptimisationStatusSensor(ShsBaseSensor):
             "binding_until": plan.get("binding_until"),
             "last_push": self.coordinator.last_optimisation_push,
             "last_error": self.coordinator.last_optimisation_error,
-            "home_id": self.coordinator.entry.data.get(CONF_HOME_ID),
+            "home_id": (self.coordinator.data or {}).get("home_id")
+            or self.coordinator.entry.data.get(CONF_HOME_ID),
+            **backend_attributes(self.coordinator.entry.data[CONF_BASE_URL]),
             "actual_slots_accepted": self.coordinator.last_actual_slots_accepted,
             "actuals_accepted_until": self.coordinator.actuals_accepted_until,
             "configuration_reviewed_at": self.coordinator.entry.options.get(
