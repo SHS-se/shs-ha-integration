@@ -370,16 +370,33 @@ async def async_discover_configuration(
     for source in preferences.get("energy_sources", []):
         source_type = source.get("type")
         if source_type == "grid":
-            mapped["grid_import"] = [
+            # Home Assistant has represented a grid source both with direct
+            # ``stat_energy_*`` fields and with per-flow lists. They describe
+            # the same curated Energy Dashboard contract.
+            grid_import = [
+                value
+                for candidate in (source.get("stat_energy_from"),)
+                if (value := _entity_id(candidate))
+            ] + [
                 value
                 for flow in source.get("flow_from", [])
                 if (value := _entity_id(flow.get("stat_energy_from")))
             ]
-            mapped["grid_export"] = [
+            grid_export = [
+                value
+                for candidate in (source.get("stat_energy_to"),)
+                if (value := _entity_id(candidate))
+            ] + [
                 value
                 for flow in source.get("flow_to", [])
                 if (value := _entity_id(flow.get("stat_energy_to")))
             ]
+            mapped["grid_import"] = list(dict.fromkeys(grid_import))
+            mapped["grid_export"] = list(dict.fromkeys(grid_export))
+            if source.get("entity_energy_price"):
+                import_prices.append(source["entity_energy_price"])
+            if source.get("entity_energy_price_export"):
+                export_prices.append(source["entity_energy_price_export"])
             import_prices.extend(
                 flow["entity_energy_price"]
                 for flow in source.get("flow_from", [])

@@ -36,8 +36,9 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
   backfilled automatically (up to 30 days) after downtime.
 - **Quarter-hour exchange**: every completed quarter the integration accepts
   only three complete HA 5-minute statistic buckets and sums them into one
-  15-minute row. It requests a rolling 72-hour plan hourly. Per-second states
-  and raw recorder rows never leave HA.
+  15-minute row. It refreshes the rolling 72-hour plan before expiry and
+  retries on the next quarter after a failed attempt. Per-second states and
+  raw recorder rows never leave HA.
 - **Forecast truth**: PV, supplier import and supplier export forecasts are
   explicit timestamped sources. The two price directions must be different;
   missing/stale data pauses planning instead of being repeated or substituted.
@@ -125,7 +126,8 @@ with an inactive state so Home Assistant retains their history.
 - Recorder statistics get a one-quarter settling delay; the last accepted
   quarter is re-sent once by idempotent upsert so late fields can be completed
   without creating another database row.
-- The large current snapshot/plan is overwritten hourly, not appended.
+- The large current snapshot/plan is overwritten whenever it is refreshed,
+  normally every 45–60 minutes, rather than appended.
 - The portal retains quarter-hours for 120 days and compact hourly run
   summaries for 30 days.
 - A full retained quarter-hour history is 11,520 sparse rows per home, not

@@ -112,16 +112,19 @@ from .optimisation import (
     aggregate_category_changes,
     build_base_load_profile,
     calibration_summary,
+    daily_service_window,
     daily_requirement,
     discrete_current_control,
     extract_timestamped_forecast,
     normalized_fraction,
+    optimisation_plan_due,
     parse_number,
     quarter_start,
     require_fresh_source,
     state_is_on,
     utc_slots,
     validate_plan_contract,
+    validate_service_windows,
 )
 from .tariff import (
     HourlyGridReading,
@@ -1171,28 +1174,29 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 daily_totals.get(category, {}), category
             )
             samples[category] = count
-            deadline_time = self._time_option(options[deadline_key], deadline_key)
-            baseline_time = self._time_option(options[baseline_key], baseline_key)
+            minimum_run = parse_number(options[run_key], run_key)
+            if not minimum_run.is_integer() or minimum_run < 1:
+                raise OptimisationInputError(
+                    f"{run_key} must be a positive whole number"
+                )
             local_days = sorted({slot.astimezone(local_tz).date() for slot in horizon})
             for day in local_days:
-                deadline = datetime.combine(day, deadline_time, local_tz).astimezone(timezone.utc)
-                if deadline <= first or deadline > end:
-                    continue
-                earliest = max(
-                    first,
-                    datetime.combine(day, time.min, local_tz).astimezone(timezone.utc),
+                window = daily_service_window(
+                    horizon,
+                    day,
+                    str(local_tz),
+                    options[deadline_key],
+                    options[baseline_key],
+                    label=device,
                 )
+                if window is None:
+                    continue
+                earliest, deadline, baseline = window
                 required = requirement
                 if day == today:
                     required = max(0.0, requirement - done_today.get(category, 0.0))
                 if required <= 0:
                     continue
-                baseline = datetime.combine(day, baseline_time, local_tz).astimezone(timezone.utc)
-                minimum_run = parse_number(options[run_key], run_key)
-                if not minimum_run.is_integer() or minimum_run < 1:
-                    raise OptimisationInputError(
-                        f"{run_key} must be a positive whole number"
-                    )
                 services.append({
                     "id": f"{device}:{day.isoformat()}",
                     "device": device,
@@ -1205,7 +1209,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     },
                     "min_run_slots": int(minimum_run),
                     "priority": priority,
-                    "baseline_preferred_start": max(earliest, baseline).isoformat(),
+                    "baseline_preferred_start": baseline.isoformat(),
                 })
 
         connected_id = (
@@ -1338,6 +1342,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "priority": 3,
                     "baseline_preferred_start": first.isoformat(),
                 })
+        validate_service_windows(services, horizon)
         return services, samples
 
     @staticmethod
@@ -1788,7 +1793,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_optimisation_push(
         self, _now: datetime | None = None, *, force_plan: bool = False
     ) -> None:
-        """Upload completed quarter-hours; request a full plan at most hourly."""
+        """Upload completed quarters and refresh or retry the rolling plan."""
         async with self._push_lock:
             stored = await self._store.async_load() or {}
             self.optimisation_plan = self.optimisation_plan or stored.get(
@@ -1828,11 +1833,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # calibration ledger saw them.
                 self._observe_calibration(stored, actuals)
                 last_plan = stored.get("optimisation_plan")
-                plan_due = force_plan or not last_plan or (
-                    dt_util.utcnow().minute < 15
-                    and dt_util.utcnow() - datetime.fromisoformat(
-                        last_plan.get("issued_at", "1970-01-01T00:00:00+00:00")
-                    ) >= timedelta(minutes=45)
+                plan_due = optimisation_plan_due(
+                    last_plan,
+                    dt_util.utcnow(),
+                    force=force_plan,
+                    retry_after_error=bool(self.last_optimisation_error),
                 )
                 snapshot = None
                 if plan_due:

@@ -9,7 +9,7 @@ or location-specific assumptions.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from math import ceil, isfinite
 from statistics import median
 from typing import Any, Iterable
@@ -43,6 +43,127 @@ def quarter_start(value: datetime) -> datetime:
     utc = value.astimezone(timezone.utc)
     epoch = int(utc.timestamp())
     return datetime.fromtimestamp(epoch - epoch % SLOT_SECONDS, timezone.utc)
+
+
+def daily_service_window(
+    horizon: list[datetime],
+    day: date,
+    timezone_name: str,
+    deadline_raw: Any,
+    baseline_raw: Any,
+    *,
+    label: str,
+) -> tuple[datetime, datetime, datetime] | None:
+    """Return one daily service window guaranteed to fit the slot horizon.
+
+    ``24:00`` is a useful human deadline but is not a Python ``time``. Treat
+    it as midnight at the end of the named service day. Other clocks must be
+    quarter-hour aligned because the planner cannot execute partial slots.
+    """
+    if not horizon:
+        raise OptimisationInputError("optimisation horizon is empty")
+    if any(value.tzinfo is None for value in horizon):
+        raise OptimisationInputError("optimisation horizon must be timezone-aware")
+
+    def parse_clock(raw: Any, field: str, *, allow_end_of_day: bool) -> tuple[time, int]:
+        value = str(raw).strip()
+        if allow_end_of_day and value == "24:00":
+            return time.min, 1
+        try:
+            parsed = time.fromisoformat(value)
+        except ValueError as err:
+            suffix = " or 24:00" if allow_end_of_day else ""
+            raise OptimisationInputError(
+                f"{field} must be HH:MM{suffix}"
+            ) from err
+        if parsed.second or parsed.microsecond:
+            raise OptimisationInputError(
+                f"{field} must align to a 15-minute boundary"
+            )
+        parsed = parsed.replace(second=0, microsecond=0, tzinfo=None)
+        if parsed.minute % 15:
+            raise OptimisationInputError(
+                f"{field} must align to a 15-minute boundary"
+            )
+        return parsed, 0
+
+    zone = ZoneInfo(timezone_name)
+    deadline_clock, deadline_day_offset = parse_clock(
+        deadline_raw, f"{label} deadline", allow_end_of_day=True
+    )
+    baseline_clock, _ = parse_clock(
+        baseline_raw, f"{label} baseline start", allow_end_of_day=False
+    )
+    first = horizon[0].astimezone(timezone.utc)
+    end = horizon[-1].astimezone(timezone.utc) + timedelta(seconds=SLOT_SECONDS)
+    local_start = datetime.combine(day, time.min, zone).astimezone(timezone.utc)
+    deadline = datetime.combine(
+        day + timedelta(days=deadline_day_offset), deadline_clock, zone
+    ).astimezone(timezone.utc)
+    if deadline <= first or deadline > end:
+        return None
+    earliest = max(first, local_start)
+    if earliest >= deadline:
+        return None
+    last_start = deadline - timedelta(seconds=SLOT_SECONDS)
+    baseline = datetime.combine(day, baseline_clock, zone).astimezone(timezone.utc)
+    preferred = min(max(earliest, baseline), last_start)
+    return earliest, deadline, preferred
+
+
+def validate_service_windows(
+    services: Iterable[dict[str, Any]], horizon: list[datetime]
+) -> None:
+    """Fail locally with exact values before an invalid snapshot is uploaded."""
+    if not horizon:
+        raise OptimisationInputError("optimisation horizon is empty")
+    first = horizon[0].astimezone(timezone.utc)
+    end = horizon[-1].astimezone(timezone.utc) + timedelta(seconds=SLOT_SECONDS)
+    for service in services:
+        service_id = str(service.get("id") or "unknown")
+        try:
+            earliest = datetime.fromisoformat(str(service["earliest_start"]))
+            deadline = datetime.fromisoformat(str(service["deadline"]))
+        except (KeyError, ValueError) as err:
+            raise OptimisationInputError(
+                f"{service_id} has an invalid service timestamp"
+            ) from err
+        if earliest.tzinfo is None or deadline.tzinfo is None:
+            raise OptimisationInputError(
+                f"{service_id} service timestamps must include a timezone"
+            )
+        earliest = earliest.astimezone(timezone.utc)
+        deadline = deadline.astimezone(timezone.utc)
+        if not first <= earliest < deadline <= end:
+            raise OptimisationInputError(
+                f"{service_id} window {earliest.isoformat()}..{deadline.isoformat()} "
+                f"is outside horizon {first.isoformat()}..{end.isoformat()}"
+            )
+
+
+def optimisation_plan_due(
+    plan: dict[str, Any] | None,
+    now: datetime,
+    *,
+    force: bool = False,
+    retry_after_error: bool = False,
+) -> bool:
+    """Request a plan before expiry and every quarter after a failed attempt."""
+    if now.tzinfo is None:
+        raise OptimisationInputError("current time must be timezone-aware")
+    if force or retry_after_error or not plan or plan.get("status") != "ready":
+        return True
+    try:
+        valid_until = datetime.fromisoformat(str(plan["valid_until"]))
+    except (KeyError, ValueError) as err:
+        raise OptimisationInputError("cached plan valid_until is invalid") from err
+    if valid_until.tzinfo is None:
+        raise OptimisationInputError("cached plan valid_until must include a timezone")
+    # Plans live for 75 minutes. A 30-minute margin normally refreshes them
+    # every 45 minutes and leaves two quarter-hour retry opportunities.
+    return now.astimezone(timezone.utc) >= (
+        valid_until.astimezone(timezone.utc) - timedelta(minutes=30)
+    )
 
 
 def parse_number(raw: Any, label: str) -> float:

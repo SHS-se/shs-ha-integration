@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import unittest
@@ -14,9 +14,13 @@ from optimisation import (  # noqa: E402
     aggregate_category_changes,
     build_base_load_profile,
     calibration_summary,
+    daily_service_window,
     discrete_current_control,
     extract_timestamped_forecast,
+    optimisation_plan_due,
     require_fresh_source,
+    utc_slots,
+    validate_service_windows,
     validate_plan_contract,
 )
 
@@ -99,6 +103,83 @@ class QuarterAggregationTests(unittest.TestCase):
 
 
 class ForecastTests(unittest.TestCase):
+    def test_daily_service_windows_fit_a_rolling_72_hour_horizon(self) -> None:
+        captured = datetime(2026, 8, 10, 17, 47, tzinfo=timezone.utc)
+        horizon = utc_slots(captured, 72)
+
+        self.assertIsNone(daily_service_window(
+            horizon,
+            date(2026, 8, 10),
+            "Europe/Stockholm",
+            "20:00",
+            "09:30",
+            label="pool",
+        ))
+        first_full_day = daily_service_window(
+            horizon,
+            date(2026, 8, 11),
+            "Europe/Stockholm",
+            "20:00",
+            "09:30",
+            label="pool",
+        )
+        self.assertEqual(first_full_day, (
+            datetime(2026, 8, 10, 22, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 11, 18, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 11, 7, 30, tzinfo=timezone.utc),
+        ))
+        final_day = daily_service_window(
+            horizon,
+            date(2026, 8, 13),
+            "Europe/Stockholm",
+            "20:00",
+            "09:30",
+            label="pool",
+        )
+        self.assertEqual(final_day[1], horizon[-1] + timedelta(minutes=15))
+
+    def test_end_of_day_deadline_and_local_window_validation(self) -> None:
+        captured = datetime(2026, 8, 10, 17, 47, tzinfo=timezone.utc)
+        horizon = utc_slots(captured, 72)
+        earliest, deadline, preferred = daily_service_window(
+            horizon,
+            date(2026, 8, 10),
+            "Europe/Stockholm",
+            "24:00",
+            "00:00",
+            label="boiler",
+        )
+        self.assertEqual(earliest, horizon[0])
+        self.assertEqual(deadline, datetime(2026, 8, 10, 22, 0, tzinfo=timezone.utc))
+        self.assertEqual(preferred, horizon[0])
+        validate_service_windows([{
+            "id": "boiler:2026-08-10",
+            "earliest_start": earliest.isoformat(),
+            "deadline": deadline.isoformat(),
+        }], horizon)
+        with self.assertRaisesRegex(OptimisationInputError, "outside horizon"):
+            validate_service_windows([{
+                "id": "pool:bad",
+                "earliest_start": (horizon[0] - timedelta(minutes=15)).isoformat(),
+                "deadline": horizon[4].isoformat(),
+            }], horizon)
+
+    def test_plan_refresh_retries_before_expiry_and_after_failure(self) -> None:
+        issued = datetime(2026, 8, 10, 18, 0, tzinfo=timezone.utc)
+        plan = {
+            "status": "ready",
+            "valid_until": (issued + timedelta(minutes=75)).isoformat(),
+        }
+        self.assertFalse(optimisation_plan_due(
+            plan, issued + timedelta(minutes=44)
+        ))
+        self.assertTrue(optimisation_plan_due(
+            plan, issued + timedelta(minutes=45)
+        ))
+        self.assertTrue(optimisation_plan_due(
+            plan, issued + timedelta(minutes=15), retry_after_error=True
+        ))
+
     def test_extracts_timestamped_watts_and_reports_provenance(self) -> None:
         entity = {
             "entity_id": "sensor.pv_forecast",
