@@ -23,7 +23,7 @@
     "step": {
       "init": {
         "title": "Energy category mapping",
-        "description": "Pick the energy sensors (kWh, total_increasing) that belong to each category. Grid import is required for automatic network-cost calculations. Daily category totals and monthly calculated costs are pushed to SHS every night. The two price sensors at the end are optional: set them to your supplier's per-kWh prices and the total import/export price sensors will add the grid tariff to them.",
+        "description": "Map daily energy categories and the explicit live inputs used by the 15-minute planner. Raw recorder samples remain in Home Assistant. Import and export forecasts must be separate timestamped series; missing inputs disable planning instead of being guessed.",
         "data": {
           "entities_heating": "Heating (radiators, floor heating, heat pump heating)",
           "entities_hot_water": "Hot water (boiler/water heater)",
@@ -36,8 +36,49 @@
           "entities_grid_export": "Grid export (sold to grid)",
           "entities_solar_production": "Solar production",
           "entities_total_consumption": "Total consumption (whole home)",
+          "entities_battery_charge": "Battery charging energy (optimisation actuals only)",
+          "entities_battery_discharge": "Battery discharging energy (optimisation actuals only)",
           "supplier_import_price_entity": "Electricity price you pay (SEK/kWh, optional)",
-          "supplier_export_price_entity": "Electricity price you are paid for exports (SEK/kWh, optional)"
+          "supplier_export_price_entity": "Current electricity price paid for exports (SEK/kWh, optional)",
+          "forecast_resolution_minutes": "Forecast resolution (minutes)",
+          "pv_forecast_entities": "PV forecast entities (timestamped watts attribute)",
+          "supplier_import_forecast_entity": "Supplier import forecast entity",
+          "supplier_export_forecast_entity": "Supplier export/spot forecast entity",
+          "electricity_price_area": "Swedish electricity price area (SE1–SE4)",
+          "pv_forecast_latitude": "PV forecast latitude",
+          "pv_forecast_longitude": "PV forecast longitude",
+          "battery_soc_entity": "Battery state of charge entity",
+          "grid_export_power_entity": "Live grid export power entity (reactive surplus)",
+          "battery_capacity_kwh": "Usable battery capacity (kWh)",
+          "battery_charge_max_w": "Battery maximum charge power (W)",
+          "battery_discharge_max_w": "Battery maximum discharge power (W)",
+          "battery_min_soc": "Battery hard minimum SOC (fraction)",
+          "battery_max_soc": "Battery maximum SOC (fraction)",
+          "battery_target_soc": "End-of-solar-day battery target (fraction)",
+          "battery_target_is_hard": "Treat battery target as a hard constraint",
+          "battery_charge_efficiency": "Battery charge efficiency (fraction)",
+          "battery_discharge_efficiency": "Battery discharge efficiency (fraction)",
+          "grid_import_limit_w": "Grid import limit (W)",
+          "grid_export_limit_w": "Grid export limit (W)",
+          "terminal_soc_min": "Minimum SOC at the end of the horizon",
+          "terminal_energy_value_sek_per_kwh": "Value of stored terminal energy (SEK/kWh)",
+          "pool_power_w": "Pool heater and required pump power (W)",
+          "pool_enabled_entity": "Pool season/enabled entity",
+          "pool_min_run_slots": "Pool minimum run (15-minute slots)",
+          "pool_deadline": "Pool daily deadline (HH:MM)",
+          "pool_baseline_start": "Pool baseline start (HH:MM)",
+          "boiler_power_w": "Water boiler power (W)",
+          "boiler_min_run_slots": "Water boiler minimum run (15-minute slots)",
+          "boiler_deadline": "Water boiler daily deadline (HH:MM)",
+          "boiler_baseline_start": "Water boiler baseline start (HH:MM)",
+          "ev_connected_entity": "EV connected entity",
+          "ev_soc_entity": "EV state of charge entity",
+          "ev_target_soc_entity": "EV target state of charge entity",
+          "ev_departure_entity": "EV departure timestamp entity",
+          "ev_power_w": "Currently available EV charging power (W)",
+          "ev_battery_kwh": "EV usable battery capacity (kWh)",
+          "ev_charge_efficiency": "EV charging efficiency (fraction)",
+          "ev_min_run_slots": "EV minimum run (15-minute slots)"
         }
       }
     }
@@ -79,6 +120,12 @@
       },
       "grid_operator": {
         "name": "Grid operator"
+      },
+      "optimisation_status": {
+        "name": "Energy plan status"
+      },
+      "reactive_surplus": {
+        "name": "Reactive surplus"
       }
     }
   },
@@ -90,6 +137,10 @@
     "subscription_inactive": {
       "title": "Smart Home Solutions subscription inactive",
       "description": "Your SHS subscription is no longer active, so energy data is not being pushed to your energy history. Renew the subscription in the customer portal to resume."
+    },
+    "optimisation_configuration": {
+      "title": "Energy planning inputs required",
+      "description": "The 15-minute planner is paused because these explicit inputs are missing or invalid:\n\n{inputs}\n\nOpen Configure on this integration. Baseline controllers continue to own the devices while planning is unavailable."
     }
   }
 }

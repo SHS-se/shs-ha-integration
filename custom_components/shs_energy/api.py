@@ -120,3 +120,18 @@ class ShsApiClient:
                 "supplier_costs": supplier_costs or [],
             },
         )
+
+    async def push_optimisation(
+        self,
+        actual_slots: list[dict[str, Any]],
+        snapshot: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Push compact quarter-hour actuals and optionally request a new plan."""
+        body: dict[str, Any] = {"actual_slots": actual_slots}
+        if snapshot is not None:
+            body["snapshot"] = snapshot
+        return await self._request(
+            "POST",
+            "energy-optimisation-ingest",
+            json_body=body,
+        )

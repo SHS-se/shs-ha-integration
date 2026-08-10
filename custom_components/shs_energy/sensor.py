@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from math import isfinite
 from typing import Any
 
@@ -20,10 +21,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     CONF_CUSTOMER_NAME,
     CONF_DEVICE_TOKEN_ID,
+    CONF_HOME_ID,
     DOMAIN,
+    OPT_GRID_EXPORT_POWER_ENTITY,
     OPT_SUPPLIER_EXPORT_PRICE,
     OPT_SUPPLIER_IMPORT_PRICE,
 )
+from .optimisation import OptimisationInputError, validate_plan_contract
 from .coordinator import ShsStatusCoordinator
 
 
@@ -44,6 +48,11 @@ async def async_setup_entry(
             ShsTotalPriceSensor(coordinator, "import"),
             ShsTotalPriceSensor(coordinator, "export"),
             ShsLastPushSensor(coordinator),
+            ShsOptimisationStatusSensor(coordinator),
+            ShsReactiveSurplusSensor(coordinator),
+            ShsPlanRequestSensor(coordinator, "boiler"),
+            ShsPlanRequestSensor(coordinator, "pool"),
+            ShsPlanRequestSensor(coordinator, "ev"),
         ]
     )
     added_component_keys: set[str] = set()
@@ -99,6 +108,9 @@ class ShsSubscriptionSensor(ShsBaseSensor):
         return {
             "expires_at": data.get("subscription_expires_at"),
             "customer": data.get("customer_name"),
+            "home_id": data.get("home_id") or self.coordinator.entry.data.get(
+                CONF_HOME_ID
+            ),
         }
 
 
@@ -120,6 +132,128 @@ class ShsLastPushSensor(ShsBaseSensor):
             "last_calculation_error": self.coordinator.last_calculation_error,
             "skipped_readings": self.coordinator.skipped_readings,
             "supplier_cost_days": self.coordinator.supplier_cost_days,
+        }
+
+
+class ShsOptimisationStatusSensor(ShsBaseSensor):
+    """Whether a verified, unexpired priority plan may be consumed locally."""
+
+    _attr_translation_key = "optimisation_status"
+
+    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_optimisation_status"
+
+    @property
+    def native_value(self) -> str:
+        plan = self.coordinator.optimisation_plan
+        if self.coordinator.optimisation_missing_inputs:
+            return "not_configured"
+        if not plan:
+            return "unavailable"
+        try:
+            validate_plan_contract(
+                plan, datetime.now(timezone.utc), require_recent_issue=False
+            )
+        except OptimisationInputError:
+            return "invalid"
+        if self.coordinator.current_plan_slot is None:
+            if plan.get("status") != "ready":
+                return str(plan.get("status", "invalid"))
+            try:
+                now = datetime.now(timezone.utc)
+                if now >= datetime.fromisoformat(plan["valid_until"]):
+                    return "expired"
+                if now >= datetime.fromisoformat(plan["binding_until"]):
+                    return "advisory_only"
+                return "waiting"
+            except (KeyError, TypeError, ValueError):
+                return "invalid"
+        return "ready"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        plan = self.coordinator.optimisation_plan or {}
+        return {
+            "plan_id": plan.get("plan_id"),
+            "model_version": plan.get("model_version"),
+            "issued_at": plan.get("issued_at"),
+            "valid_until": plan.get("valid_until"),
+            "binding_until": plan.get("binding_until"),
+            "last_push": self.coordinator.last_optimisation_push,
+            "last_error": self.coordinator.last_optimisation_error,
+            "missing_inputs": self.coordinator.optimisation_missing_inputs,
+            "validation_errors": plan.get("validation_errors", []),
+        }
+
+
+class ShsReactiveSurplusSensor(ShsBaseSensor):
+    """Measured export available to the one local reactive allocator."""
+
+    _attr_translation_key = "reactive_surplus"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = "W"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = None
+
+    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_reactive_surplus"
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.reactive_surplus_w
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        entity_id = self.coordinator.entry.options.get(
+            OPT_GRID_EXPORT_POWER_ENTITY
+        )
+        if entity_id:
+            self.async_on_remove(
+                async_track_state_change_event(
+                    self.hass, [entity_id], self._source_changed
+                )
+            )
+
+    @callback
+    def _source_changed(self, _event: Any) -> None:
+        self.async_write_ha_state()
+
+
+class ShsPlanRequestSensor(ShsBaseSensor):
+    """Current bounded request; an executor still owns the physical device."""
+
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = "W"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = None
+
+    def __init__(self, coordinator: ShsStatusCoordinator, device: str) -> None:
+        super().__init__(coordinator)
+        self.device = device
+        self._attr_name = f"{device.title()} planned request"
+        self._attr_unique_id = (
+            f"{coordinator.entry.entry_id}_{device}_planned_request"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        slot = self.coordinator.current_plan_slot
+        # Unavailable means "the planner has no authority"; zero is reserved
+        # for a valid binding slot that explicitly requests the device off.
+        return None if slot is None else float(slot.get(f"{self.device}_w", 0))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        slot = self.coordinator.current_plan_slot or {}
+        return {
+            "slot_start": slot.get("start"),
+            "binding": slot.get("binding"),
+            "plan_status": (
+                self.coordinator.optimisation_plan or {}
+            ).get("status"),
+            "advisory_only": True,
         }
 
 

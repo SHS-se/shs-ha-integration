@@ -14,6 +14,7 @@ from .const import (
     CONF_DEVICE_TOKEN,
     PUSH_TIME_HOUR,
     PUSH_TIME_MINUTE,
+    OPTIMISATION_PUSH_SECOND,
 )
 from .coordinator import ShsStatusCoordinator
 
@@ -48,6 +49,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     )
     entry.async_create_background_task(
         hass, coordinator.async_scheduled_push(), name="shs_energy_startup_push"
+    )
+    # Quarter-hour exchange. Recorder samples are aggregated locally; the
+    # website receives one completed 15-minute row, never per-second history.
+    entry.async_on_unload(
+        async_track_time_change(
+            hass,
+            coordinator.async_optimisation_push,
+            minute=[0, 15, 30, 45],
+            second=OPTIMISATION_PUSH_SECOND,
+        )
+    )
+    entry.async_create_background_task(
+        hass,
+        coordinator.async_optimisation_push(force_plan=True),
+        name="shs_energy_startup_optimisation_push",
     )
 
     # React to a changed category→sensor mapping or price entity.

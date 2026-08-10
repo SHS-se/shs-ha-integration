@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 from typing import Any
+from uuid import uuid4
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import statistics_during_period
@@ -27,19 +28,78 @@ from .api import (
 from .const import (
     BACKFILL_MAX_DAYS,
     CATEGORIES,
+    CONFIGURABLE_CATEGORIES,
     DEFAULT_FORECAST_RESOLUTION_MINUTES,
     DOMAIN,
     ISSUE_MISSING_CUSTOMER_INPUT,
+    ISSUE_OPTIMISATION_CONFIGURATION,
     ISSUE_SUBSCRIPTION_INACTIVE,
     MAX_KWH_PER_READING,
     OPT_FORECAST_RESOLUTION_MINUTES,
     OPT_PREFIX_ENTITIES,
     OPT_SUPPLIER_EXPORT_PRICE,
     OPT_SUPPLIER_IMPORT_PRICE,
+    OPT_PV_FORECAST_ENTITIES,
+    OPT_SUPPLIER_IMPORT_FORECAST_ENTITY,
+    OPT_SUPPLIER_EXPORT_FORECAST_ENTITY,
+    OPT_ELECTRICITY_PRICE_AREA,
+    OPT_PV_FORECAST_LATITUDE,
+    OPT_PV_FORECAST_LONGITUDE,
+    OPT_BATTERY_SOC_ENTITY,
+    OPT_GRID_EXPORT_POWER_ENTITY,
+    OPT_BATTERY_CAPACITY_KWH,
+    OPT_BATTERY_CHARGE_MAX_W,
+    OPT_BATTERY_DISCHARGE_MAX_W,
+    OPT_BATTERY_MIN_SOC,
+    OPT_BATTERY_MAX_SOC,
+    OPT_BATTERY_TARGET_SOC,
+    OPT_BATTERY_TARGET_IS_HARD,
+    OPT_BATTERY_CHARGE_EFFICIENCY,
+    OPT_BATTERY_DISCHARGE_EFFICIENCY,
+    OPT_GRID_IMPORT_LIMIT_W,
+    OPT_GRID_EXPORT_LIMIT_W,
+    OPT_TERMINAL_SOC_MIN,
+    OPT_TERMINAL_ENERGY_VALUE,
+    OPT_POOL_POWER_W,
+    OPT_POOL_ENABLED_ENTITY,
+    OPT_POOL_MIN_RUN_SLOTS,
+    OPT_POOL_DEADLINE,
+    OPT_POOL_BASELINE_START,
+    OPT_BOILER_POWER_W,
+    OPT_BOILER_MIN_RUN_SLOTS,
+    OPT_BOILER_DEADLINE,
+    OPT_BOILER_BASELINE_START,
+    OPT_EV_CONNECTED_ENTITY,
+    OPT_EV_SOC_ENTITY,
+    OPT_EV_TARGET_SOC_ENTITY,
+    OPT_EV_DEPARTURE_ENTITY,
+    OPT_EV_POWER_W,
+    OPT_EV_BATTERY_KWH,
+    OPT_EV_CHARGE_EFFICIENCY,
+    OPT_EV_MIN_RUN_SLOTS,
+    OPTIMISATION_ACTUAL_BACKFILL_HOURS,
+    OPTIMISATION_HORIZON_HOURS,
+    OPTIMISATION_PROFILE_DAYS,
     STATUS_POLL_INTERVAL_HOURS,
     STORAGE_KEY_TEMPLATE,
     SUPPLIER_BACKFILL_MAX_DAYS,
     STORAGE_VERSION,
+)
+from .optimisation import (
+    ACTUAL_FIELD_BY_CATEGORY,
+    OptimisationInputError,
+    aggregate_category_changes,
+    build_base_load_profile,
+    calibration_summary,
+    daily_requirement,
+    extract_timestamped_forecast,
+    normalized_fraction,
+    parse_number,
+    quarter_start,
+    require_fresh_source,
+    state_is_on,
+    utc_slots,
+    validate_plan_contract,
 )
 from .tariff import (
     HourlyGridReading,
@@ -87,6 +147,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_tariff_error: str | None = None
         self.last_calculation_error: str | None = None
         self.latest_calculation: dict[str, Any] | None = None
+        self.optimisation_plan: dict[str, Any] | None = None
+        self.last_optimisation_push: str | None = None
+        self.last_optimisation_error: str | None = None
+        self.optimisation_missing_inputs: list[str] = []
         self.tariff_components: dict[str, dict[str, str]] = {}
         self._push_lock = asyncio.Lock()
         self._store: Store[dict[str, Any]] = Store(
@@ -176,6 +240,27 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             translation_key=ISSUE_SUBSCRIPTION_INACTIVE,
         )
 
+    def _sync_optimisation_issue(self) -> None:
+        """Expose exact commissioning gaps instead of applying defaults."""
+        if not self.optimisation_missing_inputs:
+            ir.async_delete_issue(
+                self.hass, DOMAIN, ISSUE_OPTIMISATION_CONFIGURATION
+            )
+            return
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            ISSUE_OPTIMISATION_CONFIGURATION,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_OPTIMISATION_CONFIGURATION,
+            translation_placeholders={
+                "inputs": "\n".join(
+                    f"- {value}" for value in self.optimisation_missing_inputs
+                )
+            },
+        )
+
     @property
     def latest_display_components(self) -> list[dict[str, Any]]:
         """Invoice-style (VAT-inclusive) view of the latest calculation.
@@ -253,7 +338,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             category: list(
                 self.entry.options.get(f"{OPT_PREFIX_ENTITIES}{category}", [])
             )
-            for category in CATEGORIES
+            for category in CONFIGURABLE_CATEGORIES
         }
 
     async def _statistics_changes(
@@ -585,8 +670,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Aggregate the recorder, calculate, and upload in one pass."""
         stored = await self._store.async_load() or {}
         entities_by_category = self._configured_entities()
+        daily_entities_by_category = {
+            category: entities_by_category[category] for category in CATEGORIES
+        }
         all_entities = sorted(
-            {entity for values in entities_by_category.values() for entity in values}
+            {
+                entity
+                for values in daily_entities_by_category.values()
+                for entity in values
+            }
         )
 
         today_start = dt_util.start_of_local_day()
@@ -595,14 +687,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         readings: list[dict[str, Any]] = []
         skipped: list[str] = []
         for day, entity_changes in sorted(per_day.items()):
-            for category, entity_ids in entities_by_category.items():
-                values = [
-                    entity_changes[entity]
-                    for entity in entity_ids
-                    if entity in entity_changes
-                ]
-                if not values:
+            for category, entity_ids in daily_entities_by_category.items():
+                if not entity_ids or any(
+                    entity not in entity_changes for entity in entity_ids
+                ):
+                    # A category made from several meters is only meaningful
+                    # when every mapped meter covers the day. Missing is
+                    # unknown, never a smaller-looking partial total.
                     continue
+                values = [entity_changes[entity] for entity in entity_ids]
                 kwh = round(sum(values), 3)
                 if kwh > MAX_KWH_PER_READING:
                     skipped.append(f"{category} {day} ({kwh} kWh)")
@@ -617,13 +710,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
         calculations, catalog_hash, tariff_attempted = await self._tariff_calculations(
-            entities_by_category, days_back, stored
+            daily_entities_by_category, days_back, stored
         )
         supplier_sweep_start, deep_sweep = self._supplier_sweep_start(
             stored, catalog_hash, today_start
         )
         supplier_costs = await self._supplier_daily_costs(
-            entities_by_category, supplier_sweep_start, today_start
+            daily_entities_by_category, supplier_sweep_start, today_start
         )
         self.supplier_cost_days = len(supplier_costs)
         if not readings and not calculations and not supplier_costs:
@@ -671,6 +764,801 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result.get("calculations_accepted"),
             result.get("supplier_costs_accepted"),
         )
+
+    def _optimisation_options(self) -> dict[str, Any]:
+        """Return a complete explicit option set or name every missing field."""
+        options = self.entry.options
+        required = [
+            OPT_FORECAST_RESOLUTION_MINUTES,
+            OPT_PV_FORECAST_ENTITIES,
+            OPT_SUPPLIER_IMPORT_FORECAST_ENTITY,
+            OPT_SUPPLIER_EXPORT_FORECAST_ENTITY,
+            OPT_ELECTRICITY_PRICE_AREA,
+            OPT_PV_FORECAST_LATITUDE,
+            OPT_PV_FORECAST_LONGITUDE,
+            OPT_BATTERY_SOC_ENTITY,
+            OPT_BATTERY_CAPACITY_KWH,
+            OPT_BATTERY_CHARGE_MAX_W,
+            OPT_BATTERY_DISCHARGE_MAX_W,
+            OPT_BATTERY_MIN_SOC,
+            OPT_BATTERY_MAX_SOC,
+            OPT_BATTERY_TARGET_SOC,
+            OPT_BATTERY_TARGET_IS_HARD,
+            OPT_BATTERY_CHARGE_EFFICIENCY,
+            OPT_BATTERY_DISCHARGE_EFFICIENCY,
+            OPT_GRID_IMPORT_LIMIT_W,
+            OPT_GRID_EXPORT_LIMIT_W,
+            OPT_TERMINAL_SOC_MIN,
+            OPT_TERMINAL_ENERGY_VALUE,
+        ]
+        entities = self._configured_entities()
+        if not entities.get("total_consumption"):
+            required.append(f"{OPT_PREFIX_ENTITIES}total_consumption")
+        if entities.get("pool_heating"):
+            required.extend(
+                [OPT_POOL_ENABLED_ENTITY, OPT_POOL_POWER_W,
+                 OPT_POOL_MIN_RUN_SLOTS, OPT_POOL_DEADLINE,
+                 OPT_POOL_BASELINE_START]
+            )
+        if entities.get("hot_water"):
+            required.extend(
+                [OPT_BOILER_POWER_W, OPT_BOILER_MIN_RUN_SLOTS,
+                 OPT_BOILER_DEADLINE, OPT_BOILER_BASELINE_START]
+            )
+        if entities.get("ev_charging") or options.get(OPT_EV_CONNECTED_ENTITY):
+            required.extend(
+                [f"{OPT_PREFIX_ENTITIES}ev_charging",
+                 OPT_EV_CONNECTED_ENTITY, OPT_EV_SOC_ENTITY, OPT_EV_TARGET_SOC_ENTITY,
+                 OPT_EV_DEPARTURE_ENTITY, OPT_EV_POWER_W,
+                 OPT_EV_BATTERY_KWH, OPT_EV_CHARGE_EFFICIENCY,
+                 OPT_EV_MIN_RUN_SLOTS]
+            )
+        missing = sorted(
+            key for key in required
+            if options.get(key) is None or options.get(key) == "" or options.get(key) == []
+        )
+        if options.get(OPT_SUPPLIER_IMPORT_FORECAST_ENTITY) == options.get(
+            OPT_SUPPLIER_EXPORT_FORECAST_ENTITY
+        ) and options.get(OPT_SUPPLIER_IMPORT_FORECAST_ENTITY):
+            missing.append(
+                "supplier import and export forecasts must be different entities"
+            )
+        if options.get(OPT_FORECAST_RESOLUTION_MINUTES) not in (None, 15):
+            missing.append("forecast resolution must be 15 minutes")
+        self.optimisation_missing_inputs = missing
+        self._sync_optimisation_issue()
+        if missing:
+            raise OptimisationInputError(
+                "missing optimisation inputs: " + ", ".join(missing)
+            )
+        return dict(options)
+
+    def _entity_payload(self, entity_id: str) -> dict[str, Any]:
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            raise OptimisationInputError(f"{entity_id} does not exist")
+        if state.state in ("unknown", "unavailable"):
+            raise OptimisationInputError(f"{entity_id} is {state.state}")
+        return {
+            "entity_id": entity_id,
+            "state": state.state,
+            "attributes": dict(state.attributes),
+            "last_updated": state.last_updated,
+            "last_reported": state.last_reported,
+        }
+
+    async def _category_quarter_changes(
+        self,
+        entities_by_category: dict[str, list[str]],
+        start: datetime,
+        end: datetime,
+    ) -> dict[str, list[tuple[datetime, float]]]:
+        all_entities = sorted(
+            {entity for values in entities_by_category.values() for entity in values}
+        )
+        statistics = await self._statistics_changes(
+            all_entities, start, end, "5minute"
+        )
+        result: dict[str, list[tuple[datetime, float]]] = {}
+        for category, entity_ids in entities_by_category.items():
+            per_entity = [
+                dict(statistics.get(entity_id, [])) for entity_id in entity_ids
+            ]
+            if not per_entity or any(not values for values in per_entity):
+                result[category] = []
+                continue
+            complete_starts = set(per_entity[0]).intersection(
+                *(set(values) for values in per_entity[1:])
+            )
+            result[category] = [
+                (timestamp, sum(values[timestamp] for values in per_entity))
+                for timestamp in sorted(complete_starts)
+            ]
+        return result
+
+    async def _actual_quarters(
+        self,
+        entities_by_category: dict[str, list[str]],
+        start: datetime,
+        end: datetime,
+    ) -> list[dict[str, Any]]:
+        changes = await self._category_quarter_changes(
+            entities_by_category, start, end
+        )
+        return aggregate_category_changes(changes)
+
+    async def _daily_category_totals(
+        self,
+        entities_by_category: dict[str, list[str]],
+        start: datetime,
+        end: datetime,
+    ) -> dict[str, dict[str, float]]:
+        all_entities = sorted(
+            {entity for values in entities_by_category.values() for entity in values}
+        )
+        per_day = await self._daily_changes(all_entities, start, end)
+        result: dict[str, dict[str, float]] = {}
+        for day, entity_values in per_day.items():
+            for category, entity_ids in entities_by_category.items():
+                values = [entity_values[value] for value in entity_ids if value in entity_values]
+                if values and len(values) == len(entity_ids):
+                    result.setdefault(category, {})[day] = sum(values)
+        return result
+
+    @staticmethod
+    def _time_option(value: Any, label: str) -> time:
+        try:
+            parsed = time.fromisoformat(str(value))
+        except ValueError as err:
+            raise OptimisationInputError(f"{label} must be HH:MM") from err
+        return parsed.replace(second=0, microsecond=0)
+
+    def _build_services(
+        self,
+        options: dict[str, Any],
+        entities_by_category: dict[str, list[str]],
+        daily_totals: dict[str, dict[str, float]],
+        actuals: list[dict[str, Any]],
+        horizon: list[datetime],
+    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        local_tz = dt_util.DEFAULT_TIME_ZONE
+        first = horizon[0]
+        end = horizon[-1] + timedelta(minutes=15)
+        today = dt_util.now().date()
+        done_today: dict[str, float] = {}
+        for category, field in ACTUAL_FIELD_BY_CATEGORY.items():
+            done_today[category] = sum(
+                float(row.get(field) or 0)
+                for row in actuals
+                if datetime.fromisoformat(row["start"]).astimezone(local_tz).date() == today
+            )
+
+        services: list[dict[str, Any]] = []
+        samples: dict[str, int] = {}
+        for category, device, power_key, run_key, deadline_key, baseline_key, priority in (
+            ("hot_water", "boiler", OPT_BOILER_POWER_W, OPT_BOILER_MIN_RUN_SLOTS,
+             OPT_BOILER_DEADLINE, OPT_BOILER_BASELINE_START, 1),
+            ("pool_heating", "pool", OPT_POOL_POWER_W, OPT_POOL_MIN_RUN_SLOTS,
+             OPT_POOL_DEADLINE, OPT_POOL_BASELINE_START, 2),
+        ):
+            if not entities_by_category.get(category):
+                continue
+            if category == "pool_heating" and not state_is_on(
+                self._entity_payload(options[OPT_POOL_ENABLED_ENTITY])["state"]
+            ):
+                continue
+            requirement, count = daily_requirement(
+                daily_totals.get(category, {}), category
+            )
+            samples[category] = count
+            deadline_time = self._time_option(options[deadline_key], deadline_key)
+            baseline_time = self._time_option(options[baseline_key], baseline_key)
+            local_days = sorted({slot.astimezone(local_tz).date() for slot in horizon})
+            for day in local_days:
+                deadline = datetime.combine(day, deadline_time, local_tz).astimezone(timezone.utc)
+                if deadline <= first or deadline > end:
+                    continue
+                earliest = max(
+                    first,
+                    datetime.combine(day, time.min, local_tz).astimezone(timezone.utc),
+                )
+                required = requirement
+                if day == today:
+                    required = max(0.0, requirement - done_today.get(category, 0.0))
+                if required <= 0:
+                    continue
+                baseline = datetime.combine(day, baseline_time, local_tz).astimezone(timezone.utc)
+                minimum_run = parse_number(options[run_key], run_key)
+                if not minimum_run.is_integer() or minimum_run < 1:
+                    raise OptimisationInputError(
+                        f"{run_key} must be a positive whole number"
+                    )
+                services.append({
+                    "id": f"{device}:{day.isoformat()}",
+                    "device": device,
+                    "earliest_start": earliest.isoformat(),
+                    "deadline": deadline.isoformat(),
+                    "required_kwh": round(required, 3),
+                    "power_w": parse_number(options[power_key], power_key),
+                    "min_run_slots": int(minimum_run),
+                    "priority": priority,
+                    "baseline_preferred_start": max(earliest, baseline).isoformat(),
+                })
+
+        connected_id = options.get(OPT_EV_CONNECTED_ENTITY)
+        if connected_id and state_is_on(self._entity_payload(connected_id)["state"]):
+            soc = normalized_fraction(
+                self._entity_payload(options[OPT_EV_SOC_ENTITY])["state"],
+                OPT_EV_SOC_ENTITY,
+            )
+            target = normalized_fraction(
+                self._entity_payload(options[OPT_EV_TARGET_SOC_ENTITY])["state"],
+                OPT_EV_TARGET_SOC_ENTITY,
+            )
+            departure_raw = self._entity_payload(options[OPT_EV_DEPARTURE_ENTITY])["state"]
+            try:
+                departure = datetime.fromisoformat(
+                    str(departure_raw).replace("Z", "+00:00")
+                )
+            except ValueError as err:
+                raise OptimisationInputError(
+                    f"{OPT_EV_DEPARTURE_ENTITY} must contain an ISO timestamp"
+                ) from err
+            if departure.tzinfo is None:
+                raise OptimisationInputError(
+                    f"{OPT_EV_DEPARTURE_ENTITY} timestamp must include a timezone"
+                )
+            departure = departure.astimezone(timezone.utc)
+            if departure <= first or departure > end:
+                raise OptimisationInputError(
+                    "connected EV departure must fall inside the 72-hour horizon"
+                )
+            efficiency = parse_number(
+                options[OPT_EV_CHARGE_EFFICIENCY], OPT_EV_CHARGE_EFFICIENCY
+            )
+            required = max(0.0, target - soc) * parse_number(
+                options[OPT_EV_BATTERY_KWH], OPT_EV_BATTERY_KWH
+            ) / efficiency
+            if required > 0:
+                minimum_run = parse_number(
+                    options[OPT_EV_MIN_RUN_SLOTS], OPT_EV_MIN_RUN_SLOTS
+                )
+                if not minimum_run.is_integer() or minimum_run < 1:
+                    raise OptimisationInputError(
+                        f"{OPT_EV_MIN_RUN_SLOTS} must be a positive whole number"
+                    )
+                services.append({
+                    "id": f"ev:{departure.isoformat()}",
+                    "device": "ev",
+                    "earliest_start": first.isoformat(),
+                    "deadline": departure.isoformat(),
+                    "required_kwh": round(required, 3),
+                    "power_w": parse_number(options[OPT_EV_POWER_W], OPT_EV_POWER_W),
+                    "min_run_slots": int(minimum_run),
+                    "priority": 3,
+                    "baseline_preferred_start": first.isoformat(),
+                })
+        return services, samples
+
+    @staticmethod
+    def _observe_calibration(
+        stored: dict[str, Any], actuals: list[dict[str, Any]]
+    ) -> list[dict[str, float | int]]:
+        ledger = dict(stored.get("pv_forecast_ledger") or {})
+        observations = list(stored.get("pv_calibration_observations") or [])
+        for actual in actuals:
+            actual_kwh = actual.get("solar_production_kwh")
+            if actual_kwh is None:
+                continue
+            key = datetime.fromisoformat(actual["start"]).astimezone(timezone.utc).isoformat()
+            predictions = ledger.pop(key, {})
+            for lead, predicted in predictions.items():
+                observations.append({
+                    "lead_day": int(lead),
+                    "predicted_kwh": float(predicted),
+                    "actual_kwh": float(actual_kwh),
+                })
+        stored["pv_forecast_ledger"] = ledger
+        stored["pv_calibration_observations"] = observations[-1500:]
+        return observations[-1500:]
+
+    @staticmethod
+    def _record_forecast_ledger(
+        stored: dict[str, Any], pv: dict[datetime, float], captured: datetime
+    ) -> None:
+        ledger = dict(stored.get("pv_forecast_ledger") or {})
+        for start, watts in pv.items():
+            lead = max(0, min(3, int((start - captured).total_seconds() // 86400)))
+            entries = dict(ledger.get(start.isoformat()) or {})
+            entries[str(lead)] = round(watts / 1000 * 0.25, 6)
+            ledger[start.isoformat()] = entries
+        cutoff = captured - timedelta(hours=1)
+        stored["pv_forecast_ledger"] = {
+            key: value for key, value in ledger.items()
+            if datetime.fromisoformat(key) >= cutoff
+        }
+
+    async def _build_optimisation_snapshot(
+        self,
+        options: dict[str, Any],
+        entities_by_category: dict[str, list[str]],
+        actuals: list[dict[str, Any]],
+        stored: dict[str, Any],
+    ) -> dict[str, Any]:
+        captured = dt_util.utcnow()
+        horizon = utc_slots(captured, OPTIMISATION_HORIZON_HOURS)
+        horizon_end = horizon[-1] + timedelta(minutes=15)
+
+        pv_entities = [
+            self._entity_payload(entity_id)
+            for entity_id in options[OPT_PV_FORECAST_ENTITIES]
+        ]
+        pv, pv_used, pv_issued = extract_timestamped_forecast(
+            pv_entities,
+            # `watts` is the current canonical adapter contract. Accepting a
+            # generic `forecast` array without its own unit metadata would put
+            # kW/kWh ambiguity back into the production path.
+            attribute_names=("watts",),
+            value_keys=("watts", "power", "value", "estimate"),
+            combine="sum",
+        )
+        import_entity = self._entity_payload(
+            options[OPT_SUPPLIER_IMPORT_FORECAST_ENTITY]
+        )
+        export_entity = self._entity_payload(
+            options[OPT_SUPPLIER_EXPORT_FORECAST_ENTITY]
+        )
+        battery_entity = self._entity_payload(options[OPT_BATTERY_SOC_ENTITY])
+        price_area = str(options[OPT_ELECTRICITY_PRICE_AREA]).strip().upper()
+        if price_area not in {"SE1", "SE2", "SE3", "SE4"}:
+            raise OptimisationInputError(
+                f"{OPT_ELECTRICITY_PRICE_AREA} must be SE1, SE2, SE3 or SE4"
+            )
+        pv_latitude = parse_number(
+            options[OPT_PV_FORECAST_LATITUDE], OPT_PV_FORECAST_LATITUDE
+        )
+        pv_longitude = parse_number(
+            options[OPT_PV_FORECAST_LONGITUDE], OPT_PV_FORECAST_LONGITUDE
+        )
+        if abs(pv_latitude - self.hass.config.latitude) > 0.05 or abs(
+            pv_longitude - self.hass.config.longitude
+        ) > 0.05:
+            raise OptimisationInputError(
+                "PV forecast coordinates do not match the Home Assistant home location"
+            )
+        for payload in pv_entities:
+            attributes = payload["attributes"]
+            declared_latitude = attributes.get("latitude")
+            declared_longitude = attributes.get("longitude")
+            if declared_latitude is None or declared_longitude is None:
+                raise OptimisationInputError(
+                    f"{payload['entity_id']} must declare forecast latitude and longitude"
+                )
+            if abs(
+                parse_number(declared_latitude, f"{payload['entity_id']} latitude")
+                - pv_latitude
+            ) > 0.05 or abs(
+                parse_number(declared_longitude, f"{payload['entity_id']} longitude")
+                - pv_longitude
+            ) > 0.05:
+                raise OptimisationInputError(
+                    f"{payload['entity_id']} forecast location does not match the configured home"
+                )
+        for payload, label in (
+            (import_entity, OPT_SUPPLIER_IMPORT_FORECAST_ENTITY),
+            (export_entity, OPT_SUPPLIER_EXPORT_FORECAST_ENTITY),
+        ):
+            if payload["attributes"].get("unit_of_measurement") != "SEK/kWh":
+                raise OptimisationInputError(
+                    f"{label} must declare unit SEK/kWh"
+                )
+            declared_area = next(
+                (
+                    str(payload["attributes"][key]).upper()
+                    for key in ("price_area", "area", "region")
+                    if payload["attributes"].get(key)
+                ),
+                None,
+            )
+            if declared_area is None:
+                raise OptimisationInputError(
+                    f"{label} must declare its Swedish price area"
+                )
+            if declared_area != price_area:
+                raise OptimisationInputError(
+                    f"{label} declares {declared_area}, expected {price_area}"
+                )
+        import_prices, import_used, import_issued = extract_timestamped_forecast(
+            [import_entity],
+            attribute_names=(
+                "prices", "forecast", "today", "tomorrow", "raw_today", "raw_tomorrow"
+            ),
+            value_keys=("price", "total", "value", "price_sek_per_kwh"),
+        )
+        export_prices, export_used, export_issued = extract_timestamped_forecast(
+            [export_entity],
+            attribute_names=(
+                "prices", "forecast", "today", "tomorrow", "raw_today", "raw_tomorrow"
+            ),
+            value_keys=("price", "spot", "value", "price_sek_per_kwh"),
+        )
+        require_fresh_source(
+            pv_issued, captured, max_age=timedelta(hours=12), label="PV forecast"
+        )
+        require_fresh_source(
+            import_issued,
+            captured,
+            max_age=timedelta(hours=48),
+            label="import price forecast",
+        )
+        require_fresh_source(
+            export_issued,
+            captured,
+            max_age=timedelta(hours=48),
+            label="export price forecast",
+        )
+        require_fresh_source(
+            battery_entity["last_reported"],
+            captured,
+            max_age=timedelta(minutes=15),
+            label="battery SOC",
+        )
+
+        # Short-term recorder statistics may still be settling immediately at
+        # the boundary. Keeping a full-quarter safety lag avoids publishing a
+        # low partial bucket as history or learning from it.
+        profile_end = quarter_start(captured) - timedelta(minutes=15)
+        profile_start = profile_end - timedelta(
+            days=OPTIMISATION_PROFILE_DAYS
+        )
+        profile_actuals = await self._actual_quarters(
+            entities_by_category, profile_start, profile_end
+        )
+        modelled_categories = tuple(
+            category
+            for category in ("pool_heating", "hot_water", "ev_charging")
+            if entities_by_category.get(category)
+        )
+        profiles = {
+            day_type: build_base_load_profile(
+                profile_actuals,
+                str(dt_util.DEFAULT_TIME_ZONE),
+                minimum_samples=2,
+                modelled_categories=modelled_categories,
+                day_type=day_type,
+            )
+            for day_type in ("weekday", "weekend")
+        }
+        sample_count = sum(
+            int(value["sample_count"])
+            for profile in profiles.values()
+            for value in profile
+        )
+
+        daily_totals = await self._daily_category_totals(
+            entities_by_category,
+            dt_util.start_of_local_day() - timedelta(days=30),
+            dt_util.start_of_local_day(),
+        )
+        services, service_samples = self._build_services(
+            options, entities_by_category, daily_totals, profile_actuals, horizon
+        )
+
+        if self.tariff_catalog is None:
+            raise OptimisationInputError("grid tariff catalogue is unavailable")
+        grid_slots = {
+            datetime.fromisoformat(value["start"]): value
+            for value in grid_price_forecast(
+                self.tariff_catalog,
+                horizon[0],
+                horizon_end,
+                15,
+            )
+        }
+        observations = self._observe_calibration(stored, actuals)
+        calibration = calibration_summary(observations)
+        errors = [
+            abs(float(row["predicted_kwh"]) - float(row["actual_kwh"])) /
+            max(float(row["actual_kwh"]), 0.001) * 100
+            for row in observations if float(row["actual_kwh"]) > 0.01
+        ]
+        biases = [
+            (float(row["predicted_kwh"]) - float(row["actual_kwh"])) /
+            max(float(row["actual_kwh"]), 0.001) * 100
+            for row in observations if float(row["actual_kwh"]) > 0.01
+        ]
+
+        slots: list[dict[str, Any]] = []
+        price_gap = False
+        for start in horizon:
+            if start not in pv:
+                raise OptimisationInputError(
+                    f"PV forecast missing {start.isoformat()}"
+                )
+            local = start.astimezone(dt_util.DEFAULT_TIME_ZONE)
+            day_type = "weekend" if local.weekday() >= 5 else "weekday"
+            bucket = profiles[day_type][local.hour * 4 + local.minute // 15]
+            supplier_import = import_prices.get(start)
+            supplier_export = export_prices.get(start)
+            grid = grid_slots.get(start)
+            if supplier_import is None or supplier_export is None or grid is None:
+                price_gap = True
+                all_in_import = None
+                all_in_export = None
+            else:
+                if price_gap:
+                    raise OptimisationInputError(
+                        "supplier prices contain a gap before a later published slot"
+                    )
+                all_in_import = supplier_import + float(
+                    grid["import_price_sek_per_kwh"]
+                )
+                all_in_export = supplier_export + float(
+                    grid["export_price_sek_per_kwh"]
+                )
+            slots.append({
+                "start": start.isoformat(),
+                "pv_forecast_w": round(pv[start], 2),
+                "base_load_forecast_w": bucket["median_w"],
+                "base_load_p10_w": bucket["p10_w"],
+                "base_load_p90_w": bucket["p90_w"],
+                "import_price_sek_per_kwh": (
+                    None if all_in_import is None else round(all_in_import, 5)
+                ),
+                "export_price_sek_per_kwh": (
+                    None if all_in_export is None else round(all_in_export, 5)
+                ),
+            })
+
+        battery_soc = normalized_fraction(
+            battery_entity["state"],
+            OPT_BATTERY_SOC_ENTITY,
+        )
+        valid_pv = max(pv) + timedelta(minutes=15)
+        valid_import = max(import_prices) + timedelta(minutes=15)
+        valid_export = max(export_prices) + timedelta(minutes=15)
+        calibrated = any(
+            count >= 20 for count in calibration["sample_count_by_lead_day"]
+        )
+        snapshot = {
+            "schema_version": 1,
+            "snapshot_id": str(uuid4()),
+            "captured_at": captured.isoformat(),
+            "timezone": str(dt_util.DEFAULT_TIME_ZONE),
+            "slot_minutes": 15,
+            "slots": slots,
+            "sources": {
+                "pv": {
+                    "provider": "home_assistant_entity",
+                    "entity_ids": pv_used,
+                    "issued_at": pv_issued.isoformat(),
+                    "valid_until": valid_pv.isoformat(),
+                    "quality": "calibrated" if calibrated else "provider_raw",
+                    "sample_count": len(observations),
+                    "mape_percent": round(sum(errors) / len(errors), 2) if errors else None,
+                    "bias_percent": round(sum(biases) / len(biases), 2) if biases else None,
+                    "location": {
+                        "latitude": round(pv_latitude, 5),
+                        "longitude": round(pv_longitude, 5),
+                    },
+                },
+                "base_load": {
+                    "provider": "home_assistant_recorder",
+                    "entity_ids": sorted({
+                        entity_id
+                        for category in ("total_consumption", *modelled_categories)
+                        for entity_id in entities_by_category[category]
+                    }),
+                    "issued_at": captured.isoformat(),
+                    "valid_until": (captured + timedelta(hours=2)).isoformat(),
+                    "quality": "measured",
+                    "sample_count": sample_count,
+                },
+                "import_price": {
+                    "provider": "home_assistant_entity",
+                    "entity_ids": import_used,
+                    "issued_at": import_issued.isoformat(),
+                    "valid_until": valid_import.isoformat(),
+                    "quality": "provider_raw",
+                    "location": {"market_area": price_area},
+                },
+                "export_price": {
+                    "provider": "home_assistant_entity",
+                    "entity_ids": export_used,
+                    "issued_at": export_issued.isoformat(),
+                    "valid_until": valid_export.isoformat(),
+                    "quality": "provider_raw",
+                    "location": {"market_area": price_area},
+                },
+                "battery": {
+                    "provider": "home_assistant_state",
+                    "entity_ids": [options[OPT_BATTERY_SOC_ENTITY]],
+                    "issued_at": battery_entity["last_reported"].isoformat(),
+                    "valid_until": (captured + timedelta(minutes=75)).isoformat(),
+                    "quality": "measured",
+                    "sample_count": 1,
+                },
+            },
+            "pv_calibration": calibration,
+            "battery": {
+                "capacity_kwh": parse_number(
+                    options[OPT_BATTERY_CAPACITY_KWH], OPT_BATTERY_CAPACITY_KWH
+                ),
+                "soc": battery_soc,
+                "min_soc": parse_number(options[OPT_BATTERY_MIN_SOC], OPT_BATTERY_MIN_SOC),
+                "max_soc": parse_number(options[OPT_BATTERY_MAX_SOC], OPT_BATTERY_MAX_SOC),
+                "charge_max_w": parse_number(
+                    options[OPT_BATTERY_CHARGE_MAX_W], OPT_BATTERY_CHARGE_MAX_W
+                ),
+                "discharge_max_w": parse_number(
+                    options[OPT_BATTERY_DISCHARGE_MAX_W],
+                    OPT_BATTERY_DISCHARGE_MAX_W,
+                ),
+                "charge_efficiency": parse_number(
+                    options[OPT_BATTERY_CHARGE_EFFICIENCY],
+                    OPT_BATTERY_CHARGE_EFFICIENCY,
+                ),
+                "discharge_efficiency": parse_number(
+                    options[OPT_BATTERY_DISCHARGE_EFFICIENCY],
+                    OPT_BATTERY_DISCHARGE_EFFICIENCY,
+                ),
+            },
+            "grid": {
+                "import_limit_w": parse_number(
+                    options[OPT_GRID_IMPORT_LIMIT_W], OPT_GRID_IMPORT_LIMIT_W
+                ),
+                "export_limit_w": parse_number(
+                    options[OPT_GRID_EXPORT_LIMIT_W], OPT_GRID_EXPORT_LIMIT_W
+                ),
+            },
+            "policy": {
+                "battery_end_of_solar_target_soc": parse_number(
+                    options[OPT_BATTERY_TARGET_SOC], OPT_BATTERY_TARGET_SOC
+                ),
+                "battery_target_is_hard": bool(options[OPT_BATTERY_TARGET_IS_HARD]),
+                "terminal_soc_min": parse_number(
+                    options[OPT_TERMINAL_SOC_MIN], OPT_TERMINAL_SOC_MIN
+                ),
+                "terminal_energy_value_sek_per_kwh": parse_number(
+                    options[OPT_TERMINAL_ENERGY_VALUE], OPT_TERMINAL_ENERGY_VALUE
+                ),
+            },
+            "services": services,
+            "service_requirement_sample_days": service_samples,
+        }
+        self._record_forecast_ledger(
+            stored, {start: pv[start] for start in horizon}, captured
+        )
+        return snapshot
+
+    async def async_optimisation_push(
+        self, _now: datetime | None = None, *, force_plan: bool = False
+    ) -> None:
+        """Upload completed quarter-hours; request a full plan at most hourly."""
+        async with self._push_lock:
+            stored = await self._store.async_load() or {}
+            self.optimisation_plan = self.optimisation_plan or stored.get(
+                "optimisation_plan"
+            )
+            snapshot_error: str | None = None
+            try:
+                entities = self._configured_entities()
+                # Do not race the recorder's five-minute statistics job. Actual
+                # history may trail real time by one quarter; live reactive
+                # control continues to use the local power sensor directly.
+                complete_end = quarter_start(dt_util.utcnow()) - timedelta(minutes=15)
+                accepted = stored.get("optimisation_actuals_accepted_until")
+                if accepted:
+                    # Re-send the last accepted quarter once. The database
+                    # upsert keeps the unique row count at 96/day, while a
+                    # recorder category that settled late can fill a prior
+                    # sparse row without sending raw samples.
+                    start = datetime.fromisoformat(accepted)
+                else:
+                    start = complete_end - timedelta(
+                        hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS
+                    )
+                start = max(
+                    start.astimezone(timezone.utc),
+                    complete_end - timedelta(hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS),
+                )
+                actuals = (
+                    await self._actual_quarters(entities, start, complete_end)
+                    if entities.get("total_consumption") and start < complete_end
+                    else []
+                )
+                # Consume forecast/actual pairs on every quarter-hour exchange,
+                # not only during the hourly replan. Otherwise three out of
+                # four observations would pass the upload watermark before the
+                # calibration ledger saw them.
+                self._observe_calibration(stored, actuals)
+                last_plan = stored.get("optimisation_plan")
+                plan_due = force_plan or not last_plan or (
+                    dt_util.utcnow().minute < 15
+                    and dt_util.utcnow() - datetime.fromisoformat(
+                        last_plan.get("issued_at", "1970-01-01T00:00:00+00:00")
+                    ) >= timedelta(minutes=45)
+                )
+                snapshot = None
+                if plan_due:
+                    try:
+                        options = self._optimisation_options()
+                        snapshot = await self._build_optimisation_snapshot(
+                            options, entities, actuals, stored
+                        )
+                    except (OptimisationInputError, KeyError, TypeError, ValueError) as err:
+                        snapshot_error = str(err)
+                        self.optimisation_missing_inputs = [snapshot_error]
+                        self._sync_optimisation_issue()
+                        _LOGGER.warning("Optimisation plan skipped: %s", err)
+                if not actuals and snapshot is None:
+                    self.last_optimisation_error = snapshot_error
+                    self.async_update_listeners()
+                    return
+                result = await self.client.push_optimisation(actuals, snapshot)
+                if result.get("plan"):
+                    validate_plan_contract(result["plan"], dt_util.utcnow())
+            except ShsSubscriptionInactiveError:
+                self.last_optimisation_error = "subscription_inactive"
+                self._sync_subscription_issue(False)
+                return
+            except (ShsApiError, OptimisationInputError, KeyError, TypeError, ValueError) as err:
+                self.last_optimisation_error = str(err)
+                _LOGGER.warning("Optimisation push skipped: %s", err)
+                self.async_update_listeners()
+                return
+
+            self.last_optimisation_error = snapshot_error
+            self.last_optimisation_push = dt_util.utcnow().isoformat()
+            if result.get("actuals_accepted_until"):
+                stored["optimisation_actuals_accepted_until"] = result[
+                    "actuals_accepted_until"
+                ]
+            if result.get("plan"):
+                self.last_optimisation_error = None
+                self.optimisation_plan = result["plan"]
+                stored["optimisation_plan"] = self.optimisation_plan
+            elif self.optimisation_plan is None:
+                self.optimisation_plan = stored.get("optimisation_plan")
+            stored["last_optimisation_push"] = self.last_optimisation_push
+            await self._store.async_save(stored)
+            self.async_update_listeners()
+
+    @property
+    def current_plan_slot(self) -> dict[str, Any] | None:
+        """Current priority-plan slot, only while its full contract is valid."""
+        plan = self.optimisation_plan
+        if not plan or plan.get("status") != "ready":
+            return None
+        now = dt_util.utcnow()
+        try:
+            validate_plan_contract(plan, now, require_recent_issue=False)
+            if now >= datetime.fromisoformat(plan["binding_until"]):
+                return None
+            slots = plan["plans"]["priority"]["slots"]
+        except (OptimisationInputError, KeyError, TypeError, ValueError):
+            return None
+        for slot in slots:
+            start = datetime.fromisoformat(slot["start"])
+            if start <= now < start + timedelta(minutes=15):
+                return slot if slot.get("binding") is True else None
+        return None
+
+    @property
+    def reactive_surplus_w(self) -> float | None:
+        """Measured export opportunity for one central local allocator."""
+        entity_id = self.entry.options.get(OPT_GRID_EXPORT_POWER_ENTITY)
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        if state.attributes.get("unit_of_measurement") != "W":
+            return None
+        try:
+            return max(0.0, parse_number(state.state, entity_id))
+        except OptimisationInputError:
+            return None
 
     async def async_scheduled_push(self, _now: datetime | None = None) -> None:
         """Nightly job: push yesterday and catch up missed raw-reading days."""

@@ -11,6 +11,7 @@ CONF_BASE_URL = "base_url"
 CONF_DEVICE_TOKEN = "device_token"
 CONF_DEVICE_TOKEN_ID = "device_token_id"
 CONF_CUSTOMER_NAME = "customer_name"
+CONF_HOME_ID = "home_id"
 CONF_PAIRING_CODE = "pairing_code"
 CONF_DEVICE_NAME = "device_name"
 
@@ -29,6 +30,11 @@ CATEGORIES: tuple[str, ...] = (
     "solar_production",
     "total_consumption",
 )
+OPTIMISATION_EXTRA_CATEGORIES: tuple[str, ...] = (
+    "battery_charge",
+    "battery_discharge",
+)
+CONFIGURABLE_CATEGORIES = CATEGORIES + OPTIMISATION_EXTRA_CATEGORIES
 
 OPT_PREFIX_ENTITIES = "entities_"  # e.g. options["entities_heating"] = [...]
 
@@ -40,7 +46,56 @@ OPT_SUPPLIER_EXPORT_PRICE = "supplier_export_price_entity"
 # Price-forecast slot length. Swedish settlement moved to quarter-hours, and an
 # optimiser wants the series on its own timestep, so this is configurable.
 OPT_FORECAST_RESOLUTION_MINUTES = "forecast_resolution_minutes"
-DEFAULT_FORECAST_RESOLUTION_MINUTES = 60
+DEFAULT_FORECAST_RESOLUTION_MINUTES = 15
+
+# Live optimisation inputs. Forecast entities must expose timestamped values;
+# the integration does not infer a provider, unit, location or missing series.
+OPT_PV_FORECAST_ENTITIES = "pv_forecast_entities"
+OPT_SUPPLIER_IMPORT_FORECAST_ENTITY = "supplier_import_forecast_entity"
+OPT_SUPPLIER_EXPORT_FORECAST_ENTITY = "supplier_export_forecast_entity"
+OPT_ELECTRICITY_PRICE_AREA = "electricity_price_area"
+OPT_PV_FORECAST_LATITUDE = "pv_forecast_latitude"
+OPT_PV_FORECAST_LONGITUDE = "pv_forecast_longitude"
+OPT_BATTERY_SOC_ENTITY = "battery_soc_entity"
+OPT_GRID_EXPORT_POWER_ENTITY = "grid_export_power_entity"
+
+OPT_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
+OPT_BATTERY_CHARGE_MAX_W = "battery_charge_max_w"
+OPT_BATTERY_DISCHARGE_MAX_W = "battery_discharge_max_w"
+OPT_BATTERY_MIN_SOC = "battery_min_soc"
+OPT_BATTERY_MAX_SOC = "battery_max_soc"
+OPT_BATTERY_TARGET_SOC = "battery_target_soc"
+OPT_BATTERY_TARGET_IS_HARD = "battery_target_is_hard"
+OPT_BATTERY_CHARGE_EFFICIENCY = "battery_charge_efficiency"
+OPT_BATTERY_DISCHARGE_EFFICIENCY = "battery_discharge_efficiency"
+OPT_GRID_IMPORT_LIMIT_W = "grid_import_limit_w"
+OPT_GRID_EXPORT_LIMIT_W = "grid_export_limit_w"
+OPT_TERMINAL_SOC_MIN = "terminal_soc_min"
+OPT_TERMINAL_ENERGY_VALUE = "terminal_energy_value_sek_per_kwh"
+
+OPT_POOL_POWER_W = "pool_power_w"
+OPT_POOL_ENABLED_ENTITY = "pool_enabled_entity"
+OPT_POOL_MIN_RUN_SLOTS = "pool_min_run_slots"
+OPT_POOL_DEADLINE = "pool_deadline"
+OPT_POOL_BASELINE_START = "pool_baseline_start"
+OPT_BOILER_POWER_W = "boiler_power_w"
+OPT_BOILER_MIN_RUN_SLOTS = "boiler_min_run_slots"
+OPT_BOILER_DEADLINE = "boiler_deadline"
+OPT_BOILER_BASELINE_START = "boiler_baseline_start"
+OPT_EV_CONNECTED_ENTITY = "ev_connected_entity"
+OPT_EV_SOC_ENTITY = "ev_soc_entity"
+OPT_EV_TARGET_SOC_ENTITY = "ev_target_soc_entity"
+OPT_EV_DEPARTURE_ENTITY = "ev_departure_entity"
+OPT_EV_POWER_W = "ev_power_w"
+OPT_EV_BATTERY_KWH = "ev_battery_kwh"
+OPT_EV_CHARGE_EFFICIENCY = "ev_charge_efficiency"
+OPT_EV_MIN_RUN_SLOTS = "ev_min_run_slots"
+
+OPTIMISATION_ACTUAL_BACKFILL_HOURS = 48
+OPTIMISATION_PROFILE_DAYS = 10
+OPTIMISATION_HORIZON_HOURS = 72
+OPTIMISATION_PUSH_SECOND = 20
+ISSUE_OPTIMISATION_CONFIGURATION = "optimisation_configuration"
 
 # Storage keys for push bookkeeping.
 STORAGE_VERSION = 1
