@@ -23,6 +23,7 @@ from .const import (
     CONF_DEVICE_TOKEN_ID,
     CONF_HOME_ID,
     DOMAIN,
+    OPT_EV_CHARGE_CURRENT_ENTITY,
     OPT_GRID_EXPORT_POWER_ENTITY,
     OPT_SUPPLIER_EXPORT_PRICE,
     OPT_SUPPLIER_IMPORT_PRICE,
@@ -57,6 +58,7 @@ async def async_setup_entry(
             ShsPlanRequestSensor(coordinator, "boiler"),
             ShsPlanRequestSensor(coordinator, "pool"),
             ShsPlanRequestSensor(coordinator, "ev"),
+            ShsEvPlanCurrentSensor(coordinator),
         ]
     )
     added_component_keys: set[str] = set()
@@ -259,12 +261,69 @@ class ShsPlanRequestSensor(ShsBaseSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         slot = self.coordinator.current_plan_slot or {}
-        return {
+        attributes = {
             "slot_start": slot.get("start"),
             "binding": slot.get("binding"),
             "plan_status": (
                 self.coordinator.optimisation_plan or {}
             ).get("status"),
+            "advisory_only": True,
+        }
+        if self.device == "ev":
+            attributes.update({
+                "target_current_a": slot.get("ev_target_current_a"),
+                "minimum_current_a": slot.get("ev_min_current_a"),
+                "maximum_current_a": slot.get("ev_max_current_a"),
+            })
+        return attributes
+
+
+class ShsEvPlanCurrentSensor(ShsBaseSensor):
+    """Quarter-hour current target and reactive envelope for a capable EV."""
+
+    _attr_device_class = SensorDeviceClass.CURRENT
+    _attr_native_unit_of_measurement = "A"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = None
+
+    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "EV planned current"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_ev_planned_current"
+
+    def _control(self) -> dict[str, Any] | None:
+        plan = self.coordinator.optimisation_plan or {}
+        for service in plan.get("services", []):
+            control = service.get("control", {})
+            if (
+                service.get("device") == "ev"
+                and control.get("type") == "discrete_current"
+            ):
+                return control
+        return None
+
+    @property
+    def native_value(self) -> float | None:
+        slot = self.coordinator.current_plan_slot
+        if slot is None or self._control() is None:
+            return None
+        return float(slot["ev_target_current_a"])
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        slot = self.coordinator.current_plan_slot or {}
+        control = self._control() or {}
+        return {
+            "slot_start": slot.get("start"),
+            "binding": slot.get("binding"),
+            "minimum_current_a": slot.get("ev_min_current_a"),
+            "maximum_current_a": slot.get("ev_max_current_a"),
+            "charger_minimum_current_a": control.get("min_current_a"),
+            "charger_maximum_current_a": control.get("max_current_a"),
+            "current_step_a": control.get("current_step_a"),
+            "current_entity": self.coordinator.entry.options.get(
+                OPT_EV_CHARGE_CURRENT_ENTITY
+            ),
             "advisory_only": True,
         }
 

@@ -84,10 +84,12 @@ location. Import and export forecasts stay separate: automatic setup calls
 `nordpool.get_prices_for_date` for export spot, then adds the SHS grid tariff
 once in the matching direction. Explicit canonical forecast entities can be
 selected instead. The price area is discovered from Nord Pool/Tibber where it
-is unambiguous. EV power follows a
-configured current entity when available, so a car limited to 5 A is not
-modelled as an invented 11 kW load. If there is no departure timestamp entity,
-the next configured default departure time is used.
+is unambiguous. For an EV current entity, the integration reads the number
+entity's minimum, maximum and step attributes. The planner chooses one valid
+current for every 15-minute slot and derives power from the commissioned phase
+count and voltage; it never treats the entity's instantaneous state as the
+charger's fixed power. If there is no departure timestamp entity, the next
+configured default departure time is used.
 
 The GUI options are stored by Home Assistant in its config-entry storage. Do
 not edit `.storage/core.config_entries` directly. The supported automation/MCP
@@ -101,9 +103,9 @@ surface is:
 
 The integration creates *Subscription*, *Grid tariff*, *Current grid cost*,
 *Last push*, *Energy plan status*, *Reactive surplus*, planned request sensors
-for boiler/pool/EV, and one monetary sensor for every tariff component. Removed
-tariff components remain as entities with an inactive state so Home Assistant
-retains their history.
+for boiler/pool/EV, a dedicated *EV planned current* sensor, and one monetary
+sensor for every tariff component. Removed tariff components remain as entities
+with an inactive state so Home Assistant retains their history.
 
 ## Storage and privacy budget
 
@@ -132,6 +134,8 @@ The executor should consume:
 - `<device> planned request`: bounded watts for the current binding quarter;
   unavailable means the planner has no authority, while zero is an explicit
   off request inside a valid plan; and
+- `EV planned current`: the forecast target in amperes plus the current
+  quarter's deadline-safe minimum and hardware maximum as attributes; and
 - `Reactive surplus`: live, non-negative grid export watts for a central local
   allocator.
 
@@ -148,11 +152,13 @@ For a binary pool/boiler executor, apply this order:
 5. measured power confirmation before treating the device as running or
    reallocating its watts.
 
-For an EV executor, convert the requested watts to one supported current step,
-clamp it to the charger/vehicle limit, retain the departure minimum as a hard
-local rule, and confirm achieved charging power. A large unplanned import sheds
-eligible loads in reverse service priority. Baseline schedules remain active
-whenever the plan is unavailable; they are not deleted or silently recreated.
+For an EV executor, begin from `EV planned current`, then let the local reactive
+controller trim it in supported steps inside the published minimum/maximum
+envelope using actual import/export and battery state. Track delivered energy
+against the departure obligation, retain local connection/SOC/manual gates,
+and confirm achieved charging power. A large unplanned import sheds eligible
+loads in reverse service priority. Baseline schedules remain active whenever
+the plan is unavailable; they are not deleted or silently recreated.
 
 ## Notes
 

@@ -52,6 +52,10 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn('ShsTotalPriceSensor(coordinator, "import")', SENSOR)
         self.assertIn('ShsTotalPriceSensor(coordinator, "export")', SENSOR)
 
+    def test_ev_current_target_sensor_is_registered(self) -> None:
+        self.assertIn("ShsEvPlanCurrentSensor(coordinator)", SENSOR)
+        self.assertIn('slot["ev_target_current_a"]', SENSOR)
+
     def test_a_missing_supplier_price_leaves_the_total_unknown(self) -> None:
         # Falling back to the grid share alone would read as an all-in price.
         body = SENSOR[SENSOR.index("class ShsTotalPriceSensor") :]

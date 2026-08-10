@@ -107,6 +107,7 @@ from .optimisation import (
     build_base_load_profile,
     calibration_summary,
     daily_requirement,
+    discrete_current_control,
     extract_timestamped_forecast,
     normalized_fraction,
     parse_number,
@@ -1159,7 +1160,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "earliest_start": earliest.isoformat(),
                     "deadline": deadline.isoformat(),
                     "required_kwh": round(required, 3),
-                    "power_w": parse_number(options[power_key], power_key),
+                    "control": {
+                        "type": "fixed_power",
+                        "power_w": parse_number(options[power_key], power_key),
+                    },
                     "min_run_slots": int(minimum_run),
                     "priority": priority,
                     "baseline_preferred_start": max(earliest, baseline).isoformat(),
@@ -1228,26 +1232,35 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     raise OptimisationInputError(
                         f"{OPT_EV_MIN_RUN_SLOTS} must be a positive whole number"
                     )
-                power_w = options.get(OPT_EV_POWER_W)
-                if power_w in (None, ""):
-                    current_entity = options[OPT_EV_CHARGE_CURRENT_ENTITY]
+                current_entity = options.get(OPT_EV_CHARGE_CURRENT_ENTITY)
+                if current_entity:
                     current_payload = self._entity_payload(current_entity)
                     if current_payload["attributes"].get("unit_of_measurement") != "A":
                         raise OptimisationInputError(
                             f"{current_entity} must declare unit A"
                         )
-                    power_w = (
-                        parse_number(current_payload["state"], current_entity)
-                        * parse_number(options[OPT_EV_PHASE_COUNT], OPT_EV_PHASE_COUNT)
-                        * parse_number(options[OPT_EV_VOLTAGE], OPT_EV_VOLTAGE)
+                    control = discrete_current_control(
+                        current_payload["attributes"].get("min"),
+                        current_payload["attributes"].get("max"),
+                        current_payload["attributes"].get("step"),
+                        options[OPT_EV_PHASE_COUNT],
+                        options[OPT_EV_VOLTAGE],
+                        label=current_entity,
                     )
+                else:
+                    control = {
+                        "type": "fixed_power",
+                        "power_w": round(parse_number(
+                            options.get(OPT_EV_POWER_W), "EV charging power"
+                        ), 1),
+                    }
                 services.append({
                     "id": f"ev:{departure.isoformat()}",
                     "device": "ev",
                     "earliest_start": first.isoformat(),
                     "deadline": departure.isoformat(),
                     "required_kwh": round(required, 3),
-                    "power_w": round(parse_number(power_w, "EV charging power"), 1),
+                    "control": control,
                     "min_run_slots": int(minimum_run),
                     "priority": 3,
                     "baseline_preferred_start": first.isoformat(),
@@ -1603,7 +1616,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             *modelled_categories,
         )
         snapshot = {
-            "schema_version": 2,
+            "schema_version": 3,
             "mode": "live",
             "capabilities": capabilities,
             "snapshot_id": str(uuid4()),
@@ -1748,7 +1761,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "earliest_start": earliest.isoformat(),
                     "deadline": deadline.isoformat(),
                     "required_kwh": required,
-                    "power_w": power,
+                    "control": {"type": "fixed_power", "power_w": power},
                     "min_run_slots": minimum,
                     "priority": priority,
                     "baseline_preferred_start": max(earliest, preferred).isoformat(),
@@ -1760,7 +1773,14 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "earliest_start": horizon[0].isoformat(),
             "deadline": departure.isoformat(),
             "required_kwh": 8.0,
-            "power_w": 7_400,
+            "control": {
+                "type": "discrete_current",
+                "min_current_a": 5,
+                "max_current_a": 16,
+                "current_step_a": 1,
+                "phase_count": 3,
+                "voltage_v": 230,
+            },
             "min_run_slots": 2,
             "priority": 3,
             "baseline_preferred_start": horizon[0].isoformat(),
@@ -1774,7 +1794,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             **({"location": location} if location else {}),
         }
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "mode": "demo",
             "capabilities": {
                 "pv": True, "battery": True, "pool": True,

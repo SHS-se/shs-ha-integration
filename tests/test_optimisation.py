@@ -14,6 +14,7 @@ from optimisation import (  # noqa: E402
     aggregate_category_changes,
     build_base_load_profile,
     calibration_summary,
+    discrete_current_control,
     extract_timestamped_forecast,
     require_fresh_source,
     validate_plan_contract,
@@ -174,6 +175,91 @@ class ForecastTests(unittest.TestCase):
                 label="PV forecast",
             )
 
+    def test_discrete_current_capability_uses_number_entity_bounds(self) -> None:
+        control = discrete_current_control(5, 16, 1, 3, 230)
+
+        self.assertEqual(control, {
+            "type": "discrete_current",
+            "min_current_a": 5,
+            "max_current_a": 16,
+            "current_step_a": 1,
+            "phase_count": 3,
+            "voltage_v": 230,
+        })
+        with self.assertRaisesRegex(OptimisationInputError, "not aligned"):
+            discrete_current_control(5, 16.5, 1, 3, 230)
+
+    def test_cached_plan_accepts_and_verifies_ev_current_steps(self) -> None:
+        now = datetime(2026, 8, 10, 8, 0, tzinfo=timezone.utc)
+        currents = [5] * 7 + [6, 6]
+        slots = [
+            {
+                "start": (now + timedelta(minutes=15 * index)).isoformat(),
+                "binding": True,
+                "pool_w": 0,
+                "boiler_w": 0,
+                "ev_w": current * 3 * 230,
+                "ev_target_current_a": current,
+                "ev_min_current_a": 0,
+                "ev_max_current_a": 16,
+                "battery_soc": 0.5,
+            }
+            for index, current in enumerate(currents)
+        ]
+        service = {
+            "id": "ev:departure",
+            "device": "ev",
+            "earliest_start": now.isoformat(),
+            "deadline": (now + timedelta(hours=2, minutes=15)).isoformat(),
+            "required_kwh": 8,
+            "control": {
+                "type": "discrete_current",
+                "min_current_a": 5,
+                "max_current_a": 16,
+                "current_step_a": 1,
+                "phase_count": 3,
+                "voltage_v": 230,
+            },
+            "min_run_slots": 2,
+        }
+        plan = {
+            "schema_version": 3,
+            "mode": "live",
+            "capabilities": {
+                "pv": True,
+                "battery": True,
+                "pool": False,
+                "boiler": False,
+                "ev": True,
+            },
+            "slot_minutes": 15,
+            "model_version": "quarter-hour-heuristic-v3",
+            "status": "ready",
+            "issued_at": now.isoformat(),
+            "valid_until": (now + timedelta(hours=2, minutes=30)).isoformat(),
+            "binding_until": (now + timedelta(hours=2, minutes=15)).isoformat(),
+            "services": [service],
+            "plans": {
+                key: {
+                    "status": "ready",
+                    "slots": [dict(slot) for slot in slots],
+                    "service_slots": {"ev:departure": list(range(9))},
+                    "service_currents_a": {"ev:departure": list(currents)},
+                }
+                for key in ("baseline", "priority", "cost")
+            },
+        }
+        validate_plan_contract(plan, now)
+
+        plan["plans"]["priority"]["slots"][0]["ev_max_current_a"] = 17
+        with self.assertRaisesRegex(OptimisationInputError, "charger capability"):
+            validate_plan_contract(plan, now)
+        plan["plans"]["priority"]["slots"][0]["ev_max_current_a"] = 16
+
+        plan["plans"]["priority"]["service_currents_a"]["ev:departure"][0] = 5.5
+        with self.assertRaisesRegex(OptimisationInputError, "current step"):
+            validate_plan_contract(plan, now)
+
     def test_cached_plan_requires_matching_contiguous_scenarios(self) -> None:
         now = datetime(2026, 8, 10, 8, 0, tzinfo=timezone.utc)
         slots = [
@@ -183,12 +269,15 @@ class ForecastTests(unittest.TestCase):
                 "pool_w": 0,
                 "boiler_w": 0,
                 "ev_w": 0,
+                "ev_target_current_a": 0,
+                "ev_min_current_a": 0,
+                "ev_max_current_a": 0,
                 "battery_soc": 0.5,
             }
             for index in range(4)
         ]
         plan = {
-            "schema_version": 2,
+            "schema_version": 3,
             "mode": "live",
             "capabilities": {
                 "pv": True,
@@ -198,7 +287,7 @@ class ForecastTests(unittest.TestCase):
                 "ev": False,
             },
             "slot_minutes": 15,
-            "model_version": "quarter-hour-heuristic-v2",
+            "model_version": "quarter-hour-heuristic-v3",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -209,6 +298,7 @@ class ForecastTests(unittest.TestCase):
                     "status": "ready",
                     "slots": [dict(slot) for slot in slots],
                     "service_slots": {},
+                    "service_currents_a": {},
                 }
                 for key in ("baseline", "priority", "cost")
             },
@@ -230,12 +320,15 @@ class ForecastTests(unittest.TestCase):
                 "pool_w": 0,
                 "boiler_w": 0,
                 "ev_w": 0,
+                "ev_target_current_a": 0,
+                "ev_min_current_a": 0,
+                "ev_max_current_a": 0,
                 "battery_soc": 0.5,
             }
             for index in range(4)
         ]
         plan = {
-            "schema_version": 2,
+            "schema_version": 3,
             "mode": "live",
             "capabilities": {
                 "pv": True,
@@ -245,7 +338,7 @@ class ForecastTests(unittest.TestCase):
                 "ev": False,
             },
             "slot_minutes": 15,
-            "model_version": "quarter-hour-heuristic-v2",
+            "model_version": "quarter-hour-heuristic-v3",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -256,6 +349,7 @@ class ForecastTests(unittest.TestCase):
                     "status": "ready",
                     "slots": [dict(slot) for slot in slots],
                     "service_slots": {},
+                    "service_currents_a": {},
                 }
                 for key in ("baseline", "priority", "cost")
             },
@@ -275,12 +369,15 @@ class ForecastTests(unittest.TestCase):
                 "pool_w": 0,
                 "boiler_w": 3000 if index < 2 else 0,
                 "ev_w": 0,
+                "ev_target_current_a": 0,
+                "ev_min_current_a": 0,
+                "ev_max_current_a": 0,
                 "battery_soc": 0.5,
             }
             for index in range(4)
         ]
         plan = {
-            "schema_version": 2,
+            "schema_version": 3,
             "mode": "live",
             "capabilities": {
                 "pv": True,
@@ -290,7 +387,7 @@ class ForecastTests(unittest.TestCase):
                 "ev": False,
             },
             "slot_minutes": 15,
-            "model_version": "quarter-hour-heuristic-v2",
+            "model_version": "quarter-hour-heuristic-v3",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -299,7 +396,9 @@ class ForecastTests(unittest.TestCase):
                 "id": "boiler:today",
                 "device": "boiler",
                 "required_kwh": 1.5,
-                "power_w": 3000,
+                "earliest_start": now.isoformat(),
+                "deadline": (now + timedelta(hours=1)).isoformat(),
+                "control": {"type": "fixed_power", "power_w": 3000},
                 "min_run_slots": 2,
             }],
             "plans": {
@@ -307,6 +406,7 @@ class ForecastTests(unittest.TestCase):
                     "status": "ready",
                     "slots": [dict(slot) for slot in slots],
                     "service_slots": {"boiler:today": [0, 1]},
+                    "service_currents_a": {},
                 }
                 for key in ("baseline", "priority", "cost")
             },
