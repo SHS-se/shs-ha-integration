@@ -49,13 +49,14 @@ OPT_FORECAST_RESOLUTION_MINUTES = "forecast_resolution_minutes"
 DEFAULT_FORECAST_RESOLUTION_MINUTES = 15
 
 # Planning is opt-in. Monitoring and tariff uploads keep working when planning
-# is disabled, and demo plans are never exposed as executable requests.
+# is disabled. Promotional examples live only in the website bundle.
 OPT_PLANNING_MODE = "planning_mode"
 PLANNING_MODE_DISABLED = "disabled"
 PLANNING_MODE_LIVE = "live"
-PLANNING_MODE_DEMO = "demo"
 DEFAULT_PLANNING_MODE = PLANNING_MODE_DISABLED
 OPT_AUTOMATIC_SETUP = "automatic_setup"
+OPT_DISCOVERY_EVIDENCE = "discovery_evidence"
+OPT_CONFIGURATION_REVIEWED_AT = "configuration_reviewed_at"
 
 # Live optimisation inputs. Forecast entities must expose timestamped values;
 # the integration does not infer a provider, unit, location or missing series.
@@ -84,17 +85,21 @@ OPT_TERMINAL_ENERGY_VALUE = "terminal_energy_value_sek_per_kwh"
 
 OPT_POOL_POWER_W = "pool_power_w"
 OPT_POOL_PLANNING_ENABLED = "pool_planning_enabled"
+OPT_POOL_DEFERRABLE_CONFIRMED = "pool_deferrable_confirmed"
 OPT_POOL_ENABLED_ENTITY = "pool_enabled_entity"
 OPT_POOL_MIN_RUN_SLOTS = "pool_min_run_slots"
 OPT_POOL_DEADLINE = "pool_deadline"
 OPT_POOL_BASELINE_START = "pool_baseline_start"
 OPT_BOILER_POWER_W = "boiler_power_w"
 OPT_BOILER_PLANNING_ENABLED = "boiler_planning_enabled"
+OPT_BOILER_DEFERRABLE_CONFIRMED = "boiler_deferrable_confirmed"
 OPT_BOILER_MIN_RUN_SLOTS = "boiler_min_run_slots"
 OPT_BOILER_DEADLINE = "boiler_deadline"
 OPT_BOILER_BASELINE_START = "boiler_baseline_start"
 OPT_EV_CONNECTED_ENTITY = "ev_connected_entity"
 OPT_EV_PLANNING_ENABLED = "ev_planning_enabled"
+OPT_EV_DEFERRABLE_CONFIRMED = "ev_deferrable_confirmed"
+OPT_EV_ELECTRICAL_CONFIRMED = "ev_electrical_confirmed"
 OPT_EV_SOC_ENTITY = "ev_soc_entity"
 OPT_EV_TARGET_SOC_ENTITY = "ev_target_soc_entity"
 OPT_EV_DEPARTURE_ENTITY = "ev_departure_entity"
@@ -103,6 +108,9 @@ OPT_EV_BATTERY_KWH = "ev_battery_kwh"
 OPT_EV_CHARGE_EFFICIENCY = "ev_charge_efficiency"
 OPT_EV_MIN_RUN_SLOTS = "ev_min_run_slots"
 OPT_EV_CHARGE_CURRENT_ENTITY = "ev_charge_current_entity"
+OPT_EV_MIN_CURRENT_A = "ev_min_current_a"
+OPT_EV_MAX_CURRENT_A = "ev_max_current_a"
+OPT_EV_CURRENT_STEP_A = "ev_current_step_a"
 OPT_EV_ENERGY_REMAINING_ENTITY = "ev_energy_remaining_entity"
 OPT_EV_PHASE_COUNT = "ev_phase_count"
 OPT_EV_VOLTAGE = "ev_voltage"

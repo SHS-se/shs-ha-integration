@@ -23,7 +23,7 @@
     "step": {
       "init": {
         "title": "Energy planning",
-        "description": "Automatic setup reads the meters already curated in your Energy Dashboard and discovers supported forecasts and equipment. Choose Demo to show the feature with synthetic data; demo plans never control devices.",
+        "description": "Automatic setup reads the aggregate meters already curated in your Energy Dashboard, then shows what it found before anything is treated as controllable. Promotional examples live only on the website and never enter Home Assistant or customer storage.",
         "data": {
           "planning_mode": "Planning mode",
           "setup_method": "Configuration method",
@@ -82,6 +82,9 @@
           "ev_charge_efficiency": "EV charging efficiency (fraction)",
           "ev_min_run_slots": "EV minimum run (15-minute slots)",
           "ev_charge_current_entity": "EV charge-current entity (min/max/step A)",
+          "ev_min_current_a": "Usable EV charging minimum (A)",
+          "ev_max_current_a": "EV charging maximum (A)",
+          "ev_current_step_a": "EV charging current increment (A)",
           "ev_energy_remaining_entity": "EV energy remaining entity (kWh)",
           "ev_phase_count": "EV charging phase count",
           "ev_voltage": "EV phase voltage (V)",
@@ -89,6 +92,15 @@
           "pool_planning_enabled": "Plan pool heating",
           "boiler_planning_enabled": "Plan water heating",
           "ev_planning_enabled": "Plan EV charging"
+        }
+      },
+      "discovery_review": {
+        "title": "Review discovered capabilities",
+        "description": "{discovery_summary}\n\nEnergy Dashboard membership proves that a load is measured; it does not prove that it is safe or acceptable to defer. Select only loads whose operating window you want planned. You will review the control entity and operating values for each selection before they are saved.",
+        "data": {
+          "pool_planning_enabled": "I confirm pool heating may be deferred",
+          "boiler_planning_enabled": "I confirm water heating may be deferred",
+          "ev_planning_enabled": "I confirm EV charging may be deferred"
         }
       },
       "metering": {
@@ -179,13 +191,16 @@
       },
       "ev": {
         "title": "EV planning",
-        "description": "A charge-current number contributes its minimum, maximum and step; the planner chooses a valid current per quarter. If there is no departure entity, the next default departure time is used.",
+        "description": "The charge-current entity supplies its raw bounds. Review the usable charging minimum, maximum, increment, phase count and voltage; the planner then chooses only valid currents per quarter. If there is no departure entity, the next default departure time is used.",
         "data": {
           "ev_connected_entity": "EV connected entity",
           "ev_soc_entity": "EV state of charge",
           "ev_target_soc_entity": "EV target state of charge",
           "ev_departure_entity": "Departure timestamp entity (optional)",
           "ev_charge_current_entity": "Charge-current control (min/max/step A)",
+          "ev_min_current_a": "Usable charging minimum (A)",
+          "ev_max_current_a": "Charging maximum (A)",
+          "ev_current_step_a": "Current increment (A)",
           "ev_energy_remaining_entity": "Energy remaining (kWh)",
           "ev_power_w": "Fixed charging power (W, optional)",
           "ev_battery_kwh": "Usable battery capacity (kWh)",
@@ -219,7 +234,7 @@
         "name": "Current grid cost"
       },
       "last_push": {
-        "name": "Last push"
+        "name": "Daily energy history push"
       },
       "grid_import_price": {
         "name": "Grid import price"
@@ -239,8 +254,7 @@
       "optimisation_status": {
         "name": "Energy plan status",
         "state": {
-          "disabled": "Off",
-          "demo": "Demo"
+          "disabled": "Off"
         }
       },
       "reactive_surplus": {

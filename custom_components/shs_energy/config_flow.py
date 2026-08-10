@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import voluptuous as vol
@@ -18,7 +19,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import ShsApiClient, ShsApiError, ShsPairingError
 from .configuration import (
-    async_discover_options,
+    async_discover_configuration,
     optimisation_defaults,
     resolved_options,
 )
@@ -58,6 +59,7 @@ from .const import (
     OPT_POOL_DEADLINE,
     OPT_POOL_BASELINE_START,
     OPT_BOILER_POWER_W,
+    OPT_BOILER_DEFERRABLE_CONFIRMED,
     OPT_BOILER_MIN_RUN_SLOTS,
     OPT_BOILER_DEADLINE,
     OPT_BOILER_BASELINE_START,
@@ -70,18 +72,24 @@ from .const import (
     OPT_EV_CHARGE_EFFICIENCY,
     OPT_EV_MIN_RUN_SLOTS,
     OPT_EV_CHARGE_CURRENT_ENTITY,
+    OPT_EV_MIN_CURRENT_A,
+    OPT_EV_MAX_CURRENT_A,
+    OPT_EV_CURRENT_STEP_A,
     OPT_EV_ENERGY_REMAINING_ENTITY,
     OPT_EV_PHASE_COUNT,
     OPT_EV_VOLTAGE,
     OPT_EV_DEFAULT_DEPARTURE,
+    OPT_EV_DEFERRABLE_CONFIRMED,
+    OPT_EV_ELECTRICAL_CONFIRMED,
     OPT_POOL_PLANNING_ENABLED,
+    OPT_POOL_DEFERRABLE_CONFIRMED,
     OPT_BOILER_PLANNING_ENABLED,
     OPT_EV_PLANNING_ENABLED,
     OPT_PLANNING_MODE,
     OPT_AUTOMATIC_SETUP,
+    OPT_CONFIGURATION_REVIEWED_AT,
     PLANNING_MODE_DISABLED,
     PLANNING_MODE_LIVE,
-    PLANNING_MODE_DEMO,
     OPT_SUPPLIER_EXPORT_PRICE,
     OPT_SUPPLIER_IMPORT_PRICE,
 )
@@ -147,6 +155,7 @@ class ShsEnergyOptionsFlow(OptionsFlow):
     """Configure common homes in one screen and advanced homes in small steps."""
 
     _pending: dict[str, Any]
+    _discovery: dict[str, Any]
 
     def _current(self) -> dict[str, Any]:
         return resolved_options(
@@ -182,6 +191,10 @@ class ShsEnergyOptionsFlow(OptionsFlow):
     def _save(self) -> ConfigFlowResult:
         options = resolved_options(self.hass, self._pending)
         options.pop("setup_method", None)
+        if options.get(OPT_PLANNING_MODE) == PLANNING_MODE_LIVE:
+            options[OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(
+                timezone.utc
+            ).isoformat()
         return self.async_create_entry(title="", data=options)
 
     async def async_step_init(
@@ -196,9 +209,12 @@ class ShsEnergyOptionsFlow(OptionsFlow):
             method = self._pending.get("setup_method", "automatic")
             self._pending[OPT_AUTOMATIC_SETUP] = method == "automatic"
             if self._pending[OPT_PLANNING_MODE] == PLANNING_MODE_LIVE and method == "automatic":
-                self._pending = await async_discover_options(self.hass, self._pending)
+                self._discovery = await async_discover_configuration(
+                    self.hass, self._pending
+                )
+                self._pending = self._discovery["configuration"]
                 self._pending[OPT_PLANNING_MODE] = PLANNING_MODE_LIVE
-                return self._save()
+                return await self.async_step_discovery_review()
             if self._pending[OPT_PLANNING_MODE] != PLANNING_MODE_LIVE:
                 return self._save()
             if method == "manual":
@@ -216,7 +232,6 @@ class ShsEnergyOptionsFlow(OptionsFlow):
                     options=[
                         {"value": PLANNING_MODE_DISABLED, "label": "Off — monitoring only"},
                         {"value": PLANNING_MODE_LIVE, "label": "Live planning"},
-                        {"value": PLANNING_MODE_DEMO, "label": "Demo — synthetic, never controls devices"},
                     ],
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )),
@@ -231,6 +246,127 @@ class ShsEnergyOptionsFlow(OptionsFlow):
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )),
             }),
+        )
+
+    def _discovery_summary(self) -> str:
+        capabilities = self._discovery["capabilities"]
+        options = self._discovery["configuration"]
+        categories = [
+            f"{category.replace('_', ' ')}: "
+            + ", ".join(options.get(f"{OPT_PREFIX_ENTITIES}{category}", []))
+            for category in (
+                "grid_import",
+                "grid_export",
+                "solar_production",
+                "total_consumption",
+                "pool_heating",
+                "hot_water",
+                "ev_charging",
+            )
+            if options.get(f"{OPT_PREFIX_ENTITIES}{category}")
+        ]
+        lines = [
+            f"Energy Dashboard: {capabilities['metering']['detected']} aggregate meters",
+            *(categories or ["No aggregate Energy Dashboard meters were found"]),
+            f"PV forecast: {'found' if capabilities['pv']['candidate'] else 'not found (optional)'}",
+            f"Battery: {'ready' if capabilities['battery']['ready'] else 'not ready or not installed (optional)'}",
+            f"Prices: {capabilities['prices']['area'] or 'price area needs review'}",
+        ]
+        evidence = self._discovery["evidence"]
+        for key, label in (
+            (OPT_PV_FORECAST_ENTITIES, "PV source"),
+            (OPT_BATTERY_SOC_ENTITY, "Battery SOC"),
+            (OPT_BATTERY_CAPACITY_KWH, "Battery capacity"),
+            (OPT_GRID_IMPORT_LIMIT_W, "Grid import limit"),
+            (OPT_GRID_EXPORT_LIMIT_W, "Grid export limit"),
+            (OPT_GRID_EXPORT_POWER_ENTITY, "Reactive export meter"),
+            (OPT_POOL_ENABLED_ENTITY, "Pool enable gate"),
+            (OPT_POOL_POWER_W, "Pool observed power"),
+            (OPT_EV_CONNECTED_ENTITY, "EV connection"),
+            (OPT_EV_SOC_ENTITY, "EV SOC"),
+            (OPT_EV_TARGET_SOC_ENTITY, "EV target"),
+            (OPT_EV_CHARGE_CURRENT_ENTITY, "EV current control"),
+            (OPT_EV_MIN_CURRENT_A, "EV usable minimum current"),
+            (OPT_EV_MAX_CURRENT_A, "EV maximum current"),
+            (OPT_EV_CURRENT_STEP_A, "EV current increment"),
+            (OPT_EV_BATTERY_KWH, "EV capacity"),
+        ):
+            if key not in evidence:
+                continue
+            value = options.get(key)
+            if isinstance(value, list):
+                value = ", ".join(value)
+            lines.append(
+                f"{label}: {value} "
+                f"[{evidence[key]['source']}, {evidence[key]['confidence']} confidence]"
+            )
+        for name, label in (
+            ("pool", "Pool heating"),
+            ("boiler", "Water heating"),
+            ("ev", "EV charging"),
+        ):
+            capability = capabilities[name]
+            if not capability["candidate"]:
+                continue
+            state = (
+                "all inputs found"
+                if capability["ready_after_review"]
+                else "missing: " + ", ".join(capability["missing"])
+            )
+            lines.append(f"{label}: candidate only — {state}")
+        ev_current = capabilities["ev"].get("current_control")
+        if ev_current:
+            lines.append(
+                "EV current control: "
+                f"{ev_current['entity_id']} "
+                f"(entity reports {ev_current['raw_min_a']}–"
+                f"{ev_current['raw_max_a']} A; proposed usable range "
+                f"{ev_current['proposed_min_a']}–"
+                f"{ev_current['proposed_max_a']} A, step "
+                f"{ev_current['proposed_step_a']} A). Confirm this range, "
+                "phases and voltage."
+            )
+        return "\n".join(lines)
+
+    async def async_step_discovery_review(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Require a human decision before any discovered load is deferrable."""
+        pairs = (
+            ("pool", OPT_POOL_PLANNING_ENABLED, OPT_POOL_DEFERRABLE_CONFIRMED),
+            (
+                "boiler",
+                OPT_BOILER_PLANNING_ENABLED,
+                OPT_BOILER_DEFERRABLE_CONFIRMED,
+            ),
+            ("ev", OPT_EV_PLANNING_ENABLED, OPT_EV_DEFERRABLE_CONFIRMED),
+        )
+        if user_input is not None:
+            for _name, enabled_key, confirmation_key in pairs:
+                self._pending[enabled_key] = bool(
+                    user_input.get(enabled_key, False)
+                )
+                self._pending[confirmation_key] = False
+            self._pending[OPT_EV_ELECTRICAL_CONFIRMED] = False
+            return await self.async_step_pool()
+
+        current = self._current()
+        schema: dict[Any, Any] = {}
+        for name, enabled_key, confirmation_key in pairs:
+            if not self._discovery["capabilities"][name]["candidate"]:
+                continue
+            schema[vol.Optional(
+                enabled_key,
+                default=bool(
+                    current.get(enabled_key) and current.get(confirmation_key)
+                ),
+            )] = bool
+        return self.async_show_form(
+            step_id="discovery_review",
+            data_schema=vol.Schema(schema),
+            description_placeholders={
+                "discovery_summary": self._discovery_summary()
+            },
         )
 
     async def async_step_metering(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -298,6 +434,10 @@ class ShsEnergyOptionsFlow(OptionsFlow):
     async def async_step_flexible_loads(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             self._pending.update(user_input)
+            self._pending[OPT_POOL_DEFERRABLE_CONFIRMED] = False
+            self._pending[OPT_BOILER_DEFERRABLE_CONFIRMED] = False
+            self._pending[OPT_EV_DEFERRABLE_CONFIRMED] = False
+            self._pending[OPT_EV_ELECTRICAL_CONFIRMED] = False
             return await self.async_step_pool()
         current = self._current()
         return self.async_show_form(step_id="flexible_loads", data_schema=vol.Schema({
@@ -311,6 +451,7 @@ class ShsEnergyOptionsFlow(OptionsFlow):
             return await self.async_step_boiler()
         if user_input is not None:
             self._pending.update(user_input)
+            self._pending[OPT_POOL_DEFERRABLE_CONFIRMED] = True
             return await self.async_step_boiler()
         current = self._current()
         schema = dict(self._entity_schema([(OPT_POOL_ENABLED_ENTITY, None, False)]).schema)
@@ -324,6 +465,7 @@ class ShsEnergyOptionsFlow(OptionsFlow):
             return await self.async_step_ev()
         if user_input is not None:
             self._pending.update(user_input)
+            self._pending[OPT_BOILER_DEFERRABLE_CONFIRMED] = True
             return await self.async_step_ev()
         current = self._current()
         schema = dict(self._number_schema([OPT_BOILER_POWER_W, OPT_BOILER_MIN_RUN_SLOTS]).schema)
@@ -336,6 +478,8 @@ class ShsEnergyOptionsFlow(OptionsFlow):
             return self._save()
         if user_input is not None:
             self._pending.update(user_input)
+            self._pending[OPT_EV_DEFERRABLE_CONFIRMED] = True
+            self._pending[OPT_EV_ELECTRICAL_CONFIRMED] = True
             return self._save()
         current = self._current()
         schema = dict(self._entity_schema([
@@ -348,7 +492,9 @@ class ShsEnergyOptionsFlow(OptionsFlow):
         ]).schema)
         schema.update(self._number_schema([
             OPT_EV_POWER_W, OPT_EV_BATTERY_KWH, OPT_EV_CHARGE_EFFICIENCY,
-            OPT_EV_MIN_RUN_SLOTS, OPT_EV_PHASE_COUNT, OPT_EV_VOLTAGE,
+            OPT_EV_MIN_RUN_SLOTS, OPT_EV_MIN_CURRENT_A,
+            OPT_EV_MAX_CURRENT_A, OPT_EV_CURRENT_STEP_A,
+            OPT_EV_PHASE_COUNT, OPT_EV_VOLTAGE,
         ]).schema)
         schema[vol.Optional(OPT_EV_DEFAULT_DEPARTURE, default=current[OPT_EV_DEFAULT_DEPARTURE])] = str
         return self.async_show_form(step_id="ev", data_schema=vol.Schema(schema))

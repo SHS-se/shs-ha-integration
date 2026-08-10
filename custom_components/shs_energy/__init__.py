@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import voluptuous as vol
@@ -22,15 +23,23 @@ from .const import (
     PUSH_TIME_MINUTE,
     OPTIMISATION_PUSH_SECOND,
     OPT_AUTOMATIC_SETUP,
+    OPT_BOILER_DEFERRABLE_CONFIRMED,
+    OPT_BOILER_PLANNING_ENABLED,
+    OPT_CONFIGURATION_REVIEWED_AT,
+    OPT_DISCOVERY_EVIDENCE,
+    OPT_EV_DEFERRABLE_CONFIRMED,
+    OPT_EV_ELECTRICAL_CONFIRMED,
+    OPT_EV_PLANNING_ENABLED,
     OPT_PLANNING_MODE,
+    OPT_POOL_DEFERRABLE_CONFIRMED,
+    OPT_POOL_PLANNING_ENABLED,
     OPT_PREFIX_ENTITIES,
     PLANNING_MODE_LIVE,
     PLANNING_MODE_DISABLED,
-    PLANNING_MODE_DEMO,
     DOMAIN,
 )
 from .configuration import (
-    async_discover_options,
+    async_discover_configuration,
     optimisation_defaults,
     resolved_options,
 )
@@ -54,25 +63,36 @@ def _entry_for_call(hass: HomeAssistant, call: ServiceCall) -> ConfigEntry:
     return entries[0]
 
 
-def _configuration_response(options: dict[str, Any]) -> dict[str, Any]:
+def _configuration_response(
+    options: dict[str, Any], discovery: dict[str, Any] | None = None
+) -> dict[str, Any]:
     categories = {
         category: list(options.get(f"{OPT_PREFIX_ENTITIES}{category}", []))
         for category in CONFIGURABLE_CATEGORIES
     }
-    return {
+    response = {
         "planning_mode": options.get(OPT_PLANNING_MODE),
         "automatic_setup": bool(options.get(OPT_AUTOMATIC_SETUP)),
         "categories": categories,
         "configuration": options,
+        "evidence": options.get(OPT_DISCOVERY_EVIDENCE, {}),
     }
+    if discovery is not None:
+        response["capabilities"] = discovery["capabilities"]
+        response["review_required"] = discovery["review_required"]
+    return response
 
 
 async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
     """Register a validated configuration surface for UI actions and MCP."""
     async def discover(call: ServiceCall) -> dict[str, Any]:
         entry = _entry_for_call(hass, call)
-        options = await async_discover_options(hass, dict(entry.options))
-        return _configuration_response(options)
+        discovery = await async_discover_configuration(
+            hass, dict(entry.options)
+        )
+        return _configuration_response(
+            discovery["configuration"], discovery
+        )
 
     async def apply(call: ServiceCall) -> dict[str, Any]:
         entry = _entry_for_call(hass, call)
@@ -91,15 +111,44 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
             raise ValueError("unknown configuration keys: " + ", ".join(unknown))
         options = resolved_options(hass, {**dict(entry.options), **incoming})
         if options.get(OPT_PLANNING_MODE) not in {
-            PLANNING_MODE_DISABLED, PLANNING_MODE_LIVE, PLANNING_MODE_DEMO
+            PLANNING_MODE_DISABLED, PLANNING_MODE_LIVE
         }:
-            raise ValueError("planning_mode must be disabled, live or demo")
-        if (
-            options.get(OPT_PLANNING_MODE) == PLANNING_MODE_LIVE
-            and options.get(OPT_AUTOMATIC_SETUP)
-        ):
-            options = await async_discover_options(hass, options)
-            options.update(incoming)
+            raise ValueError("planning_mode must be disabled or live")
+        confirmations = (
+            (
+                OPT_POOL_PLANNING_ENABLED,
+                OPT_POOL_DEFERRABLE_CONFIRMED,
+                "pool deferrability",
+            ),
+            (
+                OPT_BOILER_PLANNING_ENABLED,
+                OPT_BOILER_DEFERRABLE_CONFIRMED,
+                "water-heater deferrability",
+            ),
+            (
+                OPT_EV_PLANNING_ENABLED,
+                OPT_EV_DEFERRABLE_CONFIRMED,
+                "EV deferrability",
+            ),
+            (
+                OPT_EV_PLANNING_ENABLED,
+                OPT_EV_ELECTRICAL_CONFIRMED,
+                "EV phase count and voltage",
+            ),
+        )
+        unconfirmed = [
+            label
+            for enabled_key, confirmation_key, label in confirmations
+            if options.get(enabled_key) and not options.get(confirmation_key)
+        ]
+        if unconfirmed:
+            raise ValueError(
+                "explicit confirmation required: " + ", ".join(unconfirmed)
+            )
+        if options.get(OPT_PLANNING_MODE) == PLANNING_MODE_LIVE:
+            options[OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(
+                timezone.utc
+            ).isoformat()
         hass.config_entries.async_update_entry(entry, options=options)
         return _configuration_response(options)
 

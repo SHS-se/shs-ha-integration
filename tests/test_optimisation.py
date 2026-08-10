@@ -251,6 +251,11 @@ class ForecastTests(unittest.TestCase):
         }
         validate_plan_contract(plan, now)
 
+        plan["mode"] = "demo"
+        with self.assertRaisesRegex(OptimisationInputError, "mode"):
+            validate_plan_contract(plan, now)
+        plan["mode"] = "live"
+
         plan["plans"]["priority"]["slots"][0]["ev_max_current_a"] = 17
         with self.assertRaisesRegex(OptimisationInputError, "charger capability"):
             validate_plan_contract(plan, now)

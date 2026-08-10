@@ -14,17 +14,22 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
 - **One home per credential**: the portal binds the pairing code and device
   token to the selected home. A token cannot submit or read another home's
   optimisation data.
-- **Automatic setup**: the integration reads the aggregate meters already
-  curated in Home Assistant's Energy Dashboard, discovers supported forecast,
-  battery and EV entities, and stores one compact configuration. Phase-level
-  child meters are not selected when an aggregate meter exists. A multi-step
-  manual path remains available for unusual installations.
+- **Reviewed automatic setup**: the integration reads the aggregate meters
+  already curated in Home Assistant's Energy Dashboard and discovers supported
+  forecast, battery and control candidates. It then shows its evidence before
+  saving. Phase-level child meters are not selected when an aggregate exists,
+  and no measured load is assumed to be deferrable. A user must explicitly
+  select each flexible load and review its operating values. Fixed-load power
+  proposals use only local five-minute recorder statistics, with their sample
+  count shown; those source rows never leave HA. A multi-step manual path
+  remains available for unusual installations.
 - **Optional capabilities**: monitoring a category does not make it
   controllable. Solar, battery, pool, water heating and EV planning are
   independent capabilities; a home without any of them is still a valid
   integration and can use price-led planning for the equipment it does have.
-- **Demo mode**: creates a clearly labelled synthetic plan for demonstrations.
-  Home Assistant never exposes demo plan requests to executor automations.
+- **Website-only example**: the portal can render a promotional scenario from
+  fixed numbers bundled with the website. Home Assistant cannot create or
+  upload demo data, and the ingestion database accepts live plans only.
 - **Nightly push**: shortly after midnight the integration reads the previous
   day's change for each mapped sensor from HA's long-term statistics and
   pushes one reading per category. Pushes are idempotent and missed days are
@@ -73,9 +78,10 @@ directory and restart.
 2. HA → Settings → Devices & services → **Add integration** →
    *Smart Home Solutions Energy*
 3. Enter the code (within 10 minutes), then open **Configure**. Choose **Live
-   planning → Automatic** to use the Energy Dashboard as the source of truth,
-   **Manual** to review the advanced capability steps, **Demo** to show the
-   feature safely, or **Off** to use reporting and tariffs without planning.
+   planning → Automatic** to discover from the Energy Dashboard and review a
+   compact proposal, **Manual** for every advanced mapping, or **Off** to use
+   reporting and tariffs without planning. The website's **Example** view is
+   independent of this integration.
 
 PV forecast entities expose timestamped 15-minute values in a `watts`
 attribute. Their location defaults to Home Assistant's configured home
@@ -84,22 +90,28 @@ location. Import and export forecasts stay separate: automatic setup calls
 `nordpool.get_prices_for_date` for export spot, then adds the SHS grid tariff
 once in the matching direction. Explicit canonical forecast entities can be
 selected instead. The price area is discovered from Nord Pool/Tibber where it
-is unambiguous. For an EV current entity, the integration reads the number
-entity's minimum, maximum and step attributes. The planner chooses one valid
-current for every 15-minute slot and derives power from the commissioned phase
-count and voltage; it never treats the entity's instantaneous state as the
-charger's fixed power. If there is no departure timestamp entity, the next
-configured default departure time is used.
+is unambiguous. For an EV current entity, automatic setup shows both its raw
+selector bounds and the proposed usable minimum, maximum and increment. Those
+operating values, phase count and voltage must be reviewed explicitly; this
+matters when an entity exposes an `off` value such as 0 A below the charger's
+real charging floor. The planner chooses one confirmed valid current for every
+15-minute slot and derives power from the commissioned phase count and voltage;
+it never treats the entity's instantaneous state as fixed charger power. If
+there is no departure timestamp entity, the next configured default departure
+time is used.
 
 The GUI options are stored by Home Assistant in its config-entry storage. Do
 not edit `.storage/core.config_entries` directly. The supported automation/MCP
 surface is:
 
 - `shs_energy.discover_configuration`: returns the Energy Dashboard-derived
-  recommendation without changing anything; and
-- `shs_energy.apply_configuration`: validates and stores an explicit mapping,
-  or re-runs automatic discovery for `planning_mode: live` and
-  `automatic_setup: true`.
+  recommendation, per-field provenance and confidence, missing facts, and the
+  capabilities requiring review without changing anything; and
+- `shs_energy.apply_configuration`: validates and stores only the explicit
+  mapping supplied by the caller. It never re-runs discovery while applying.
+  Enabling pool, water heating, or EV planning requires the corresponding
+  `*_deferrable_confirmed` value; EV planning also requires
+  `ev_electrical_confirmed` after phase count and voltage are reviewed.
 
 The integration creates *Subscription*, *Grid tariff*, *Current grid cost*,
 *Last push*, *Energy plan status*, *Reactive surplus*, planned request sensors

@@ -23,13 +23,16 @@ from .const import (
     CONF_DEVICE_TOKEN_ID,
     CONF_HOME_ID,
     DOMAIN,
+    OPT_CONFIGURATION_REVIEWED_AT,
     OPT_EV_CHARGE_CURRENT_ENTITY,
+    OPT_EV_CURRENT_STEP_A,
+    OPT_EV_MAX_CURRENT_A,
+    OPT_EV_MIN_CURRENT_A,
     OPT_GRID_EXPORT_POWER_ENTITY,
     OPT_SUPPLIER_EXPORT_PRICE,
     OPT_SUPPLIER_IMPORT_PRICE,
     OPT_PLANNING_MODE,
     PLANNING_MODE_DISABLED,
-    PLANNING_MODE_DEMO,
 )
 from .configuration import resolved_options
 from .optimisation import OptimisationInputError, validate_plan_contract
@@ -180,7 +183,7 @@ class ShsOptimisationStatusSensor(ShsBaseSensor):
                 return "waiting"
             except (KeyError, TypeError, ValueError):
                 return "invalid"
-        return "demo" if mode == PLANNING_MODE_DEMO else "ready"
+        return "ready"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -196,6 +199,13 @@ class ShsOptimisationStatusSensor(ShsBaseSensor):
             "binding_until": plan.get("binding_until"),
             "last_push": self.coordinator.last_optimisation_push,
             "last_error": self.coordinator.last_optimisation_error,
+            "home_id": self.coordinator.entry.data.get(CONF_HOME_ID),
+            "actual_slots_accepted": self.coordinator.last_actual_slots_accepted,
+            "actuals_accepted_until": self.coordinator.actuals_accepted_until,
+            "configuration_reviewed_at": self.coordinator.entry.options.get(
+                OPT_CONFIGURATION_REVIEWED_AT
+            ),
+            "capabilities": plan.get("capabilities", {}),
             "missing_inputs": self.coordinator.optimisation_missing_inputs,
             "validation_errors": plan.get("validation_errors", []),
         }
@@ -305,7 +315,8 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
     @property
     def native_value(self) -> float | None:
         slot = self.coordinator.current_plan_slot
-        if slot is None or self._control() is None:
+        plan = self.coordinator.optimisation_plan or {}
+        if slot is None or not plan.get("capabilities", {}).get("ev"):
             return None
         return float(slot["ev_target_current_a"])
 
@@ -313,17 +324,37 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         slot = self.coordinator.current_plan_slot or {}
         control = self._control() or {}
+        current_entity = self.coordinator.entry.options.get(
+            OPT_EV_CHARGE_CURRENT_ENTITY
+        )
+        current_state = (
+            self.hass.states.get(current_entity) if current_entity else None
+        )
+        current_attributes = current_state.attributes if current_state else {}
         return {
             "slot_start": slot.get("start"),
             "binding": slot.get("binding"),
             "minimum_current_a": slot.get("ev_min_current_a"),
             "maximum_current_a": slot.get("ev_max_current_a"),
-            "charger_minimum_current_a": control.get("min_current_a"),
-            "charger_maximum_current_a": control.get("max_current_a"),
-            "current_step_a": control.get("current_step_a"),
-            "current_entity": self.coordinator.entry.options.get(
-                OPT_EV_CHARGE_CURRENT_ENTITY
+            "charger_minimum_current_a": control.get(
+                "min_current_a",
+                self.coordinator.entry.options.get(
+                    OPT_EV_MIN_CURRENT_A, current_attributes.get("min")
+                ),
             ),
+            "charger_maximum_current_a": control.get(
+                "max_current_a",
+                self.coordinator.entry.options.get(
+                    OPT_EV_MAX_CURRENT_A, current_attributes.get("max")
+                ),
+            ),
+            "current_step_a": control.get(
+                "current_step_a",
+                self.coordinator.entry.options.get(
+                    OPT_EV_CURRENT_STEP_A, current_attributes.get("step")
+                ),
+            ),
+            "current_entity": current_entity,
             "advisory_only": True,
         }
 

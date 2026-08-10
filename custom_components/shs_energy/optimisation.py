@@ -391,7 +391,7 @@ def validate_plan_contract(
         raise OptimisationInputError("optimisation response has no plan object")
     if plan.get("schema_version") != 3 or plan.get("slot_minutes") != 15:
         raise OptimisationInputError("optimisation plan schema is unsupported")
-    if plan.get("mode") not in ("live", "demo"):
+    if plan.get("mode") != "live":
         raise OptimisationInputError("optimisation plan mode is unsupported")
     if plan.get("model_version") != SUPPORTED_OPTIMISATION_MODEL_VERSION:
         raise OptimisationInputError("optimisation model version is unsupported")

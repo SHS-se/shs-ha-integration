@@ -9,14 +9,20 @@ changes.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import timedelta
 from math import isfinite
 import re
+from statistics import median
 from typing import Any
 
 from homeassistant.components.energy import async_get_manager
+from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.core import HomeAssistant, State
+from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONFIGURABLE_CATEGORIES,
     DEFAULT_FORECAST_RESOLUTION_MINUTES,
     DEFAULT_PLANNING_MODE,
     OPT_AUTOMATIC_SETUP,
@@ -32,17 +38,24 @@ from .const import (
     OPT_BATTERY_TARGET_SOC,
     OPT_BOILER_BASELINE_START,
     OPT_BOILER_DEADLINE,
+    OPT_BOILER_DEFERRABLE_CONFIRMED,
     OPT_BOILER_MIN_RUN_SLOTS,
     OPT_BOILER_PLANNING_ENABLED,
     OPT_BOILER_POWER_W,
+    OPT_DISCOVERY_EVIDENCE,
     OPT_ELECTRICITY_PRICE_AREA,
     OPT_EV_BATTERY_KWH,
     OPT_EV_CHARGE_CURRENT_ENTITY,
     OPT_EV_CHARGE_EFFICIENCY,
     OPT_EV_CONNECTED_ENTITY,
+    OPT_EV_CURRENT_STEP_A,
     OPT_EV_DEFAULT_DEPARTURE,
+    OPT_EV_DEFERRABLE_CONFIRMED,
+    OPT_EV_ELECTRICAL_CONFIRMED,
     OPT_EV_ENERGY_REMAINING_ENTITY,
     OPT_EV_MIN_RUN_SLOTS,
+    OPT_EV_MIN_CURRENT_A,
+    OPT_EV_MAX_CURRENT_A,
     OPT_EV_PHASE_COUNT,
     OPT_EV_PLANNING_ENABLED,
     OPT_EV_POWER_W,
@@ -56,6 +69,7 @@ from .const import (
     OPT_PLANNING_MODE,
     OPT_POOL_BASELINE_START,
     OPT_POOL_DEADLINE,
+    OPT_POOL_DEFERRABLE_CONFIRMED,
     OPT_POOL_ENABLED_ENTITY,
     OPT_POOL_MIN_RUN_SLOTS,
     OPT_POOL_PLANNING_ENABLED,
@@ -92,14 +106,18 @@ def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
         OPT_TERMINAL_SOC_MIN: 0.2,
         OPT_TERMINAL_ENERGY_VALUE: 1.0,
         OPT_POOL_PLANNING_ENABLED: False,
+        OPT_POOL_DEFERRABLE_CONFIRMED: False,
         OPT_POOL_MIN_RUN_SLOTS: 4,
         OPT_POOL_DEADLINE: "20:00",
         OPT_POOL_BASELINE_START: "12:00",
         OPT_BOILER_PLANNING_ENABLED: False,
+        OPT_BOILER_DEFERRABLE_CONFIRMED: False,
         OPT_BOILER_MIN_RUN_SLOTS: 4,
         OPT_BOILER_DEADLINE: "22:00",
         OPT_BOILER_BASELINE_START: "06:00",
         OPT_EV_PLANNING_ENABLED: False,
+        OPT_EV_DEFERRABLE_CONFIRMED: False,
+        OPT_EV_ELECTRICAL_CONFIRMED: False,
         OPT_EV_CHARGE_EFFICIENCY: 0.92,
         OPT_EV_MIN_RUN_SLOTS: 2,
         OPT_EV_PHASE_COUNT: 3,
@@ -157,6 +175,16 @@ def _number(state: State | None) -> float | None:
     return value if isfinite(value) else None
 
 
+def _attribute_number(state: State | None, key: str) -> float | None:
+    if state is None:
+        return None
+    try:
+        value = float(state.attributes.get(key))
+    except (TypeError, ValueError):
+        return None
+    return value if isfinite(value) else None
+
+
 def _as_watts(state: State | None) -> float | None:
     value = _number(state)
     if value is None:
@@ -181,12 +209,79 @@ def _as_kwh(state: State | None) -> float | None:
     return None
 
 
+async def _recent_active_power(
+    hass: HomeAssistant,
+    entity_ids: tuple[str, ...],
+) -> tuple[float | None, int]:
+    """Estimate fixed active power from local five-minute statistics.
+
+    The value is only a review proposal. Raw recorder samples stay in Home
+    Assistant and are never included in the discovery response or upload.
+    """
+    if not entity_ids:
+        return None, 0
+    end = dt_util.utcnow()
+    statistics = await get_instance(hass).async_add_executor_job(
+        statistics_during_period,
+        hass,
+        end - timedelta(days=30),
+        end,
+        set(entity_ids),
+        "5minute",
+        {"power": "W"},
+        {"mean"},
+    )
+    active_levels: list[float] = []
+    sample_count = 0
+    for entity_id in entity_ids:
+        positive = sorted(
+            value
+            for row in statistics.get(entity_id, [])
+            if (value := row.get("mean")) is not None
+            and isfinite(float(value))
+            and float(value) > 25
+        )
+        if not positive:
+            return None, 0
+        # Ignore switching edges and standby. A fixed load's upper operating
+        # cluster is stable even when a five-minute bucket contains only part
+        # of an on-cycle.
+        threshold = max(25.0, float(positive[-1]) * 0.5)
+        active = [float(value) for value in positive if float(value) >= threshold]
+        active_levels.append(float(median(active)))
+        sample_count += len(active)
+    return round(sum(active_levels), 1), sample_count
+
+
 def _category_for_device(name: str) -> str:
     value = name.lower().replace("_", " ")
+    if "tesla" in value and any(
+        token in value for token in ("charg", "energy added")
+    ):
+        return "ev_charging"
     rules = (
         ("pool_heating", ("pool", "bassäng")),
-        ("hot_water", ("hot water", "boiler", "water heater", "varmvatten")),
-        ("ev_charging", ("car charging", "ev charging", "vehicle charger")),
+        (
+            "hot_water",
+            (
+                "hot water",
+                "boiler",
+                "water heater",
+                "varmvatten",
+                "varmvattenberedare",
+                "vvb",
+            ),
+        ),
+        (
+            "ev_charging",
+            (
+                "car charging",
+                "ev charging",
+                "vehicle charger",
+                "wallbox",
+                "energy added",
+            ),
+        ),
         ("cooling", ("aircon", "air conditioning", "cooling")),
         ("heating", ("heater", "floor heating", "towel rack", "radiator")),
         ("property_energy", ("ftx", "ventilation", "extractor fan")),
@@ -225,39 +320,76 @@ def _price_area(hass: HomeAssistant, states: Iterable[State]) -> str | None:
     return next(iter(found)) if len(found) == 1 else None
 
 
-async def async_discover_options(
+async def async_discover_configuration(
     hass: HomeAssistant, existing: dict[str, Any]
 ) -> dict[str, Any]:
-    """Build a compact configuration from the Energy Dashboard and live states."""
+    """Return a reviewable proposal without deciding what is deferrable."""
     options = resolved_options(hass, existing)
+    evidence: dict[str, dict[str, Any]] = {}
+
+    def record(
+        key: str,
+        value: Any,
+        *,
+        source: str,
+        confidence: str,
+        detail: str,
+    ) -> None:
+        options[key] = value
+        evidence[key] = {
+            "source": source,
+            "confidence": confidence,
+            "detail": detail,
+        }
+
+    def record_state(
+        key: str,
+        state: State | None,
+        *,
+        exact_ids: tuple[str, ...],
+        detail: str,
+    ) -> None:
+        if state is None:
+            return
+        exact = state.entity_id in exact_ids
+        record(
+            key,
+            state.entity_id,
+            source="exact_entity_id" if exact else "entity_name_match",
+            confidence="high" if exact else "medium",
+            detail=detail,
+        )
+
     states = list(hass.states.async_all())
     manager = await async_get_manager(hass)
     preferences = manager.data or manager.default_preferences()
-
     mapped: dict[str, list[str]] = {}
+    import_prices: list[str] = []
+    export_prices: list[str] = []
+
     for source in preferences.get("energy_sources", []):
         source_type = source.get("type")
         if source_type == "grid":
             mapped["grid_import"] = [
-                value for flow in source.get("flow_from", [])
+                value
+                for flow in source.get("flow_from", [])
                 if (value := _entity_id(flow.get("stat_energy_from")))
             ]
             mapped["grid_export"] = [
-                value for flow in source.get("flow_to", [])
+                value
+                for flow in source.get("flow_to", [])
                 if (value := _entity_id(flow.get("stat_energy_to")))
             ]
-            import_prices = [
-                flow.get("entity_energy_price") for flow in source.get("flow_from", [])
+            import_prices.extend(
+                flow["entity_energy_price"]
+                for flow in source.get("flow_from", [])
                 if flow.get("entity_energy_price")
-            ]
-            export_prices = [
-                flow.get("entity_energy_price") for flow in source.get("flow_to", [])
+            )
+            export_prices.extend(
+                flow["entity_energy_price"]
+                for flow in source.get("flow_to", [])
                 if flow.get("entity_energy_price")
-            ]
-            if import_prices:
-                options[OPT_SUPPLIER_IMPORT_PRICE] = import_prices[0]
-            if export_prices:
-                options[OPT_SUPPLIER_EXPORT_PRICE] = export_prices[0]
+            )
         elif source_type == "solar":
             if value := _entity_id(source.get("stat_energy_from")):
                 mapped.setdefault("solar_production", []).append(value)
@@ -280,31 +412,72 @@ async def async_discover_options(
         device_categories.setdefault(category, []).append(statistic_id)
     mapped.update(device_categories)
 
+    total_ids = ("sensor.sigen_plant_total_load_consumption",)
     total = _first_state(
         states,
-        exact_ids=("sensor.sigen_plant_total_load_consumption",),
+        exact_ids=total_ids,
         required=("total", "load", "consumption"),
         domain="sensor",
     )
     if total is not None and total.attributes.get("device_class") == "energy":
         mapped["total_consumption"] = [total.entity_id]
 
-    for category, entity_ids in mapped.items():
-        options[f"{OPT_PREFIX_ENTITIES}{category}"] = sorted(set(entity_ids))
+    for category in CONFIGURABLE_CATEGORIES:
+        key = f"{OPT_PREFIX_ENTITIES}{category}"
+        discovered_total = (
+            category == "total_consumption"
+            and total is not None
+            and mapped.get(category) == [total.entity_id]
+        )
+        record(
+            key,
+            sorted(set(mapped.get(category, []))),
+            source=(
+                "whole_home_entity_contract"
+                if discovered_total
+                else "energy_dashboard"
+            ),
+            confidence="high" if discovered_total else "authoritative",
+            detail=(
+                "Whole-home energy entity matched by device class and semantics"
+                if discovered_total
+                else "Aggregate statistic selected in Home Assistant Energy"
+            ),
+        )
+    if import_prices:
+        record(
+            OPT_SUPPLIER_IMPORT_PRICE,
+            import_prices[0],
+            source="energy_dashboard",
+            confidence="authoritative",
+            detail="Current import price selected in Home Assistant Energy",
+        )
+    if export_prices:
+        record(
+            OPT_SUPPLIER_EXPORT_PRICE,
+            export_prices[0],
+            source="energy_dashboard",
+            confidence="authoritative",
+            detail="Current export price selected in Home Assistant Energy",
+        )
 
-    pv_forecasts = [
-        state.entity_id for state in states
+    pv_forecasts = sorted(
+        state.entity_id
+        for state in states
         if state.entity_id.startswith("sensor.")
         and isinstance(state.attributes.get("watts"), dict)
         and state.attributes.get("watts")
-    ]
+    )
     if pv_forecasts:
-        options[OPT_PV_FORECAST_ENTITIES] = sorted(pv_forecasts)
+        record(
+            OPT_PV_FORECAST_ENTITIES,
+            pv_forecasts,
+            source="timestamped_watts_contract",
+            confidence="high",
+            detail="Entity exposes timestamped watts rather than positional samples",
+        )
 
-    # SHS grid-price sensors are deliberately not supplier forecasts: using
-    # them here would add the network tariff twice in the all-in price. An
-    # explicitly selected canonical supplier entity is retained; automatic
-    # live setup otherwise uses the Tibber and Nord Pool service adapters.
+    # SHS grid-price sensors are network tariffs, not supplier forecasts.
     for key in (
         OPT_SUPPLIER_IMPORT_FORECAST_ENTITY,
         OPT_SUPPLIER_EXPORT_FORECAST_ENTITY,
@@ -314,139 +487,471 @@ async def async_discover_options(
         ):
             options.pop(key, None)
     if area := _price_area(hass, states):
-        options[OPT_ELECTRICITY_PRICE_AREA] = area
+        record(
+            OPT_ELECTRICITY_PRICE_AREA,
+            area,
+            source="price_provider_configuration",
+            confidence="high",
+            detail="One unambiguous Swedish market area was declared",
+        )
 
+    battery_soc_ids = ("sensor.sigen_plant_battery_state_of_charge",)
+    battery_capacity_ids = ("sensor.sigen_plant_rated_energy_capacity",)
+    charge_limit_ids = ("sensor.sigen_plant_ess_rated_charging_power",)
+    discharge_limit_ids = ("sensor.sigen_plant_ess_rated_discharging_power",)
+    plant_limit_ids = ("sensor.sigen_plant_max_active_power",)
     battery_soc = _first_state(
         states,
-        exact_ids=("sensor.sigen_plant_battery_state_of_charge",),
+        exact_ids=battery_soc_ids,
         required=("battery", "state", "charge"),
         domain="sensor",
     )
-    if battery_soc:
-        options[OPT_BATTERY_SOC_ENTITY] = battery_soc.entity_id
-    battery_capacity = _as_kwh(_first_state(
-        states,
-        exact_ids=("sensor.sigen_plant_rated_energy_capacity",),
-        required=("rated", "energy", "capacity"),
-        domain="sensor",
-    ))
-    charge_limit = _as_watts(_first_state(
-        states,
-        exact_ids=("sensor.sigen_plant_ess_rated_charging_power",),
-        required=("rated", "charging", "power"),
-        domain="sensor",
-    ))
-    discharge_limit = _as_watts(_first_state(
-        states,
-        exact_ids=("sensor.sigen_plant_ess_rated_discharging_power",),
-        required=("rated", "discharging", "power"),
-        domain="sensor",
-    ))
-    plant_limit = _as_watts(_first_state(
-        states,
-        exact_ids=("sensor.sigen_plant_max_active_power",),
-        required=("max", "active", "power"),
-        domain="sensor",
-    ))
-    for key, value in (
-        (OPT_BATTERY_CAPACITY_KWH, battery_capacity),
-        (OPT_BATTERY_CHARGE_MAX_W, charge_limit),
-        (OPT_BATTERY_DISCHARGE_MAX_W, discharge_limit),
-        (OPT_GRID_IMPORT_LIMIT_W, plant_limit),
-        (OPT_GRID_EXPORT_LIMIT_W, plant_limit),
-    ):
-        if value is not None:
-            options[key] = round(value, 3)
+    record_state(
+        OPT_BATTERY_SOC_ENTITY,
+        battery_soc,
+        exact_ids=battery_soc_ids,
+        detail="Live battery state of charge",
+    )
+    equipment_values = (
+        (
+            OPT_BATTERY_CAPACITY_KWH,
+            _first_state(
+                states,
+                exact_ids=battery_capacity_ids,
+                required=("rated", "energy", "capacity"),
+                domain="sensor",
+            ),
+            _as_kwh,
+            battery_capacity_ids,
+        ),
+        (
+            OPT_BATTERY_CHARGE_MAX_W,
+            _first_state(
+                states,
+                exact_ids=charge_limit_ids,
+                required=("rated", "charging", "power"),
+                domain="sensor",
+            ),
+            _as_watts,
+            charge_limit_ids,
+        ),
+        (
+            OPT_BATTERY_DISCHARGE_MAX_W,
+            _first_state(
+                states,
+                exact_ids=discharge_limit_ids,
+                required=("rated", "discharging", "power"),
+                domain="sensor",
+            ),
+            _as_watts,
+            discharge_limit_ids,
+        ),
+        (
+            OPT_GRID_IMPORT_LIMIT_W,
+            _first_state(
+                states,
+                exact_ids=plant_limit_ids,
+                required=("max", "active", "power"),
+                domain="sensor",
+            ),
+            _as_watts,
+            plant_limit_ids,
+        ),
+    )
+    for key, state, converter, exact_ids in equipment_values:
+        value = converter(state)
+        if value is None or state is None:
+            continue
+        exact = state.entity_id in exact_ids
+        record(
+            key,
+            round(value, 3),
+            source="equipment_rating_entity",
+            confidence="high" if exact else "medium",
+            detail=f"Declared by {state.entity_id}",
+        )
+    if options.get(OPT_GRID_IMPORT_LIMIT_W):
+        record(
+            OPT_GRID_EXPORT_LIMIT_W,
+            options[OPT_GRID_IMPORT_LIMIT_W],
+            source="equipment_rating_entity",
+            confidence="medium",
+            detail="Proposed from the same plant limit; review if export is restricted",
+        )
 
+    export_power_ids = ("sensor.sigen_plant_grid_export_power",)
     export_power = _first_state(
         states,
-        exact_ids=("sensor.sigen_plant_grid_export_power",),
+        exact_ids=export_power_ids,
         required=("grid", "export", "power"),
         domain="sensor",
     )
-    if export_power:
-        options[OPT_GRID_EXPORT_POWER_ENTITY] = export_power.entity_id
+    record_state(
+        OPT_GRID_EXPORT_POWER_ENTITY,
+        export_power,
+        exact_ids=export_power_ids,
+        detail="Live measured export available to reactive control",
+    )
 
+    pool_enabled_ids = ("input_boolean.pool_heating",)
     pool_enabled = _first_state(
         states,
-        exact_ids=("input_boolean.pool_heating",),
+        exact_ids=pool_enabled_ids,
         required=("pool", "heating"),
     )
-    if pool_enabled:
-        options[OPT_POOL_ENABLED_ENTITY] = pool_enabled.entity_id
-    pool_heater_power = _as_watts(_first_state(
+    record_state(
+        OPT_POOL_ENABLED_ENTITY,
+        pool_enabled,
+        exact_ids=pool_enabled_ids,
+        detail="Pool season or enable gate; not proof that the load is deferrable",
+    )
+    pool_heater = _first_state(
         states,
         exact_ids=("sensor.pool_heater_power",),
         required=("pool", "heater", "power"),
         domain="sensor",
-    ))
-    pool_pump_power = _as_watts(_first_state(
+    )
+    pool_pump = _first_state(
         states,
         exact_ids=("sensor.esphome_pool_pump_power",),
         required=("pool", "pump", "power"),
         domain="sensor",
-    ))
-    if (
-        pool_enabled and pool_enabled.state == "on"
-        and pool_heater_power and pool_heater_power > 100
-        and pool_pump_power and pool_pump_power > 100
+    )
+    pool_heater_power = _as_watts(pool_heater)
+    pool_pump_power = _as_watts(pool_pump)
+    pool_power, pool_power_samples = await _recent_active_power(
+        hass,
+        tuple(
+            state.entity_id
+            for state in (pool_heater, pool_pump)
+            if state is not None
+        ),
+    )
+    if pool_power is not None and pool_heater is not None and pool_pump is not None:
+        record(
+            OPT_POOL_POWER_W,
+            pool_power,
+            source="recorder_5minute_statistics",
+            confidence="medium",
+            detail=(
+                "Median active heater plus required pump power from "
+                f"{pool_power_samples} local five-minute samples; confirm rating"
+            ),
+        )
+    elif (
+        pool_heater_power is not None
+        and pool_heater_power > 100
+        and pool_pump_power is not None
+        and pool_pump_power > 100
     ):
-        options[OPT_POOL_POWER_W] = round(pool_heater_power + pool_pump_power, 1)
+        record(
+            OPT_POOL_POWER_W,
+            round(pool_heater_power + pool_pump_power, 1),
+            source="live_power_observation",
+            confidence="medium",
+            detail="Active heater plus required pump observed now; confirm rating",
+        )
 
-    ev_connected = _first_state(
+    boiler_power_ids = ("sensor.water_boiler_power",)
+    boiler_power_state = _first_state(
         states,
-        exact_ids=("binary_sensor.tesla_model_y_charge_cable",),
-        required=("charge", "cable"),
-        domain="binary_sensor",
-    )
-    ev_soc = _first_state(
-        states,
-        exact_ids=("sensor.tesla_model_y_battery_level",),
-        required=("battery", "level"),
+        exact_ids=boiler_power_ids,
+        required=("water", "boiler", "power"),
         domain="sensor",
     )
-    ev_target = _first_state(
-        states,
-        exact_ids=("number.tesla_model_y_charge_limit",),
-        required=("charge", "limit"),
-        domain="number",
+    boiler_power, boiler_power_samples = await _recent_active_power(
+        hass,
+        (boiler_power_state.entity_id,) if boiler_power_state is not None else (),
     )
-    ev_current = _first_state(
-        states,
-        exact_ids=("number.tesla_model_y_charge_current",),
-        required=("charge", "current"),
-        domain="number",
-    )
-    ev_remaining = _first_state(
-        states,
-        exact_ids=("sensor.tesla_model_y_energy_remaining",),
-        required=("energy", "remaining"),
-        domain="sensor",
-    )
-    for key, state in (
-        (OPT_EV_CONNECTED_ENTITY, ev_connected),
-        (OPT_EV_SOC_ENTITY, ev_soc),
-        (OPT_EV_TARGET_SOC_ENTITY, ev_target),
-        (OPT_EV_CHARGE_CURRENT_ENTITY, ev_current),
-        (OPT_EV_ENERGY_REMAINING_ENTITY, ev_remaining),
+    if boiler_power is not None:
+        record(
+            OPT_BOILER_POWER_W,
+            boiler_power,
+            source="recorder_5minute_statistics",
+            confidence="medium",
+            detail=(
+                "Median active aggregate water-heater power from "
+                f"{boiler_power_samples} local five-minute samples; confirm rating"
+            ),
+        )
+    elif (
+        boiler_power_state is not None
+        and (live_boiler_power := _as_watts(boiler_power_state)) is not None
+        and live_boiler_power > 100
     ):
-        if state:
-            options[key] = state.entity_id
+        record(
+            OPT_BOILER_POWER_W,
+            round(live_boiler_power, 1),
+            source="live_power_observation",
+            confidence="medium",
+            detail="Active aggregate water-heater power observed now; confirm rating",
+        )
+
+    ev_matches = (
+        (
+            OPT_EV_CONNECTED_ENTITY,
+            _first_state(
+                states,
+                exact_ids=("binary_sensor.tesla_model_y_charge_cable",),
+                required=("charge", "cable"),
+                domain="binary_sensor",
+            ),
+            ("binary_sensor.tesla_model_y_charge_cable",),
+            "Charging connection state",
+        ),
+        (
+            OPT_EV_SOC_ENTITY,
+            _first_state(
+                states,
+                exact_ids=("sensor.tesla_model_y_battery_level",),
+                required=("battery", "level"),
+                domain="sensor",
+            ),
+            ("sensor.tesla_model_y_battery_level",),
+            "Vehicle state of charge",
+        ),
+        (
+            OPT_EV_TARGET_SOC_ENTITY,
+            _first_state(
+                states,
+                exact_ids=("number.tesla_model_y_charge_limit",),
+                required=("charge", "limit"),
+                domain="number",
+            ),
+            ("number.tesla_model_y_charge_limit",),
+            "Vehicle charge target",
+        ),
+        (
+            OPT_EV_CHARGE_CURRENT_ENTITY,
+            _first_state(
+                states,
+                exact_ids=("number.tesla_model_y_charge_current",),
+                required=("charge", "current"),
+                domain="number",
+            ),
+            ("number.tesla_model_y_charge_current",),
+            "Current control with min/max/step attributes",
+        ),
+        (
+            OPT_EV_ENERGY_REMAINING_ENTITY,
+            _first_state(
+                states,
+                exact_ids=("sensor.tesla_model_y_energy_remaining",),
+                required=("energy", "remaining"),
+                domain="sensor",
+            ),
+            ("sensor.tesla_model_y_energy_remaining",),
+            "Vehicle energy remaining",
+        ),
+    )
+    matched_ev: dict[str, State | None] = {}
+    for key, state, exact_ids, detail in ev_matches:
+        matched_ev[key] = state
+        record_state(key, state, exact_ids=exact_ids, detail=detail)
+    ev_current = matched_ev[OPT_EV_CHARGE_CURRENT_ENTITY]
+    raw_current_min = _attribute_number(ev_current, "min")
+    raw_current_max = _attribute_number(ev_current, "max")
+    raw_current_step = _attribute_number(ev_current, "step")
+    if ev_current is not None:
+        # Tessie exposes 0 A as the selector minimum, but this installation's
+        # commissioned AC charging floor is 5 A. This is a proposal only: the
+        # EV review screen requires the user to confirm it together with phase
+        # count and voltage before planning is enabled.
+        proposed_min = (
+            5.0
+            if ev_current.entity_id == "number.tesla_model_y_charge_current"
+            and raw_current_min == 0
+            else raw_current_min
+        )
+        for key, value, detail in (
+            (
+                OPT_EV_MIN_CURRENT_A,
+                proposed_min,
+                f"Usable charging floor; entity selector reports {raw_current_min} A",
+            ),
+            (
+                OPT_EV_MAX_CURRENT_A,
+                raw_current_max,
+                "Maximum accepted by the charge-current entity",
+            ),
+            (
+                OPT_EV_CURRENT_STEP_A,
+                raw_current_step,
+                "Increment accepted by the charge-current entity",
+            ),
+        ):
+            if value is not None:
+                record(
+                    key,
+                    value,
+                    source="charger_range_proposal",
+                    confidence="medium" if key == OPT_EV_MIN_CURRENT_A else "high",
+                    detail=detail,
+                )
+    ev_soc = matched_ev[OPT_EV_SOC_ENTITY]
+    ev_remaining = matched_ev[OPT_EV_ENERGY_REMAINING_ENTITY]
     soc = _number(ev_soc)
     remaining = _as_kwh(ev_remaining)
     if soc is not None and remaining is not None and 1 <= soc <= 100:
-        options[OPT_EV_BATTERY_KWH] = round(remaining / (soc / 100), 2)
+        record(
+            OPT_EV_BATTERY_KWH,
+            round(remaining / (soc / 100), 2),
+            source="derived_vehicle_state",
+            confidence="medium",
+            detail="Derived as remaining energy divided by current SOC",
+        )
 
-    options[OPT_EV_PLANNING_ENABLED] = bool(
-        mapped.get("ev_charging") and ev_connected and ev_soc and ev_target
-        and (ev_current or options.get(OPT_EV_POWER_W))
-        and options.get(OPT_EV_BATTERY_KWH)
+    # Existing confirmations survive rediscovery; inference alone never turns
+    # a meter into a controllable or deferrable load.
+    confirmation_pairs = (
+        (OPT_POOL_PLANNING_ENABLED, OPT_POOL_DEFERRABLE_CONFIRMED),
+        (OPT_BOILER_PLANNING_ENABLED, OPT_BOILER_DEFERRABLE_CONFIRMED),
+        (OPT_EV_PLANNING_ENABLED, OPT_EV_DEFERRABLE_CONFIRMED),
     )
-    options[OPT_POOL_PLANNING_ENABLED] = bool(
-        mapped.get("pool_heating") and pool_enabled and options.get(OPT_POOL_POWER_W)
+    for enabled_key, confirmation_key in confirmation_pairs:
+        options[enabled_key] = bool(
+            existing.get(enabled_key) and existing.get(confirmation_key)
+        )
+        options[confirmation_key] = bool(existing.get(confirmation_key))
+    options[OPT_EV_ELECTRICAL_CONFIRMED] = bool(
+        existing.get(OPT_EV_ELECTRICAL_CONFIRMED)
     )
-    options[OPT_BOILER_PLANNING_ENABLED] = bool(
-        mapped.get("hot_water") and options.get(OPT_BOILER_POWER_W)
+
+    def missing(keys: tuple[str, ...]) -> list[str]:
+        return [
+            key
+            for key in keys
+            if options.get(key) in (None, "", [])
+        ]
+
+    pool_candidate = bool(mapped.get("pool_heating"))
+    boiler_candidate = bool(mapped.get("hot_water"))
+    ev_candidate = bool(
+        mapped.get("ev_charging")
+        or matched_ev.get(OPT_EV_CONNECTED_ENTITY)
+        or matched_ev.get(OPT_EV_CHARGE_CURRENT_ENTITY)
     )
+    capabilities = {
+        "metering": {
+            "detected": sum(len(value) for value in mapped.values()),
+            "source": "energy_dashboard",
+        },
+        "pv": {
+            "candidate": bool(pv_forecasts),
+            "ready": bool(pv_forecasts),
+            "missing": [],
+        },
+        "battery": {
+            "candidate": battery_soc is not None,
+            "ready": battery_soc is not None and not missing((
+                OPT_BATTERY_CAPACITY_KWH,
+                OPT_BATTERY_CHARGE_MAX_W,
+                OPT_BATTERY_DISCHARGE_MAX_W,
+            )),
+            "missing": missing((
+                OPT_BATTERY_CAPACITY_KWH,
+                OPT_BATTERY_CHARGE_MAX_W,
+                OPT_BATTERY_DISCHARGE_MAX_W,
+            )),
+        },
+        "pool": {
+            "candidate": pool_candidate,
+            "ready_after_review": pool_candidate and not missing((
+                OPT_POOL_ENABLED_ENTITY,
+                OPT_POOL_POWER_W,
+            )),
+            "missing": missing((OPT_POOL_ENABLED_ENTITY, OPT_POOL_POWER_W)),
+            "requires_confirmation": True,
+        },
+        "boiler": {
+            "candidate": boiler_candidate,
+            "ready_after_review": boiler_candidate and not missing((
+                OPT_BOILER_POWER_W,
+            )),
+            "missing": missing((OPT_BOILER_POWER_W,)),
+            "requires_confirmation": True,
+        },
+        "ev": {
+            "candidate": ev_candidate,
+            "ready_after_review": ev_candidate and not missing((
+                OPT_EV_CONNECTED_ENTITY,
+                OPT_EV_SOC_ENTITY,
+                OPT_EV_TARGET_SOC_ENTITY,
+                OPT_EV_BATTERY_KWH,
+                OPT_EV_MIN_CURRENT_A,
+                OPT_EV_MAX_CURRENT_A,
+                OPT_EV_CURRENT_STEP_A,
+            )) and bool(
+                options.get(OPT_EV_CHARGE_CURRENT_ENTITY)
+                or options.get(OPT_EV_POWER_W)
+            ),
+            "missing": missing((
+                OPT_EV_CONNECTED_ENTITY,
+                OPT_EV_SOC_ENTITY,
+                OPT_EV_TARGET_SOC_ENTITY,
+                OPT_EV_BATTERY_KWH,
+                OPT_EV_MIN_CURRENT_A,
+                OPT_EV_MAX_CURRENT_A,
+                OPT_EV_CURRENT_STEP_A,
+            )),
+            "current_control": (
+                None
+                if matched_ev.get(OPT_EV_CHARGE_CURRENT_ENTITY) is None
+                else {
+                    "entity_id": matched_ev[OPT_EV_CHARGE_CURRENT_ENTITY].entity_id,
+                    "raw_min_a": raw_current_min,
+                    "raw_max_a": raw_current_max,
+                    "raw_step_a": raw_current_step,
+                    "proposed_min_a": options.get(OPT_EV_MIN_CURRENT_A),
+                    "proposed_max_a": options.get(OPT_EV_MAX_CURRENT_A),
+                    "proposed_step_a": options.get(OPT_EV_CURRENT_STEP_A),
+                }
+            ),
+            "requires_confirmation": True,
+            "electrical_values_require_confirmation": True,
+        },
+        "prices": {
+            "area": options.get(OPT_ELECTRICITY_PRICE_AREA),
+            "tibber_service": hass.services.has_service("tibber", "get_prices"),
+            "nordpool_service": hass.services.has_service(
+                "nordpool", "get_prices_for_date"
+            ),
+        },
+    }
+    for key in (
+        OPT_BATTERY_CAPACITY_KWH,
+        OPT_BATTERY_CHARGE_MAX_W,
+        OPT_BATTERY_DISCHARGE_MAX_W,
+        OPT_GRID_IMPORT_LIMIT_W,
+        OPT_GRID_EXPORT_LIMIT_W,
+        OPT_POOL_ENABLED_ENTITY,
+        OPT_POOL_POWER_W,
+        OPT_BOILER_POWER_W,
+        OPT_EV_CONNECTED_ENTITY,
+        OPT_EV_SOC_ENTITY,
+        OPT_EV_TARGET_SOC_ENTITY,
+        OPT_EV_CHARGE_CURRENT_ENTITY,
+        OPT_EV_MIN_CURRENT_A,
+        OPT_EV_MAX_CURRENT_A,
+        OPT_EV_CURRENT_STEP_A,
+        OPT_EV_BATTERY_KWH,
+    ):
+        if key in evidence or options.get(key) in (None, "", []):
+            continue
+        evidence[key] = {
+            "source": "existing_configuration",
+            "confidence": "requires_review",
+            "detail": "Previously saved value; current discovery did not verify it",
+        }
     options[OPT_AUTOMATIC_SETUP] = True
-    return options
+    options[OPT_DISCOVERY_EVIDENCE] = evidence
+    return {
+        "configuration": options,
+        "capabilities": capabilities,
+        "evidence": evidence,
+        "review_required": [
+            name
+            for name in ("pool", "boiler", "ev")
+            if capabilities[name]["candidate"]
+        ],
+    }

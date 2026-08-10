@@ -7,7 +7,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import hashlib
 import json
 import logging
-from math import pi, sin, sqrt
+from math import sqrt
 from typing import Any
 from uuid import uuid4
 
@@ -66,10 +66,12 @@ from .const import (
     OPT_POOL_ENABLED_ENTITY,
     OPT_POOL_MIN_RUN_SLOTS,
     OPT_POOL_DEADLINE,
+    OPT_POOL_DEFERRABLE_CONFIRMED,
     OPT_POOL_BASELINE_START,
     OPT_BOILER_POWER_W,
     OPT_BOILER_MIN_RUN_SLOTS,
     OPT_BOILER_DEADLINE,
+    OPT_BOILER_DEFERRABLE_CONFIRMED,
     OPT_BOILER_BASELINE_START,
     OPT_EV_CONNECTED_ENTITY,
     OPT_EV_SOC_ENTITY,
@@ -80,17 +82,21 @@ from .const import (
     OPT_EV_CHARGE_EFFICIENCY,
     OPT_EV_MIN_RUN_SLOTS,
     OPT_EV_CHARGE_CURRENT_ENTITY,
+    OPT_EV_MIN_CURRENT_A,
+    OPT_EV_MAX_CURRENT_A,
+    OPT_EV_CURRENT_STEP_A,
     OPT_EV_ENERGY_REMAINING_ENTITY,
     OPT_EV_PHASE_COUNT,
     OPT_EV_VOLTAGE,
     OPT_EV_DEFAULT_DEPARTURE,
+    OPT_EV_DEFERRABLE_CONFIRMED,
+    OPT_EV_ELECTRICAL_CONFIRMED,
     OPT_POOL_PLANNING_ENABLED,
     OPT_BOILER_PLANNING_ENABLED,
     OPT_EV_PLANNING_ENABLED,
     OPT_PLANNING_MODE,
     PLANNING_MODE_DISABLED,
     PLANNING_MODE_LIVE,
-    PLANNING_MODE_DEMO,
     OPTIMISATION_ACTUAL_BACKFILL_HOURS,
     OPTIMISATION_HORIZON_HOURS,
     OPTIMISATION_PROFILE_DAYS,
@@ -166,6 +172,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.optimisation_plan: dict[str, Any] | None = None
         self.last_optimisation_push: str | None = None
         self.last_optimisation_error: str | None = None
+        self.last_actual_slots_accepted = 0
+        self.actuals_accepted_until: str | None = None
         self.optimisation_missing_inputs: list[str] = []
         self.tariff_components: dict[str, dict[str, str]] = {}
         self._push_lock = asyncio.Lock()
@@ -259,7 +267,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _sync_optimisation_issue(self) -> None:
         """Expose short capability-level gaps only for requested live planning."""
         mode = resolved_options(self.hass, dict(self.entry.options))[OPT_PLANNING_MODE]
-        if mode != PLANNING_MODE_LIVE or not self.optimisation_missing_inputs:
+        if mode == PLANNING_MODE_DISABLED or not self.optimisation_missing_inputs:
             ir.async_delete_issue(
                 self.hass, DOMAIN, ISSUE_OPTIMISATION_CONFIGURATION
             )
@@ -835,6 +843,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if options.get(OPT_POOL_PLANNING_ENABLED):
             required.extend(
                 [f"{OPT_PREFIX_ENTITIES}pool_heating",
+                 OPT_POOL_DEFERRABLE_CONFIRMED,
                  OPT_POOL_ENABLED_ENTITY, OPT_POOL_POWER_W,
                  OPT_POOL_MIN_RUN_SLOTS, OPT_POOL_DEADLINE,
                  OPT_POOL_BASELINE_START]
@@ -842,24 +851,54 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if options.get(OPT_BOILER_PLANNING_ENABLED):
             required.extend(
                 [f"{OPT_PREFIX_ENTITIES}hot_water",
+                 OPT_BOILER_DEFERRABLE_CONFIRMED,
                  OPT_BOILER_POWER_W, OPT_BOILER_MIN_RUN_SLOTS,
                  OPT_BOILER_DEADLINE, OPT_BOILER_BASELINE_START]
             )
         if options.get(OPT_EV_PLANNING_ENABLED):
             required.extend(
                 [f"{OPT_PREFIX_ENTITIES}ev_charging",
+                 OPT_EV_DEFERRABLE_CONFIRMED, OPT_EV_ELECTRICAL_CONFIRMED,
                  OPT_EV_CONNECTED_ENTITY, OPT_EV_SOC_ENTITY, OPT_EV_TARGET_SOC_ENTITY,
                  OPT_EV_BATTERY_KWH, OPT_EV_CHARGE_EFFICIENCY,
                  OPT_EV_MIN_RUN_SLOTS, OPT_EV_DEFAULT_DEPARTURE]
             )
-            if not options.get(OPT_EV_POWER_W) and not options.get(
-                OPT_EV_CHARGE_CURRENT_ENTITY
-            ):
+            if options.get(OPT_EV_CHARGE_CURRENT_ENTITY):
+                required.extend((
+                    OPT_EV_MIN_CURRENT_A,
+                    OPT_EV_MAX_CURRENT_A,
+                    OPT_EV_CURRENT_STEP_A,
+                ))
+            elif not options.get(OPT_EV_POWER_W):
                 required.append("EV charging power or configured current entity")
         missing = sorted(
             key for key in required
             if options.get(key) is None or options.get(key) == "" or options.get(key) == []
         )
+        for enabled_key, confirmation_keys in (
+            (
+                OPT_POOL_PLANNING_ENABLED,
+                (OPT_POOL_DEFERRABLE_CONFIRMED,),
+            ),
+            (
+                OPT_BOILER_PLANNING_ENABLED,
+                (OPT_BOILER_DEFERRABLE_CONFIRMED,),
+            ),
+            (
+                OPT_EV_PLANNING_ENABLED,
+                (
+                    OPT_EV_DEFERRABLE_CONFIRMED,
+                    OPT_EV_ELECTRICAL_CONFIRMED,
+                ),
+            ),
+        ):
+            if not options.get(enabled_key):
+                continue
+            missing.extend(
+                key
+                for key in confirmation_keys
+                if options.get(key) is not True and key not in missing
+            )
         if options.get(OPT_SUPPLIER_IMPORT_FORECAST_ENTITY) == options.get(
             OPT_SUPPLIER_EXPORT_FORECAST_ENTITY
         ) and options.get(OPT_SUPPLIER_IMPORT_FORECAST_ENTITY):
@@ -1239,10 +1278,44 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         raise OptimisationInputError(
                             f"{current_entity} must declare unit A"
                         )
-                    control = discrete_current_control(
+                    configured_min = parse_number(
+                        options[OPT_EV_MIN_CURRENT_A], OPT_EV_MIN_CURRENT_A
+                    )
+                    configured_max = parse_number(
+                        options[OPT_EV_MAX_CURRENT_A], OPT_EV_MAX_CURRENT_A
+                    )
+                    configured_step = parse_number(
+                        options[OPT_EV_CURRENT_STEP_A], OPT_EV_CURRENT_STEP_A
+                    )
+                    entity_min = parse_number(
                         current_payload["attributes"].get("min"),
+                        f"{current_entity} min",
+                    )
+                    entity_max = parse_number(
                         current_payload["attributes"].get("max"),
+                        f"{current_entity} max",
+                    )
+                    entity_step = parse_number(
                         current_payload["attributes"].get("step"),
+                        f"{current_entity} step",
+                    )
+                    if configured_min < entity_min or configured_max > entity_max:
+                        raise OptimisationInputError(
+                            "configured EV current range is outside the entity bounds"
+                        )
+                    if entity_step <= 0:
+                        raise OptimisationInputError(
+                            f"{current_entity} step must be positive"
+                        )
+                    step_ratio = configured_step / entity_step
+                    if abs(step_ratio - round(step_ratio)) > 1e-6:
+                        raise OptimisationInputError(
+                            "configured EV current step is not supported by the entity"
+                        )
+                    control = discrete_current_control(
+                        configured_min,
+                        configured_max,
+                        configured_step,
                         options[OPT_EV_PHASE_COUNT],
                         options[OPT_EV_VOLTAGE],
                         label=current_entity,
@@ -1712,136 +1785,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         return snapshot
 
-    def _build_demo_snapshot(self) -> dict[str, Any]:
-        """Create a deterministic promotional plan that can never be actuated."""
-        captured = dt_util.utcnow()
-        horizon = utc_slots(captured, OPTIMISATION_HORIZON_HOURS)
-        valid_until = (horizon[-1] + timedelta(minutes=15)).isoformat()
-        slots: list[dict[str, Any]] = []
-        for start in horizon:
-            local = start.astimezone(dt_util.DEFAULT_TIME_ZONE)
-            daylight = max(0.0, sin(pi * (local.hour + local.minute / 60 - 6) / 14))
-            pv_w = 6_500 * daylight ** 1.8
-            evening = 900 if 17 <= local.hour < 22 else 0
-            base_w = 550 + evening
-            import_price = 0.9 + (0.75 if 7 <= local.hour < 10 or 17 <= local.hour < 21 else 0)
-            slots.append({
-                "start": start.isoformat(),
-                "pv_forecast_w": round(pv_w, 2),
-                "base_load_forecast_w": base_w,
-                "base_load_p10_w": round(base_w * 0.75, 2),
-                "base_load_p90_w": round(base_w * 1.35, 2),
-                "import_price_sek_per_kwh": import_price,
-                "export_price_sek_per_kwh": 0.35,
-            })
-
-        services: list[dict[str, Any]] = []
-        local_days = sorted({slot.astimezone(dt_util.DEFAULT_TIME_ZONE).date() for slot in horizon})
-        end = horizon[-1] + timedelta(minutes=15)
-        for day in local_days:
-            for device, required, power, minimum, deadline_time, baseline, priority in (
-                ("boiler", 3.0, 3_000, 2, time(22), time(6), 1),
-                ("pool", 6.0, 3_600, 4, time(20), time(12), 2),
-            ):
-                deadline = datetime.combine(
-                    day, deadline_time, dt_util.DEFAULT_TIME_ZONE
-                ).astimezone(timezone.utc)
-                earliest = max(
-                    horizon[0],
-                    datetime.combine(day, time.min, dt_util.DEFAULT_TIME_ZONE).astimezone(timezone.utc),
-                )
-                if deadline <= horizon[0] or deadline > end:
-                    continue
-                preferred = datetime.combine(
-                    day, baseline, dt_util.DEFAULT_TIME_ZONE
-                ).astimezone(timezone.utc)
-                services.append({
-                    "id": f"demo-{device}:{day.isoformat()}",
-                    "device": device,
-                    "earliest_start": earliest.isoformat(),
-                    "deadline": deadline.isoformat(),
-                    "required_kwh": required,
-                    "control": {"type": "fixed_power", "power_w": power},
-                    "min_run_slots": minimum,
-                    "priority": priority,
-                    "baseline_preferred_start": max(earliest, preferred).isoformat(),
-                })
-        departure = horizon[0] + timedelta(hours=12)
-        services.append({
-            "id": f"demo-ev:{departure.isoformat()}",
-            "device": "ev",
-            "earliest_start": horizon[0].isoformat(),
-            "deadline": departure.isoformat(),
-            "required_kwh": 8.0,
-            "control": {
-                "type": "discrete_current",
-                "min_current_a": 5,
-                "max_current_a": 16,
-                "current_step_a": 1,
-                "phase_count": 3,
-                "voltage_v": 230,
-            },
-            "min_run_slots": 2,
-            "priority": 3,
-            "baseline_preferred_start": horizon[0].isoformat(),
-        })
-        source = lambda provider, entity_id, location=None: {
-            "provider": provider,
-            "entity_ids": [entity_id],
-            "issued_at": captured.isoformat(),
-            "valid_until": valid_until,
-            "quality": "synthetic",
-            **({"location": location} if location else {}),
-        }
-        return {
-            "schema_version": 3,
-            "mode": "demo",
-            "capabilities": {
-                "pv": True, "battery": True, "pool": True,
-                "boiler": True, "ev": True,
-            },
-            "snapshot_id": str(uuid4()),
-            "captured_at": captured.isoformat(),
-            "timezone": str(dt_util.DEFAULT_TIME_ZONE),
-            "slot_minutes": 15,
-            "slots": slots,
-            "sources": {
-                "pv": source("Smart Home Solutions demo", "demo.pv", {
-                    "latitude": round(self.hass.config.latitude, 5),
-                    "longitude": round(self.hass.config.longitude, 5),
-                }),
-                "base_load": source("Smart Home Solutions demo", "demo.base_load"),
-                "import_price": source(
-                    "Smart Home Solutions demo", "demo.import_price", {"market_area": "SE3"}
-                ),
-                "export_price": source(
-                    "Smart Home Solutions demo", "demo.export_price", {"market_area": "SE3"}
-                ),
-                "battery": source("Smart Home Solutions demo", "demo.battery"),
-            },
-            "pv_calibration": {
-                "correction_factor_by_lead_day": [1.0, 1.0, 1.0, 1.0],
-                "sample_count_by_lead_day": [0, 0, 0, 0],
-            },
-            "battery": {
-                "capacity_kwh": 10.0, "soc": 0.45, "min_soc": 0.1,
-                "max_soc": 1.0, "charge_max_w": 5_000,
-                "discharge_max_w": 5_000, "charge_efficiency": 0.95,
-                "discharge_efficiency": 0.95,
-            },
-            "grid": {"import_limit_w": 11_000, "export_limit_w": 11_000},
-            "policy": {
-                "battery_end_of_solar_target_soc": 0.7,
-                "battery_target_is_hard": False,
-                "terminal_soc_min": 0.2,
-                "terminal_energy_value_sek_per_kwh": 1.0,
-            },
-            "services": services,
-            "service_requirement_sample_days": {
-                "hot_water": 14, "pool_heating": 14, "ev_charging": 1,
-            },
-        }
-
     async def async_optimisation_push(
         self, _now: datetime | None = None, *, force_plan: bool = False
     ) -> None:
@@ -1899,11 +1842,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if mode == PLANNING_MODE_DISABLED:
                         self.optimisation_missing_inputs = []
                         self._sync_optimisation_issue()
-                    elif mode == PLANNING_MODE_DEMO:
-                        self.optimisation_missing_inputs = []
-                        self._sync_optimisation_issue()
-                        snapshot = self._build_demo_snapshot()
-                    else:
+                    elif mode == PLANNING_MODE_LIVE:
                         try:
                             options = self._optimisation_options()
                             snapshot = await self._build_optimisation_snapshot(
@@ -1915,11 +1854,23 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 self.optimisation_missing_inputs = [snapshot_error]
                             self._sync_optimisation_issue()
                             _LOGGER.warning("Optimisation plan skipped: %s", err)
+                    else:
+                        snapshot_error = (
+                            f"unsupported planning mode {mode!r}; review the integration"
+                        )
+                        self.optimisation_missing_inputs = [snapshot_error]
+                        self._sync_optimisation_issue()
                 if not actuals and snapshot is None:
                     self.last_optimisation_error = snapshot_error
                     self.async_update_listeners()
                     return
                 result = await self.client.push_optimisation(actuals, snapshot)
+                self.last_actual_slots_accepted = int(
+                    result.get("actual_slots_accepted") or 0
+                )
+                self.actuals_accepted_until = result.get(
+                    "actuals_accepted_until"
+                )
                 if result.get("plan"):
                     validate_plan_contract(result["plan"], dt_util.utcnow())
             except ShsSubscriptionInactiveError:
