@@ -188,9 +188,17 @@ class ForecastTests(unittest.TestCase):
             for index in range(4)
         ]
         plan = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "mode": "live",
+            "capabilities": {
+                "pv": True,
+                "battery": True,
+                "pool": False,
+                "boiler": False,
+                "ev": False,
+            },
             "slot_minutes": 15,
-            "model_version": "quarter-hour-heuristic-v1",
+            "model_version": "quarter-hour-heuristic-v2",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -227,9 +235,17 @@ class ForecastTests(unittest.TestCase):
             for index in range(4)
         ]
         plan = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "mode": "live",
+            "capabilities": {
+                "pv": True,
+                "battery": True,
+                "pool": False,
+                "boiler": False,
+                "ev": False,
+            },
             "slot_minutes": 15,
-            "model_version": "quarter-hour-heuristic-v1",
+            "model_version": "quarter-hour-heuristic-v2",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -264,9 +280,17 @@ class ForecastTests(unittest.TestCase):
             for index in range(4)
         ]
         plan = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "mode": "live",
+            "capabilities": {
+                "pv": True,
+                "battery": True,
+                "pool": False,
+                "boiler": True,
+                "ev": False,
+            },
             "slot_minutes": 15,
-            "model_version": "quarter-hour-heuristic-v1",
+            "model_version": "quarter-hour-heuristic-v2",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),

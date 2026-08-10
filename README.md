@@ -14,13 +14,17 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
 - **One home per credential**: the portal binds the pairing code and device
   token to the selected home. A token cannot submit or read another home's
   optimisation data.
-- **Category mapping**: in the integration's *Configure* dialog, map your
-  energy sensors (kWh, `total_increasing`) to categories: heating, hot water,
-  comfort cooling, property energy (ventilation etc.), pool heating, EV
-  charging, household, grid import/export, solar production, and total
-  consumption. Battery charge/discharge energy can also be mapped for the
-  optimisation actuals but is not duplicated into daily energiprestanda.
-  Multiple sensors per category are summed.
+- **Automatic setup**: the integration reads the aggregate meters already
+  curated in Home Assistant's Energy Dashboard, discovers supported forecast,
+  battery and EV entities, and stores one compact configuration. Phase-level
+  child meters are not selected when an aggregate meter exists. A multi-step
+  manual path remains available for unusual installations.
+- **Optional capabilities**: monitoring a category does not make it
+  controllable. Solar, battery, pool, water heating and EV planning are
+  independent capabilities; a home without any of them is still a valid
+  integration and can use price-led planning for the equipment it does have.
+- **Demo mode**: creates a clearly labelled synthetic plan for demonstrations.
+  Home Assistant never exposes demo plan requests to executor automations.
 - **Nightly push**: shortly after midnight the integration reads the previous
   day's change for each mapped sensor from HA's long-term statistics and
   pushes one reading per category. Pushes are idempotent and missed days are
@@ -68,15 +72,32 @@ directory and restart.
 1. Portal → Account → *Home Assistant* → **Generate pairing code**
 2. HA → Settings → Devices & services → **Add integration** →
    *Smart Home Solutions Energy*
-3. Enter the code (within 10 minutes), then open **Configure** to map your
-   sensors, forecast sources, measured device capabilities and service
-   deadlines. Pool heating also requires an explicit season/enabled entity.
-   EV planning requires its energy meter as well as connection, SOC, target,
-   departure and real available charging power. These values are required
-   rather than guessed.
-   Forecast entities must expose timestamped 15-minute values and provenance:
-   PV entities use a `watts` attribute plus latitude/longitude, and both price
-   entities declare `SE1`–`SE4` as well as `SEK/kWh`.
+3. Enter the code (within 10 minutes), then open **Configure**. Choose **Live
+   planning → Automatic** to use the Energy Dashboard as the source of truth,
+   **Manual** to review the advanced capability steps, **Demo** to show the
+   feature safely, or **Off** to use reporting and tariffs without planning.
+
+PV forecast entities expose timestamped 15-minute values in a `watts`
+attribute. Their location defaults to Home Assistant's configured home
+location. Import and export forecasts stay separate: automatic setup calls
+`tibber.get_prices` for supplier import and
+`nordpool.get_prices_for_date` for export spot, then adds the SHS grid tariff
+once in the matching direction. Explicit canonical forecast entities can be
+selected instead. The price area is discovered from Nord Pool/Tibber where it
+is unambiguous. EV power follows a
+configured current entity when available, so a car limited to 5 A is not
+modelled as an invented 11 kW load. If there is no departure timestamp entity,
+the next configured default departure time is used.
+
+The GUI options are stored by Home Assistant in its config-entry storage. Do
+not edit `.storage/core.config_entries` directly. The supported automation/MCP
+surface is:
+
+- `shs_energy.discover_configuration`: returns the Energy Dashboard-derived
+  recommendation without changing anything; and
+- `shs_energy.apply_configuration`: validates and stores an explicit mapping,
+  or re-runs automatic discovery for `planning_mode: live` and
+  `automatic_setup: true`.
 
 The integration creates *Subscription*, *Grid tariff*, *Current grid cost*,
 *Last push*, *Energy plan status*, *Reactive surplus*, planned request sensors

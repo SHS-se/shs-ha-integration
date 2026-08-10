@@ -26,7 +26,11 @@ from .const import (
     OPT_GRID_EXPORT_POWER_ENTITY,
     OPT_SUPPLIER_EXPORT_PRICE,
     OPT_SUPPLIER_IMPORT_PRICE,
+    OPT_PLANNING_MODE,
+    PLANNING_MODE_DISABLED,
+    PLANNING_MODE_DEMO,
 )
+from .configuration import resolved_options
 from .optimisation import OptimisationInputError, validate_plan_contract
 from .coordinator import ShsStatusCoordinator
 
@@ -146,6 +150,11 @@ class ShsOptimisationStatusSensor(ShsBaseSensor):
 
     @property
     def native_value(self) -> str:
+        mode = resolved_options(
+            self.hass, dict(self.coordinator.entry.options)
+        )[OPT_PLANNING_MODE]
+        if mode == PLANNING_MODE_DISABLED:
+            return "disabled"
         plan = self.coordinator.optimisation_plan
         if self.coordinator.optimisation_missing_inputs:
             return "not_configured"
@@ -169,12 +178,15 @@ class ShsOptimisationStatusSensor(ShsBaseSensor):
                 return "waiting"
             except (KeyError, TypeError, ValueError):
                 return "invalid"
-        return "ready"
+        return "demo" if mode == PLANNING_MODE_DEMO else "ready"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         plan = self.coordinator.optimisation_plan or {}
         return {
+            "mode": resolved_options(
+                self.hass, dict(self.coordinator.entry.options)
+            )[OPT_PLANNING_MODE],
             "plan_id": plan.get("plan_id"),
             "model_version": plan.get("model_version"),
             "issued_at": plan.get("issued_at"),

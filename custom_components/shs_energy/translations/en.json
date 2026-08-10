@@ -22,9 +22,11 @@
   "options": {
     "step": {
       "init": {
-        "title": "Energy category mapping",
-        "description": "Map daily energy categories and the explicit live inputs used by the 15-minute planner. Raw recorder samples remain in Home Assistant. Import and export forecasts must be separate timestamped series; missing inputs disable planning instead of being guessed.",
+        "title": "Energy planning",
+        "description": "Automatic setup reads the meters already curated in your Energy Dashboard and discovers supported forecasts and equipment. Choose Demo to show the feature with synthetic data; demo plans never control devices.",
         "data": {
+          "planning_mode": "Planning mode",
+          "setup_method": "Configuration method",
           "entities_heating": "Heating (radiators, floor heating, heat pump heating)",
           "entities_hot_water": "Hot water (boiler/water heater)",
           "entities_cooling": "Comfort cooling",
@@ -78,7 +80,120 @@
           "ev_power_w": "Currently available EV charging power (W)",
           "ev_battery_kwh": "EV usable battery capacity (kWh)",
           "ev_charge_efficiency": "EV charging efficiency (fraction)",
-          "ev_min_run_slots": "EV minimum run (15-minute slots)"
+          "ev_min_run_slots": "EV minimum run (15-minute slots)",
+          "ev_charge_current_entity": "EV configured charge-current entity (A)",
+          "ev_energy_remaining_entity": "EV energy remaining entity (kWh)",
+          "ev_phase_count": "EV charging phase count",
+          "ev_voltage": "EV phase voltage (V)",
+          "ev_default_departure": "Default EV departure time (HH:MM)",
+          "pool_planning_enabled": "Plan pool heating",
+          "boiler_planning_enabled": "Plan water heating",
+          "ev_planning_enabled": "Plan EV charging"
+        }
+      },
+      "metering": {
+        "title": "Whole-home meters",
+        "description": "Select aggregate energy meters only. Do not add phase-level children when an aggregate meter exists.",
+        "data": {
+          "entities_grid_import": "Grid import",
+          "entities_grid_export": "Grid export",
+          "entities_solar_production": "Solar production",
+          "entities_total_consumption": "Total home consumption (optional when it can be derived)",
+          "entities_battery_charge": "Battery charging energy",
+          "entities_battery_discharge": "Battery discharging energy"
+        }
+      },
+      "categories": {
+        "title": "Energy categories",
+        "description": "These mappings support reporting. A mapped category is not assumed to be controllable.",
+        "data": {
+          "entities_heating": "Heating",
+          "entities_hot_water": "Hot water",
+          "entities_cooling": "Comfort cooling",
+          "entities_property_energy": "Property energy",
+          "entities_pool_heating": "Pool heating and required pump",
+          "entities_ev_charging": "EV charging",
+          "entities_household": "Household"
+        }
+      },
+      "forecasts": {
+        "title": "Prices and forecasts",
+        "description": "Solar is optional. Import and export prices remain separate because buying and selling have different values.",
+        "data": {
+          "supplier_import_price_entity": "Current supplier import price",
+          "supplier_export_price_entity": "Current supplier export price",
+          "pv_forecast_entities": "PV forecast entities",
+          "supplier_import_forecast_entity": "Import price forecast",
+          "supplier_export_forecast_entity": "Export price forecast",
+          "grid_export_power_entity": "Live grid export power",
+          "electricity_price_area": "Swedish price area (SE1–SE4)"
+        }
+      },
+      "battery": {
+        "title": "Battery and grid limits",
+        "description": "Leave the battery entity and ratings empty for homes without a battery. The 80% target is a preference unless you explicitly make it hard.",
+        "data": {
+          "battery_soc_entity": "Battery state of charge",
+          "battery_capacity_kwh": "Usable battery capacity (kWh)",
+          "battery_charge_max_w": "Maximum charge power (W)",
+          "battery_discharge_max_w": "Maximum discharge power (W)",
+          "battery_min_soc": "Hard minimum SOC (fraction)",
+          "battery_max_soc": "Maximum SOC (fraction)",
+          "battery_target_soc": "End-of-solar-day target (fraction)",
+          "battery_target_is_hard": "Make the battery target a hard reservation",
+          "battery_charge_efficiency": "Charge efficiency",
+          "battery_discharge_efficiency": "Discharge efficiency",
+          "grid_import_limit_w": "Grid import limit (W)",
+          "grid_export_limit_w": "Grid export limit (W)",
+          "terminal_soc_min": "Minimum terminal SOC",
+          "terminal_energy_value_sek_per_kwh": "Value of stored terminal energy (SEK/kWh)"
+        }
+      },
+      "flexible_loads": {
+        "title": "Flexible loads",
+        "description": "Enable only equipment that Home Assistant can measure and whose operating window you want planned.",
+        "data": {
+          "pool_planning_enabled": "Plan pool heating",
+          "boiler_planning_enabled": "Plan water heating",
+          "ev_planning_enabled": "Plan EV charging"
+        }
+      },
+      "pool": {
+        "title": "Pool planning",
+        "data": {
+          "pool_enabled_entity": "Pool season/enabled entity",
+          "pool_power_w": "Heater plus required pump power (W)",
+          "pool_min_run_slots": "Minimum run (15-minute slots)",
+          "pool_deadline": "Daily deadline (HH:MM)",
+          "pool_baseline_start": "Baseline start (HH:MM)"
+        }
+      },
+      "boiler": {
+        "title": "Water-heater planning",
+        "data": {
+          "boiler_power_w": "Water-heater power (W)",
+          "boiler_min_run_slots": "Minimum run (15-minute slots)",
+          "boiler_deadline": "Daily deadline (HH:MM)",
+          "boiler_baseline_start": "Baseline start (HH:MM)"
+        }
+      },
+      "ev": {
+        "title": "EV planning",
+        "description": "Charging power follows the configured current when available. If there is no departure entity, the next default departure time is used.",
+        "data": {
+          "ev_connected_entity": "EV connected entity",
+          "ev_soc_entity": "EV state of charge",
+          "ev_target_soc_entity": "EV target state of charge",
+          "ev_departure_entity": "Departure timestamp entity (optional)",
+          "ev_charge_current_entity": "Configured charging current (A)",
+          "ev_energy_remaining_entity": "Energy remaining (kWh)",
+          "ev_power_w": "Fixed charging power (W, optional)",
+          "ev_battery_kwh": "Usable battery capacity (kWh)",
+          "ev_charge_efficiency": "Charging efficiency",
+          "ev_min_run_slots": "Minimum run (15-minute slots)",
+          "ev_phase_count": "Charging phase count",
+          "ev_voltage": "Phase voltage (V)",
+          "ev_default_departure": "Default departure time (HH:MM)"
         }
       }
     }
@@ -122,7 +237,11 @@
         "name": "Grid operator"
       },
       "optimisation_status": {
-        "name": "Energy plan status"
+        "name": "Energy plan status",
+        "state": {
+          "disabled": "Off",
+          "demo": "Demo"
+        }
       },
       "reactive_surplus": {
         "name": "Reactive surplus"

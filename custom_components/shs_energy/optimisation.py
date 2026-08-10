@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 SLOT_SECONDS = 900
 SLOT_HOURS = 0.25
-SUPPORTED_OPTIMISATION_MODEL_VERSION = "quarter-hour-heuristic-v1"
+SUPPORTED_OPTIMISATION_MODEL_VERSION = "quarter-hour-heuristic-v2"
 ACTUAL_FIELD_BY_CATEGORY = {
     "total_consumption": "total_load_kwh",
     "solar_production": "solar_production_kwh",
@@ -345,8 +345,10 @@ def validate_plan_contract(
     """Validate the cached server plan before exposing any local request."""
     if not isinstance(plan, dict):
         raise OptimisationInputError("optimisation response has no plan object")
-    if plan.get("schema_version") != 1 or plan.get("slot_minutes") != 15:
+    if plan.get("schema_version") != 2 or plan.get("slot_minutes") != 15:
         raise OptimisationInputError("optimisation plan schema is unsupported")
+    if plan.get("mode") not in ("live", "demo"):
+        raise OptimisationInputError("optimisation plan mode is unsupported")
     if plan.get("model_version") != SUPPORTED_OPTIMISATION_MODEL_VERSION:
         raise OptimisationInputError("optimisation model version is unsupported")
     if plan.get("status") not in ("ready", "incomplete", "infeasible"):

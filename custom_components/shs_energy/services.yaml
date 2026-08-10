@@ -1,0 +1,40 @@
+discover_configuration:
+  name: Discover energy configuration
+  description: >-
+    Read the curated Home Assistant Energy Dashboard and return recommended
+    aggregate meters, forecasts and supported planning capabilities. Nothing is
+    changed.
+  fields:
+    entry_id:
+      name: Configuration entry ID
+      description: Required only when more than one SHS Energy entry exists.
+      example: 01JEXAMPLE
+      selector:
+        text:
+  response:
+    optional: false
+
+apply_configuration:
+  name: Apply energy configuration
+  description: >-
+    Validate and save configuration returned by discovery or supplied by an
+    administrator or MCP client. Automatic live setup re-runs discovery before
+    saving. Home Assistant's internal .storage files are never edited directly.
+  fields:
+    entry_id:
+      name: Configuration entry ID
+      description: Required only when more than one SHS Energy entry exists.
+      example: 01JEXAMPLE
+      selector:
+        text:
+    configuration:
+      name: Configuration
+      description: Mapping of supported SHS Energy option keys to values.
+      required: true
+      example:
+        planning_mode: live
+        automatic_setup: true
+      selector:
+        object:
+  response:
+    optional: true
