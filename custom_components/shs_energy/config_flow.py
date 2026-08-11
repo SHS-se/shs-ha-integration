@@ -49,6 +49,9 @@ from .const import (
     OPT_BATTERY_TARGET_IS_HARD,
     OPT_BATTERY_CHARGE_EFFICIENCY,
     OPT_BATTERY_DISCHARGE_EFFICIENCY,
+    OPT_BATTERY_EXPORT_ENABLED,
+    OPT_BATTERY_EXPORT_MIN_PRICE,
+    OPT_BATTERY_EXPORT_RESERVE_SOC,
     OPT_GRID_IMPORT_LIMIT_W,
     OPT_GRID_EXPORT_LIMIT_W,
     OPT_TERMINAL_SOC_MIN,
@@ -420,12 +423,17 @@ class ShsEnergyOptionsFlow(OptionsFlow):
             OPT_BATTERY_DISCHARGE_MAX_W, OPT_BATTERY_MIN_SOC,
             OPT_BATTERY_MAX_SOC, OPT_BATTERY_TARGET_SOC,
             OPT_BATTERY_CHARGE_EFFICIENCY, OPT_BATTERY_DISCHARGE_EFFICIENCY,
+            OPT_BATTERY_EXPORT_RESERVE_SOC, OPT_BATTERY_EXPORT_MIN_PRICE,
             OPT_GRID_IMPORT_LIMIT_W, OPT_GRID_EXPORT_LIMIT_W,
             OPT_TERMINAL_SOC_MIN, OPT_TERMINAL_ENERGY_VALUE,
         ]).schema)
         schema[vol.Optional(
             OPT_BATTERY_TARGET_IS_HARD,
             default=bool(current[OPT_BATTERY_TARGET_IS_HARD]),
+        )] = bool
+        schema[vol.Optional(
+            OPT_BATTERY_EXPORT_ENABLED,
+            default=bool(current[OPT_BATTERY_EXPORT_ENABLED]),
         )] = bool
         return self.async_show_form(step_id="battery", data_schema=vol.Schema(schema))
 

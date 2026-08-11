@@ -60,6 +60,9 @@
           "battery_target_is_hard": "Treat battery target as a hard constraint",
           "battery_charge_efficiency": "Battery charge efficiency (fraction)",
           "battery_discharge_efficiency": "Battery discharge efficiency (fraction)",
+          "battery_export_enabled": "Allow planned battery export at high prices",
+          "battery_export_reserve_soc": "Battery export reserve SOC (fraction)",
+          "battery_export_min_price_sek_per_kwh": "Minimum export price for battery discharge (SEK/kWh)",
           "grid_import_limit_w": "Grid import limit (W)",
           "grid_export_limit_w": "Grid export limit (W)",
           "terminal_soc_min": "Minimum SOC at the end of the horizon",
@@ -141,7 +144,7 @@
       },
       "battery": {
         "title": "Battery and grid limits",
-        "description": "Leave the battery entity and ratings empty for homes without a battery. The 80% target is a preference unless you explicitly make it hard.",
+        "description": "Leave the battery entity and ratings empty for homes without a battery. Planned battery export is advisory and disabled by default; when enabled it never deliberately exports below the configured reserve.",
         "data": {
           "battery_soc_entity": "Battery state of charge",
           "battery_capacity_kwh": "Usable battery capacity (kWh)",
@@ -153,6 +156,9 @@
           "battery_target_is_hard": "Make the battery target a hard reservation",
           "battery_charge_efficiency": "Charge efficiency",
           "battery_discharge_efficiency": "Discharge efficiency",
+          "battery_export_enabled": "Allow planned battery export at high prices",
+          "battery_export_reserve_soc": "Do not deliberately export below this SOC",
+          "battery_export_min_price_sek_per_kwh": "Minimum export price (SEK/kWh)",
           "grid_import_limit_w": "Grid import limit (W)",
           "grid_export_limit_w": "Grid export limit (W)",
           "terminal_soc_min": "Minimum terminal SOC",

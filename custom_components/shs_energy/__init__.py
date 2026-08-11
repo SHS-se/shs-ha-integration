@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,6 +23,9 @@ from .const import (
     PUSH_TIME_HOUR,
     PUSH_TIME_MINUTE,
     OPTIMISATION_PUSH_SECOND,
+    OPTIMISATION_STARTUP_DELAY_SECONDS,
+    OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS,
+    OPTIMISATION_STARTUP_RETRY_SECONDS,
     OPT_AUTOMATIC_SETUP,
     OPT_BOILER_DEFERRABLE_CONFIRMED,
     OPT_BOILER_PLANNING_ENABLED,
@@ -51,6 +55,27 @@ ShsEnergyConfigEntry = ConfigEntry[ShsStatusCoordinator]
 
 SERVICE_DISCOVER_CONFIGURATION = "discover_configuration"
 SERVICE_APPLY_CONFIGURATION = "apply_configuration"
+
+
+async def _async_delayed_startup_optimisation_push(
+    coordinator: ShsStatusCoordinator,
+) -> None:
+    """Wait for state-providing integrations, retrying only startup gaps."""
+    await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)
+    attempts = 1 + max(
+        0,
+        (
+            OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS
+            - OPTIMISATION_STARTUP_DELAY_SECONDS
+        )
+        // OPTIMISATION_STARTUP_RETRY_SECONDS,
+    )
+    for attempt in range(attempts):
+        await coordinator.async_optimisation_push(force_plan=True)
+        if not coordinator.optimisation_input_gap_is_transient():
+            return
+        if attempt + 1 < attempts:
+            await asyncio.sleep(OPTIMISATION_STARTUP_RETRY_SECONDS)
 
 
 def _entry_for_call(hass: HomeAssistant, call: ServiceCall) -> ConfigEntry:
@@ -211,7 +236,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     )
     entry.async_create_background_task(
         hass,
-        coordinator.async_optimisation_push(force_plan=True),
+        _async_delayed_startup_optimisation_push(coordinator),
         name="shs_energy_startup_optimisation_push",
     )
 

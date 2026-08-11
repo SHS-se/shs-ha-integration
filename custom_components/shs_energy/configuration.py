@@ -30,6 +30,9 @@ from .const import (
     OPT_BATTERY_CHARGE_EFFICIENCY,
     OPT_BATTERY_CHARGE_MAX_W,
     OPT_BATTERY_DISCHARGE_EFFICIENCY,
+    OPT_BATTERY_EXPORT_ENABLED,
+    OPT_BATTERY_EXPORT_MIN_PRICE,
+    OPT_BATTERY_EXPORT_RESERVE_SOC,
     OPT_BATTERY_DISCHARGE_MAX_W,
     OPT_BATTERY_MAX_SOC,
     OPT_BATTERY_MIN_SOC,
@@ -102,6 +105,11 @@ def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
         OPT_BATTERY_TARGET_IS_HARD: False,
         OPT_BATTERY_CHARGE_EFFICIENCY: 0.95,
         OPT_BATTERY_DISCHARGE_EFFICIENCY: 0.95,
+        # Export from storage is an explicit customer preference. It is
+        # advisory until a separately reviewed battery executor exists.
+        OPT_BATTERY_EXPORT_ENABLED: False,
+        OPT_BATTERY_EXPORT_RESERVE_SOC: 0.8,
+        OPT_BATTERY_EXPORT_MIN_PRICE: 2.5,
         OPT_TERMINAL_SOC_MIN: 0.2,
         OPT_TERMINAL_ENERGY_VALUE: 1.0,
         OPT_POOL_PLANNING_ENABLED: False,

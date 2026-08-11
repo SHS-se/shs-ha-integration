@@ -58,6 +58,9 @@ from .const import (
     OPT_BATTERY_TARGET_IS_HARD,
     OPT_BATTERY_CHARGE_EFFICIENCY,
     OPT_BATTERY_DISCHARGE_EFFICIENCY,
+    OPT_BATTERY_EXPORT_ENABLED,
+    OPT_BATTERY_EXPORT_MIN_PRICE,
+    OPT_BATTERY_EXPORT_RESERVE_SOC,
     OPT_GRID_IMPORT_LIMIT_W,
     OPT_GRID_EXPORT_LIMIT_W,
     OPT_TERMINAL_SOC_MIN,
@@ -98,6 +101,7 @@ from .const import (
     OPTIMISATION_ACTUAL_BACKFILL_HOURS,
     OPTIMISATION_HORIZON_HOURS,
     OPTIMISATION_PROFILE_DAYS,
+    OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS,
     STATUS_POLL_INTERVAL_HOURS,
     STORAGE_KEY_TEMPLATE,
     SUPPLIER_BACKFILL_MAX_DAYS,
@@ -178,6 +182,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_actual_slots_accepted = 0
         self.actuals_accepted_until: str | None = None
         self.optimisation_missing_inputs: list[str] = []
+        self._optimisation_issue_grace_until = dt_util.utcnow() + timedelta(
+            seconds=OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS
+        )
         self.tariff_components: dict[str, dict[str, str]] = {}
         self._push_lock = asyncio.Lock()
         self._store: Store[dict[str, Any]] = Store(
@@ -270,7 +277,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _sync_optimisation_issue(self) -> None:
         """Expose short capability-level gaps only for requested live planning."""
         mode = resolved_options(self.hass, dict(self.entry.options))[OPT_PLANNING_MODE]
-        if mode == PLANNING_MODE_DISABLED or not self.optimisation_missing_inputs:
+        transient_startup_gap = (
+            dt_util.utcnow() < self._optimisation_issue_grace_until
+            and self.optimisation_input_gap_is_transient()
+        )
+        if (
+            mode == PLANNING_MODE_DISABLED
+            or not self.optimisation_missing_inputs
+            or transient_startup_gap
+        ):
             ir.async_delete_issue(
                 self.hass, DOMAIN, ISSUE_OPTIMISATION_CONFIGURATION
             )
@@ -287,6 +302,14 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     f"- {value}" for value in self.optimisation_missing_inputs
                 )
             },
+        )
+
+    def optimisation_input_gap_is_transient(self) -> bool:
+        """Return whether entity providers may still be starting up."""
+        transient_markers = (" does not exist", " is unavailable", " is unknown")
+        return bool(self.optimisation_missing_inputs) and all(
+            any(marker in value for marker in transient_markers)
+            for value in self.optimisation_missing_inputs
         )
 
     @property
@@ -840,6 +863,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 OPT_BATTERY_TARGET_IS_HARD,
                 OPT_BATTERY_CHARGE_EFFICIENCY,
                 OPT_BATTERY_DISCHARGE_EFFICIENCY,
+                OPT_BATTERY_EXPORT_ENABLED,
+                OPT_BATTERY_EXPORT_RESERVE_SOC,
+                OPT_BATTERY_EXPORT_MIN_PRICE,
                 OPT_TERMINAL_SOC_MIN,
                 OPT_TERMINAL_ENERGY_VALUE,
             ])
@@ -1975,6 +2001,21 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "terminal_energy_value_sek_per_kwh": (
                     parse_number(options[OPT_TERMINAL_ENERGY_VALUE], OPT_TERMINAL_ENERGY_VALUE)
                     if battery else 0
+                ),
+                "battery_export_enabled": (
+                    bool(options[OPT_BATTERY_EXPORT_ENABLED]) if battery else False
+                ),
+                "battery_export_reserve_soc": (
+                    parse_number(
+                        options[OPT_BATTERY_EXPORT_RESERVE_SOC],
+                        OPT_BATTERY_EXPORT_RESERVE_SOC,
+                    ) if battery else 0
+                ),
+                "battery_export_min_price_sek_per_kwh": (
+                    parse_number(
+                        options[OPT_BATTERY_EXPORT_MIN_PRICE],
+                        OPT_BATTERY_EXPORT_MIN_PRICE,
+                    ) if battery else 0
                 ),
             },
             "device_models": device_models,
