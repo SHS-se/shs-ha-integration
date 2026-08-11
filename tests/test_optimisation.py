@@ -45,11 +45,11 @@ class QuarterAggregationTests(unittest.TestCase):
                     inference["method"], "energy_dashboard_semantics_v1"
                 )
 
-    def test_planning_roles_are_conservative_and_control_specific(self) -> None:
+    def test_new_devices_always_require_explicit_control_opt_in(self) -> None:
         cases = (
-            ("hot_water", "duty_cycle", "controllable", "permit_inhibit"),
-            ("pool_heating", "duty_cycle", "controllable", "switch_schedule"),
-            ("ev_charging", "variable_full_load", "controllable", "current_limit"),
+            ("hot_water", "duty_cycle", "base_load", None),
+            ("pool_heating", "duty_cycle", "base_load", None),
+            ("ev_charging", "variable_full_load", "base_load", None),
             ("cooling", "inverter", "base_load", None),
             ("household", "fixed_full_load", "base_load", None),
         )
@@ -393,7 +393,7 @@ class ForecastTests(unittest.TestCase):
                 "ev": True,
             },
             "slot_minutes": 15,
-            "model_version": "controllable-device-planner-v5",
+            "model_version": "battery-export-planner-v6",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(hours=2, minutes=30)).isoformat(),
@@ -456,7 +456,7 @@ class ForecastTests(unittest.TestCase):
                 "ev": False,
             },
             "slot_minutes": 15,
-            "model_version": "controllable-device-planner-v5",
+            "model_version": "battery-export-planner-v6",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -511,7 +511,7 @@ class ForecastTests(unittest.TestCase):
                 "ev": False,
             },
             "slot_minutes": 15,
-            "model_version": "controllable-device-planner-v5",
+            "model_version": "battery-export-planner-v6",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -564,7 +564,7 @@ class ForecastTests(unittest.TestCase):
                 "ev": False,
             },
             "slot_minutes": 15,
-            "model_version": "controllable-device-planner-v5",
+            "model_version": "battery-export-planner-v6",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),

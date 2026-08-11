@@ -34,10 +34,12 @@ from .const import (
     DEFAULT_FORECAST_RESOLUTION_MINUTES,
     DOMAIN,
     ISSUE_MISSING_CUSTOMER_INPUT,
+    ISSUE_DEVICE_CONTROL_MAPPING,
     ISSUE_OPTIMISATION_CONFIGURATION,
     ISSUE_SUBSCRIPTION_INACTIVE,
     MAX_KWH_PER_READING,
     OPT_FORECAST_RESOLUTION_MINUTES,
+    OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_PREFIX_ENTITIES,
     OPT_SUPPLIER_EXPORT_PRICE,
     OPT_SUPPLIER_IMPORT_PRICE,
@@ -108,6 +110,11 @@ from .const import (
     STORAGE_VERSION,
 )
 from .configuration import async_energy_dashboard_inventory, resolved_options
+from .device_controls import (
+    apply_requested_configuration,
+    mapping_report,
+    requested_controllable_devices,
+)
 from .optimisation import (
     ACTUAL_FIELD_BY_CATEGORY,
     OptimisationInputError,
@@ -182,6 +189,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_actual_slots_accepted = 0
         self.actuals_accepted_until: str | None = None
         self.optimisation_missing_inputs: list[str] = []
+        self.device_control_mapping_gaps: list[str] = []
         self._optimisation_issue_grace_until = dt_util.utcnow() + timedelta(
             seconds=OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS
         )
@@ -304,6 +312,39 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             },
         )
 
+    def _sync_device_control_issue(
+        self, configuration: dict[str, dict[str, Any]]
+    ) -> None:
+        """Raise one actionable issue for website-requested local mappings."""
+        mappings = self.entry.options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
+        known_entity_ids = {state.entity_id for state in self.hass.states.async_all()}
+        self.device_control_mapping_gaps = []
+        for device in requested_controllable_devices(configuration):
+            report = mapping_report(
+                device.get("control_type"), mappings.get(device["key"]),
+                known_entity_ids,
+            )
+            if report["mapping_status"] != "ready":
+                self.device_control_mapping_gaps.append(
+                    str(device.get("name") or device["key"])
+                )
+        if not self.device_control_mapping_gaps:
+            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_DEVICE_CONTROL_MAPPING)
+            return
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            ISSUE_DEVICE_CONTROL_MAPPING,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_DEVICE_CONTROL_MAPPING,
+            translation_placeholders={
+                "devices": "\n".join(
+                    f"- {name}" for name in self.device_control_mapping_gaps
+                )
+            },
+        )
+
     def optimisation_input_gap_is_transient(self) -> bool:
         """Return whether entity providers may still be starting up."""
         transient_markers = (" does not exist", " is unavailable", " is unknown")
@@ -391,6 +432,91 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             for category in CONFIGURABLE_CATEGORIES
         }
+
+    async def _prepared_device_inventory(
+        self, stored: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Hydrate Energy Dashboard devices with server requests and local status."""
+        devices = await async_energy_dashboard_inventory(self.hass)
+        stored_metadata = stored.get("optimisation_device_metadata", {})
+        for device in devices:
+            metadata = stored_metadata.get(device["key"], {})
+            for field in ("active_power_w", "profile_sample_count", "inference"):
+                if field in metadata:
+                    device[field] = metadata[field]
+        return apply_requested_configuration(
+            devices,
+            stored.get("optimisation_device_configuration", {}),
+            self.entry.options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
+            {state.entity_id for state in self.hass.states.async_all()},
+        )
+
+    def _record_device_exchange(
+        self,
+        stored: dict[str, Any],
+        devices: list[dict[str, Any]],
+        result: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        """Persist one authoritative website configuration response."""
+        configurations = result.get("device_configuration")
+        if not isinstance(configurations, list) or len(configurations) != len(devices):
+            raise ShsApiError("website returned an incomplete device configuration")
+        configuration = {
+            value["key"]: {
+                "key": value["key"],
+                "statistic_id": value["statistic_id"],
+                "name": value["name"],
+                "category": value["category"],
+                "load_type": value["load_type"],
+                "planning_role": value["planning_role"],
+                "control_type": value["control_type"],
+            }
+            for value in configurations
+        }
+        if set(configuration) != {device["key"] for device in devices}:
+            raise ShsApiError("website device configuration does not match inventory")
+        stored["optimisation_device_metadata"] = {
+            device["key"]: {
+                "active_power_w": device["active_power_w"],
+                "profile_sample_count": device["profile_sample_count"],
+                "inference": device["inference"],
+            }
+            for device in devices
+        }
+        stored["optimisation_device_configuration"] = configuration
+        self._sync_device_control_issue(configuration)
+        return configuration
+
+    async def async_refresh_device_configuration(self) -> list[dict[str, Any]]:
+        """Force-fetch website requests when the user opens Configure."""
+        async with self._push_lock:
+            stored = await self._store.async_load() or {}
+            previous = dict(stored.get("optimisation_device_configuration", {}))
+            devices = await self._prepared_device_inventory(stored)
+            if not devices:
+                self._sync_device_control_issue({})
+                return []
+            result = await self.client.push_optimisation([], None, devices)
+            configuration = self._record_device_exchange(stored, devices, result)
+            if configuration != previous:
+                self.optimisation_plan = None
+                stored.pop("optimisation_plan", None)
+                # The first exchange discovers the new website request. Report
+                # its status immediately in a second device-only exchange so a
+                # previously saved matching mapping becomes Ready in one click.
+                apply_requested_configuration(
+                    devices,
+                    configuration,
+                    self.entry.options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
+                    {state.entity_id for state in self.hass.states.async_all()},
+                )
+                result = await self.client.push_optimisation([], None, devices)
+                configuration = self._record_device_exchange(
+                    stored, devices, result
+                )
+            await self._store.async_save(stored)
+            self.async_update_listeners()
+            return requested_controllable_devices(configuration)
 
     async def _statistics_changes(
         self,
@@ -1517,6 +1643,24 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         captured = dt_util.utcnow()
         horizon = utc_slots(captured, OPTIMISATION_HORIZON_HOURS)
         horizon_end = horizon[-1] + timedelta(minutes=15)
+        options = dict(options)
+        # Legacy service builders are enabled only when the website request has
+        # a complete local mapping of the same control type. This keeps pending
+        # devices in empirical base load and prevents old category toggles from
+        # turning a website selection into control authority.
+        for category, control_type, enabled_key in (
+            ("pool_heating", "switch_schedule", OPT_POOL_PLANNING_ENABLED),
+            ("hot_water", "permit_inhibit", OPT_BOILER_PLANNING_ENABLED),
+            ("ev_charging", "current_limit", OPT_EV_PLANNING_ENABLED),
+        ):
+            ready = any(
+                device["category"] == category
+                and device["planning_role"] == "controllable"
+                and device["control_type"] == control_type
+                for device in devices
+            )
+            if not ready:
+                options[enabled_key] = False
 
         pv_entities = [
             self._entity_payload(entity_id)
@@ -2034,38 +2178,20 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Upload completed quarters and refresh or retry the rolling plan."""
         async with self._push_lock:
             stored = await self._store.async_load() or {}
+            previous_configuration = dict(
+                stored.get("optimisation_device_configuration", {})
+            )
             self.optimisation_plan = self.optimisation_plan or stored.get(
                 "optimisation_plan"
             )
             snapshot_error: str | None = None
             try:
                 entities = self._configured_entities()
-                devices = await async_energy_dashboard_inventory(self.hass)
+                devices = await self._prepared_device_inventory(stored)
                 for device in devices:
                     category_entities = entities.setdefault(device["category"], [])
                     if device["statistic_id"] not in category_entities:
                         category_entities.append(device["statistic_id"])
-                stored_metadata = stored.get("optimisation_device_metadata", {})
-                stored_configuration = stored.get(
-                    "optimisation_device_configuration", {}
-                )
-                for device in devices:
-                    metadata = stored_metadata.get(device["key"], {})
-                    for field in (
-                        "active_power_w", "profile_sample_count", "inference"
-                    ):
-                        if field in metadata:
-                            device[field] = metadata[field]
-                    configuration = stored_configuration.get(device["key"], {})
-                    device["load_type"] = configuration.get(
-                        "load_type", device["suggested_load_type"]
-                    )
-                    device["planning_role"] = configuration.get(
-                        "planning_role", device["suggested_planning_role"]
-                    )
-                    device["control_type"] = configuration.get(
-                        "control_type", device["suggested_control_type"]
-                    )
                 # Do not race the recorder's five-minute statistics job. Actual
                 # history may trail real time by one quarter; live reactive
                 # control continues to use the local power sensor directly.
@@ -2142,13 +2268,17 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                         self.optimisation_missing_inputs = [snapshot_error]
                         self._sync_optimisation_issue()
-                if not actuals and snapshot is None:
+                if not actuals and snapshot is None and not devices:
                     self.last_optimisation_error = snapshot_error
                     self.async_update_listeners()
                     return
                 result = await self.client.push_optimisation(
                     actuals, snapshot, devices
                 )
+                configuration = self._record_device_exchange(
+                    stored, devices, result
+                )
+                configuration_changed = configuration != previous_configuration
                 self.last_actual_slots_accepted = int(
                     result.get("actual_slots_accepted") or 0
                 )
@@ -2173,29 +2303,20 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 stored["optimisation_actuals_accepted_until"] = result[
                     "actuals_accepted_until"
                 ]
-            if result.get("plan"):
+            if result.get("plan") and not configuration_changed:
                 self.last_optimisation_error = None
                 self.optimisation_plan = result["plan"]
                 stored["optimisation_plan"] = self.optimisation_plan
+            elif configuration_changed:
+                # The returned plan was built from the preceding website
+                # request. Never expose it after a role/control change; the
+                # next exchange replans using the new effective base split.
+                self.optimisation_plan = None
+                stored.pop("optimisation_plan", None)
+                self.last_optimisation_error = "device configuration changed; replan pending"
             elif self.optimisation_plan is None:
                 self.optimisation_plan = stored.get("optimisation_plan")
             stored["last_optimisation_push"] = self.last_optimisation_push
-            stored["optimisation_device_metadata"] = {
-                device["key"]: {
-                    "active_power_w": device["active_power_w"],
-                    "profile_sample_count": device["profile_sample_count"],
-                    "inference": device["inference"],
-                }
-                for device in devices
-            }
-            stored["optimisation_device_configuration"] = {
-                configuration["key"]: {
-                    "load_type": configuration["load_type"],
-                    "planning_role": configuration["planning_role"],
-                    "control_type": configuration["control_type"],
-                }
-                for configuration in result.get("device_configuration", [])
-            }
             await self._store.async_save(stored)
             self.async_update_listeners()
 

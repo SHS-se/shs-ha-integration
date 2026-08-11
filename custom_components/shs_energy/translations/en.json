@@ -213,7 +213,43 @@
           "ev_voltage": "Phase voltage (V)",
           "ev_default_departure": "Default departure time (HH:MM)"
         }
+      },
+      "device_control": {
+        "title": "Configure {device_name}",
+        "description": "Device {position} of {total}. The website requests **{control_type}** control. Entity mappings stay local to Home Assistant. Saving them acknowledges that this device may be modeled separately; it does not replace or enable any existing controller.",
+        "data": {
+          "temperature_entity_id": "Room or process temperature",
+          "setpoint_entity_id": "Direct setpoint entity (optional when high/low values are used)",
+          "comfort_high_entity_id": "Scheduled high/comfort temperature",
+          "comfort_low_entity_id": "Scheduled low/setback temperature",
+          "actuator_entity_ids": "Controlled actuator(s)",
+          "companion_actuator_entity_ids": "Required companion actuator(s)",
+          "power_entity_id": "Measured power (optional)",
+          "override_entity_id": "Manual override state (optional)",
+          "override_timer_entity_id": "Manual override timer (optional)",
+          "availability_entity_id": "Season or availability entity (optional)",
+          "power_w": "Rated combined power (W, optional)",
+          "max_inhibit_slots": "Maximum continuous inhibit (15-minute slots)",
+          "min_run_slots": "Minimum run (15-minute slots)",
+          "power_control_entity_id": "Variable power control",
+          "current_control_entity_id": "Charge-current control",
+          "connected_entity_id": "Vehicle connected state",
+          "soc_entity_id": "Vehicle battery state of charge",
+          "target_soc_entity_id": "Vehicle target state of charge",
+          "departure_entity_id": "Vehicle departure timestamp (optional)",
+          "energy_remaining_entity_id": "Vehicle energy remaining (optional)",
+          "battery_capacity_kwh": "Vehicle usable battery capacity (kWh)",
+          "min_current_a": "Usable charging minimum (A)",
+          "max_current_a": "Charging maximum (A)",
+          "current_step_a": "Charging current increment (A)",
+          "phase_count": "Charging phase count",
+          "voltage": "Phase voltage (V)"
+        }
       }
+    },
+    "error": {
+      "website_configuration_unavailable": "Could not fetch the latest website device selections. Try Configure again; no Home Assistant restart is required.",
+      "invalid_device_mapping": "The mapping is incomplete. Provide the required entities for this control type."
     }
   },
   "entity": {
@@ -277,6 +313,10 @@
     "optimisation_configuration": {
       "title": "Energy planning inputs required",
       "description": "The 15-minute planner is paused because these explicit inputs are missing or invalid:\n\n{inputs}\n\nOpen Configure on this integration. Baseline controllers continue to own the devices while planning is unavailable."
+    },
+    "device_control_mapping": {
+      "title": "Controllable devices need configuration",
+      "description": "The website requests control mappings for these devices:\n\n{devices}\n\nOpen Configure on this integration. It fetches the latest website selections immediately; no Home Assistant restart is required. Until each matching mapping is complete, that device remains in empirical base load and existing controllers remain unchanged."
     }
   }
 }

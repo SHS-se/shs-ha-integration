@@ -74,6 +74,7 @@ DEFAULT_PLANNING_MODE = PLANNING_MODE_DISABLED
 OPT_AUTOMATIC_SETUP = "automatic_setup"
 OPT_DISCOVERY_EVIDENCE = "discovery_evidence"
 OPT_CONFIGURATION_REVIEWED_AT = "configuration_reviewed_at"
+OPT_DEVICE_CONTROL_MAPPINGS = "device_control_mappings"
 
 # Live optimisation inputs. Forecast entities must expose timestamped values;
 # the integration does not infer a provider, unit, location or missing series.
@@ -142,6 +143,7 @@ OPTIMISATION_STARTUP_DELAY_SECONDS = 60
 OPTIMISATION_STARTUP_RETRY_SECONDS = 15
 OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS = 120
 ISSUE_OPTIMISATION_CONFIGURATION = "optimisation_configuration"
+ISSUE_DEVICE_CONTROL_MAPPING = "device_control_mapping"
 
 # Storage keys for push bookkeeping.
 STORAGE_VERSION = 1

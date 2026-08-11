@@ -22,6 +22,7 @@ from .configuration import (
     async_discover_configuration,
     optimisation_defaults,
     resolved_options,
+    suggest_device_control_mapping,
 )
 from .const import (
     CONF_BASE_URL,
@@ -89,11 +90,13 @@ from .const import (
     OPT_PLANNING_MODE,
     OPT_AUTOMATIC_SETUP,
     OPT_CONFIGURATION_REVIEWED_AT,
+    OPT_DEVICE_CONTROL_MAPPINGS,
     PLANNING_MODE_DISABLED,
     PLANNING_MODE_LIVE,
     OPT_SUPPLIER_EXPORT_PRICE,
     OPT_SUPPLIER_IMPORT_PRICE,
 )
+from .device_controls import mapping_errors, mapping_report
 
 
 class ShsEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -157,6 +160,10 @@ class ShsEnergyOptionsFlow(OptionsFlow):
 
     _pending: dict[str, Any]
     _discovery: dict[str, Any]
+    _requested_devices: list[dict[str, Any]]
+    _device_queue: list[dict[str, Any]]
+    _device_index: int
+    _portal_refreshed: bool
 
     def _current(self) -> dict[str, Any]:
         return resolved_options(
@@ -189,6 +196,183 @@ class ShsEnergyOptionsFlow(OptionsFlow):
             for key in keys
         })
 
+    def _device_mappings(self) -> dict[str, dict[str, Any]]:
+        value = self._current().get(OPT_DEVICE_CONTROL_MAPPINGS, {})
+        return {
+            str(key): dict(mapping)
+            for key, mapping in value.items()
+            if isinstance(mapping, dict)
+        } if isinstance(value, dict) else {}
+
+    def _mapping_defaults(self, device: dict[str, Any]) -> dict[str, Any]:
+        """Reuse saved values and relevant legacy values during migration."""
+        control_type = str(device["control_type"])
+        saved = self._device_mappings().get(device["key"])
+        if saved and saved.get("control_type") == control_type:
+            return saved
+        current = self._current()
+        defaults = suggest_device_control_mapping(
+            self.hass, device, control_type
+        )
+        if control_type == "current_limit":
+            for target, source in (
+                ("current_control_entity_id", OPT_EV_CHARGE_CURRENT_ENTITY),
+                ("connected_entity_id", OPT_EV_CONNECTED_ENTITY),
+                ("soc_entity_id", OPT_EV_SOC_ENTITY),
+                ("target_soc_entity_id", OPT_EV_TARGET_SOC_ENTITY),
+                ("departure_entity_id", OPT_EV_DEPARTURE_ENTITY),
+                ("energy_remaining_entity_id", OPT_EV_ENERGY_REMAINING_ENTITY),
+                ("battery_capacity_kwh", OPT_EV_BATTERY_KWH),
+                ("min_current_a", OPT_EV_MIN_CURRENT_A),
+                ("max_current_a", OPT_EV_MAX_CURRENT_A),
+                ("current_step_a", OPT_EV_CURRENT_STEP_A),
+                ("phase_count", OPT_EV_PHASE_COUNT),
+                ("voltage", OPT_EV_VOLTAGE),
+                ("min_run_slots", OPT_EV_MIN_RUN_SLOTS),
+            ):
+                if current.get(source) not in (None, "", []):
+                    defaults[target] = current[source]
+        elif control_type == "permit_inhibit":
+            defaults["max_inhibit_slots"] = current[OPT_BOILER_MAX_INHIBIT_SLOTS]
+            if current.get(OPT_BOILER_POWER_W) not in (None, ""):
+                defaults["power_w"] = current[OPT_BOILER_POWER_W]
+        elif control_type == "switch_schedule":
+            defaults["min_run_slots"] = current[OPT_POOL_MIN_RUN_SLOTS]
+            if current.get(OPT_POOL_ENABLED_ENTITY):
+                defaults["availability_entity_id"] = current[OPT_POOL_ENABLED_ENTITY]
+            if current.get(OPT_POOL_POWER_W) not in (None, ""):
+                defaults["power_w"] = current[OPT_POOL_POWER_W]
+        return defaults
+
+    @staticmethod
+    def _field(
+        schema: dict[Any, Any],
+        defaults: dict[str, Any],
+        key: str,
+        value_selector: Any,
+        *,
+        required: bool,
+        default: Any = None,
+    ) -> None:
+        value = defaults.get(key, default)
+        marker: Any
+        if required:
+            marker = (
+                vol.Required(key, default=value)
+                if value not in (None, "", [])
+                else vol.Required(key)
+            )
+        else:
+            marker = (
+                vol.Optional(key, default=value)
+                if value not in (None, "", [])
+                else vol.Optional(key)
+            )
+        schema[marker] = value_selector
+
+    def _device_mapping_schema(self, device: dict[str, Any]) -> vol.Schema:
+        control_type = str(device["control_type"])
+        defaults = self._mapping_defaults(device)
+        schema: dict[Any, Any] = {}
+        entity = lambda multiple=False: selector.EntitySelector(
+            selector.EntitySelectorConfig(multiple=multiple)
+        )
+        positive = selector.NumberSelector(selector.NumberSelectorConfig(
+            min=0.01, step=0.01, mode=selector.NumberSelectorMode.BOX
+        ))
+        whole = selector.NumberSelector(selector.NumberSelectorConfig(
+            min=1, step=1, mode=selector.NumberSelectorMode.BOX
+        ))
+
+        if control_type == "setpoint":
+            self._field(schema, defaults, "temperature_entity_id", entity(), required=True)
+            self._field(schema, defaults, "setpoint_entity_id", entity(), required=False)
+            self._field(schema, defaults, "comfort_high_entity_id", entity(), required=False)
+            self._field(schema, defaults, "comfort_low_entity_id", entity(), required=False)
+            self._field(schema, defaults, "actuator_entity_ids", entity(True), required=True)
+            self._field(
+                schema, defaults, "companion_actuator_entity_ids",
+                entity(True), required=False,
+            )
+            self._field(schema, defaults, "power_entity_id", entity(), required=False)
+            self._field(schema, defaults, "override_entity_id", entity(), required=False)
+            self._field(schema, defaults, "override_timer_entity_id", entity(), required=False)
+        elif control_type == "permit_inhibit":
+            self._field(schema, defaults, "actuator_entity_ids", entity(True), required=True)
+            self._field(schema, defaults, "availability_entity_id", entity(), required=False)
+            self._field(schema, defaults, "power_entity_id", entity(), required=False)
+            self._field(schema, defaults, "power_w", positive, required=False)
+            self._field(schema, defaults, "max_inhibit_slots", whole, required=True, default=4)
+        elif control_type == "switch_schedule":
+            self._field(schema, defaults, "actuator_entity_ids", entity(True), required=True)
+            self._field(
+                schema, defaults, "companion_actuator_entity_ids",
+                entity(True), required=False,
+            )
+            self._field(schema, defaults, "availability_entity_id", entity(), required=False)
+            self._field(schema, defaults, "power_entity_id", entity(), required=False)
+            self._field(schema, defaults, "power_w", positive, required=False)
+            self._field(schema, defaults, "min_run_slots", whole, required=True, default=4)
+        elif control_type == "variable_power":
+            self._field(schema, defaults, "power_control_entity_id", entity(), required=True)
+            self._field(schema, defaults, "availability_entity_id", entity(), required=False)
+            self._field(schema, defaults, "power_entity_id", entity(), required=False)
+        elif control_type == "current_limit":
+            for key in (
+                "current_control_entity_id", "connected_entity_id", "soc_entity_id",
+                "target_soc_entity_id",
+            ):
+                self._field(schema, defaults, key, entity(), required=True)
+            for key in (
+                "departure_entity_id", "energy_remaining_entity_id", "power_entity_id",
+            ):
+                self._field(schema, defaults, key, entity(), required=False)
+            for key, default in (
+                ("battery_capacity_kwh", None), ("min_current_a", 6),
+                ("max_current_a", 16), ("current_step_a", 1),
+                ("phase_count", 3), ("voltage", 230), ("min_run_slots", 2),
+            ):
+                self._field(
+                    schema, defaults, key,
+                    whole if key in ("phase_count", "min_run_slots") else positive,
+                    required=True, default=default,
+                )
+        return vol.Schema(schema)
+
+    def _queue_device_controls(self, devices: list[dict[str, Any]]) -> None:
+        self._device_queue = devices
+        self._device_index = 0
+
+    async def async_step_device_control(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Configure one website-requested device using its control contract."""
+        device = self._device_queue[self._device_index]
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            mapping = {"control_type": device["control_type"], **user_input}
+            if mapping_errors(mapping, str(device["control_type"])):
+                errors["base"] = "invalid_device_mapping"
+            else:
+                mappings = self._device_mappings()
+                mappings[device["key"]] = mapping
+                self._pending[OPT_DEVICE_CONTROL_MAPPINGS] = mappings
+                self._device_index += 1
+                if self._device_index >= len(self._device_queue):
+                    return self._save()
+                return await self.async_step_device_control()
+        return self.async_show_form(
+            step_id="device_control",
+            data_schema=self._device_mapping_schema(device),
+            errors=errors,
+            description_placeholders={
+                "device_name": str(device.get("name") or device["key"]),
+                "control_type": str(device["control_type"]).replace("_", " "),
+                "position": str(self._device_index + 1),
+                "total": str(len(self._device_queue)),
+            },
+        )
+
     def _save(self) -> ConfigFlowResult:
         options = resolved_options(self.hass, self._pending)
         options.pop("setup_method", None)
@@ -201,6 +385,34 @@ class ShsEnergyOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        if not hasattr(self, "_pending"):
+            self._pending = {
+                **optimisation_defaults(self.hass),
+                **dict(self.config_entry.options),
+            }
+        if not hasattr(self, "_requested_devices"):
+            self._requested_devices = []
+        if not getattr(self, "_portal_refreshed", False):
+            try:
+                self._requested_devices = (
+                    await self.config_entry.runtime_data.async_refresh_device_configuration()
+                )
+            except (ShsApiError, KeyError, TypeError, ValueError):
+                errors["base"] = "website_configuration_unavailable"
+                user_input = None
+            else:
+                self._portal_refreshed = True
+                mappings = self._device_mappings()
+                pending = [
+                    device for device in self._requested_devices
+                    if mapping_report(
+                        device.get("control_type"), mappings.get(device["key"])
+                    )["mapping_status"] != "ready"
+                ]
+                if pending:
+                    self._queue_device_controls(pending)
+                    return await self.async_step_device_control()
         if user_input is not None:
             self._pending = {
                 **optimisation_defaults(self.hass),
@@ -209,11 +421,18 @@ class ShsEnergyOptionsFlow(OptionsFlow):
             }
             method = self._pending.get("setup_method", "automatic")
             self._pending[OPT_AUTOMATIC_SETUP] = method == "automatic"
+            if method == "device_controls":
+                if self._requested_devices:
+                    self._queue_device_controls(self._requested_devices)
+                    return await self.async_step_device_control()
+                return self._save()
             if self._pending[OPT_PLANNING_MODE] == PLANNING_MODE_LIVE and method == "automatic":
+                mappings = self._pending[OPT_DEVICE_CONTROL_MAPPINGS]
                 self._discovery = await async_discover_configuration(
                     self.hass, self._pending
                 )
                 self._pending = self._discovery["configuration"]
+                self._pending[OPT_DEVICE_CONTROL_MAPPINGS] = mappings
                 self._pending[OPT_PLANNING_MODE] = PLANNING_MODE_LIVE
                 return await self.async_step_discovery_review()
             if self._pending[OPT_PLANNING_MODE] != PLANNING_MODE_LIVE:
@@ -243,10 +462,12 @@ class ShsEnergyOptionsFlow(OptionsFlow):
                     options=[
                         {"value": "automatic", "label": "Automatic — use Energy Dashboard"},
                         {"value": "manual", "label": "Manual — review advanced mappings"},
+                        {"value": "device_controls", "label": "Website-requested device controls"},
                     ],
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )),
             }),
+            errors=errors,
         )
 
     def _discovery_summary(self) -> str:

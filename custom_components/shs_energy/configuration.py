@@ -44,6 +44,7 @@ from .const import (
     OPT_BOILER_PLANNING_ENABLED,
     OPT_BOILER_POWER_W,
     OPT_DISCOVERY_EVIDENCE,
+    OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_ELECTRICITY_PRICE_AREA,
     OPT_EV_BATTERY_KWH,
     OPT_EV_CHARGE_CURRENT_ENTITY,
@@ -94,6 +95,7 @@ def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
     return {
         OPT_PLANNING_MODE: DEFAULT_PLANNING_MODE,
         OPT_AUTOMATIC_SETUP: True,
+        OPT_DEVICE_CONTROL_MAPPINGS: {},
         OPT_FORECAST_RESOLUTION_MINUTES: DEFAULT_FORECAST_RESOLUTION_MINUTES,
         OPT_PV_FORECAST_LATITUDE: hass.config.latitude,
         OPT_PV_FORECAST_LONGITUDE: hass.config.longitude,
@@ -348,6 +350,150 @@ async def async_energy_dashboard_inventory(
     manager = await async_get_manager(hass)
     preferences = manager.data or manager.default_preferences()
     return _energy_dashboard_inventory(hass, preferences)
+
+
+_CONTROL_TOKEN_STOP_WORDS = {
+    "energy", "sensor", "power", "load", "heating", "heater", "cooling",
+    "consumption", "device", "room", "the", "and",
+}
+
+
+def _control_tokens(*values: Any) -> set[str]:
+    text = " ".join(str(value or "") for value in values).lower().replace("'s", "s")
+    return {
+        token for token in re.findall(r"[a-zåäö0-9]+", text)
+        if len(token) > 1 and token not in _CONTROL_TOKEN_STOP_WORDS
+    }
+
+
+def _suggest_control_entities(
+    hass: HomeAssistant,
+    device: dict[str, Any],
+    *,
+    domains: tuple[str, ...],
+    field_tokens: tuple[str, ...],
+    units: tuple[str, ...] = (),
+    multiple: bool = False,
+) -> str | list[str] | None:
+    """Rank local entities semantically; suggestions always require review."""
+    device_tokens = _control_tokens(
+        device.get("name"), device.get("statistic_id"), device.get("category")
+    )
+    ranked: list[tuple[int, str]] = []
+    for state in hass.states.async_all():
+        domain = state.entity_id.split(".", 1)[0]
+        if domain not in domains:
+            continue
+        text = _state_text(state)
+        if any(token in text for token in ("child lock", "lock state", "configuration")):
+            continue
+        tokens = _control_tokens(text)
+        overlap = len(device_tokens & tokens)
+        if overlap == 0:
+            continue
+        field_hits = sum(token in text for token in field_tokens)
+        unit_hit = state.attributes.get("unit_of_measurement") in units
+        if field_hits == 0 and not unit_hit:
+            continue
+        score = overlap * 10 + field_hits * 3 + (2 if unit_hit else 0)
+        ranked.append((score, state.entity_id))
+    ranked.sort(key=lambda value: (-value[0], len(value[1]), value[1]))
+    if not ranked:
+        return [] if multiple else None
+    if not multiple:
+        return ranked[0][1]
+    best = ranked[0][0]
+    return [entity_id for score, entity_id in ranked if score >= best - 2][:6]
+
+
+def suggest_device_control_mapping(
+    hass: HomeAssistant,
+    device: dict[str, Any],
+    control_type: str,
+) -> dict[str, Any]:
+    """Propose installation-local fields without silently accepting them."""
+    mapping: dict[str, Any] = {"control_type": control_type}
+
+    def set_if_found(key: str, value: Any) -> None:
+        if value not in (None, "", []):
+            mapping[key] = value
+
+    set_if_found("power_entity_id", _suggest_control_entities(
+        hass, device, domains=("sensor",), field_tokens=("power", "effekt"),
+        units=("W", "kW"),
+    ))
+    if control_type == "setpoint":
+        set_if_found("temperature_entity_id", _suggest_control_entities(
+            hass, device, domains=("sensor", "climate"),
+            field_tokens=("temperature", "temp", "temperatur"), units=("°C",),
+        ))
+        set_if_found("setpoint_entity_id", _suggest_control_entities(
+            hass, device, domains=("number", "input_number", "climate"),
+            field_tokens=("setpoint", "target temp", "target temperature", "börvärde"),
+        ))
+        set_if_found("comfort_high_entity_id", _suggest_control_entities(
+            hass, device, domains=("number", "input_number"),
+            field_tokens=("high temp", "comfort", "hög temp"), units=("°C",),
+        ))
+        set_if_found("comfort_low_entity_id", _suggest_control_entities(
+            hass, device, domains=("number", "input_number"),
+            field_tokens=("low temp", "setback", "låg temp"), units=("°C",),
+        ))
+        set_if_found("actuator_entity_ids", _suggest_control_entities(
+            hass, device, domains=("switch", "climate"),
+            field_tokens=("heater", "heating", "aircon", "climate", "värme"),
+            multiple=True,
+        ))
+        set_if_found("override_entity_id", _suggest_control_entities(
+            hass, device, domains=("input_boolean", "input_text", "select"),
+            field_tokens=("override", "manual", "manuell"),
+        ))
+        set_if_found("override_timer_entity_id", _suggest_control_entities(
+            hass, device, domains=("input_number", "timer"),
+            field_tokens=("override timer", "override time", "manual timer"),
+        ))
+    elif control_type in ("switch_schedule", "permit_inhibit"):
+        set_if_found("actuator_entity_ids", _suggest_control_entities(
+            hass, device, domains=("switch", "input_boolean", "climate"),
+            field_tokens=("heater", "heating", "boiler", "pump", "switch", "värme"),
+            multiple=True,
+        ))
+        set_if_found("availability_entity_id", _suggest_control_entities(
+            hass, device, domains=("binary_sensor", "input_boolean", "switch"),
+            field_tokens=("enabled", "season", "available", "tillgänglig"),
+        ))
+    elif control_type == "variable_power":
+        set_if_found("power_control_entity_id", _suggest_control_entities(
+            hass, device, domains=("number", "input_number"),
+            field_tokens=("power", "output", "limit", "effekt"), units=("W", "kW"),
+        ))
+    elif control_type == "current_limit":
+        set_if_found("current_control_entity_id", _suggest_control_entities(
+            hass, device, domains=("number", "input_number"),
+            field_tokens=("charge current", "charging current", "ström"), units=("A",),
+        ))
+        set_if_found("connected_entity_id", _suggest_control_entities(
+            hass, device, domains=("binary_sensor", "input_boolean"),
+            field_tokens=("connected", "plugged", "ansluten"),
+        ))
+        set_if_found("soc_entity_id", _suggest_control_entities(
+            hass, device, domains=("sensor",),
+            field_tokens=("state of charge", "battery level", "soc"), units=("%",),
+        ))
+        set_if_found("target_soc_entity_id", _suggest_control_entities(
+            hass, device, domains=("number", "input_number"),
+            field_tokens=("target soc", "charge limit", "target charge"), units=("%",),
+        ))
+        set_if_found("departure_entity_id", _suggest_control_entities(
+            hass, device, domains=("sensor", "input_datetime"),
+            field_tokens=("departure", "leave", "avresa"),
+        ))
+        set_if_found("energy_remaining_entity_id", _suggest_control_entities(
+            hass, device, domains=("sensor",),
+            field_tokens=("energy remaining", "charge energy added", "remaining"),
+            units=("kWh",),
+        ))
+    return mapping
 
 
 def _price_area(hass: HomeAssistant, states: Iterable[State]) -> str | None:

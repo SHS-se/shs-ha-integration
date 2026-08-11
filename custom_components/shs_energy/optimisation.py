@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 SLOT_SECONDS = 900
 SLOT_HOURS = 0.25
-SUPPORTED_OPTIMISATION_MODEL_VERSION = "controllable-device-planner-v5"
+SUPPORTED_OPTIMISATION_MODEL_VERSION = "battery-export-planner-v6"
 ACTUAL_FIELD_BY_CATEGORY = {
     "total_consumption": "total_load_kwh",
     "solar_production": "solar_production_kwh",
@@ -70,33 +70,19 @@ def suggested_load_type(name: str, category: str) -> tuple[str, dict[str, str]]:
 def suggested_device_planning(
     category: str, load_type: str
 ) -> tuple[str, str | None, dict[str, str]]:
-    """Conservatively suggest which meters belong outside empirical base load.
+    """Initialize every discovered Energy Dashboard device in base load.
 
-    A load shape describes how power is consumed. The planning role separately
-    describes whether this installation has a real control path. Only the
-    explicitly supported high-power services are automatic; every other Energy
-    Dashboard device remains part of measured base load until a user or staff
-    member reviews it.
+    Category and load-shape inference may propose useful context, but neither
+    proves that a customer has installed a safe control path. Controllability
+    is therefore always an explicit website opt-in followed by a local Home
+    Assistant entity mapping.
     """
-    if category == "hot_water":
-        role, control, rule = (
-            "controllable", "permit_inhibit", "water_heater_permission_only"
-        )
-    elif category == "pool_heating":
-        role, control, rule = (
-            "controllable", "switch_schedule", "pool_service_schedule"
-        )
-    elif category == "ev_charging":
-        role, control, rule = (
-            "controllable", "current_limit", "ev_current_control"
-        )
-    else:
-        role, control, rule = "base_load", None, "conservative_base_load"
+    role, control, rule = "base_load", None, "user_opt_in_required"
     return role, control, {
         "method": "energy_dashboard_planning_semantics_v1",
         "rule": rule,
         "load_type_evidence": load_type,
-        "confidence": "high" if role == "controllable" else "medium",
+        "confidence": "high",
     }
 
 
