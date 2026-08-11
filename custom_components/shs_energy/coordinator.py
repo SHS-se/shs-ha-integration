@@ -1160,7 +1160,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         actuals: list[dict[str, Any]],
         horizon: list[datetime],
         device_models: list[dict[str, Any]],
-    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any] | None]:
         local_tz = dt_util.DEFAULT_TIME_ZONE
         first = horizon[0]
         end = horizon[-1] + timedelta(minutes=15)
@@ -1175,6 +1175,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         services: list[dict[str, Any]] = []
         samples: dict[str, int] = {}
+        ev_battery: dict[str, Any] | None = None
         for category, device, enabled_key, power_key, run_key, deadline_key, baseline_key, priority in (
             ("pool_heating", "pool", OPT_POOL_PLANNING_ENABLED,
              OPT_POOL_POWER_W, OPT_POOL_MIN_RUN_SLOTS,
@@ -1282,50 +1283,17 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "priority": 1,
                 })
 
-        connected_id = (
-            options.get(OPT_EV_CONNECTED_ENTITY)
-            if options.get(OPT_EV_PLANNING_ENABLED)
-            else None
-        )
-        if connected_id and state_is_on(self._entity_payload(connected_id)["state"]):
-            soc = normalized_fraction(
-                self._entity_payload(options[OPT_EV_SOC_ENTITY])["state"],
-                OPT_EV_SOC_ENTITY,
-            )
+        connected_id = options.get(OPT_EV_CONNECTED_ENTITY)
+        if options.get(OPT_EV_PLANNING_ENABLED) and connected_id:
+            connected_payload = self._entity_payload(connected_id)
+            connected = state_is_on(connected_payload["state"])
+            soc_id = options[OPT_EV_SOC_ENTITY]
+            target_id = options[OPT_EV_TARGET_SOC_ENTITY]
+            soc_payload = self._entity_payload(soc_id)
+            soc = normalized_fraction(soc_payload["state"], OPT_EV_SOC_ENTITY)
             target = normalized_fraction(
-                self._entity_payload(options[OPT_EV_TARGET_SOC_ENTITY])["state"],
-                OPT_EV_TARGET_SOC_ENTITY,
+                self._entity_payload(target_id)["state"], OPT_EV_TARGET_SOC_ENTITY
             )
-            departure_entity = options.get(OPT_EV_DEPARTURE_ENTITY)
-            if departure_entity:
-                departure_raw = self._entity_payload(departure_entity)["state"]
-                try:
-                    departure = datetime.fromisoformat(
-                        str(departure_raw).replace("Z", "+00:00")
-                    )
-                except ValueError as err:
-                    raise OptimisationInputError(
-                        f"{OPT_EV_DEPARTURE_ENTITY} must contain an ISO timestamp"
-                    ) from err
-                if departure.tzinfo is None:
-                    raise OptimisationInputError(
-                        f"{OPT_EV_DEPARTURE_ENTITY} timestamp must include a timezone"
-                    )
-                departure = departure.astimezone(timezone.utc)
-            else:
-                departure_time = self._time_option(
-                    options[OPT_EV_DEFAULT_DEPARTURE], OPT_EV_DEFAULT_DEPARTURE
-                )
-                local_first = first.astimezone(local_tz)
-                departure = datetime.combine(
-                    local_first.date(), departure_time, local_tz
-                ).astimezone(timezone.utc)
-                if departure <= first:
-                    departure += timedelta(days=1)
-            if departure <= first or departure > end:
-                raise OptimisationInputError(
-                    "connected EV departure must fall inside the 72-hour horizon"
-                )
             efficiency = parse_number(
                 options[OPT_EV_CHARGE_EFFICIENCY], OPT_EV_CHARGE_EFFICIENCY
             )
@@ -1336,8 +1304,68 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._entity_payload(remaining_entity)["state"], remaining_entity
                 )
                 capacity = remaining / soc
-            required = max(0.0, target - soc) * capacity / efficiency
+
+            departure: datetime | None = None
+            if connected:
+                departure_entity = options.get(OPT_EV_DEPARTURE_ENTITY)
+                if departure_entity:
+                    departure_raw = self._entity_payload(departure_entity)["state"]
+                    try:
+                        departure = datetime.fromisoformat(
+                            str(departure_raw).replace("Z", "+00:00")
+                        )
+                    except ValueError as err:
+                        raise OptimisationInputError(
+                            f"{OPT_EV_DEPARTURE_ENTITY} must contain an ISO timestamp"
+                        ) from err
+                    if departure.tzinfo is None:
+                        raise OptimisationInputError(
+                            f"{OPT_EV_DEPARTURE_ENTITY} timestamp must include a timezone"
+                        )
+                    departure = departure.astimezone(timezone.utc)
+                else:
+                    departure_time = self._time_option(
+                        options[OPT_EV_DEFAULT_DEPARTURE], OPT_EV_DEFAULT_DEPARTURE
+                    )
+                    local_first = first.astimezone(local_tz)
+                    departure = datetime.combine(
+                        local_first.date(), departure_time, local_tz
+                    ).astimezone(timezone.utc)
+                    if departure <= first:
+                        departure += timedelta(days=1)
+                if departure <= first or departure > end:
+                    raise OptimisationInputError(
+                        "connected EV departure must fall inside the 72-hour horizon"
+                    )
+
+            current_entity = options.get(OPT_EV_CHARGE_CURRENT_ENTITY)
+            ev_battery = {
+                "name": str(
+                    soc_payload["attributes"].get("friendly_name") or "EV battery"
+                ),
+                "connected": connected,
+                "capacity_kwh": round(capacity, 3),
+                "soc": round(soc, 6),
+                "departure_target_soc": round(target, 6),
+                "charge_efficiency": round(efficiency, 6),
+                "available_from": first.isoformat() if connected else None,
+                "departure": departure.isoformat() if departure else None,
+                "priority": 3,
+                "source_entity_ids": {
+                    "connected": connected_id,
+                    "soc": soc_id,
+                    "target_soc": target_id,
+                    "energy_remaining": remaining_entity,
+                    "charge_current": current_entity,
+                },
+            }
+
+            required = (
+                max(0.0, target - soc) * capacity / efficiency
+                if connected else 0.0
+            )
             if required > 0:
+                assert departure is not None
                 minimum_run = parse_number(
                     options[OPT_EV_MIN_RUN_SLOTS], OPT_EV_MIN_RUN_SLOTS
                 )
@@ -1345,7 +1373,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     raise OptimisationInputError(
                         f"{OPT_EV_MIN_RUN_SLOTS} must be a positive whole number"
                     )
-                current_entity = options.get(OPT_EV_CHARGE_CURRENT_ENTITY)
                 if current_entity:
                     current_payload = self._entity_payload(current_entity)
                     if current_payload["attributes"].get("unit_of_measurement") != "A":
@@ -1413,7 +1440,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "baseline_preferred_start": first.isoformat(),
                 })
         validate_service_windows(services, horizon)
-        return services, samples
+        return services, samples, ev_battery
 
     @staticmethod
     def _observe_calibration(
@@ -1743,7 +1770,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             dt_util.start_of_local_day() - timedelta(days=30),
             dt_util.start_of_local_day(),
         )
-        services, service_samples = self._build_services(
+        services, service_samples, ev_battery = self._build_services(
             options, entities_by_category, daily_totals, profile_actuals, horizon,
             device_models,
         )
@@ -1924,6 +1951,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             },
             "pv_calibration": calibration,
             "battery": battery,
+            "ev_battery": ev_battery,
             "grid": {
                 "import_limit_w": parse_number(
                     options[OPT_GRID_IMPORT_LIMIT_W], OPT_GRID_IMPORT_LIMIT_W
