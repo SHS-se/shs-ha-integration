@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 SLOT_SECONDS = 900
 SLOT_HOURS = 0.25
-SUPPORTED_OPTIMISATION_MODEL_VERSION = "quarter-hour-heuristic-v3"
+SUPPORTED_OPTIMISATION_MODEL_VERSION = "empirical-device-planner-v4"
 ACTUAL_FIELD_BY_CATEGORY = {
     "total_consumption": "total_load_kwh",
     "solar_production": "solar_production_kwh",
@@ -29,11 +29,42 @@ ACTUAL_FIELD_BY_CATEGORY = {
     "battery_charge": "battery_charge_kwh",
     "battery_discharge": "battery_discharge_kwh",
 }
-SHIFTABLE_CATEGORIES = ("pool_heating", "hot_water", "ev_charging")
 
 
 class OptimisationInputError(ValueError):
     """A required optimisation input is absent or ambiguous."""
+
+
+def suggested_load_type(name: str, category: str) -> tuple[str, dict[str, str]]:
+    """Suggest one of four editable electrical load characteristics."""
+    value = name.lower().replace("_", " ")
+    inverter_tokens = (
+        "heat pump", "värmepump", "aircon", "air conditioning",
+        "mini split", "inverter",
+    )
+    duty_tokens = (
+        "boiler", "water heater", "hot water", "varmvatten", "heater",
+        "radiator", "floor heating", "fridge", "freezer", "kyl", "frys",
+    )
+    variable_tokens = (
+        "charger", "charging", "tesla", "computer", "oven", "stove",
+        "dishwasher", "washing machine", "tumble dryer", "microwave",
+    )
+    if any(token in value for token in inverter_tokens):
+        load_type, rule = "inverter", "inverter_semantics"
+    elif category == "hot_water" or any(token in value for token in duty_tokens):
+        load_type, rule = "duty_cycle", "thermostat_semantics"
+    elif category in ("ev_charging", "cooling") or any(
+        token in value for token in variable_tokens
+    ):
+        load_type, rule = "variable_full_load", "variable_power_semantics"
+    else:
+        load_type, rule = "fixed_full_load", "default_fixed_power"
+    return load_type, {
+        "method": "energy_dashboard_semantics_v1",
+        "rule": rule,
+        "confidence": "medium" if rule != "default_fixed_power" else "low",
+    }
 
 
 def quarter_start(value: datetime) -> datetime:
@@ -382,6 +413,37 @@ def aggregate_category_changes(
     ]
 
 
+def aggregate_device_changes(
+    changes: dict[str, list[tuple[datetime, float]]],
+) -> list[dict[str, Any]]:
+    """Keep each Energy Dashboard device as a complete quarter-hour series."""
+    buckets: dict[datetime, dict[str, float]] = defaultdict(dict)
+    for device_key, rows in changes.items():
+        per_bucket: dict[datetime, dict[datetime, float]] = defaultdict(dict)
+        for timestamp, kwh in rows:
+            if not isfinite(kwh) or kwh < 0:
+                continue
+            per_bucket[quarter_start(timestamp)][timestamp.astimezone(timezone.utc)] = kwh
+        for start, samples in per_bucket.items():
+            expected = {
+                start + timedelta(minutes=offset) for offset in (0, 5, 10)
+            }
+            if set(samples) != expected:
+                continue
+            buckets[start][device_key] = round(sum(samples.values()), 6)
+    return [
+        {
+            "start": start.isoformat(),
+            "device_energy_kwh": values,
+            "quality": {
+                "aggregation": "sum_of_recorder_5minute_changes",
+                "duration_seconds": SLOT_SECONDS,
+            },
+        }
+        for start, values in sorted(buckets.items())
+    ]
+
+
 def _quantile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     if not ordered:
@@ -393,36 +455,120 @@ def _quantile(values: list[float], fraction: float) -> float:
     return ordered[lower] * (1 - weight) + ordered[upper] * weight
 
 
+def _trimmed_mean(values: list[float]) -> float:
+    ordered = sorted(values)
+    trim = int(len(ordered) * 0.1) if len(ordered) >= 10 else 0
+    kept = ordered[trim:len(ordered) - trim] if trim else ordered
+    return sum(kept) / len(kept)
+
+
+def build_empirical_device_profile(
+    device_slots: list[dict[str, Any]],
+    device_key: str,
+    timezone_name: str,
+    *,
+    minimum_samples: int = 2,
+    day_type: str,
+) -> dict[str, Any]:
+    """Learn a 96-quarter expected-power profile from measured device energy.
+
+    A trimmed mean is intentional. Median power would turn an intermittent
+    thermostat load into zero for most quarters, while copying active power
+    would invent exact switch-on times. The mean is the probability-weighted
+    expected draw visible in a planning graph.
+    """
+    if day_type not in ("weekday", "weekend"):
+        raise OptimisationInputError("day_type must be weekday or weekend")
+    local_tz = ZoneInfo(timezone_name)
+    samples: dict[int, list[float]] = defaultdict(list)
+    all_power: list[float] = []
+    for row in device_slots:
+        when = _timestamp(row.get("start"))
+        values = row.get("device_energy_kwh")
+        if when is None or not isinstance(values, dict) or device_key not in values:
+            continue
+        energy = values[device_key]
+        if not isinstance(energy, (int, float)) or not isfinite(float(energy)):
+            continue
+        local = when.astimezone(local_tz)
+        if day_type == "weekday" and local.weekday() >= 5:
+            continue
+        if day_type == "weekend" and local.weekday() < 5:
+            continue
+        power_w = max(0.0, float(energy) * 4_000)
+        samples[local.hour * 4 + local.minute // 15].append(power_w)
+        all_power.append(power_w)
+
+    missing = [
+        quarter for quarter in range(96)
+        if len(samples[quarter]) < minimum_samples
+    ]
+    if missing:
+        raise OptimisationInputError(
+            f"{device_key} lacks {minimum_samples} {day_type} samples for "
+            f"{len(missing)} quarters"
+        )
+    positive = sorted(value for value in all_power if value > 25)
+    active_power_w: float | None = None
+    if positive:
+        threshold = max(25.0, positive[-1] * 0.5)
+        active_power_w = round(median(
+            value for value in positive if value >= threshold
+        ), 1)
+    return {
+        "expected_w": [
+            round(_trimmed_mean(samples[quarter]), 2)
+            for quarter in range(96)
+        ],
+        "sample_count": sum(len(values) for values in samples.values()),
+        "active_power_w": active_power_w,
+    }
+
+
 def build_base_load_profile(
     actual_slots: list[dict[str, Any]],
     timezone_name: str,
     *,
+    device_slots: list[dict[str, Any]] | None = None,
+    modelled_device_keys: tuple[str, ...] = (),
     minimum_samples: int = 3,
-    modelled_categories: tuple[str, ...] = SHIFTABLE_CATEGORIES,
     day_type: str | None = None,
 ) -> list[dict[str, float | int]]:
-    """Return 96 robust baseload buckets for a local weekday or weekend."""
+    """Return the residual load after subtracting empirical device meters.
+
+    The caller must pass only device keys with complete empirical profiles.
+    A missing device quarter makes the corresponding whole-home quarter
+    unknown; treating it as zero would leak that device back into the residual
+    and then count its forecast a second time.
+    """
     if day_type not in (None, "weekday", "weekend"):
         raise OptimisationInputError("day_type must be weekday or weekend")
     local_tz = ZoneInfo(timezone_name)
+    device_energy_by_start: dict[datetime, dict[str, Any]] = {}
+    for row in device_slots or []:
+        when = _timestamp(row.get("start"))
+        values = row.get("device_energy_kwh")
+        if when is not None and isinstance(values, dict):
+            device_energy_by_start[when.astimezone(timezone.utc)] = values
     samples: dict[int, list[float]] = defaultdict(list)
     for row in actual_slots:
         total = row.get("total_load_kwh")
         when = _timestamp(row.get("start"))
         if when is None or not isinstance(total, (int, float)) or not isfinite(float(total)):
             continue
-        required_fields = [
-            ACTUAL_FIELD_BY_CATEGORY[category]
-            for category in modelled_categories
-        ]
-        if any(field not in row for field in required_fields):
-            # Absence is unknown, not a zero-energy device.
+        device_values = device_energy_by_start.get(when.astimezone(timezone.utc), {})
+        if any(
+            key not in device_values
+            or not isinstance(device_values[key], (int, float))
+            or not isfinite(float(device_values[key]))
+            for key in modelled_device_keys
+        ):
             continue
-        shiftable = sum(
-            float(row[ACTUAL_FIELD_BY_CATEGORY[category]])
-            for category in modelled_categories
+        modelled_kwh = sum(
+            max(0.0, float(device_values[key]))
+            for key in modelled_device_keys
         )
-        base_kwh = max(0.0, float(total) - shiftable)
+        base_kwh = max(0.0, float(total) - modelled_kwh)
         local = when.astimezone(local_tz)
         if day_type == "weekday" and local.weekday() >= 5:
             continue
@@ -510,7 +656,7 @@ def validate_plan_contract(
     """Validate the cached server plan before exposing any local request."""
     if not isinstance(plan, dict):
         raise OptimisationInputError("optimisation response has no plan object")
-    if plan.get("schema_version") != 3 or plan.get("slot_minutes") != 15:
+    if plan.get("schema_version") != 4 or plan.get("slot_minutes") != 15:
         raise OptimisationInputError("optimisation plan schema is unsupported")
     if plan.get("mode") != "live":
         raise OptimisationInputError("optimisation plan mode is unsupported")
@@ -557,9 +703,6 @@ def validate_plan_contract(
             or not isinstance(required_kwh, (int, float))
             or not isfinite(required_kwh)
             or required_kwh < 0
-            or isinstance(minimum, bool)
-            or not isinstance(minimum, int)
-            or minimum < 1
             or earliest is None
             or deadline is None
             or earliest >= deadline
@@ -575,6 +718,12 @@ def validate_plan_contract(
                 or not 100 <= power_w <= 100_000
             ):
                 raise OptimisationInputError("optimisation fixed-power service is invalid")
+            if device == "boiler" or isinstance(minimum, bool) or not isinstance(
+                minimum, int
+            ) or minimum < 1:
+                raise OptimisationInputError(
+                    "optimisation fixed-power service is invalid"
+                )
             normalized_control: dict[str, Any] = {
                 "type": "fixed_power", "power_w": float(power_w)
             }
@@ -591,16 +740,71 @@ def validate_plan_contract(
                 control.get("voltage_v"),
                 label="optimisation EV service",
             )
+            if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < 1:
+                raise OptimisationInputError(
+                    "optimisation current service minimum run is invalid"
+                )
+        elif control.get("type") == "duty_cycle":
+            rated_power_w = control.get("rated_power_w")
+            expected_power = control.get("expected_power_w_by_slot")
+            maximum_inhibit = control.get("max_consecutive_inhibit_slots")
+            if (
+                device != "boiler"
+                or isinstance(rated_power_w, bool)
+                or not isinstance(rated_power_w, (int, float))
+                or not isfinite(rated_power_w)
+                or not 100 <= rated_power_w <= 100_000
+                or not isinstance(expected_power, list)
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not isfinite(value)
+                    or not 0 <= value <= rated_power_w
+                    for value in expected_power
+                )
+                or isinstance(maximum_inhibit, bool)
+                or not isinstance(maximum_inhibit, int)
+                or maximum_inhibit < 1
+            ):
+                raise OptimisationInputError(
+                    "optimisation duty-cycle service is invalid"
+                )
+            normalized_control = {
+                "type": "duty_cycle",
+                "rated_power_w": float(rated_power_w),
+                "expected_power_w_by_slot": [float(value) for value in expected_power],
+                "max_consecutive_inhibit_slots": maximum_inhibit,
+            }
         else:
             raise OptimisationInputError("optimisation service control is unsupported")
         service_specs[service_id] = {
             "device": device,
             "required_kwh": float(required_kwh),
-            "min_run_slots": minimum,
+            "min_run_slots": minimum if normalized_control["type"] != "duty_cycle" else None,
             "earliest": earliest,
             "deadline": deadline,
             "control": normalized_control,
         }
+
+    device_models = plan.get("device_models")
+    load_types = {
+        "fixed_full_load", "variable_full_load", "duty_cycle", "inverter"
+    }
+    if not isinstance(device_models, list):
+        raise OptimisationInputError("optimisation device models are invalid")
+    device_model_keys: set[str] = set()
+    for model in device_models:
+        if (
+            not isinstance(model, dict)
+            or not isinstance(model.get("key"), str)
+            or not model["key"]
+            or model["key"] in device_model_keys
+            or model.get("load_type") not in load_types
+            or model.get("suggested_load_type") not in load_types
+            or not isinstance(model.get("forecast_w_by_slot"), list)
+        ):
+            raise OptimisationInputError("optimisation device model is invalid")
+        device_model_keys.add(model["key"])
 
     plans = plan.get("plans")
     if not isinstance(plans, dict) or set(plans) != {"baseline", "priority", "cost"}:
@@ -617,6 +821,20 @@ def validate_plan_contract(
         slots = scenario.get("slots")
         if not isinstance(slots, list) or not 4 <= len(slots) <= 288:
             raise OptimisationInputError(f"{key} scenario slot count is invalid")
+        if any(
+            len(model["forecast_w_by_slot"]) != len(slots)
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+                or value < 0
+                for value in model["forecast_w_by_slot"]
+            )
+            for model in device_models
+        ):
+            raise OptimisationInputError(
+                f"{key} scenario device forecast length is invalid"
+            )
         starts: list[datetime] = []
         binding_flags: list[bool] = []
         previous: datetime | None = None
@@ -635,7 +853,7 @@ def validate_plan_contract(
                 raise OptimisationInputError(f"{key} slot binding flag is invalid")
             binding_flags.append(slot["binding"])
             for field in (
-                "pool_w", "boiler_w", "ev_w", "ev_target_current_a",
+                "pool_w", "boiler_expected_w", "ev_w", "ev_target_current_a",
                 "ev_min_current_a", "ev_max_current_a",
             ):
                 value = slot.get(field)
@@ -646,6 +864,26 @@ def validate_plan_contract(
                     or value < 0
                 ):
                     raise OptimisationInputError(f"{key} slot {field} is invalid")
+            if not isinstance(slot.get("boiler_permitted"), bool):
+                raise OptimisationInputError(
+                    f"{key} slot boiler permission is invalid"
+                )
+            device_loads = slot.get("device_loads_w")
+            if (
+                not isinstance(device_loads, dict)
+                or set(device_loads) != device_model_keys
+                or any(
+                not isinstance(device_key, str)
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+                or value < 0
+                for device_key, value in device_loads.items()
+                )
+            ):
+                raise OptimisationInputError(
+                    f"{key} slot empirical device loads are invalid"
+                )
             if not (
                 slot["ev_min_current_a"] <= slot["ev_target_current_a"]
                 <= slot["ev_max_current_a"]
@@ -682,6 +920,18 @@ def validate_plan_contract(
             raise OptimisationInputError(
                 f"{key} scenario current schedule is invalid"
             )
+        inhibited_slots = scenario.get("service_inhibited_slots")
+        duty_service_ids = {
+            service_id for service_id, spec in service_specs.items()
+            if spec["control"]["type"] == "duty_cycle"
+        }
+        if (
+            not isinstance(inhibited_slots, dict)
+            or set(inhibited_slots) != duty_service_ids
+        ):
+            raise OptimisationInputError(
+                f"{key} scenario inhibit schedule is invalid"
+            )
         expected_power = {
             device: [0.0] * len(slots) for device in ("pool", "boiler", "ev")
         }
@@ -700,15 +950,18 @@ def validate_plan_contract(
                     or not 0 <= index < len(slots)
                     for index in indices
                 )
-                or any(
-                    index > 0 and value != indices[index - 1] + 1
-                    for index, value in enumerate(indices)
-                )
             ):
                 raise OptimisationInputError(
                     f"{key} scenario {service_id} schedule is invalid"
                 )
             control = spec["control"]
+            if control["type"] != "duty_cycle" and any(
+                index > 0 and value != indices[index - 1] + 1
+                for index, value in enumerate(indices)
+            ):
+                raise OptimisationInputError(
+                    f"{key} scenario {service_id} schedule is fragmented"
+                )
             if control["type"] == "fixed_power":
                 required_count = (
                     0 if spec["required_kwh"] == 0 else max(
@@ -730,7 +983,7 @@ def validate_plan_contract(
                 delivered = len(indices) * control["power_w"] / 1000 * SLOT_HOURS
                 for index in indices:
                     expected_power[spec["device"]][index] += control["power_w"]
-            else:
+            elif control["type"] == "discrete_current":
                 currents = service_currents[service_id]
                 if not isinstance(currents, list) or len(currents) != len(indices):
                     raise OptimisationInputError(
@@ -818,13 +1071,71 @@ def validate_plan_contract(
                             and start + timedelta(minutes=15) <= spec["deadline"]
                         ):
                             envelope_controls[index].append(control)
-            if scenario["status"] == "ready" and delivered + 1e-6 < spec["required_kwh"]:
+            else:
+                if len(control["expected_power_w_by_slot"]) != len(slots):
+                    raise OptimisationInputError(
+                        f"{key} scenario {service_id} duty forecast length is invalid"
+                    )
+                inhibited = inhibited_slots[service_id]
+                if (
+                    not isinstance(inhibited, list)
+                    or any(
+                        isinstance(index, bool)
+                        or not isinstance(index, int)
+                        or not 0 <= index < len(slots)
+                        or not (
+                            spec["earliest"] <= starts[index]
+                            and starts[index] + timedelta(minutes=15)
+                            <= spec["deadline"]
+                        )
+                        for index in inhibited
+                    )
+                    or inhibited != sorted(set(inhibited))
+                ):
+                    raise OptimisationInputError(
+                        f"{key} scenario {service_id} inhibit slots are invalid"
+                    )
+                inhibited_set = set(inhibited)
+                consecutive = 0
+                delivered = 0.0
+                for index, start in enumerate(starts):
+                    in_window = (
+                        spec["earliest"] <= start
+                        and start + timedelta(minutes=15) <= spec["deadline"]
+                    )
+                    if not in_window:
+                        continue
+                    is_inhibited = index in inhibited_set
+                    consecutive = consecutive + 1 if is_inhibited else 0
+                    if consecutive > control["max_consecutive_inhibit_slots"]:
+                        raise OptimisationInputError(
+                            f"{key} scenario {service_id} inhibit duration is unsafe"
+                        )
+                    if is_inhibited != (slots[index]["boiler_permitted"] is False):
+                        raise OptimisationInputError(
+                            f"{key} scenario {service_id} permission does not match inhibit slots"
+                        )
+                    boiler_w = float(slots[index]["boiler_expected_w"])
+                    if boiler_w > control["rated_power_w"] + 0.01:
+                        raise OptimisationInputError(
+                            f"{key} scenario {service_id} expected power exceeds rating"
+                        )
+                    if is_inhibited and boiler_w > 0.01:
+                        raise OptimisationInputError(
+                            f"{key} scenario {service_id} draws power while inhibited"
+                        )
+                    delivered += boiler_w / 1000 * SLOT_HOURS
+            if (
+                control["type"] != "duty_cycle"
+                and scenario["status"] == "ready"
+                and delivered + 1e-6 < spec["required_kwh"]
+            ):
                 raise OptimisationInputError(
                     f"{key} scenario {service_id} under-delivers its requirement"
                 )
             scenario_energy[service_id] = delivered
         for index, slot in enumerate(slots):
-            for device in ("pool", "boiler", "ev"):
+            for device in ("pool", "ev"):
                 if abs(float(slot[f"{device}_w"]) - expected_power[device][index]) > 0.01:
                     raise OptimisationInputError(
                         f"{key} scenario {device} power is not its discrete schedule"
@@ -853,11 +1164,15 @@ def validate_plan_contract(
                     raise OptimisationInputError(
                         f"{key} slot EV current envelope exceeds charger capability"
                     )
+        dispatchable_energy = {
+            service_id: energy for service_id, energy in scenario_energy.items()
+            if service_specs[service_id]["control"]["type"] != "duty_cycle"
+        }
         if expected_service_energy is None:
-            expected_service_energy = scenario_energy
+            expected_service_energy = dispatchable_energy
         elif any(
-            abs(scenario_energy[service_id] - expected_service_energy[service_id]) > 1e-6
-            for service_id in service_specs
+            abs(dispatchable_energy[service_id] - expected_service_energy[service_id]) > 1e-6
+            for service_id in dispatchable_energy
         ):
             raise OptimisationInputError(
                 "optimisation scenarios use different service energy"

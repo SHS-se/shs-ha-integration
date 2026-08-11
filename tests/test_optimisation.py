@@ -12,13 +12,16 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_en
 from optimisation import (  # noqa: E402
     OptimisationInputError,
     aggregate_category_changes,
+    aggregate_device_changes,
     build_base_load_profile,
+    build_empirical_device_profile,
     calibration_summary,
     daily_service_window,
     discrete_current_control,
     extract_timestamped_forecast,
     optimisation_plan_due,
     require_fresh_source,
+    suggested_load_type,
     utc_slots,
     validate_service_windows,
     validate_plan_contract,
@@ -26,6 +29,21 @@ from optimisation import (  # noqa: E402
 
 
 class QuarterAggregationTests(unittest.TestCase):
+    def test_load_characteristics_are_suggested_from_device_semantics(self) -> None:
+        cases = (
+            ("Workshop extractor", "household", "fixed_full_load"),
+            ("Tesla charging", "ev_charging", "variable_full_load"),
+            ("Water boiler", "hot_water", "duty_cycle"),
+            ("Living room aircon", "cooling", "inverter"),
+        )
+        for name, category, expected in cases:
+            with self.subTest(name=name):
+                load_type, inference = suggested_load_type(name, category)
+                self.assertEqual(load_type, expected)
+                self.assertEqual(
+                    inference["method"], "energy_dashboard_semantics_v1"
+                )
+
     def test_three_five_minute_changes_become_one_quarter(self) -> None:
         start = datetime(2026, 8, 10, 8, 0, tzinfo=timezone.utc)
         rows = [(start + timedelta(minutes=5 * index), 0.1) for index in range(3)]
@@ -56,21 +74,57 @@ class QuarterAggregationTests(unittest.TestCase):
 
         self.assertEqual(result, [])
 
-    def test_base_profile_uses_median_and_subtracts_modelled_loads(self) -> None:
+    def test_device_quarters_remain_separate_and_feed_expected_power(self) -> None:
+        start = datetime(2026, 8, 3, tzinfo=timezone.utc)
+        changes = {"sensor.water_boiler_energy": []}
+        for day in range(7):
+            for quarter in range(96):
+                quarter_start = start + timedelta(days=day, minutes=quarter * 15)
+                energy = 0.25 if quarter % 8 == 0 else 0.0
+                changes["sensor.water_boiler_energy"].extend([
+                    (quarter_start + timedelta(minutes=offset), energy / 3)
+                    for offset in (0, 5, 10)
+                ])
+        slots = aggregate_device_changes(changes)
+        profile = build_empirical_device_profile(
+            slots,
+            "sensor.water_boiler_energy",
+            "UTC",
+            day_type="weekday",
+            minimum_samples=2,
+        )
+
+        self.assertEqual(len(slots), 7 * 96)
+        self.assertEqual(profile["expected_w"][0], 1000)
+        self.assertEqual(profile["expected_w"][1], 0)
+        self.assertEqual(profile["active_power_w"], 1000)
+
+    def test_base_profile_uses_median_and_subtracts_empirical_devices(self) -> None:
         start = datetime(2026, 8, 1, tzinfo=timezone.utc)
         rows = []
+        device_rows = []
         for day in range(4):
             for quarter in range(96):
                 # Three ordinary days have 1 kW baseload; one 20 kW outlier
                 # must not become the forecast shape for every future day.
                 base_kwh = 5.0 if day == 3 else 0.25
+                when = start + timedelta(days=day, minutes=quarter * 15)
                 rows.append({
-                    "start": (start + timedelta(days=day, minutes=quarter * 15)).isoformat(),
-                    "total_load_kwh": base_kwh + 0.5,
-                    "pool_heating_kwh": 0.5,
+                    "start": when.isoformat(),
+                    "total_load_kwh": base_kwh + 0.625,
+                })
+                device_rows.append({
+                    "start": when.isoformat(),
+                    "device_energy_kwh": {
+                        "pool-heater": 0.5,
+                        "fridge": 0.125,
+                    },
                 })
         profile = build_base_load_profile(
-            rows, "UTC", modelled_categories=("pool_heating",)
+            rows,
+            "UTC",
+            device_slots=device_rows,
+            modelled_device_keys=("pool-heater", "fridge"),
         )
 
         self.assertEqual(len(profile), 96)
@@ -90,11 +144,11 @@ class QuarterAggregationTests(unittest.TestCase):
                 })
 
         weekday = build_base_load_profile(
-            rows, "UTC", minimum_samples=2, modelled_categories=(),
+            rows, "UTC", minimum_samples=2,
             day_type="weekday",
         )
         weekend = build_base_load_profile(
-            rows, "UTC", minimum_samples=2, modelled_categories=(),
+            rows, "UTC", minimum_samples=2,
             day_type="weekend",
         )
 
@@ -278,7 +332,9 @@ class ForecastTests(unittest.TestCase):
                 "start": (now + timedelta(minutes=15 * index)).isoformat(),
                 "binding": True,
                 "pool_w": 0,
-                "boiler_w": 0,
+                "boiler_expected_w": 0,
+                "boiler_permitted": True,
+                "device_loads_w": {},
                 "ev_w": current * 3 * 230,
                 "ev_target_current_a": current,
                 "ev_min_current_a": 0,
@@ -304,7 +360,7 @@ class ForecastTests(unittest.TestCase):
             "min_run_slots": 2,
         }
         plan = {
-            "schema_version": 3,
+            "schema_version": 4,
             "mode": "live",
             "capabilities": {
                 "pv": True,
@@ -314,18 +370,20 @@ class ForecastTests(unittest.TestCase):
                 "ev": True,
             },
             "slot_minutes": 15,
-            "model_version": "quarter-hour-heuristic-v3",
+            "model_version": "empirical-device-planner-v4",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(hours=2, minutes=30)).isoformat(),
             "binding_until": (now + timedelta(hours=2, minutes=15)).isoformat(),
             "services": [service],
+            "device_models": [],
             "plans": {
                 key: {
                     "status": "ready",
                     "slots": [dict(slot) for slot in slots],
                     "service_slots": {"ev:departure": list(range(9))},
                     "service_currents_a": {"ev:departure": list(currents)},
+                    "service_inhibited_slots": {},
                 }
                 for key in ("baseline", "priority", "cost")
             },
@@ -353,7 +411,9 @@ class ForecastTests(unittest.TestCase):
                 "start": (now + timedelta(minutes=15 * index)).isoformat(),
                 "binding": True,
                 "pool_w": 0,
-                "boiler_w": 0,
+                "boiler_expected_w": 0,
+                "boiler_permitted": True,
+                "device_loads_w": {},
                 "ev_w": 0,
                 "ev_target_current_a": 0,
                 "ev_min_current_a": 0,
@@ -363,7 +423,7 @@ class ForecastTests(unittest.TestCase):
             for index in range(4)
         ]
         plan = {
-            "schema_version": 3,
+            "schema_version": 4,
             "mode": "live",
             "capabilities": {
                 "pv": True,
@@ -373,18 +433,20 @@ class ForecastTests(unittest.TestCase):
                 "ev": False,
             },
             "slot_minutes": 15,
-            "model_version": "quarter-hour-heuristic-v3",
+            "model_version": "empirical-device-planner-v4",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
             "binding_until": (now + timedelta(hours=1)).isoformat(),
             "services": [],
+            "device_models": [],
             "plans": {
                 key: {
                     "status": "ready",
                     "slots": [dict(slot) for slot in slots],
                     "service_slots": {},
                     "service_currents_a": {},
+                    "service_inhibited_slots": {},
                 }
                 for key in ("baseline", "priority", "cost")
             },
@@ -404,7 +466,9 @@ class ForecastTests(unittest.TestCase):
                 "start": (now + timedelta(minutes=15 * index)).isoformat(),
                 "binding": index < 2,
                 "pool_w": 0,
-                "boiler_w": 0,
+                "boiler_expected_w": 0,
+                "boiler_permitted": True,
+                "device_loads_w": {},
                 "ev_w": 0,
                 "ev_target_current_a": 0,
                 "ev_min_current_a": 0,
@@ -414,7 +478,7 @@ class ForecastTests(unittest.TestCase):
             for index in range(4)
         ]
         plan = {
-            "schema_version": 3,
+            "schema_version": 4,
             "mode": "live",
             "capabilities": {
                 "pv": True,
@@ -424,18 +488,20 @@ class ForecastTests(unittest.TestCase):
                 "ev": False,
             },
             "slot_minutes": 15,
-            "model_version": "quarter-hour-heuristic-v3",
+            "model_version": "empirical-device-planner-v4",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
             "binding_until": (now + timedelta(minutes=30)).isoformat(),
             "services": [],
+            "device_models": [],
             "plans": {
                 key: {
                     "status": "ready",
                     "slots": [dict(slot) for slot in slots],
                     "service_slots": {},
                     "service_currents_a": {},
+                    "service_inhibited_slots": {},
                 }
                 for key in ("baseline", "priority", "cost")
             },
@@ -446,14 +512,16 @@ class ForecastTests(unittest.TestCase):
         with self.assertRaisesRegex(OptimisationInputError, "different binding"):
             validate_plan_contract(plan, now)
 
-    def test_cached_plan_rejects_fractional_device_power(self) -> None:
+    def test_cached_plan_rejects_expected_boiler_draw_while_inhibited(self) -> None:
         now = datetime(2026, 8, 10, 8, 0, tzinfo=timezone.utc)
         slots = [
             {
                 "start": (now + timedelta(minutes=15 * index)).isoformat(),
                 "binding": True,
                 "pool_w": 0,
-                "boiler_w": 3000 if index < 2 else 0,
+                "boiler_expected_w": 500,
+                "boiler_permitted": True,
+                "device_loads_w": {},
                 "ev_w": 0,
                 "ev_target_current_a": 0,
                 "ev_min_current_a": 0,
@@ -463,7 +531,7 @@ class ForecastTests(unittest.TestCase):
             for index in range(4)
         ]
         plan = {
-            "schema_version": 3,
+            "schema_version": 4,
             "mode": "live",
             "capabilities": {
                 "pv": True,
@@ -473,7 +541,7 @@ class ForecastTests(unittest.TestCase):
                 "ev": False,
             },
             "slot_minutes": 15,
-            "model_version": "quarter-hour-heuristic-v3",
+            "model_version": "empirical-device-planner-v4",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -481,26 +549,33 @@ class ForecastTests(unittest.TestCase):
             "services": [{
                 "id": "boiler:today",
                 "device": "boiler",
-                "required_kwh": 1.5,
+                "required_kwh": 0.5,
                 "earliest_start": now.isoformat(),
                 "deadline": (now + timedelta(hours=1)).isoformat(),
-                "control": {"type": "fixed_power", "power_w": 3000},
-                "min_run_slots": 2,
+                "control": {
+                    "type": "duty_cycle",
+                    "rated_power_w": 3000,
+                    "expected_power_w_by_slot": [500, 500, 500, 500],
+                    "max_consecutive_inhibit_slots": 2,
+                },
             }],
+            "device_models": [],
             "plans": {
                 key: {
                     "status": "ready",
                     "slots": [dict(slot) for slot in slots],
-                    "service_slots": {"boiler:today": [0, 1]},
+                    "service_slots": {"boiler:today": [0, 1, 2, 3]},
                     "service_currents_a": {},
+                    "service_inhibited_slots": {"boiler:today": []},
                 }
                 for key in ("baseline", "priority", "cost")
             },
         }
         validate_plan_contract(plan, now)
 
-        plan["plans"]["priority"]["slots"][0]["boiler_w"] = 1500
-        with self.assertRaisesRegex(OptimisationInputError, "discrete schedule"):
+        plan["plans"]["priority"]["slots"][0]["boiler_permitted"] = False
+        plan["plans"]["priority"]["service_inhibited_slots"]["boiler:today"] = [0]
+        with self.assertRaisesRegex(OptimisationInputError, "draws power while inhibited"):
             validate_plan_contract(plan, now)
 
 

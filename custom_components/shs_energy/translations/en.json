@@ -70,9 +70,7 @@
           "pool_deadline": "Pool daily deadline (HH:MM)",
           "pool_baseline_start": "Pool baseline start (HH:MM)",
           "boiler_power_w": "Water boiler power (W)",
-          "boiler_min_run_slots": "Water boiler minimum run (15-minute slots)",
-          "boiler_deadline": "Water boiler daily deadline (HH:MM)",
-          "boiler_baseline_start": "Water boiler baseline start (HH:MM)",
+          "boiler_max_inhibit_slots": "Maximum continuous water-heater inhibit (15-minute slots)",
           "ev_connected_entity": "EV connected entity",
           "ev_soc_entity": "EV state of charge entity",
           "ev_target_soc_entity": "EV target state of charge entity",
@@ -182,11 +180,10 @@
       },
       "boiler": {
         "title": "Water-heater planning",
+        "description": "The thermostat owns the duty cycle. SHS learns expected draw from recorder history and only inhibits heating during planned high-load intervals. Set the longest safe continuous inhibit interval.",
         "data": {
           "boiler_power_w": "Water-heater power (W)",
-          "boiler_min_run_slots": "Minimum run (15-minute slots)",
-          "boiler_deadline": "Daily deadline (HH:MM)",
-          "boiler_baseline_start": "Baseline start (HH:MM)"
+          "boiler_max_inhibit_slots": "Maximum continuous inhibit (15-minute slots)"
         }
       },
       "ev": {

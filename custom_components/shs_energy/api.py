@@ -125,9 +125,13 @@ class ShsApiClient:
         self,
         actual_slots: list[dict[str, Any]],
         snapshot: dict[str, Any] | None = None,
+        devices: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Push compact quarter-hour actuals and optionally request a new plan."""
-        body: dict[str, Any] = {"actual_slots": actual_slots}
+        """Push aggregate and per-device quarters, plus an optional plan."""
+        body: dict[str, Any] = {
+            "actual_slots": actual_slots,
+            "devices": devices or [],
+        }
         if snapshot is not None:
             body["snapshot"] = snapshot
         return await self._request(

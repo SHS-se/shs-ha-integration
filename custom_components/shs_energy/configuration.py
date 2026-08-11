@@ -36,10 +36,8 @@ from .const import (
     OPT_BATTERY_SOC_ENTITY,
     OPT_BATTERY_TARGET_IS_HARD,
     OPT_BATTERY_TARGET_SOC,
-    OPT_BOILER_BASELINE_START,
-    OPT_BOILER_DEADLINE,
     OPT_BOILER_DEFERRABLE_CONFIRMED,
-    OPT_BOILER_MIN_RUN_SLOTS,
+    OPT_BOILER_MAX_INHIBIT_SLOTS,
     OPT_BOILER_PLANNING_ENABLED,
     OPT_BOILER_POWER_W,
     OPT_DISCOVERY_EVIDENCE,
@@ -85,6 +83,7 @@ from .const import (
     OPT_TERMINAL_ENERGY_VALUE,
     OPT_TERMINAL_SOC_MIN,
 )
+from .optimisation import suggested_load_type
 
 
 def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
@@ -112,9 +111,7 @@ def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
         OPT_POOL_BASELINE_START: "12:00",
         OPT_BOILER_PLANNING_ENABLED: False,
         OPT_BOILER_DEFERRABLE_CONFIRMED: False,
-        OPT_BOILER_MIN_RUN_SLOTS: 4,
-        OPT_BOILER_DEADLINE: "22:00",
-        OPT_BOILER_BASELINE_START: "06:00",
+        OPT_BOILER_MAX_INHIBIT_SLOTS: 4,
         OPT_EV_PLANNING_ENABLED: False,
         OPT_EV_DEFERRABLE_CONFIRMED: False,
         OPT_EV_ELECTRICAL_CONFIRMED: False,
@@ -292,6 +289,51 @@ def _category_for_device(name: str) -> str:
     return "household"
 
 
+def _energy_dashboard_inventory(
+    hass: HomeAssistant, preferences: dict[str, Any]
+) -> list[dict[str, Any]]:
+    inventory: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for device in preferences.get("device_consumption", []):
+        statistic_id = str(device.get("stat_consumption") or "").strip()
+        if not statistic_id or statistic_id in seen:
+            continue
+        seen.add(statistic_id)
+        state = hass.states.get(statistic_id)
+        configured_name = str(device.get("name") or "").strip()
+        state_name = (
+            str(state.attributes.get("friendly_name") or "").strip()
+            if state is not None else ""
+        )
+        name = configured_name or state_name or statistic_id
+        evidence_text = " ".join(
+            value for value in (name, statistic_id, _state_text(state) if state else "")
+            if value
+        )
+        category = _category_for_device(evidence_text)
+        load_type, inference = suggested_load_type(evidence_text, category)
+        inventory.append({
+            "key": statistic_id,
+            "statistic_id": statistic_id,
+            "name": name,
+            "category": category,
+            "suggested_load_type": load_type,
+            "active_power_w": None,
+            "profile_sample_count": 0,
+            "inference": inference,
+        })
+    return inventory
+
+
+async def async_energy_dashboard_inventory(
+    hass: HomeAssistant,
+) -> list[dict[str, Any]]:
+    """Read the current Energy Dashboard device inventory."""
+    manager = await async_get_manager(hass)
+    preferences = manager.data or manager.default_preferences()
+    return _energy_dashboard_inventory(hass, preferences)
+
+
 def _price_area(hass: HomeAssistant, states: Iterable[State]) -> str | None:
     found: set[str] = set()
 
@@ -417,16 +459,10 @@ async def async_discover_configuration(
                 mapped.setdefault("battery_discharge", []).append(value)
 
     device_categories: dict[str, list[str]] = {}
-    for device in preferences.get("device_consumption", []):
-        statistic_id = _entity_id(device.get("stat_consumption"))
-        if not statistic_id:
-            continue
-        state = hass.states.get(statistic_id)
-        label = str(device.get("name") or "")
-        if state is not None:
-            label += " " + _state_text(state)
-        category = _category_for_device(label or statistic_id)
-        device_categories.setdefault(category, []).append(statistic_id)
+    for device in _energy_dashboard_inventory(hass, preferences):
+        device_categories.setdefault(device["category"], []).append(
+            device["statistic_id"]
+        )
     mapped.update(device_categories)
 
     total_ids = ("sensor.sigen_plant_total_load_consumption",)

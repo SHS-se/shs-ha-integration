@@ -42,10 +42,12 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
 - **Forecast truth**: PV, supplier import and supplier export forecasts are
   explicit timestamped sources. The two price directions must be different;
   missing/stale data pauses planning instead of being repeated or substituted.
-- **Local calibration**: baseload uses separate weekday/weekend median
-  15-minute profiles with p10/p90 spread. PV bias is learned by lead day from
-  forecast-versus-actual pairs and stays neutral until a lead bucket has 20
-  observations. Only the compact profile/calibration summary is uploaded.
+- **Local calibration**: each complete Energy Dashboard device gets a separate
+  weekday/weekend empirical 15-minute profile. Those meters are subtracted from
+  the whole-home history to produce a residual baseload, then added back exactly
+  once in planner headroom, battery and grid calculations. PV bias is learned by
+  lead day and stays neutral until a lead bucket has 20 observations. Only the
+  compact profile/calibration summary is uploaded.
 - **Staff-managed tariffs**: SHS staff publish one global, effective-dated
   Ellevio catalogue for every customer. The customer's main fuse and solar
   status come from their SHS home-profile answers; customers do not select or
@@ -120,16 +122,24 @@ for boiler/pool/EV, a dedicated *EV planned current* sensor, and one monetary
 sensor for every tariff component. Removed tariff components remain as entities
 with an inactive state so Home Assistant retains their history.
 
+Every device declared in Home Assistant's Energy Dashboard is also published
+as a stable home-local inventory item with complete 15-minute energy values.
+The portal proposes one of four editable electrical characteristics: fixed full
+load, variable full load, thermostat duty cycle, or inverter load. Suggested
+types and empirical weekday/weekend profiles come from Home Assistant; customer
+and staff overrides are returned by the backend on the next exchange.
+
 ## Storage and privacy budget
 
-- At most 96 completed actual rows are sent per home/day.
+- At most 96 completed aggregate rows and 96 values per declared device are
+  sent per home/day. No raw state changes or per-second samples leave HA.
 - Recorder statistics get a one-quarter settling delay; the last accepted
   quarter is re-sent once by idempotent upsert so late fields can be completed
   without creating another database row.
 - The large current snapshot/plan is overwritten whenever it is refreshed,
   normally every 45–60 minutes, rather than appended.
-- The portal retains quarter-hours for 120 days and compact hourly run
-  summaries for 30 days.
+- The portal retains aggregate and per-device quarter-hours for 120 days and
+  compact hourly run summaries for 30 days.
 - A full retained quarter-hour history is 11,520 sparse rows per home, not
   millions of per-second sensor states.
 - HA retains the detailed source history used for local aggregation and
@@ -147,7 +157,10 @@ The executor should consume:
 - `Energy plan status`: only `ready` authorises a planned request;
 - `<device> planned request`: bounded watts for the current binding quarter;
   unavailable means the planner has no authority, while zero is an explicit
-  off request inside a valid plan; and
+  off request inside a valid plan. For the boiler specifically, reviewed rated
+  watts means the thermostat is permitted to cycle and zero means inhibited;
+  the separate empirical `expected_power_w` attribute is never a forced-on
+  command; and
 - `EV planned current`: the forecast target in amperes plus the current
   quarter's deadline-safe minimum and hardware maximum as attributes; and
 - `Reactive surplus`: live, non-negative grid export watts for a central local
@@ -156,7 +169,7 @@ The executor should consume:
 Advisory slots after either price series ends never produce a local planned
 request, even while they remain visible in the 72-hour portal comparison.
 
-For a binary pool/boiler executor, apply this order:
+For a binary pool executor, apply this order:
 
 1. safety, manual override, hard temperature/hygiene and completion guards;
 2. existing minimum-on/off and coupled pump/heater rules;
@@ -165,6 +178,11 @@ For a binary pool/boiler executor, apply this order:
    a stable period; and
 5. measured power confirmation before treating the device as running or
    reallocating its watts.
+
+For a water boiler, keep the local thermostat in charge of cycling. Treat a
+positive boiler request only as permission and zero as a temporary inhibit,
+after applying hygiene, hard-temperature, manual and maximum-off guards. Never
+turn the element on merely because `expected_power_w` is positive.
 
 For an EV executor, begin from `EV planned current`, then let the local reactive
 controller trim it in supported steps inside the published minimum/maximum

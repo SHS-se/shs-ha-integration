@@ -271,7 +271,23 @@ class ShsPlanRequestSensor(ShsBaseSensor):
         slot = self.coordinator.current_plan_slot
         # Unavailable means "the planner has no authority"; zero is reserved
         # for a valid binding slot that explicitly requests the device off.
-        return None if slot is None else float(slot.get(f"{self.device}_w", 0))
+        if slot is None:
+            return None
+        if self.device != "boiler":
+            return float(slot.get(f"{self.device}_w", 0))
+        plan = self.coordinator.optimisation_plan or {}
+        duty_service = next(
+            (
+                service for service in plan.get("services", [])
+                if service.get("device") == "boiler"
+                and service.get("control", {}).get("type") == "duty_cycle"
+            ),
+            None,
+        )
+        if duty_service is None:
+            return None
+        rated_power_w = float(duty_service["control"]["rated_power_w"])
+        return rated_power_w if slot.get("boiler_permitted") is True else 0.0
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -289,6 +305,12 @@ class ShsPlanRequestSensor(ShsBaseSensor):
                 "target_current_a": slot.get("ev_target_current_a"),
                 "minimum_current_a": slot.get("ev_min_current_a"),
                 "maximum_current_a": slot.get("ev_max_current_a"),
+            })
+        elif self.device == "boiler":
+            attributes.update({
+                "control_mode": "duty_cycle_permit",
+                "permitted": slot.get("boiler_permitted"),
+                "expected_power_w": slot.get("boiler_expected_w"),
             })
         return attributes
 

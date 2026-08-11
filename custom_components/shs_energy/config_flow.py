@@ -60,9 +60,7 @@ from .const import (
     OPT_POOL_BASELINE_START,
     OPT_BOILER_POWER_W,
     OPT_BOILER_DEFERRABLE_CONFIRMED,
-    OPT_BOILER_MIN_RUN_SLOTS,
-    OPT_BOILER_DEADLINE,
-    OPT_BOILER_BASELINE_START,
+    OPT_BOILER_MAX_INHIBIT_SLOTS,
     OPT_EV_CONNECTED_ENTITY,
     OPT_EV_SOC_ENTITY,
     OPT_EV_TARGET_SOC_ENTITY,
@@ -468,9 +466,9 @@ class ShsEnergyOptionsFlow(OptionsFlow):
             self._pending[OPT_BOILER_DEFERRABLE_CONFIRMED] = True
             return await self.async_step_ev()
         current = self._current()
-        schema = dict(self._number_schema([OPT_BOILER_POWER_W, OPT_BOILER_MIN_RUN_SLOTS]).schema)
-        schema[vol.Optional(OPT_BOILER_DEADLINE, default=current[OPT_BOILER_DEADLINE])] = str
-        schema[vol.Optional(OPT_BOILER_BASELINE_START, default=current[OPT_BOILER_BASELINE_START])] = str
+        schema = dict(self._number_schema([
+            OPT_BOILER_POWER_W, OPT_BOILER_MAX_INHIBIT_SLOTS
+        ]).schema)
         return self.async_show_form(step_id="boiler", data_schema=vol.Schema(schema))
 
     async def async_step_ev(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

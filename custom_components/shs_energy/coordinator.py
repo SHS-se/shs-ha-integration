@@ -69,10 +69,8 @@ from .const import (
     OPT_POOL_DEFERRABLE_CONFIRMED,
     OPT_POOL_BASELINE_START,
     OPT_BOILER_POWER_W,
-    OPT_BOILER_MIN_RUN_SLOTS,
-    OPT_BOILER_DEADLINE,
+    OPT_BOILER_MAX_INHIBIT_SLOTS,
     OPT_BOILER_DEFERRABLE_CONFIRMED,
-    OPT_BOILER_BASELINE_START,
     OPT_EV_CONNECTED_ENTITY,
     OPT_EV_SOC_ENTITY,
     OPT_EV_TARGET_SOC_ENTITY,
@@ -105,12 +103,14 @@ from .const import (
     SUPPLIER_BACKFILL_MAX_DAYS,
     STORAGE_VERSION,
 )
-from .configuration import resolved_options
+from .configuration import async_energy_dashboard_inventory, resolved_options
 from .optimisation import (
     ACTUAL_FIELD_BY_CATEGORY,
     OptimisationInputError,
     aggregate_category_changes,
+    aggregate_device_changes,
     build_base_load_profile,
+    build_empirical_device_profile,
     calibration_summary,
     daily_service_window,
     daily_requirement,
@@ -855,8 +855,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             required.extend(
                 [f"{OPT_PREFIX_ENTITIES}hot_water",
                  OPT_BOILER_DEFERRABLE_CONFIRMED,
-                 OPT_BOILER_POWER_W, OPT_BOILER_MIN_RUN_SLOTS,
-                 OPT_BOILER_DEADLINE, OPT_BOILER_BASELINE_START]
+                 OPT_BOILER_POWER_W, OPT_BOILER_MAX_INHIBIT_SLOTS]
             )
         if options.get(OPT_EV_PLANNING_ENABLED):
             required.extend(
@@ -1108,6 +1107,25 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             row["total_load_kwh"] = round(max(0.0, total), 6)
         return rows
 
+    async def _device_actual_quarters(
+        self,
+        devices: list[dict[str, Any]],
+        start: datetime,
+        end: datetime,
+    ) -> list[dict[str, Any]]:
+        """Return complete per-device Energy Dashboard quarters."""
+        statistic_by_key = {
+            str(device["key"]): str(device["statistic_id"])
+            for device in devices
+        }
+        statistics = await self._statistics_changes(
+            sorted(set(statistic_by_key.values())), start, end, "5minute"
+        )
+        return aggregate_device_changes({
+            key: statistics.get(statistic_id, [])
+            for key, statistic_id in statistic_by_key.items()
+        })
+
     async def _daily_category_totals(
         self,
         entities_by_category: dict[str, list[str]],
@@ -1141,6 +1159,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         daily_totals: dict[str, dict[str, float]],
         actuals: list[dict[str, Any]],
         horizon: list[datetime],
+        device_models: list[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], dict[str, int]]:
         local_tz = dt_util.DEFAULT_TIME_ZONE
         first = horizon[0]
@@ -1157,9 +1176,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         services: list[dict[str, Any]] = []
         samples: dict[str, int] = {}
         for category, device, enabled_key, power_key, run_key, deadline_key, baseline_key, priority in (
-            ("hot_water", "boiler", OPT_BOILER_PLANNING_ENABLED,
-             OPT_BOILER_POWER_W, OPT_BOILER_MIN_RUN_SLOTS,
-             OPT_BOILER_DEADLINE, OPT_BOILER_BASELINE_START, 1),
             ("pool_heating", "pool", OPT_POOL_PLANNING_ENABLED,
              OPT_POOL_POWER_W, OPT_POOL_MIN_RUN_SLOTS,
              OPT_POOL_DEADLINE, OPT_POOL_BASELINE_START, 2),
@@ -1210,6 +1226,60 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "min_run_slots": int(minimum_run),
                     "priority": priority,
                     "baseline_preferred_start": baseline.isoformat(),
+                })
+
+        if options.get(OPT_BOILER_PLANNING_ENABLED):
+            boiler_models = [
+                model for model in device_models
+                if model["category"] == "hot_water"
+            ]
+            if not boiler_models:
+                raise OptimisationInputError(
+                    "water-heater planning needs a complete empirical device profile"
+                )
+            expected_w = [
+                round(sum(model["forecast_w_by_slot"][index]
+                          for model in boiler_models), 2)
+                for index in range(len(horizon))
+            ]
+            rated_power_w = parse_number(
+                options[OPT_BOILER_POWER_W], OPT_BOILER_POWER_W
+            )
+            if max(expected_w, default=0) > rated_power_w + 1e-6:
+                raise OptimisationInputError(
+                    "empirical water-heater expected power exceeds its reviewed rating"
+                )
+            maximum_inhibit = parse_number(
+                options[OPT_BOILER_MAX_INHIBIT_SLOTS],
+                OPT_BOILER_MAX_INHIBIT_SLOTS,
+            )
+            if not maximum_inhibit.is_integer() or maximum_inhibit < 1:
+                raise OptimisationInputError(
+                    f"{OPT_BOILER_MAX_INHIBIT_SLOTS} must be a positive whole number"
+                )
+            samples["hot_water"] = sum(
+                int(model["profile_sample_count"]) for model in boiler_models
+            )
+            by_day: dict[date, list[int]] = {}
+            for index, slot in enumerate(horizon):
+                by_day.setdefault(slot.astimezone(local_tz).date(), []).append(index)
+            for day, indices in sorted(by_day.items()):
+                required_kwh = sum(expected_w[index] for index in indices) / 4_000
+                services.append({
+                    "id": f"boiler:{day.isoformat()}",
+                    "device": "boiler",
+                    "earliest_start": horizon[indices[0]].isoformat(),
+                    "deadline": (
+                        horizon[indices[-1]] + timedelta(minutes=15)
+                    ).isoformat(),
+                    "required_kwh": round(required_kwh, 5),
+                    "control": {
+                        "type": "duty_cycle",
+                        "rated_power_w": rated_power_w,
+                        "expected_power_w_by_slot": expected_w,
+                        "max_consecutive_inhibit_slots": int(maximum_inhibit),
+                    },
+                    "priority": 1,
                 })
 
         connected_id = (
@@ -1389,6 +1459,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         entities_by_category: dict[str, list[str]],
         actuals: list[dict[str, Any]],
         stored: dict[str, Any],
+        devices: list[dict[str, Any]],
     ) -> dict[str, Any]:
         captured = dt_util.utcnow()
         horizon = utc_slots(captured, OPTIMISATION_HORIZON_HOURS)
@@ -1547,21 +1618,87 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         profile_actuals = await self._actual_quarters(
             entities_by_category, profile_start, profile_end
         )
-        modelled_categories = tuple(
-            category
-            for category, enabled_key in (
+        device_profile_actuals = await self._device_actual_quarters(
+            devices, profile_start, profile_end
+        )
+        device_models: list[dict[str, Any]] = []
+        for device in devices:
+            try:
+                empirical = {
+                    day_type: build_empirical_device_profile(
+                        device_profile_actuals,
+                        device["key"],
+                        str(dt_util.DEFAULT_TIME_ZONE),
+                        minimum_samples=2,
+                        day_type=day_type,
+                    )
+                    for day_type in ("weekday", "weekend")
+                }
+            except OptimisationInputError:
+                continue
+            active_values = [
+                profile["active_power_w"] for profile in empirical.values()
+                if profile["active_power_w"] is not None
+            ]
+            active_power_w = (
+                round(sum(active_values) / len(active_values), 1)
+                if active_values else None
+            )
+            profile_sample_count = sum(
+                int(profile["sample_count"]) for profile in empirical.values()
+            )
+            device["active_power_w"] = active_power_w
+            device["profile_sample_count"] = profile_sample_count
+            device["inference"] = {
+                **device["inference"],
+                "history_days": OPTIMISATION_PROFILE_DAYS,
+                "profile": "weekday_weekend_trimmed_mean_v1",
+            }
+            forecast_w: list[float] = []
+            for start in horizon:
+                local = start.astimezone(dt_util.DEFAULT_TIME_ZONE)
+                day_type = "weekend" if local.weekday() >= 5 else "weekday"
+                forecast_w.append(empirical[day_type]["expected_w"][
+                    local.hour * 4 + local.minute // 15
+                ])
+            device_models.append({
+                **device,
+                "load_type": device.get(
+                    "load_type", device["suggested_load_type"]
+                ),
+                "forecast_w_by_slot": forecast_w,
+            })
+        modelled_device_keys = tuple(
+            str(model["key"]) for model in device_models
+        )
+        complete_device_keys = set(modelled_device_keys)
+        for category, enabled_key in (
                 ("pool_heating", OPT_POOL_PLANNING_ENABLED),
                 ("hot_water", OPT_BOILER_PLANNING_ENABLED),
                 ("ev_charging", OPT_EV_PLANNING_ENABLED),
-            )
-            if options.get(enabled_key) and entities_by_category.get(category)
-        )
+        ):
+            if not options.get(enabled_key):
+                continue
+            category_devices = [
+                device for device in devices if device["category"] == category
+            ]
+            missing = [
+                str(device["name"])
+                for device in category_devices
+                if str(device["key"]) not in complete_device_keys
+            ]
+            if not category_devices or missing:
+                detail = ", ".join(missing) if missing else "no Energy Dashboard device"
+                raise OptimisationInputError(
+                    f"{category} planning needs complete empirical profiles; missing {detail}"
+                )
         profiles = {
             day_type: build_base_load_profile(
                 profile_actuals,
                 str(dt_util.DEFAULT_TIME_ZONE),
+                device_slots=device_profile_actuals,
+                modelled_device_keys=modelled_device_keys,
                 minimum_samples=2,
-                modelled_categories=modelled_categories,
                 day_type=day_type,
             )
             for day_type in ("weekday", "weekend")
@@ -1578,7 +1715,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             dt_util.start_of_local_day(),
         )
         services, service_samples = self._build_services(
-            options, entities_by_category, daily_totals, profile_actuals, horizon
+            options, entities_by_category, daily_totals, profile_actuals, horizon,
+            device_models,
         )
 
         if self.tariff_catalog is None:
@@ -1691,10 +1829,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         base_source_categories = (
             "total_consumption", "grid_import", "grid_export",
             "solar_production", "battery_charge", "battery_discharge",
-            *modelled_categories,
         )
         snapshot = {
-            "schema_version": 3,
+            "schema_version": 4,
             "mode": "live",
             "capabilities": capabilities,
             "snapshot_id": str(uuid4()),
@@ -1723,6 +1860,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         entity_id
                         for category in base_source_categories
                         for entity_id in entities_by_category[category]
+                    } | {
+                        str(model["statistic_id"]) for model in device_models
                     }),
                     "issued_at": captured.isoformat(),
                     "valid_until": (captured + timedelta(hours=2)).isoformat(),
@@ -1781,6 +1920,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if battery else 0
                 ),
             },
+            "device_models": device_models,
             "services": services,
             "service_requirement_sample_days": service_samples,
         }
@@ -1802,6 +1942,23 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             snapshot_error: str | None = None
             try:
                 entities = self._configured_entities()
+                devices = await async_energy_dashboard_inventory(self.hass)
+                for device in devices:
+                    category_entities = entities.setdefault(device["category"], [])
+                    if device["statistic_id"] not in category_entities:
+                        category_entities.append(device["statistic_id"])
+                stored_metadata = stored.get("optimisation_device_metadata", {})
+                stored_load_types = stored.get("optimisation_device_load_types", {})
+                for device in devices:
+                    metadata = stored_metadata.get(device["key"], {})
+                    for field in (
+                        "active_power_w", "profile_sample_count", "inference"
+                    ):
+                        if field in metadata:
+                            device[field] = metadata[field]
+                    device["load_type"] = stored_load_types.get(
+                        device["key"], device["suggested_load_type"]
+                    )
                 # Do not race the recorder's five-minute statistics job. Actual
                 # history may trail real time by one quarter; live reactive
                 # control continues to use the local power sensor directly.
@@ -1827,6 +1984,19 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     and start < complete_end
                     else []
                 )
+                if actuals and devices:
+                    device_actuals = await self._device_actual_quarters(
+                        devices, start, complete_end
+                    )
+                    device_energy_by_start = {
+                        row["start"]: row["device_energy_kwh"]
+                        for row in device_actuals
+                    }
+                    for row in actuals:
+                        if row["start"] in device_energy_by_start:
+                            row["device_energy_kwh"] = device_energy_by_start[
+                                row["start"]
+                            ]
                 # Consume forecast/actual pairs on every quarter-hour exchange,
                 # not only during the hourly replan. Otherwise three out of
                 # four observations would pass the upload watermark before the
@@ -1851,7 +2021,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         try:
                             options = self._optimisation_options()
                             snapshot = await self._build_optimisation_snapshot(
-                                options, entities, actuals, stored
+                                options, entities, actuals, stored, devices
                             )
                         except (OptimisationInputError, KeyError, TypeError, ValueError) as err:
                             snapshot_error = str(err)
@@ -1869,7 +2039,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.last_optimisation_error = snapshot_error
                     self.async_update_listeners()
                     return
-                result = await self.client.push_optimisation(actuals, snapshot)
+                result = await self.client.push_optimisation(
+                    actuals, snapshot, devices
+                )
                 self.last_actual_slots_accepted = int(
                     result.get("actual_slots_accepted") or 0
                 )
@@ -1901,6 +2073,18 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             elif self.optimisation_plan is None:
                 self.optimisation_plan = stored.get("optimisation_plan")
             stored["last_optimisation_push"] = self.last_optimisation_push
+            stored["optimisation_device_metadata"] = {
+                device["key"]: {
+                    "active_power_w": device["active_power_w"],
+                    "profile_sample_count": device["profile_sample_count"],
+                    "inference": device["inference"],
+                }
+                for device in devices
+            }
+            stored["optimisation_device_load_types"] = {
+                model["key"]: model["load_type"]
+                for model in result.get("device_models", [])
+            }
             await self._store.async_save(stored)
             self.async_update_listeners()
 
