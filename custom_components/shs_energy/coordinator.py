@@ -1623,6 +1623,20 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         device_models: list[dict[str, Any]] = []
         for device in devices:
+            planning_role = device["planning_role"]
+            control_type = device["control_type"]
+            if (
+                planning_role == "base_load" and control_type is not None
+            ) or (
+                planning_role == "controllable"
+                and control_type not in (
+                    "switch_schedule", "variable_power", "permit_inhibit",
+                    "setpoint", "current_limit",
+                )
+            ) or planning_role not in ("base_load", "controllable"):
+                raise OptimisationInputError(
+                    f"{device['name']} has an invalid planning role or control type"
+                )
             try:
                 empirical = {
                     day_type: build_empirical_device_profile(
@@ -1634,7 +1648,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                     for day_type in ("weekday", "weekend")
                 }
-            except OptimisationInputError:
+            except OptimisationInputError as err:
+                if planning_role == "controllable":
+                    raise OptimisationInputError(
+                        f"{device['name']} needs a complete empirical profile "
+                        "before it can be controllable"
+                    ) from err
                 continue
             active_values = [
                 profile["active_power_w"] for profile in empirical.values()
@@ -1654,6 +1673,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "history_days": OPTIMISATION_PROFILE_DAYS,
                 "profile": "weekday_weekend_trimmed_mean_v1",
             }
+            if planning_role == "base_load":
+                continue
             forecast_w: list[float] = []
             for start in horizon:
                 local = start.astimezone(dt_util.DEFAULT_TIME_ZONE)
@@ -1666,6 +1687,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "load_type": device.get(
                     "load_type", device["suggested_load_type"]
                 ),
+                "planning_role": "controllable",
+                "control_type": control_type,
                 "forecast_w_by_slot": forecast_w,
             })
         modelled_device_keys = tuple(
@@ -1680,7 +1703,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not options.get(enabled_key):
                 continue
             category_devices = [
-                device for device in devices if device["category"] == category
+                device for device in devices
+                if device["category"] == category
+                and device["planning_role"] == "controllable"
             ]
             missing = [
                 str(device["name"])
@@ -1688,7 +1713,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if str(device["key"]) not in complete_device_keys
             ]
             if not category_devices or missing:
-                detail = ", ".join(missing) if missing else "no Energy Dashboard device"
+                detail = (
+                    ", ".join(missing)
+                    if missing
+                    else "no controllable Energy Dashboard device"
+                )
                 raise OptimisationInputError(
                     f"{category} planning needs complete empirical profiles; missing {detail}"
                 )
@@ -1831,7 +1860,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "solar_production", "battery_charge", "battery_discharge",
         )
         snapshot = {
-            "schema_version": 4,
+            "schema_version": 5,
             "mode": "live",
             "capabilities": capabilities,
             "snapshot_id": str(uuid4()),
@@ -1948,7 +1977,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if device["statistic_id"] not in category_entities:
                         category_entities.append(device["statistic_id"])
                 stored_metadata = stored.get("optimisation_device_metadata", {})
-                stored_load_types = stored.get("optimisation_device_load_types", {})
+                stored_configuration = stored.get(
+                    "optimisation_device_configuration", {}
+                )
                 for device in devices:
                     metadata = stored_metadata.get(device["key"], {})
                     for field in (
@@ -1956,8 +1987,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ):
                         if field in metadata:
                             device[field] = metadata[field]
-                    device["load_type"] = stored_load_types.get(
-                        device["key"], device["suggested_load_type"]
+                    configuration = stored_configuration.get(device["key"], {})
+                    device["load_type"] = configuration.get(
+                        "load_type", device["suggested_load_type"]
+                    )
+                    device["planning_role"] = configuration.get(
+                        "planning_role", device["suggested_planning_role"]
+                    )
+                    device["control_type"] = configuration.get(
+                        "control_type", device["suggested_control_type"]
                     )
                 # Do not race the recorder's five-minute statistics job. Actual
                 # history may trail real time by one quarter; live reactive
@@ -2081,9 +2119,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 }
                 for device in devices
             }
-            stored["optimisation_device_load_types"] = {
-                model["key"]: model["load_type"]
-                for model in result.get("device_models", [])
+            stored["optimisation_device_configuration"] = {
+                configuration["key"]: {
+                    "load_type": configuration["load_type"],
+                    "planning_role": configuration["planning_role"],
+                    "control_type": configuration["control_type"],
+                }
+                for configuration in result.get("device_configuration", [])
             }
             await self._store.async_save(stored)
             self.async_update_listeners()

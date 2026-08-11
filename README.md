@@ -42,10 +42,11 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
 - **Forecast truth**: PV, supplier import and supplier export forecasts are
   explicit timestamped sources. The two price directions must be different;
   missing/stale data pauses planning instead of being repeated or substituted.
-- **Local calibration**: each complete Energy Dashboard device gets a separate
-  weekday/weekend empirical 15-minute profile. Those meters are subtracted from
-  the whole-home history to produce a residual baseload, then added back exactly
-  once in planner headroom, battery and grid calculations. PV bias is learned by
+- **Local calibration**: each complete Energy Dashboard device gets a
+  weekday/weekend empirical 15-minute profile. Only devices classified as
+  controllable are subtracted from whole-home history and added back exactly
+  once in planner headroom, battery and grid calculations. Every other device
+  remains represented by its real measured use inside baseload. PV bias is learned by
   lead day and stays neutral until a lead bucket has 20 observations. Only the
   compact profile/calibration summary is uploaded.
 - **Staff-managed tariffs**: SHS staff publish one global, effective-dated
@@ -126,8 +127,12 @@ Every device declared in Home Assistant's Energy Dashboard is also published
 as a stable home-local inventory item with complete 15-minute energy values.
 The portal proposes one of four editable electrical characteristics: fixed full
 load, variable full load, thermostat duty cycle, or inverter load. Suggested
-types and empirical weekday/weekend profiles come from Home Assistant; customer
-and staff overrides are returned by the backend on the next exchange.
+types and empirical weekday/weekend profiles come from Home Assistant. It also
+proposes a separate planning role (base load or controllable) and, for
+controllable devices, a reviewed control type. Hot water defaults to
+permit/inhibit, pool heating to an on/off schedule and EV charging to current
+control; all other devices conservatively remain in baseload. Customer and
+staff overrides are returned by the backend on the next exchange.
 
 ## Storage and privacy budget
 

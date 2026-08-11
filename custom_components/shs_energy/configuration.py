@@ -83,7 +83,7 @@ from .const import (
     OPT_TERMINAL_ENERGY_VALUE,
     OPT_TERMINAL_SOC_MIN,
 )
-from .optimisation import suggested_load_type
+from .optimisation import suggested_device_planning, suggested_load_type
 
 
 def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
@@ -312,15 +312,23 @@ def _energy_dashboard_inventory(
         )
         category = _category_for_device(evidence_text)
         load_type, inference = suggested_load_type(evidence_text, category)
+        planning_role, control_type, planning_inference = (
+            suggested_device_planning(category, load_type)
+        )
         inventory.append({
             "key": statistic_id,
             "statistic_id": statistic_id,
             "name": name,
             "category": category,
             "suggested_load_type": load_type,
+            "suggested_planning_role": planning_role,
+            "suggested_control_type": control_type,
             "active_power_w": None,
             "profile_sample_count": 0,
-            "inference": inference,
+            "inference": {
+                **inference,
+                "planning": planning_inference,
+            },
         })
     return inventory
 

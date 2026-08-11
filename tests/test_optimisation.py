@@ -21,6 +21,7 @@ from optimisation import (  # noqa: E402
     extract_timestamped_forecast,
     optimisation_plan_due,
     require_fresh_source,
+    suggested_device_planning,
     suggested_load_type,
     utc_slots,
     validate_service_windows,
@@ -42,6 +43,26 @@ class QuarterAggregationTests(unittest.TestCase):
                 self.assertEqual(load_type, expected)
                 self.assertEqual(
                     inference["method"], "energy_dashboard_semantics_v1"
+                )
+
+    def test_planning_roles_are_conservative_and_control_specific(self) -> None:
+        cases = (
+            ("hot_water", "duty_cycle", "controllable", "permit_inhibit"),
+            ("pool_heating", "duty_cycle", "controllable", "switch_schedule"),
+            ("ev_charging", "variable_full_load", "controllable", "current_limit"),
+            ("cooling", "inverter", "base_load", None),
+            ("household", "fixed_full_load", "base_load", None),
+        )
+        for category, load_type, role, control in cases:
+            with self.subTest(category=category):
+                suggested_role, suggested_control, inference = (
+                    suggested_device_planning(category, load_type)
+                )
+                self.assertEqual(suggested_role, role)
+                self.assertEqual(suggested_control, control)
+                self.assertEqual(
+                    inference["method"],
+                    "energy_dashboard_planning_semantics_v1",
                 )
 
     def test_three_five_minute_changes_become_one_quarter(self) -> None:
@@ -99,7 +120,7 @@ class QuarterAggregationTests(unittest.TestCase):
         self.assertEqual(profile["expected_w"][1], 0)
         self.assertEqual(profile["active_power_w"], 1000)
 
-    def test_base_profile_uses_median_and_subtracts_empirical_devices(self) -> None:
+    def test_base_profile_subtracts_only_controllable_devices(self) -> None:
         start = datetime(2026, 8, 1, tzinfo=timezone.utc)
         rows = []
         device_rows = []
@@ -124,11 +145,13 @@ class QuarterAggregationTests(unittest.TestCase):
             rows,
             "UTC",
             device_slots=device_rows,
-            modelled_device_keys=("pool-heater", "fridge"),
+            modelled_device_keys=("pool-heater",),
         )
 
         self.assertEqual(len(profile), 96)
-        self.assertEqual(profile[0]["median_w"], 1000)
+        # The controllable pool heater is removed. The non-controllable fridge
+        # remains inside the empirical base load learned from whole-home usage.
+        self.assertEqual(profile[0]["median_w"], 1500)
         self.assertGreater(profile[0]["p90_w"], profile[0]["median_w"])
         self.assertEqual(profile[0]["sample_count"], 4)
 
@@ -360,7 +383,7 @@ class ForecastTests(unittest.TestCase):
             "min_run_slots": 2,
         }
         plan = {
-            "schema_version": 4,
+            "schema_version": 5,
             "mode": "live",
             "capabilities": {
                 "pv": True,
@@ -370,7 +393,7 @@ class ForecastTests(unittest.TestCase):
                 "ev": True,
             },
             "slot_minutes": 15,
-            "model_version": "empirical-device-planner-v4",
+            "model_version": "controllable-device-planner-v5",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(hours=2, minutes=30)).isoformat(),
@@ -423,7 +446,7 @@ class ForecastTests(unittest.TestCase):
             for index in range(4)
         ]
         plan = {
-            "schema_version": 4,
+            "schema_version": 5,
             "mode": "live",
             "capabilities": {
                 "pv": True,
@@ -433,7 +456,7 @@ class ForecastTests(unittest.TestCase):
                 "ev": False,
             },
             "slot_minutes": 15,
-            "model_version": "empirical-device-planner-v4",
+            "model_version": "controllable-device-planner-v5",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -478,7 +501,7 @@ class ForecastTests(unittest.TestCase):
             for index in range(4)
         ]
         plan = {
-            "schema_version": 4,
+            "schema_version": 5,
             "mode": "live",
             "capabilities": {
                 "pv": True,
@@ -488,7 +511,7 @@ class ForecastTests(unittest.TestCase):
                 "ev": False,
             },
             "slot_minutes": 15,
-            "model_version": "empirical-device-planner-v4",
+            "model_version": "controllable-device-planner-v5",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -531,7 +554,7 @@ class ForecastTests(unittest.TestCase):
             for index in range(4)
         ]
         plan = {
-            "schema_version": 4,
+            "schema_version": 5,
             "mode": "live",
             "capabilities": {
                 "pv": True,
@@ -541,7 +564,7 @@ class ForecastTests(unittest.TestCase):
                 "ev": False,
             },
             "slot_minutes": 15,
-            "model_version": "empirical-device-planner-v4",
+            "model_version": "controllable-device-planner-v5",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
