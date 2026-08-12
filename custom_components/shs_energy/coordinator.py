@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.history import get_significant_states
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -38,6 +39,10 @@ from .const import (
     ISSUE_OPTIMISATION_CONFIGURATION,
     ISSUE_SUBSCRIPTION_INACTIVE,
     MAX_KWH_PER_READING,
+    MAX_THERMAL_SLOTS_PER_PUSH,
+    THERMAL_BACKFILL_HOURS,
+    OPT_OUTDOOR_TEMPERATURE_ENTITY,
+    OPT_WEATHER_FORECAST_ENTITY,
     OPT_FORECAST_RESOLUTION_MINUTES,
     OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_PREFIX_ENTITIES,
@@ -137,6 +142,15 @@ from .optimisation import (
     validate_plan_contract,
     validate_service_windows,
 )
+from .thermal import (
+    actuator_value,
+    build_thermal_slots,
+    interpolate_hourly_forecast,
+    numeric_value,
+    quarter_means,
+    thermal_zone_inputs,
+    time_weighted_quarters,
+)
 from .tariff import (
     HourlyGridReading,
     TariffError,
@@ -188,6 +202,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_optimisation_error: str | None = None
         self.last_actual_slots_accepted = 0
         self.actuals_accepted_until: str | None = None
+        self.last_thermal_slots_accepted = 0
         self.optimisation_missing_inputs: list[str] = []
         self.device_control_mapping_gaps: list[str] = []
         self._optimisation_issue_grace_until = dt_util.utcnow() + timedelta(
@@ -560,6 +575,246 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 values.append((start_utc, float(change)))
             result[entity_id] = values
         return result
+
+    async def _statistics_means(
+        self, entity_ids: list[str], start: datetime, end: datetime
+    ) -> dict[str, list[tuple[datetime, float]]]:
+        """Read recorder five-minute ``mean`` statistics for temperatures.
+
+        The energy path asks for ``change`` in kWh, which no temperature
+        entity produces. Measurement sensors are summarised as ``mean``
+        instead, and those statistics live as long as ``purge_keep_days``.
+        """
+        if not entity_ids:
+            return {}
+        end_utc = dt_util.as_utc(end)
+        stats = await get_instance(self.hass).async_add_executor_job(
+            statistics_during_period,
+            self.hass,
+            dt_util.as_utc(start),
+            end_utc,
+            set(entity_ids),
+            "5minute",
+            None,
+            {"mean"},
+        )
+
+        result: dict[str, list[tuple[datetime, float]]] = {}
+        for entity_id, rows in stats.items():
+            values: list[tuple[datetime, float]] = []
+            for row in rows:
+                start_value = row.get("start")
+                mean = row.get("mean")
+                if start_value is None or mean is None:
+                    continue
+                if isinstance(start_value, datetime):
+                    start_utc = start_value.astimezone(timezone.utc)
+                else:
+                    start_utc = dt_util.utc_from_timestamp(float(start_value))
+                if start_utc >= end_utc:
+                    continue
+                values.append((start_utc, float(mean)))
+            result[entity_id] = values
+        return result
+
+    async def _state_history(
+        self,
+        entity_ids: list[str],
+        start: datetime,
+        end: datetime,
+        *,
+        with_attributes: bool,
+    ) -> dict[str, list[tuple[datetime, Any, dict[str, Any] | None]]]:
+        """Read raw state changes for entities the statistics engine ignores.
+
+        ``input_number`` helpers carry no ``state_class``, so no statistics
+        exist for a comfort band, and an actuator's on/off history is not a
+        number at all. Both have to come from state changes. Attributes are
+        fetched only when a climate entity's ``hvac_action`` is needed, since
+        they dominate the row size over a multi-day window.
+        """
+        if not entity_ids:
+            return {}
+        # One extra state before the window is what makes the first quarter
+        # complete: a helper that last changed days ago still governed it.
+        history = await get_instance(self.hass).async_add_executor_job(
+            lambda: get_significant_states(
+                self.hass,
+                dt_util.as_utc(start),
+                dt_util.as_utc(end),
+                sorted(set(entity_ids)),
+                include_start_time_state=True,
+                significant_changes_only=False,
+                minimal_response=False,
+                no_attributes=not with_attributes,
+            )
+        )
+
+        result: dict[str, list[tuple[datetime, Any, dict[str, Any] | None]]] = {}
+        for entity_id, states in (history or {}).items():
+            rows: list[tuple[datetime, Any, dict[str, Any] | None]] = []
+            for state in states:
+                changed = getattr(state, "last_updated", None) or getattr(
+                    state, "last_changed", None
+                )
+                if changed is None:
+                    continue
+                rows.append((
+                    changed,
+                    getattr(state, "state", None),
+                    dict(getattr(state, "attributes", None) or {})
+                    if with_attributes
+                    else None,
+                ))
+            result[entity_id] = rows
+        return result
+
+    async def _outdoor_temperature_quarters(
+        self, options: dict[str, Any], start: datetime, end: datetime
+    ) -> dict[datetime, float]:
+        """Measured outdoor temperature on the quarter grid, when configured."""
+        entity_id = options.get(OPT_OUTDOOR_TEMPERATURE_ENTITY)
+        if not entity_id:
+            return {}
+        statistics = await self._statistics_means([entity_id], start, end)
+        return quarter_means(statistics.get(entity_id, []))
+
+    async def _outdoor_forecast(
+        self, options: dict[str, Any], horizon: list[datetime]
+    ) -> tuple[dict[datetime, float], str | None]:
+        """Resample the weather provider's hourly forecast onto planning slots.
+
+        Modern Home Assistant serves forecasts from ``weather.get_forecasts``
+        rather than a ``forecast`` attribute, so this asks the service and
+        never reads a stale attribute copy.
+        """
+        entity_id = options.get(OPT_WEATHER_FORECAST_ENTITY)
+        if not entity_id or not horizon:
+            return {}, None
+        try:
+            response = await self.hass.services.async_call(
+                "weather",
+                "get_forecasts",
+                {"entity_id": entity_id, "type": "hourly"},
+                blocking=True,
+                return_response=True,
+            )
+        except HomeAssistantError as err:
+            _LOGGER.debug("Outdoor forecast unavailable from %s: %s", entity_id, err)
+            return {}, None
+
+        entries = ((response or {}).get(entity_id) or {}).get("forecast") or []
+        records: list[tuple[datetime, float]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            when = entry.get("datetime")
+            temperature = entry.get("temperature")
+            if not isinstance(when, str) or temperature is None:
+                continue
+            try:
+                moment = datetime.fromisoformat(when.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if moment.tzinfo is None:
+                continue
+            records.append((moment, float(temperature)))
+        if not records:
+            return {}, None
+        return interpolate_hourly_forecast(records, horizon), entity_id
+
+    async def _thermal_quarters(
+        self,
+        options: dict[str, Any],
+        devices: list[dict[str, Any]],
+        start: datetime,
+        end: datetime,
+    ) -> list[dict[str, Any]]:
+        """Build complete quarter-hour thermal observations for every zone."""
+        zones = thermal_zone_inputs(
+            devices, options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
+        )
+        if not zones or start >= end:
+            return []
+
+        temperature_entities = sorted(
+            {zone["temperature_entity_id"] for zone in zones.values()}
+        )
+        helper_entities = sorted({
+            entity
+            for zone in zones.values()
+            for entity in (
+                zone.get("comfort_low_entity_id"),
+                zone.get("comfort_high_entity_id"),
+                zone.get("setpoint_entity_id"),
+            )
+            if isinstance(entity, str) and entity.strip()
+        })
+        actuator_entities = sorted(
+            {entity for zone in zones.values() for entity in zone["actuator_entity_ids"]}
+        )
+
+        temperatures = await self._statistics_means(
+            temperature_entities, start, end
+        )
+        # A setpoint may be a climate entity, whose target lives in an
+        # attribute rather than the state, so helpers are read with attributes.
+        helper_history = await self._state_history(
+            helper_entities, start, end, with_attributes=True
+        )
+        actuator_history = await self._state_history(
+            actuator_entities, start, end, with_attributes=True
+        )
+
+        temperature_quarters = {
+            entity_id: quarter_means(rows)
+            for entity_id, rows in temperatures.items()
+        }
+        helper_quarters = {
+            entity_id: time_weighted_quarters(
+                rows, start, end, numeric_value
+            )
+            for entity_id, rows in helper_history.items()
+        }
+        actuator_quarters = {
+            entity_id: time_weighted_quarters(
+                rows, start, end, actuator_value
+            )
+            for entity_id, rows in actuator_history.items()
+        }
+
+        series: dict[str, dict[str, dict[datetime, float]]] = {}
+        for key, zone in zones.items():
+            duties: dict[datetime, list[float]] = {}
+            for entity_id in zone["actuator_entity_ids"]:
+                for slot, duty in actuator_quarters.get(entity_id, {}).items():
+                    duties.setdefault(slot, []).append(duty)
+            # Several actuators serving one zone are one zone-level demand.
+            # Averaging keeps the value a fraction of the quarter rather than
+            # a count of running heaters.
+            zone_series: dict[str, dict[datetime, float]] = {
+                "room_temperature_c": temperature_quarters.get(
+                    zone["temperature_entity_id"], {}
+                ),
+                "actuator_duty": {
+                    slot: round(sum(values) / len(values), 4)
+                    for slot, values in duties.items()
+                    if len(values) == len(zone["actuator_entity_ids"])
+                },
+            }
+            for field, mapping_key in (
+                ("comfort_min_c", "comfort_low_entity_id"),
+                ("comfort_max_c", "comfort_high_entity_id"),
+                ("setpoint_c", "setpoint_entity_id"),
+            ):
+                entity_id = zone.get(mapping_key)
+                if isinstance(entity_id, str) and entity_id.strip():
+                    zone_series[field] = helper_quarters.get(entity_id, {})
+            series[key] = zone_series
+
+        outdoor = await self._outdoor_temperature_quarters(options, start, end)
+        slots = build_thermal_slots(series, outdoor)
+        return slots[-MAX_THERMAL_SLOTS_PER_PUSH:]
 
     async def _daily_changes(
         self, entity_ids: list[str], start: datetime, end: datetime
@@ -2166,6 +2421,25 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "services": services,
             "service_requirement_sample_days": service_samples,
         }
+        # Outdoor temperature is what makes a thermal projection forward-
+        # looking. It is attached only when a provider actually covered the
+        # horizon, so a short or missing forecast leaves the field absent
+        # rather than flat-filled with today's weather.
+        outdoor_forecast, outdoor_entity = await self._outdoor_forecast(
+            options, horizon
+        )
+        if outdoor_forecast:
+            snapshot["outdoor_temperature_c"] = [
+                outdoor_forecast.get(start) for start in horizon
+            ]
+            snapshot["sources"]["outdoor_temperature"] = {
+                "provider": "home_assistant_weather",
+                "entity_ids": [outdoor_entity] if outdoor_entity else [],
+                "issued_at": captured.isoformat(),
+                "valid_until": horizon_end.isoformat(),
+                "quality": "provider_raw",
+                "sample_count": len(outdoor_forecast),
+            }
         if pv_entities:
             self._record_forecast_ledger(
                 stored, {start: pv[start] for start in horizon}, captured
@@ -2235,6 +2509,33 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # four observations would pass the upload watermark before the
                 # calibration ledger saw them.
                 self._observe_calibration(stored, actuals)
+                # Thermal observations are independent of the electrical
+                # watermark: a zone sensor can settle after its energy meter,
+                # so the window is re-swept every push and de-duplicated by
+                # the server's upsert rather than by a local high-water mark.
+                thermal_options = resolved_options(
+                    self.hass, dict(self.entry.options)
+                )
+                thermal_start = complete_end - timedelta(
+                    hours=THERMAL_BACKFILL_HOURS
+                )
+                accepted_thermal = stored.get("thermal_slots_accepted_until")
+                if accepted_thermal:
+                    thermal_start = max(
+                        thermal_start,
+                        datetime.fromisoformat(accepted_thermal).astimezone(
+                            timezone.utc
+                        ) - timedelta(hours=1),
+                    )
+                try:
+                    thermal_slots = await self._thermal_quarters(
+                        thermal_options, devices, thermal_start, complete_end
+                    )
+                except (HomeAssistantError, OptimisationInputError, ValueError) as err:
+                    # A missing thermal sensor must never stop the electrical
+                    # plan; the website reports the gap on its readiness panel.
+                    _LOGGER.debug("Thermal observations unavailable: %s", err)
+                    thermal_slots = []
                 last_plan = stored.get("optimisation_plan")
                 plan_due = optimisation_plan_due(
                     last_plan,
@@ -2268,12 +2569,17 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                         self.optimisation_missing_inputs = [snapshot_error]
                         self._sync_optimisation_issue()
-                if not actuals and snapshot is None and not devices:
+                if (
+                    not actuals
+                    and snapshot is None
+                    and not devices
+                    and not thermal_slots
+                ):
                     self.last_optimisation_error = snapshot_error
                     self.async_update_listeners()
                     return
                 result = await self.client.push_optimisation(
-                    actuals, snapshot, devices
+                    actuals, snapshot, devices, thermal_slots
                 )
                 configuration = self._record_device_exchange(
                     stored, devices, result
@@ -2303,6 +2609,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 stored["optimisation_actuals_accepted_until"] = result[
                     "actuals_accepted_until"
                 ]
+            if result.get("thermal_slots_accepted_until"):
+                stored["thermal_slots_accepted_until"] = result[
+                    "thermal_slots_accepted_until"
+                ]
+            self.last_thermal_slots_accepted = int(
+                result.get("thermal_slots_accepted") or 0
+            )
             if result.get("plan") and not configuration_changed:
                 self.last_optimisation_error = None
                 self.optimisation_plan = result["plan"]

@@ -41,6 +41,8 @@ from .const import (
     OPT_ELECTRICITY_PRICE_AREA,
     OPT_BATTERY_SOC_ENTITY,
     OPT_GRID_EXPORT_POWER_ENTITY,
+    OPT_OUTDOOR_TEMPERATURE_ENTITY,
+    OPT_WEATHER_FORECAST_ENTITY,
     OPT_BATTERY_CAPACITY_KWH,
     OPT_BATTERY_CHARGE_MAX_W,
     OPT_BATTERY_DISCHARGE_MAX_W,
@@ -704,6 +706,8 @@ class ShsEnergyOptionsFlow(OptionsFlow):
             (OPT_SUPPLIER_IMPORT_FORECAST_ENTITY, "sensor", False),
             (OPT_SUPPLIER_EXPORT_FORECAST_ENTITY, "sensor", False),
             (OPT_GRID_EXPORT_POWER_ENTITY, "sensor", False),
+            (OPT_OUTDOOR_TEMPERATURE_ENTITY, "sensor", False),
+            (OPT_WEATHER_FORECAST_ENTITY, "weather", False),
         ]).schema)
         schema[self._optional(OPT_ELECTRICITY_PRICE_AREA, current)] = str
         return self.async_show_form(step_id="forecasts", data_schema=vol.Schema(schema))

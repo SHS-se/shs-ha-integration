@@ -131,7 +131,7 @@
       },
       "forecasts": {
         "title": "Prices and forecasts",
-        "description": "Solar is optional. Import and export prices remain separate because buying and selling have different values.",
+        "description": "Solar is optional. Import and export prices remain separate because buying and selling have different values. The outdoor temperature sensor and weather entity feed thermal-zone learning; without them heating stays electrically planned but thermally unmodelled.",
         "data": {
           "supplier_import_price_entity": "Current supplier import price",
           "supplier_export_price_entity": "Current supplier export price",
@@ -139,7 +139,9 @@
           "supplier_import_forecast_entity": "Import price forecast",
           "supplier_export_forecast_entity": "Export price forecast",
           "grid_export_power_entity": "Live grid export power",
-          "electricity_price_area": "Swedish price area (SE1–SE4)"
+          "electricity_price_area": "Swedish price area (SE1–SE4)",
+          "outdoor_temperature_entity": "Outdoor temperature sensor",
+          "weather_forecast_entity": "Weather entity for the outdoor forecast"
         }
       },
       "battery": {
