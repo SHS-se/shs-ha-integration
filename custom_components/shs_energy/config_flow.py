@@ -339,9 +339,81 @@ class ShsEnergyOptionsFlow(OptionsFlow):
                 )
         return vol.Schema(schema)
 
-    def _queue_device_controls(self, devices: list[dict[str, Any]]) -> None:
+    def _queue_device_controls(
+        self,
+        devices: list[dict[str, Any]],
+        *,
+        selected_key: str | None = None,
+    ) -> None:
         self._device_queue = devices
-        self._device_index = 0
+        self._device_index = next(
+            (
+                index
+                for index, device in enumerate(devices)
+                if device["key"] == selected_key
+            ),
+            0,
+        )
+
+    async def async_step_device_controls(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Navigate website-requested controls without trapping users in a sequence."""
+        del user_input
+        device = self._device_queue[self._device_index]
+        report = mapping_report(
+            device.get("control_type"),
+            self._device_mappings().get(device["key"]),
+        )
+        menu_options = ["configure_device"]
+        if self._device_index > 0:
+            menu_options.append("previous_device")
+        if self._device_index + 1 < len(self._device_queue):
+            menu_options.append("next_device")
+        menu_options.append("finish_device_controls")
+        return self.async_show_menu(
+            step_id="device_controls",
+            menu_options=menu_options,
+            description_placeholders={
+                "device_name": str(device.get("name") or device["key"]),
+                "control_type": str(device["control_type"]).replace("_", " "),
+                "position": str(self._device_index + 1),
+                "total": str(len(self._device_queue)),
+                "mapping_status": str(report["mapping_status"]).replace("_", " "),
+            },
+        )
+
+    async def async_step_configure_device(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Open the mapping form for the selected device."""
+        del user_input
+        return await self.async_step_device_control()
+
+    async def async_step_previous_device(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Move to the previous requested device."""
+        del user_input
+        self._device_index = max(0, self._device_index - 1)
+        return await self.async_step_device_controls()
+
+    async def async_step_next_device(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Move to the next requested device."""
+        del user_input
+        self._device_index = min(
+            len(self._device_queue) - 1, self._device_index + 1
+        )
+        return await self.async_step_device_controls()
+
+    async def async_step_finish_device_controls(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Save configured mappings; unmapped controls remain part of base load."""
+        del user_input
+        return self._save()
 
     async def async_step_device_control(
         self, user_input: dict[str, Any] | None = None
@@ -357,10 +429,10 @@ class ShsEnergyOptionsFlow(OptionsFlow):
                 mappings = self._device_mappings()
                 mappings[device["key"]] = mapping
                 self._pending[OPT_DEVICE_CONTROL_MAPPINGS] = mappings
-                self._device_index += 1
-                if self._device_index >= len(self._device_queue):
-                    return self._save()
-                return await self.async_step_device_control()
+                self._device_index = min(
+                    len(self._device_queue) - 1, self._device_index + 1
+                )
+                return await self.async_step_device_controls()
         return self.async_show_form(
             step_id="device_control",
             data_schema=self._device_mapping_schema(device),
@@ -411,8 +483,11 @@ class ShsEnergyOptionsFlow(OptionsFlow):
                     )["mapping_status"] != "ready"
                 ]
                 if pending:
-                    self._queue_device_controls(pending)
-                    return await self.async_step_device_control()
+                    self._queue_device_controls(
+                        self._requested_devices,
+                        selected_key=pending[0]["key"],
+                    )
+                    return await self.async_step_device_controls()
         if user_input is not None:
             self._pending = {
                 **optimisation_defaults(self.hass),
@@ -424,7 +499,7 @@ class ShsEnergyOptionsFlow(OptionsFlow):
             if method == "device_controls":
                 if self._requested_devices:
                     self._queue_device_controls(self._requested_devices)
-                    return await self.async_step_device_control()
+                    return await self.async_step_device_controls()
                 return self._save()
             if self._pending[OPT_PLANNING_MODE] == PLANNING_MODE_LIVE and method == "automatic":
                 mappings = self._pending[OPT_DEVICE_CONTROL_MAPPINGS]

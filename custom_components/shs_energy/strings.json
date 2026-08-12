@@ -216,7 +216,7 @@
       },
       "device_control": {
         "title": "Configure {device_name}",
-        "description": "Device {position} of {total}. The website requests **{control_type}** control. Entity mappings stay local to Home Assistant. Saving them acknowledges that this device may be modeled separately; it does not replace or enable any existing controller.",
+        "description": "Device {position} of {total}. The website requests **{control_type}** control. Entity mappings stay local to Home Assistant. Saving returns to the device navigator and acknowledges that this device may be modeled separately; it does not replace or enable any existing controller.",
         "data": {
           "temperature_entity_id": "Room or process temperature",
           "setpoint_entity_id": "Direct setpoint entity (optional when high/low values are used)",
@@ -244,6 +244,16 @@
           "current_step_a": "Charging current increment (A)",
           "phase_count": "Charging phase count",
           "voltage": "Phase voltage (V)"
+        }
+      },
+      "device_controls": {
+        "title": "Website-requested device controls",
+        "description": "Device {position} of {total}: **{device_name}** requests **{control_type}** control. Mapping status: **{mapping_status}**. Choose a device action or finish and save. Devices without a complete mapping remain part of base load.",
+        "menu_options": {
+          "configure_device": "Configure this device",
+          "previous_device": "Previous device",
+          "next_device": "Next device",
+          "finish_device_controls": "Finish and save"
         }
       }
     },
