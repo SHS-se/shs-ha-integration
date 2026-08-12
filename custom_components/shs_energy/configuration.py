@@ -46,6 +46,8 @@ from .const import (
     OPT_DISCOVERY_EVIDENCE,
     OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_ELECTRICITY_PRICE_AREA,
+    OPT_OUTDOOR_TEMPERATURE_ENTITY,
+    OPT_WEATHER_FORECAST_ENTITY,
     OPT_EV_BATTERY_KWH,
     OPT_EV_CHARGE_CURRENT_ENTITY,
     OPT_EV_CHARGE_EFFICIENCY,
@@ -806,6 +808,46 @@ async def async_discover_configuration(
         export_power,
         exact_ids=export_power_ids,
         detail="Live measured export available to reactive control",
+    )
+
+    # Outdoor temperature drives every zone's heat loss, so it is discovered
+    # once for the home rather than per device. A local sensor is preferred
+    # over the weather provider's regional value; the provider entity is kept
+    # separately because only it carries a forecast.
+    outdoor_ids = ("sensor.outdoor_temperature",)
+    outdoor = _first_state(
+        states,
+        exact_ids=outdoor_ids,
+        required=("outdoor", "temperature"),
+        domain="sensor",
+    ) or _first_state(
+        states,
+        exact_ids=(),
+        required=("outside", "temperature"),
+        domain="sensor",
+    )
+    if outdoor is not None and outdoor.attributes.get("unit_of_measurement") not in (
+        "°C",
+        "°F",
+    ):
+        # A temperature entity without a temperature unit is some other
+        # quantity that merely reads like one. Guessing would silently poison
+        # every zone fit that consumes it.
+        outdoor = None
+    record_state(
+        OPT_OUTDOOR_TEMPERATURE_ENTITY,
+        outdoor,
+        exact_ids=outdoor_ids,
+        detail="Measured outdoor air temperature for zone heat-loss fitting",
+    )
+
+    forecast_ids = ("weather.forecast_home", "weather.home")
+    forecast = _first_state(states, exact_ids=forecast_ids, required=(), domain="weather")
+    record_state(
+        OPT_WEATHER_FORECAST_ENTITY,
+        forecast,
+        exact_ids=forecast_ids,
+        detail="Weather entity providing the outdoor temperature forecast",
     )
 
     pool_enabled_ids = ("input_boolean.pool_heating",)

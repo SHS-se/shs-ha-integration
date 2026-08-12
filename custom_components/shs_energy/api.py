@@ -126,12 +126,18 @@ class ShsApiClient:
         actual_slots: list[dict[str, Any]],
         snapshot: dict[str, Any] | None = None,
         devices: list[dict[str, Any]] | None = None,
+        thermal_slots: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Push aggregate and per-device quarters, plus an optional plan."""
+        """Push aggregate, per-device and thermal quarters, plus a plan."""
         body: dict[str, Any] = {
             "actual_slots": actual_slots,
             "devices": devices or [],
         }
+        # Omitted rather than sent empty so an older server, and the device
+        # inventory exchange that carries no observations, both see the
+        # request shape they already accept.
+        if thermal_slots:
+            body["thermal_slots"] = thermal_slots
         if snapshot is not None:
             body["snapshot"] = snapshot
         return await self._request(

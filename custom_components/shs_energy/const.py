@@ -87,6 +87,15 @@ OPT_PV_FORECAST_LONGITUDE = "pv_forecast_longitude"
 OPT_BATTERY_SOC_ENTITY = "battery_soc_entity"
 OPT_GRID_EXPORT_POWER_ENTITY = "grid_export_power_entity"
 
+# Thermal-zone observations. Room temperature, comfort band and actuator state
+# already belong to each setpoint device's control mapping; these two name the
+# shared outdoor sources that no single zone owns. Observations and forecast
+# are separate entities on purpose: a `weather.*` entity carries a forecast but
+# reports a provider's regional temperature, while a local sensor measures the
+# air the building actually loses heat to.
+OPT_OUTDOOR_TEMPERATURE_ENTITY = "outdoor_temperature_entity"
+OPT_WEATHER_FORECAST_ENTITY = "weather_forecast_entity"
+
 OPT_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
 OPT_BATTERY_CHARGE_MAX_W = "battery_charge_max_w"
 OPT_BATTERY_DISCHARGE_MAX_W = "battery_discharge_max_w"
@@ -137,6 +146,13 @@ OPT_EV_DEFAULT_DEPARTURE = "ev_default_departure"
 
 OPTIMISATION_ACTUAL_BACKFILL_HOURS = 72
 OPTIMISATION_PROFILE_DAYS = 10
+
+# Thermal history rides the same quarter-hour grid as electrical actuals. The
+# recorder's `purge_keep_days` bounds how far back a gap can still be filled;
+# a 72-hour sweep re-offers recent quarters on every push so a late-settling
+# sensor is picked up, while the server's upsert keeps the row count at 96/day.
+THERMAL_BACKFILL_HOURS = 72
+MAX_THERMAL_SLOTS_PER_PUSH = 288
 OPTIMISATION_HORIZON_HOURS = 72
 OPTIMISATION_PUSH_SECOND = 20
 OPTIMISATION_STARTUP_DELAY_SECONDS = 60
