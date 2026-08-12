@@ -144,6 +144,7 @@ from .optimisation import (
 )
 from .thermal import (
     actuator_value,
+    cooling_value,
     build_thermal_slots,
     interpolate_hourly_forecast,
     numeric_value,
@@ -782,13 +783,25 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             for entity_id, rows in actuator_history.items()
         }
+        # Cooling is not modelled, only detected. A quarter spent cooling is
+        # excluded from training rather than read as a heater that somehow
+        # made the room colder.
+        cooling_quarters = {
+            entity_id: time_weighted_quarters(
+                rows, start, end, cooling_value
+            )
+            for entity_id, rows in actuator_history.items()
+        }
 
         series: dict[str, dict[str, dict[datetime, float]]] = {}
         for key, zone in zones.items():
             duties: dict[datetime, list[float]] = {}
+            cooling: dict[datetime, list[float]] = {}
             for entity_id in zone["actuator_entity_ids"]:
                 for slot, duty in actuator_quarters.get(entity_id, {}).items():
                     duties.setdefault(slot, []).append(duty)
+                for slot, duty in cooling_quarters.get(entity_id, {}).items():
+                    cooling.setdefault(slot, []).append(duty)
             # Several actuators serving one zone are one zone-level demand.
             # Averaging keeps the value a fraction of the quarter rather than
             # a count of running heaters.
@@ -800,6 +813,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     slot: round(sum(values) / len(values), 4)
                     for slot, values in duties.items()
                     if len(values) == len(zone["actuator_entity_ids"])
+                },
+                # Any actuator cooling taints the whole zone-quarter, so this
+                # is a maximum rather than a mean.
+                "cooling_duty": {
+                    slot: round(max(values), 4)
+                    for slot, values in cooling.items()
+                    if max(values) > 0
                 },
             }
             for field, mapping_key in (

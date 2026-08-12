@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_en
 
 from thermal import (  # noqa: E402
     actuator_value,
+    cooling_value,
     build_thermal_slots,
     interpolate_hourly_forecast,
     numeric_value,
@@ -81,6 +82,45 @@ class TimeWeightedTests(unittest.TestCase):
         )
         self.assertEqual(result[START], 0.0)
 
+    def test_cooling_is_not_counted_as_heating(self) -> None:
+        # A summer aircon puts energy through the meter while the room gets
+        # colder. Counting it as heating would ask the fit to explain an
+        # impossibility, so it reads as no heat and is reported separately.
+        changes = [(at(0), "cool", {"hvac_action": "cooling"})]
+        self.assertEqual(
+            time_weighted_quarters(changes, START, at(15), actuator_value)[START],
+            0.0,
+        )
+        self.assertEqual(
+            time_weighted_quarters(changes, START, at(15), cooling_value)[START],
+            1.0,
+        )
+
+    def test_heating_is_not_counted_as_cooling(self) -> None:
+        changes = [(at(0), "heat", {"hvac_action": "heating"})]
+        self.assertEqual(
+            time_weighted_quarters(changes, START, at(15), actuator_value)[START],
+            1.0,
+        )
+        self.assertEqual(
+            time_weighted_quarters(changes, START, at(15), cooling_value)[START],
+            0.0,
+        )
+
+    def test_a_switch_without_an_action_never_reports_cooling(self) -> None:
+        changes = [(at(0), "on", None)]
+        self.assertEqual(
+            time_weighted_quarters(changes, START, at(15), cooling_value)[START],
+            0.0,
+        )
+
+    def test_cool_mode_without_an_action_still_excludes_heat(self) -> None:
+        changes = [(at(0), "cool", None)]
+        self.assertEqual(
+            time_weighted_quarters(changes, START, at(15), actuator_value)[START],
+            0.0,
+        )
+
     def test_spans_multiple_quarters(self) -> None:
         result = time_weighted_quarters(
             [(at(0), "on", None)], START, at(30), actuator_value
@@ -109,6 +149,7 @@ class BuildSlotsTests(unittest.TestCase):
                 "room_temperature_c": {START: 21.0, at(15): 21.4},
                 "actuator_duty": {START: 0.5},
                 "comfort_max_c": {START: 22.0},
+                "cooling_duty": {},
             }
         }
         slots = build_thermal_slots(zones, {START: 4.0})
@@ -122,6 +163,22 @@ class BuildSlotsTests(unittest.TestCase):
                 "actuator_duty": 0.5,
                 "comfort_max_c": 22.0,
             },
+        )
+
+    def test_cooling_is_reported_only_when_it_happened(self) -> None:
+        zones = {
+            "tv_room": {
+                "room_temperature_c": {START: 24.0, at(15): 23.0},
+                "actuator_duty": {START: 0.0, at(15): 0.0},
+                "cooling_duty": {at(15): 0.8},
+            }
+        }
+        slots = build_thermal_slots(zones, {})
+        self.assertNotIn(
+            "cooling_duty", slots[0]["zone_observations"]["tv_room"]
+        )
+        self.assertEqual(
+            slots[1]["zone_observations"]["tv_room"]["cooling_duty"], 0.8
         )
 
     def test_outdoor_temperature_is_optional(self) -> None:

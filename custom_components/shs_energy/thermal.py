@@ -57,7 +57,11 @@ THERMAL_MIN_SAMPLE_COVERAGE = 0.6
 # Climate entities report their true demand in ``hvac_action``; ``state`` only
 # names the mode the user selected. A thermostat left in ``heat`` all night is
 # not a heater that ran all night.
-ACTIVE_HVAC_ACTIONS = ("heating", "cooling")
+#
+# Modes that cannot be delivering heat. ``dry`` and ``fan_only`` are grouped
+# with cooling because they are equally not heating, and a quarter spent in
+# any of them teaches the heating model nothing.
+COOLING_MODES = ("cool", "dry", "fan_only")
 UNUSABLE_STATES = ("unknown", "unavailable", "none", "")
 
 
@@ -77,7 +81,13 @@ def numeric_value(state: Any, attributes: dict[str, Any] | None = None) -> float
 
 
 def actuator_value(state: Any, attributes: dict[str, Any] | None = None) -> float | None:
-    """Return 1.0 while an actuator is actually running, 0.0 while it is not.
+    """Return 1.0 while an actuator is actively *heating*, 0.0 while it is not.
+
+    Cooling deliberately reads as 0.0 rather than 1.0. The model has one heat
+    input, so counting a cooling aircon as heating would ask the fit to explain
+    a room getting colder while energy went in, and the zone would be refused
+    as non-physical. Cooling is reported separately by :func:`cooling_value`
+    so those quarters can be excluded rather than mislabelled.
 
     ``None`` means the actuator's state was not knowable, which is different
     from a confident zero and must not be integrated as one.
@@ -90,17 +100,39 @@ def actuator_value(state: Any, attributes: dict[str, Any] | None = None) -> floa
     action = (attributes or {}).get("hvac_action")
     if isinstance(action, str):
         # A climate entity that reports its action is authoritative about it.
-        return 1.0 if action.strip().lower() in ACTIVE_HVAC_ACTIONS else 0.0
+        return 1.0 if action.strip().lower() == "heating" else 0.0
     if text == "on":
         return 1.0
     if text == "off":
         return 0.0
-    if text in ("heat", "cool", "heat_cool", "auto", "dry", "fan_only"):
+    if text in COOLING_MODES:
+        return 0.0
+    if text in ("heat", "heat_cool", "auto"):
         # A climate entity without ``hvac_action`` can only be read by mode.
-        # Everything except ``off`` is treated as calling for energy, which
+        # Everything except off is treated as calling for heat, which
         # overstates duty; the website records the weaker provenance.
         return 1.0
     return None
+
+
+def cooling_value(state: Any, attributes: dict[str, Any] | None = None) -> float | None:
+    """Return 1.0 while an actuator is actively cooling, 0.0 while it is not.
+
+    Cooling is not modelled. It is measured only so that a quarter spent
+    cooling can be dropped from training instead of being read as a heater
+    that mysteriously chilled the room.
+    """
+    if not isinstance(state, str):
+        return None
+    text = state.strip().lower()
+    if text in UNUSABLE_STATES:
+        return None
+    action = (attributes or {}).get("hvac_action")
+    if isinstance(action, str):
+        return 1.0 if action.strip().lower() == "cooling" else 0.0
+    if text in COOLING_MODES:
+        return 1.0
+    return 0.0
 
 
 def quarter_means(
@@ -244,6 +276,7 @@ def build_thermal_slots(
     for key, series in zones.items():
         temperatures = series.get("room_temperature_c", {})
         duties = series.get("actuator_duty", {})
+        cooling = series.get("cooling_duty", {})
         for slot, temperature in temperatures.items():
             if slot not in duties:
                 continue
@@ -251,6 +284,10 @@ def build_thermal_slots(
                 "room_temperature_c": temperature,
                 "actuator_duty": duties[slot],
             }
+            # Only sent when non-zero. Most homes never cool, and a column of
+            # zeros on every row would be pure noise on the wire.
+            if cooling.get(slot):
+                observation["cooling_duty"] = cooling[slot]
             for field in ("comfort_min_c", "comfort_max_c", "setpoint_c"):
                 value = series.get(field, {}).get(slot)
                 if value is not None:
