@@ -1,0 +1,309 @@
+{
+  "fixture_version": "grid-price-parity-1",
+  "_comment": [
+    "Cross-implementation parity fixture for the marginal grid price.",
+    "The integration's tariff.py current_grid_prices() is the reference; the",
+    "portal's _shared/energy-grid-pricing.ts is a port of it. Expected values",
+    "below were captured from the Python. This file is duplicated verbatim in",
+    "both repositories (smart-home-solutions and shs-ha-integration) because CI",
+    "cannot reach across them; each repo asserts its own implementation against",
+    "it. Change the calculation and BOTH copies must be regenerated, or one",
+    "repo's suite fails - which is the point.",
+    "See ENERGY_OPTIMISATION_ARCHITECTURE.md 1.3.7.6."
+  ],
+  "timezone": "Europe/Stockholm",
+  "base_configuration": {
+    "profile_id": "ellevio",
+    "connection_type": "three_phase",
+    "fuse_a": 25,
+    "grid_area": "stockholm",
+    "production_enabled": true,
+    "energy_tax_reduced": false,
+    "include_vat": true,
+    "export_vat_registered": false
+  },
+  "profile": {
+    "id": "ellevio",
+    "currency": "SEK",
+    "versions": [
+      {
+        "revision": "ellevio-2026-06-01",
+        "valid_from": "2026-06-01",
+        "valid_to": null,
+        "calculation_model": "se_grid_v1",
+        "definition": {
+          "schema_version": 1,
+          "vat_rate": 0.25,
+          "energy_tax": {
+            "ore_per_kwh_ex_vat": 36.0,
+            "reduction_ore_per_kwh": 9.6
+          },
+          "plans": {
+            "three_phase": {
+              "selector": "fuse_a",
+              "fixed_monthly_sek_ex_vat": {
+                "16": 360,
+                "20": 472,
+                "25": 592,
+                "35": 904,
+                "50": 1384,
+                "63": 1984
+              },
+              "transfer": {
+                "mode": "flat",
+                "ore_per_kwh_ex_vat": 20.8
+              }
+            },
+            "single_phase": {
+              "selector": "fuse_a",
+              "fixed_monthly_sek_ex_vat": {
+                "20": 136,
+                "25": 360,
+                "35": 360
+              },
+              "transfer": {
+                "mode": "flat_by_selector",
+                "ore_per_kwh_ex_vat": {
+                  "20": 40.0,
+                  "25": 20.8,
+                  "35": 20.8
+                }
+              }
+            },
+            "apartment": {
+              "selector": "apartment_band",
+              "fixed_monthly_sek_ex_vat": {
+                "up_to_29": 96,
+                "30_59": 88,
+                "60_99": 80,
+                "100_plus": 72
+              },
+              "transfer": {
+                "mode": "flat",
+                "ore_per_kwh_ex_vat": 20.8
+              }
+            }
+          },
+          "export_credit": {
+            "schedule": "swedish_winter_weekday_06_22_v1",
+            "ore_per_kwh_ex_vat_by_area": {
+              "dalarna_sodra_norrland_edsbyn": {
+                "high": 4.1,
+                "low": 3.2
+              },
+              "stockholm": {
+                "high": 4.4,
+                "low": 3.3
+              },
+              "vastkusten": {
+                "high": 6.3,
+                "low": 5.1
+              },
+              "vastra_svealand_vastergotland": {
+                "high": 6.9,
+                "low": 5.9
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "label": "summer midday is outside the high-load band",
+      "at": "2026-08-13T12:00:00+02:00",
+      "overrides": {},
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.033,
+        "load_period": "low",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "winter weekday inside 06-22 is high band",
+      "at": "2026-12-15T08:00:00+01:00",
+      "overrides": {},
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.044,
+        "load_period": "high",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "05:45 is before the band opens",
+      "at": "2026-12-15T05:45:00+01:00",
+      "overrides": {},
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.033,
+        "load_period": "low",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "22:00 is after the band closes",
+      "at": "2026-12-15T22:00:00+01:00",
+      "overrides": {},
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.033,
+        "load_period": "low",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "a winter Saturday is never high band",
+      "at": "2026-12-19T10:00:00+01:00",
+      "overrides": {},
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.033,
+        "load_period": "low",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "Christmas Eve is excluded",
+      "at": "2026-12-24T10:00:00+01:00",
+      "overrides": {},
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.033,
+        "load_period": "low",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "a March weekday is still winter",
+      "at": "2027-03-24T10:00:00+01:00",
+      "overrides": {},
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.044,
+        "load_period": "high",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "Maundy Thursday is excluded",
+      "at": "2027-03-25T10:00:00+01:00",
+      "overrides": {},
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.033,
+        "load_period": "low",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "Good Friday is excluded",
+      "at": "2027-03-26T10:00:00+01:00",
+      "overrides": {},
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.033,
+        "load_period": "low",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "Easter Monday is excluded",
+      "at": "2027-03-29T10:00:00+02:00",
+      "overrides": {},
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.033,
+        "load_period": "low",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "reduced energy tax",
+      "at": "2026-08-13T12:00:00+02:00",
+      "overrides": {
+        "energy_tax_reduced": true
+      },
+      "expected": {
+        "import_price_sek_per_kwh": 0.59,
+        "export_price_sek_per_kwh": 0.033,
+        "load_period": "low",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "no production means no export credit",
+      "at": "2026-12-15T08:00:00+01:00",
+      "overrides": {
+        "production_enabled": false
+      },
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.0,
+        "load_period": null,
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "VAT-registered export",
+      "at": "2026-12-15T08:00:00+01:00",
+      "overrides": {
+        "export_vat_registered": true
+      },
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.055,
+        "load_period": "high",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "prices excluding VAT",
+      "at": "2026-08-13T12:00:00+02:00",
+      "overrides": {
+        "include_vat": false
+      },
+      "expected": {
+        "import_price_sek_per_kwh": 0.568,
+        "export_price_sek_per_kwh": 0.033,
+        "load_period": "low",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "single phase uses a per-selector transfer",
+      "at": "2026-08-13T12:00:00+02:00",
+      "overrides": {
+        "connection_type": "single_phase",
+        "fuse_a": 20
+      },
+      "expected": {
+        "import_price_sek_per_kwh": 0.95,
+        "export_price_sek_per_kwh": 0.033,
+        "load_period": "low",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "a different grid area",
+      "at": "2026-12-15T08:00:00+01:00",
+      "overrides": {
+        "grid_area": "vastkusten"
+      },
+      "expected": {
+        "import_price_sek_per_kwh": 0.71,
+        "export_price_sek_per_kwh": 0.063,
+        "load_period": "high",
+        "tariff_revision": "ellevio-2026-06-01"
+      }
+    },
+    {
+      "label": "before the catalogue starts",
+      "at": "2026-05-01T10:00:00+02:00",
+      "overrides": {},
+      "expected": null
+    }
+  ]
+}
