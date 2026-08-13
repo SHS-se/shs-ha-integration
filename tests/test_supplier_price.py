@@ -97,6 +97,19 @@ class SensorWiringTests(unittest.TestCase):
     def test_it_follows_the_supplier_sensor(self) -> None:
         self.assertIn("async_track_state_change_event", SENSOR)
 
+    def test_calculated_totals_cannot_be_supplier_sources(self) -> None:
+        self.assertIn("def is_shs_total_price_entity", CONFIGURATION)
+        self.assertIn("registry_entry.platform == DOMAIN", CONFIGURATION)
+        self.assertIn('"_total_import_price"', CONFIGURATION)
+        self.assertIn('"_total_export_price"', CONFIGURATION)
+        discovery = CONFIGURATION[
+            CONFIGURATION.index("async def async_discover_configuration") :
+        ]
+        self.assertIn("if not is_shs_total_price_entity(hass, entity_id)", discovery)
+        self.assertIn("is_shs_total_price_entity(hass, options.get(key))", discovery)
+        self.assertIn("is_shs_total_price_entity(hass, options.get(key))", CONFIG_PANEL)
+        self.assertIn("is_shs_total_price_entity(self.hass, entity_id)", SENSOR)
+
     def test_changing_the_options_reloads_the_entry(self) -> None:
         # Entities subscribe to the supplier price sensor when they are added.
         # A price entity chosen after setup is only watched if the entry is

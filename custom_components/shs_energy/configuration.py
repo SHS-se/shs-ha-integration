@@ -19,12 +19,14 @@ from homeassistant.components.energy import async_get_manager
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.core import HomeAssistant, State
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .const import (
     CONFIGURABLE_CATEGORIES,
     DEFAULT_FORECAST_RESOLUTION_MINUTES,
     DEFAULT_PLANNING_MODE,
+    DOMAIN,
     OPT_AUTOMATIC_SETUP,
     OPT_BATTERY_CAPACITY_KWH,
     OPT_BATTERY_CHARGE_EFFICIENCY,
@@ -90,6 +92,24 @@ from .const import (
     OPT_TERMINAL_SOC_MIN,
 )
 from .optimisation import suggested_device_planning, suggested_load_type
+
+
+_TOTAL_PRICE_UNIQUE_ID_SUFFIXES = (
+    "_total_import_price",
+    "_total_export_price",
+)
+
+
+def is_shs_total_price_entity(hass: HomeAssistant, entity_id: Any) -> bool:
+    """Return whether an entity is one of this integration's calculated totals."""
+    if not isinstance(entity_id, str) or not entity_id:
+        return False
+    registry_entry = er.async_get(hass).async_get(entity_id)
+    return bool(
+        registry_entry
+        and registry_entry.platform == DOMAIN
+        and registry_entry.unique_id.endswith(_TOTAL_PRICE_UNIQUE_ID_SUFFIXES)
+    )
 
 
 def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
@@ -661,6 +681,20 @@ async def async_discover_configuration(
                 else "Aggregate statistic selected in Home Assistant Energy"
             ),
         )
+    import_prices = [
+        entity_id
+        for entity_id in dict.fromkeys(import_prices)
+        if not is_shs_total_price_entity(hass, entity_id)
+    ]
+    export_prices = [
+        entity_id
+        for entity_id in dict.fromkeys(export_prices)
+        if not is_shs_total_price_entity(hass, entity_id)
+    ]
+    for key in (OPT_SUPPLIER_IMPORT_PRICE, OPT_SUPPLIER_EXPORT_PRICE):
+        if is_shs_total_price_entity(hass, options.get(key)):
+            options.pop(key, None)
+
     if import_prices:
         record(
             OPT_SUPPLIER_IMPORT_PRICE,

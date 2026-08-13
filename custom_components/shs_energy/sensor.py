@@ -36,7 +36,7 @@ from .const import (
     PLANNING_MODE_DISABLED,
     backend_attributes,
 )
-from .configuration import resolved_options
+from .configuration import is_shs_total_price_entity, resolved_options
 from .optimisation import OptimisationInputError, validate_plan_contract
 from .coordinator import ShsStatusCoordinator
 
@@ -476,7 +476,12 @@ class ShsTotalPriceSensor(ShsBaseSensor):
 
     @property
     def _supplier_entity_id(self) -> str | None:
-        return self.coordinator.entry.options.get(self.option_key) or None
+        entity_id = self.coordinator.entry.options.get(self.option_key) or None
+        return (
+            None
+            if is_shs_total_price_entity(self.hass, entity_id)
+            else entity_id
+        )
 
     def _supplier_price(self) -> float | None:
         entity_id = self._supplier_entity_id
