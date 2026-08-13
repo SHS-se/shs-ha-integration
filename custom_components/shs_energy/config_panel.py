@@ -890,6 +890,7 @@ async def async_apply_configuration(
     return options
 
 
+@websocket_api.require_admin
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{shs_const.DOMAIN}/config/get",
@@ -904,7 +905,6 @@ async def websocket_get_configuration(
     msg: dict[str, Any],
 ) -> None:
     """Return the complete local configuration and current website request."""
-    connection.require_admin()
     entry = _entry_from_message(hass, msg.get("config_entry"))
     if entry is None:
         connection.send_result(
@@ -926,6 +926,7 @@ async def websocket_get_configuration(
     connection.send_result(msg["id"], payload)
 
 
+@websocket_api.require_admin
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{shs_const.DOMAIN}/config/discover",
@@ -939,7 +940,6 @@ async def websocket_discover_configuration(
     msg: dict[str, Any],
 ) -> None:
     """Build an Energy Dashboard proposal without saving it."""
-    connection.require_admin()
     entry = _entry_from_message(hass, msg["config_entry"])
     if entry is None:
         connection.send_error(msg["id"], "not_found", "SHS Energy entry not found")
@@ -953,6 +953,7 @@ async def websocket_discover_configuration(
     connection.send_result(msg["id"], discovery)
 
 
+@websocket_api.require_admin
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{shs_const.DOMAIN}/config/save",
@@ -967,7 +968,6 @@ async def websocket_save_configuration(
     msg: dict[str, Any],
 ) -> None:
     """Validate and save the panel draft."""
-    connection.require_admin()
     entry = _entry_from_message(hass, msg["config_entry"])
     if entry is None:
         connection.send_error(msg["id"], "not_found", "SHS Energy entry not found")
