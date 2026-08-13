@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_en
 
 from optimisation import (  # noqa: E402
     OptimisationInputError,
+    SUPPORTED_OPTIMISATION_MODEL_VERSIONS,
     aggregate_category_changes,
     aggregate_device_changes,
     build_base_load_profile,
@@ -604,3 +605,23 @@ class ForecastTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModelVersionToleranceTests(unittest.TestCase):
+    """The server must be able to change planner without stopping control.
+
+    This build accepts v6 and v7 so the portal's version bump can land after
+    installations have updated, rather than needing to land before them - which
+    a strict equality check made impossible to sequence safely.
+    """
+
+    def test_both_planner_versions_are_executable(self) -> None:
+        self.assertIn(
+            "battery-export-planner-v6", SUPPORTED_OPTIMISATION_MODEL_VERSIONS
+        )
+        self.assertIn(
+            "shadow-price-planner-v7", SUPPORTED_OPTIMISATION_MODEL_VERSIONS
+        )
+
+    def test_an_unknown_planner_version_is_still_refused(self) -> None:
+        self.assertNotIn("some-future-planner", SUPPORTED_OPTIMISATION_MODEL_VERSIONS)

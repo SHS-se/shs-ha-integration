@@ -17,7 +17,18 @@ from zoneinfo import ZoneInfo
 
 SLOT_SECONDS = 900
 SLOT_HOURS = 0.25
-SUPPORTED_OPTIMISATION_MODEL_VERSION = "battery-export-planner-v6"
+# A set, not a string, so the server can change planner without every
+# installation losing control until it updates through HACS. The server deploys
+# on push; this updates by hand, so the tolerant build has to land first and a
+# strict equality check made that impossible to sequence safely.
+#
+# v7 adds an objective for the two thirds of the horizon Nord Pool has not
+# priced (portal ENERGY_OPTIMISATION_ARCHITECTURE.md §1.4). The plan contract
+# itself is unchanged, which is why both are executable.
+SUPPORTED_OPTIMISATION_MODEL_VERSIONS = frozenset({
+    "battery-export-planner-v6",
+    "shadow-price-planner-v7",
+})
 ACTUAL_FIELD_BY_CATEGORY = {
     "total_consumption": "total_load_kwh",
     "solar_production": "solar_production_kwh",
@@ -679,7 +690,7 @@ def validate_plan_contract(
         raise OptimisationInputError("optimisation plan schema is unsupported")
     if plan.get("mode") != "live":
         raise OptimisationInputError("optimisation plan mode is unsupported")
-    if plan.get("model_version") != SUPPORTED_OPTIMISATION_MODEL_VERSION:
+    if plan.get("model_version") not in SUPPORTED_OPTIMISATION_MODEL_VERSIONS:
         raise OptimisationInputError("optimisation model version is unsupported")
     if plan.get("status") not in ("ready", "incomplete", "infeasible"):
         raise OptimisationInputError("optimisation plan status is invalid")
