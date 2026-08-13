@@ -16,13 +16,14 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
   optimisation data.
 - **Reviewed automatic setup**: the integration reads the aggregate meters
   already curated in Home Assistant's Energy Dashboard and discovers supported
-  forecast, battery and control candidates. It then shows its evidence before
-  saving. Phase-level child meters are not selected when an aggregate exists,
-  and no measured load is assumed to be deferrable. A user must explicitly
-  select each flexible load and review its operating values. Fixed-load power
-  proposals use only local five-minute recorder statistics, with their sample
-  count shown; those source rows never leave HA. A multi-step manual path
-  remains available for unusual installations.
+  forecast, battery and control candidates. Its full-page configuration panel
+  shows the evidence as a draft before anything is saved. Phase-level child
+  meters are not selected when an aggregate exists, and no measured load is
+  assumed to be deferrable. A user must explicitly select each flexible load
+  on the website, map its local entities and review its operating values in
+  Home Assistant. Fixed-load power proposals use only local five-minute
+  recorder statistics, with their sample count shown; those source rows never
+  leave HA.
 - **Optional capabilities**: monitoring a category does not make it
   controllable. Solar, battery, pool, water heating and EV planning are
   independent capabilities; a home without any of them is still a valid
@@ -81,11 +82,24 @@ directory and restart.
 1. Portal → Account → *Home Assistant* → **Generate pairing code**
 2. HA → Settings → Devices & services → **Add integration** →
    *Smart Home Solutions Energy*
-3. Enter the code (within 10 minutes), then open **Configure**. Choose **Live
-   planning → Automatic** to discover from the Energy Dashboard and review a
-   compact proposal, **Manual** for every advanced mapping, or **Off** to use
-   reporting and tariffs without planning. The website's **Example** view is
-   independent of this integration.
+3. Enter the code within 10 minutes and restart Home Assistant after the
+   integration is installed or upgraded.
+4. Open the integration's **Configure** cogwheel. It opens the SHS Energy
+   configuration page, runs the first website-role refresh and shows Energy
+   Dashboard inputs, controllable-device mappings, thermal readiness, house
+   battery and EV settings, and concrete diagnostics.
+5. Use **Run automatic discovery** to create a local review draft, then save it
+   after checking the proposed entities and electrical values. Discovery never
+   saves by itself and this page never operates a relay, heater, charger,
+   climate entity or Node-RED flow.
+6. Choose each controllable device and control method on the SHS website.
+   Reopen the cogwheel page or press **Refresh website roles**; restarting the
+   integration is not required. Base-load devices need no local mapping.
+
+The top-level back arrow returns to Home Assistant's integration page. Save and
+Discard are always available in the page header, and leaving with unsaved edits
+requires confirmation. The website's **Example** view is independent of this
+integration.
 
 PV forecast entities expose timestamped 15-minute values in a `watts`
 attribute. Their location defaults to Home Assistant's configured home
@@ -104,9 +118,11 @@ it never treats the entity's instantaneous state as fixed charger power. If
 there is no departure timestamp entity, the next configured default departure
 time is used.
 
-The GUI options are stored by Home Assistant in its config-entry storage. Do
-not edit `.storage/core.config_entries` directly. The supported automation/MCP
-surface is:
+The configuration page is available only to Home Assistant administrators and
+stores reviewed settings in Home Assistant's config-entry storage. Do not edit
+`.storage/core.config_entries` directly. Initial registration still uses the
+native pairing dialog; all post-install configuration uses the full-page panel.
+The supported automation/MCP surface is:
 
 - `shs_energy.discover_configuration`: returns the Energy Dashboard-derived
   recommendation, per-field provenance and confidence, missing facts, and the

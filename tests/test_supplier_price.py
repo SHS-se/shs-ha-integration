@@ -36,6 +36,12 @@ CONFIG_FLOW = (
     / "shs_energy"
     / "config_flow.py"
 ).read_text(encoding="utf-8")
+CONFIG_PANEL = (
+    Path(__file__).parents[1]
+    / "custom_components"
+    / "shs_energy"
+    / "config_panel.py"
+).read_text(encoding="utf-8")
 
 # sensor.py imports Home Assistant, so lift out the one pure helper.
 _SOURCE = SENSOR[SENSOR.index("def price_from_state") : SENSOR.index("class ShsTotalPriceSensor")]
@@ -130,13 +136,18 @@ class SensorWiringTests(unittest.TestCase):
         ):
             with self.subTest(option=option):
                 self.assertIn(option, CONFIGURATION)
-                self.assertIn(option, CONFIG_FLOW)
+                self.assertIn(option, CONFIG_PANEL)
                 self.assertIn(option, COORDINATOR)
         self.assertIn('"battery_export_enabled"', COORDINATOR)
         self.assertIn('"battery_export_reserve_soc"', COORDINATOR)
         self.assertIn(
             '"battery_export_min_price_sek_per_kwh"', COORDINATOR
         )
+
+    def test_integration_cogwheel_opens_the_full_page_panel(self) -> None:
+        self.assertNotIn("OptionsFlow", CONFIG_FLOW)
+        self.assertIn("config_panel_domain=shs_const.DOMAIN", CONFIG_PANEL)
+        self.assertIn("await async_register_config_panel(hass)", INIT)
 
 
 if __name__ == "__main__":

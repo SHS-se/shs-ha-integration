@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from typing import Any
 
 import voluptuous as vol
@@ -14,8 +13,8 @@ from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_change
 
-from . import const as shs_const
 from .api import ShsApiClient
+from .config_panel import async_apply_configuration, async_register_config_panel
 from .const import (
     CONFIGURABLE_CATEGORIES,
     CONF_BASE_URL,
@@ -27,25 +26,13 @@ from .const import (
     OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS,
     OPTIMISATION_STARTUP_RETRY_SECONDS,
     OPT_AUTOMATIC_SETUP,
-    OPT_BOILER_DEFERRABLE_CONFIRMED,
-    OPT_BOILER_PLANNING_ENABLED,
-    OPT_CONFIGURATION_REVIEWED_AT,
     OPT_DISCOVERY_EVIDENCE,
-    OPT_EV_DEFERRABLE_CONFIRMED,
-    OPT_EV_ELECTRICAL_CONFIRMED,
-    OPT_EV_PLANNING_ENABLED,
     OPT_PLANNING_MODE,
-    OPT_POOL_DEFERRABLE_CONFIRMED,
-    OPT_POOL_PLANNING_ENABLED,
     OPT_PREFIX_ENTITIES,
-    PLANNING_MODE_LIVE,
-    PLANNING_MODE_DISABLED,
     DOMAIN,
 )
 from .configuration import (
     async_discover_configuration,
-    optimisation_defaults,
-    resolved_options,
 )
 from .coordinator import ShsStatusCoordinator
 
@@ -109,7 +96,9 @@ def _configuration_response(
 
 
 async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
-    """Register a validated configuration surface for UI actions and MCP."""
+    """Register the full-page configuration panel and automation services."""
+    await async_register_config_panel(hass)
+
     async def discover(call: ServiceCall) -> dict[str, Any]:
         entry = _entry_for_call(hass, call)
         discovery = await async_discover_configuration(
@@ -121,60 +110,9 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
 
     async def apply(call: ServiceCall) -> dict[str, Any]:
         entry = _entry_for_call(hass, call)
-        incoming = dict(call.data["configuration"])
-        allowed = {
-            value for name, value in vars(shs_const).items()
-            if name.startswith("OPT_") and isinstance(value, str)
-        } | set(optimisation_defaults(hass)) | {
-            f"{OPT_PREFIX_ENTITIES}{category}" for category in CONFIGURABLE_CATEGORIES
-        }
-        # Existing keys are also allowed so an advanced option introduced by
-        # this installed version can be round-tripped by an MCP client.
-        allowed.update(entry.options)
-        unknown = sorted(set(incoming) - allowed)
-        if unknown:
-            raise ValueError("unknown configuration keys: " + ", ".join(unknown))
-        options = resolved_options(hass, {**dict(entry.options), **incoming})
-        if options.get(OPT_PLANNING_MODE) not in {
-            PLANNING_MODE_DISABLED, PLANNING_MODE_LIVE
-        }:
-            raise ValueError("planning_mode must be disabled or live")
-        confirmations = (
-            (
-                OPT_POOL_PLANNING_ENABLED,
-                OPT_POOL_DEFERRABLE_CONFIRMED,
-                "pool deferrability",
-            ),
-            (
-                OPT_BOILER_PLANNING_ENABLED,
-                OPT_BOILER_DEFERRABLE_CONFIRMED,
-                "water-heater deferrability",
-            ),
-            (
-                OPT_EV_PLANNING_ENABLED,
-                OPT_EV_DEFERRABLE_CONFIRMED,
-                "EV deferrability",
-            ),
-            (
-                OPT_EV_PLANNING_ENABLED,
-                OPT_EV_ELECTRICAL_CONFIRMED,
-                "EV phase count and voltage",
-            ),
+        options = await async_apply_configuration(
+            hass, entry, dict(call.data["configuration"])
         )
-        unconfirmed = [
-            label
-            for enabled_key, confirmation_key, label in confirmations
-            if options.get(enabled_key) and not options.get(confirmation_key)
-        ]
-        if unconfirmed:
-            raise ValueError(
-                "explicit confirmation required: " + ", ".join(unconfirmed)
-            )
-        if options.get(OPT_PLANNING_MODE) == PLANNING_MODE_LIVE:
-            options[OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(
-                timezone.utc
-            ).isoformat()
-        hass.config_entries.async_update_entry(entry, options=options)
         return _configuration_response(options)
 
     hass.services.async_register(

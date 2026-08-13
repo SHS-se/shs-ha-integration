@@ -534,6 +534,24 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.async_update_listeners()
             return requested_controllable_devices(configuration)
 
+    async def async_cached_device_configuration(self) -> list[dict[str, Any]]:
+        """Return the last website request without making a network request."""
+        stored = await self._store.async_load() or {}
+        configuration = stored.get("optimisation_device_configuration", {})
+        if not isinstance(configuration, dict):
+            return []
+        return requested_controllable_devices(configuration)
+
+    async def async_cached_exchange_status(self) -> dict[str, Any]:
+        """Return durable exchange watermarks for the configuration panel."""
+        stored = await self._store.async_load() or {}
+        return {
+            "thermal_slots_accepted_until": stored.get(
+                "thermal_slots_accepted_until"
+            ),
+            "last_optimisation_push": stored.get("last_optimisation_push"),
+        }
+
     async def _statistics_changes(
         self,
         entity_ids: list[str],

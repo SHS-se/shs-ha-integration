@@ -3,11 +3,11 @@
   "name": "Smart Home Solutions Energy",
   "codeowners": ["@philbert"],
   "config_flow": true,
-  "dependencies": ["energy", "recorder"],
+  "dependencies": ["energy", "frontend", "http", "panel_custom", "recorder"],
   "documentation": "https://github.com/SHS-se/shs-ha-integration",
   "integration_type": "service",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/SHS-se/shs-ha-integration/issues",
   "requirements": [],
-  "version": "0.6.0-beta.12"
+  "version": "0.6.0-beta.13"
 }
