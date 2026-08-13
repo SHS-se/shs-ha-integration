@@ -131,7 +131,20 @@ The supported automation/MCP surface is:
   mapping supplied by the caller. It never re-runs discovery while applying.
   Enabling pool, water heating, or EV planning requires the corresponding
   `*_deferrable_confirmed` value; EV planning also requires
-  `ev_electrical_confirmed` after phase count and voltage are reviewed.
+  `ev_electrical_confirmed` after phase count and voltage are reviewed; and
+- `shs_energy.backfill_prices`: reprices `days` of history and pushes it. Every
+  exchange already sends the all-in price for the quarters around it, so this is
+  only needed to cover history recorded before the integration started sending
+  prices. Supplier prices are re-fetched for the requested dates and combined
+  with the effective-dated grid tariff, so a past quarter is resolved exactly
+  rather than estimated. Existing quarters are overwritten, so re-running is
+  safe.
+
+The portal stores no historical electricity price of its own — deriving one
+there would mean a second implementation of the grid transfer and energy tax,
+free to drift from the price that actually spent the customer's money. So the
+all-in figure the planner optimises against is sent from here and is the only
+price the portal's history reporting uses.
 
 The integration creates *Subscription*, *Grid tariff*, *Current grid cost*,
 *Last push*, *Energy plan status*, *Reactive surplus*, planned request sensors

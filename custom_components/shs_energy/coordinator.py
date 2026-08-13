@@ -104,6 +104,8 @@ from .const import (
     OPTIMISATION_HORIZON_HOURS,
     OPTIMISATION_PROFILE_DAYS,
     OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS,
+    PRICE_BACKFILL_CHUNK_DAYS,
+    PRICE_BACKFILL_MAX_DAYS,
     STATUS_POLL_INTERVAL_HOURS,
     STORAGE_KEY_TEMPLATE,
     SUPPLIER_BACKFILL_MAX_DAYS,
@@ -164,6 +166,7 @@ from .tariff import (
 )
 from .supplier import (
     SupplierPriceError,
+    all_in_price_slots,
     hourly_supplier_price_means,
     supplier_price_forecast,
     validate_supplier_prices,
@@ -1419,6 +1422,87 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ]
         return result
 
+    def _price_quarters(
+        self,
+        supplier_payload: dict[str, Any] | None,
+        start: datetime,
+        end: datetime,
+    ) -> list[dict[str, Any]]:
+        """All-in quarter prices for a window, or none when either half is out.
+
+        The portal has no historical price of its own and will not derive one,
+        because reproducing the grid transfer and energy tax in TypeScript would
+        be a second implementation free to drift from the one that actually
+        spent the customer's money (ENERGY_OPTIMISATION_ARCHITECTURE.md
+        §1.3.7.1). This is the single source.
+        """
+        if self.tariff_catalog is None or supplier_payload is None:
+            return []
+        try:
+            grid_slots = {
+                datetime.fromisoformat(value["start"]): value
+                for value in grid_price_forecast(
+                    self.tariff_catalog, start, end, 15
+                )
+            }
+        except TariffError as err:
+            _LOGGER.debug("Grid prices unavailable for price push: %s", err)
+            return []
+        window_start = start.astimezone(timezone.utc)
+        window_end = end.astimezone(timezone.utc)
+        return [
+            slot for slot in all_in_price_slots(supplier_payload, grid_slots)
+            if window_start
+            <= datetime.fromisoformat(slot["start"])
+            < window_end
+        ]
+
+    async def async_backfill_prices(self, days: int) -> dict[str, Any]:
+        """Reprice a historical window and push it to the portal.
+
+        Prices only start accumulating when this integration version ships, and
+        a planner being tuned needs the history that already exists to carry a
+        cost. Supplier prices are fetched for the requested dates rather than
+        taken from the cached forecast, which only covers today and tomorrow;
+        grid tariffs are effective-dated and published ahead, so a past quarter
+        resolves exactly rather than being estimated.
+        """
+        if days < 1 or days > PRICE_BACKFILL_MAX_DAYS:
+            raise OptimisationInputError(
+                f"days must be between 1 and {PRICE_BACKFILL_MAX_DAYS}"
+            )
+        if self.tariff_catalog is None:
+            raise OptimisationInputError("grid tariff catalogue is unavailable")
+        start_of_today = dt_util.start_of_local_day()
+        start = start_of_today - timedelta(days=days)
+        end = quarter_start(dt_util.utcnow())
+        pushed = 0
+        cursor = start
+        # One request per chunk keeps each spot fetch and each push inside the
+        # server's own limits; the ingest upsert makes a repeated chunk free.
+        while cursor < end:
+            chunk_end = min(cursor + timedelta(days=PRICE_BACKFILL_CHUNK_DAYS), end)
+            payload = await self.client.prices(
+                cursor.astimezone(tariff_timezone(self.tariff_catalog))
+                .date().isoformat(),
+                (chunk_end - timedelta(seconds=1))
+                .astimezone(tariff_timezone(self.tariff_catalog))
+                .date().isoformat(),
+            )
+            validate_supplier_prices(payload)
+            slots = self._price_quarters(payload, cursor, chunk_end)
+            if slots:
+                await self.client.push_optimisation([], None, [], None, slots)
+                pushed += len(slots)
+            cursor = chunk_end
+        self.async_update_listeners()
+        return {
+            "days": days,
+            "from": start.astimezone(timezone.utc).isoformat(),
+            "to": end.astimezone(timezone.utc).isoformat(),
+            "price_slots_pushed": pushed,
+        }
+
     async def _actual_quarters(
         self,
         entities_by_category: dict[str, list[str]],
@@ -2456,17 +2540,30 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                         self.optimisation_missing_inputs = [snapshot_error]
                         self._sync_optimisation_issue()
+                # Price the quarters just measured as well as the ones ahead, so
+                # the portal's history tab is priced on the same exchange that
+                # gives it the energy rather than a push behind.
+                price_slots = self._price_quarters(
+                    self.supplier_prices,
+                    complete_end - timedelta(
+                        hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS
+                    ),
+                    quarter_start(dt_util.utcnow()) + timedelta(
+                        hours=OPTIMISATION_HORIZON_HOURS
+                    ),
+                )
                 if (
                     not actuals
                     and snapshot is None
                     and not devices
                     and not thermal_slots
+                    and not price_slots
                 ):
                     self.last_optimisation_error = snapshot_error
                     self.async_update_listeners()
                     return
                 result = await self.client.push_optimisation(
-                    actuals, snapshot, devices, thermal_slots
+                    actuals, snapshot, devices, thermal_slots, price_slots
                 )
                 configuration = self._record_device_exchange(
                     stored, devices, result

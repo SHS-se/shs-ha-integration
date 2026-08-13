@@ -91,6 +91,42 @@ def supplier_price_forecast(
     }
 
 
+def all_in_price_slots(
+    supplier_payload: dict[str, Any] | None,
+    grid_slots: dict[datetime, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Combine supplier and grid prices into the figure the planner optimises.
+
+    This is the number the portal stores as a home's only historical price
+    (ENERGY_OPTIMISATION_ARCHITECTURE.md §1.3.7.2). It must stay identical to
+    the all-in price the optimisation snapshot carries — the portal reconciles
+    measured cost against planned cost, and two subtly different definitions of
+    "price" would make that comparison meaningless.
+
+    A quarter is emitted only when both halves are published for it. A partial
+    price is worse than no price: the portal can say a quarter is unpriced, but
+    it cannot detect a supplier price silently missing its grid component.
+    """
+    supplier = supplier_price_forecast(supplier_payload)
+    slots: list[dict[str, Any]] = []
+    for start in sorted(supplier):
+        grid = grid_slots.get(start)
+        if grid is None:
+            continue
+        slots.append({
+            "start": start.astimezone(timezone.utc).isoformat(),
+            "import_price_sek_per_kwh": round(
+                supplier[start]["import"] + float(grid["import_price_sek_per_kwh"]),
+                5,
+            ),
+            "export_price_sek_per_kwh": round(
+                supplier[start]["export"] + float(grid["export_price_sek_per_kwh"]),
+                5,
+            ),
+        })
+    return slots
+
+
 def hourly_supplier_price_means(
     payload: dict[str, Any],
 ) -> dict[datetime, dict[str, float]]:

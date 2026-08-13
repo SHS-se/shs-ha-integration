@@ -27,6 +27,7 @@ from .const import (
     OPTIMISATION_STARTUP_DELAY_SECONDS,
     OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS,
     OPTIMISATION_STARTUP_RETRY_SECONDS,
+    PRICE_BACKFILL_MAX_DAYS,
     OPT_AUTOMATIC_SETUP,
     OPT_DISCOVERY_EVIDENCE,
     OPT_PLANNING_MODE,
@@ -44,6 +45,7 @@ ShsEnergyConfigEntry = ConfigEntry[ShsStatusCoordinator]
 
 SERVICE_DISCOVER_CONFIGURATION = "discover_configuration"
 SERVICE_APPLY_CONFIGURATION = "apply_configuration"
+SERVICE_BACKFILL_PRICES = "backfill_prices"
 
 
 async def _async_delayed_startup_optimisation_push(
@@ -124,6 +126,13 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
         schema=vol.Schema({vol.Optional("entry_id"): str}),
         supports_response=SupportsResponse.ONLY,
     )
+    async def backfill_prices(call: ServiceCall) -> dict[str, Any]:
+        entry = _entry_for_call(hass, call)
+        coordinator = getattr(entry, "runtime_data", None)
+        if coordinator is None:
+            raise ValueError("SHS Energy is not loaded for that entry")
+        return await coordinator.async_backfill_prices(int(call.data["days"]))
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_APPLY_CONFIGURATION,
@@ -133,6 +142,18 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
             vol.Required("configuration"): dict,
         }),
         supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_BACKFILL_PRICES,
+        backfill_prices,
+        schema=vol.Schema({
+            vol.Optional("entry_id"): str,
+            vol.Required("days"): vol.All(
+                vol.Coerce(int), vol.Range(min=1, max=PRICE_BACKFILL_MAX_DAYS)
+            ),
+        }),
+        supports_response=SupportsResponse.ONLY,
     )
     return True
 

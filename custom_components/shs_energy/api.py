@@ -144,6 +144,7 @@ class ShsApiClient:
         snapshot: dict[str, Any] | None = None,
         devices: list[dict[str, Any]] | None = None,
         thermal_slots: list[dict[str, Any]] | None = None,
+        price_slots: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Push aggregate, per-device and thermal quarters, plus a plan."""
         body: dict[str, Any] = {
@@ -155,6 +156,8 @@ class ShsApiClient:
         # request shape they already accept.
         if thermal_slots:
             body["thermal_slots"] = thermal_slots
+        if price_slots:
+            body["price_slots"] = price_slots
         if snapshot is not None:
             body["snapshot"] = snapshot
         return await self._request(

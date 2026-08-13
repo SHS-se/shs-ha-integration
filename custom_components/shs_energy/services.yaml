@@ -14,6 +14,39 @@ discover_configuration:
   response:
     optional: false
 
+backfill_prices:
+  name: Backfill electricity prices
+  description: >-
+    Reprice a past window and send it to the SHS portal, which stores no
+    historical price of its own. Supplier prices are fetched for the requested
+    dates and combined with the effective-dated grid tariff, so each quarter
+    gets the same all-in figure the planner optimises against rather than an
+    estimate. Existing quarters are overwritten, so re-running is safe.
+  fields:
+    entry_id:
+      name: Configuration entry ID
+      description: Required only when more than one SHS Energy entry exists.
+      example: 01JEXAMPLE
+      selector:
+        text:
+    days:
+      name: Days
+      description: >-
+        How many days back from the start of today to reprice. The portal keeps
+        measured quarters for 120 days, so pricing further back has nothing to
+        attach to.
+      required: true
+      example: 7
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 120
+          mode: box
+          unit_of_measurement: days
+  response:
+    optional: false
+
 apply_configuration:
   name: Apply energy configuration
   description: >-

@@ -155,6 +155,17 @@ OPTIMISATION_PROFILE_DAYS = 10
 # sensor is picked up, while the server's upsert keeps the row count at 96/day.
 THERMAL_BACKFILL_HOURS = 72
 MAX_THERMAL_SLOTS_PER_PUSH = 288
+
+# Published prices, not measurements: they need no recorder and no watermark,
+# so a quarter far outside the actual-slot window can still be priced. The
+# ceiling matches the portal's 120-day retention for the quarters being priced,
+# and the chunk keeps one spot fetch inside the price endpoint's 62-day limit
+# and one push inside its 2,880-slot cap.
+PRICE_BACKFILL_MAX_DAYS = 120
+# 28 days is 2,688 quarters against the server's 2,880 cap. The headroom is
+# deliberate: the two DST changeover days are 92 and 100 quarters long, so a
+# chunk sized to exactly fill the cap would fail twice a year.
+PRICE_BACKFILL_CHUNK_DAYS = 28
 OPTIMISATION_HORIZON_HOURS = 72
 OPTIMISATION_PUSH_SECOND = 20
 OPTIMISATION_STARTUP_DELAY_SECONDS = 60
