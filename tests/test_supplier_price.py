@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
 import unittest
 
 SENSOR = (
@@ -43,37 +42,6 @@ CONFIG_PANEL = (
     / "config_panel.py"
 ).read_text(encoding="utf-8")
 
-# sensor.py imports Home Assistant, so lift out the one pure helper.
-_SOURCE = SENSOR[SENSOR.index("def price_from_state") : SENSOR.index("class ShsTotalPriceSensor")]
-_NAMESPACE: dict[str, object] = {}
-exec(  # noqa: S102 - trusted first-party source
-    "from __future__ import annotations\nfrom math import isfinite\nfrom typing import Any\n"
-    + _SOURCE,
-    _NAMESPACE,
-)
-price_from_state = _NAMESPACE["price_from_state"]
-
-
-class SupplierPriceTests(unittest.TestCase):
-    def test_reads_a_normal_price(self) -> None:
-        self.assertEqual(price_from_state("0.307"), 0.307)
-        self.assertEqual(price_from_state("-0.05"), -0.05)
-        self.assertEqual(price_from_state(0.5), 0.5)
-
-    def test_unusable_states_give_no_price(self) -> None:
-        for raw in (None, "", "unknown", "unavailable", "abc", "1,5"):
-            with self.subTest(raw=raw):
-                self.assertIsNone(price_from_state(raw))
-
-    def test_non_finite_values_are_rejected(self) -> None:
-        for raw in ("nan", "inf", "-inf"):
-            with self.subTest(raw=raw):
-                self.assertIsNone(price_from_state(raw))
-
-    def test_totals_add_the_grid_share_to_the_supplier_price(self) -> None:
-        # The live figures: 0.71 grid + 0.307 supplier.
-        self.assertAlmostEqual(round(0.71 + price_from_state("0.307"), 5), 1.017)
-
 
 class SensorWiringTests(unittest.TestCase):
     """Guard the parts a Home-Assistant-free test cannot exercise directly."""
@@ -94,21 +62,15 @@ class SensorWiringTests(unittest.TestCase):
             "return None", body[body.index("if prices is None or supplier is None:") :]
         )
 
-    def test_it_follows_the_supplier_sensor(self) -> None:
-        self.assertIn("async_track_state_change_event", SENSOR)
+    def test_totals_use_server_owned_supplier_prices(self) -> None:
+        body = SENSOR[SENSOR.index("class ShsTotalPriceSensor") :]
+        self.assertIn("current_supplier_prices(self.coordinator.supplier_prices)", body)
+        self.assertNotIn("supplier_entity_id", body)
 
-    def test_calculated_totals_cannot_be_supplier_sources(self) -> None:
-        self.assertIn("def is_shs_total_price_entity", CONFIGURATION)
-        self.assertIn("registry_entry.platform == DOMAIN", CONFIGURATION)
-        self.assertIn('"_total_import_price"', CONFIGURATION)
-        self.assertIn('"_total_export_price"', CONFIGURATION)
-        discovery = CONFIGURATION[
-            CONFIGURATION.index("async def async_discover_configuration") :
-        ]
-        self.assertIn("if not is_shs_total_price_entity(hass, entity_id)", discovery)
-        self.assertIn("is_shs_total_price_entity(hass, options.get(key))", discovery)
-        self.assertIn("is_shs_total_price_entity(hass, options.get(key))", CONFIG_PANEL)
-        self.assertIn("is_shs_total_price_entity(self.hass, entity_id)", SENSOR)
+    def test_old_supplier_entity_options_are_removed_on_setup(self) -> None:
+        setup = INIT[INIT.index("async def async_setup_entry") :]
+        self.assertIn("RETIRED_SUPPLIER_PRICE_OPTIONS.intersection(entry.options)", setup)
+        self.assertIn("if key not in RETIRED_SUPPLIER_PRICE_OPTIONS", setup)
 
     def test_changing_the_options_reloads_the_entry(self) -> None:
         # Entities subscribe to the supplier price sensor when they are added.

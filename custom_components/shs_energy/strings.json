@@ -40,13 +40,8 @@
           "entities_total_consumption": "Total consumption (whole home)",
           "entities_battery_charge": "Battery charging energy (optimisation actuals only)",
           "entities_battery_discharge": "Battery discharging energy (optimisation actuals only)",
-          "supplier_import_price_entity": "Electricity price you pay (SEK/kWh, optional)",
-          "supplier_export_price_entity": "Current electricity price paid for exports (SEK/kWh, optional)",
           "forecast_resolution_minutes": "Forecast resolution (minutes)",
           "pv_forecast_entities": "PV forecast entities (timestamped watts attribute)",
-          "supplier_import_forecast_entity": "Supplier import forecast entity",
-          "supplier_export_forecast_entity": "Supplier export/spot forecast entity",
-          "electricity_price_area": "Swedish electricity price area (SE1–SE4)",
           "pv_forecast_latitude": "PV forecast latitude",
           "pv_forecast_longitude": "PV forecast longitude",
           "battery_soc_entity": "Battery state of charge entity",
@@ -130,16 +125,11 @@
         }
       },
       "forecasts": {
-        "title": "Prices and forecasts",
-        "description": "Solar is optional. Import and export prices remain separate because buying and selling have different values. The outdoor temperature sensor and weather entity feed thermal-zone learning; without them heating stays electrically planned but thermally unmodelled.",
+        "title": "Solar and weather forecasts",
+        "description": "Supplier prices are configured and calculated on the Smart Home Solutions website. Solar is optional. The outdoor temperature sensor and weather entity feed thermal-zone learning; without them heating stays electrically planned but thermally unmodelled.",
         "data": {
-          "supplier_import_price_entity": "Current supplier import price",
-          "supplier_export_price_entity": "Current supplier export price",
           "pv_forecast_entities": "PV forecast entities",
-          "supplier_import_forecast_entity": "Import price forecast",
-          "supplier_export_forecast_entity": "Export price forecast",
           "grid_export_power_entity": "Live grid export power",
-          "electricity_price_area": "Swedish price area (SE1–SE4)",
           "outdoor_temperature_entity": "Outdoor temperature sensor",
           "weather_forecast_entity": "Weather entity for the outdoor forecast"
         }

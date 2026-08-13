@@ -40,8 +40,9 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
   15-minute row. It refreshes the rolling 72-hour plan before expiry and
   retries on the next quarter after a failed attempt. Per-second states and
   raw recorder rows never leave HA.
-- **Forecast truth**: PV, supplier import and supplier export forecasts are
-  explicit timestamped sources. The two price directions must be different;
+- **Forecast truth**: PV is an explicit timestamped Home Assistant source.
+  Supplier import and export are distinct server-calculated series based on
+  public Swedish spot prices and the supplier selected on the SHS home profile;
   missing/stale data pauses planning instead of being repeated or substituted.
 - **Local calibration**: each complete Energy Dashboard device gets a
   weekday/weekend empirical 15-minute profile. Only devices classified as
@@ -103,12 +104,11 @@ integration.
 
 PV forecast entities expose timestamped 15-minute values in a `watts`
 attribute. Their location defaults to Home Assistant's configured home
-location. Import and export forecasts stay separate: automatic setup calls
-`tibber.get_prices` for supplier import and
-`nordpool.get_prices_for_date` for export spot, then adds the SHS grid tariff
-once in the matching direction. Explicit canonical forecast entities can be
-selected instead. The price area is discovered from Nord Pool/Tibber where it
-is unambiguous. For an EV current entity, automatic setup shows both its raw
+location. Supplier and Swedish price area are selected on the SHS home profile.
+The SHS service fetches `elprisetjustnu.se`, applies the effective-dated
+supplier terms, and returns separate import/export series; no Tibber or Nord
+Pool Home Assistant integration is required. For an EV current entity,
+automatic setup shows both its raw
 selector bounds and the proposed usable minimum, maximum and increment. Those
 operating values, phase count and voltage must be reviewed explicitly; this
 matters when an entity exposes an `off` value such as 0 A below the charger's

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from math import isfinite
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -30,15 +29,14 @@ from .const import (
     OPT_EV_MAX_CURRENT_A,
     OPT_EV_MIN_CURRENT_A,
     OPT_GRID_EXPORT_POWER_ENTITY,
-    OPT_SUPPLIER_EXPORT_PRICE,
-    OPT_SUPPLIER_IMPORT_PRICE,
     OPT_PLANNING_MODE,
     PLANNING_MODE_DISABLED,
     backend_attributes,
 )
-from .configuration import is_shs_total_price_entity, resolved_options
+from .configuration import resolved_options
 from .optimisation import OptimisationInputError, validate_plan_contract
 from .coordinator import ShsStatusCoordinator
+from .supplier import current_supplier_prices
 
 
 async def async_setup_entry(
@@ -440,19 +438,12 @@ class ShsTariffStatusSensor(ShsBaseSensor):
             "missing_questions": self.coordinator.missing_questions,
             "revisions": revisions,
             "last_error": self.coordinator.last_tariff_error,
+            "supplier_price_error": self.coordinator.last_price_error,
+            "supplier_price_configuration": (
+                self.coordinator.supplier_prices or {}
+            ).get("configuration"),
             "last_calculation_error": self.coordinator.last_calculation_error,
         }
-
-
-def price_from_state(raw: Any) -> float | None:
-    """Read a per-kWh price, or None when the source has nothing usable."""
-    if raw is None or raw in ("unknown", "unavailable", ""):
-        return None
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return None
-    return value if isfinite(value) else None
 
 
 class ShsTotalPriceSensor(ShsBaseSensor):
@@ -466,29 +457,15 @@ class ShsTotalPriceSensor(ShsBaseSensor):
     def __init__(self, coordinator: ShsStatusCoordinator, direction: str) -> None:
         super().__init__(coordinator)
         self.direction = direction
-        self.option_key = (
-            OPT_SUPPLIER_IMPORT_PRICE
-            if direction == "import"
-            else OPT_SUPPLIER_EXPORT_PRICE
-        )
         self._attr_translation_key = f"total_{direction}_price"
         self._attr_unique_id = f"{coordinator.entry.entry_id}_total_{direction}_price"
 
-    @property
-    def _supplier_entity_id(self) -> str | None:
-        entity_id = self.coordinator.entry.options.get(self.option_key) or None
-        return (
-            None
-            if is_shs_total_price_entity(self.hass, entity_id)
-            else entity_id
-        )
-
     def _supplier_price(self) -> float | None:
-        entity_id = self._supplier_entity_id
-        if not entity_id:
+        current = current_supplier_prices(self.coordinator.supplier_prices)
+        if current is None:
             return None
-        state = self.hass.states.get(entity_id)
-        return price_from_state(None if state is None else state.state)
+        value = current.get(f"supplier_{self.direction}_price_sek_per_kwh")
+        return float(value) if isinstance(value, (int, float)) else None
 
     @property
     def native_value(self) -> float | None:
@@ -510,26 +487,18 @@ class ShsTotalPriceSensor(ShsBaseSensor):
                 f"{self.direction}_price_sek_per_kwh"
             ),
             "supplier_price_sek_per_kwh": self._supplier_price(),
-            "supplier_entity_id": self._supplier_entity_id,
+            "supplier": (self.coordinator.supplier_prices or {}).get(
+                "configuration", {}
+            ).get("supplier"),
+            "price_area": (self.coordinator.supplier_prices or {}).get(
+                "configuration", {}
+            ).get("price_area"),
+            "supplier_revisions": (self.coordinator.supplier_prices or {}).get(
+                "revisions", []
+            ),
             "load_period": prices.get("load_period"),
             "tariff_revision": prices.get("tariff_revision"),
         }
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        entity_id = self._supplier_entity_id
-        if entity_id:
-            # The supplier price moves on its own schedule, so follow it
-            # instead of waiting for the next coordinator poll.
-            self.async_on_remove(
-                async_track_state_change_event(
-                    self.hass, [entity_id], self._supplier_changed
-                )
-            )
-
-    @callback
-    def _supplier_changed(self, _event: Any) -> None:
-        self.async_write_ha_state()
 
 
 class ShsGridPriceSensor(ShsBaseSensor):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -103,6 +104,22 @@ class ShsApiClient:
     async def tariff(self) -> dict[str, Any]:
         """Fetch the global catalogue and questionnaire-derived home inputs."""
         return await self._request("GET", "integration-tariff")
+
+    async def prices(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch SHS-calculated supplier prices for the requested local dates."""
+        query = {
+            key: value
+            for key, value in (("from", start_date), ("to", end_date))
+            if value is not None
+        }
+        path = "integration-prices"
+        if query:
+            path = f"{path}?{urlencode(query)}"
+        return await self._request("GET", path)
 
     async def push_readings(
         self,

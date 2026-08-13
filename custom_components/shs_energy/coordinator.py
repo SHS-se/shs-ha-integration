@@ -46,12 +46,7 @@ from .const import (
     OPT_FORECAST_RESOLUTION_MINUTES,
     OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_PREFIX_ENTITIES,
-    OPT_SUPPLIER_EXPORT_PRICE,
-    OPT_SUPPLIER_IMPORT_PRICE,
     OPT_PV_FORECAST_ENTITIES,
-    OPT_SUPPLIER_IMPORT_FORECAST_ENTITY,
-    OPT_SUPPLIER_EXPORT_FORECAST_ENTITY,
-    OPT_ELECTRICITY_PRICE_AREA,
     OPT_PV_FORECAST_LATITUDE,
     OPT_PV_FORECAST_LONGITUDE,
     OPT_BATTERY_SOC_ENTITY,
@@ -167,6 +162,12 @@ from .tariff import (
     tariff_timezone,
     validate_tariff_catalog,
 )
+from .supplier import (
+    SupplierPriceError,
+    hourly_supplier_price_means,
+    supplier_price_forecast,
+    validate_supplier_prices,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -193,9 +194,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.skipped_readings: list[str] = []
         self.supplier_cost_days = 0
         self.tariff_catalog: dict[str, Any] | None = None
+        self.supplier_prices: dict[str, Any] | None = None
         self.tariff_status = "not_configured"
         self.missing_questions: list[str] = []
         self.last_tariff_error: str | None = None
+        self.last_price_error: str | None = None
         self.last_calculation_error: str | None = None
         self.latest_calculation: dict[str, Any] | None = None
         self.optimisation_plan: dict[str, Any] | None = None
@@ -227,9 +230,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._sync_subscription_issue(active)
         if not active:
             self.tariff_catalog = None
+            self.supplier_prices = None
             self.tariff_components = {}
             self.tariff_status = "subscription_inactive"
             self.last_tariff_error = None
+            self.last_price_error = None
             self.missing_questions = []
             self._sync_missing_input_issue()
             return status
@@ -265,6 +270,28 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.tariff_status = "configured"
                 self.missing_questions = []
             self._sync_missing_input_issue()
+        try:
+            prices = await self.client.prices()
+            validate_supplier_prices(prices)
+        except ShsSubscriptionInactiveError:
+            self.supplier_prices = None
+            self.last_price_error = "subscription_inactive"
+            self._sync_subscription_issue(False)
+        except (ShsApiError, SupplierPriceError) as err:
+            self.supplier_prices = None
+            self.last_price_error = str(err)
+            _LOGGER.warning("Supplier price refresh failed: %s", err)
+        else:
+            self.supplier_prices = prices
+            self.last_price_error = None
+            price_questions = missing_input_labels(
+                prices, self.hass.config.language
+            )
+            self.missing_questions = list(dict.fromkeys([
+                *self.missing_questions,
+                *price_questions,
+            ]))
+        self._sync_missing_input_issue()
         return status
 
     def _sync_missing_input_issue(self) -> None:
@@ -283,6 +310,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "questions": "\n".join(f"- {q}" for q in self.missing_questions)
             },
         )
+
+    async def async_price_refresh(self, _now: datetime | None = None) -> None:
+        """Refresh server prices on native Swedish market-quarter boundaries."""
+        await self.async_request_refresh()
 
     def _sync_subscription_issue(self, active: bool) -> None:
         """Raise or clear the subscription repair issue."""
@@ -896,41 +927,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for timestamp, change in sorted(import_by_hour.items())
         ]
 
-    async def _hourly_price_means(
-        self, entity_ids: list[str], start: datetime, end: datetime
-    ) -> dict[str, dict[datetime, float]]:
-        """Read hourly mean prices, keyed by entity then hour."""
-        if not entity_ids:
-            return {}
-        end_utc = dt_util.as_utc(end)
-        stats = await get_instance(self.hass).async_add_executor_job(
-            statistics_during_period,
-            self.hass,
-            dt_util.as_utc(start),
-            end_utc,
-            set(entity_ids),
-            "hour",
-            None,
-            {"mean"},
-        )
-        result: dict[str, dict[datetime, float]] = {}
-        for entity_id, rows in stats.items():
-            means: dict[datetime, float] = {}
-            for row in rows:
-                start_value = row.get("start")
-                mean = row.get("mean")
-                if start_value is None or mean is None:
-                    continue
-                if isinstance(start_value, datetime):
-                    start_utc = start_value.astimezone(timezone.utc)
-                else:
-                    start_utc = dt_util.utc_from_timestamp(float(start_value))
-                if start_utc >= end_utc:
-                    continue
-                means[start_utc] = float(mean)
-            result[entity_id] = means
-        return result
-
     @staticmethod
     def _supplier_sweep_start(
         stored: dict[str, Any], catalog_hash: str | None, today_start: datetime
@@ -965,29 +961,46 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         half of what a day actually cost. Pricing hour by hour rather than on a
         daily average is the whole point: consumption correlates with price.
         """
-        import_entity = self.entry.options.get(OPT_SUPPLIER_IMPORT_PRICE) or None
-        export_entity = self.entry.options.get(OPT_SUPPLIER_EXPORT_PRICE) or None
-        if not import_entity and not export_entity:
-            return []
         readings = await self._hourly_grid_readings(entities_by_category, start, end)
         if not readings:
             return []
-        prices = await self._hourly_price_means(
-            sorted({entity for entity in (import_entity, export_entity) if entity}),
-            start,
-            end,
+
+        current_catalog = self.supplier_prices
+        if not current_catalog or current_catalog.get("configuration") is None:
+            return []
+        terms_valid_from = current_catalog.get("terms_valid_from")
+        if not isinstance(terms_valid_from, str):
+            raise SupplierPriceError("supplier terms have no effective date")
+        cursor = max(
+            start.astimezone(dt_util.DEFAULT_TIME_ZONE).date(),
+            date.fromisoformat(terms_valid_from),
         )
-        import_prices = prices.get(import_entity or "", {})
-        export_prices = prices.get(export_entity or "", {})
+
+        # The edge endpoint deliberately caps one response. Chunking a deep
+        # initial backfill keeps memory and public-source load bounded while
+        # retaining the exact same server-owned tariff terms for every day.
+        last_day = (end.astimezone(dt_util.DEFAULT_TIME_ZONE) - timedelta(
+            microseconds=1
+        )).date()
+        hourly_prices: dict[datetime, dict[str, float]] = {}
+        while cursor <= last_day:
+            chunk_end = min(cursor + timedelta(days=61), last_day)
+            payload = await self.client.prices(
+                cursor.isoformat(), chunk_end.isoformat()
+            )
+            validate_supplier_prices(payload)
+            hourly_prices.update(hourly_supplier_price_means(payload))
+            cursor = chunk_end + timedelta(days=1)
 
         per_day: dict[str, dict[str, float]] = {}
         for reading in readings:
-            import_price = import_prices.get(reading.start)
-            export_price = export_prices.get(reading.start)
-            if import_price is None and export_price is None:
+            prices = hourly_prices.get(reading.start)
+            if prices is None:
                 # No price for this hour: leave the day short rather than
                 # valuing energy at a rate that was never quoted.
                 continue
+            import_price = prices["import"]
+            export_price = prices["export"]
             day = dt_util.as_local(reading.start).date().isoformat()
             totals = per_day.setdefault(
                 day,
@@ -999,12 +1012,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "priced_hours": 0.0,
                 },
             )
-            if import_price is not None:
-                totals["import_kwh"] += reading.import_kwh
-                totals["import_cost_sek"] += reading.import_kwh * import_price
-            if export_price is not None:
-                totals["export_kwh"] += reading.export_kwh
-                totals["export_credit_sek"] += reading.export_kwh * export_price
+            totals["import_kwh"] += reading.import_kwh
+            totals["import_cost_sek"] += reading.import_kwh * import_price
+            totals["export_kwh"] += reading.export_kwh
+            totals["export_credit_sek"] += reading.export_kwh * export_price
             totals["priced_hours"] += 1
 
         return [
@@ -1185,9 +1196,16 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         supplier_sweep_start, deep_sweep = self._supplier_sweep_start(
             stored, catalog_hash, today_start
         )
-        supplier_costs = await self._supplier_daily_costs(
-            daily_entities_by_category, supplier_sweep_start, today_start
-        )
+        supplier_costs_completed = True
+        try:
+            supplier_costs = await self._supplier_daily_costs(
+                daily_entities_by_category, supplier_sweep_start, today_start
+            )
+        except (ShsApiError, SupplierPriceError, ValueError) as err:
+            supplier_costs_completed = False
+            supplier_costs = []
+            self.last_price_error = str(err)
+            _LOGGER.warning("Supplier-cost pricing failed: %s", err)
         self.supplier_cost_days = len(supplier_costs)
         if not readings and not calculations and not supplier_costs:
             if tariff_attempted and catalog_hash:
@@ -1216,7 +1234,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             stored["last_push_date"] = self.last_push_date
         if tariff_attempted and catalog_hash:
             stored["tariff_catalog_hash"] = catalog_hash
-        if deep_sweep:
+        if deep_sweep and supplier_costs_completed:
             # Only once the portal has accepted it, so a failed push repeats the
             # sweep rather than marking history done that never landed.
             stored["supplier_costs_backfilled"] = True
@@ -1251,20 +1269,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             options[OPT_GRID_EXPORT_LIMIT_W] = options[OPT_GRID_IMPORT_LIMIT_W]
         required = [
             OPT_FORECAST_RESOLUTION_MINUTES,
-            OPT_ELECTRICITY_PRICE_AREA,
             OPT_GRID_IMPORT_LIMIT_W,
             OPT_GRID_EXPORT_LIMIT_W,
         ]
-        if not options.get(
-            OPT_SUPPLIER_IMPORT_FORECAST_ENTITY
-        ) and not self.hass.services.has_service("tibber", "get_prices"):
-            required.append(OPT_SUPPLIER_IMPORT_FORECAST_ENTITY)
-        if not options.get(
-            OPT_SUPPLIER_EXPORT_FORECAST_ENTITY
-        ) and not self.hass.services.has_service(
-            "nordpool", "get_prices_for_date"
-        ):
-            required.append(OPT_SUPPLIER_EXPORT_FORECAST_ENTITY)
         entities = self._configured_entities()
         can_derive_total = bool(entities.get("grid_import"))
         if not entities.get("total_consumption") and not can_derive_total:
@@ -1346,17 +1353,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 for key in confirmation_keys
                 if options.get(key) is not True and key not in missing
             )
-        if options.get(OPT_SUPPLIER_IMPORT_FORECAST_ENTITY) == options.get(
-            OPT_SUPPLIER_EXPORT_FORECAST_ENTITY
-        ) and options.get(OPT_SUPPLIER_IMPORT_FORECAST_ENTITY):
-            missing.append(
-                "supplier import and export forecasts must be different entities"
-            )
         if options.get(OPT_FORECAST_RESOLUTION_MINUTES) not in (None, 15):
             missing.append("forecast resolution must be 15 minutes")
         groups: list[str] = []
-        if any("forecast" in value or value == OPT_ELECTRICITY_PRICE_AREA for value in missing):
-            groups.append("Prices: separate import and export forecasts plus the Swedish price area")
         if any("battery" in value or "terminal" in value for value in missing):
             groups.append("Battery: state of charge and equipment ratings")
         if any("pool" in value for value in missing):
@@ -1390,99 +1389,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "last_updated": state.last_updated,
             "last_reported": state.last_reported,
         }
-
-    async def _tibber_import_forecast(
-        self, start: datetime, end: datetime, captured: datetime
-    ) -> tuple[dict[datetime, float], list[str], datetime]:
-        """Read native quarter-hour supplier prices from Tibber's action."""
-        if not self.hass.services.has_service("tibber", "get_prices"):
-            raise OptimisationInputError(
-                "import price forecast needs a canonical entity or tibber.get_prices"
-            )
-        try:
-            response = await self.hass.services.async_call(
-                "tibber",
-                "get_prices",
-                {"start": start.isoformat(), "end": end.isoformat()},
-                blocking=True,
-                return_response=True,
-            )
-        except HomeAssistantError as err:
-            raise OptimisationInputError(
-                "Tibber did not return an import price forecast"
-            ) from err
-        groups = (response or {}).get("prices")
-        if not isinstance(groups, dict) or len(groups) != 1:
-            raise OptimisationInputError(
-                "tibber.get_prices must return exactly one configured home"
-            )
-        records = next(iter(groups.values()))
-        return extract_timestamped_forecast(
-            [{
-                "entity_id": "service.tibber.get_prices",
-                "last_updated": captured,
-                "attributes": {"forecast": records},
-            }],
-            attribute_names=("forecast",),
-            value_keys=("price", "total", "value"),
-        )
-
-    async def _nordpool_export_forecast(
-        self,
-        horizon: list[datetime],
-        price_area: str,
-        captured: datetime,
-    ) -> tuple[dict[datetime, float], list[str], datetime]:
-        """Read official Nord Pool spot prices and convert SEK/MWh to SEK/kWh."""
-        if not self.hass.services.has_service("nordpool", "get_prices_for_date"):
-            raise OptimisationInputError(
-                "export price forecast needs a canonical entity or "
-                "nordpool.get_prices_for_date"
-            )
-        entries = self.hass.config_entries.async_entries("nordpool")
-        if len(entries) != 1:
-            raise OptimisationInputError(
-                "Nord Pool export forecast needs exactly one configured entry"
-            )
-        records: list[Any] = []
-        days = sorted({
-            slot.astimezone(dt_util.DEFAULT_TIME_ZONE).date() for slot in horizon
-        })
-        for day in days:
-            try:
-                response = await self.hass.services.async_call(
-                    "nordpool",
-                    "get_prices_for_date",
-                    {
-                        "config_entry": entries[0].entry_id,
-                        "date": day.isoformat(),
-                        "areas": [price_area],
-                        "currency": "SEK",
-                    },
-                    blocking=True,
-                    return_response=True,
-                )
-            except HomeAssistantError as err:
-                if not records:
-                    raise OptimisationInputError(
-                        "Nord Pool did not publish the first required price day"
-                    ) from err
-                break
-            records.append(response)
-        values, _used, issued = extract_timestamped_forecast(
-            [{
-                "entity_id": "service.nordpool.get_prices_for_date",
-                "last_updated": captured,
-                "attributes": {"forecast": records},
-            }],
-            attribute_names=("forecast",),
-            value_keys=("price", "value"),
-        )
-        return (
-            {timestamp: value / 1_000 for timestamp, value in values.items()},
-            ["service.nordpool.get_prices_for_date"],
-            issued,
-        )
 
     async def _category_quarter_changes(
         self,
@@ -1972,26 +1878,32 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pv = {start: 0.0 for start in horizon}
             pv_used = []
             pv_issued = captured
-        import_entity = (
-            self._entity_payload(options[OPT_SUPPLIER_IMPORT_FORECAST_ENTITY])
-            if options.get(OPT_SUPPLIER_IMPORT_FORECAST_ENTITY)
-            else None
-        )
-        export_entity = (
-            self._entity_payload(options[OPT_SUPPLIER_EXPORT_FORECAST_ENTITY])
-            if options.get(OPT_SUPPLIER_EXPORT_FORECAST_ENTITY)
-            else None
-        )
         battery_entity = (
             self._entity_payload(options[OPT_BATTERY_SOC_ENTITY])
             if options.get(OPT_BATTERY_SOC_ENTITY)
             else None
         )
-        price_area = str(options[OPT_ELECTRICITY_PRICE_AREA]).strip().upper()
-        if price_area not in {"SE1", "SE2", "SE3", "SE4"}:
+        price_catalog = self.supplier_prices
+        if not price_catalog or price_catalog.get("configuration") is None:
             raise OptimisationInputError(
-                f"{OPT_ELECTRICITY_PRICE_AREA} must be SE1, SE2, SE3 or SE4"
+                "supplier and price area must be configured on the website"
             )
+        prices = supplier_price_forecast(price_catalog)
+        import_prices = {
+            start: values["import"] for start, values in prices.items()
+        }
+        export_prices = {
+            start: values["export"] for start, values in prices.items()
+        }
+        price_area = price_catalog["configuration"]["price_area"]
+        try:
+            price_issued = datetime.fromisoformat(
+                price_catalog["issued_at"]
+            ).astimezone(timezone.utc)
+        except (KeyError, TypeError, ValueError) as err:
+            raise OptimisationInputError(
+                "server supplier prices have no valid issue time"
+            ) from err
         pv_latitude = parse_number(
             options[OPT_PV_FORECAST_LATITUDE], OPT_PV_FORECAST_LATITUDE
         )
@@ -2018,77 +1930,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise OptimisationInputError(
                     f"{payload['entity_id']} forecast location does not match the configured home"
                 )
-        for payload, label in (
-            (import_entity, OPT_SUPPLIER_IMPORT_FORECAST_ENTITY),
-            (export_entity, OPT_SUPPLIER_EXPORT_FORECAST_ENTITY),
-        ):
-            if payload is None:
-                continue
-            if payload["attributes"].get("unit_of_measurement") != "SEK/kWh":
-                raise OptimisationInputError(
-                    f"{label} must declare unit SEK/kWh"
-                )
-            declared_area = next(
-                (
-                    str(payload["attributes"][key]).upper()
-                    for key in ("price_area", "area", "region")
-                    if payload["attributes"].get(key)
-                ),
-                None,
-            )
-            if declared_area is not None and declared_area != price_area:
-                raise OptimisationInputError(
-                    f"{label} declares {declared_area}, expected {price_area}"
-                )
-        if import_entity:
-            import_prices, import_used, import_issued = extract_timestamped_forecast(
-                [import_entity],
-                attribute_names=(
-                    "prices", "forecast", "today", "tomorrow",
-                    "raw_today", "raw_tomorrow",
-                ),
-                value_keys=("price", "total", "value", "price_sek_per_kwh"),
-            )
-            import_provider = "home_assistant_entity"
-        else:
-            import_prices, import_used, import_issued = (
-                await self._tibber_import_forecast(
-                    horizon[0], horizon_end, captured
-                )
-            )
-            import_provider = "tibber.get_prices"
-        if export_entity:
-            export_prices, export_used, export_issued = extract_timestamped_forecast(
-                [export_entity],
-                attribute_names=(
-                    "prices", "forecast", "today", "tomorrow",
-                    "raw_today", "raw_tomorrow",
-                ),
-                value_keys=("price", "spot", "value", "price_sek_per_kwh"),
-            )
-            export_provider = "home_assistant_entity"
-        else:
-            export_prices, export_used, export_issued = (
-                await self._nordpool_export_forecast(
-                    horizon, price_area, captured
-                )
-            )
-            export_provider = "nordpool.get_prices_for_date"
         if pv_entities:
             require_fresh_source(
                 pv_issued, captured, max_age=timedelta(hours=12), label="PV forecast"
             )
         require_fresh_source(
-            import_issued,
+            price_issued,
             captured,
             max_age=timedelta(hours=48),
-            label="import price forecast",
-        )
-        require_fresh_source(
-            export_issued,
-            captured,
-            max_age=timedelta(hours=48),
-            label="export price forecast",
+            label="server supplier price forecast",
         )
         if battery_entity:
             require_fresh_source(
@@ -2312,8 +2162,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if battery_entity else None
         )
         valid_pv = max(pv) + timedelta(minutes=15)
-        valid_import = max(import_prices) + timedelta(minutes=15)
-        valid_export = max(export_prices) + timedelta(minutes=15)
+        valid_prices = max(import_prices) + timedelta(minutes=15)
         calibrated = any(
             count >= 20 for count in calibration["sample_count_by_lead_day"]
         )
@@ -2388,18 +2237,18 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "sample_count": sample_count,
                 },
                 "import_price": {
-                    "provider": import_provider,
-                    "entity_ids": import_used,
-                    "issued_at": import_issued.isoformat(),
-                    "valid_until": valid_import.isoformat(),
+                    "provider": "smart_home_solutions",
+                    "entity_ids": ["shs:supplier_import"],
+                    "issued_at": price_issued.isoformat(),
+                    "valid_until": valid_prices.isoformat(),
                     "quality": "provider_raw",
                     "location": {"market_area": price_area},
                 },
                 "export_price": {
-                    "provider": export_provider,
-                    "entity_ids": export_used,
-                    "issued_at": export_issued.isoformat(),
-                    "valid_until": valid_export.isoformat(),
+                    "provider": "smart_home_solutions",
+                    "entity_ids": ["shs:supplier_export"],
+                    "issued_at": price_issued.isoformat(),
+                    "valid_until": valid_prices.isoformat(),
                     "quality": "provider_raw",
                     "location": {"market_area": price_area},
                 },

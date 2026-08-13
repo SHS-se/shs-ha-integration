@@ -57,12 +57,17 @@ OPT_PREFIX_ENTITIES = "entities_"  # e.g. options["entities_heating"] = [...]
 
 # The supplier sells the energy itself; the grid tariff never covers it. Point
 # these at whatever integration provides those prices to get an all-in figure.
-OPT_SUPPLIER_IMPORT_PRICE = "supplier_import_price_entity"
-OPT_SUPPLIER_EXPORT_PRICE = "supplier_export_price_entity"
 
 # Price-forecast slot length. Swedish settlement moved to quarter-hours, and an
 # optimiser wants the series on its own timestep, so this is configurable.
 OPT_FORECAST_RESOLUTION_MINUTES = "forecast_resolution_minutes"
+RETIRED_SUPPLIER_PRICE_OPTIONS = frozenset({
+    "supplier_import_price_entity",
+    "supplier_export_price_entity",
+    "supplier_import_forecast_entity",
+    "supplier_export_forecast_entity",
+    "electricity_price_area",
+})
 DEFAULT_FORECAST_RESOLUTION_MINUTES = 15
 
 # Planning is opt-in. Monitoring and tariff uploads keep working when planning
@@ -79,9 +84,6 @@ OPT_DEVICE_CONTROL_MAPPINGS = "device_control_mappings"
 # Live optimisation inputs. Forecast entities must expose timestamped values;
 # the integration does not infer a provider, unit, location or missing series.
 OPT_PV_FORECAST_ENTITIES = "pv_forecast_entities"
-OPT_SUPPLIER_IMPORT_FORECAST_ENTITY = "supplier_import_forecast_entity"
-OPT_SUPPLIER_EXPORT_FORECAST_ENTITY = "supplier_export_forecast_entity"
-OPT_ELECTRICITY_PRICE_AREA = "electricity_price_area"
 OPT_PV_FORECAST_LATITUDE = "pv_forecast_latitude"
 OPT_PV_FORECAST_LONGITUDE = "pv_forecast_longitude"
 OPT_BATTERY_SOC_ENTITY = "battery_soc_entity"
@@ -166,6 +168,7 @@ STORAGE_VERSION = 1
 STORAGE_KEY_TEMPLATE = "shs_energy.{entry_id}"
 
 STATUS_POLL_INTERVAL_HOURS = 1
+PRICE_REFRESH_SECOND = 5
 PUSH_TIME_HOUR = 0
 PUSH_TIME_MINUTE = 20
 BACKFILL_MAX_DAYS = 30

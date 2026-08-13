@@ -20,7 +20,6 @@ from . import const as shs_const
 from .api import ShsApiError
 from .configuration import (
     async_discover_configuration,
-    is_shs_total_price_entity,
     optimisation_defaults,
     resolved_options,
     suggest_device_control_mapping,
@@ -336,27 +335,10 @@ def _configuration_sections() -> list[dict[str, Any]]:
         {
             "id": "prices_forecasts",
             "tab": "inputs",
-            "title": "Prices, solar and electrical measurements",
-            "description": "Import and export remain separate because buying and selling have different values.",
+            "title": "Solar and electrical measurements",
+            "description": "Supplier and price area are configured on the Smart Home Solutions website; prices are fetched and calculated by the service.",
             "fields": [
-                _field(
-                    c.OPT_SUPPLIER_IMPORT_PRICE,
-                    "Current supplier import price",
-                    "entity",
-                    help_text="Energy price before the grid import tariff. Do not select a Smart Home Solutions total-price entity.",
-                    domains=("sensor",),
-                ),
-                _field(
-                    c.OPT_SUPPLIER_EXPORT_PRICE,
-                    "Current supplier export price",
-                    "entity",
-                    help_text="Energy price paid for exports before the grid export credit. It may use the same source as import when the supplier prices are identical.",
-                    domains=("sensor",),
-                ),
                 _field(c.OPT_PV_FORECAST_ENTITIES, "Solar forecast", "entities", domains=("sensor",)),
-                _field(c.OPT_SUPPLIER_IMPORT_FORECAST_ENTITY, "Import-price forecast", "entity", domains=("sensor",)),
-                _field(c.OPT_SUPPLIER_EXPORT_FORECAST_ENTITY, "Export-price forecast", "entity", domains=("sensor",)),
-                _field(c.OPT_ELECTRICITY_PRICE_AREA, "Swedish price area", "select", choices=(("SE1", "SE1"), ("SE2", "SE2"), ("SE3", "SE3"), ("SE4", "SE4"))),
                 _field(c.OPT_GRID_EXPORT_POWER_ENTITY, "Instantaneous grid-export power", "entity", domains=("sensor",)),
                 _field(c.OPT_PV_FORECAST_LATITUDE, "Solar forecast latitude", "number", step=0.00001),
                 _field(c.OPT_PV_FORECAST_LONGITUDE, "Solar forecast longitude", "number", step=0.00001),
@@ -825,15 +807,6 @@ async def async_apply_configuration(
                 options.pop(key, None)
             else:
                 options[key] = value
-    for key, label in (
-        (shs_const.OPT_SUPPLIER_IMPORT_PRICE, "Current supplier import price"),
-        (shs_const.OPT_SUPPLIER_EXPORT_PRICE, "Current supplier export price"),
-    ):
-        if is_shs_total_price_entity(hass, options.get(key)):
-            raise ValueError(
-                f"Prices, solar and electrical measurements: {label} cannot "
-                "use a calculated Smart Home Solutions total-price entity"
-            )
     if options.get(shs_const.OPT_PLANNING_MODE) not in {
         shs_const.PLANNING_MODE_DISABLED,
         shs_const.PLANNING_MODE_LIVE,

@@ -19,14 +19,12 @@ from homeassistant.components.energy import async_get_manager
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.core import HomeAssistant, State
-from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .const import (
     CONFIGURABLE_CATEGORIES,
     DEFAULT_FORECAST_RESOLUTION_MINUTES,
     DEFAULT_PLANNING_MODE,
-    DOMAIN,
     OPT_AUTOMATIC_SETUP,
     OPT_BATTERY_CAPACITY_KWH,
     OPT_BATTERY_CHARGE_EFFICIENCY,
@@ -47,7 +45,6 @@ from .const import (
     OPT_BOILER_POWER_W,
     OPT_DISCOVERY_EVIDENCE,
     OPT_DEVICE_CONTROL_MAPPINGS,
-    OPT_ELECTRICITY_PRICE_AREA,
     OPT_OUTDOOR_TEMPERATURE_ENTITY,
     OPT_WEATHER_FORECAST_ENTITY,
     OPT_EV_BATTERY_KWH,
@@ -84,32 +81,10 @@ from .const import (
     OPT_PV_FORECAST_ENTITIES,
     OPT_PV_FORECAST_LATITUDE,
     OPT_PV_FORECAST_LONGITUDE,
-    OPT_SUPPLIER_EXPORT_FORECAST_ENTITY,
-    OPT_SUPPLIER_EXPORT_PRICE,
-    OPT_SUPPLIER_IMPORT_FORECAST_ENTITY,
-    OPT_SUPPLIER_IMPORT_PRICE,
     OPT_TERMINAL_ENERGY_VALUE,
     OPT_TERMINAL_SOC_MIN,
 )
 from .optimisation import suggested_device_planning, suggested_load_type
-
-
-_TOTAL_PRICE_UNIQUE_ID_SUFFIXES = (
-    "_total_import_price",
-    "_total_export_price",
-)
-
-
-def is_shs_total_price_entity(hass: HomeAssistant, entity_id: Any) -> bool:
-    """Return whether an entity is one of this integration's calculated totals."""
-    if not isinstance(entity_id, str) or not entity_id:
-        return False
-    registry_entry = er.async_get(hass).async_get(entity_id)
-    return bool(
-        registry_entry
-        and registry_entry.platform == DOMAIN
-        and registry_entry.unique_id.endswith(_TOTAL_PRICE_UNIQUE_ID_SUFFIXES)
-    )
 
 
 def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
@@ -518,34 +493,6 @@ def suggest_device_control_mapping(
     return mapping
 
 
-def _price_area(hass: HomeAssistant, states: Iterable[State]) -> str | None:
-    found: set[str] = set()
-
-    def walk(value: Any) -> None:
-        if isinstance(value, str):
-            found.update(re.findall(r"\bSE[1-4]\b", value.upper()))
-        elif isinstance(value, dict):
-            for child in value.values():
-                walk(child)
-        elif isinstance(value, (list, tuple, set)):
-            for child in value:
-                walk(child)
-
-    for state in states:
-        found.update(
-            f"SE{match}"
-            for match in re.findall(r"nord[_-]?pool[_-]?se([1-4])", state.entity_id)
-        )
-        walk(state.attributes.get("price_area"))
-        walk(state.attributes.get("area"))
-        walk(state.attributes.get("region"))
-    for domain in ("nordpool", "nord_pool", "tibber"):
-        for entry in hass.config_entries.async_entries(domain):
-            walk(entry.data)
-            walk(entry.options)
-    return next(iter(found)) if len(found) == 1 else None
-
-
 async def async_discover_configuration(
     hass: HomeAssistant, existing: dict[str, Any]
 ) -> dict[str, Any]:
@@ -590,9 +537,6 @@ async def async_discover_configuration(
     manager = await async_get_manager(hass)
     preferences = manager.data or manager.default_preferences()
     mapped: dict[str, list[str]] = {}
-    import_prices: list[str] = []
-    export_prices: list[str] = []
-
     for source in preferences.get("energy_sources", []):
         source_type = source.get("type")
         if source_type == "grid":
@@ -619,20 +563,6 @@ async def async_discover_configuration(
             ]
             mapped["grid_import"] = list(dict.fromkeys(grid_import))
             mapped["grid_export"] = list(dict.fromkeys(grid_export))
-            if source.get("entity_energy_price"):
-                import_prices.append(source["entity_energy_price"])
-            if source.get("entity_energy_price_export"):
-                export_prices.append(source["entity_energy_price_export"])
-            import_prices.extend(
-                flow["entity_energy_price"]
-                for flow in source.get("flow_from", [])
-                if flow.get("entity_energy_price")
-            )
-            export_prices.extend(
-                flow["entity_energy_price"]
-                for flow in source.get("flow_to", [])
-                if flow.get("entity_energy_price")
-            )
         elif source_type == "solar":
             if value := _entity_id(source.get("stat_energy_from")):
                 mapped.setdefault("solar_production", []).append(value)
@@ -681,37 +611,6 @@ async def async_discover_configuration(
                 else "Aggregate statistic selected in Home Assistant Energy"
             ),
         )
-    import_prices = [
-        entity_id
-        for entity_id in dict.fromkeys(import_prices)
-        if not is_shs_total_price_entity(hass, entity_id)
-    ]
-    export_prices = [
-        entity_id
-        for entity_id in dict.fromkeys(export_prices)
-        if not is_shs_total_price_entity(hass, entity_id)
-    ]
-    for key in (OPT_SUPPLIER_IMPORT_PRICE, OPT_SUPPLIER_EXPORT_PRICE):
-        if is_shs_total_price_entity(hass, options.get(key)):
-            options.pop(key, None)
-
-    if import_prices:
-        record(
-            OPT_SUPPLIER_IMPORT_PRICE,
-            import_prices[0],
-            source="energy_dashboard",
-            confidence="authoritative",
-            detail="Current import price selected in Home Assistant Energy",
-        )
-    if export_prices:
-        record(
-            OPT_SUPPLIER_EXPORT_PRICE,
-            export_prices[0],
-            source="energy_dashboard",
-            confidence="authoritative",
-            detail="Current export price selected in Home Assistant Energy",
-        )
-
     pv_forecasts = sorted(
         state.entity_id
         for state in states
@@ -726,24 +625,6 @@ async def async_discover_configuration(
             source="timestamped_watts_contract",
             confidence="high",
             detail="Entity exposes timestamped watts rather than positional samples",
-        )
-
-    # SHS grid-price sensors are network tariffs, not supplier forecasts.
-    for key in (
-        OPT_SUPPLIER_IMPORT_FORECAST_ENTITY,
-        OPT_SUPPLIER_EXPORT_FORECAST_ENTITY,
-    ):
-        if str(options.get(key, "")).startswith(
-            "sensor.smart_home_solutions_grid_"
-        ):
-            options.pop(key, None)
-    if area := _price_area(hass, states):
-        record(
-            OPT_ELECTRICITY_PRICE_AREA,
-            area,
-            source="price_provider_configuration",
-            confidence="high",
-            detail="One unambiguous Swedish market area was declared",
         )
 
     battery_soc_ids = ("sensor.sigen_plant_battery_state_of_charge",)
@@ -1200,13 +1081,6 @@ async def async_discover_configuration(
             ),
             "requires_confirmation": True,
             "electrical_values_require_confirmation": True,
-        },
-        "prices": {
-            "area": options.get(OPT_ELECTRICITY_PRICE_AREA),
-            "tibber_service": hass.services.has_service("tibber", "get_prices"),
-            "nordpool_service": hass.services.has_service(
-                "nordpool", "get_prices_for_date"
-            ),
         },
     }
     for key in (

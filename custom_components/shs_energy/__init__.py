@@ -21,6 +21,8 @@ from .const import (
     CONF_DEVICE_TOKEN,
     PUSH_TIME_HOUR,
     PUSH_TIME_MINUTE,
+    PRICE_REFRESH_SECOND,
+    RETIRED_SUPPLIER_PRICE_OPTIONS,
     OPTIMISATION_PUSH_SECOND,
     OPTIMISATION_STARTUP_DELAY_SECONDS,
     OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS,
@@ -137,6 +139,15 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
     """Set up from a config entry."""
+    if RETIRED_SUPPLIER_PRICE_OPTIONS.intersection(entry.options):
+        hass.config_entries.async_update_entry(
+            entry,
+            options={
+                key: value
+                for key, value in entry.options.items()
+                if key not in RETIRED_SUPPLIER_PRICE_OPTIONS
+            },
+        )
     client = ShsApiClient(
         async_get_clientsession(hass),
         entry.data[CONF_BASE_URL],
@@ -162,6 +173,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     entry.async_create_background_task(
         hass, coordinator.async_scheduled_push(), name="shs_energy_startup_push"
     )
+    # The public market and supplier terms are native quarter-hour series. Keep
+    # total-price sensors aligned even when the integration was loaded between
+    # quarter boundaries.
+    entry.async_on_unload(
+        async_track_time_change(
+            hass,
+            coordinator.async_price_refresh,
+            minute=[0, 15, 30, 45],
+            second=PRICE_REFRESH_SECOND,
+        )
+    )
     # Quarter-hour exchange. Recorder samples are aggregated locally; the
     # website receives one completed 15-minute row, never per-second history.
     entry.async_on_unload(
@@ -178,7 +200,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         name="shs_energy_startup_optimisation_push",
     )
 
-    # React to a changed category→sensor mapping or price entity.
+    # React to changed local meter and device-control mappings.
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
@@ -186,10 +208,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
 async def _async_options_updated(
     hass: HomeAssistant, entry: ShsEnergyConfigEntry
 ) -> None:
-    # A full reload, not just a re-push: entities subscribe to the configured
-    # supplier price sensor when they are added, so an entity picked after
-    # setup would never be watched and its total would only move on the hourly
-    # coordinator poll. Setting up again re-pushes on its own.
+    # A full reload ensures changed entity mappings are reflected by all
+    # platforms before the next recorder aggregation.
     await hass.config_entries.async_reload(entry.entry_id)
 
 
