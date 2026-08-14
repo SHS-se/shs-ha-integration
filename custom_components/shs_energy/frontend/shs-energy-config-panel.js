@@ -21,6 +21,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._tab = "overview";
     this._loading = false;
     this._saving = false;
+    this._savingDeviceKey = "";
     this._error = "";
     this._notice = "";
     this._entryId = new URLSearchParams(window.location.search).get("config_entry");
@@ -83,6 +84,27 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return JSON.stringify(this._draft) !== JSON.stringify(this._savedDraft);
   }
 
+  get _configurationDirty() {
+    const draft = this._clone(this._draft || {});
+    const saved = this._clone(this._savedDraft || {});
+    delete draft[MAPPINGS_KEY];
+    delete saved[MAPPINGS_KEY];
+    return JSON.stringify(draft) !== JSON.stringify(saved);
+  }
+
+  _deviceDirty(deviceKey) {
+    const draft = this._draft?.[MAPPINGS_KEY]?.[deviceKey];
+    const saved = this._savedDraft?.[MAPPINGS_KEY]?.[deviceKey];
+    return JSON.stringify(draft) !== JSON.stringify(saved);
+  }
+
+  _entityLabel(entityId) {
+    const entity = this._data?.entities?.find((item) => item.entity_id === entityId);
+    return entity && entity.name !== entityId
+      ? `${entity.name} · ${entityId}`
+      : entityId;
+  }
+
   async _load(refreshRoles) {
     if (!this._hass || this._loading) return;
     this._loading = true;
@@ -110,24 +132,75 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   async _save() {
-    if (!this._dirty || this._saving || !this._entryId) return;
+    if (
+      !this._configurationDirty || this._saving || this._savingDeviceKey ||
+      !this._entryId
+    ) return;
     this._saving = true;
     this._error = "";
     this._notice = "";
     this._render();
+    const configuration = this._clone(this._draft);
+    delete configuration[MAPPINGS_KEY];
     try {
       await this._hass.callWS({
         type: "shs_energy/config/save",
         config_entry: this._entryId,
-        configuration: this._draft,
+        configuration,
       });
+      const savedMappings = this._clone(this._savedDraft?.[MAPPINGS_KEY] || {});
       this._savedDraft = this._clone(this._draft);
+      this._savedDraft[MAPPINGS_KEY] = savedMappings;
       this._notice =
-        "Configuration saved. Home Assistant is reloading the integration; no device controls were changed or enabled by this page.";
+        "General configuration saved. Device-card drafts still need their own Save configuration button.";
     } catch (error) {
       this._error = error?.message || String(error);
     } finally {
       this._saving = false;
+      this._render();
+    }
+  }
+
+  async _saveDevice(deviceKey) {
+    if (
+      !this._deviceDirty(deviceKey) ||
+      this._savingDeviceKey ||
+      this._saving ||
+      !this._entryId
+    ) return;
+    this._savingDeviceKey = deviceKey;
+    this._error = "";
+    this._notice = "";
+    this._render();
+    const mapping = this._clone(
+      this._draft?.[MAPPINGS_KEY]?.[deviceKey] || null
+    );
+    try {
+      const result = await this._hass.callWS({
+        type: "shs_energy/config/save_device",
+        config_entry: this._entryId,
+        device_key: deviceKey,
+        mapping,
+      });
+      if (!this._savedDraft[MAPPINGS_KEY]) this._savedDraft[MAPPINGS_KEY] = {};
+      if (mapping) {
+        this._savedDraft[MAPPINGS_KEY][deviceKey] = this._clone(mapping);
+      } else {
+        delete this._savedDraft[MAPPINGS_KEY][deviceKey];
+      }
+      const device = this._data.devices.find((item) => item.key === deviceKey);
+      if (device) {
+        device.mapping_status = result.mapping_status;
+        device.mapping_error = result.mapping_error;
+        device.mapping_summary = result.mapping_summary || {};
+      }
+      this._notice = mapping
+        ? `${device?.name || deviceKey} is saved and ${result.mapping_status === "ready" ? "ready" : this._human(result.mapping_status)} on the website.`
+        : `${device?.name || deviceKey} is no longer locally mapped.`;
+    } catch (error) {
+      this._error = error?.message || String(error);
+    } finally {
+      this._savingDeviceKey = "";
       this._render();
     }
   }
@@ -295,6 +368,16 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (!field) return;
     const value = field.kind === "toggle" ? element.checked : element.value;
     this._setField(scope, key, value, field, deviceKey);
+    if (scope === "mapping" && key === "control_entity_id" && value) {
+      const entity = this._data.entities.find((item) => item.entity_id === value);
+      const mapping = this._mapping(deviceKey, true);
+      if (mapping.minimum_value === undefined && Number.isFinite(Number(entity?.minimum))) {
+        mapping.minimum_value = Number(entity.minimum);
+      }
+      if (mapping.maximum_value === undefined && Number.isFinite(Number(entity?.maximum))) {
+        mapping.maximum_value = Number(entity.maximum);
+      }
+    }
     this._notice = "";
     this._render();
   }
@@ -306,6 +389,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (!action) return;
     if (action === "back") this._goBack();
     else if (action === "save") this._save();
+    else if (action === "save-device") this._saveDevice(button.dataset.deviceKey);
     else if (action === "discard") this._discard();
     else if (action === "refresh") this._load(true);
     else if (action === "retry") this._load(false);
@@ -361,13 +445,23 @@ class ShsEnergyConfigPanel extends HTMLElement {
           )
           .join("")}
       </select>`;
+    } else if (field.kind === "area") {
+      control = `<select ${common}>
+        <option value="">Select a room…</option>
+        ${(this._data.areas || [])
+          .map(
+            (area) =>
+              `<option value="${this._escape(area.id)}" ${area.id === value ? "selected" : ""}>${this._escape(area.name)}</option>`
+          )
+          .join("")}
+      </select>`;
     } else if (field.kind === "entities") {
       const values = Array.isArray(value) ? value : [];
       control = `<div class="multi-editor">
         <div class="chips">
           ${values
             .map(
-              (entityId) => `<span class="chip">${this._escape(entityId)}<button type="button" aria-label="Remove ${this._escape(entityId)}" data-action="remove-multi" data-scope="${this._escape(scope)}" data-device-key="${this._escape(deviceKey)}" data-field-key="${key}" data-value="${this._escape(entityId)}">×</button></span>`
+              (entityId) => `<span class="chip">${this._escape(this._entityLabel(entityId))}<button type="button" aria-label="Remove ${this._escape(entityId)}" data-action="remove-multi" data-scope="${this._escape(scope)}" data-device-key="${this._escape(deviceKey)}" data-field-key="${key}" data-value="${this._escape(entityId)}">×</button></span>`
             )
             .join("")}
         </div>
@@ -380,6 +474,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
       control = `<div class="with-unit"><input type="number" ${common} value="${this._escape(displayed)}" ${field.step !== undefined ? `step="${field.step}"` : ""} ${field.minimum !== undefined ? `min="${field.minimum}"` : ""} ${field.maximum !== undefined ? `max="${field.maximum}"` : ""}><span>${this._escape(field.unit || "")}</span></div>`;
     } else if (field.kind === "time") {
       control = `<input type="time" ${common} value="${this._escape(value || "")}">`;
+    } else if (field.kind === "power") {
+      control = `<div class="with-unit"><input type="text" list="shs-power-list" ${common} value="${this._escape(value ?? "")}" placeholder="Power entity or watts"><span>W</span></div>`;
     } else {
       control = `<input type="text" ${common} ${field.kind === "entity" ? 'list="shs-entity-list"' : ""} value="${this._escape(value || "")}" placeholder="${field.kind === "entity" ? "Search or enter an entity" : ""}">`;
     }
@@ -468,7 +564,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _thermalStatusText(thermal) {
     const messages = {
       not_requested: "No setpoint-controlled thermal zones are requested by the website.",
-      device_mappings_required: `${thermal.mapped_zones} of ${thermal.requested_zones} thermal zones have complete local mappings.`,
+      device_mappings_required: `${thermal.mapped_zones} of ${thermal.requested_zones} heating-device mappings are complete.`,
       outdoor_sources_required: "Zone mappings are ready; measured outdoor temperature and weather forecast still need confirmation.",
       waiting_for_history: "Inputs are mapped. Waiting for complete recorder quarters to be accepted by the website.",
       observations_published: thermal.accepted_until
@@ -480,7 +576,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _renderDevice(device) {
     const mapping = this._mapping(device.key) || {};
-    const open = device.mapping_status !== "ready" ? "open" : "";
+    const dirty = this._deviceDirty(device.key);
+    const saving = this._savingDeviceKey === device.key;
+    const open = device.mapping_status !== "ready" || dirty ? "open" : "";
     const suggestionCount = Object.keys(device.suggested_mapping || {}).filter(
       (key) => key !== "control_type" && mapping[key] === undefined
     ).length;
@@ -494,8 +592,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
         ${device.stale_mapping_control_type ? `<div class="inline-warning">The website changed this device from ${this._escape(this._human(device.stale_mapping_control_type))} to ${this._escape(this._human(device.control_type))}. The old mapping is ignored.</div>` : ""}
         ${device.mapping_error ? `<div class="inline-warning">${this._escape(device.mapping_error)}</div>` : ""}
         <div class="device-actions">
-          <button type="button" class="secondary" data-action="use-suggestions" data-device-key="${this._escape(device.key)}" ${suggestionCount ? "" : "disabled"}>Use ${suggestionCount} suggestion${suggestionCount === 1 ? "" : "s"}</button>
-          <button type="button" class="text danger" data-action="clear-mapping" data-device-key="${this._escape(device.key)}">Remove local mapping</button>
+          <div class="device-action-group"><button type="button" class="secondary" data-action="use-suggestions" data-device-key="${this._escape(device.key)}" ${suggestionCount ? "" : "disabled"}>Use ${suggestionCount} suggestion${suggestionCount === 1 ? "" : "s"}</button>
+          <button type="button" class="text danger" data-action="clear-mapping" data-device-key="${this._escape(device.key)}">Remove local mapping</button></div>
+          <button type="button" class="primary" data-action="save-device" data-device-key="${this._escape(device.key)}" ${dirty && !this._savingDeviceKey && !this._saving ? "" : "disabled"}>${saving ? "Saving…" : dirty ? "Save configuration" : "Saved"}</button>
         </div>
         <div class="field-grid">
           ${device.fields
@@ -524,15 +623,15 @@ class ShsEnergyConfigPanel extends HTMLElement {
       <section class="card thermal-status">
         <div class="summary-top"><div><h2>Thermal model input status</h2><p>${this._escape(this._thermalStatusText(thermal))}</p></div>${this._statusBadge(thermal.status === "observations_published" || thermal.status === "not_requested" ? "ready" : "warning", this._human(thermal.status))}</div>
         <div class="thermal-grid">
-          <div><strong>${thermal.mapped_zones}/${thermal.requested_zones}</strong><span>mapped zones</span></div>
+          <div><strong>${thermal.mapped_rooms}</strong><span>rooms from ${thermal.mapped_zones}/${thermal.requested_zones} mapped heaters</span></div>
           <div><strong>${thermal.outdoor_temperature_ready ? "Ready" : "Missing"}</strong><span>measured outdoor temperature</span></div>
           <div><strong>${thermal.weather_forecast_ready ? "Ready" : "Missing"}</strong><span>outdoor forecast</span></div>
           <div><strong>${this._escape(thermal.accepted_until || "—")}</strong><span>observations accepted through</span></div>
         </div>
-        ${thermal.zones.length ? `<table><thead><tr><th>Zone</th><th>Mapping</th><th>Reason</th></tr></thead><tbody>${thermal.zones.map((zone) => `<tr><td>${this._escape(zone.name)}</td><td>${this._statusBadge(zone.mapping_status)}</td><td>${this._escape(zone.mapping_error || "Complete")}</td></tr>`).join("")}</tbody></table>` : ""}
+        ${thermal.zones.length ? `<table><thead><tr><th>Heating meter</th><th>Room</th><th>Mapping</th><th>Reason</th></tr></thead><tbody>${thermal.zones.map((zone) => `<tr><td>${this._escape(zone.name)}</td><td>${this._escape(zone.room_name || "—")}</td><td>${this._statusBadge(zone.mapping_status)}</td><td>${this._escape(zone.mapping_error || "Complete")}</td></tr>`).join("")}</tbody></table>` : ""}
       </section>
       ${this._renderSections("thermal")}
-      <section class="card explanation"><h2>What happens next?</h2><p>After complete 15-minute recorder intervals exist, the integration publishes room temperature, comfort target, actual heating duty and outdoor conditions. The website must accept those observations and learn a confirmed response model before the Thermal plan view can appear. Energy history by itself is not treated as a room-temperature model.</p></section>
+      <section class="card explanation"><h2>What happens next?</h2><p>After complete 15-minute recorder intervals exist, the integration publishes room temperature, actual heating/cooling duty and outdoor conditions. The website joins those observations to its room-owned Comfort schedule and learns one response model per room. Energy history by itself is not treated as a room-temperature model.</p></section>
     `;
   }
 
@@ -578,12 +677,16 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _renderDatalist() {
     if (!this._data?.entities) return "";
-    return `<datalist id="shs-entity-list">${this._data.entities
+    const options = (entities) => entities
       .map(
         (entity) =>
           `<option value="${this._escape(entity.entity_id)}">${this._escape(entity.name)}${entity.unit ? ` · ${this._escape(entity.unit)}` : ""}</option>`
       )
-      .join("")}</datalist>`;
+      .join("");
+    const powerEntities = this._data.entities.filter(
+      (entity) => entity.domain === "sensor" && ["W", "kW"].includes(entity.unit)
+    );
+    return `<datalist id="shs-entity-list">${options(this._data.entities)}</datalist><datalist id="shs-power-list">${options(powerEntities)}</datalist>`;
   }
 
   _render() {
@@ -611,7 +714,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
             <button type="button" class="secondary" data-action="refresh" ${this._loading ? "disabled" : ""}>${this._loading ? "Refreshing…" : "Refresh website roles"}</button>
             <button type="button" class="secondary" data-action="discover" ${this._loading ? "disabled" : ""}>Run automatic discovery</button>
             <button type="button" class="text" data-action="discard" ${this._dirty ? "" : "disabled"}>Discard</button>
-            <button type="button" class="primary" data-action="save" ${this._dirty && !this._saving ? "" : "disabled"}>${this._saving ? "Saving…" : "Save changes"}</button>
+            <button type="button" class="primary" data-action="save" ${this._configurationDirty && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>${this._saving ? "Saving…" : "Save general changes"}</button>
           </div>
         </header>
         <nav class="tabs" aria-label="Configuration sections">${TABS.map(([id, label]) => `<button type="button" data-action="tab" data-tab="${id}" class="${this._tab === id ? "active" : ""}">${label}</button>`).join("")}</nav>
@@ -709,6 +812,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .device-meta { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
       .device-meta span { padding:5px 9px; border-radius:8px; background:var(--secondary-background-color); color:var(--secondary-text-color); font-size:12px; }
       .device-actions { display:flex; justify-content:space-between; gap:10px; align-items:center; margin:14px 0 20px; }
+      .device-action-group { display:flex; flex-wrap:wrap; gap:8px; }
       .inline-warning { padding:11px 13px; margin:10px 0; border-radius:9px; color:var(--warning-color); background:color-mix(in srgb, var(--warning-color) 10%, transparent); }
       .thermal-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:22px 0; }
       .thermal-grid div { padding:16px; border-radius:12px; background:var(--secondary-background-color); display:flex; flex-direction:column; gap:5px; }

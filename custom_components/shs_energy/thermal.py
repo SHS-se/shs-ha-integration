@@ -317,11 +317,13 @@ def thermal_zone_inputs(
     devices: Sequence[dict[str, Any]],
     mappings: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
-    """Name the entities each website-selected setpoint zone observes.
+    """Group website-selected setpoint devices into Home Assistant rooms.
 
     The website owns which devices are controllable; Home Assistant owns the
-    entity ids. Only devices where both sides agree on ``setpoint`` are read,
-    so a pending or mismatched mapping never contributes observations.
+    room and entity ids. Multiple energy meters and heaters may serve the same
+    room; their actuator history becomes one room observation. Only devices
+    where both sides agree on ``setpoint`` are read, so a pending or
+    mismatched mapping never contributes observations.
     """
     inputs: dict[str, dict[str, Any]] = {}
     for device in devices:
@@ -329,22 +331,50 @@ def thermal_zone_inputs(
             continue
         if device.get("planning_role") != "controllable":
             continue
-        mapping = mappings.get(str(device["statistic_id"])) or {}
+        mapping = mappings.get(str(device["key"])) or {}
         if mapping.get("control_type") != "setpoint":
             continue
+        area_id = mapping.get("area_id")
         temperature = mapping.get("temperature_entity_id")
         actuators = [
             entity
             for entity in mapping.get("actuator_entity_ids") or []
             if isinstance(entity, str) and entity.strip()
         ]
-        if not isinstance(temperature, str) or not temperature.strip() or not actuators:
+        if (
+            not isinstance(area_id, str)
+            or not area_id.strip()
+            or not isinstance(temperature, str)
+            or not temperature.strip()
+            or not actuators
+        ):
             continue
-        inputs[str(device["key"])] = {
-            "temperature_entity_id": temperature,
-            "actuator_entity_ids": actuators,
-            "comfort_low_entity_id": mapping.get("comfort_low_entity_id"),
-            "comfort_high_entity_id": mapping.get("comfort_high_entity_id"),
-            "setpoint_entity_id": mapping.get("setpoint_entity_id"),
-        }
+        room = inputs.setdefault(
+            area_id,
+            {
+                "temperature_entity_id": temperature,
+                "actuator_entity_ids": [],
+                "device_keys": [],
+                "setpoint_entity_id": mapping.get("setpoint_entity_id"),
+            },
+        )
+        if room["temperature_entity_id"] != temperature:
+            raise ValueError(
+                f"Home Assistant room {area_id} has more than one temperature entity"
+            )
+        setpoint = mapping.get("setpoint_entity_id")
+        if (
+            setpoint
+            and room.get("setpoint_entity_id")
+            and room["setpoint_entity_id"] != setpoint
+        ):
+            raise ValueError(
+                f"Home Assistant room {area_id} has more than one direct setpoint entity"
+            )
+        if setpoint:
+            room["setpoint_entity_id"] = setpoint
+        room["actuator_entity_ids"] = sorted(
+            set(room["actuator_entity_ids"]) | set(actuators)
+        )
+        room["device_keys"].append(str(device["key"]))
     return inputs

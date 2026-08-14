@@ -97,10 +97,39 @@ directory and restart.
    Reopen the cogwheel page or press **Refresh website roles**; restarting the
    integration is not required. Base-load devices need no local mapping.
 
-The top-level back arrow returns to Home Assistant's integration page. Save and
-Discard are always available in the page header, and leaving with unsaved edits
-requires confirmation. The website's **Example** view is independent of this
-integration.
+Each controllable-device card is saved independently. A card changes to
+**Ready** only after Home Assistant validates the mapping and the SHS server
+acknowledges it. The top-level back arrow returns to Home Assistant's
+integration page; the header Save/Discard actions remain for the non-device
+configuration tabs. Leaving with unsaved edits requires confirmation. The
+website's **Example** view is independent of this integration.
+
+Heating comfort is configured by **Home Assistant room**, not by Energy
+Dashboard meter or entity name. A setpoint mapping selects the HA area, the
+room-temperature sensor and every heater/climate actuator that can serve it.
+Several meters and actuators can therefore share one room objective. The SHS
+Comfort tab displays the live room name and those controlled entities. A yellow
+quarter means the room must already be at its Comfort temperature when that
+quarter begins; the planner may preheat during preceding blue Setback quarters
+and stagger recovery across rooms.
+
+Planned-control cards contain only facts needed by the planned schedule:
+
+- a switch schedule has its actuator(s), optional companion actuator(s), one
+  optional Power field (a W/kW entity or reviewed watts), and an optional
+  minimum run;
+- a setpoint schedule has its room, measured temperature, optional direct
+  setpoint, controlled heater/climate actuator(s), optional companion
+  actuator(s), and optional Power field; scheduled comfort/setback helpers and
+  reactive override fields are not part of this mapping; and
+- variable-power and current-limit controls share one number entity plus
+  optional minimum and maximum values. Home Assistant proposes the entity's
+  bounds when available, while explicitly entered bounds take precedence.
+
+The integration sends a complete Energy Dashboard device inventory during its
+device exchanges. Live friendly names and HA area names supersede older copied
+labels, removed devices are retired by the server, and a device that reappears
+with the same stable key becomes active again.
 
 PV forecast entities expose timestamped 15-minute values in a `watts`
 attribute. Their location defaults to Home Assistant's configured home
@@ -128,7 +157,8 @@ The supported automation/MCP surface is:
   recommendation, per-field provenance and confidence, missing facts, and the
   capabilities requiring review without changing anything; and
 - `shs_energy.apply_configuration`: validates and stores only the explicit
-  mapping supplied by the caller. It never re-runs discovery while applying.
+  non-device options supplied by the caller. It never re-runs discovery while applying;
+  controllable-device mappings are saved independently from their cards.
   Enabling pool, water heating, or EV planning requires the corresponding
   `*_deferrable_confirmed` value; EV planning also requires
   `ev_electrical_confirmed` after phase count and voltage are reviewed; and

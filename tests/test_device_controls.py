@@ -16,27 +16,34 @@ from device_controls import (  # noqa: E402
 
 
 class DeviceControlMappingTests(unittest.TestCase):
-    def test_setpoint_requires_temperature_actuator_and_setpoint_policy(self) -> None:
+    def test_setpoint_requires_a_home_assistant_room(self) -> None:
         report = mapping_report("setpoint", {
             "control_type": "setpoint",
             "temperature_entity_id": "sensor.office_temperature",
             "actuator_entity_ids": ["switch.office_heater"],
         })
         self.assertEqual(report["mapping_status"], "invalid")
-        self.assertIn("setpoint", report["mapping_error"])
+        self.assertIn("room", report["mapping_error"])
 
         report = mapping_report("setpoint", {
             "control_type": "setpoint",
+            "area_id": "office",
             "temperature_entity_id": "sensor.office_temperature",
-            "comfort_high_entity_id": "input_number.office_high",
-            "comfort_low_entity_id": "input_number.office_low",
             "actuator_entity_ids": [
                 "switch.office_heater_left",
                 "switch.office_heater_right",
             ],
-        })
+        }, entity_names={
+            "switch.office_heater_left": "Office heater left",
+            "switch.office_heater_right": "Office heater right",
+        }, area_names={"office": "Office"})
         self.assertEqual(report["mapping_status"], "ready")
-        self.assertEqual(report["mapping_summary"]["entity_count"], 5)
+        self.assertEqual(report["mapping_summary"]["entity_count"], 3)
+        self.assertEqual(report["mapping_summary"]["room_name"], "Office")
+        self.assertEqual(
+            report["mapping_summary"]["controlled_devices"],
+            ["Office heater left", "Office heater right"],
+        )
 
     def test_mismatched_control_type_is_not_configured(self) -> None:
         report = mapping_report("permit_inhibit", {
@@ -90,17 +97,9 @@ class DeviceControlMappingTests(unittest.TestCase):
         mappings = {
             "sensor.ev_energy": {
                 "control_type": "current_limit",
-                "current_control_entity_id": "number.ev_current",
-                "connected_entity_id": "binary_sensor.ev_connected",
-                "soc_entity_id": "sensor.ev_soc",
-                "target_soc_entity_id": "number.ev_target_soc",
-                "battery_capacity_kwh": 75,
-                "min_current_a": 6,
-                "max_current_a": 16,
-                "current_step_a": 1,
-                "phase_count": 3,
-                "voltage": 230,
-                "min_run_slots": 2,
+                "control_entity_id": "number.ev_current",
+                "minimum_value": 6,
+                "maximum_value": 16,
             }
         }
         apply_requested_configuration(devices, requested, mappings)
@@ -109,24 +108,25 @@ class DeviceControlMappingTests(unittest.TestCase):
         self.assertEqual(devices[0]["mapping_status"], "ready")
         self.assertEqual(requested_controllable_devices(requested)[0]["name"], "Car")
 
-    def test_ev_mapping_rejects_missing_or_inverted_current_limits(self) -> None:
+    def test_number_mapping_rejects_inverted_limits(self) -> None:
         mapping = {
             "control_type": "current_limit",
-            "current_control_entity_id": "number.ev_current",
-            "connected_entity_id": "binary_sensor.ev_connected",
-            "soc_entity_id": "sensor.ev_soc",
-            "target_soc_entity_id": "number.ev_target_soc",
-            "battery_capacity_kwh": 75,
-            "min_current_a": 20,
-            "max_current_a": 16,
-            "current_step_a": 1,
-            "phase_count": 3,
-            "voltage": 230,
+            "control_entity_id": "number.ev_current",
+            "minimum_value": 20,
+            "maximum_value": 16,
         }
         report = mapping_report("current_limit", mapping)
         self.assertEqual(report["mapping_status"], "invalid")
-        self.assertIn("minimum run slots", report["mapping_error"])
-        self.assertIn("cannot exceed", report["mapping_error"])
+        self.assertIn("below maximum", report["mapping_error"])
+
+    def test_switch_minimum_run_is_optional_and_power_is_one_field(self) -> None:
+        report = mapping_report("switch_schedule", {
+            "control_type": "switch_schedule",
+            "actuator_entity_ids": ["switch.pool_heater"],
+            "power": 3600,
+        })
+        self.assertEqual(report["mapping_status"], "ready")
+        self.assertEqual(report["mapping_summary"]["reviewed_power_w"], 3600)
 
 
 if __name__ == "__main__":

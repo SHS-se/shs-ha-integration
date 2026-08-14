@@ -62,25 +62,15 @@
           "grid_export_limit_w": "Grid export limit (W)",
           "terminal_soc_min": "Minimum SOC at the end of the horizon",
           "terminal_energy_value_sek_per_kwh": "Value of stored terminal energy (SEK/kWh)",
-          "pool_power_w": "Pool heater and required pump power (W)",
-          "pool_enabled_entity": "Pool season/enabled entity",
-          "pool_min_run_slots": "Pool minimum run (15-minute slots)",
           "pool_deadline": "Pool daily deadline (HH:MM)",
           "pool_baseline_start": "Pool baseline start (HH:MM)",
-          "boiler_power_w": "Water boiler power (W)",
-          "boiler_max_inhibit_slots": "Maximum continuous water-heater inhibit (15-minute slots)",
           "ev_connected_entity": "EV connected entity",
           "ev_soc_entity": "EV state of charge entity",
           "ev_target_soc_entity": "EV target state of charge entity",
           "ev_departure_entity": "EV departure timestamp entity",
-          "ev_power_w": "Fixed EV charging power without current control (W)",
           "ev_battery_kwh": "EV usable battery capacity (kWh)",
           "ev_charge_efficiency": "EV charging efficiency (fraction)",
           "ev_min_run_slots": "EV minimum run (15-minute slots)",
-          "ev_charge_current_entity": "EV charge-current entity (min/max/step A)",
-          "ev_min_current_a": "Usable EV charging minimum (A)",
-          "ev_max_current_a": "EV charging maximum (A)",
-          "ev_current_step_a": "EV charging current increment (A)",
           "ev_energy_remaining_entity": "EV energy remaining entity (kWh)",
           "ev_phase_count": "EV charging phase count",
           "ev_voltage": "EV phase voltage (V)",
@@ -169,9 +159,6 @@
       "pool": {
         "title": "Pool planning",
         "data": {
-          "pool_enabled_entity": "Pool season/enabled entity",
-          "pool_power_w": "Heater plus required pump power (W)",
-          "pool_min_run_slots": "Minimum run (15-minute slots)",
           "pool_deadline": "Daily deadline (HH:MM)",
           "pool_baseline_start": "Baseline start (HH:MM)"
         }
@@ -179,10 +166,7 @@
       "boiler": {
         "title": "Water-heater planning",
         "description": "The thermostat owns the duty cycle. SHS learns expected draw from recorder history and only inhibits heating during planned high-load intervals. Set the longest safe continuous inhibit interval.",
-        "data": {
-          "boiler_power_w": "Water-heater power (W)",
-          "boiler_max_inhibit_slots": "Maximum continuous inhibit (15-minute slots)"
-        }
+        "data": {}
       },
       "ev": {
         "title": "EV planning",
@@ -192,50 +176,13 @@
           "ev_soc_entity": "EV state of charge",
           "ev_target_soc_entity": "EV target state of charge",
           "ev_departure_entity": "Departure timestamp entity (optional)",
-          "ev_charge_current_entity": "Charge-current control (min/max/step A)",
-          "ev_min_current_a": "Usable charging minimum (A)",
-          "ev_max_current_a": "Charging maximum (A)",
-          "ev_current_step_a": "Current increment (A)",
           "ev_energy_remaining_entity": "Energy remaining (kWh)",
-          "ev_power_w": "Fixed charging power (W, optional)",
           "ev_battery_kwh": "Usable battery capacity (kWh)",
           "ev_charge_efficiency": "Charging efficiency",
           "ev_min_run_slots": "Minimum run (15-minute slots)",
           "ev_phase_count": "Charging phase count",
           "ev_voltage": "Phase voltage (V)",
           "ev_default_departure": "Default departure time (HH:MM)"
-        }
-      },
-      "device_control": {
-        "title": "Configure {device_name}",
-        "description": "Device {position} of {total}. The website requests **{control_type}** control. Entity mappings stay local to Home Assistant. Saving returns to the device navigator and acknowledges that this device may be modeled separately; it does not replace or enable any existing controller.",
-        "data": {
-          "temperature_entity_id": "Room or process temperature",
-          "setpoint_entity_id": "Direct setpoint entity (optional when high/low values are used)",
-          "comfort_high_entity_id": "Scheduled high/comfort temperature",
-          "comfort_low_entity_id": "Scheduled low/setback temperature",
-          "actuator_entity_ids": "Controlled actuator(s)",
-          "companion_actuator_entity_ids": "Required companion actuator(s)",
-          "power_entity_id": "Measured power (optional)",
-          "override_entity_id": "Manual override state (optional)",
-          "override_timer_entity_id": "Manual override timer (optional)",
-          "availability_entity_id": "Season or availability entity (optional)",
-          "power_w": "Rated combined power (W, optional)",
-          "max_inhibit_slots": "Maximum continuous inhibit (15-minute slots)",
-          "min_run_slots": "Minimum run (15-minute slots)",
-          "power_control_entity_id": "Variable power control",
-          "current_control_entity_id": "Charge-current control",
-          "connected_entity_id": "Vehicle connected state",
-          "soc_entity_id": "Vehicle battery state of charge",
-          "target_soc_entity_id": "Vehicle target state of charge",
-          "departure_entity_id": "Vehicle departure timestamp (optional)",
-          "energy_remaining_entity_id": "Vehicle energy remaining (optional)",
-          "battery_capacity_kwh": "Vehicle usable battery capacity (kWh)",
-          "min_current_a": "Usable charging minimum (A)",
-          "max_current_a": "Charging maximum (A)",
-          "current_step_a": "Charging current increment (A)",
-          "phase_count": "Charging phase count",
-          "voltage": "Phase voltage (V)"
         }
       },
       "device_controls": {

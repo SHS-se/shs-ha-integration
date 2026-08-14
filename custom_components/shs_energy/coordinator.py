@@ -7,7 +7,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import hashlib
 import json
 import logging
-from math import sqrt
+from math import isfinite, sqrt
 from typing import Any
 from uuid import uuid4
 
@@ -67,27 +67,17 @@ from .const import (
     OPT_GRID_EXPORT_LIMIT_W,
     OPT_TERMINAL_SOC_MIN,
     OPT_TERMINAL_ENERGY_VALUE,
-    OPT_POOL_POWER_W,
-    OPT_POOL_ENABLED_ENTITY,
-    OPT_POOL_MIN_RUN_SLOTS,
     OPT_POOL_DEADLINE,
     OPT_POOL_DEFERRABLE_CONFIRMED,
     OPT_POOL_BASELINE_START,
-    OPT_BOILER_POWER_W,
-    OPT_BOILER_MAX_INHIBIT_SLOTS,
     OPT_BOILER_DEFERRABLE_CONFIRMED,
     OPT_EV_CONNECTED_ENTITY,
     OPT_EV_SOC_ENTITY,
     OPT_EV_TARGET_SOC_ENTITY,
     OPT_EV_DEPARTURE_ENTITY,
-    OPT_EV_POWER_W,
     OPT_EV_BATTERY_KWH,
     OPT_EV_CHARGE_EFFICIENCY,
     OPT_EV_MIN_RUN_SLOTS,
-    OPT_EV_CHARGE_CURRENT_ENTITY,
-    OPT_EV_MIN_CURRENT_A,
-    OPT_EV_MAX_CURRENT_A,
-    OPT_EV_CURRENT_STEP_A,
     OPT_EV_ENERGY_REMAINING_ENTITY,
     OPT_EV_PHASE_COUNT,
     OPT_EV_VOLTAGE,
@@ -111,7 +101,12 @@ from .const import (
     SUPPLIER_BACKFILL_MAX_DAYS,
     STORAGE_VERSION,
 )
-from .configuration import async_energy_dashboard_inventory, resolved_options
+from .configuration import (
+    area_name_by_id,
+    async_energy_dashboard_inventory,
+    entity_display_name_by_id,
+    resolved_options,
+)
 from .device_controls import (
     apply_requested_configuration,
     mapping_report,
@@ -368,11 +363,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Raise one actionable issue for website-requested local mappings."""
         mappings = self.entry.options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
         known_entity_ids = {state.entity_id for state in self.hass.states.async_all()}
+        entity_names = entity_display_name_by_id(self.hass)
+        area_names = area_name_by_id(self.hass)
         self.device_control_mapping_gaps = []
         for device in requested_controllable_devices(configuration):
             report = mapping_report(
                 device.get("control_type"), mappings.get(device["key"]),
                 known_entity_ids,
+                entity_names,
+                area_names,
             )
             if report["mapping_status"] != "ready":
                 self.device_control_mapping_gaps.append(
@@ -483,8 +482,29 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for category in CONFIGURABLE_CATEGORIES
         }
 
+    def _mapped_power_w(self, mapping: dict[str, Any]) -> float | None:
+        """Resolve the card's reviewed watts or current W/kW sensor value."""
+        value = mapping.get("power")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            watts = float(value)
+            return watts if isfinite(watts) and watts > 0 else None
+        if not isinstance(value, str) or "." not in value:
+            return None
+        state = self.hass.states.get(value)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        try:
+            watts = float(state.state)
+        except (TypeError, ValueError):
+            return None
+        if state.attributes.get("unit_of_measurement") == "kW":
+            watts *= 1_000
+        return watts if isfinite(watts) and watts > 0 else None
+
     async def _prepared_device_inventory(
-        self, stored: dict[str, Any]
+        self,
+        stored: dict[str, Any],
+        mappings: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Hydrate Energy Dashboard devices with server requests and local status."""
         devices = await async_energy_dashboard_inventory(self.hass)
@@ -494,12 +514,27 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for field in ("active_power_w", "profile_sample_count", "inference"):
                 if field in metadata:
                     device[field] = metadata[field]
-        return apply_requested_configuration(
+        prepared = apply_requested_configuration(
             devices,
             stored.get("optimisation_device_configuration", {}),
-            self.entry.options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
+            mappings
+            if mappings is not None
+            else self.entry.options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
             {state.entity_id for state in self.hass.states.async_all()},
+            entity_display_name_by_id(self.hass),
+            area_name_by_id(self.hass),
         )
+        active_mappings = mappings if mappings is not None else self.entry.options.get(
+            OPT_DEVICE_CONTROL_MAPPINGS, {}
+        )
+        if not isinstance(active_mappings, dict):
+            active_mappings = {}
+        for device in prepared:
+            mapping = active_mappings.get(device["key"], {})
+            watts = self._mapped_power_w(mapping)
+            if watts is not None:
+                device["active_power_w"] = round(watts, 1)
+        return prepared
 
     def _record_device_exchange(
         self,
@@ -543,10 +578,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             stored = await self._store.async_load() or {}
             previous = dict(stored.get("optimisation_device_configuration", {}))
             devices = await self._prepared_device_inventory(stored)
-            if not devices:
-                self._sync_device_control_issue({})
-                return []
-            result = await self.client.push_optimisation([], None, devices)
+            result = await self.client.push_optimisation(
+                [], None, devices, device_inventory_complete=True
+            )
             configuration = self._record_device_exchange(stored, devices, result)
             if configuration != previous:
                 self.optimisation_plan = None
@@ -559,14 +593,45 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     configuration,
                     self.entry.options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
                     {state.entity_id for state in self.hass.states.async_all()},
+                    entity_display_name_by_id(self.hass),
+                    area_name_by_id(self.hass),
                 )
-                result = await self.client.push_optimisation([], None, devices)
+                result = await self.client.push_optimisation(
+                    [], None, devices, device_inventory_complete=True
+                )
                 configuration = self._record_device_exchange(
                     stored, devices, result
                 )
             await self._store.async_save(stored)
             self.async_update_listeners()
             return requested_controllable_devices(configuration)
+
+    async def async_report_device_mapping(
+        self,
+        device_key: str,
+        mappings: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Publish one newly reviewed mapping and return server acknowledgement."""
+        async with self._push_lock:
+            stored = await self._store.async_load() or {}
+            devices = await self._prepared_device_inventory(stored, mappings)
+            result = await self.client.push_optimisation(
+                [], None, devices, device_inventory_complete=True
+            )
+            configuration = self._record_device_exchange(stored, devices, result)
+            await self._store.async_save(stored)
+            self.async_update_listeners()
+            reported = next(
+                (device for device in devices if device["key"] == device_key),
+                None,
+            )
+            if reported is None or device_key not in configuration:
+                raise ShsApiError("website did not acknowledge the saved device mapping")
+            return {
+                "mapping_status": reported["mapping_status"],
+                "mapping_error": reported["mapping_error"],
+                "mapping_summary": reported["mapping_summary"],
+            }
 
     async def async_cached_device_configuration(self) -> list[dict[str, Any]]:
         """Return the last website request without making a network request."""
@@ -796,11 +861,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         helper_entities = sorted({
             entity
             for zone in zones.values()
-            for entity in (
-                zone.get("comfort_low_entity_id"),
-                zone.get("comfort_high_entity_id"),
-                zone.get("setpoint_entity_id"),
-            )
+            for entity in (zone.get("setpoint_entity_id"),)
             if isinstance(entity, str) and entity.strip()
         })
         actuator_entities = sorted(
@@ -874,11 +935,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if max(values) > 0
                 },
             }
-            for field, mapping_key in (
-                ("comfort_min_c", "comfort_low_entity_id"),
-                ("comfort_max_c", "comfort_high_entity_id"),
-                ("setpoint_c", "setpoint_entity_id"),
-            ):
+            for field, mapping_key in (("setpoint_c", "setpoint_entity_id"),):
                 entity_id = zone.get(mapping_key)
                 if isinstance(entity_id, str) and entity_id.strip():
                     zone_series[field] = helper_quarters.get(entity_id, {})
@@ -1302,15 +1359,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             required.extend(
                 [f"{OPT_PREFIX_ENTITIES}pool_heating",
                  OPT_POOL_DEFERRABLE_CONFIRMED,
-                 OPT_POOL_ENABLED_ENTITY, OPT_POOL_POWER_W,
-                 OPT_POOL_MIN_RUN_SLOTS, OPT_POOL_DEADLINE,
+                 OPT_POOL_DEADLINE,
                  OPT_POOL_BASELINE_START]
             )
         if options.get(OPT_BOILER_PLANNING_ENABLED):
             required.extend(
                 [f"{OPT_PREFIX_ENTITIES}hot_water",
-                 OPT_BOILER_DEFERRABLE_CONFIRMED,
-                 OPT_BOILER_POWER_W, OPT_BOILER_MAX_INHIBIT_SLOTS]
+                 OPT_BOILER_DEFERRABLE_CONFIRMED]
             )
         if options.get(OPT_EV_PLANNING_ENABLED):
             required.extend(
@@ -1318,16 +1373,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                  OPT_EV_DEFERRABLE_CONFIRMED, OPT_EV_ELECTRICAL_CONFIRMED,
                  OPT_EV_CONNECTED_ENTITY, OPT_EV_SOC_ENTITY, OPT_EV_TARGET_SOC_ENTITY,
                  OPT_EV_BATTERY_KWH, OPT_EV_CHARGE_EFFICIENCY,
-                 OPT_EV_MIN_RUN_SLOTS, OPT_EV_DEFAULT_DEPARTURE]
+                 OPT_EV_MIN_RUN_SLOTS, OPT_EV_PHASE_COUNT, OPT_EV_VOLTAGE,
+                 OPT_EV_DEFAULT_DEPARTURE]
             )
-            if options.get(OPT_EV_CHARGE_CURRENT_ENTITY):
-                required.extend((
-                    OPT_EV_MIN_CURRENT_A,
-                    OPT_EV_MAX_CURRENT_A,
-                    OPT_EV_CURRENT_STEP_A,
-                ))
-            elif not options.get(OPT_EV_POWER_W):
-                required.append("EV charging power or configured current entity")
         missing = sorted(
             key for key in required
             if options.get(key) is None or options.get(key) == "" or options.get(key) == []
@@ -1611,34 +1659,67 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         services: list[dict[str, Any]] = []
         samples: dict[str, int] = {}
         ev_battery: dict[str, Any] | None = None
-        for category, device, enabled_key, power_key, run_key, deadline_key, baseline_key, priority in (
-            ("pool_heating", "pool", OPT_POOL_PLANNING_ENABLED,
-             OPT_POOL_POWER_W, OPT_POOL_MIN_RUN_SLOTS,
-             OPT_POOL_DEADLINE, OPT_POOL_BASELINE_START, 2),
+        raw_mappings = options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
+        if not isinstance(raw_mappings, dict):
+            raise OptimisationInputError("device control mappings must be an object")
+
+        def mapped_controls(
+            category: str,
+            control_type: str,
+        ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+            pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+            for model in device_models:
+                if model["category"] != category:
+                    continue
+                if model["control_type"] != control_type:
+                    raise OptimisationInputError(
+                        f"{model['name']} must use {control_type} control"
+                    )
+                mapping = raw_mappings.get(str(model["key"]))
+                if (
+                    not isinstance(mapping, dict)
+                    or mapping.get("control_type") != control_type
+                ):
+                    raise OptimisationInputError(
+                        f"{model['name']} has no saved {control_type} mapping"
+                    )
+                pairs.append((model, mapping))
+            return pairs
+
+        if (
+            options.get(OPT_POOL_PLANNING_ENABLED)
+            and entities_by_category.get("pool_heating")
         ):
-            if not options.get(enabled_key) or not entities_by_category.get(category):
-                continue
-            if category == "pool_heating" and not state_is_on(
-                self._entity_payload(options[OPT_POOL_ENABLED_ENTITY])["state"]
-            ):
-                continue
+            category = "pool_heating"
+            device = "pool"
+            pool_controls = mapped_controls(category, "switch_schedule")
+            rated_power_w = sum(
+                parse_number(model.get("active_power_w"), f"{model['name']} power")
+                for model, _mapping in pool_controls
+            )
+            minimum_run = 1
+            for model, mapping in pool_controls:
+                value = mapping.get("min_run_slots")
+                if value in (None, ""):
+                    continue
+                parsed = parse_number(value, f"{model['name']} minimum run")
+                if not parsed.is_integer() or parsed < 1:
+                    raise OptimisationInputError(
+                        f"{model['name']} minimum run must be a positive whole number"
+                    )
+                minimum_run = max(minimum_run, int(parsed))
             requirement, count = daily_requirement(
                 daily_totals.get(category, {}), category
             )
             samples[category] = count
-            minimum_run = parse_number(options[run_key], run_key)
-            if not minimum_run.is_integer() or minimum_run < 1:
-                raise OptimisationInputError(
-                    f"{run_key} must be a positive whole number"
-                )
             local_days = sorted({slot.astimezone(local_tz).date() for slot in horizon})
             for day in local_days:
                 window = daily_service_window(
                     horizon,
                     day,
                     str(local_tz),
-                    options[deadline_key],
-                    options[baseline_key],
+                    options[OPT_POOL_DEADLINE],
+                    options[OPT_POOL_BASELINE_START],
                     label=device,
                 )
                 if window is None:
@@ -1657,18 +1738,16 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "required_kwh": round(required, 3),
                     "control": {
                         "type": "fixed_power",
-                        "power_w": parse_number(options[power_key], power_key),
+                        "power_w": rated_power_w,
                     },
-                    "min_run_slots": int(minimum_run),
-                    "priority": priority,
+                    "min_run_slots": minimum_run,
+                    "priority": 2,
                     "baseline_preferred_start": baseline.isoformat(),
                 })
 
         if options.get(OPT_BOILER_PLANNING_ENABLED):
-            boiler_models = [
-                model for model in device_models
-                if model["category"] == "hot_water"
-            ]
+            boiler_controls = mapped_controls("hot_water", "permit_inhibit")
+            boiler_models = [model for model, _mapping in boiler_controls]
             if not boiler_models:
                 raise OptimisationInputError(
                     "water-heater planning needs a complete empirical device profile"
@@ -1678,21 +1757,26 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                           for model in boiler_models), 2)
                 for index in range(len(horizon))
             ]
-            rated_power_w = parse_number(
-                options[OPT_BOILER_POWER_W], OPT_BOILER_POWER_W
+            rated_power_w = sum(
+                parse_number(model.get("active_power_w"), f"{model['name']} power")
+                for model in boiler_models
             )
             if max(expected_w, default=0) > rated_power_w + 1e-6:
                 raise OptimisationInputError(
                     "empirical water-heater expected power exceeds its reviewed rating"
                 )
-            maximum_inhibit = parse_number(
-                options[OPT_BOILER_MAX_INHIBIT_SLOTS],
-                OPT_BOILER_MAX_INHIBIT_SLOTS,
-            )
-            if not maximum_inhibit.is_integer() or maximum_inhibit < 1:
-                raise OptimisationInputError(
-                    f"{OPT_BOILER_MAX_INHIBIT_SLOTS} must be a positive whole number"
+            inhibit_values: list[int] = []
+            for model, mapping in boiler_controls:
+                maximum_inhibit = parse_number(
+                    mapping.get("max_inhibit_slots"),
+                    f"{model['name']} maximum inhibit",
                 )
+                if not maximum_inhibit.is_integer() or maximum_inhibit < 1:
+                    raise OptimisationInputError(
+                        f"{model['name']} maximum inhibit must be a positive whole number"
+                    )
+                inhibit_values.append(int(maximum_inhibit))
+            maximum_inhibit = min(inhibit_values)
             samples["hot_water"] = sum(
                 int(model["profile_sample_count"]) for model in boiler_models
             )
@@ -1713,13 +1797,64 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         "type": "duty_cycle",
                         "rated_power_w": rated_power_w,
                         "expected_power_w_by_slot": expected_w,
-                        "max_consecutive_inhibit_slots": int(maximum_inhibit),
+                        "max_consecutive_inhibit_slots": maximum_inhibit,
                     },
                     "priority": 1,
                 })
 
         connected_id = options.get(OPT_EV_CONNECTED_ENTITY)
         if options.get(OPT_EV_PLANNING_ENABLED) and connected_id:
+            ev_controls = mapped_controls("ev_charging", "current_limit")
+            control_signatures: set[tuple[str, float, float]] = set()
+            for model, mapping in ev_controls:
+                control_signatures.add((
+                    str(mapping.get("control_entity_id") or ""),
+                    parse_number(
+                        mapping.get("minimum_value"),
+                        f"{model['name']} minimum current",
+                    ),
+                    parse_number(
+                        mapping.get("maximum_value"),
+                        f"{model['name']} maximum current",
+                    ),
+                ))
+            if (
+                len(control_signatures) != 1
+                or not next(iter(control_signatures), ("", 0, 0))[0]
+            ):
+                raise OptimisationInputError(
+                    "EV charging meters must share one current-limit entity and range"
+                )
+            current_entity, configured_min, configured_max = next(
+                iter(control_signatures)
+            )
+            current_payload = self._entity_payload(current_entity)
+            if current_payload["attributes"].get("unit_of_measurement") != "A":
+                raise OptimisationInputError(
+                    f"{current_entity} must declare unit A"
+                )
+            entity_min_raw = current_payload["attributes"].get("min")
+            entity_max_raw = current_payload["attributes"].get("max")
+            if entity_min_raw is not None:
+                entity_min = parse_number(entity_min_raw, f"{current_entity} min")
+                if configured_min < entity_min:
+                    raise OptimisationInputError(
+                        "configured EV current minimum is below the entity bound"
+                    )
+            if entity_max_raw is not None:
+                entity_max = parse_number(entity_max_raw, f"{current_entity} max")
+                if configured_max > entity_max:
+                    raise OptimisationInputError(
+                        "configured EV current maximum is above the entity bound"
+                    )
+            configured_step = parse_number(
+                current_payload["attributes"].get("step"),
+                f"{current_entity} step",
+            )
+            if configured_step <= 0:
+                raise OptimisationInputError(
+                    f"{current_entity} step must be positive"
+                )
             connected_payload = self._entity_payload(connected_id)
             connected = state_is_on(connected_payload["state"])
             soc_id = options[OPT_EV_SOC_ENTITY]
@@ -1773,7 +1908,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         "connected EV departure must fall inside the 72-hour horizon"
                     )
 
-            current_entity = options.get(OPT_EV_CHARGE_CURRENT_ENTITY)
             ev_battery = {
                 "name": str(
                     soc_payload["attributes"].get("friendly_name") or "EV battery"
@@ -1808,61 +1942,14 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     raise OptimisationInputError(
                         f"{OPT_EV_MIN_RUN_SLOTS} must be a positive whole number"
                     )
-                if current_entity:
-                    current_payload = self._entity_payload(current_entity)
-                    if current_payload["attributes"].get("unit_of_measurement") != "A":
-                        raise OptimisationInputError(
-                            f"{current_entity} must declare unit A"
-                        )
-                    configured_min = parse_number(
-                        options[OPT_EV_MIN_CURRENT_A], OPT_EV_MIN_CURRENT_A
-                    )
-                    configured_max = parse_number(
-                        options[OPT_EV_MAX_CURRENT_A], OPT_EV_MAX_CURRENT_A
-                    )
-                    configured_step = parse_number(
-                        options[OPT_EV_CURRENT_STEP_A], OPT_EV_CURRENT_STEP_A
-                    )
-                    entity_min = parse_number(
-                        current_payload["attributes"].get("min"),
-                        f"{current_entity} min",
-                    )
-                    entity_max = parse_number(
-                        current_payload["attributes"].get("max"),
-                        f"{current_entity} max",
-                    )
-                    entity_step = parse_number(
-                        current_payload["attributes"].get("step"),
-                        f"{current_entity} step",
-                    )
-                    if configured_min < entity_min or configured_max > entity_max:
-                        raise OptimisationInputError(
-                            "configured EV current range is outside the entity bounds"
-                        )
-                    if entity_step <= 0:
-                        raise OptimisationInputError(
-                            f"{current_entity} step must be positive"
-                        )
-                    step_ratio = configured_step / entity_step
-                    if abs(step_ratio - round(step_ratio)) > 1e-6:
-                        raise OptimisationInputError(
-                            "configured EV current step is not supported by the entity"
-                        )
-                    control = discrete_current_control(
-                        configured_min,
-                        configured_max,
-                        configured_step,
-                        options[OPT_EV_PHASE_COUNT],
-                        options[OPT_EV_VOLTAGE],
-                        label=current_entity,
-                    )
-                else:
-                    control = {
-                        "type": "fixed_power",
-                        "power_w": round(parse_number(
-                            options.get(OPT_EV_POWER_W), "EV charging power"
-                        ), 1),
-                    }
+                control = discrete_current_control(
+                    configured_min,
+                    configured_max,
+                    configured_step,
+                    options[OPT_EV_PHASE_COUNT],
+                    options[OPT_EV_VOLTAGE],
+                    label=current_entity,
+                )
                 services.append({
                     "id": f"ev:{departure.isoformat()}",
                     "device": "ev",
@@ -2045,6 +2132,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         device_profile_actuals = await self._device_actual_quarters(
             devices, profile_start, profile_end
         )
+        control_mappings = options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
+        if not isinstance(control_mappings, dict):
+            raise OptimisationInputError("device control mappings must be an object")
         device_models: list[dict[str, Any]] = []
         for device in devices:
             planning_role = device["planning_role"]
@@ -2083,9 +2173,18 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 profile["active_power_w"] for profile in empirical.values()
                 if profile["active_power_w"] is not None
             ]
-            active_power_w = (
+            empirical_active_power_w = (
                 round(sum(active_values) / len(active_values), 1)
                 if active_values else None
+            )
+            mapping = control_mappings.get(str(device["key"]), {})
+            mapped_power_w = self._mapped_power_w(
+                mapping if isinstance(mapping, dict) else {}
+            )
+            active_power_w = (
+                round(mapped_power_w, 1)
+                if mapped_power_w is not None
+                else empirical_active_power_w
             )
             profile_sample_count = sum(
                 int(profile["sample_count"]) for profile in empirical.values()
@@ -2563,7 +2662,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.async_update_listeners()
                     return
                 result = await self.client.push_optimisation(
-                    actuals, snapshot, devices, thermal_slots, price_slots
+                    actuals,
+                    snapshot,
+                    devices,
+                    thermal_slots,
+                    price_slots,
+                    device_inventory_complete=True,
                 )
                 configuration = self._record_device_exchange(
                     stored, devices, result

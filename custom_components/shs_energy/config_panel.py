@@ -19,7 +19,10 @@ from homeassistant.core import HomeAssistant
 from . import const as shs_const
 from .api import ShsApiError
 from .configuration import (
+    area_name_by_id,
     async_discover_configuration,
+    entity_area_id,
+    entity_display_name_by_id,
     optimisation_defaults,
     resolved_options,
     suggest_device_control_mapping,
@@ -77,8 +80,59 @@ def _field(
     return result
 
 
+POWER_FIELD = _field(
+    "power",
+    "Power",
+    "power",
+    help_text="Choose a power sensor, or enter reviewed watts directly.",
+)
+
+def _number_control_fields(*, minimum: float = 0) -> tuple[dict[str, Any], ...]:
+    """Describe the shared number-entity contract with one semantic bound."""
+    minimum_help = (
+        "Use the smallest non-zero operating value when zero means off. "
+        if minimum > 0
+        else ""
+    )
+    return (
+        _field(
+            "control_entity_id",
+            "Controlled number entity",
+            "entity",
+            domains=("number", "input_number"),
+            required=True,
+        ),
+        _field(
+            "minimum_value",
+            "Minimum value",
+            "number",
+            minimum=minimum,
+            step=0.1,
+            required=True,
+            help_text=minimum_help + "Automatically proposed from Home Assistant when available. A saved value takes precedence.",
+        ),
+        _field(
+            "maximum_value",
+            "Maximum value",
+            "number",
+            minimum=0.1,
+            step=0.1,
+            required=True,
+            help_text="Automatically proposed from Home Assistant when available. A saved value takes precedence.",
+        ),
+        POWER_FIELD,
+    )
+
+
 CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
     "setpoint": (
+        _field(
+            "area_id",
+            "Room",
+            "area",
+            required=True,
+            help_text="The Home Assistant room owns this comfort objective, even when several heaters serve it.",
+        ),
         _field(
             "temperature_entity_id",
             "Room or process temperature",
@@ -95,19 +149,6 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
             help_text="Use this when one entity contains the current target temperature.",
         ),
         _field(
-            "comfort_high_entity_id",
-            "Scheduled comfort temperature",
-            "entity",
-            domains=("number", "input_number"),
-            help_text="Use both comfort and setback when there is no direct setpoint entity.",
-        ),
-        _field(
-            "comfort_low_entity_id",
-            "Scheduled setback temperature",
-            "entity",
-            domains=("number", "input_number"),
-        ),
-        _field(
             "actuator_entity_ids",
             "Controlled heater or climate actuator(s)",
             "entities",
@@ -122,25 +163,7 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
             domains=("switch", "climate", "input_boolean"),
             help_text="For coupled equipment such as a circulation pump.",
         ),
-        _field(
-            "power_entity_id",
-            "Measured power",
-            "entity",
-            domains=("sensor",),
-            help_text="Optional when the Energy Dashboard meter already supplies sufficient history.",
-        ),
-        _field(
-            "override_entity_id",
-            "Manual override state",
-            "entity",
-            domains=("input_boolean", "input_text", "select", "sensor"),
-        ),
-        _field(
-            "override_timer_entity_id",
-            "Manual override timer",
-            "entity",
-            domains=("input_number", "timer", "sensor"),
-        ),
+        POWER_FIELD,
     ),
     "permit_inhibit": (
         _field(
@@ -151,19 +174,7 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
             required=True,
             help_text="The local thermostat keeps ownership of the duty cycle.",
         ),
-        _field(
-            "availability_entity_id",
-            "Availability or season state",
-            "entity",
-            domains=("binary_sensor", "input_boolean", "switch"),
-        ),
-        _field(
-            "power_entity_id",
-            "Measured power",
-            "entity",
-            domains=("sensor",),
-        ),
-        _field("power_w", "Reviewed rated power", "number", unit="W", minimum=1, step=1),
+        POWER_FIELD,
         _field(
             "max_inhibit_slots",
             "Maximum continuous inhibit",
@@ -188,14 +199,7 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
             "entities",
             domains=("switch", "input_boolean", "climate"),
         ),
-        _field(
-            "availability_entity_id",
-            "Availability or season state",
-            "entity",
-            domains=("binary_sensor", "input_boolean", "switch"),
-        ),
-        _field("power_entity_id", "Measured power", "entity", domains=("sensor",)),
-        _field("power_w", "Reviewed rated power", "number", unit="W", minimum=1, step=1),
+        POWER_FIELD,
         _field(
             "min_run_slots",
             "Minimum run",
@@ -203,83 +207,10 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
             unit="15-minute slots",
             minimum=1,
             step=1,
-            required=True,
         ),
     ),
-    "variable_power": (
-        _field(
-            "power_control_entity_id",
-            "Power control",
-            "entity",
-            domains=("number", "input_number"),
-            required=True,
-        ),
-        _field(
-            "availability_entity_id",
-            "Availability state",
-            "entity",
-            domains=("binary_sensor", "input_boolean", "switch"),
-        ),
-        _field("power_entity_id", "Measured power", "entity", domains=("sensor",)),
-    ),
-    "current_limit": (
-        _field(
-            "current_control_entity_id",
-            "Charging-current control",
-            "entity",
-            domains=("number", "input_number"),
-            required=True,
-        ),
-        _field(
-            "connected_entity_id",
-            "Vehicle connected state",
-            "entity",
-            domains=("binary_sensor", "input_boolean", "sensor"),
-            required=True,
-        ),
-        _field(
-            "soc_entity_id",
-            "Vehicle battery state of charge",
-            "entity",
-            domains=("sensor",),
-            required=True,
-        ),
-        _field(
-            "target_soc_entity_id",
-            "Vehicle target state of charge",
-            "entity",
-            domains=("number", "input_number", "sensor"),
-            required=True,
-        ),
-        _field(
-            "departure_entity_id",
-            "Departure time",
-            "entity",
-            domains=("sensor", "input_datetime"),
-        ),
-        _field(
-            "energy_remaining_entity_id",
-            "Energy remaining",
-            "entity",
-            domains=("sensor",),
-        ),
-        _field("power_entity_id", "Measured charging power", "entity", domains=("sensor",)),
-        _field(
-            "battery_capacity_kwh",
-            "Usable vehicle battery capacity",
-            "number",
-            unit="kWh",
-            minimum=0.1,
-            step=0.1,
-            required=True,
-        ),
-        _field("min_current_a", "Minimum charging current", "number", unit="A", minimum=0.1, step=0.1, required=True),
-        _field("max_current_a", "Maximum charging current", "number", unit="A", minimum=0.1, step=0.1, required=True),
-        _field("current_step_a", "Charging-current step", "number", unit="A", minimum=0.1, step=0.1, required=True),
-        _field("phase_count", "Charging phases", "number", minimum=1, maximum=3, step=1, required=True),
-        _field("voltage", "Charging voltage", "number", unit="V", minimum=1, step=1, required=True),
-        _field("min_run_slots", "Minimum run", "number", unit="15-minute slots", minimum=1, step=1, required=True),
-    ),
+    "variable_power": _number_control_fields(),
+    "current_limit": _number_control_fields(minimum=0.1),
 }
 
 
@@ -390,13 +321,10 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "id": "pool",
             "tab": "devices",
             "title": "Pool service window",
-            "description": "These portfolio constraints supplement the pool device's local switch mapping.",
+            "description": "The local switch card owns actuators, power and any minimum run. This section only defines the service obligation.",
             "fields": [
                 _field(c.OPT_POOL_PLANNING_ENABLED, "Include pool in planning", "toggle"),
                 _field(c.OPT_POOL_DEFERRABLE_CONFIRMED, "I confirm the pool load is deferrable", "toggle"),
-                _field(c.OPT_POOL_ENABLED_ENTITY, "Pool season or enabled state", "entity"),
-                _field(c.OPT_POOL_POWER_W, "Heater plus required pump power", "number", unit="W", minimum=1, step=1),
-                _field(c.OPT_POOL_MIN_RUN_SLOTS, "Minimum run", "number", unit="15-minute slots", minimum=1, step=1),
                 _field(c.OPT_POOL_DEADLINE, "Daily deadline", "time"),
                 _field(c.OPT_POOL_BASELINE_START, "Baseline preferred start", "time"),
             ],
@@ -409,8 +337,6 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "fields": [
                 _field(c.OPT_BOILER_PLANNING_ENABLED, "Include water heating in planning", "toggle"),
                 _field(c.OPT_BOILER_DEFERRABLE_CONFIRMED, "I confirm temporary inhibit is safe", "toggle"),
-                _field(c.OPT_BOILER_POWER_W, "Reviewed element power", "number", unit="W", minimum=1, step=1),
-                _field(c.OPT_BOILER_MAX_INHIBIT_SLOTS, "Maximum continuous inhibit", "number", unit="15-minute slots", minimum=1, step=1),
             ],
         },
         {
@@ -421,20 +347,15 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "fields": [
                 _field(c.OPT_EV_PLANNING_ENABLED, "Include EV charging in planning", "toggle"),
                 _field(c.OPT_EV_DEFERRABLE_CONFIRMED, "I confirm EV charging is deferrable", "toggle"),
-                _field(c.OPT_EV_ELECTRICAL_CONFIRMED, "I confirm phases, voltage and current limits", "toggle"),
+                _field(c.OPT_EV_ELECTRICAL_CONFIRMED, "I confirm phases, voltage and the mapped current limits", "toggle"),
                 _field(c.OPT_EV_CONNECTED_ENTITY, "Vehicle connected state", "entity"),
                 _field(c.OPT_EV_SOC_ENTITY, "Vehicle battery SOC", "entity", domains=("sensor",)),
                 _field(c.OPT_EV_TARGET_SOC_ENTITY, "Vehicle target SOC", "entity"),
                 _field(c.OPT_EV_DEPARTURE_ENTITY, "Departure time", "entity"),
-                _field(c.OPT_EV_CHARGE_CURRENT_ENTITY, "Charging-current control", "entity"),
                 _field(c.OPT_EV_ENERGY_REMAINING_ENTITY, "Energy remaining", "entity", domains=("sensor",)),
-                _field(c.OPT_EV_POWER_W, "Fixed charging power when current control is unavailable", "number", unit="W", minimum=1, step=1),
                 _field(c.OPT_EV_BATTERY_KWH, "Usable vehicle battery capacity", "number", unit="kWh", minimum=0.1, step=0.1),
                 _field(c.OPT_EV_CHARGE_EFFICIENCY, "Charging efficiency", "number", unit="%", minimum=1, maximum=100, step=1, scale=100),
                 _field(c.OPT_EV_MIN_RUN_SLOTS, "Minimum run", "number", unit="15-minute slots", minimum=1, step=1),
-                _field(c.OPT_EV_MIN_CURRENT_A, "Minimum current", "number", unit="A", minimum=0.1, step=0.1),
-                _field(c.OPT_EV_MAX_CURRENT_A, "Maximum current", "number", unit="A", minimum=0.1, step=0.1),
-                _field(c.OPT_EV_CURRENT_STEP_A, "Current step", "number", unit="A", minimum=0.1, step=0.1),
                 _field(c.OPT_EV_PHASE_COUNT, "Charging phases", "number", minimum=1, maximum=3, step=1),
                 _field(c.OPT_EV_VOLTAGE, "Charging voltage", "number", unit="V", minimum=1, step=1),
                 _field(c.OPT_EV_DEFAULT_DEPARTURE, "Default departure", "time"),
@@ -479,6 +400,9 @@ def _entity_catalog(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "state": str(state.state)[:120],
                 "unit": state.attributes.get("unit_of_measurement"),
                 "device_class": state.attributes.get("device_class"),
+                "minimum": state.attributes.get("min"),
+                "maximum": state.attributes.get("max"),
+                "area_id": entity_area_id(hass, state.entity_id),
             }
         )
     return result
@@ -488,40 +412,9 @@ def _mapping_suggestions(
     hass: HomeAssistant,
     device: dict[str, Any],
     control_type: str,
-    options: dict[str, Any],
 ) -> dict[str, Any]:
-    """Combine semantic entity suggestions with reviewed legacy values."""
-    c = shs_const
-    defaults = suggest_device_control_mapping(hass, device, control_type)
-    if control_type == "current_limit":
-        for target, source in (
-            ("current_control_entity_id", c.OPT_EV_CHARGE_CURRENT_ENTITY),
-            ("connected_entity_id", c.OPT_EV_CONNECTED_ENTITY),
-            ("soc_entity_id", c.OPT_EV_SOC_ENTITY),
-            ("target_soc_entity_id", c.OPT_EV_TARGET_SOC_ENTITY),
-            ("departure_entity_id", c.OPT_EV_DEPARTURE_ENTITY),
-            ("energy_remaining_entity_id", c.OPT_EV_ENERGY_REMAINING_ENTITY),
-            ("battery_capacity_kwh", c.OPT_EV_BATTERY_KWH),
-            ("min_current_a", c.OPT_EV_MIN_CURRENT_A),
-            ("max_current_a", c.OPT_EV_MAX_CURRENT_A),
-            ("current_step_a", c.OPT_EV_CURRENT_STEP_A),
-            ("phase_count", c.OPT_EV_PHASE_COUNT),
-            ("voltage", c.OPT_EV_VOLTAGE),
-            ("min_run_slots", c.OPT_EV_MIN_RUN_SLOTS),
-        ):
-            if options.get(source) not in (None, "", []):
-                defaults[target] = options[source]
-    elif control_type == "permit_inhibit":
-        defaults["max_inhibit_slots"] = options[c.OPT_BOILER_MAX_INHIBIT_SLOTS]
-        if options.get(c.OPT_BOILER_POWER_W) not in (None, ""):
-            defaults["power_w"] = options[c.OPT_BOILER_POWER_W]
-    elif control_type == "switch_schedule":
-        defaults["min_run_slots"] = options[c.OPT_POOL_MIN_RUN_SLOTS]
-        if options.get(c.OPT_POOL_ENABLED_ENTITY):
-            defaults["availability_entity_id"] = options[c.OPT_POOL_ENABLED_ENTITY]
-        if options.get(c.OPT_POOL_POWER_W) not in (None, ""):
-            defaults["power_w"] = options[c.OPT_POOL_POWER_W]
-    return defaults
+    """Return live Home Assistant suggestions for the current card contract."""
+    return suggest_device_control_mapping(hass, device, control_type)
 
 
 async def _configuration_payload(
@@ -548,6 +441,8 @@ async def _configuration_payload(
     if not isinstance(mappings, dict):
         mappings = {}
     known_entity_ids = {state.entity_id for state in hass.states.async_all()}
+    entity_names = entity_display_name_by_id(hass)
+    area_names = area_name_by_id(hass)
     devices: list[dict[str, Any]] = []
     for device in requested:
         control_type = str(device.get("control_type") or "")
@@ -557,7 +452,13 @@ async def _configuration_payload(
             if isinstance(saved, dict) and saved.get("control_type") == control_type
             else {}
         )
-        report = mapping_report(control_type, saved, known_entity_ids)
+        report = mapping_report(
+            control_type,
+            saved,
+            known_entity_ids,
+            entity_names,
+            area_names,
+        )
         devices.append(
             {
                 "key": device["key"],
@@ -575,7 +476,7 @@ async def _configuration_payload(
                     else None
                 ),
                 "suggested_mapping": _mapping_suggestions(
-                    hass, device, control_type, options
+                    hass, device, control_type
                 ),
                 "fields": list(CONTROL_FIELDS.get(control_type, ())),
                 **report,
@@ -593,6 +494,12 @@ async def _configuration_payload(
         for device in setpoint_devices
         if device["mapping_status"] == "ready"
     ]
+    mapped_room_keys = {
+        device["mapping_summary"].get("room_key")
+        for device in ready_setpoint_devices
+        if isinstance(device.get("mapping_summary"), dict)
+        and isinstance(device["mapping_summary"].get("room_key"), str)
+    }
     outdoor_entity = options.get(shs_const.OPT_OUTDOOR_TEMPERATURE_ENTITY)
     weather_entity = options.get(shs_const.OPT_WEATHER_FORECAST_ENTITY)
     outdoor_ready = bool(outdoor_entity and outdoor_entity in known_entity_ids)
@@ -620,6 +527,12 @@ async def _configuration_payload(
         "configuration": options,
         "sections": _configuration_sections(),
         "entities": _entity_catalog(hass),
+        "areas": [
+            {"id": area_id, "name": name}
+            for area_id, name in sorted(
+                area_names.items(), key=lambda item: item[1].casefold()
+            )
+        ],
         "devices": devices,
         "portal": {
             "status": "error" if portal_error else "synchronised",
@@ -650,6 +563,7 @@ async def _configuration_payload(
             "status": thermal_status,
             "requested_zones": len(setpoint_devices),
             "mapped_zones": len(ready_setpoint_devices),
+            "mapped_rooms": len(mapped_room_keys),
             "outdoor_temperature_entity": outdoor_entity,
             "outdoor_temperature_ready": outdoor_ready,
             "weather_forecast_entity": weather_entity,
@@ -660,6 +574,9 @@ async def _configuration_payload(
                 {
                     "key": device["key"],
                     "name": device["name"],
+                    "room_name": device["mapping_summary"].get("room_name")
+                    if isinstance(device.get("mapping_summary"), dict)
+                    else None,
                     "mapping_status": device["mapping_status"],
                     "mapping_error": device["mapping_error"],
                 }
@@ -753,6 +670,32 @@ def _normalise_field_value(
             raise ValueError(f"{context}: {label} must use HH:MM")
         return text
 
+    if kind == "area":
+        area_id = str(value).strip()
+        if area_id not in area_name_by_id(hass):
+            raise ValueError(f"{context}: {label} is not a Home Assistant room")
+        return area_id
+
+    if kind == "power":
+        text = str(value).strip()
+        state = hass.states.get(text)
+        if state is not None:
+            unit = state.attributes.get("unit_of_measurement")
+            if not text.startswith("sensor.") or unit not in {"W", "kW"}:
+                raise ValueError(
+                    f"{context}: {label} must be a W or kW power sensor"
+                )
+            return text
+        try:
+            watts = float(text)
+        except (TypeError, ValueError) as err:
+            raise ValueError(
+                f"{context}: {label} must be a power entity or watts"
+            ) from err
+        if not isfinite(watts) or watts <= 0:
+            raise ValueError(f"{context}: {label} must be positive watts")
+        return watts
+
     if kind in {"entity", "entities"}:
         values = value if isinstance(value, list) else [value]
         if kind == "entities" and not isinstance(value, list):
@@ -778,12 +721,56 @@ def _normalise_field_value(
     return str(value).strip()
 
 
+def _normalise_device_mapping(
+    hass: HomeAssistant,
+    device: dict[str, Any],
+    mapping: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate one mapping and retain only the current control contract."""
+    control_type = str(device.get("control_type") or "")
+    if control_type not in CONTROL_FIELDS:
+        raise ValueError(f"{device['name']}: unsupported control type")
+    if mapping.get("control_type") != control_type:
+        raise ValueError(
+            f"{device['name']}: mapping belongs to a different control type"
+        )
+
+    normalised: dict[str, Any] = {"control_type": control_type}
+    for field in CONTROL_FIELDS[control_type]:
+        key = field["key"]
+        if key not in mapping:
+            continue
+        value = _normalise_field_value(
+            hass,
+            field,
+            mapping[key],
+            context=str(device["name"]),
+        )
+        if value is not None:
+            normalised[key] = value
+
+    report = mapping_report(
+        control_type,
+        normalised,
+        {state.entity_id for state in hass.states.async_all()},
+        entity_display_name_by_id(hass),
+        area_name_by_id(hass),
+    )
+    if report["mapping_status"] != "ready":
+        raise ValueError(
+            f"{device['name']}: {report['mapping_error'] or 'mapping is incomplete'}"
+        )
+    return normalised
+
+
 async def async_apply_configuration(
     hass: HomeAssistant,
     entry: ConfigEntry,
     incoming: dict[str, Any],
 ) -> dict[str, Any]:
-    """Validate and persist one complete or partial panel/service update."""
+    """Validate and persist a complete or partial non-device update."""
+    if shs_const.OPT_DEVICE_CONTROL_MAPPINGS in incoming:
+        raise ValueError("device mappings must be saved from their own card")
     unknown = sorted(set(incoming) - _allowed_configuration_keys(hass, entry))
     if unknown:
         raise ValueError("unknown configuration keys: " + ", ".join(unknown))
@@ -812,40 +799,6 @@ async def async_apply_configuration(
         shs_const.PLANNING_MODE_LIVE,
     }:
         raise ValueError("planning mode must be Off or Live planning")
-
-    mappings = options.get(shs_const.OPT_DEVICE_CONTROL_MAPPINGS, {})
-    if not isinstance(mappings, dict):
-        raise ValueError("device control mappings must be an object")
-    requested = await entry.runtime_data.async_cached_device_configuration()
-    known_entity_ids = {state.entity_id for state in hass.states.async_all()}
-    for device in requested:
-        mapping = mappings.get(device["key"])
-        if mapping is None:
-            continue
-        if not isinstance(mapping, dict):
-            raise ValueError(f"{device['name']}: mapping must be an object")
-        control_type = str(device.get("control_type") or "")
-        if mapping.get("control_type") != control_type:
-            continue
-        report = mapping_report(control_type, mapping, known_entity_ids)
-        if report["mapping_status"] != "ready":
-            raise ValueError(
-                f"{device['name']}: {report['mapping_error'] or 'mapping is incomplete'}"
-            )
-        fields = {field["key"]: field for field in CONTROL_FIELDS[control_type]}
-        for key, field in fields.items():
-            if key not in mapping:
-                continue
-            value = _normalise_field_value(
-                hass,
-                field,
-                mapping[key],
-                context=str(device["name"]),
-            )
-            if value is None:
-                mapping.pop(key, None)
-            else:
-                mapping[key] = value
 
     confirmations = (
         (
@@ -883,6 +836,42 @@ async def async_apply_configuration(
         ).isoformat()
     hass.config_entries.async_update_entry(entry, options=options)
     return options
+
+
+async def async_apply_device_mapping(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    device_key: str,
+    incoming: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate, report and save one device mapping without touching its peers."""
+    requested = await entry.runtime_data.async_cached_device_configuration()
+    device = next((item for item in requested if item["key"] == device_key), None)
+    if device is None:
+        raise ValueError("the website no longer requests this controllable device")
+
+    options = resolved_options(hass, dict(entry.options))
+    existing = options.get(shs_const.OPT_DEVICE_CONTROL_MAPPINGS, {})
+    mappings = {
+        key: dict(value)
+        for key, value in existing.items()
+        if isinstance(key, str) and isinstance(value, dict)
+    } if isinstance(existing, dict) else {}
+    if incoming is None:
+        mappings.pop(device_key, None)
+    else:
+        mappings[device_key] = _normalise_device_mapping(hass, device, incoming)
+
+    report = await entry.runtime_data.async_report_device_mapping(
+        device_key, mappings
+    )
+    options[shs_const.OPT_DEVICE_CONTROL_MAPPINGS] = mappings
+    if options.get(shs_const.OPT_PLANNING_MODE) == shs_const.PLANNING_MODE_LIVE:
+        options[shs_const.OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(
+            timezone.utc
+        ).isoformat()
+    hass.config_entries.async_update_entry(entry, options=options)
+    return report
 
 
 @websocket_api.require_admin
@@ -985,6 +974,39 @@ async def websocket_save_configuration(
     )
 
 
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{shs_const.DOMAIN}/config/save_device",
+        vol.Required("config_entry"): str,
+        vol.Required("device_key"): str,
+        vol.Required("mapping"): vol.Any(dict, None),
+    }
+)
+@websocket_api.async_response
+async def websocket_save_device_configuration(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Save and report one local control mapping."""
+    entry = _entry_from_message(hass, msg["config_entry"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "SHS Energy entry not found")
+        return
+    try:
+        report = await async_apply_device_mapping(
+            hass,
+            entry,
+            msg["device_key"],
+            dict(msg["mapping"]) if msg["mapping"] is not None else None,
+        )
+    except (ShsApiError, TypeError, ValueError) as err:
+        connection.send_error(msg["id"], "invalid_device_mapping", str(err))
+        return
+    connection.send_result(msg["id"], {"saved": True, **report})
+
+
 async def async_register_config_panel(hass: HomeAssistant) -> None:
     """Register the static bundle, backend commands and cogwheel destination."""
     await hass.http.async_register_static_paths(
@@ -1004,3 +1026,4 @@ async def async_register_config_panel(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_get_configuration)
     websocket_api.async_register_command(hass, websocket_discover_configuration)
     websocket_api.async_register_command(hass, websocket_save_configuration)
+    websocket_api.async_register_command(hass, websocket_save_device_configuration)

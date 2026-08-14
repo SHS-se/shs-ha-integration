@@ -55,7 +55,8 @@ apply_configuration:
     silently re-run while applying. Every enabled flexible load must include
     its explicit deferrability confirmation, and EV control must also confirm
     phase count and voltage. Home Assistant's internal .storage files are never
-    edited directly.
+    edited directly. Controllable-device mappings are saved independently from
+    their cards on the SHS Energy configuration page.
   fields:
     entry_id:
       name: Configuration entry ID

@@ -111,9 +111,10 @@ class PricePushWiringTests(unittest.TestCase):
     def test_every_exchange_pushes_prices(self) -> None:
         self.assertIn("price_slots = self._price_quarters(", COORDINATOR)
         self.assertIn(
-            "actuals, snapshot, devices, thermal_slots, price_slots",
+            "actuals,\n                    snapshot,\n                    devices,\n                    thermal_slots,\n                    price_slots",
             COORDINATOR,
         )
+        self.assertIn("device_inventory_complete=True", COORDINATOR)
 
     def test_prices_alone_are_worth_a_push(self) -> None:
         # Without this a backfill on a home with no new actuals would return

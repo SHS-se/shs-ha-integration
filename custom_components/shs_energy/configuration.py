@@ -9,17 +9,15 @@ changes.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import timedelta
 from math import isfinite
 import re
-from statistics import median
 from typing import Any
 
 from homeassistant.components.energy import async_get_manager
-from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.core import HomeAssistant, State
-from homeassistant.util import dt as dt_util
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONFIGURABLE_CATEGORIES,
@@ -40,28 +38,21 @@ from .const import (
     OPT_BATTERY_TARGET_IS_HARD,
     OPT_BATTERY_TARGET_SOC,
     OPT_BOILER_DEFERRABLE_CONFIRMED,
-    OPT_BOILER_MAX_INHIBIT_SLOTS,
     OPT_BOILER_PLANNING_ENABLED,
-    OPT_BOILER_POWER_W,
     OPT_DISCOVERY_EVIDENCE,
     OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_OUTDOOR_TEMPERATURE_ENTITY,
     OPT_WEATHER_FORECAST_ENTITY,
     OPT_EV_BATTERY_KWH,
-    OPT_EV_CHARGE_CURRENT_ENTITY,
     OPT_EV_CHARGE_EFFICIENCY,
     OPT_EV_CONNECTED_ENTITY,
-    OPT_EV_CURRENT_STEP_A,
     OPT_EV_DEFAULT_DEPARTURE,
     OPT_EV_DEFERRABLE_CONFIRMED,
     OPT_EV_ELECTRICAL_CONFIRMED,
     OPT_EV_ENERGY_REMAINING_ENTITY,
     OPT_EV_MIN_RUN_SLOTS,
-    OPT_EV_MIN_CURRENT_A,
-    OPT_EV_MAX_CURRENT_A,
     OPT_EV_PHASE_COUNT,
     OPT_EV_PLANNING_ENABLED,
-    OPT_EV_POWER_W,
     OPT_EV_SOC_ENTITY,
     OPT_EV_TARGET_SOC_ENTITY,
     OPT_EV_VOLTAGE,
@@ -73,10 +64,7 @@ from .const import (
     OPT_POOL_BASELINE_START,
     OPT_POOL_DEADLINE,
     OPT_POOL_DEFERRABLE_CONFIRMED,
-    OPT_POOL_ENABLED_ENTITY,
-    OPT_POOL_MIN_RUN_SLOTS,
     OPT_POOL_PLANNING_ENABLED,
-    OPT_POOL_POWER_W,
     OPT_PREFIX_ENTITIES,
     OPT_PV_FORECAST_ENTITIES,
     OPT_PV_FORECAST_LATITUDE,
@@ -113,12 +101,10 @@ def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
         OPT_TERMINAL_ENERGY_VALUE: 1.0,
         OPT_POOL_PLANNING_ENABLED: False,
         OPT_POOL_DEFERRABLE_CONFIRMED: False,
-        OPT_POOL_MIN_RUN_SLOTS: 4,
         OPT_POOL_DEADLINE: "20:00",
         OPT_POOL_BASELINE_START: "12:00",
         OPT_BOILER_PLANNING_ENABLED: False,
         OPT_BOILER_DEFERRABLE_CONFIRMED: False,
-        OPT_BOILER_MAX_INHIBIT_SLOTS: 4,
         OPT_EV_PLANNING_ENABLED: False,
         OPT_EV_DEFERRABLE_CONFIRMED: False,
         OPT_EV_ELECTRICAL_CONFIRMED: False,
@@ -133,6 +119,46 @@ def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
 def resolved_options(hass: HomeAssistant, options: dict[str, Any]) -> dict[str, Any]:
     """Apply real runtime defaults; selector placeholders are not persisted."""
     return {**optimisation_defaults(hass), **dict(options)}
+
+
+def area_name_by_id(hass: HomeAssistant) -> dict[str, str]:
+    """Return Home Assistant's stable area ids and user-facing room names."""
+    registry = ar.async_get(hass)
+    return {area.id: area.name for area in registry.async_list_areas()}
+
+
+def entity_area_id(hass: HomeAssistant, entity_id: str) -> str | None:
+    """Resolve an entity's own area, then its device's area."""
+    entity = er.async_get(hass).async_get(entity_id)
+    if entity is None:
+        return None
+    if entity.area_id:
+        return entity.area_id
+    if not entity.device_id:
+        return None
+    device = dr.async_get(hass).async_get(entity.device_id)
+    return device.area_id if device is not None else None
+
+
+def entity_display_name_by_id(hass: HomeAssistant) -> dict[str, str]:
+    """Name controlled hardware without exposing entity ids to the website."""
+    entities = er.async_get(hass)
+    devices = dr.async_get(hass)
+    result: dict[str, str] = {}
+    for state in hass.states.async_all():
+        entity = entities.async_get(state.entity_id)
+        device = (
+            devices.async_get(entity.device_id)
+            if entity is not None and entity.device_id
+            else None
+        )
+        result[state.entity_id] = str(
+            (device.name_by_user if device else None)
+            or (device.name if device else None)
+            or state.attributes.get("friendly_name")
+            or state.entity_id
+        )
+    return result
 
 
 def _entity_id(statistic_id: Any) -> str | None:
@@ -213,50 +239,6 @@ def _as_kwh(state: State | None) -> float | None:
     return None
 
 
-async def _recent_active_power(
-    hass: HomeAssistant,
-    entity_ids: tuple[str, ...],
-) -> tuple[float | None, int]:
-    """Estimate fixed active power from local five-minute statistics.
-
-    The value is only a review proposal. Raw recorder samples stay in Home
-    Assistant and are never included in the discovery response or upload.
-    """
-    if not entity_ids:
-        return None, 0
-    end = dt_util.utcnow()
-    statistics = await get_instance(hass).async_add_executor_job(
-        statistics_during_period,
-        hass,
-        end - timedelta(days=30),
-        end,
-        set(entity_ids),
-        "5minute",
-        {"power": "W"},
-        {"mean"},
-    )
-    active_levels: list[float] = []
-    sample_count = 0
-    for entity_id in entity_ids:
-        positive = sorted(
-            value
-            for row in statistics.get(entity_id, [])
-            if (value := row.get("mean")) is not None
-            and isfinite(float(value))
-            and float(value) > 25
-        )
-        if not positive:
-            return None, 0
-        # Ignore switching edges and standby. A fixed load's upper operating
-        # cluster is stable even when a five-minute bucket contains only part
-        # of an on-cycle.
-        threshold = max(25.0, float(positive[-1]) * 0.5)
-        active = [float(value) for value in positive if float(value) >= threshold]
-        active_levels.append(float(median(active)))
-        sample_count += len(active)
-    return round(sum(active_levels), 1), sample_count
-
-
 def _category_for_device(name: str) -> str:
     value = name.lower().replace("_", " ")
     if "tesla" in value and any(
@@ -312,7 +294,10 @@ def _energy_dashboard_inventory(
             str(state.attributes.get("friendly_name") or "").strip()
             if state is not None else ""
         )
-        name = configured_name or state_name or statistic_id
+        # The registry/state name is live Home Assistant metadata. Energy
+        # Dashboard preferences may retain an older copied label after a user
+        # rename, so the live friendly name takes precedence on every sync.
+        name = state_name or configured_name or statistic_id
         evidence_text = " ".join(
             value for value in (name, statistic_id, _state_text(state) if state else "")
             if value
@@ -415,7 +400,7 @@ def suggest_device_control_mapping(
         if value not in (None, "", []):
             mapping[key] = value
 
-    set_if_found("power_entity_id", _suggest_control_entities(
+    set_if_found("power", _suggest_control_entities(
         hass, device, domains=("sensor",), field_tokens=("power", "effekt"),
         units=("W", "kW"),
     ))
@@ -428,68 +413,46 @@ def suggest_device_control_mapping(
             hass, device, domains=("number", "input_number", "climate"),
             field_tokens=("setpoint", "target temp", "target temperature", "börvärde"),
         ))
-        set_if_found("comfort_high_entity_id", _suggest_control_entities(
-            hass, device, domains=("number", "input_number"),
-            field_tokens=("high temp", "comfort", "hög temp"), units=("°C",),
-        ))
-        set_if_found("comfort_low_entity_id", _suggest_control_entities(
-            hass, device, domains=("number", "input_number"),
-            field_tokens=("low temp", "setback", "låg temp"), units=("°C",),
-        ))
         set_if_found("actuator_entity_ids", _suggest_control_entities(
             hass, device, domains=("switch", "climate"),
             field_tokens=("heater", "heating", "aircon", "climate", "värme"),
             multiple=True,
         ))
-        set_if_found("override_entity_id", _suggest_control_entities(
-            hass, device, domains=("input_boolean", "input_text", "select"),
-            field_tokens=("override", "manual", "manuell"),
-        ))
-        set_if_found("override_timer_entity_id", _suggest_control_entities(
-            hass, device, domains=("input_number", "timer"),
-            field_tokens=("override timer", "override time", "manual timer"),
-        ))
+        room_sources = [
+            mapping.get("temperature_entity_id"),
+            *(mapping.get("actuator_entity_ids") or []),
+            device.get("statistic_id"),
+        ]
+        for source in room_sources:
+            if not isinstance(source, str):
+                continue
+            if area_id := entity_area_id(hass, source):
+                mapping["area_id"] = area_id
+                break
     elif control_type in ("switch_schedule", "permit_inhibit"):
         set_if_found("actuator_entity_ids", _suggest_control_entities(
             hass, device, domains=("switch", "input_boolean", "climate"),
             field_tokens=("heater", "heating", "boiler", "pump", "switch", "värme"),
             multiple=True,
         ))
-        set_if_found("availability_entity_id", _suggest_control_entities(
-            hass, device, domains=("binary_sensor", "input_boolean", "switch"),
-            field_tokens=("enabled", "season", "available", "tillgänglig"),
-        ))
-    elif control_type == "variable_power":
-        set_if_found("power_control_entity_id", _suggest_control_entities(
-            hass, device, domains=("number", "input_number"),
-            field_tokens=("power", "output", "limit", "effekt"), units=("W", "kW"),
-        ))
-    elif control_type == "current_limit":
-        set_if_found("current_control_entity_id", _suggest_control_entities(
-            hass, device, domains=("number", "input_number"),
-            field_tokens=("charge current", "charging current", "ström"), units=("A",),
-        ))
-        set_if_found("connected_entity_id", _suggest_control_entities(
-            hass, device, domains=("binary_sensor", "input_boolean"),
-            field_tokens=("connected", "plugged", "ansluten"),
-        ))
-        set_if_found("soc_entity_id", _suggest_control_entities(
-            hass, device, domains=("sensor",),
-            field_tokens=("state of charge", "battery level", "soc"), units=("%",),
-        ))
-        set_if_found("target_soc_entity_id", _suggest_control_entities(
-            hass, device, domains=("number", "input_number"),
-            field_tokens=("target soc", "charge limit", "target charge"), units=("%",),
-        ))
-        set_if_found("departure_entity_id", _suggest_control_entities(
-            hass, device, domains=("sensor", "input_datetime"),
-            field_tokens=("departure", "leave", "avresa"),
-        ))
-        set_if_found("energy_remaining_entity_id", _suggest_control_entities(
-            hass, device, domains=("sensor",),
-            field_tokens=("energy remaining", "charge energy added", "remaining"),
-            units=("kWh",),
-        ))
+    elif control_type in {"variable_power", "current_limit"}:
+        control_entity = _suggest_control_entities(
+            hass,
+            device,
+            domains=("number", "input_number"),
+            field_tokens=(
+                ("charge current", "charging current", "ström")
+                if control_type == "current_limit"
+                else ("power", "output", "limit", "effekt")
+            ),
+            units=("A",) if control_type == "current_limit" else ("W", "kW"),
+        )
+        set_if_found("control_entity_id", control_entity)
+        if isinstance(control_entity, str):
+            state = hass.states.get(control_entity)
+            if state is not None:
+                set_if_found("minimum_value", _attribute_number(state, "min"))
+                set_if_found("maximum_value", _attribute_number(state, "max"))
     return mapping
 
 
@@ -765,100 +728,12 @@ async def async_discover_configuration(
         detail="Weather entity providing the outdoor temperature forecast",
     )
 
-    pool_enabled_ids = ("input_boolean.pool_heating",)
-    pool_enabled = _first_state(
+    ev_current = _first_state(
         states,
-        exact_ids=pool_enabled_ids,
-        required=("pool", "heating"),
+        exact_ids=("number.tesla_model_y_charge_current",),
+        required=("charge", "current"),
+        domain="number",
     )
-    record_state(
-        OPT_POOL_ENABLED_ENTITY,
-        pool_enabled,
-        exact_ids=pool_enabled_ids,
-        detail="Pool season or enable gate; not proof that the load is deferrable",
-    )
-    pool_heater = _first_state(
-        states,
-        exact_ids=("sensor.pool_heater_power",),
-        required=("pool", "heater", "power"),
-        domain="sensor",
-    )
-    pool_pump = _first_state(
-        states,
-        exact_ids=("sensor.esphome_pool_pump_power",),
-        required=("pool", "pump", "power"),
-        domain="sensor",
-    )
-    pool_heater_power = _as_watts(pool_heater)
-    pool_pump_power = _as_watts(pool_pump)
-    pool_power, pool_power_samples = await _recent_active_power(
-        hass,
-        tuple(
-            state.entity_id
-            for state in (pool_heater, pool_pump)
-            if state is not None
-        ),
-    )
-    if pool_power is not None and pool_heater is not None and pool_pump is not None:
-        record(
-            OPT_POOL_POWER_W,
-            pool_power,
-            source="recorder_5minute_statistics",
-            confidence="medium",
-            detail=(
-                "Median active heater plus required pump power from "
-                f"{pool_power_samples} local five-minute samples; confirm rating"
-            ),
-        )
-    elif (
-        pool_heater_power is not None
-        and pool_heater_power > 100
-        and pool_pump_power is not None
-        and pool_pump_power > 100
-    ):
-        record(
-            OPT_POOL_POWER_W,
-            round(pool_heater_power + pool_pump_power, 1),
-            source="live_power_observation",
-            confidence="medium",
-            detail="Active heater plus required pump observed now; confirm rating",
-        )
-
-    boiler_power_ids = ("sensor.water_boiler_power",)
-    boiler_power_state = _first_state(
-        states,
-        exact_ids=boiler_power_ids,
-        required=("water", "boiler", "power"),
-        domain="sensor",
-    )
-    boiler_power, boiler_power_samples = await _recent_active_power(
-        hass,
-        (boiler_power_state.entity_id,) if boiler_power_state is not None else (),
-    )
-    if boiler_power is not None:
-        record(
-            OPT_BOILER_POWER_W,
-            boiler_power,
-            source="recorder_5minute_statistics",
-            confidence="medium",
-            detail=(
-                "Median active aggregate water-heater power from "
-                f"{boiler_power_samples} local five-minute samples; confirm rating"
-            ),
-        )
-    elif (
-        boiler_power_state is not None
-        and (live_boiler_power := _as_watts(boiler_power_state)) is not None
-        and live_boiler_power > 100
-    ):
-        record(
-            OPT_BOILER_POWER_W,
-            round(live_boiler_power, 1),
-            source="live_power_observation",
-            confidence="medium",
-            detail="Active aggregate water-heater power observed now; confirm rating",
-        )
-
     ev_matches = (
         (
             OPT_EV_CONNECTED_ENTITY,
@@ -894,17 +769,6 @@ async def async_discover_configuration(
             "Vehicle charge target",
         ),
         (
-            OPT_EV_CHARGE_CURRENT_ENTITY,
-            _first_state(
-                states,
-                exact_ids=("number.tesla_model_y_charge_current",),
-                required=("charge", "current"),
-                domain="number",
-            ),
-            ("number.tesla_model_y_charge_current",),
-            "Current control with min/max/step attributes",
-        ),
-        (
             OPT_EV_ENERGY_REMAINING_ENTITY,
             _first_state(
                 states,
@@ -920,10 +784,10 @@ async def async_discover_configuration(
     for key, state, exact_ids, detail in ev_matches:
         matched_ev[key] = state
         record_state(key, state, exact_ids=exact_ids, detail=detail)
-    ev_current = matched_ev[OPT_EV_CHARGE_CURRENT_ENTITY]
     raw_current_min = _attribute_number(ev_current, "min")
     raw_current_max = _attribute_number(ev_current, "max")
     raw_current_step = _attribute_number(ev_current, "step")
+    proposed_min = raw_current_min
     if ev_current is not None:
         # Tessie exposes 0 A as the selector minimum, but this installation's
         # commissioned AC charging floor is 5 A. This is a proposal only: the
@@ -935,31 +799,6 @@ async def async_discover_configuration(
             and raw_current_min == 0
             else raw_current_min
         )
-        for key, value, detail in (
-            (
-                OPT_EV_MIN_CURRENT_A,
-                proposed_min,
-                f"Usable charging floor; entity selector reports {raw_current_min} A",
-            ),
-            (
-                OPT_EV_MAX_CURRENT_A,
-                raw_current_max,
-                "Maximum accepted by the charge-current entity",
-            ),
-            (
-                OPT_EV_CURRENT_STEP_A,
-                raw_current_step,
-                "Increment accepted by the charge-current entity",
-            ),
-        ):
-            if value is not None:
-                record(
-                    key,
-                    value,
-                    source="charger_range_proposal",
-                    confidence="medium" if key == OPT_EV_MIN_CURRENT_A else "high",
-                    detail=detail,
-                )
     ev_soc = matched_ev[OPT_EV_SOC_ENTITY]
     ev_remaining = matched_ev[OPT_EV_ENERGY_REMAINING_ENTITY]
     soc = _number(ev_soc)
@@ -1001,7 +840,7 @@ async def async_discover_configuration(
     ev_candidate = bool(
         mapped.get("ev_charging")
         or matched_ev.get(OPT_EV_CONNECTED_ENTITY)
-        or matched_ev.get(OPT_EV_CHARGE_CURRENT_ENTITY)
+        or ev_current
     )
     capabilities = {
         "metering": {
@@ -1028,19 +867,14 @@ async def async_discover_configuration(
         },
         "pool": {
             "candidate": pool_candidate,
-            "ready_after_review": pool_candidate and not missing((
-                OPT_POOL_ENABLED_ENTITY,
-                OPT_POOL_POWER_W,
-            )),
-            "missing": missing((OPT_POOL_ENABLED_ENTITY, OPT_POOL_POWER_W)),
+            "ready_after_review": pool_candidate,
+            "missing": [],
             "requires_confirmation": True,
         },
         "boiler": {
             "candidate": boiler_candidate,
-            "ready_after_review": boiler_candidate and not missing((
-                OPT_BOILER_POWER_W,
-            )),
-            "missing": missing((OPT_BOILER_POWER_W,)),
+            "ready_after_review": boiler_candidate,
+            "missing": [],
             "requires_confirmation": True,
         },
         "ev": {
@@ -1050,33 +884,24 @@ async def async_discover_configuration(
                 OPT_EV_SOC_ENTITY,
                 OPT_EV_TARGET_SOC_ENTITY,
                 OPT_EV_BATTERY_KWH,
-                OPT_EV_MIN_CURRENT_A,
-                OPT_EV_MAX_CURRENT_A,
-                OPT_EV_CURRENT_STEP_A,
-            )) and bool(
-                options.get(OPT_EV_CHARGE_CURRENT_ENTITY)
-                or options.get(OPT_EV_POWER_W)
-            ),
+            )) and ev_current is not None,
             "missing": missing((
                 OPT_EV_CONNECTED_ENTITY,
                 OPT_EV_SOC_ENTITY,
                 OPT_EV_TARGET_SOC_ENTITY,
                 OPT_EV_BATTERY_KWH,
-                OPT_EV_MIN_CURRENT_A,
-                OPT_EV_MAX_CURRENT_A,
-                OPT_EV_CURRENT_STEP_A,
             )),
             "current_control": (
                 None
-                if matched_ev.get(OPT_EV_CHARGE_CURRENT_ENTITY) is None
+                if ev_current is None
                 else {
-                    "entity_id": matched_ev[OPT_EV_CHARGE_CURRENT_ENTITY].entity_id,
+                    "entity_id": ev_current.entity_id,
                     "raw_min_a": raw_current_min,
                     "raw_max_a": raw_current_max,
                     "raw_step_a": raw_current_step,
-                    "proposed_min_a": options.get(OPT_EV_MIN_CURRENT_A),
-                    "proposed_max_a": options.get(OPT_EV_MAX_CURRENT_A),
-                    "proposed_step_a": options.get(OPT_EV_CURRENT_STEP_A),
+                    "proposed_min_a": proposed_min,
+                    "proposed_max_a": raw_current_max,
+                    "proposed_step_a": raw_current_step,
                 }
             ),
             "requires_confirmation": True,
@@ -1089,16 +914,9 @@ async def async_discover_configuration(
         OPT_BATTERY_DISCHARGE_MAX_W,
         OPT_GRID_IMPORT_LIMIT_W,
         OPT_GRID_EXPORT_LIMIT_W,
-        OPT_POOL_ENABLED_ENTITY,
-        OPT_POOL_POWER_W,
-        OPT_BOILER_POWER_W,
         OPT_EV_CONNECTED_ENTITY,
         OPT_EV_SOC_ENTITY,
         OPT_EV_TARGET_SOC_ENTITY,
-        OPT_EV_CHARGE_CURRENT_ENTITY,
-        OPT_EV_MIN_CURRENT_A,
-        OPT_EV_MAX_CURRENT_A,
-        OPT_EV_CURRENT_STEP_A,
         OPT_EV_BATTERY_KWH,
     ):
         if key in evidence or options.get(key) in (None, "", []):

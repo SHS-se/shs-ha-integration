@@ -24,10 +24,7 @@ from .const import (
     CONF_HOME_ID,
     DOMAIN,
     OPT_CONFIGURATION_REVIEWED_AT,
-    OPT_EV_CHARGE_CURRENT_ENTITY,
-    OPT_EV_CURRENT_STEP_A,
-    OPT_EV_MAX_CURRENT_A,
-    OPT_EV_MIN_CURRENT_A,
+    OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_GRID_EXPORT_POWER_ENTITY,
     OPT_PLANNING_MODE,
     PLANNING_MODE_DISABLED,
@@ -337,6 +334,19 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
                 return control
         return None
 
+    def _current_entity(self) -> str | None:
+        mappings = self.coordinator.entry.options.get(
+            OPT_DEVICE_CONTROL_MAPPINGS, {}
+        )
+        entities = {
+            mapping.get("control_entity_id")
+            for mapping in mappings.values()
+            if mapping.get("control_type") == "current_limit"
+            and isinstance(mapping.get("control_entity_id"), str)
+            and mapping["control_entity_id"]
+        }
+        return next(iter(entities)) if len(entities) == 1 else None
+
     @property
     def native_value(self) -> float | None:
         slot = self.coordinator.current_plan_slot
@@ -349,9 +359,7 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         slot = self.coordinator.current_plan_slot or {}
         control = self._control() or {}
-        current_entity = self.coordinator.entry.options.get(
-            OPT_EV_CHARGE_CURRENT_ENTITY
-        )
+        current_entity = self._current_entity()
         current_state = (
             self.hass.states.get(current_entity) if current_entity else None
         )
@@ -362,22 +370,13 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
             "minimum_current_a": slot.get("ev_min_current_a"),
             "maximum_current_a": slot.get("ev_max_current_a"),
             "charger_minimum_current_a": control.get(
-                "min_current_a",
-                self.coordinator.entry.options.get(
-                    OPT_EV_MIN_CURRENT_A, current_attributes.get("min")
-                ),
+                "min_current_a", current_attributes.get("min")
             ),
             "charger_maximum_current_a": control.get(
-                "max_current_a",
-                self.coordinator.entry.options.get(
-                    OPT_EV_MAX_CURRENT_A, current_attributes.get("max")
-                ),
+                "max_current_a", current_attributes.get("max")
             ),
             "current_step_a": control.get(
-                "current_step_a",
-                self.coordinator.entry.options.get(
-                    OPT_EV_CURRENT_STEP_A, current_attributes.get("step")
-                ),
+                "current_step_a", current_attributes.get("step")
             ),
             "current_entity": current_entity,
             "advisory_only": True,

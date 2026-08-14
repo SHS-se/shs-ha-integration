@@ -40,6 +40,21 @@ def _positive_number(mapping: dict[str, Any], key: str) -> bool:
     return isfinite(value) and value > 0
 
 
+def _non_negative_number(mapping: dict[str, Any], key: str) -> bool:
+    try:
+        value = float(mapping.get(key))
+    except (TypeError, ValueError):
+        return False
+    return isfinite(value) and value >= 0
+
+
+def _power_source(mapping: dict[str, Any]) -> bool:
+    value = mapping.get("power")
+    return value in (None, "") or _positive_number(mapping, "power") or (
+        isinstance(value, str) and "." in value and bool(value.strip())
+    )
+
+
 def mapping_errors(mapping: dict[str, Any], control_type: str) -> list[str]:
     """Return structural mapping errors for one control contract."""
     if control_type not in CONTROL_TYPES:
@@ -49,18 +64,12 @@ def mapping_errors(mapping: dict[str, Any], control_type: str) -> list[str]:
 
     errors: list[str] = []
     if control_type == "setpoint":
+        if not _text(mapping, "area_id"):
+            errors.append("Home Assistant room is required")
         if not _text(mapping, "temperature_entity_id"):
             errors.append("room temperature entity is required")
         if not _entities(mapping, "actuator_entity_ids"):
             errors.append("at least one heater or climate actuator is required")
-        direct = _text(mapping, "setpoint_entity_id")
-        scheduled = _text(mapping, "comfort_high_entity_id") and _text(
-            mapping, "comfort_low_entity_id"
-        )
-        if not direct and not scheduled:
-            errors.append(
-                "a setpoint entity or both high and low comfort entities are required"
-            )
     elif control_type == "permit_inhibit":
         if not _entities(mapping, "actuator_entity_ids"):
             errors.append("at least one permit/inhibit actuator is required")
@@ -69,38 +78,34 @@ def mapping_errors(mapping: dict[str, Any], control_type: str) -> list[str]:
     elif control_type == "switch_schedule":
         if not _entities(mapping, "actuator_entity_ids"):
             errors.append("at least one switch actuator is required")
-        if not _positive_number(mapping, "min_run_slots"):
+        if "min_run_slots" in mapping and not _positive_number(
+            mapping, "min_run_slots"
+        ):
             errors.append("minimum run slots must be positive")
-    elif control_type == "variable_power":
-        if not _text(mapping, "power_control_entity_id"):
-            errors.append("power control entity is required")
-    elif control_type == "current_limit":
-        for key, label in (
-            ("current_control_entity_id", "charge current control entity"),
-            ("connected_entity_id", "connected entity"),
-            ("soc_entity_id", "vehicle state of charge entity"),
-            ("target_soc_entity_id", "target state of charge entity"),
-        ):
-            if not _text(mapping, key):
-                errors.append(f"{label} is required")
-        if not _positive_number(mapping, "battery_capacity_kwh"):
-            errors.append("vehicle usable battery capacity must be positive")
-        for key, label in (
-            ("min_current_a", "minimum charge current"),
-            ("max_current_a", "maximum charge current"),
-            ("current_step_a", "charge current step"),
-            ("phase_count", "phase count"),
-            ("voltage", "charging voltage"),
-            ("min_run_slots", "minimum run slots"),
-        ):
-            if not _positive_number(mapping, key):
-                errors.append(f"{label} must be positive")
+    elif control_type in {"variable_power", "current_limit"}:
+        if not _text(mapping, "control_entity_id"):
+            errors.append("number control entity is required")
+        minimum_valid = (
+            _positive_number(mapping, "minimum_value")
+            if control_type == "current_limit"
+            else _non_negative_number(mapping, "minimum_value")
+        )
+        if not minimum_valid:
+            errors.append(
+                "minimum control value must be positive"
+                if control_type == "current_limit"
+                else "minimum control value must be zero or greater"
+            )
+        if not _positive_number(mapping, "maximum_value"):
+            errors.append("maximum control value must be positive")
         if (
-            _positive_number(mapping, "min_current_a")
-            and _positive_number(mapping, "max_current_a")
-            and float(mapping["min_current_a"]) > float(mapping["max_current_a"])
+            minimum_valid
+            and _positive_number(mapping, "maximum_value")
+            and float(mapping["minimum_value"]) >= float(mapping["maximum_value"])
         ):
-            errors.append("minimum charge current cannot exceed maximum charge current")
+            errors.append("minimum control value must be below maximum control value")
+    if not _power_source(mapping):
+        errors.append("power must be a power entity or a positive watt value")
     return errors
 
 
@@ -108,6 +113,8 @@ def mapping_report(
     requested_control_type: str | None,
     mapping: dict[str, Any] | None,
     known_entity_ids: set[str] | None = None,
+    entity_names: dict[str, str] | None = None,
+    area_names: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the privacy-minimised status uploaded to the website."""
     if requested_control_type not in CONTROL_TYPES or not mapping:
@@ -133,10 +140,19 @@ def mapping_report(
         for entity_id in (value if isinstance(value, list) else [value])
         if isinstance(entity_id, str) and entity_id
     }
+    if isinstance(mapping.get("power"), str) and "." in mapping["power"]:
+        configured_entity_ids.add(mapping["power"])
     if known_entity_ids is not None and not configured_entity_ids.issubset(
         known_entity_ids
     ):
         errors.append("one or more configured entities no longer exist")
+    area_id = mapping.get("area_id")
+    if (
+        requested_control_type == "setpoint"
+        and area_names is not None
+        and area_id not in area_names
+    ):
+        errors.append("the configured Home Assistant room no longer exists")
     entity_count = sum(
         len(value) if isinstance(value, list) else 1
         for key, value in mapping.items()
@@ -149,6 +165,30 @@ def mapping_report(
             key for key, value in mapping.items() if key != "control_type" and value
         ),
     }
+    if requested_control_type == "setpoint" and isinstance(area_id, str):
+        summary.update(
+            {
+                "room_key": area_id,
+                "room_name": (area_names or {}).get(area_id, area_id),
+                "controlled_devices": sorted(
+                    {
+                        (entity_names or {}).get(entity_id, entity_id)
+                        for key in (
+                            "actuator_entity_ids",
+                            "companion_actuator_entity_ids",
+                        )
+                        for entity_id in mapping.get(key, [])
+                        if isinstance(entity_id, str) and entity_id
+                    }
+                ),
+            }
+        )
+    if _positive_number(mapping, "power"):
+        summary["reviewed_power_w"] = float(mapping["power"])
+    elif isinstance(mapping.get("power"), str) and mapping["power"].strip():
+        summary["power_entity_name"] = (entity_names or {}).get(
+            mapping["power"], mapping["power"]
+        )
     return {
         "mapping_status": "invalid" if errors else "ready",
         "mapped_control_type": requested_control_type,
@@ -162,6 +202,8 @@ def apply_requested_configuration(
     requested: dict[str, dict[str, Any]],
     mappings: dict[str, dict[str, Any]],
     known_entity_ids: set[str] | None = None,
+    entity_names: dict[str, str] | None = None,
+    area_names: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Apply website requests, keeping incomplete controls in base load."""
     for device in devices:
@@ -172,6 +214,8 @@ def apply_requested_configuration(
             requested_control if requested_role == "controllable" else None,
             mappings.get(device["key"]),
             known_entity_ids,
+            entity_names,
+            area_names,
         )
         device["load_type"] = configuration.get(
             "load_type", device["suggested_load_type"]
@@ -180,6 +224,9 @@ def apply_requested_configuration(
         device["planning_role"] = "controllable" if ready else "base_load"
         device["control_type"] = requested_control if ready else None
         device.update(report)
+        reviewed_power = report["mapping_summary"].get("reviewed_power_w")
+        if ready and isinstance(reviewed_power, (int, float)):
+            device["active_power_w"] = float(reviewed_power)
     return devices
 
 

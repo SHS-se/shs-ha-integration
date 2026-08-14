@@ -205,22 +205,48 @@ class ZoneInputTests(unittest.TestCase):
 
     def test_reads_a_matching_setpoint_mapping(self) -> None:
         mappings = {
-            "sensor.kitchen_heater_energy": {
+            "kitchen": {
                 "control_type": "setpoint",
+                "area_id": "kitchen_area",
                 "temperature_entity_id": "sensor.kitchen_temperature",
                 "actuator_entity_ids": ["switch.kitchen_heaters"],
-                "comfort_high_entity_id": "input_number.kitchen_high",
             }
         }
         zones = thermal_zone_inputs([self._device()], mappings)
         self.assertEqual(
-            zones["kitchen"]["temperature_entity_id"],
+            zones["kitchen_area"]["temperature_entity_id"],
             "sensor.kitchen_temperature",
+        )
+
+    def test_groups_multiple_heater_meters_into_one_room(self) -> None:
+        second = self._device(
+            key="kitchen_floor",
+            statistic_id="sensor.kitchen_floor_energy",
+        )
+        mappings = {
+            "kitchen": {
+                "control_type": "setpoint",
+                "area_id": "kitchen_area",
+                "temperature_entity_id": "sensor.kitchen_temperature",
+                "actuator_entity_ids": ["switch.kitchen_radiator"],
+            },
+            "kitchen_floor": {
+                "control_type": "setpoint",
+                "area_id": "kitchen_area",
+                "temperature_entity_id": "sensor.kitchen_temperature",
+                "actuator_entity_ids": ["climate.kitchen_floor"],
+            },
+        }
+        zones = thermal_zone_inputs([self._device(), second], mappings)
+        self.assertEqual(list(zones), ["kitchen_area"])
+        self.assertEqual(
+            zones["kitchen_area"]["actuator_entity_ids"],
+            ["climate.kitchen_floor", "switch.kitchen_radiator"],
         )
 
     def test_skips_a_mapping_of_a_different_control_type(self) -> None:
         mappings = {
-            "sensor.kitchen_heater_energy": {
+            "kitchen": {
                 "control_type": "switch_schedule",
                 "temperature_entity_id": "sensor.kitchen_temperature",
                 "actuator_entity_ids": ["switch.kitchen_heaters"],
@@ -230,8 +256,9 @@ class ZoneInputTests(unittest.TestCase):
 
     def test_skips_a_device_the_website_did_not_select(self) -> None:
         mappings = {
-            "sensor.kitchen_heater_energy": {
+            "kitchen": {
                 "control_type": "setpoint",
+                "area_id": "kitchen_area",
                 "temperature_entity_id": "sensor.kitchen_temperature",
                 "actuator_entity_ids": ["switch.kitchen_heaters"],
             }
