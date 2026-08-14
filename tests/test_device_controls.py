@@ -23,11 +23,10 @@ class DeviceControlMappingTests(unittest.TestCase):
             "actuator_entity_ids": ["switch.office_heater"],
         })
         self.assertEqual(report["mapping_status"], "invalid")
-        self.assertIn("room", report["mapping_error"])
+        self.assertIn("assign a Home Assistant area", report["mapping_error"])
 
         report = mapping_report("setpoint", {
             "control_type": "setpoint",
-            "area_id": "office",
             "temperature_entity_id": "sensor.office_temperature",
             "actuator_entity_ids": [
                 "switch.office_heater_left",
@@ -36,7 +35,10 @@ class DeviceControlMappingTests(unittest.TestCase):
         }, entity_names={
             "switch.office_heater_left": "Office heater left",
             "switch.office_heater_right": "Office heater right",
-        }, area_names={"office": "Office"})
+        }, area_names={"office": "Office"}, entity_area_ids={
+            "switch.office_heater_left": "office",
+            "switch.office_heater_right": "office",
+        })
         self.assertEqual(report["mapping_status"], "ready")
         self.assertEqual(report["mapping_summary"]["entity_count"], 3)
         self.assertEqual(report["mapping_summary"]["room_name"], "Office")
@@ -44,6 +46,19 @@ class DeviceControlMappingTests(unittest.TestCase):
             report["mapping_summary"]["controlled_devices"],
             ["Office heater left", "Office heater right"],
         )
+
+    def test_setpoint_rejects_actuators_in_different_rooms(self) -> None:
+        report = mapping_report("setpoint", {
+            "control_type": "setpoint",
+            "temperature_entity_id": "sensor.house_temperature",
+            "actuator_entity_ids": ["switch.office", "switch.bedroom"],
+        }, area_names={"office": "Office", "bedroom": "Bedroom"},
+            entity_area_ids={
+                "switch.office": "office",
+                "switch.bedroom": "bedroom",
+            })
+        self.assertEqual(report["mapping_status"], "invalid")
+        self.assertIn("must all belong to one", report["mapping_error"])
 
     def test_mismatched_control_type_is_not_configured(self) -> None:
         report = mapping_report("permit_inhibit", {

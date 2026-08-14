@@ -140,6 +140,16 @@ def entity_area_id(hass: HomeAssistant, entity_id: str) -> str | None:
     return device.area_id if device is not None else None
 
 
+def entity_area_id_by_id(hass: HomeAssistant) -> dict[str, str]:
+    """Resolve every live entity to its own or parent device area."""
+    result: dict[str, str] = {}
+    for state in hass.states.async_all():
+        area_id = entity_area_id(hass, state.entity_id)
+        if area_id:
+            result[state.entity_id] = area_id
+    return result
+
+
 def entity_display_name_by_id(hass: HomeAssistant) -> dict[str, str]:
     """Name controlled hardware without exposing entity ids to the website."""
     entities = er.async_get(hass)
@@ -418,17 +428,6 @@ def suggest_device_control_mapping(
             field_tokens=("heater", "heating", "aircon", "climate", "värme"),
             multiple=True,
         ))
-        room_sources = [
-            mapping.get("temperature_entity_id"),
-            *(mapping.get("actuator_entity_ids") or []),
-            device.get("statistic_id"),
-        ]
-        for source in room_sources:
-            if not isinstance(source, str):
-                continue
-            if area_id := entity_area_id(hass, source):
-                mapping["area_id"] = area_id
-                break
     elif control_type in ("switch_schedule", "permit_inhibit"):
         set_if_found("actuator_entity_ids", _suggest_control_entities(
             hass, device, domains=("switch", "input_boolean", "climate"),

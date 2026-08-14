@@ -199,6 +199,7 @@ class ZoneInputTests(unittest.TestCase):
             "statistic_id": "sensor.kitchen_heater_energy",
             "planning_role": "controllable",
             "control_type": "setpoint",
+            "mapping_summary": {"room_key": "kitchen_area"},
         }
         device.update(overrides)
         return device
@@ -207,7 +208,6 @@ class ZoneInputTests(unittest.TestCase):
         mappings = {
             "kitchen": {
                 "control_type": "setpoint",
-                "area_id": "kitchen_area",
                 "temperature_entity_id": "sensor.kitchen_temperature",
                 "actuator_entity_ids": ["switch.kitchen_heaters"],
             }
@@ -226,13 +226,11 @@ class ZoneInputTests(unittest.TestCase):
         mappings = {
             "kitchen": {
                 "control_type": "setpoint",
-                "area_id": "kitchen_area",
                 "temperature_entity_id": "sensor.kitchen_temperature",
                 "actuator_entity_ids": ["switch.kitchen_radiator"],
             },
             "kitchen_floor": {
                 "control_type": "setpoint",
-                "area_id": "kitchen_area",
                 "temperature_entity_id": "sensor.kitchen_temperature",
                 "actuator_entity_ids": ["climate.kitchen_floor"],
             },
@@ -258,7 +256,6 @@ class ZoneInputTests(unittest.TestCase):
         mappings = {
             "kitchen": {
                 "control_type": "setpoint",
-                "area_id": "kitchen_area",
                 "temperature_entity_id": "sensor.kitchen_temperature",
                 "actuator_entity_ids": ["switch.kitchen_heaters"],
             }

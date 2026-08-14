@@ -170,15 +170,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     if isinstance(mappings, dict):
         migrated_mappings = dict(mappings)
         for device_key, raw_mapping in mappings.items():
-            if (
-                isinstance(raw_mapping, dict)
-                and raw_mapping.get("control_type") == "current_limit"
-            ):
-                migrated_mappings[device_key] = {
-                    **raw_mapping,
-                    "control_type": "variable_power",
-                }
+            if not isinstance(raw_mapping, dict):
+                continue
+            migrated_mapping = dict(raw_mapping)
+            if migrated_mapping.get("control_type") == "current_limit":
+                migrated_mapping["control_type"] = "variable_power"
                 options_changed = True
+            if (
+                migrated_mapping.get("control_type") == "setpoint"
+                and "area_id" in migrated_mapping
+            ):
+                migrated_mapping.pop("area_id")
+                options_changed = True
+            migrated_mappings[device_key] = migrated_mapping
         migrated_options[OPT_DEVICE_CONTROL_MAPPINGS] = migrated_mappings
     if options_changed:
         hass.config_entries.async_update_entry(

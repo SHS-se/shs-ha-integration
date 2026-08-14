@@ -105,8 +105,11 @@ configuration tabs. Leaving with unsaved edits requires confirmation. The
 website's **Example** view is independent of this integration.
 
 Heating comfort is configured by **Home Assistant room**, not by Energy
-Dashboard meter or entity name. A setpoint mapping selects the HA area, the
-room-temperature sensor and every heater/climate actuator that can serve it.
+Dashboard meter or entity name. A setpoint mapping selects the room-temperature
+sensor and every heater/climate actuator that can serve it. The integration
+derives the room from each controlled actuator's entity area or parent device
+area. Saving is rejected when an actuator has no area or the selected actuators
+belong to different rooms.
 Several meters and actuators can therefore share one room objective. The SHS
 Comfort tab displays the live room name and those controlled entities. A yellow
 quarter means the room must already be at its Comfort temperature when that
@@ -118,10 +121,11 @@ Planned-control cards contain only facts needed by the planned schedule:
 - a switch schedule has its actuator(s), optional companion actuator(s), one
   optional Power field (a W/kW entity or reviewed watts), and an optional
   minimum run;
-- a setpoint schedule has its room, measured temperature, optional direct
-  setpoint, controlled heater/climate actuator(s), optional companion
-  actuator(s), and optional Power field; scheduled comfort/setback helpers and
-  reactive override fields are not part of this mapping; and
+- a setpoint schedule has its measured temperature, optional direct setpoint,
+  controlled heater/climate actuator(s), optional companion actuator(s), and
+  optional Power field; its room is derived from the controlled actuators, and
+  scheduled comfort/setback helpers and reactive override fields are not part
+  of this mapping; and
 - variable-power control uses one number entity plus optional minimum and
   maximum values. Home Assistant proposes the entity's
   bounds when available, while explicitly entered bounds take precedence.

@@ -104,6 +104,7 @@ from .const import (
 from .configuration import (
     area_name_by_id,
     async_energy_dashboard_inventory,
+    entity_area_id_by_id,
     entity_display_name_by_id,
     resolved_options,
 )
@@ -365,6 +366,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         known_entity_ids = {state.entity_id for state in self.hass.states.async_all()}
         entity_names = entity_display_name_by_id(self.hass)
         area_names = area_name_by_id(self.hass)
+        entity_area_ids = entity_area_id_by_id(self.hass)
         self.device_control_mapping_gaps = []
         for device in requested_controllable_devices(configuration):
             report = mapping_report(
@@ -372,6 +374,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 known_entity_ids,
                 entity_names,
                 area_names,
+                entity_area_ids,
             )
             if report["mapping_status"] != "ready":
                 self.device_control_mapping_gaps.append(
@@ -523,6 +526,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             {state.entity_id for state in self.hass.states.async_all()},
             entity_display_name_by_id(self.hass),
             area_name_by_id(self.hass),
+            entity_area_id_by_id(self.hass),
         )
         active_mappings = mappings if mappings is not None else self.entry.options.get(
             OPT_DEVICE_CONTROL_MAPPINGS, {}

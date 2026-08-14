@@ -445,16 +445,6 @@ class ShsEnergyConfigPanel extends HTMLElement {
           )
           .join("")}
       </select>`;
-    } else if (field.kind === "area") {
-      control = `<select ${common}>
-        <option value="">Select a room…</option>
-        ${(this._data.areas || [])
-          .map(
-            (area) =>
-              `<option value="${this._escape(area.id)}" ${area.id === value ? "selected" : ""}>${this._escape(area.name)}</option>`
-          )
-          .join("")}
-      </select>`;
     } else if (field.kind === "entities") {
       const values = Array.isArray(value) ? value : [];
       control = `<div class="multi-editor">
@@ -853,6 +843,6 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 }
 
-if (!customElements.get("shs-energy-config-panel-v2")) {
-  customElements.define("shs-energy-config-panel-v2", ShsEnergyConfigPanel);
+if (!customElements.get("shs-energy-config-panel-v3")) {
+  customElements.define("shs-energy-config-panel-v3", ShsEnergyConfigPanel);
 }

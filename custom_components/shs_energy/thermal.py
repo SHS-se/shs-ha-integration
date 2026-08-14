@@ -334,7 +334,8 @@ def thermal_zone_inputs(
         mapping = mappings.get(str(device["key"])) or {}
         if mapping.get("control_type") != "setpoint":
             continue
-        area_id = mapping.get("area_id")
+        mapping_summary = device.get("mapping_summary") or {}
+        area_id = mapping_summary.get("room_key")
         temperature = mapping.get("temperature_entity_id")
         actuators = [
             entity

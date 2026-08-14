@@ -63,8 +63,6 @@ def mapping_errors(mapping: dict[str, Any], control_type: str) -> list[str]:
 
     errors: list[str] = []
     if control_type == "setpoint":
-        if not _text(mapping, "area_id"):
-            errors.append("Home Assistant room is required")
         if not _text(mapping, "temperature_entity_id"):
             errors.append("room temperature entity is required")
         if not _entities(mapping, "actuator_entity_ids"):
@@ -106,6 +104,7 @@ def mapping_report(
     known_entity_ids: set[str] | None = None,
     entity_names: dict[str, str] | None = None,
     area_names: dict[str, str] | None = None,
+    entity_area_ids: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the privacy-minimised status uploaded to the website."""
     if requested_control_type not in CONTROL_TYPES or not mapping:
@@ -137,13 +136,48 @@ def mapping_report(
         known_entity_ids
     ):
         errors.append("one or more configured entities no longer exist")
-    area_id = mapping.get("area_id")
-    if (
-        requested_control_type == "setpoint"
-        and area_names is not None
-        and area_id not in area_names
-    ):
-        errors.append("the configured Home Assistant room no longer exists")
+    area_id: str | None = None
+    if requested_control_type == "setpoint":
+        actuators = [
+            value
+            for value in mapping.get("actuator_entity_ids", [])
+            if isinstance(value, str) and value
+        ]
+        existing_actuators = [
+            value
+            for value in actuators
+            if known_entity_ids is None or value in known_entity_ids
+        ]
+        missing_areas = [
+            value
+            for value in existing_actuators
+            if not (entity_area_ids or {}).get(value)
+        ]
+        if missing_areas:
+            labels = ", ".join(
+                (entity_names or {}).get(value, value) for value in missing_areas
+            )
+            errors.append(
+                "assign a Home Assistant area to every controlled actuator "
+                f"before saving: {labels}"
+            )
+        actuator_areas = {
+            (entity_area_ids or {}).get(value)
+            for value in existing_actuators
+            if (entity_area_ids or {}).get(value)
+        }
+        if len(actuator_areas) > 1:
+            labels = ", ".join(
+                sorted((area_names or {}).get(value, value) for value in actuator_areas)
+            )
+            errors.append(
+                "controlled actuators must all belong to one Home Assistant "
+                f"room; found: {labels}"
+            )
+        elif not missing_areas and len(actuator_areas) == 1:
+            area_id = next(iter(actuator_areas))
+            if area_names is not None and area_id not in area_names:
+                errors.append("the controlled actuator's Home Assistant room no longer exists")
     entity_count = sum(
         len(value) if isinstance(value, list) else 1
         for key, value in mapping.items()
@@ -195,6 +229,7 @@ def apply_requested_configuration(
     known_entity_ids: set[str] | None = None,
     entity_names: dict[str, str] | None = None,
     area_names: dict[str, str] | None = None,
+    entity_area_ids: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Apply website requests, keeping incomplete controls in base load."""
     for device in devices:
@@ -207,6 +242,7 @@ def apply_requested_configuration(
             known_entity_ids,
             entity_names,
             area_names,
+            entity_area_ids,
         )
         device["load_type"] = configuration.get(
             "load_type", device["suggested_load_type"]

@@ -86,8 +86,15 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn("Save configuration", CONFIG_PANEL_FRONTEND)
 
     def test_panel_asset_uses_a_new_component_and_cache_key(self) -> None:
-        self.assertIn('PANEL_ELEMENT = "shs-energy-config-panel-v2"', CONFIG_PANEL)
+        self.assertIn('PANEL_ELEMENT = "shs-energy-config-panel-v3"', CONFIG_PANEL)
         self.assertIn("?v={FRONTEND_ASSET_VERSION}", CONFIG_PANEL)
+
+    def test_setpoint_room_is_derived_instead_of_edited(self) -> None:
+        fields = CONFIG_PANEL[
+            CONFIG_PANEL.index("CONTROL_FIELDS") :
+            CONFIG_PANEL.index("def _configuration_sections")
+        ]
+        self.assertNotIn('"area_id"', fields)
 
     def test_changing_the_options_reloads_the_entry(self) -> None:
         # Entities subscribe to the supplier price sensor when they are added.

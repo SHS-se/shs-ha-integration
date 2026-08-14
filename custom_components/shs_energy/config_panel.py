@@ -22,6 +22,7 @@ from .configuration import (
     area_name_by_id,
     async_discover_configuration,
     entity_area_id,
+    entity_area_id_by_id,
     entity_display_name_by_id,
     optimisation_defaults,
     resolved_options,
@@ -32,10 +33,10 @@ from .device_controls import mapping_report
 _LOGGER = logging.getLogger(__name__)
 
 PANEL_URL = "shs-energy"
-PANEL_ELEMENT = "shs-energy-config-panel-v2"
+PANEL_ELEMENT = "shs-energy-config-panel-v3"
 STATIC_URL = "/shs_energy_frontend"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
-FRONTEND_ASSET_VERSION = "0.7.0-beta.2"
+FRONTEND_ASSET_VERSION = "0.7.0-beta.3"
 
 
 def _field(
@@ -122,13 +123,6 @@ def _number_control_fields() -> tuple[dict[str, Any], ...]:
 
 CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
     "setpoint": (
-        _field(
-            "area_id",
-            "Room",
-            "area",
-            required=True,
-            help_text="The Home Assistant room owns this comfort objective, even when several heaters serve it.",
-        ),
         _field(
             "temperature_entity_id",
             "Room or process temperature",
@@ -438,6 +432,7 @@ async def _configuration_payload(
     known_entity_ids = {state.entity_id for state in hass.states.async_all()}
     entity_names = entity_display_name_by_id(hass)
     area_names = area_name_by_id(hass)
+    entity_area_ids = entity_area_id_by_id(hass)
     devices: list[dict[str, Any]] = []
     for device in requested:
         control_type = str(device.get("control_type") or "")
@@ -453,6 +448,7 @@ async def _configuration_payload(
             known_entity_ids,
             entity_names,
             area_names,
+            entity_area_ids,
         )
         devices.append(
             {
@@ -522,12 +518,6 @@ async def _configuration_payload(
         "configuration": options,
         "sections": _configuration_sections(),
         "entities": _entity_catalog(hass),
-        "areas": [
-            {"id": area_id, "name": name}
-            for area_id, name in sorted(
-                area_names.items(), key=lambda item: item[1].casefold()
-            )
-        ],
         "devices": devices,
         "portal": {
             "status": "error" if portal_error else "synchronised",
@@ -665,12 +655,6 @@ def _normalise_field_value(
             raise ValueError(f"{context}: {label} must use HH:MM")
         return text
 
-    if kind == "area":
-        area_id = str(value).strip()
-        if area_id not in area_name_by_id(hass):
-            raise ValueError(f"{context}: {label} is not a Home Assistant room")
-        return area_id
-
     if kind == "power":
         text = str(value).strip()
         state = hass.states.get(text)
@@ -750,6 +734,7 @@ def _normalise_device_mapping(
         {state.entity_id for state in hass.states.async_all()},
         entity_display_name_by_id(hass),
         area_name_by_id(hass),
+        entity_area_id_by_id(hass),
     )
     if report["mapping_status"] != "ready":
         raise ValueError(
