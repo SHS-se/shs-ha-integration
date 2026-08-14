@@ -822,7 +822,6 @@ def validate_plan_contract(
     }
     control_types = {
         "switch_schedule", "variable_power", "permit_inhibit", "setpoint",
-        "current_limit",
     }
     if not isinstance(device_models, list):
         raise OptimisationInputError("optimisation device models are invalid")

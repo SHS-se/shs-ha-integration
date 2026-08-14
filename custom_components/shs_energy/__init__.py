@@ -29,6 +29,7 @@ from .const import (
     OPTIMISATION_STARTUP_RETRY_SECONDS,
     PRICE_BACKFILL_MAX_DAYS,
     OPT_AUTOMATIC_SETUP,
+    OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_DISCOVERY_EVIDENCE,
     OPT_PLANNING_MODE,
     OPT_PREFIX_ENTITIES,
@@ -160,14 +161,29 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
     """Set up from a config entry."""
-    if RETIRED_SUPPLIER_PRICE_OPTIONS.intersection(entry.options):
+    migrated_options = dict(entry.options)
+    options_changed = False
+    for key in RETIRED_SUPPLIER_PRICE_OPTIONS.intersection(migrated_options):
+        migrated_options.pop(key)
+        options_changed = True
+    mappings = migrated_options.get(OPT_DEVICE_CONTROL_MAPPINGS)
+    if isinstance(mappings, dict):
+        migrated_mappings = dict(mappings)
+        for device_key, raw_mapping in mappings.items():
+            if (
+                isinstance(raw_mapping, dict)
+                and raw_mapping.get("control_type") == "current_limit"
+            ):
+                migrated_mappings[device_key] = {
+                    **raw_mapping,
+                    "control_type": "variable_power",
+                }
+                options_changed = True
+        migrated_options[OPT_DEVICE_CONTROL_MAPPINGS] = migrated_mappings
+    if options_changed:
         hass.config_entries.async_update_entry(
             entry,
-            options={
-                key: value
-                for key, value in entry.options.items()
-                if key not in RETIRED_SUPPLIER_PRICE_OPTIONS
-            },
+            options=migrated_options,
         )
     client = ShsApiClient(
         async_get_clientsession(hass),

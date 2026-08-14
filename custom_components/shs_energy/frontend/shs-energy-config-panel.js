@@ -578,6 +578,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const mapping = this._mapping(device.key) || {};
     const dirty = this._deviceDirty(device.key);
     const saving = this._savingDeviceKey === device.key;
+    const saveStatus = dirty
+      ? "Unsaved changes in this card"
+      : device.mapping_status === "ready"
+        ? "Saved and ready"
+        : "Complete the required fields, then save this card";
     const open = device.mapping_status !== "ready" || dirty ? "open" : "";
     const suggestionCount = Object.keys(device.suggested_mapping || {}).filter(
       (key) => key !== "control_type" && mapping[key] === undefined
@@ -594,12 +599,15 @@ class ShsEnergyConfigPanel extends HTMLElement {
         <div class="device-actions">
           <div class="device-action-group"><button type="button" class="secondary" data-action="use-suggestions" data-device-key="${this._escape(device.key)}" ${suggestionCount ? "" : "disabled"}>Use ${suggestionCount} suggestion${suggestionCount === 1 ? "" : "s"}</button>
           <button type="button" class="text danger" data-action="clear-mapping" data-device-key="${this._escape(device.key)}">Remove local mapping</button></div>
-          <button type="button" class="primary" data-action="save-device" data-device-key="${this._escape(device.key)}" ${dirty && !this._savingDeviceKey && !this._saving ? "" : "disabled"}>${saving ? "Saving…" : dirty ? "Save configuration" : "Saved"}</button>
         </div>
         <div class="field-grid">
           ${device.fields
             .map((field) => this._renderField(field, mapping[field.key], "mapping", device.key))
             .join("")}
+        </div>
+        <div class="device-save-row">
+          <span>${this._escape(saveStatus)}</span>
+          <button type="button" class="primary" data-action="save-device" data-device-key="${this._escape(device.key)}" ${dirty && !this._savingDeviceKey && !this._saving ? "" : "disabled"}>${saving ? "Saving…" : "Save configuration"}</button>
         </div>
       </div>
     </details>`;
@@ -813,6 +821,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .device-meta span { padding:5px 9px; border-radius:8px; background:var(--secondary-background-color); color:var(--secondary-text-color); font-size:12px; }
       .device-actions { display:flex; justify-content:space-between; gap:10px; align-items:center; margin:14px 0 20px; }
       .device-action-group { display:flex; flex-wrap:wrap; gap:8px; }
+      .device-save-row { display:flex; justify-content:flex-end; align-items:center; gap:16px; margin-top:24px; padding-top:18px; border-top:1px solid var(--divider-color); }
+      .device-save-row span { color:var(--secondary-text-color); font-size:13px; }
       .inline-warning { padding:11px 13px; margin:10px 0; border-radius:9px; color:var(--warning-color); background:color-mix(in srgb, var(--warning-color) 10%, transparent); }
       .thermal-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:22px 0; }
       .thermal-grid div { padding:16px; border-radius:12px; background:var(--secondary-background-color); display:flex; flex-direction:column; gap:5px; }
@@ -843,6 +853,6 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 }
 
-if (!customElements.get("shs-energy-config-panel")) {
-  customElements.define("shs-energy-config-panel", ShsEnergyConfigPanel);
+if (!customElements.get("shs-energy-config-panel-v2")) {
+  customElements.define("shs-energy-config-panel-v2", ShsEnergyConfigPanel);
 }

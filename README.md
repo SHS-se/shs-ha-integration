@@ -122,8 +122,8 @@ Planned-control cards contain only facts needed by the planned schedule:
   setpoint, controlled heater/climate actuator(s), optional companion
   actuator(s), and optional Power field; scheduled comfort/setback helpers and
   reactive override fields are not part of this mapping; and
-- variable-power and current-limit controls share one number entity plus
-  optional minimum and maximum values. Home Assistant proposes the entity's
+- variable-power control uses one number entity plus optional minimum and
+  maximum values. Home Assistant proposes the entity's
   bounds when available, while explicitly entered bounds take precedence.
 
 The integration sends a complete Energy Dashboard device inventory during its

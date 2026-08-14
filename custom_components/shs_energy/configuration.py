@@ -435,17 +435,18 @@ def suggest_device_control_mapping(
             field_tokens=("heater", "heating", "boiler", "pump", "switch", "värme"),
             multiple=True,
         ))
-    elif control_type in {"variable_power", "current_limit"}:
+    elif control_type == "variable_power":
+        current_control = device.get("category") == "ev_charging"
         control_entity = _suggest_control_entities(
             hass,
             device,
             domains=("number", "input_number"),
             field_tokens=(
                 ("charge current", "charging current", "ström")
-                if control_type == "current_limit"
+                if current_control
                 else ("power", "output", "limit", "effekt")
             ),
-            units=("A",) if control_type == "current_limit" else ("W", "kW"),
+            units=("A",) if current_control else ("W", "kW"),
         )
         set_if_found("control_entity_id", control_entity)
         if isinstance(control_entity, str):

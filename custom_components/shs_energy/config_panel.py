@@ -32,9 +32,10 @@ from .device_controls import mapping_report
 _LOGGER = logging.getLogger(__name__)
 
 PANEL_URL = "shs-energy"
-PANEL_ELEMENT = "shs-energy-config-panel"
+PANEL_ELEMENT = "shs-energy-config-panel-v2"
 STATIC_URL = "/shs_energy_frontend"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
+FRONTEND_ASSET_VERSION = "0.7.0-beta.2"
 
 
 def _field(
@@ -87,13 +88,8 @@ POWER_FIELD = _field(
     help_text="Choose a power sensor, or enter reviewed watts directly.",
 )
 
-def _number_control_fields(*, minimum: float = 0) -> tuple[dict[str, Any], ...]:
-    """Describe the shared number-entity contract with one semantic bound."""
-    minimum_help = (
-        "Use the smallest non-zero operating value when zero means off. "
-        if minimum > 0
-        else ""
-    )
+def _number_control_fields() -> tuple[dict[str, Any], ...]:
+    """Describe the shared variable-power number-entity contract."""
     return (
         _field(
             "control_entity_id",
@@ -106,10 +102,10 @@ def _number_control_fields(*, minimum: float = 0) -> tuple[dict[str, Any], ...]:
             "minimum_value",
             "Minimum value",
             "number",
-            minimum=minimum,
+            minimum=0,
             step=0.1,
             required=True,
-            help_text=minimum_help + "Automatically proposed from Home Assistant when available. A saved value takes precedence.",
+            help_text="Automatically proposed from Home Assistant when available. A saved value takes precedence.",
         ),
         _field(
             "maximum_value",
@@ -210,7 +206,6 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
         ),
     ),
     "variable_power": _number_control_fields(),
-    "current_limit": _number_control_fields(minimum=0.1),
 }
 
 
@@ -347,7 +342,7 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "fields": [
                 _field(c.OPT_EV_PLANNING_ENABLED, "Include EV charging in planning", "toggle"),
                 _field(c.OPT_EV_DEFERRABLE_CONFIRMED, "I confirm EV charging is deferrable", "toggle"),
-                _field(c.OPT_EV_ELECTRICAL_CONFIRMED, "I confirm phases, voltage and the mapped current limits", "toggle"),
+                _field(c.OPT_EV_ELECTRICAL_CONFIRMED, "I confirm phases, voltage and the mapped operating range", "toggle"),
                 _field(c.OPT_EV_CONNECTED_ENTITY, "Vehicle connected state", "entity"),
                 _field(c.OPT_EV_SOC_ENTITY, "Vehicle battery SOC", "entity", domains=("sensor",)),
                 _field(c.OPT_EV_TARGET_SOC_ENTITY, "Vehicle target SOC", "entity"),
@@ -1016,7 +1011,10 @@ async def async_register_config_panel(hass: HomeAssistant) -> None:
         hass,
         frontend_url_path=PANEL_URL,
         webcomponent_name=PANEL_ELEMENT,
-        module_url=f"{STATIC_URL}/shs-energy-config-panel.js",
+        module_url=(
+            f"{STATIC_URL}/shs-energy-config-panel.js"
+            f"?v={FRONTEND_ASSET_VERSION}"
+        ),
         sidebar_title=None,
         sidebar_icon="mdi:home-lightning-bolt",
         config={"domain": shs_const.DOMAIN},

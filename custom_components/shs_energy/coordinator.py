@@ -1804,7 +1804,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         connected_id = options.get(OPT_EV_CONNECTED_ENTITY)
         if options.get(OPT_EV_PLANNING_ENABLED) and connected_id:
-            ev_controls = mapped_controls("ev_charging", "current_limit")
+            ev_controls = mapped_controls("ev_charging", "variable_power")
             control_signatures: set[tuple[str, float, float]] = set()
             for model, mapping in ev_controls:
                 control_signatures.add((
@@ -1823,7 +1823,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 or not next(iter(control_signatures), ("", 0, 0))[0]
             ):
                 raise OptimisationInputError(
-                    "EV charging meters must share one current-limit entity and range"
+                    "EV charging meters must share one variable-power number entity and range"
                 )
             current_entity, configured_min, configured_max = next(
                 iter(control_signatures)
@@ -2021,7 +2021,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for category, control_type, enabled_key in (
             ("pool_heating", "switch_schedule", OPT_POOL_PLANNING_ENABLED),
             ("hot_water", "permit_inhibit", OPT_BOILER_PLANNING_ENABLED),
-            ("ev_charging", "current_limit", OPT_EV_PLANNING_ENABLED),
+            ("ev_charging", "variable_power", OPT_EV_PLANNING_ENABLED),
         ):
             ready = any(
                 device["category"] == category
@@ -2145,7 +2145,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 planning_role == "controllable"
                 and control_type not in (
                     "switch_schedule", "variable_power", "permit_inhibit",
-                    "setpoint", "current_limit",
+                    "setpoint",
                 )
             ) or planning_role not in ("base_load", "controllable"):
                 raise OptimisationInputError(

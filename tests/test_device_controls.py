@@ -90,13 +90,13 @@ class DeviceControlMappingTests(unittest.TestCase):
                 "key": "sensor.ev_energy",
                 "name": "Car",
                 "planning_role": "controllable",
-                "control_type": "current_limit",
+                "control_type": "variable_power",
                 "load_type": "variable_full_load",
             }
         }
         mappings = {
             "sensor.ev_energy": {
-                "control_type": "current_limit",
+                "control_type": "variable_power",
                 "control_entity_id": "number.ev_current",
                 "minimum_value": 6,
                 "maximum_value": 16,
@@ -104,18 +104,18 @@ class DeviceControlMappingTests(unittest.TestCase):
         }
         apply_requested_configuration(devices, requested, mappings)
         self.assertEqual(devices[0]["planning_role"], "controllable")
-        self.assertEqual(devices[0]["control_type"], "current_limit")
+        self.assertEqual(devices[0]["control_type"], "variable_power")
         self.assertEqual(devices[0]["mapping_status"], "ready")
         self.assertEqual(requested_controllable_devices(requested)[0]["name"], "Car")
 
     def test_number_mapping_rejects_inverted_limits(self) -> None:
         mapping = {
-            "control_type": "current_limit",
+            "control_type": "variable_power",
             "control_entity_id": "number.ev_current",
             "minimum_value": 20,
             "maximum_value": 16,
         }
-        report = mapping_report("current_limit", mapping)
+        report = mapping_report("variable_power", mapping)
         self.assertEqual(report["mapping_status"], "invalid")
         self.assertIn("below maximum", report["mapping_error"])
 

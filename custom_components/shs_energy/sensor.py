@@ -338,13 +338,18 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
         mappings = self.coordinator.entry.options.get(
             OPT_DEVICE_CONTROL_MAPPINGS, {}
         )
-        entities = {
-            mapping.get("control_entity_id")
-            for mapping in mappings.values()
-            if mapping.get("control_type") == "current_limit"
-            and isinstance(mapping.get("control_entity_id"), str)
-            and mapping["control_entity_id"]
-        }
+        entities: set[str] = set()
+        for mapping in mappings.values():
+            entity_id = mapping.get("control_entity_id")
+            if (
+                mapping.get("control_type") != "variable_power"
+                or not isinstance(entity_id, str)
+                or not entity_id
+            ):
+                continue
+            state = self.hass.states.get(entity_id)
+            if state and state.attributes.get("unit_of_measurement") == "A":
+                entities.add(entity_id)
         return next(iter(entities)) if len(entities) == 1 else None
 
     @property

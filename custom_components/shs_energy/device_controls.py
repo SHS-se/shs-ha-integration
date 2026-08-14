@@ -15,7 +15,6 @@ CONTROL_TYPES = (
     "variable_power",
     "permit_inhibit",
     "setpoint",
-    "current_limit",
 )
 
 
@@ -82,20 +81,12 @@ def mapping_errors(mapping: dict[str, Any], control_type: str) -> list[str]:
             mapping, "min_run_slots"
         ):
             errors.append("minimum run slots must be positive")
-    elif control_type in {"variable_power", "current_limit"}:
+    elif control_type == "variable_power":
         if not _text(mapping, "control_entity_id"):
             errors.append("number control entity is required")
-        minimum_valid = (
-            _positive_number(mapping, "minimum_value")
-            if control_type == "current_limit"
-            else _non_negative_number(mapping, "minimum_value")
-        )
+        minimum_valid = _non_negative_number(mapping, "minimum_value")
         if not minimum_valid:
-            errors.append(
-                "minimum control value must be positive"
-                if control_type == "current_limit"
-                else "minimum control value must be zero or greater"
-            )
+            errors.append("minimum control value must be zero or greater")
         if not _positive_number(mapping, "maximum_value"):
             errors.append("maximum control value must be positive")
         if (

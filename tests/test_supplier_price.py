@@ -41,6 +41,13 @@ CONFIG_PANEL = (
     / "shs_energy"
     / "config_panel.py"
 ).read_text(encoding="utf-8")
+CONFIG_PANEL_FRONTEND = (
+    Path(__file__).parents[1]
+    / "custom_components"
+    / "shs_energy"
+    / "frontend"
+    / "shs-energy-config-panel.js"
+).read_text(encoding="utf-8")
 
 
 class SensorWiringTests(unittest.TestCase):
@@ -69,8 +76,18 @@ class SensorWiringTests(unittest.TestCase):
 
     def test_old_supplier_entity_options_are_removed_on_setup(self) -> None:
         setup = INIT[INIT.index("async def async_setup_entry") :]
-        self.assertIn("RETIRED_SUPPLIER_PRICE_OPTIONS.intersection(entry.options)", setup)
-        self.assertIn("if key not in RETIRED_SUPPLIER_PRICE_OPTIONS", setup)
+        self.assertIn(
+            "RETIRED_SUPPLIER_PRICE_OPTIONS.intersection(migrated_options)", setup
+        )
+        self.assertIn("migrated_options.pop(key)", setup)
+
+    def test_device_cards_have_an_independent_save_button(self) -> None:
+        self.assertIn('data-action="save-device"', CONFIG_PANEL_FRONTEND)
+        self.assertIn("Save configuration", CONFIG_PANEL_FRONTEND)
+
+    def test_panel_asset_uses_a_new_component_and_cache_key(self) -> None:
+        self.assertIn('PANEL_ELEMENT = "shs-energy-config-panel-v2"', CONFIG_PANEL)
+        self.assertIn("?v={FRONTEND_ASSET_VERSION}", CONFIG_PANEL)
 
     def test_changing_the_options_reloads_the_entry(self) -> None:
         # Entities subscribe to the supplier price sensor when they are added.
