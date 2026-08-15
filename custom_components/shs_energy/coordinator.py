@@ -1439,20 +1439,35 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         if options.get(OPT_FORECAST_RESOLUTION_MINUTES) not in (None, 15):
             missing.append("forecast resolution must be 15 minutes")
-        groups: list[str] = []
-        if any("battery" in value or "terminal" in value for value in missing):
-            groups.append("Battery: state of charge and equipment ratings")
-        if any("pool" in value for value in missing):
-            groups.append("Pool: aggregate meter, enabled state and rated power")
-        if any("boiler" in value or "hot_water" in value for value in missing):
-            groups.append("Water heater: aggregate meter and rated power")
-        if any("ev" in value.lower() for value in missing):
-            groups.append("EV: connection, SOC, target, capacity and charging power")
-        if any("whole-home" in value or "grid meter" in value for value in missing):
-            groups.append("Consumption: configure the Home Assistant Energy Dashboard grid meter")
-        if any("grid_" in value and "forecast" not in value for value in missing):
-            groups.append("Electrical limits: grid import and export limits")
-        self.optimisation_missing_inputs = groups or missing
+        labels = {
+            f"{OPT_PREFIX_ENTITIES}ev_charging": (
+                "EV charging energy meter is not configured"
+            ),
+            OPT_EV_DEFERRABLE_CONFIRMED: (
+                "EV deferrability confirmation is required"
+            ),
+            OPT_EV_CONNECTED_ENTITY: (
+                "Vehicle connected-state entity is not configured"
+            ),
+            OPT_EV_SOC_ENTITY: "Vehicle battery SOC entity is not configured",
+            OPT_EV_TARGET_SOC_ENTITY: (
+                "Vehicle target SOC entity is not configured"
+            ),
+            OPT_EV_DEPARTURE_ENTITY: (
+                "EV departure timestamp entity is not configured"
+            ),
+            OPT_EV_ENERGY_REMAINING_ENTITY: (
+                "Vehicle usable-energy-remaining entity is not configured"
+            ),
+            "a whole-home meter or Energy Dashboard grid meter": (
+                "Home Assistant Energy Dashboard grid meter is not configured"
+            ),
+            OPT_GRID_IMPORT_LIMIT_W: "Grid import limit is not configured",
+            OPT_GRID_EXPORT_LIMIT_W: "Grid export limit is not configured",
+        }
+        self.optimisation_missing_inputs = [
+            labels.get(value, value) for value in missing
+        ]
         self._sync_optimisation_issue()
         if missing:
             raise OptimisationInputError(

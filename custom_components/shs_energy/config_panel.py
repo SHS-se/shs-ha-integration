@@ -43,7 +43,7 @@ PANEL_URL = "shs-energy"
 PANEL_ELEMENT = "shs-energy-config-panel-v3"
 STATIC_URL = "/shs_energy_frontend"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
-FRONTEND_ASSET_VERSION = "0.7.0-beta.7"
+FRONTEND_ASSET_VERSION = "0.7.0-beta.8"
 
 
 def _field(
@@ -54,6 +54,7 @@ def _field(
     help_text: str = "",
     domains: tuple[str, ...] = (),
     required: bool = False,
+    required_when: str | None = None,
     choices: tuple[tuple[str, str], ...] = (),
     unit: str | None = None,
     step: float | None = None,
@@ -71,6 +72,8 @@ def _field(
     }
     if domains:
         result["domains"] = list(domains)
+    if required_when is not None:
+        result["required_when"] = required_when
     if choices:
         result["choices"] = [
             {"value": value, "label": choice_label}
@@ -364,15 +367,63 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "id": "ev",
             "tab": "storage",
             "title": "EV obligation",
-            "description": "Vehicle state supplies the charging need and explicit departure deadline. Charger current bounds come from its Variable Power device card; the electrical model is fixed at three 230 V phases.",
+            "description": (
+                "Vehicle state supplies the charging need and explicit departure "
+                "deadline. Charger current bounds and the optional charging-power "
+                "sensor come from its Variable Power device card; the electrical "
+                "model is fixed at three 230 V phases."
+            ),
             "fields": [
-                _field(c.OPT_EV_PLANNING_ENABLED, "Include EV charging in planning", "toggle"),
-                _field(c.OPT_EV_DEFERRABLE_CONFIRMED, "I confirm EV charging is deferrable", "toggle"),
-                _field(c.OPT_EV_CONNECTED_ENTITY, "Vehicle connected state", "entity"),
-                _field(c.OPT_EV_SOC_ENTITY, "Vehicle battery SOC", "entity", domains=("sensor",)),
-                _field(c.OPT_EV_TARGET_SOC_ENTITY, "Vehicle target SOC", "entity"),
-                _field(c.OPT_EV_DEPARTURE_ENTITY, "Departure timestamp", "entity", help_text="Required when EV planning is enabled; the entity must contain a timezone-aware timestamp."),
-                _field(c.OPT_EV_ENERGY_REMAINING_ENTITY, "Usable energy remaining", "entity", domains=("sensor",), help_text="Used with current SOC to derive usable battery capacity automatically."),
+                _field(
+                    c.OPT_EV_PLANNING_ENABLED,
+                    "Include EV charging in planning",
+                    "toggle",
+                ),
+                _field(
+                    c.OPT_EV_DEFERRABLE_CONFIRMED,
+                    "I confirm EV charging is deferrable",
+                    "toggle",
+                ),
+                _field(
+                    c.OPT_EV_CONNECTED_ENTITY,
+                    "Vehicle connected state",
+                    "entity",
+                    required_when=c.OPT_EV_PLANNING_ENABLED,
+                ),
+                _field(
+                    c.OPT_EV_SOC_ENTITY,
+                    "Vehicle battery SOC",
+                    "entity",
+                    domains=("sensor",),
+                    required_when=c.OPT_EV_PLANNING_ENABLED,
+                ),
+                _field(
+                    c.OPT_EV_TARGET_SOC_ENTITY,
+                    "Vehicle target SOC",
+                    "entity",
+                    required_when=c.OPT_EV_PLANNING_ENABLED,
+                ),
+                _field(
+                    c.OPT_EV_DEPARTURE_ENTITY,
+                    "Departure timestamp",
+                    "entity",
+                    required_when=c.OPT_EV_PLANNING_ENABLED,
+                    help_text=(
+                        "The entity must contain a timezone-aware timestamp. "
+                        "The planner will not invent a departure deadline."
+                    ),
+                ),
+                _field(
+                    c.OPT_EV_ENERGY_REMAINING_ENTITY,
+                    "Usable energy remaining",
+                    "entity",
+                    domains=("sensor",),
+                    required_when=c.OPT_EV_PLANNING_ENABLED,
+                    help_text=(
+                        "Used with current SOC to derive usable battery capacity "
+                        "automatically."
+                    ),
+                ),
             ],
         },
     ]
@@ -838,6 +889,16 @@ async def async_apply_configuration(
                 options.pop(key, None)
             else:
                 options[key] = value
+    conditionally_missing = [
+        f"{section['title']}: {field['label']} is required"
+        for section in _configuration_sections()
+        for field in section["fields"]
+        if field.get("required_when")
+        and options.get(field["required_when"])
+        and options.get(field["key"]) in (None, "", [])
+    ]
+    if conditionally_missing:
+        raise ValueError("; ".join(conditionally_missing))
     if options.get(shs_const.OPT_PLANNING_MODE) not in {
         shs_const.PLANNING_MODE_DISABLED,
         shs_const.PLANNING_MODE_LIVE,

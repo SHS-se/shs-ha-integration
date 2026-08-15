@@ -80,11 +80,12 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn("current_supplier_prices(self.coordinator.supplier_prices)", body)
         self.assertNotIn("supplier_entity_id", body)
 
-    def test_old_supplier_entity_options_are_removed_on_setup(self) -> None:
+    def test_old_supplier_entity_options_are_archived_on_setup(self) -> None:
         setup = INIT[INIT.index("async def async_setup_entry") :]
         self.assertIn(
             "RETIRED_SUPPLIER_PRICE_OPTIONS.intersection(migrated_options)", setup
         )
+        self.assertIn("legacy_archive.setdefault(key, migrated_options[key])", setup)
         self.assertIn("migrated_options.pop(key)", setup)
 
     def test_ev_electrical_model_is_not_user_configuration(self) -> None:
@@ -112,6 +113,27 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn(
             "RETIRED_EV_PLANNING_OPTIONS.intersection(migrated_options)", setup
         )
+        self.assertIn("recover_legacy_ev_options", setup)
+
+    def test_ev_requirements_are_conditional_and_reported_exactly(self) -> None:
+        sections = CONFIG_PANEL[
+            CONFIG_PANEL.index('"id": "ev"') :
+            CONFIG_PANEL.index("def _entry_state")
+        ]
+        self.assertIn("required_when=c.OPT_EV_PLANNING_ENABLED", sections)
+        self.assertIn("field.required_when", CONFIG_PANEL_FRONTEND)
+        self.assertIn(
+            '"EV departure timestamp entity is not configured"', COORDINATOR
+        )
+        self.assertNotIn(
+            "EV: connection, SOC, target, capacity and charging power",
+            COORDINATOR,
+        )
+
+    def test_general_configuration_replans_after_reload(self) -> None:
+        listener = INIT[INIT.index("async def _async_options_updated") :]
+        self.assertIn("async_reload(entry.entry_id)", listener)
+        self.assertIn("async_optimisation_push(force_plan=True)", listener)
 
     def test_device_cards_have_an_independent_save_button(self) -> None:
         self.assertIn('data-action="save-device"', CONFIG_PANEL_FRONTEND)

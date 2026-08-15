@@ -452,7 +452,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const key = this._escape(field.key);
     const label = this._escape(field.label);
     const help = field.help ? `<div class="field-help">${this._escape(field.help)}</div>` : "";
-    const required = field.required ? '<span class="required">Required</span>' : "";
+    const isRequired = field.required || (
+      field.required_when && Boolean(this._draft?.[field.required_when])
+    );
+    const required = isRequired ? '<span class="required">Required</span>' : "";
     const common = `data-field-key="${key}" data-scope="${this._escape(scope)}" data-device-key="${this._escape(deviceKey)}"`;
     let control = "";
     if (field.kind === "toggle") {

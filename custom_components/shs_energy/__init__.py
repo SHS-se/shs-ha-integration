@@ -16,6 +16,7 @@ from homeassistant.helpers.event import async_track_time_change
 from .api import ShsApiClient
 from .config_panel import async_apply_configuration, async_register_config_panel
 from .const import (
+    CONFIGURATION_SCHEMA_VERSION,
     CONFIGURABLE_CATEGORIES,
     CONF_BASE_URL,
     CONF_DEVICE_TOKEN,
@@ -30,8 +31,10 @@ from .const import (
     OPTIMISATION_STARTUP_RETRY_SECONDS,
     PRICE_BACKFILL_MAX_DAYS,
     OPT_AUTOMATIC_SETUP,
+    OPT_CONFIGURATION_SCHEMA_VERSION,
     OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_DISCOVERY_EVIDENCE,
+    OPT_LEGACY_CONFIGURATION_ARCHIVE,
     OPT_PLANNING_MODE,
     OPT_PREFIX_ENTITIES,
     DOMAIN,
@@ -41,7 +44,10 @@ from .configuration import (
     entity_area_id,
 )
 from .coordinator import ShsStatusCoordinator
-from .device_controls import migrate_device_control_mappings
+from .device_controls import (
+    migrate_device_control_mappings,
+    recover_legacy_ev_options,
+)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
@@ -166,12 +172,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     """Set up from a config entry."""
     migrated_options = dict(entry.options)
     options_changed = False
+    legacy_archive = migrated_options.get(OPT_LEGACY_CONFIGURATION_ARCHIVE, {})
+    legacy_archive = dict(legacy_archive) if isinstance(legacy_archive, dict) else {}
     for key in RETIRED_SUPPLIER_PRICE_OPTIONS.intersection(migrated_options):
+        legacy_archive.setdefault(key, migrated_options[key])
         migrated_options.pop(key)
         options_changed = True
     for key in RETIRED_EV_PLANNING_OPTIONS.intersection(migrated_options):
+        legacy_archive.setdefault(key, migrated_options[key])
         migrated_options.pop(key)
         options_changed = True
+    if legacy_archive:
+        migrated_options[OPT_LEGACY_CONFIGURATION_ARCHIVE] = legacy_archive
     mappings = migrated_options.get(OPT_DEVICE_CONTROL_MAPPINGS)
     if isinstance(mappings, dict):
         mapped_entity_ids = {
@@ -202,6 +214,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         )
         migrated_options[OPT_DEVICE_CONTROL_MAPPINGS] = migrated_mappings
         options_changed = options_changed or mappings_changed
+        migrated_options, ev_options_changed = recover_legacy_ev_options(
+            migrated_options,
+            migrated_mappings,
+        )
+        options_changed = options_changed or ev_options_changed
+    if (
+        migrated_options.get(OPT_CONFIGURATION_SCHEMA_VERSION)
+        != CONFIGURATION_SCHEMA_VERSION
+    ):
+        migrated_options[OPT_CONFIGURATION_SCHEMA_VERSION] = (
+            CONFIGURATION_SCHEMA_VERSION
+        )
+        options_changed = True
     if options_changed:
         hass.config_entries.async_update_entry(
             entry,
@@ -271,7 +296,12 @@ async def _async_options_updated(
         return
     # A full reload ensures changed entity mappings are reflected by all
     # platforms before the next recorder aggregation.
-    await hass.config_entries.async_reload(entry.entry_id)
+    if not await hass.config_entries.async_reload(entry.entry_id):
+        return
+    reloaded = hass.config_entries.async_get_entry(entry.entry_id)
+    coordinator = getattr(reloaded, "runtime_data", None)
+    if coordinator is not None:
+        await coordinator.async_optimisation_push(force_plan=True)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:

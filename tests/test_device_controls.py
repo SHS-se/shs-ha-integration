@@ -16,6 +16,7 @@ from device_controls import (  # noqa: E402
     mapping_report,
     migrate_device_control_mapping,
     migrate_device_control_mappings,
+    recover_legacy_ev_options,
     requested_controllable_devices,
 )
 
@@ -308,6 +309,42 @@ class DeviceControlMappingTests(unittest.TestCase):
         )
         self.assertFalse(changed)
         self.assertEqual(repeated, migrated)
+
+    def test_legacy_ev_card_telemetry_moves_to_current_settings(self) -> None:
+        mapping = {
+            "control_type": "current_limit",
+            "connected_entity_id": "binary_sensor.ev_connected",
+            "soc_entity_id": "sensor.ev_soc",
+            "target_soc_entity_id": "number.ev_target_soc",
+            "departure_entity_id": "sensor.ev_departure",
+            "energy_remaining_entity_id": "sensor.ev_energy_remaining",
+            "power_entity_id": "sensor.car_charging_power",
+        }
+        options, changed = recover_legacy_ev_options({}, {"car": mapping})
+        self.assertTrue(changed)
+        self.assertEqual(
+            options,
+            {
+                "ev_connected_entity": "binary_sensor.ev_connected",
+                "ev_soc_entity": "sensor.ev_soc",
+                "ev_target_soc_entity": "number.ev_target_soc",
+                "ev_departure_entity": "sensor.ev_departure",
+                "ev_energy_remaining_entity": "sensor.ev_energy_remaining",
+            },
+        )
+        migrated_mapping, _changed = migrate_device_control_mapping(mapping)
+        self.assertEqual(
+            migrated_mapping["power"], "sensor.car_charging_power"
+        )
+
+    def test_current_ev_settings_win_over_legacy_card_values(self) -> None:
+        current = {"ev_soc_entity": "sensor.current_ev_soc"}
+        migrated, changed = recover_legacy_ev_options(
+            current,
+            {"car": {"soc_entity_id": "sensor.old_ev_soc"}},
+        )
+        self.assertFalse(changed)
+        self.assertEqual(migrated, current)
 
 
 if __name__ == "__main__":

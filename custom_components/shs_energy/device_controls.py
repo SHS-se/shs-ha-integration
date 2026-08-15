@@ -37,6 +37,14 @@ _ENTITY_FIELDS_BY_CONTROL_TYPE: dict[str, tuple[str, ...]] = {
     "variable_power": ("control_entity_id",),
 }
 
+_LEGACY_EV_OPTION_FIELDS = (
+    ("ev_connected_entity", "connected_entity_id"),
+    ("ev_soc_entity", "soc_entity_id"),
+    ("ev_target_soc_entity", "target_soc_entity_id"),
+    ("ev_departure_entity", "departure_entity_id"),
+    ("ev_energy_remaining_entity", "energy_remaining_entity_id"),
+)
+
 
 def _present(value: Any) -> bool:
     return value not in (None, "", [])
@@ -141,6 +149,30 @@ def migrate_device_control_mappings(
         migrated[device_key] = value
         changed = changed or value_changed
     return migrated, changed
+
+
+def recover_legacy_ev_options(
+    options: dict[str, Any],
+    mappings: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Recover EV telemetry that older releases stored inside its device card."""
+    migrated = dict(options)
+    before = dict(migrated)
+    mapping_values = [
+        mapping for mapping in mappings.values() if isinstance(mapping, dict)
+    ]
+    for option_key, mapping_key in _LEGACY_EV_OPTION_FIELDS:
+        if _present(migrated.get(option_key)):
+            continue
+        candidates = {
+            mapping[mapping_key]
+            for mapping in mapping_values
+            if isinstance(mapping.get(mapping_key), str)
+            and mapping[mapping_key].strip()
+        }
+        if len(candidates) == 1:
+            migrated[option_key] = next(iter(candidates))
+    return migrated, migrated != before
 
 
 def is_room_thermal_control(control_type: str | None, category: str | None) -> bool:
