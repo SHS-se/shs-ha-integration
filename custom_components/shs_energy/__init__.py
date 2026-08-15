@@ -38,8 +38,10 @@ from .const import (
 )
 from .configuration import (
     async_discover_configuration,
+    entity_area_id,
 )
 from .coordinator import ShsStatusCoordinator
+from .device_controls import migrate_device_control_mappings
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
@@ -172,22 +174,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         options_changed = True
     mappings = migrated_options.get(OPT_DEVICE_CONTROL_MAPPINGS)
     if isinstance(mappings, dict):
-        migrated_mappings = dict(mappings)
-        for device_key, raw_mapping in mappings.items():
-            if not isinstance(raw_mapping, dict):
-                continue
-            migrated_mapping = dict(raw_mapping)
-            if migrated_mapping.get("control_type") == "current_limit":
-                migrated_mapping["control_type"] = "variable_power"
-                options_changed = True
-            if (
-                migrated_mapping.get("control_type") == "setpoint"
-                and "area_id" in migrated_mapping
-            ):
-                migrated_mapping.pop("area_id")
-                options_changed = True
-            migrated_mappings[device_key] = migrated_mapping
+        mapped_entity_ids = {
+            entity_id
+            for mapping in mappings.values()
+            if isinstance(mapping, dict)
+            for key, value in mapping.items()
+            if key.endswith("_entity_id") or key.endswith("_entity_ids")
+            for entity_id in (value if isinstance(value, list) else [value])
+            if isinstance(entity_id, str) and entity_id
+        }
+        entity_area_ids = {
+            entity_id: area_id
+            for entity_id in mapped_entity_ids
+            if (area_id := entity_area_id(hass, entity_id)) is not None
+        }
+        entity_limits = {
+            state.entity_id: (
+                state.attributes.get("min"),
+                state.attributes.get("max"),
+            )
+            for state in hass.states.async_all()
+        }
+        migrated_mappings, mappings_changed = migrate_device_control_mappings(
+            mappings,
+            entity_area_ids=entity_area_ids,
+            entity_limits=entity_limits,
+        )
         migrated_options[OPT_DEVICE_CONTROL_MAPPINGS] = migrated_mappings
+        options_changed = options_changed or mappings_changed
     if options_changed:
         hass.config_entries.async_update_entry(
             entry,

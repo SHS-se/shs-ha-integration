@@ -22,6 +22,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._loading = false;
     this._saving = false;
     this._savingDeviceKey = "";
+    this._deviceErrors = {};
     this._error = "";
     this._notice = "";
     this._entryId = new URLSearchParams(window.location.search).get("config_entry");
@@ -100,9 +101,16 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _entityLabel(entityId) {
     const entity = this._data?.entities?.find((item) => item.entity_id === entityId);
-    return entity && entity.name !== entityId
+    const label = entity && entity.name !== entityId
       ? `${entity.name} · ${entityId}`
       : entityId;
+    return entity ? `${label} · ${entity.area_name || "No area"}` : label;
+  }
+
+  _clearDeviceError(deviceKey) {
+    if (deviceKey && this._deviceErrors[deviceKey]) {
+      delete this._deviceErrors[deviceKey];
+    }
   }
 
   async _load(refreshRoles) {
@@ -118,6 +126,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     try {
       const data = await this._hass.callWS(message);
       this._data = data;
+      this._deviceErrors = {};
       if (!data.requires_entry_selection) {
         this._entryId = data.entry.entry_id;
         this._draft = this._clone(data.configuration);
@@ -169,6 +178,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       !this._entryId
     ) return;
     this._savingDeviceKey = deviceKey;
+    this._clearDeviceError(deviceKey);
     this._error = "";
     this._notice = "";
     this._render();
@@ -182,11 +192,17 @@ class ShsEnergyConfigPanel extends HTMLElement {
         device_key: deviceKey,
         mapping,
       });
+      const savedMapping = this._clone(
+        result.panel?.configuration?.[MAPPINGS_KEY]?.[deviceKey] ?? mapping
+      );
       if (result.panel) this._data = result.panel;
+      if (!this._draft[MAPPINGS_KEY]) this._draft[MAPPINGS_KEY] = {};
       if (!this._savedDraft[MAPPINGS_KEY]) this._savedDraft[MAPPINGS_KEY] = {};
-      if (mapping) {
-        this._savedDraft[MAPPINGS_KEY][deviceKey] = this._clone(mapping);
+      if (savedMapping) {
+        this._draft[MAPPINGS_KEY][deviceKey] = this._clone(savedMapping);
+        this._savedDraft[MAPPINGS_KEY][deviceKey] = this._clone(savedMapping);
       } else {
+        delete this._draft[MAPPINGS_KEY][deviceKey];
         delete this._savedDraft[MAPPINGS_KEY][deviceKey];
       }
       const device = this._data.devices.find((item) => item.key === deviceKey);
@@ -199,7 +215,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         ? `${device?.name || deviceKey} is saved and ${result.mapping_status === "ready" ? "ready" : this._human(result.mapping_status)} on the website.`
         : `${device?.name || deviceKey} is no longer locally mapped.`;
     } catch (error) {
-      this._error = error?.message || String(error);
+      this._deviceErrors[deviceKey] = error?.message || String(error);
     } finally {
       this._savingDeviceKey = "";
       this._render();
@@ -299,6 +315,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const current = Array.isArray(target[key]) ? [...target[key]] : [];
     if (!current.includes(entityId)) current.push(entityId);
     target[key] = current;
+    this._clearDeviceError(deviceKey);
     this._notice = "";
     this._render();
   }
@@ -309,6 +326,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const next = current.filter((item) => item !== value);
     if (next.length) target[key] = next;
     else delete target[key];
+    this._clearDeviceError(deviceKey);
     this._notice = "";
     this._render();
   }
@@ -323,6 +341,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       }
     }
     mapping.control_type = device.control_type;
+    this._clearDeviceError(deviceKey);
     this._notice =
       "Suggestions were copied into the draft. Review every value before saving.";
     this._render();
@@ -332,6 +351,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (this._draft[MAPPINGS_KEY]) {
       delete this._draft[MAPPINGS_KEY][deviceKey];
     }
+    this._clearDeviceError(deviceKey);
     this._notice =
       "The local mapping was removed from the draft. Until mapped again, this device stays in measured base load.";
     this._render();
@@ -369,6 +389,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (!field) return;
     const value = field.kind === "toggle" ? element.checked : element.value;
     this._setField(scope, key, value, field, deviceKey);
+    if (scope === "mapping") this._clearDeviceError(deviceKey);
     if (scope === "mapping" && key === "control_entity_id" && value) {
       const entity = this._data.entities.find((item) => item.entity_id === value);
       const mapping = this._mapping(deviceKey, true);
@@ -569,7 +590,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const mapping = this._mapping(device.key) || {};
     const dirty = this._deviceDirty(device.key);
     const saving = this._savingDeviceKey === device.key;
-    const saveStatus = dirty
+    const deviceError = this._deviceErrors[device.key] || "";
+    const saveStatus = deviceError
+      ? "Save failed — correct the message above"
+      : dirty
       ? "Unsaved changes in this card"
       : device.mapping_status === "ready"
         ? "Saved and ready"
@@ -586,7 +610,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
       <div class="device-body">
         <div class="device-meta"><span>${this._escape(this._human(device.category))}</span><span>${this._escape(this._human(device.load_type))}</span><span>Website: controllable</span></div>
         ${device.stale_mapping_control_type ? `<div class="inline-warning">The website changed this device from ${this._escape(this._human(device.stale_mapping_control_type))} to ${this._escape(this._human(device.control_type))}. The old mapping is ignored.</div>` : ""}
-        ${device.mapping_error ? `<div class="inline-warning">${this._escape(device.mapping_error)}</div>` : ""}
+        ${device.mapping_error ? `<div class="inline-warning"><strong>Currently saved configuration:</strong> ${this._escape(device.mapping_error)}</div>` : ""}
+        ${deviceError ? `<div class="inline-error"><strong>Could not save this configuration</strong><span>${this._escape(deviceError)}</span></div>` : ""}
         <div class="device-actions">
           <div class="device-action-group"><button type="button" class="secondary" data-action="use-suggestions" data-device-key="${this._escape(device.key)}" ${suggestionCount ? "" : "disabled"}>Use ${suggestionCount} suggestion${suggestionCount === 1 ? "" : "s"}</button>
           <button type="button" class="text danger" data-action="clear-mapping" data-device-key="${this._escape(device.key)}">Remove local mapping</button></div>
@@ -679,7 +704,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const options = (entities) => entities
       .map(
         (entity) =>
-          `<option value="${this._escape(entity.entity_id)}">${this._escape(entity.name)}${entity.unit ? ` · ${this._escape(entity.unit)}` : ""}</option>`
+          `<option value="${this._escape(entity.entity_id)}">${this._escape(entity.name)}${entity.area_name ? ` · ${this._escape(entity.area_name)}` : " · No area"}${entity.unit ? ` · ${this._escape(entity.unit)}` : ""}</option>`
       )
       .join("");
     const powerEntities = this._data.entities.filter(
@@ -815,6 +840,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .device-save-row { display:flex; justify-content:flex-end; align-items:center; gap:16px; margin-top:24px; padding-top:18px; border-top:1px solid var(--divider-color); }
       .device-save-row span { color:var(--secondary-text-color); font-size:13px; }
       .inline-warning { padding:11px 13px; margin:10px 0; border-radius:9px; color:var(--warning-color); background:color-mix(in srgb, var(--warning-color) 10%, transparent); }
+      .inline-error { display:flex; gap:10px; align-items:center; padding:11px 13px; margin:10px 0; border-radius:9px; color:var(--error-color); background:color-mix(in srgb, var(--error-color) 10%, transparent); }
+      .inline-error span { flex:1; }
       .thermal-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:22px 0; }
       .thermal-grid div { padding:16px; border-radius:12px; background:var(--secondary-background-color); display:flex; flex-direction:column; gap:5px; }
       .thermal-grid strong { font-size:21px; }

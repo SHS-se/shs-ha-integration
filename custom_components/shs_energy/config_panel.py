@@ -28,7 +28,14 @@ from .configuration import (
     resolved_options,
     suggest_device_control_mapping,
 )
-from .device_controls import is_room_thermal_control, mapping_report
+from .device_controls import (
+    MAPPING_SCHEMA_VERSION,
+    MAPPING_SCHEMA_VERSION_FIELD,
+    MIGRATED_ROOM_AREA_FIELD,
+    is_room_thermal_control,
+    mapping_report,
+    migrate_device_control_mapping,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,7 +43,7 @@ PANEL_URL = "shs-energy"
 PANEL_ELEMENT = "shs-energy-config-panel-v3"
 STATIC_URL = "/shs_energy_frontend"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
-FRONTEND_ASSET_VERSION = "0.7.0-beta.6"
+FRONTEND_ASSET_VERSION = "0.7.0-beta.7"
 
 
 def _field(
@@ -89,14 +96,24 @@ POWER_FIELD = _field(
     help_text="Choose a power sensor, or enter reviewed watts directly.",
 )
 
-TEMPERATURE_FIELD = _field(
-    "temperature_entity_id",
-    "Room or process temperature",
-    "entity",
-    domains=("sensor", "climate"),
-    required=True,
-    help_text="The measured temperature used to learn how this zone responds.",
-)
+def _temperature_field(*, required: bool) -> dict[str, Any]:
+    """Describe a mandatory setpoint source or optional room upgrade."""
+    return _field(
+        "temperature_entity_id",
+        "Room or process temperature",
+        "entity",
+        domains=("sensor", "climate"),
+        required=required,
+        help_text=(
+            "The measured temperature used to learn how this zone responds."
+            if required
+            else "Optional. Add this to include an existing on/off control in room comfort planning; its saved schedule remains valid without it."
+        ),
+    )
+
+
+TEMPERATURE_FIELD = _temperature_field(required=True)
+OPTIONAL_TEMPERATURE_FIELD = _temperature_field(required=False)
 
 
 def _number_control_fields() -> tuple[dict[str, Any], ...]:
@@ -147,7 +164,7 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
             "entities",
             domains=("switch", "climate", "input_boolean"),
             required=True,
-            help_text="These entities reveal actual heating duty. This page does not operate them.",
+            help_text="These entities reveal actual heating duty. Their Home Assistant area defines the room; this page does not operate them.",
         ),
         _field(
             "companion_actuator_entity_ids",
@@ -214,7 +231,7 @@ def _control_fields(device: dict[str, Any]) -> tuple[dict[str, Any], ...]:
         is_room_thermal_control(control_type, str(device.get("category") or ""))
         and control_type != "setpoint"
     ):
-        return (TEMPERATURE_FIELD, *fields)
+        return (OPTIONAL_TEMPERATURE_FIELD, *fields)
     return fields
 
 
@@ -388,7 +405,9 @@ def _entries(hass: HomeAssistant) -> list[dict[str, str]]:
 
 def _entity_catalog(hass: HomeAssistant) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
+    area_names = area_name_by_id(hass)
     for state in sorted(hass.states.async_all(), key=lambda value: value.entity_id):
+        area_id = entity_area_id(hass, state.entity_id)
         result.append(
             {
                 "entity_id": state.entity_id,
@@ -399,7 +418,8 @@ def _entity_catalog(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "device_class": state.attributes.get("device_class"),
                 "minimum": state.attributes.get("min"),
                 "maximum": state.attributes.get("max"),
-                "area_id": entity_area_id(hass, state.entity_id),
+                "area_id": area_id,
+                "area_name": area_names.get(area_id) if area_id else None,
             }
         )
     return result
@@ -492,11 +512,16 @@ async def _configuration_payload(
         device
         for device in devices
         if is_room_thermal_control(device["control_type"], device.get("category"))
+        and (
+            device["control_type"] == "setpoint"
+            or bool(device.get("mapping", {}).get("temperature_entity_id"))
+        )
     ]
     ready_thermal_devices = [
         device
         for device in thermal_devices
         if device["mapping_status"] == "ready"
+        and isinstance(device.get("mapping_summary", {}).get("room_key"), str)
     ]
     mapped_room_keys = {
         device["mapping_summary"].get("room_key")
@@ -717,25 +742,48 @@ def _normalise_device_mapping(
     hass: HomeAssistant,
     device: dict[str, Any],
     mapping: dict[str, Any],
+    existing_mapping: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Validate one mapping and retain only the current control contract."""
+    """Validate one mapping while retaining lossless migration data."""
     control_type = str(device.get("control_type") or "")
     if control_type not in CONTROL_FIELDS:
         raise ValueError(f"{device['name']}: unsupported control type")
-    if mapping.get("control_type") != control_type:
+
+    entity_limits = {
+        state.entity_id: (
+            state.attributes.get("min"),
+            state.attributes.get("max"),
+        )
+        for state in hass.states.async_all()
+    }
+    submitted, _changed = migrate_device_control_mapping(
+        mapping,
+        entity_limits=entity_limits,
+        recover_room=False,
+    )
+    if submitted.get("control_type") != control_type:
         raise ValueError(
             f"{device['name']}: mapping belongs to a different control type"
         )
+    normalised = dict(submitted)
+    normalised["control_type"] = control_type
+    normalised[MAPPING_SCHEMA_VERSION_FIELD] = MAPPING_SCHEMA_VERSION
+    normalised.pop(MIGRATED_ROOM_AREA_FIELD, None)
+    migrated_room_area = (existing_mapping or {}).get(MIGRATED_ROOM_AREA_FIELD)
+    if isinstance(migrated_room_area, str) and migrated_room_area.strip():
+        normalised[MIGRATED_ROOM_AREA_FIELD] = migrated_room_area
 
-    normalised: dict[str, Any] = {"control_type": control_type}
-    for field in _control_fields(device):
+    fields = _control_fields(device)
+    for field in fields:
+        normalised.pop(field["key"], None)
+    for field in fields:
         key = field["key"]
-        if key not in mapping:
+        if key not in submitted:
             continue
         value = _normalise_field_value(
             hass,
             field,
-            mapping[key],
+            submitted[key],
             context=str(device["name"]),
         )
         if value is not None:
@@ -851,7 +899,12 @@ async def async_apply_device_mapping(
     if incoming is None:
         mappings.pop(device_key, None)
     else:
-        mappings[device_key] = _normalise_device_mapping(hass, device, incoming)
+        mappings[device_key] = _normalise_device_mapping(
+            hass,
+            device,
+            incoming,
+            mappings.get(device_key),
+        )
 
     report = await entry.runtime_data.async_report_device_mapping(
         device_key, mappings
