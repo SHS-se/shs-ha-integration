@@ -23,7 +23,7 @@ from .const import (
     PUSH_TIME_HOUR,
     PUSH_TIME_MINUTE,
     PRICE_REFRESH_SECOND,
-    RETIRED_EV_PLANNING_OPTIONS,
+    RETIRED_PLANNING_OPTIONS,
     RETIRED_SUPPLIER_PRICE_OPTIONS,
     OPTIMISATION_PUSH_SECOND,
     OPTIMISATION_STARTUP_DELAY_SECONDS,
@@ -178,7 +178,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         legacy_archive.setdefault(key, migrated_options[key])
         migrated_options.pop(key)
         options_changed = True
-    for key in RETIRED_EV_PLANNING_OPTIONS.intersection(migrated_options):
+    for key in RETIRED_PLANNING_OPTIONS.intersection(migrated_options):
         legacy_archive.setdefault(key, migrated_options[key])
         migrated_options.pop(key)
         options_changed = True

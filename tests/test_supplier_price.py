@@ -107,28 +107,62 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn("EV_PHASE_VOLTAGE = 230.0", CONSTANTS)
         self.assertIn("EV_PHASE_COUNT,", COORDINATOR)
         self.assertIn("EV_PHASE_VOLTAGE,", COORDINATOR)
-        self.assertIn('options[OPT_EV_DEPARTURE_ENTITY]', COORDINATOR)
+        self.assertIn("options.get(OPT_EV_DEPARTURE_ENTITY)", COORDINATOR)
+        self.assertIn("planning_deadline = departure or end", COORDINATOR)
         self.assertNotIn("OPT_EV_DEFAULT_DEPARTURE", COORDINATOR)
         setup = INIT[INIT.index("async def async_setup_entry") :]
         self.assertIn(
-            "RETIRED_EV_PLANNING_OPTIONS.intersection(migrated_options)", setup
+            "RETIRED_PLANNING_OPTIONS.intersection(migrated_options)", setup
         )
         self.assertIn("recover_legacy_ev_options", setup)
 
-    def test_ev_requirements_are_conditional_and_reported_exactly(self) -> None:
+    def test_mapped_loads_are_automatic_and_ev_departure_is_optional(self) -> None:
         sections = CONFIG_PANEL[
             CONFIG_PANEL.index('"id": "ev"') :
             CONFIG_PANEL.index("def _entry_state")
         ]
-        self.assertIn("required_when=c.OPT_EV_PLANNING_ENABLED", sections)
-        self.assertIn("field.required_when", CONFIG_PANEL_FRONTEND)
+        for obsolete in (
+            "OPT_EV_PLANNING_ENABLED",
+            "OPT_EV_DEFERRABLE_CONFIRMED",
+            "required_when=",
+        ):
+            self.assertNotIn(obsolete, sections)
+        self.assertNotIn("field.required_when", CONFIG_PANEL_FRONTEND)
+        self.assertIn('"Optional departure timestamp"', sections)
+        self.assertNotIn("departure timestamp entity is not configured", COORDINATOR)
         self.assertIn(
-            '"EV departure timestamp entity is not configured"', COORDINATOR
-        )
-        self.assertNotIn(
-            "EV: connection, SOC, target, capacity and charging power",
+            'pool_controls = mapped_controls("pool_heating", "switch_schedule")',
             COORDINATOR,
         )
+        self.assertIn("if day_end > end:", COORDINATOR)
+        self.assertIn(
+            'boiler_controls = mapped_controls("hot_water", "permit_inhibit")',
+            COORDINATOR,
+        )
+        self.assertIn(
+            'ev_controls = mapped_controls("ev_charging", "variable_power")',
+            COORDINATOR,
+        )
+        self.assertNotIn('"id": "pool"', CONFIG_PANEL)
+        self.assertNotIn('"id": "hot_water"', CONFIG_PANEL)
+
+    def test_retired_planning_switches_are_archived_and_ignored(self) -> None:
+        setup = INIT[INIT.index("async def async_setup_entry") :]
+        self.assertIn(
+            "RETIRED_PLANNING_OPTIONS.intersection(migrated_options)", setup
+        )
+        for retired_key in (
+            '"pool_planning_enabled"',
+            '"pool_deferrable_confirmed"',
+            '"pool_deadline"',
+            '"pool_baseline_start"',
+            '"boiler_planning_enabled"',
+            '"boiler_deferrable_confirmed"',
+            '"ev_planning_enabled"',
+            '"ev_deferrable_confirmed"',
+        ):
+            self.assertIn(retired_key, CONSTANTS)
+            self.assertNotIn(retired_key, COORDINATOR)
 
     def test_general_configuration_replans_after_reload(self) -> None:
         listener = INIT[INIT.index("async def _async_options_updated") :]

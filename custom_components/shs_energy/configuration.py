@@ -37,17 +37,13 @@ from .const import (
     OPT_BATTERY_SOC_ENTITY,
     OPT_BATTERY_TARGET_IS_HARD,
     OPT_BATTERY_TARGET_SOC,
-    OPT_BOILER_DEFERRABLE_CONFIRMED,
-    OPT_BOILER_PLANNING_ENABLED,
     OPT_DISCOVERY_EVIDENCE,
     OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_OUTDOOR_TEMPERATURE_ENTITY,
     OPT_WEATHER_FORECAST_ENTITY,
     OPT_EV_CONNECTED_ENTITY,
-    OPT_EV_DEFERRABLE_CONFIRMED,
     OPT_EV_DEPARTURE_ENTITY,
     OPT_EV_ENERGY_REMAINING_ENTITY,
-    OPT_EV_PLANNING_ENABLED,
     OPT_EV_SOC_ENTITY,
     OPT_EV_TARGET_SOC_ENTITY,
     OPT_FORECAST_RESOLUTION_MINUTES,
@@ -55,10 +51,6 @@ from .const import (
     OPT_GRID_EXPORT_POWER_ENTITY,
     OPT_GRID_IMPORT_LIMIT_W,
     OPT_PLANNING_MODE,
-    OPT_POOL_BASELINE_START,
-    OPT_POOL_DEADLINE,
-    OPT_POOL_DEFERRABLE_CONFIRMED,
-    OPT_POOL_PLANNING_ENABLED,
     OPT_PREFIX_ENTITIES,
     OPT_PV_FORECAST_ENTITIES,
     OPT_PV_FORECAST_LATITUDE,
@@ -94,14 +86,6 @@ def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
         OPT_BATTERY_EXPORT_MIN_PRICE: 2.5,
         OPT_TERMINAL_SOC_MIN: 0.2,
         OPT_TERMINAL_ENERGY_VALUE: 1.0,
-        OPT_POOL_PLANNING_ENABLED: False,
-        OPT_POOL_DEFERRABLE_CONFIRMED: False,
-        OPT_POOL_DEADLINE: "20:00",
-        OPT_POOL_BASELINE_START: "12:00",
-        OPT_BOILER_PLANNING_ENABLED: False,
-        OPT_BOILER_DEFERRABLE_CONFIRMED: False,
-        OPT_EV_PLANNING_ENABLED: False,
-        OPT_EV_DEFERRABLE_CONFIRMED: False,
     }
 
 
@@ -782,25 +766,14 @@ async def async_discover_configuration(
         # Tessie exposes 0 A as the selector minimum, but this installation's
         # commissioned AC charging floor is 5 A. This is a proposal only: the
         # variable-power device card still requires the user to save its
-        # operating range before planning is enabled.
+        # operating range before this mapped charger enters the plan.
         proposed_min = (
             5.0
             if ev_current.entity_id == "number.tesla_model_y_charge_current"
             and raw_current_min == 0
             else raw_current_min
         )
-    # Existing confirmations survive rediscovery; inference alone never turns
-    # a meter into a controllable or deferrable load.
-    confirmation_pairs = (
-        (OPT_POOL_PLANNING_ENABLED, OPT_POOL_DEFERRABLE_CONFIRMED),
-        (OPT_BOILER_PLANNING_ENABLED, OPT_BOILER_DEFERRABLE_CONFIRMED),
-        (OPT_EV_PLANNING_ENABLED, OPT_EV_DEFERRABLE_CONFIRMED),
-    )
-    for enabled_key, confirmation_key in confirmation_pairs:
-        options[enabled_key] = bool(
-            existing.get(enabled_key) and existing.get(confirmation_key)
-        )
-        options[confirmation_key] = bool(existing.get(confirmation_key))
+
     def missing(keys: tuple[str, ...]) -> list[str]:
         return [
             key
@@ -842,13 +815,13 @@ async def async_discover_configuration(
             "candidate": pool_candidate,
             "ready_after_review": pool_candidate,
             "missing": [],
-            "requires_confirmation": True,
+            "included_when_mapped": True,
         },
         "boiler": {
             "candidate": boiler_candidate,
             "ready_after_review": boiler_candidate,
             "missing": [],
-            "requires_confirmation": True,
+            "included_when_mapped": True,
         },
         "ev": {
             "candidate": ev_candidate,
@@ -856,14 +829,12 @@ async def async_discover_configuration(
                 OPT_EV_CONNECTED_ENTITY,
                 OPT_EV_SOC_ENTITY,
                 OPT_EV_TARGET_SOC_ENTITY,
-                OPT_EV_DEPARTURE_ENTITY,
                 OPT_EV_ENERGY_REMAINING_ENTITY,
             )) and ev_current is not None,
             "missing": missing((
                 OPT_EV_CONNECTED_ENTITY,
                 OPT_EV_SOC_ENTITY,
                 OPT_EV_TARGET_SOC_ENTITY,
-                OPT_EV_DEPARTURE_ENTITY,
                 OPT_EV_ENERGY_REMAINING_ENTITY,
             )),
             "current_control": (
@@ -879,7 +850,7 @@ async def async_discover_configuration(
                     "proposed_step_a": raw_current_step,
                 }
             ),
-            "requires_confirmation": True,
+            "included_when_mapped": True,
         },
     }
     for key in (

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -68,10 +68,6 @@ from .const import (
     OPT_GRID_EXPORT_LIMIT_W,
     OPT_TERMINAL_SOC_MIN,
     OPT_TERMINAL_ENERGY_VALUE,
-    OPT_POOL_DEADLINE,
-    OPT_POOL_DEFERRABLE_CONFIRMED,
-    OPT_POOL_BASELINE_START,
-    OPT_BOILER_DEFERRABLE_CONFIRMED,
     EV_CHARGE_EFFICIENCY,
     EV_MIN_RUN_SLOTS,
     EV_PHASE_COUNT,
@@ -81,10 +77,6 @@ from .const import (
     OPT_EV_TARGET_SOC_ENTITY,
     OPT_EV_DEPARTURE_ENTITY,
     OPT_EV_ENERGY_REMAINING_ENTITY,
-    OPT_EV_DEFERRABLE_CONFIRMED,
-    OPT_POOL_PLANNING_ENABLED,
-    OPT_BOILER_PLANNING_ENABLED,
-    OPT_EV_PLANNING_ENABLED,
     OPT_PLANNING_MODE,
     PLANNING_MODE_DISABLED,
     PLANNING_MODE_LIVE,
@@ -120,7 +112,6 @@ from .optimisation import (
     build_base_load_profile,
     build_empirical_device_profile,
     calibration_summary,
-    daily_service_window,
     daily_requirement,
     discrete_current_control,
     extract_timestamped_forecast,
@@ -1393,72 +1384,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 OPT_TERMINAL_SOC_MIN,
                 OPT_TERMINAL_ENERGY_VALUE,
             ])
-        if options.get(OPT_POOL_PLANNING_ENABLED):
-            required.extend(
-                [f"{OPT_PREFIX_ENTITIES}pool_heating",
-                 OPT_POOL_DEFERRABLE_CONFIRMED,
-                 OPT_POOL_DEADLINE,
-                 OPT_POOL_BASELINE_START]
-            )
-        if options.get(OPT_BOILER_PLANNING_ENABLED):
-            required.extend(
-                [f"{OPT_PREFIX_ENTITIES}hot_water",
-                 OPT_BOILER_DEFERRABLE_CONFIRMED]
-            )
-        if options.get(OPT_EV_PLANNING_ENABLED):
-            required.extend(
-                [f"{OPT_PREFIX_ENTITIES}ev_charging",
-                 OPT_EV_DEFERRABLE_CONFIRMED,
-                 OPT_EV_CONNECTED_ENTITY, OPT_EV_SOC_ENTITY, OPT_EV_TARGET_SOC_ENTITY,
-                 OPT_EV_DEPARTURE_ENTITY, OPT_EV_ENERGY_REMAINING_ENTITY]
-            )
         missing = sorted(
             key for key in required
             if options.get(key) is None or options.get(key) == "" or options.get(key) == []
         )
-        for enabled_key, confirmation_keys in (
-            (
-                OPT_POOL_PLANNING_ENABLED,
-                (OPT_POOL_DEFERRABLE_CONFIRMED,),
-            ),
-            (
-                OPT_BOILER_PLANNING_ENABLED,
-                (OPT_BOILER_DEFERRABLE_CONFIRMED,),
-            ),
-            (
-                OPT_EV_PLANNING_ENABLED,
-                (OPT_EV_DEFERRABLE_CONFIRMED,),
-            ),
-        ):
-            if not options.get(enabled_key):
-                continue
-            missing.extend(
-                key
-                for key in confirmation_keys
-                if options.get(key) is not True and key not in missing
-            )
         if options.get(OPT_FORECAST_RESOLUTION_MINUTES) not in (None, 15):
             missing.append("forecast resolution must be 15 minutes")
         labels = {
-            f"{OPT_PREFIX_ENTITIES}ev_charging": (
-                "EV charging energy meter is not configured"
-            ),
-            OPT_EV_DEFERRABLE_CONFIRMED: (
-                "EV deferrability confirmation is required"
-            ),
-            OPT_EV_CONNECTED_ENTITY: (
-                "Vehicle connected-state entity is not configured"
-            ),
-            OPT_EV_SOC_ENTITY: "Vehicle battery SOC entity is not configured",
-            OPT_EV_TARGET_SOC_ENTITY: (
-                "Vehicle target SOC entity is not configured"
-            ),
-            OPT_EV_DEPARTURE_ENTITY: (
-                "EV departure timestamp entity is not configured"
-            ),
-            OPT_EV_ENERGY_REMAINING_ENTITY: (
-                "Vehicle usable-energy-remaining entity is not configured"
-            ),
             "a whole-home meter or Energy Dashboard grid meter": (
                 "Home Assistant Energy Dashboard grid meter is not configured"
             ),
@@ -1675,18 +1607,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     result.setdefault(category, {})[day] = sum(values)
         return result
 
-    @staticmethod
-    def _time_option(value: Any, label: str) -> time:
-        try:
-            parsed = time.fromisoformat(str(value))
-        except ValueError as err:
-            raise OptimisationInputError(f"{label} must be HH:MM") from err
-        return parsed.replace(second=0, microsecond=0)
-
     def _build_services(
         self,
         options: dict[str, Any],
-        entities_by_category: dict[str, list[str]],
         daily_totals: dict[str, dict[str, float]],
         actuals: list[dict[str, Any]],
         horizon: list[datetime],
@@ -1734,13 +1657,16 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 pairs.append((model, mapping))
             return pairs
 
-        if (
-            options.get(OPT_POOL_PLANNING_ENABLED)
-            and entities_by_category.get("pool_heating")
-        ):
+        def required_entity(option_key: str, label: str) -> str:
+            entity_id = options.get(option_key)
+            if not isinstance(entity_id, str) or not entity_id.strip():
+                raise OptimisationInputError(f"{label} is not configured")
+            return entity_id
+
+        pool_controls = mapped_controls("pool_heating", "switch_schedule")
+        if pool_controls:
             category = "pool_heating"
             device = "pool"
-            pool_controls = mapped_controls(category, "switch_schedule")
             rated_power_w = sum(
                 parse_number(model.get("active_power_w"), f"{model['name']} power")
                 for model, _mapping in pool_controls
@@ -1760,24 +1686,33 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 daily_totals.get(category, {}), category
             )
             samples[category] = count
-            local_days = sorted({slot.astimezone(local_tz).date() for slot in horizon})
-            for day in local_days:
-                window = daily_service_window(
-                    horizon,
-                    day,
-                    str(local_tz),
-                    options[OPT_POOL_DEADLINE],
-                    options[OPT_POOL_BASELINE_START],
-                    label=device,
-                )
-                if window is None:
+            by_day: dict[date, list[int]] = {}
+            for index, slot in enumerate(horizon):
+                by_day.setdefault(slot.astimezone(local_tz).date(), []).append(index)
+            for day, indices in sorted(by_day.items()):
+                day_end = datetime.combine(
+                    day + timedelta(days=1),
+                    datetime.min.time(),
+                    tzinfo=local_tz,
+                ).astimezone(timezone.utc)
+                if day_end > end:
                     continue
-                earliest, deadline, baseline = window
                 required = requirement
                 if day == today:
                     required = max(0.0, requirement - done_today.get(category, 0.0))
                 if required <= 0:
                     continue
+                earliest = horizon[indices[0]]
+                deadline = day_end
+                active_indices = [
+                    index
+                    for index in indices
+                    if sum(
+                        float(model["forecast_w_by_slot"][index])
+                        for model, _mapping in pool_controls
+                    ) > 0
+                ]
+                baseline = horizon[active_indices[0]] if active_indices else earliest
                 services.append({
                     "id": f"{device}:{day.isoformat()}",
                     "device": device,
@@ -1793,13 +1728,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "baseline_preferred_start": baseline.isoformat(),
                 })
 
-        if options.get(OPT_BOILER_PLANNING_ENABLED):
-            boiler_controls = mapped_controls("hot_water", "permit_inhibit")
+        boiler_controls = mapped_controls("hot_water", "permit_inhibit")
+        if boiler_controls:
             boiler_models = [model for model, _mapping in boiler_controls]
-            if not boiler_models:
-                raise OptimisationInputError(
-                    "water-heater planning needs a complete empirical device profile"
-                )
             expected_w = [
                 round(sum(model["forecast_w_by_slot"][index]
                           for model in boiler_models), 2)
@@ -1850,9 +1781,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "priority": 1,
                 })
 
-        connected_id = options.get(OPT_EV_CONNECTED_ENTITY)
-        if options.get(OPT_EV_PLANNING_ENABLED) and connected_id:
-            ev_controls = mapped_controls("ev_charging", "variable_power")
+        ev_controls = mapped_controls("ev_charging", "variable_power")
+        if ev_controls:
+            connected_id = required_entity(
+                OPT_EV_CONNECTED_ENTITY,
+                "Vehicle connected-state entity",
+            )
             control_signatures: set[tuple[str, float, float]] = set()
             for model, mapping in ev_controls:
                 control_signatures.add((
@@ -1905,14 +1839,23 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             connected_payload = self._entity_payload(connected_id)
             connected = state_is_on(connected_payload["state"])
-            soc_id = options[OPT_EV_SOC_ENTITY]
-            target_id = options[OPT_EV_TARGET_SOC_ENTITY]
+            soc_id = required_entity(
+                OPT_EV_SOC_ENTITY,
+                "Vehicle battery SOC entity",
+            )
+            target_id = required_entity(
+                OPT_EV_TARGET_SOC_ENTITY,
+                "Vehicle target SOC entity",
+            )
             soc_payload = self._entity_payload(soc_id)
             soc = normalized_fraction(soc_payload["state"], OPT_EV_SOC_ENTITY)
             target = normalized_fraction(
                 self._entity_payload(target_id)["state"], OPT_EV_TARGET_SOC_ENTITY
             )
-            remaining_entity = options[OPT_EV_ENERGY_REMAINING_ENTITY]
+            remaining_entity = required_entity(
+                OPT_EV_ENERGY_REMAINING_ENTITY,
+                "Vehicle usable-energy-remaining entity",
+            )
             remaining = parse_number(
                 self._entity_payload(remaining_entity)["state"], remaining_entity
             )
@@ -1927,8 +1870,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             capacity = remaining / soc
 
             departure: datetime | None = None
-            if connected:
-                departure_entity = options[OPT_EV_DEPARTURE_ENTITY]
+            departure_entity = options.get(OPT_EV_DEPARTURE_ENTITY)
+            if connected and isinstance(departure_entity, str) and departure_entity:
                 departure_raw = self._entity_payload(departure_entity)["state"]
                 try:
                     departure = datetime.fromisoformat(
@@ -1974,7 +1917,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if connected else 0.0
             )
             if required > 0:
-                assert departure is not None
+                planning_deadline = departure or end
                 control = discrete_current_control(
                     configured_min,
                     configured_max,
@@ -1984,10 +1927,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     label=current_entity,
                 )
                 services.append({
-                    "id": f"ev:{departure.isoformat()}",
+                    "id": f"ev:{planning_deadline.isoformat()}",
                     "device": "ev",
                     "earliest_start": first.isoformat(),
-                    "deadline": departure.isoformat(),
+                    "deadline": planning_deadline.isoformat(),
                     "required_kwh": round(required, 3),
                     "control": control,
                     "min_run_slots": EV_MIN_RUN_SLOTS,
@@ -2046,24 +1989,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         captured = dt_util.utcnow()
         horizon = utc_slots(captured, OPTIMISATION_HORIZON_HOURS)
         horizon_end = horizon[-1] + timedelta(minutes=15)
-        options = dict(options)
-        # Legacy service builders are enabled only when the website request has
-        # a complete local mapping of the same control type. This keeps pending
-        # devices in empirical base load and prevents old category toggles from
-        # turning a website selection into control authority.
-        for category, control_type, enabled_key in (
-            ("pool_heating", "switch_schedule", OPT_POOL_PLANNING_ENABLED),
-            ("hot_water", "permit_inhibit", OPT_BOILER_PLANNING_ENABLED),
-            ("ev_charging", "variable_power", OPT_EV_PLANNING_ENABLED),
-        ):
-            ready = any(
-                device["category"] == category
-                and device["planning_role"] == "controllable"
-                and device["control_type"] == control_type
-                for device in devices
-            )
-            if not ready:
-                options[enabled_key] = False
 
         pv_entities = [
             self._entity_payload(entity_id)
@@ -2250,33 +2175,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         modelled_device_keys = tuple(
             str(model["key"]) for model in device_models
         )
-        complete_device_keys = set(modelled_device_keys)
-        for category, enabled_key in (
-                ("pool_heating", OPT_POOL_PLANNING_ENABLED),
-                ("hot_water", OPT_BOILER_PLANNING_ENABLED),
-                ("ev_charging", OPT_EV_PLANNING_ENABLED),
-        ):
-            if not options.get(enabled_key):
-                continue
-            category_devices = [
-                device for device in devices
-                if device["category"] == category
-                and device["planning_role"] == "controllable"
-            ]
-            missing = [
-                str(device["name"])
-                for device in category_devices
-                if str(device["key"]) not in complete_device_keys
-            ]
-            if not category_devices or missing:
-                detail = (
-                    ", ".join(missing)
-                    if missing
-                    else "no controllable Energy Dashboard device"
-                )
-                raise OptimisationInputError(
-                    f"{category} planning needs complete empirical profiles; missing {detail}"
-                )
         profiles = {
             day_type: build_base_load_profile(
                 profile_actuals,
@@ -2300,7 +2198,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             dt_util.start_of_local_day(),
         )
         services, service_samples, ev_battery = self._build_services(
-            options, entities_by_category, daily_totals, profile_actuals, horizon,
+            options,
+            daily_totals,
+            profile_actuals,
+            horizon,
             device_models,
         )
 
@@ -2406,9 +2307,21 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         capabilities = {
             "pv": bool(pv_entities),
             "battery": battery is not None,
-            "pool": bool(options.get(OPT_POOL_PLANNING_ENABLED)),
-            "boiler": bool(options.get(OPT_BOILER_PLANNING_ENABLED)),
-            "ev": bool(options.get(OPT_EV_PLANNING_ENABLED)),
+            "pool": any(
+                model["category"] == "pool_heating"
+                and model["control_type"] == "switch_schedule"
+                for model in device_models
+            ),
+            "boiler": any(
+                model["category"] == "hot_water"
+                and model["control_type"] == "permit_inhibit"
+                for model in device_models
+            ),
+            "ev": any(
+                model["category"] == "ev_charging"
+                and model["control_type"] == "variable_power"
+                for model in device_models
+            ),
         }
         base_source_categories = (
             "total_consumption", "grid_import", "grid_export",

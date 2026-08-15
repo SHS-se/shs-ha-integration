@@ -43,7 +43,7 @@ PANEL_URL = "shs-energy"
 PANEL_ELEMENT = "shs-energy-config-panel-v3"
 STATIC_URL = "/shs_energy_frontend"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
-FRONTEND_ASSET_VERSION = "0.7.0-beta.8"
+FRONTEND_ASSET_VERSION = "0.7.0-beta.9"
 
 
 def _field(
@@ -54,7 +54,6 @@ def _field(
     help_text: str = "",
     domains: tuple[str, ...] = (),
     required: bool = False,
-    required_when: str | None = None,
     choices: tuple[tuple[str, str], ...] = (),
     unit: str | None = None,
     step: float | None = None,
@@ -72,8 +71,6 @@ def _field(
     }
     if domains:
         result["domains"] = list(domains)
-    if required_when is not None:
-        result["required_when"] = required_when
     if choices:
         result["choices"] = [
             {"value": value, "label": choice_label}
@@ -342,75 +339,41 @@ def _configuration_sections() -> list[dict[str, Any]]:
             ],
         },
         {
-            "id": "pool",
-            "tab": "devices",
-            "title": "Pool service window",
-            "description": "The local switch card owns actuators, power and any minimum run. This section only defines the service obligation.",
-            "fields": [
-                _field(c.OPT_POOL_PLANNING_ENABLED, "Include pool in planning", "toggle"),
-                _field(c.OPT_POOL_DEFERRABLE_CONFIRMED, "I confirm the pool load is deferrable", "toggle"),
-                _field(c.OPT_POOL_DEADLINE, "Daily deadline", "time"),
-                _field(c.OPT_POOL_BASELINE_START, "Baseline preferred start", "time"),
-            ],
-        },
-        {
-            "id": "hot_water",
-            "tab": "devices",
-            "title": "Water-heater safety envelope",
-            "description": "The thermostat owns the duty cycle. Planning may only permit or temporarily inhibit it.",
-            "fields": [
-                _field(c.OPT_BOILER_PLANNING_ENABLED, "Include water heating in planning", "toggle"),
-                _field(c.OPT_BOILER_DEFERRABLE_CONFIRMED, "I confirm temporary inhibit is safe", "toggle"),
-            ],
-        },
-        {
             "id": "ev",
             "tab": "storage",
             "title": "EV obligation",
             "description": (
-                "Vehicle state supplies the charging need and explicit departure "
-                "deadline. Charger current bounds and the optional charging-power "
-                "sensor come from its Variable Power device card; the electrical "
-                "model is fixed at three 230 V phases."
+                "Vehicle state supplies the charging need. An optional departure "
+                "timestamp gives the target a specific deadline; without one, the "
+                "planner uses the end of its rolling horizon. Charger current bounds "
+                "and the optional charging-power sensor come from its Variable Power "
+                "device card; the electrical model is fixed at three 230 V phases."
             ),
             "fields": [
-                _field(
-                    c.OPT_EV_PLANNING_ENABLED,
-                    "Include EV charging in planning",
-                    "toggle",
-                ),
-                _field(
-                    c.OPT_EV_DEFERRABLE_CONFIRMED,
-                    "I confirm EV charging is deferrable",
-                    "toggle",
-                ),
                 _field(
                     c.OPT_EV_CONNECTED_ENTITY,
                     "Vehicle connected state",
                     "entity",
-                    required_when=c.OPT_EV_PLANNING_ENABLED,
                 ),
                 _field(
                     c.OPT_EV_SOC_ENTITY,
                     "Vehicle battery SOC",
                     "entity",
                     domains=("sensor",),
-                    required_when=c.OPT_EV_PLANNING_ENABLED,
                 ),
                 _field(
                     c.OPT_EV_TARGET_SOC_ENTITY,
                     "Vehicle target SOC",
                     "entity",
-                    required_when=c.OPT_EV_PLANNING_ENABLED,
                 ),
                 _field(
                     c.OPT_EV_DEPARTURE_ENTITY,
-                    "Departure timestamp",
+                    "Optional departure timestamp",
                     "entity",
-                    required_when=c.OPT_EV_PLANNING_ENABLED,
                     help_text=(
-                        "The entity must contain a timezone-aware timestamp. "
-                        "The planner will not invent a departure deadline."
+                        "When provided, the entity must contain a timezone-aware "
+                        "timestamp. Leave it empty to plan toward the target over "
+                        "the rolling horizon."
                     ),
                 ),
                 _field(
@@ -418,7 +381,6 @@ def _configuration_sections() -> list[dict[str, Any]]:
                     "Usable energy remaining",
                     "entity",
                     domains=("sensor",),
-                    required_when=c.OPT_EV_PLANNING_ENABLED,
                     help_text=(
                         "Used with current SOC to derive usable battery capacity "
                         "automatically."
@@ -889,46 +851,11 @@ async def async_apply_configuration(
                 options.pop(key, None)
             else:
                 options[key] = value
-    conditionally_missing = [
-        f"{section['title']}: {field['label']} is required"
-        for section in _configuration_sections()
-        for field in section["fields"]
-        if field.get("required_when")
-        and options.get(field["required_when"])
-        and options.get(field["key"]) in (None, "", [])
-    ]
-    if conditionally_missing:
-        raise ValueError("; ".join(conditionally_missing))
     if options.get(shs_const.OPT_PLANNING_MODE) not in {
         shs_const.PLANNING_MODE_DISABLED,
         shs_const.PLANNING_MODE_LIVE,
     }:
         raise ValueError("planning mode must be Off or Live planning")
-
-    confirmations = (
-        (
-            shs_const.OPT_POOL_PLANNING_ENABLED,
-            shs_const.OPT_POOL_DEFERRABLE_CONFIRMED,
-            "pool deferrability",
-        ),
-        (
-            shs_const.OPT_BOILER_PLANNING_ENABLED,
-            shs_const.OPT_BOILER_DEFERRABLE_CONFIRMED,
-            "water-heater inhibit safety",
-        ),
-        (
-            shs_const.OPT_EV_PLANNING_ENABLED,
-            shs_const.OPT_EV_DEFERRABLE_CONFIRMED,
-            "EV deferrability",
-        ),
-    )
-    unconfirmed = [
-        label
-        for enabled_key, confirmation_key, label in confirmations
-        if options.get(enabled_key) and not options.get(confirmation_key)
-    ]
-    if unconfirmed:
-        raise ValueError("explicit confirmation required: " + ", ".join(unconfirmed))
 
     if options.get(shs_const.OPT_PLANNING_MODE) == shs_const.PLANNING_MODE_LIVE:
         options[shs_const.OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(

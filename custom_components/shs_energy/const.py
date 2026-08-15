@@ -82,7 +82,7 @@ OPT_CONFIGURATION_REVIEWED_AT = "configuration_reviewed_at"
 OPT_DEVICE_CONTROL_MAPPINGS = "device_control_mappings"
 OPT_CONFIGURATION_SCHEMA_VERSION = "_configuration_schema_version"
 OPT_LEGACY_CONFIGURATION_ARCHIVE = "_legacy_configuration_archive"
-CONFIGURATION_SCHEMA_VERSION = 2
+CONFIGURATION_SCHEMA_VERSION = 3
 
 # Live optimisation inputs. Forecast entities must expose timestamped values;
 # the integration does not infer a provider, unit, location or missing series.
@@ -118,15 +118,7 @@ OPT_GRID_EXPORT_LIMIT_W = "grid_export_limit_w"
 OPT_TERMINAL_SOC_MIN = "terminal_soc_min"
 OPT_TERMINAL_ENERGY_VALUE = "terminal_energy_value_sek_per_kwh"
 
-OPT_POOL_PLANNING_ENABLED = "pool_planning_enabled"
-OPT_POOL_DEFERRABLE_CONFIRMED = "pool_deferrable_confirmed"
-OPT_POOL_DEADLINE = "pool_deadline"
-OPT_POOL_BASELINE_START = "pool_baseline_start"
-OPT_BOILER_PLANNING_ENABLED = "boiler_planning_enabled"
-OPT_BOILER_DEFERRABLE_CONFIRMED = "boiler_deferrable_confirmed"
 OPT_EV_CONNECTED_ENTITY = "ev_connected_entity"
-OPT_EV_PLANNING_ENABLED = "ev_planning_enabled"
-OPT_EV_DEFERRABLE_CONFIRMED = "ev_deferrable_confirmed"
 OPT_EV_SOC_ENTITY = "ev_soc_entity"
 OPT_EV_TARGET_SOC_ENTITY = "ev_target_soc_entity"
 OPT_EV_DEPARTURE_ENTITY = "ev_departure_entity"
@@ -140,9 +132,17 @@ EV_MIN_RUN_SLOTS = 1
 EV_PHASE_COUNT = 3
 EV_PHASE_VOLTAGE = 230.0
 
-# Remove superseded UI-owned EV values from existing config entries. Their
-# presence must never override the integration's current planning contract.
-RETIRED_EV_PLANNING_OPTIONS = frozenset({
+# Preserve superseded UI-owned values during migration, but never use them to
+# decide whether a website-selected device appears in an advisory plan.
+RETIRED_PLANNING_OPTIONS = frozenset({
+    "pool_planning_enabled",
+    "pool_deferrable_confirmed",
+    "pool_deadline",
+    "pool_baseline_start",
+    "boiler_planning_enabled",
+    "boiler_deferrable_confirmed",
+    "ev_planning_enabled",
+    "ev_deferrable_confirmed",
     "ev_electrical_confirmed",
     "ev_battery_kwh",
     "ev_charge_efficiency",

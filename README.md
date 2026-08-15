@@ -28,6 +28,9 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
   controllable. Solar, battery, pool, water heating and EV planning are
   independent capabilities; a home without any of them is still a valid
   integration and can use price-led planning for the equipment it does have.
+- **Advisory only**: a website-selected device with a complete local mapping is
+  included in the plan automatically. The integration publishes and visualises
+  schedules, but it does not switch, inhibit, or set any Home Assistant entity.
 - **Website-only example**: the portal can render a promotional scenario from
   fixed numbers bundled with the website. Home Assistant cannot create or
   upload demo data, and the ingestion database accepts live plans only.
@@ -153,8 +156,10 @@ floor. The planner chooses one confirmed valid current for every 15-minute slot
 and derives power using the installation-wide three-phase 230 V contract. It
 never treats the entity's instantaneous state as fixed charger power. Usable
 battery capacity is derived from live remaining energy and SOC, charging
-efficiency is fixed at 92%, and an explicit timezone-aware departure timestamp
-is required. None of these derived or invariant values are user configuration.
+efficiency is fixed at 92%, and a timezone-aware departure timestamp is
+optional. When it is absent, the current target SOC is planned over the rolling
+72-hour horizon. None of these derived or invariant values are user
+configuration.
 
 The configuration page is available only to Home Assistant administrators and
 stores reviewed settings in Home Assistant's config-entry storage. Do not edit
@@ -167,9 +172,9 @@ The supported automation/MCP surface is:
   capabilities requiring review without changing anything; and
 - `shs_energy.apply_configuration`: validates and stores only the explicit
   non-device options supplied by the caller. It never re-runs discovery while applying;
-  controllable-device mappings are saved independently from their cards.
-  Enabling pool, water heating, or EV planning requires the corresponding
-  `*_deferrable_confirmed` value; and
+  controllable-device mappings are saved independently from their cards. A
+  complete mapping is the inclusion decision; there are no separate
+  planning-enable or deferrability-confirmation options; and
 - `shs_energy.backfill_prices`: reprices `days` of history and pushes it. Every
   exchange already sends the all-in price for the quarters around it, so this is
   only needed to cover history recorded before the integration started sending
