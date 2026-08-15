@@ -497,12 +497,15 @@ def build_device_models(
             if active_values else None
         )
         mapping = control_mappings.get(str(device["key"]), {})
-        mapped_power_w = mapped_power_w(
+        # Named apart from the `mapped_power_w` reader deliberately: binding the
+        # result to the reader's own name works for the first device and then
+        # calls a float on the second.
+        reviewed_power_w = mapped_power_w(
             mapping if isinstance(mapping, dict) else {}
         )
         active_power_w = (
-            round(mapped_power_w, 1)
-            if mapped_power_w is not None
+            round(reviewed_power_w, 1)
+            if reviewed_power_w is not None
             else empirical_active_power_w
         )
         profile_sample_count = sum(

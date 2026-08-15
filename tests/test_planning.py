@@ -421,6 +421,40 @@ class DeviceModelTests(unittest.TestCase):
         )
         self.assertEqual(devices[0]["active_power_w"], 4_321.0)
 
+    def test_a_whole_home_of_devices_is_modelled_not_just_the_first(self) -> None:
+        # Every earlier test here used one device, so a bug that only appears
+        # on the second one shipped: the power reader was rebound to its own
+        # result, which is callable exactly once.
+        keys = [f"sensor.heater_{index}" for index in range(5)]
+        devices = [
+            inventory_device(key, "controllable", "setpoint") for key in keys
+        ]
+        models = self.build(devices, complete_history(*keys))
+        self.assertEqual([model["key"] for model in models], keys)
+        for device in devices:
+            self.assertEqual(device["active_power_w"], 1_000.0)
+
+    def test_the_power_reader_is_consulted_once_per_device(self) -> None:
+        keys = [f"sensor.heater_{index}" for index in range(3)]
+        devices = [
+            inventory_device(key, "controllable", "setpoint") for key in keys
+        ]
+        seen: list[dict[str, object]] = []
+
+        def reader(mapping: dict[str, object]) -> float | None:
+            seen.append(mapping)
+            return None
+
+        build_device_models(
+            devices,
+            complete_history(*keys),
+            HORIZON,
+            {},
+            mapped_power_w=reader,
+            local_tz=timezone.utc,
+        )
+        self.assertEqual(len(seen), len(keys))
+
 
 if __name__ == "__main__":
     unittest.main()
