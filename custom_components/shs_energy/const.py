@@ -124,17 +124,30 @@ OPT_BOILER_DEFERRABLE_CONFIRMED = "boiler_deferrable_confirmed"
 OPT_EV_CONNECTED_ENTITY = "ev_connected_entity"
 OPT_EV_PLANNING_ENABLED = "ev_planning_enabled"
 OPT_EV_DEFERRABLE_CONFIRMED = "ev_deferrable_confirmed"
-OPT_EV_ELECTRICAL_CONFIRMED = "ev_electrical_confirmed"
 OPT_EV_SOC_ENTITY = "ev_soc_entity"
 OPT_EV_TARGET_SOC_ENTITY = "ev_target_soc_entity"
 OPT_EV_DEPARTURE_ENTITY = "ev_departure_entity"
-OPT_EV_BATTERY_KWH = "ev_battery_kwh"
-OPT_EV_CHARGE_EFFICIENCY = "ev_charge_efficiency"
-OPT_EV_MIN_RUN_SLOTS = "ev_min_run_slots"
 OPT_EV_ENERGY_REMAINING_ENTITY = "ev_energy_remaining_entity"
-OPT_EV_PHASE_COUNT = "ev_phase_count"
-OPT_EV_VOLTAGE = "ev_voltage"
-OPT_EV_DEFAULT_DEPARTURE = "ev_default_departure"
+
+# Charger electrical characteristics are installation invariants, not customer
+# preferences. The number entity still supplies its commissioned current range
+# and increment, while every supported charger uses three 230 V phases.
+EV_CHARGE_EFFICIENCY = 0.92
+EV_MIN_RUN_SLOTS = 1
+EV_PHASE_COUNT = 3
+EV_PHASE_VOLTAGE = 230.0
+
+# Remove superseded UI-owned EV values from existing config entries. Their
+# presence must never override the integration's current planning contract.
+RETIRED_EV_PLANNING_OPTIONS = frozenset({
+    "ev_electrical_confirmed",
+    "ev_battery_kwh",
+    "ev_charge_efficiency",
+    "ev_min_run_slots",
+    "ev_phase_count",
+    "ev_voltage",
+    "ev_default_departure",
+})
 
 OPTIMISATION_ACTUAL_BACKFILL_HOURS = 72
 OPTIMISATION_PROFILE_DAYS = 10

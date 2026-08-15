@@ -332,22 +332,15 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "id": "ev",
             "tab": "storage",
             "title": "EV obligation",
-            "description": "Vehicle SOC and target determine how much energy the car can accept and its deadline priority.",
+            "description": "Vehicle state supplies the charging need and explicit departure deadline. Charger current bounds come from its Variable Power device card; the electrical model is fixed at three 230 V phases.",
             "fields": [
                 _field(c.OPT_EV_PLANNING_ENABLED, "Include EV charging in planning", "toggle"),
                 _field(c.OPT_EV_DEFERRABLE_CONFIRMED, "I confirm EV charging is deferrable", "toggle"),
-                _field(c.OPT_EV_ELECTRICAL_CONFIRMED, "I confirm phases, voltage and the mapped operating range", "toggle"),
                 _field(c.OPT_EV_CONNECTED_ENTITY, "Vehicle connected state", "entity"),
                 _field(c.OPT_EV_SOC_ENTITY, "Vehicle battery SOC", "entity", domains=("sensor",)),
                 _field(c.OPT_EV_TARGET_SOC_ENTITY, "Vehicle target SOC", "entity"),
-                _field(c.OPT_EV_DEPARTURE_ENTITY, "Departure time", "entity"),
-                _field(c.OPT_EV_ENERGY_REMAINING_ENTITY, "Energy remaining", "entity", domains=("sensor",)),
-                _field(c.OPT_EV_BATTERY_KWH, "Usable vehicle battery capacity", "number", unit="kWh", minimum=0.1, step=0.1),
-                _field(c.OPT_EV_CHARGE_EFFICIENCY, "Charging efficiency", "number", unit="%", minimum=1, maximum=100, step=1, scale=100),
-                _field(c.OPT_EV_MIN_RUN_SLOTS, "Minimum run", "number", unit="15-minute slots", minimum=1, step=1),
-                _field(c.OPT_EV_PHASE_COUNT, "Charging phases", "number", minimum=1, maximum=3, step=1),
-                _field(c.OPT_EV_VOLTAGE, "Charging voltage", "number", unit="V", minimum=1, step=1),
-                _field(c.OPT_EV_DEFAULT_DEPARTURE, "Default departure", "time"),
+                _field(c.OPT_EV_DEPARTURE_ENTITY, "Departure timestamp", "entity", help_text="Required when EV planning is enabled; the entity must contain a timezone-aware timestamp."),
+                _field(c.OPT_EV_ENERGY_REMAINING_ENTITY, "Usable energy remaining", "entity", domains=("sensor",), help_text="Used with current SOC to derive usable battery capacity automatically."),
             ],
         },
     ]
@@ -795,11 +788,6 @@ async def async_apply_configuration(
             shs_const.OPT_EV_PLANNING_ENABLED,
             shs_const.OPT_EV_DEFERRABLE_CONFIRMED,
             "EV deferrability",
-        ),
-        (
-            shs_const.OPT_EV_PLANNING_ENABLED,
-            shs_const.OPT_EV_ELECTRICAL_CONFIRMED,
-            "EV electrical limits",
         ),
     )
     unconfirmed = [

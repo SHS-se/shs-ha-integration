@@ -143,13 +143,14 @@ supplier terms, and returns separate import/export series; no Tibber or Nord
 Pool Home Assistant integration is required. For an EV current entity,
 automatic setup shows both its raw
 selector bounds and the proposed usable minimum, maximum and increment. Those
-operating values, phase count and voltage must be reviewed explicitly; this
-matters when an entity exposes an `off` value such as 0 A below the charger's
-real charging floor. The planner chooses one confirmed valid current for every
-15-minute slot and derives power from the commissioned phase count and voltage;
-it never treats the entity's instantaneous state as fixed charger power. If
-there is no departure timestamp entity, the next configured default departure
-time is used.
+operating values are saved in the Variable Power device card; this matters when
+an entity exposes an `off` value such as 0 A below the charger's real charging
+floor. The planner chooses one confirmed valid current for every 15-minute slot
+and derives power using the installation-wide three-phase 230 V contract. It
+never treats the entity's instantaneous state as fixed charger power. Usable
+battery capacity is derived from live remaining energy and SOC, charging
+efficiency is fixed at 92%, and an explicit timezone-aware departure timestamp
+is required. None of these derived or invariant values are user configuration.
 
 The configuration page is available only to Home Assistant administrators and
 stores reviewed settings in Home Assistant's config-entry storage. Do not edit
@@ -164,8 +165,7 @@ The supported automation/MCP surface is:
   non-device options supplied by the caller. It never re-runs discovery while applying;
   controllable-device mappings are saved independently from their cards.
   Enabling pool, water heating, or EV planning requires the corresponding
-  `*_deferrable_confirmed` value; EV planning also requires
-  `ev_electrical_confirmed` after phase count and voltage are reviewed; and
+  `*_deferrable_confirmed` value; and
 - `shs_energy.backfill_prices`: reprices `days` of history and pushes it. Every
   exchange already sends the all-in price for the quarters around it, so this is
   only needed to cover history recorded before the integration started sending

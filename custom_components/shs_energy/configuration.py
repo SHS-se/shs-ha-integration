@@ -43,19 +43,13 @@ from .const import (
     OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_OUTDOOR_TEMPERATURE_ENTITY,
     OPT_WEATHER_FORECAST_ENTITY,
-    OPT_EV_BATTERY_KWH,
-    OPT_EV_CHARGE_EFFICIENCY,
     OPT_EV_CONNECTED_ENTITY,
-    OPT_EV_DEFAULT_DEPARTURE,
     OPT_EV_DEFERRABLE_CONFIRMED,
-    OPT_EV_ELECTRICAL_CONFIRMED,
+    OPT_EV_DEPARTURE_ENTITY,
     OPT_EV_ENERGY_REMAINING_ENTITY,
-    OPT_EV_MIN_RUN_SLOTS,
-    OPT_EV_PHASE_COUNT,
     OPT_EV_PLANNING_ENABLED,
     OPT_EV_SOC_ENTITY,
     OPT_EV_TARGET_SOC_ENTITY,
-    OPT_EV_VOLTAGE,
     OPT_FORECAST_RESOLUTION_MINUTES,
     OPT_GRID_EXPORT_LIMIT_W,
     OPT_GRID_EXPORT_POWER_ENTITY,
@@ -107,12 +101,6 @@ def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
         OPT_BOILER_DEFERRABLE_CONFIRMED: False,
         OPT_EV_PLANNING_ENABLED: False,
         OPT_EV_DEFERRABLE_CONFIRMED: False,
-        OPT_EV_ELECTRICAL_CONFIRMED: False,
-        OPT_EV_CHARGE_EFFICIENCY: 0.92,
-        OPT_EV_MIN_RUN_SLOTS: 2,
-        OPT_EV_PHASE_COUNT: 3,
-        OPT_EV_VOLTAGE: 230.0,
-        OPT_EV_DEFAULT_DEPARTURE: "07:00",
     }
 
 
@@ -791,27 +779,14 @@ async def async_discover_configuration(
     if ev_current is not None:
         # Tessie exposes 0 A as the selector minimum, but this installation's
         # commissioned AC charging floor is 5 A. This is a proposal only: the
-        # EV review screen requires the user to confirm it together with phase
-        # count and voltage before planning is enabled.
+        # variable-power device card still requires the user to save its
+        # operating range before planning is enabled.
         proposed_min = (
             5.0
             if ev_current.entity_id == "number.tesla_model_y_charge_current"
             and raw_current_min == 0
             else raw_current_min
         )
-    ev_soc = matched_ev[OPT_EV_SOC_ENTITY]
-    ev_remaining = matched_ev[OPT_EV_ENERGY_REMAINING_ENTITY]
-    soc = _number(ev_soc)
-    remaining = _as_kwh(ev_remaining)
-    if soc is not None and remaining is not None and 1 <= soc <= 100:
-        record(
-            OPT_EV_BATTERY_KWH,
-            round(remaining / (soc / 100), 2),
-            source="derived_vehicle_state",
-            confidence="medium",
-            detail="Derived as remaining energy divided by current SOC",
-        )
-
     # Existing confirmations survive rediscovery; inference alone never turns
     # a meter into a controllable or deferrable load.
     confirmation_pairs = (
@@ -824,10 +799,6 @@ async def async_discover_configuration(
             existing.get(enabled_key) and existing.get(confirmation_key)
         )
         options[confirmation_key] = bool(existing.get(confirmation_key))
-    options[OPT_EV_ELECTRICAL_CONFIRMED] = bool(
-        existing.get(OPT_EV_ELECTRICAL_CONFIRMED)
-    )
-
     def missing(keys: tuple[str, ...]) -> list[str]:
         return [
             key
@@ -883,13 +854,15 @@ async def async_discover_configuration(
                 OPT_EV_CONNECTED_ENTITY,
                 OPT_EV_SOC_ENTITY,
                 OPT_EV_TARGET_SOC_ENTITY,
-                OPT_EV_BATTERY_KWH,
+                OPT_EV_DEPARTURE_ENTITY,
+                OPT_EV_ENERGY_REMAINING_ENTITY,
             )) and ev_current is not None,
             "missing": missing((
                 OPT_EV_CONNECTED_ENTITY,
                 OPT_EV_SOC_ENTITY,
                 OPT_EV_TARGET_SOC_ENTITY,
-                OPT_EV_BATTERY_KWH,
+                OPT_EV_DEPARTURE_ENTITY,
+                OPT_EV_ENERGY_REMAINING_ENTITY,
             )),
             "current_control": (
                 None
@@ -905,7 +878,6 @@ async def async_discover_configuration(
                 }
             ),
             "requires_confirmation": True,
-            "electrical_values_require_confirmation": True,
         },
     }
     for key in (
@@ -917,7 +889,8 @@ async def async_discover_configuration(
         OPT_EV_CONNECTED_ENTITY,
         OPT_EV_SOC_ENTITY,
         OPT_EV_TARGET_SOC_ENTITY,
-        OPT_EV_BATTERY_KWH,
+        OPT_EV_DEPARTURE_ENTITY,
+        OPT_EV_ENERGY_REMAINING_ENTITY,
     ):
         if key in evidence or options.get(key) in (None, "", []):
             continue

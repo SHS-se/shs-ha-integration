@@ -68,13 +68,7 @@
           "ev_soc_entity": "EV state of charge entity",
           "ev_target_soc_entity": "EV target state of charge entity",
           "ev_departure_entity": "EV departure timestamp entity",
-          "ev_battery_kwh": "EV usable battery capacity (kWh)",
-          "ev_charge_efficiency": "EV charging efficiency (fraction)",
-          "ev_min_run_slots": "EV minimum run (15-minute slots)",
           "ev_energy_remaining_entity": "EV energy remaining entity (kWh)",
-          "ev_phase_count": "EV charging phase count",
-          "ev_voltage": "EV phase voltage (V)",
-          "ev_default_departure": "Default EV departure time (HH:MM)",
           "pool_planning_enabled": "Plan pool heating",
           "boiler_planning_enabled": "Plan water heating",
           "ev_planning_enabled": "Plan EV charging"
@@ -170,19 +164,13 @@
       },
       "ev": {
         "title": "EV planning",
-        "description": "The charge-current entity supplies its raw bounds. Review the usable charging minimum, maximum, increment, phase count and voltage; the planner then chooses only valid currents per quarter. If there is no departure entity, the next default departure time is used.",
+        "description": "The charge-current entity supplies its raw bounds. The planner uses three 230 V phases, derives usable capacity from live SOC and remaining energy, and requires an explicit departure timestamp.",
         "data": {
           "ev_connected_entity": "EV connected entity",
           "ev_soc_entity": "EV state of charge",
           "ev_target_soc_entity": "EV target state of charge",
-          "ev_departure_entity": "Departure timestamp entity (optional)",
-          "ev_energy_remaining_entity": "Energy remaining (kWh)",
-          "ev_battery_kwh": "Usable battery capacity (kWh)",
-          "ev_charge_efficiency": "Charging efficiency",
-          "ev_min_run_slots": "Minimum run (15-minute slots)",
-          "ev_phase_count": "Charging phase count",
-          "ev_voltage": "Phase voltage (V)",
-          "ev_default_departure": "Default departure time (HH:MM)"
+          "ev_departure_entity": "Departure timestamp entity",
+          "ev_energy_remaining_entity": "Energy remaining (kWh)"
         }
       },
       "device_controls": {

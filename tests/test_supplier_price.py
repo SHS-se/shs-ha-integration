@@ -48,6 +48,12 @@ CONFIG_PANEL_FRONTEND = (
     / "frontend"
     / "shs-energy-config-panel.js"
 ).read_text(encoding="utf-8")
+CONSTANTS = (
+    Path(__file__).parents[1]
+    / "custom_components"
+    / "shs_energy"
+    / "const.py"
+).read_text(encoding="utf-8")
 
 
 class SensorWiringTests(unittest.TestCase):
@@ -80,6 +86,32 @@ class SensorWiringTests(unittest.TestCase):
             "RETIRED_SUPPLIER_PRICE_OPTIONS.intersection(migrated_options)", setup
         )
         self.assertIn("migrated_options.pop(key)", setup)
+
+    def test_ev_electrical_model_is_not_user_configuration(self) -> None:
+        sections = CONFIG_PANEL[
+            CONFIG_PANEL.index('"id": "ev"') :
+            CONFIG_PANEL.index("def _entry_state")
+        ]
+        for retired_field in (
+            "OPT_EV_ELECTRICAL_CONFIRMED",
+            "OPT_EV_BATTERY_KWH",
+            "OPT_EV_CHARGE_EFFICIENCY",
+            "OPT_EV_MIN_RUN_SLOTS",
+            "OPT_EV_PHASE_COUNT",
+            "OPT_EV_VOLTAGE",
+            "OPT_EV_DEFAULT_DEPARTURE",
+        ):
+            self.assertNotIn(retired_field, sections)
+        self.assertIn("EV_PHASE_COUNT = 3", CONSTANTS)
+        self.assertIn("EV_PHASE_VOLTAGE = 230.0", CONSTANTS)
+        self.assertIn("EV_PHASE_COUNT,", COORDINATOR)
+        self.assertIn("EV_PHASE_VOLTAGE,", COORDINATOR)
+        self.assertIn('options[OPT_EV_DEPARTURE_ENTITY]', COORDINATOR)
+        self.assertNotIn("OPT_EV_DEFAULT_DEPARTURE", COORDINATOR)
+        setup = INIT[INIT.index("async def async_setup_entry") :]
+        self.assertIn(
+            "RETIRED_EV_PLANNING_OPTIONS.intersection(migrated_options)", setup
+        )
 
     def test_device_cards_have_an_independent_save_button(self) -> None:
         self.assertIn('data-action="save-device"', CONFIG_PANEL_FRONTEND)

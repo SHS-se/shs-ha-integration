@@ -53,10 +53,11 @@ apply_configuration:
     Validate and save an explicit configuration supplied by an administrator
     or MCP client. Discovery is a separate read-only action and is never
     silently re-run while applying. Every enabled flexible load must include
-    its explicit deferrability confirmation, and EV control must also confirm
-    phase count and voltage. Home Assistant's internal .storage files are never
-    edited directly. Controllable-device mappings are saved independently from
-    their cards on the SHS Energy configuration page.
+    its explicit deferrability confirmation. EV current bounds are saved in
+    the Variable Power device card; three 230 V phases are an integration
+    invariant. Home Assistant's internal .storage files are never edited
+    directly. Controllable-device mappings are saved independently from their
+    cards on the SHS Energy configuration page.
   fields:
     entry_id:
       name: Configuration entry ID

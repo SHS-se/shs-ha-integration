@@ -71,19 +71,16 @@ from .const import (
     OPT_POOL_DEFERRABLE_CONFIRMED,
     OPT_POOL_BASELINE_START,
     OPT_BOILER_DEFERRABLE_CONFIRMED,
+    EV_CHARGE_EFFICIENCY,
+    EV_MIN_RUN_SLOTS,
+    EV_PHASE_COUNT,
+    EV_PHASE_VOLTAGE,
     OPT_EV_CONNECTED_ENTITY,
     OPT_EV_SOC_ENTITY,
     OPT_EV_TARGET_SOC_ENTITY,
     OPT_EV_DEPARTURE_ENTITY,
-    OPT_EV_BATTERY_KWH,
-    OPT_EV_CHARGE_EFFICIENCY,
-    OPT_EV_MIN_RUN_SLOTS,
     OPT_EV_ENERGY_REMAINING_ENTITY,
-    OPT_EV_PHASE_COUNT,
-    OPT_EV_VOLTAGE,
-    OPT_EV_DEFAULT_DEPARTURE,
     OPT_EV_DEFERRABLE_CONFIRMED,
-    OPT_EV_ELECTRICAL_CONFIRMED,
     OPT_POOL_PLANNING_ENABLED,
     OPT_BOILER_PLANNING_ENABLED,
     OPT_EV_PLANNING_ENABLED,
@@ -1374,11 +1371,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if options.get(OPT_EV_PLANNING_ENABLED):
             required.extend(
                 [f"{OPT_PREFIX_ENTITIES}ev_charging",
-                 OPT_EV_DEFERRABLE_CONFIRMED, OPT_EV_ELECTRICAL_CONFIRMED,
+                 OPT_EV_DEFERRABLE_CONFIRMED,
                  OPT_EV_CONNECTED_ENTITY, OPT_EV_SOC_ENTITY, OPT_EV_TARGET_SOC_ENTITY,
-                 OPT_EV_BATTERY_KWH, OPT_EV_CHARGE_EFFICIENCY,
-                 OPT_EV_MIN_RUN_SLOTS, OPT_EV_PHASE_COUNT, OPT_EV_VOLTAGE,
-                 OPT_EV_DEFAULT_DEPARTURE]
+                 OPT_EV_DEPARTURE_ENTITY, OPT_EV_ENERGY_REMAINING_ENTITY]
             )
         missing = sorted(
             key for key in required
@@ -1395,10 +1390,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
             (
                 OPT_EV_PLANNING_ENABLED,
-                (
-                    OPT_EV_DEFERRABLE_CONFIRMED,
-                    OPT_EV_ELECTRICAL_CONFIRMED,
-                ),
+                (OPT_EV_DEFERRABLE_CONFIRMED,),
             ),
         ):
             if not options.get(enabled_key):
@@ -1868,45 +1860,37 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             target = normalized_fraction(
                 self._entity_payload(target_id)["state"], OPT_EV_TARGET_SOC_ENTITY
             )
-            efficiency = parse_number(
-                options[OPT_EV_CHARGE_EFFICIENCY], OPT_EV_CHARGE_EFFICIENCY
+            remaining_entity = options[OPT_EV_ENERGY_REMAINING_ENTITY]
+            remaining = parse_number(
+                self._entity_payload(remaining_entity)["state"], remaining_entity
             )
-            capacity = parse_number(options[OPT_EV_BATTERY_KWH], OPT_EV_BATTERY_KWH)
-            remaining_entity = options.get(OPT_EV_ENERGY_REMAINING_ENTITY)
-            if remaining_entity and soc > 0:
-                remaining = parse_number(
-                    self._entity_payload(remaining_entity)["state"], remaining_entity
+            if soc <= 0:
+                raise OptimisationInputError(
+                    "vehicle SOC must be above zero to derive usable battery capacity"
                 )
-                capacity = remaining / soc
+            if remaining <= 0:
+                raise OptimisationInputError(
+                    f"{remaining_entity} must report positive usable energy"
+                )
+            capacity = remaining / soc
 
             departure: datetime | None = None
             if connected:
-                departure_entity = options.get(OPT_EV_DEPARTURE_ENTITY)
-                if departure_entity:
-                    departure_raw = self._entity_payload(departure_entity)["state"]
-                    try:
-                        departure = datetime.fromisoformat(
-                            str(departure_raw).replace("Z", "+00:00")
-                        )
-                    except ValueError as err:
-                        raise OptimisationInputError(
-                            f"{OPT_EV_DEPARTURE_ENTITY} must contain an ISO timestamp"
-                        ) from err
-                    if departure.tzinfo is None:
-                        raise OptimisationInputError(
-                            f"{OPT_EV_DEPARTURE_ENTITY} timestamp must include a timezone"
-                        )
-                    departure = departure.astimezone(timezone.utc)
-                else:
-                    departure_time = self._time_option(
-                        options[OPT_EV_DEFAULT_DEPARTURE], OPT_EV_DEFAULT_DEPARTURE
+                departure_entity = options[OPT_EV_DEPARTURE_ENTITY]
+                departure_raw = self._entity_payload(departure_entity)["state"]
+                try:
+                    departure = datetime.fromisoformat(
+                        str(departure_raw).replace("Z", "+00:00")
                     )
-                    local_first = first.astimezone(local_tz)
-                    departure = datetime.combine(
-                        local_first.date(), departure_time, local_tz
-                    ).astimezone(timezone.utc)
-                    if departure <= first:
-                        departure += timedelta(days=1)
+                except ValueError as err:
+                    raise OptimisationInputError(
+                        f"{OPT_EV_DEPARTURE_ENTITY} must contain an ISO timestamp"
+                    ) from err
+                if departure.tzinfo is None:
+                    raise OptimisationInputError(
+                        f"{OPT_EV_DEPARTURE_ENTITY} timestamp must include a timezone"
+                    )
+                departure = departure.astimezone(timezone.utc)
                 if departure <= first or departure > end:
                     raise OptimisationInputError(
                         "connected EV departure must fall inside the 72-hour horizon"
@@ -1920,7 +1904,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "capacity_kwh": round(capacity, 3),
                 "soc": round(soc, 6),
                 "departure_target_soc": round(target, 6),
-                "charge_efficiency": round(efficiency, 6),
+                "charge_efficiency": EV_CHARGE_EFFICIENCY,
                 "available_from": first.isoformat() if connected else None,
                 "departure": departure.isoformat() if departure else None,
                 "priority": 3,
@@ -1934,24 +1918,17 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
 
             required = (
-                max(0.0, target - soc) * capacity / efficiency
+                max(0.0, target - soc) * capacity / EV_CHARGE_EFFICIENCY
                 if connected else 0.0
             )
             if required > 0:
                 assert departure is not None
-                minimum_run = parse_number(
-                    options[OPT_EV_MIN_RUN_SLOTS], OPT_EV_MIN_RUN_SLOTS
-                )
-                if not minimum_run.is_integer() or minimum_run < 1:
-                    raise OptimisationInputError(
-                        f"{OPT_EV_MIN_RUN_SLOTS} must be a positive whole number"
-                    )
                 control = discrete_current_control(
                     configured_min,
                     configured_max,
                     configured_step,
-                    options[OPT_EV_PHASE_COUNT],
-                    options[OPT_EV_VOLTAGE],
+                    EV_PHASE_COUNT,
+                    EV_PHASE_VOLTAGE,
                     label=current_entity,
                 )
                 services.append({
@@ -1961,7 +1938,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "deadline": departure.isoformat(),
                     "required_kwh": round(required, 3),
                     "control": control,
-                    "min_run_slots": int(minimum_run),
+                    "min_run_slots": EV_MIN_RUN_SLOTS,
                     "priority": 3,
                     "baseline_preferred_start": first.isoformat(),
                 })
