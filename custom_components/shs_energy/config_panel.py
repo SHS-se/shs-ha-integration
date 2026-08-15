@@ -908,7 +908,14 @@ async def async_apply_device_mapping(
             timezone.utc
         ).isoformat()
     hass.config_entries.async_update_entry(entry, options=options)
-    await entry.runtime_data.async_optimisation_push(force_plan=True)
+    # The saved mapping's status is already in `report`; the replan only
+    # refreshes the plan behind it. Awaiting it here made Save sit for the
+    # length of a full statistics sweep before the card could answer.
+    entry.async_create_background_task(
+        hass,
+        entry.runtime_data.async_optimisation_push(force_plan=True),
+        name=f"{shs_const.DOMAIN}_replan_after_mapping_save",
+    )
     return report
 
 

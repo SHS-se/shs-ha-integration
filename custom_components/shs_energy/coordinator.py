@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -581,7 +581,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return configuration
 
     async def async_refresh_device_configuration(self) -> list[dict[str, Any]]:
-        """Force-fetch website requests when the user opens Configure."""
+        """Force-fetch website requests when the user opens Configure.
+
+        Opening a configuration screen must not wait on the planning pipeline:
+        that reads ten days of five-minute statistics for every device before
+        a website round-trip, which made the panel take about ten seconds to
+        appear. A changed request still deserves a fresh plan, so one is
+        scheduled in the background instead of awaited, and an unchanged
+        request needs no replan at all.
+        """
         async with self._push_lock:
             stored = await self._store.async_load() or {}
             previous = dict(stored.get("optimisation_device_configuration", {}))
@@ -590,7 +598,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 [], None, devices, device_inventory_complete=True
             )
             configuration = self._record_device_exchange(stored, devices, result)
-            if configuration != previous:
+            configuration_changed = configuration != previous
+            if configuration_changed:
                 self.optimisation_plan = None
                 stored.pop("optimisation_plan", None)
                 # The first exchange discovers the new website request. Report
@@ -614,10 +623,14 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._store.async_save(stored)
             self.async_update_listeners()
             requested = requested_controllable_devices(configuration)
-        if resolved_options(
+        if configuration_changed and resolved_options(
             self.hass, dict(self.entry.options)
         )[OPT_PLANNING_MODE] == PLANNING_MODE_LIVE:
-            await self.async_optimisation_push(force_plan=True)
+            self.entry.async_create_background_task(
+                self.hass,
+                self.async_optimisation_push(force_plan=True),
+                name=f"{DOMAIN}_replan_after_role_change",
+            )
         return requested
 
     async def async_report_device_mapping(
@@ -2169,14 +2182,30 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             snapshot = await self._build_optimisation_snapshot(
                                 options, entities, actuals, stored, devices
                             )
-                        except (OptimisationInputError, KeyError, TypeError, ValueError) as err:
+                        except OptimisationInputError as err:
                             snapshot_error = str(err)
                             if not self.optimisation_missing_inputs:
                                 self.optimisation_missing_inputs = list(
-                                    getattr(err, "reasons", None) or [snapshot_error]
+                                    err.reasons or [snapshot_error]
                                 )
                             self._sync_optimisation_issue()
                             _LOGGER.warning("Optimisation plan skipped: %s", err)
+                        except (KeyError, TypeError, ValueError) as err:
+                            # Not a missing input: a defect. Reporting it as a
+                            # configuration gap sent the reader looking for a
+                            # setting to fix, and the bare Python text named
+                            # neither the file nor the line.
+                            snapshot_error = (
+                                "internal error while building the plan "
+                                f"({type(err).__name__}: {err}); the Home "
+                                "Assistant log holds the traceback"
+                            )
+                            if not self.optimisation_missing_inputs:
+                                self.optimisation_missing_inputs = [snapshot_error]
+                            self._sync_optimisation_issue()
+                            _LOGGER.exception(
+                                "Unable to build the optimisation snapshot"
+                            )
                     else:
                         snapshot_error = (
                             f"unsupported planning mode {mode!r}; review the integration"
