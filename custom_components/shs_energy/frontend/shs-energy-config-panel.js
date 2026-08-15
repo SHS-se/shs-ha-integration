@@ -182,6 +182,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         device_key: deviceKey,
         mapping,
       });
+      if (result.panel) this._data = result.panel;
       if (!this._savedDraft[MAPPINGS_KEY]) this._savedDraft[MAPPINGS_KEY] = {};
       if (mapping) {
         this._savedDraft[MAPPINGS_KEY][deviceKey] = this._clone(mapping);

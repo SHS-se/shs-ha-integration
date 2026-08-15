@@ -36,7 +36,7 @@ PANEL_URL = "shs-energy"
 PANEL_ELEMENT = "shs-energy-config-panel-v3"
 STATIC_URL = "/shs_energy_frontend"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
-FRONTEND_ASSET_VERSION = "0.7.0-beta.3"
+FRONTEND_ASSET_VERSION = "0.7.0-beta.5"
 
 
 def _field(
@@ -818,7 +818,7 @@ async def async_apply_device_mapping(
     if device is None:
         raise ValueError("the website no longer requests this controllable device")
 
-    options = resolved_options(hass, dict(entry.options))
+    options = dict(entry.options)
     existing = options.get(shs_const.OPT_DEVICE_CONTROL_MAPPINGS, {})
     mappings = {
         key: dict(value)
@@ -839,6 +839,7 @@ async def async_apply_device_mapping(
             timezone.utc
         ).isoformat()
     hass.config_entries.async_update_entry(entry, options=options)
+    await entry.runtime_data.async_optimisation_push(force_plan=True)
     return report
 
 
@@ -969,10 +970,11 @@ async def websocket_save_device_configuration(
             msg["device_key"],
             dict(msg["mapping"]) if msg["mapping"] is not None else None,
         )
+        panel = await _configuration_payload(hass, entry, refresh_roles=False)
     except (ShsApiError, TypeError, ValueError) as err:
         connection.send_error(msg["id"], "invalid_device_mapping", str(err))
         return
-    connection.send_result(msg["id"], {"saved": True, **report})
+    connection.send_result(msg["id"], {"saved": True, **report, "panel": panel})
 
 
 async def async_register_config_panel(hass: HomeAssistant) -> None:

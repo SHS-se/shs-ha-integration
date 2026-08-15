@@ -253,6 +253,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
 async def _async_options_updated(
     hass: HomeAssistant, entry: ShsEnergyConfigEntry
 ) -> None:
+    if not entry.runtime_data.options_update_requires_reload():
+        return
     # A full reload ensures changed entity mappings are reflected by all
     # platforms before the next recorder aggregation.
     await hass.config_entries.async_reload(entry.entry_id)

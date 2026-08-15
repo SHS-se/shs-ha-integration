@@ -117,6 +117,26 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn('data-action="save-device"', CONFIG_PANEL_FRONTEND)
         self.assertIn("Save configuration", CONFIG_PANEL_FRONTEND)
 
+    def test_device_card_save_replans_and_refreshes_readiness_immediately(self) -> None:
+        save = CONFIG_PANEL[
+            CONFIG_PANEL.index("async def async_apply_device_mapping") :
+            CONFIG_PANEL.index("async def websocket_get_configuration")
+        ]
+        self.assertIn("async_optimisation_push(force_plan=True)", save)
+        refresh = COORDINATOR[
+            COORDINATOR.index("async def async_refresh_device_configuration") :
+            COORDINATOR.index("async def async_report_device_mapping")
+        ]
+        self.assertIn("async_optimisation_push(force_plan=True)", refresh)
+        self.assertIn('"panel": panel', CONFIG_PANEL)
+        self.assertIn("if (result.panel) this._data = result.panel", CONFIG_PANEL_FRONTEND)
+        self.assertIn("options_update_requires_reload()", INIT)
+        live_update = COORDINATOR[
+            COORDINATOR.index("def options_update_requires_reload") :
+            COORDINATOR.index("def optimisation_input_gap_is_transient")
+        ]
+        self.assertIn("OPT_DEVICE_CONTROL_MAPPINGS", live_update)
+
     def test_panel_asset_uses_a_new_component_and_cache_key(self) -> None:
         self.assertIn('PANEL_ELEMENT = "shs-energy-config-panel-v3"', CONFIG_PANEL)
         self.assertIn("?v={FRONTEND_ASSET_VERSION}", CONFIG_PANEL)
@@ -133,6 +153,7 @@ class SensorWiringTests(unittest.TestCase):
         # A price entity chosen after setup is only watched if the entry is
         # rebuilt, so re-pushing alone would leave totals on the hourly poll.
         listener = INIT[INIT.index("async def _async_options_updated") :]
+        self.assertIn("options_update_requires_reload()", listener)
         self.assertIn("async_reload(entry.entry_id)", listener)
 
     def test_startup_planning_waits_for_entity_providers(self) -> None:

@@ -99,10 +99,14 @@ directory and restart.
 
 Each controllable-device card is saved independently. A card changes to
 **Ready** only after Home Assistant validates the mapping and the SHS server
-acknowledges it. The top-level back arrow returns to Home Assistant's
-integration page; the header Save/Discard actions remain for the non-device
-configuration tabs. Leaving with unsaved edits requires confirmation. The
-website's **Example** view is independent of this integration.
+acknowledges it. Saving a card immediately rebuilds and publishes the electrical
+plan, then refreshes every readiness summary on the page; it never waits for
+the next quarter-hour exchange. Opening the configuration page or pressing
+**Refresh website roles** also forces a fresh plan while live planning is
+enabled. The top-level back arrow returns to Home Assistant's integration page;
+the header Save/Discard actions remain for the non-device configuration tabs.
+Leaving with unsaved edits requires confirmation. The website's **Example**
+view is independent of this integration.
 
 Heating comfort is configured by **Home Assistant room**, not by Energy
 Dashboard meter or entity name. A setpoint mapping selects the room-temperature

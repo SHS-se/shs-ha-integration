@@ -44,6 +44,7 @@ from .const import (
     OPT_OUTDOOR_TEMPERATURE_ENTITY,
     OPT_WEATHER_FORECAST_ENTITY,
     OPT_FORECAST_RESOLUTION_MINUTES,
+    OPT_CONFIGURATION_REVIEWED_AT,
     OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_PREFIX_ENTITIES,
     OPT_PV_FORECAST_ENTITIES,
@@ -205,6 +206,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_thermal_slots_accepted = 0
         self.optimisation_missing_inputs: list[str] = []
         self.device_control_mapping_gaps: list[str] = []
+        self._loaded_options = dict(entry.options)
         self._optimisation_issue_grace_until = dt_util.utcnow() + timedelta(
             seconds=OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS
         )
@@ -356,10 +358,18 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     def _sync_device_control_issue(
-        self, configuration: dict[str, dict[str, Any]]
+        self,
+        configuration: dict[str, dict[str, Any]],
+        mappings: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """Raise one actionable issue for website-requested local mappings."""
-        mappings = self.entry.options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
+        active_mappings = (
+            mappings
+            if mappings is not None
+            else self.entry.options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
+        )
+        if not isinstance(active_mappings, dict):
+            active_mappings = {}
         known_entity_ids = {state.entity_id for state in self.hass.states.async_all()}
         entity_names = entity_display_name_by_id(self.hass)
         area_names = area_name_by_id(self.hass)
@@ -367,7 +377,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.device_control_mapping_gaps = []
         for device in requested_controllable_devices(configuration):
             report = mapping_report(
-                device.get("control_type"), mappings.get(device["key"]),
+                device.get("control_type"), active_mappings.get(device["key"]),
                 known_entity_ids,
                 entity_names,
                 area_names,
@@ -393,6 +403,20 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             },
         )
+
+    def options_update_requires_reload(self) -> bool:
+        """Apply mapping-only option changes live; reload for everything else."""
+        current = dict(self.entry.options)
+        keys = set(self._loaded_options) | set(current)
+        changed = {
+            key for key in keys if self._loaded_options.get(key) != current.get(key)
+        }
+        self._loaded_options = current
+        live_keys = {
+            OPT_CONFIGURATION_REVIEWED_AT,
+            OPT_DEVICE_CONTROL_MAPPINGS,
+        }
+        return bool(changed - live_keys)
 
     def optimisation_input_gap_is_transient(self) -> bool:
         """Return whether entity providers may still be starting up."""
@@ -542,6 +566,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         stored: dict[str, Any],
         devices: list[dict[str, Any]],
         result: dict[str, Any],
+        mappings: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Persist one authoritative website configuration response."""
         configurations = result.get("device_configuration")
@@ -570,7 +595,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for device in devices
         }
         stored["optimisation_device_configuration"] = configuration
-        self._sync_device_control_issue(configuration)
+        self._sync_device_control_issue(configuration, mappings)
         return configuration
 
     async def async_refresh_device_configuration(self) -> list[dict[str, Any]]:
@@ -605,7 +630,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             await self._store.async_save(stored)
             self.async_update_listeners()
-            return requested_controllable_devices(configuration)
+            requested = requested_controllable_devices(configuration)
+        if resolved_options(
+            self.hass, dict(self.entry.options)
+        )[OPT_PLANNING_MODE] == PLANNING_MODE_LIVE:
+            await self.async_optimisation_push(force_plan=True)
+        return requested
 
     async def async_report_device_mapping(
         self,
@@ -619,7 +649,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result = await self.client.push_optimisation(
                 [], None, devices, device_inventory_complete=True
             )
-            configuration = self._record_device_exchange(stored, devices, result)
+            configuration = self._record_device_exchange(
+                stored, devices, result, mappings
+            )
             await self._store.async_save(stored)
             self.async_update_listeners()
             reported = next(
