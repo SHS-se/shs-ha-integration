@@ -41,9 +41,11 @@ from math import isfinite
 from typing import Any
 
 try:  # pragma: no cover - exercised by both import paths
+    from .device_controls import is_room_thermal_control
     from .optimisation import quarter_start
 except ImportError:  # The test suite imports these helpers as flat modules,
     # without Home Assistant installed, so the package parent does not exist.
+    from device_controls import is_room_thermal_control  # type: ignore[no-redef]
     from optimisation import quarter_start  # type: ignore[no-redef]
 
 SLOT = timedelta(minutes=15)
@@ -317,22 +319,25 @@ def thermal_zone_inputs(
     devices: Sequence[dict[str, Any]],
     mappings: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
-    """Group website-selected setpoint devices into Home Assistant rooms.
+    """Group website-selected thermal devices into Home Assistant rooms.
 
     The website owns which devices are controllable; Home Assistant owns the
     room and entity ids. Multiple energy meters and heaters may serve the same
     room; their actuator history becomes one room observation. Only devices
-    where both sides agree on ``setpoint`` are read, so a pending or
-    mismatched mapping never contributes observations.
+    where both sides agree on the control contract are read, so a pending or
+    mismatched mapping never contributes observations. Reversible air
+    conditioners are thermal controls even when their meter category is
+    ``cooling``.
     """
     inputs: dict[str, dict[str, Any]] = {}
     for device in devices:
-        if device.get("control_type") != "setpoint":
+        control_type = device.get("control_type")
+        if not is_room_thermal_control(control_type, device.get("category")):
             continue
         if device.get("planning_role") != "controllable":
             continue
         mapping = mappings.get(str(device["key"])) or {}
-        if mapping.get("control_type") != "setpoint":
+        if mapping.get("control_type") != control_type:
             continue
         mapping_summary = device.get("mapping_summary") or {}
         area_id = mapping_summary.get("room_key")

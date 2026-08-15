@@ -28,7 +28,7 @@ from .configuration import (
     resolved_options,
     suggest_device_control_mapping,
 )
-from .device_controls import mapping_report
+from .device_controls import is_room_thermal_control, mapping_report
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ PANEL_URL = "shs-energy"
 PANEL_ELEMENT = "shs-energy-config-panel-v3"
 STATIC_URL = "/shs_energy_frontend"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
-FRONTEND_ASSET_VERSION = "0.7.0-beta.5"
+FRONTEND_ASSET_VERSION = "0.7.0-beta.6"
 
 
 def _field(
@@ -89,6 +89,16 @@ POWER_FIELD = _field(
     help_text="Choose a power sensor, or enter reviewed watts directly.",
 )
 
+TEMPERATURE_FIELD = _field(
+    "temperature_entity_id",
+    "Room or process temperature",
+    "entity",
+    domains=("sensor", "climate"),
+    required=True,
+    help_text="The measured temperature used to learn how this zone responds.",
+)
+
+
 def _number_control_fields() -> tuple[dict[str, Any], ...]:
     """Describe the shared variable-power number-entity contract."""
     return (
@@ -123,14 +133,7 @@ def _number_control_fields() -> tuple[dict[str, Any], ...]:
 
 CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
     "setpoint": (
-        _field(
-            "temperature_entity_id",
-            "Room or process temperature",
-            "entity",
-            domains=("sensor", "climate"),
-            required=True,
-            help_text="The measured temperature used to learn how this zone responds.",
-        ),
+        TEMPERATURE_FIELD,
         _field(
             "setpoint_entity_id",
             "Direct setpoint",
@@ -201,6 +204,18 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
     ),
     "variable_power": _number_control_fields(),
 }
+
+
+def _control_fields(device: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """Return the control contract, adding room inputs to on/off heaters."""
+    control_type = str(device.get("control_type") or "")
+    fields = CONTROL_FIELDS.get(control_type, ())
+    if (
+        is_room_thermal_control(control_type, str(device.get("category") or ""))
+        and control_type != "setpoint"
+    ):
+        return (TEMPERATURE_FIELD, *fields)
+    return fields
 
 
 def _configuration_sections() -> list[dict[str, Any]]:
@@ -442,6 +457,9 @@ async def _configuration_payload(
             entity_names,
             area_names,
             entity_area_ids,
+            room_control=is_room_thermal_control(
+                control_type, str(device.get("category") or "")
+            ),
         )
         devices.append(
             {
@@ -462,7 +480,7 @@ async def _configuration_payload(
                 "suggested_mapping": _mapping_suggestions(
                     hass, device, control_type
                 ),
-                "fields": list(CONTROL_FIELDS.get(control_type, ())),
+                "fields": list(_control_fields(device)),
                 **report,
             }
         )
@@ -470,17 +488,19 @@ async def _configuration_payload(
     ready_devices = [
         device for device in devices if device["mapping_status"] == "ready"
     ]
-    setpoint_devices = [
-        device for device in devices if device["control_type"] == "setpoint"
-    ]
-    ready_setpoint_devices = [
+    thermal_devices = [
         device
-        for device in setpoint_devices
+        for device in devices
+        if is_room_thermal_control(device["control_type"], device.get("category"))
+    ]
+    ready_thermal_devices = [
+        device
+        for device in thermal_devices
         if device["mapping_status"] == "ready"
     ]
     mapped_room_keys = {
         device["mapping_summary"].get("room_key")
-        for device in ready_setpoint_devices
+        for device in ready_thermal_devices
         if isinstance(device.get("mapping_summary"), dict)
         and isinstance(device["mapping_summary"].get("room_key"), str)
     }
@@ -490,9 +510,9 @@ async def _configuration_payload(
     forecast_ready = bool(weather_entity and weather_entity in known_entity_ids)
     thermal_slots = int(coordinator.last_thermal_slots_accepted or 0)
     thermal_accepted_until = exchange_status.get("thermal_slots_accepted_until")
-    if not setpoint_devices:
+    if not thermal_devices:
         thermal_status = "not_requested"
-    elif len(ready_setpoint_devices) != len(setpoint_devices):
+    elif len(ready_thermal_devices) != len(thermal_devices):
         thermal_status = "device_mappings_required"
     elif not outdoor_ready or not forecast_ready:
         thermal_status = "outdoor_sources_required"
@@ -539,8 +559,8 @@ async def _configuration_payload(
         },
         "thermal": {
             "status": thermal_status,
-            "requested_zones": len(setpoint_devices),
-            "mapped_zones": len(ready_setpoint_devices),
+            "requested_zones": len(thermal_devices),
+            "mapped_zones": len(ready_thermal_devices),
             "mapped_rooms": len(mapped_room_keys),
             "outdoor_temperature_entity": outdoor_entity,
             "outdoor_temperature_ready": outdoor_ready,
@@ -558,7 +578,7 @@ async def _configuration_payload(
                     "mapping_status": device["mapping_status"],
                     "mapping_error": device["mapping_error"],
                 }
-                for device in setpoint_devices
+                for device in thermal_devices
             ],
         },
         "diagnostics": {
@@ -708,7 +728,7 @@ def _normalise_device_mapping(
         )
 
     normalised: dict[str, Any] = {"control_type": control_type}
-    for field in CONTROL_FIELDS[control_type]:
+    for field in _control_fields(device):
         key = field["key"]
         if key not in mapping:
             continue
@@ -728,6 +748,9 @@ def _normalise_device_mapping(
         entity_display_name_by_id(hass),
         area_name_by_id(hass),
         entity_area_id_by_id(hass),
+        room_control=is_room_thermal_control(
+            control_type, str(device.get("category") or "")
+        ),
     )
     if report["mapping_status"] != "ready":
         raise ValueError(

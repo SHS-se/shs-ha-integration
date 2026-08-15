@@ -242,6 +242,21 @@ class ZoneInputTests(unittest.TestCase):
             ["climate.kitchen_floor", "switch.kitchen_radiator"],
         )
 
+    def test_reads_a_reversible_on_off_aircon_as_a_room_control(self) -> None:
+        device = self._device(
+            control_type="switch_schedule",
+            category="cooling",
+        )
+        mappings = {
+            "kitchen": {
+                "control_type": "switch_schedule",
+                "temperature_entity_id": "sensor.kitchen_temperature",
+                "actuator_entity_ids": ["climate.kitchen_aircon"],
+            }
+        }
+        zones = thermal_zone_inputs([device], mappings)
+        self.assertEqual(zones["kitchen_area"]["device_keys"], ["kitchen"])
+
     def test_skips_a_mapping_of_a_different_control_type(self) -> None:
         mappings = {
             "kitchen": {

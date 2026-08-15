@@ -66,6 +66,7 @@ from .const import (
     OPT_TERMINAL_ENERGY_VALUE,
     OPT_TERMINAL_SOC_MIN,
 )
+from .device_controls import is_room_thermal_control
 from .optimisation import suggested_device_planning, suggested_load_type
 
 
@@ -402,11 +403,12 @@ def suggest_device_control_mapping(
         hass, device, domains=("sensor",), field_tokens=("power", "effekt"),
         units=("W", "kW"),
     ))
-    if control_type == "setpoint":
+    if is_room_thermal_control(control_type, str(device.get("category") or "")):
         set_if_found("temperature_entity_id", _suggest_control_entities(
             hass, device, domains=("sensor", "climate"),
             field_tokens=("temperature", "temp", "temperatur"), units=("°C",),
         ))
+    if control_type == "setpoint":
         set_if_found("setpoint_entity_id", _suggest_control_entities(
             hass, device, domains=("number", "input_number", "climate"),
             field_tokens=("setpoint", "target temp", "target temperature", "börvärde"),

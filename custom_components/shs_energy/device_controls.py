@@ -18,6 +18,13 @@ CONTROL_TYPES = (
 )
 
 
+def is_room_thermal_control(control_type: str | None, category: str | None) -> bool:
+    """Return whether one requested device belongs to a room heat model."""
+    return control_type == "setpoint" or (
+        control_type == "switch_schedule" and category in ("heating", "cooling")
+    )
+
+
 def _text(mapping: dict[str, Any], key: str) -> bool:
     return isinstance(mapping.get(key), str) and bool(mapping[key].strip())
 
@@ -54,7 +61,12 @@ def _power_source(mapping: dict[str, Any]) -> bool:
     )
 
 
-def mapping_errors(mapping: dict[str, Any], control_type: str) -> list[str]:
+def mapping_errors(
+    mapping: dict[str, Any],
+    control_type: str,
+    *,
+    room_control: bool = False,
+) -> list[str]:
     """Return structural mapping errors for one control contract."""
     if control_type not in CONTROL_TYPES:
         return ["unsupported control type"]
@@ -62,9 +74,11 @@ def mapping_errors(mapping: dict[str, Any], control_type: str) -> list[str]:
         return ["the saved mapping belongs to a different control type"]
 
     errors: list[str] = []
+    if (control_type == "setpoint" or room_control) and not _text(
+        mapping, "temperature_entity_id"
+    ):
+        errors.append("room temperature entity is required")
     if control_type == "setpoint":
-        if not _text(mapping, "temperature_entity_id"):
-            errors.append("room temperature entity is required")
         if not _entities(mapping, "actuator_entity_ids"):
             errors.append("at least one heater or climate actuator is required")
     elif control_type == "permit_inhibit":
@@ -105,6 +119,8 @@ def mapping_report(
     entity_names: dict[str, str] | None = None,
     area_names: dict[str, str] | None = None,
     entity_area_ids: dict[str, str] | None = None,
+    *,
+    room_control: bool = False,
 ) -> dict[str, Any]:
     """Build the privacy-minimised status uploaded to the website."""
     if requested_control_type not in CONTROL_TYPES or not mapping:
@@ -122,7 +138,12 @@ def mapping_report(
             "mapping_error": None,
             "mapping_summary": {},
         }
-    errors = mapping_errors(mapping, requested_control_type)
+    room_control = requested_control_type == "setpoint" or room_control
+    errors = mapping_errors(
+        mapping,
+        requested_control_type,
+        room_control=room_control,
+    )
     configured_entity_ids = {
         entity_id
         for key, value in mapping.items()
@@ -137,7 +158,7 @@ def mapping_report(
     ):
         errors.append("one or more configured entities no longer exist")
     area_id: str | None = None
-    if requested_control_type == "setpoint":
+    if room_control:
         actuators = [
             value
             for value in mapping.get("actuator_entity_ids", [])
@@ -190,7 +211,7 @@ def mapping_report(
             key for key, value in mapping.items() if key != "control_type" and value
         ),
     }
-    if requested_control_type == "setpoint" and isinstance(area_id, str):
+    if room_control and isinstance(area_id, str):
         summary.update(
             {
                 "room_key": area_id,
@@ -243,6 +264,10 @@ def apply_requested_configuration(
             entity_names,
             area_names,
             entity_area_ids,
+            room_control=is_room_thermal_control(
+                requested_control,
+                str(device.get("category") or configuration.get("category") or ""),
+            ),
         )
         device["load_type"] = configuration.get(
             "load_type", device["suggested_load_type"]

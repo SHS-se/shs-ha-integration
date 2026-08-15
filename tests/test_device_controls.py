@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_en
 
 from device_controls import (  # noqa: E402
     apply_requested_configuration,
+    is_room_thermal_control,
     mapping_report,
     requested_controllable_devices,
 )
@@ -142,6 +143,36 @@ class DeviceControlMappingTests(unittest.TestCase):
         })
         self.assertEqual(report["mapping_status"], "ready")
         self.assertEqual(report["mapping_summary"]["reviewed_power_w"], 3600)
+
+    def test_on_off_heat_pump_is_mapped_to_its_actuator_room(self) -> None:
+        self.assertTrue(is_room_thermal_control("switch_schedule", "cooling"))
+        report = mapping_report(
+            "switch_schedule",
+            {
+                "control_type": "switch_schedule",
+                "temperature_entity_id": "sensor.entrance_temperature",
+                "actuator_entity_ids": ["climate.entrance_aircon"],
+            },
+            area_names={"entrance": "Entrance"},
+            entity_area_ids={"climate.entrance_aircon": "entrance"},
+            room_control=True,
+        )
+        self.assertEqual(report["mapping_status"], "ready")
+        self.assertEqual(report["mapping_summary"]["room_key"], "entrance")
+
+    def test_room_on_off_control_requires_a_temperature_source(self) -> None:
+        report = mapping_report(
+            "switch_schedule",
+            {
+                "control_type": "switch_schedule",
+                "actuator_entity_ids": ["switch.office_heater"],
+            },
+            area_names={"office": "Office"},
+            entity_area_ids={"switch.office_heater": "office"},
+            room_control=True,
+        )
+        self.assertEqual(report["mapping_status"], "invalid")
+        self.assertIn("room temperature entity is required", report["mapping_error"])
 
 
 if __name__ == "__main__":

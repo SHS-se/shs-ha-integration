@@ -108,6 +108,7 @@ from .configuration import (
 )
 from .device_controls import (
     apply_requested_configuration,
+    is_room_thermal_control,
     mapping_report,
     requested_controllable_devices,
 )
@@ -382,6 +383,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 entity_names,
                 area_names,
                 entity_area_ids,
+                room_control=is_room_thermal_control(
+                    device.get("control_type"), device.get("category")
+                ),
             )
             if report["mapping_status"] != "ready":
                 self.device_control_mapping_gaps.append(
@@ -621,6 +625,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     {state.entity_id for state in self.hass.states.async_all()},
                     entity_display_name_by_id(self.hass),
                     area_name_by_id(self.hass),
+                    entity_area_id_by_id(self.hass),
                 )
                 result = await self.client.push_optimisation(
                     [], None, devices, device_inventory_complete=True
