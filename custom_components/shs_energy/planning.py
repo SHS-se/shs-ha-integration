@@ -16,7 +16,7 @@ service actually controls, never from the whole meter category.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone, tzinfo
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 try:  # pragma: no cover - exercised by both import paths
     from .const import (
@@ -31,9 +31,11 @@ try:  # pragma: no cover - exercised by both import paths
         OPT_EV_SOC_ENTITY,
         OPT_EV_TARGET_SOC_ENTITY,
     )
-    from .device_controls import planning_path
+    from .const import OPTIMISATION_PROFILE_DAYS
+    from .device_controls import CONTROL_TYPES, planning_path
     from .optimisation import (
         OptimisationInputError,
+        build_empirical_device_profile,
         daily_requirement,
         discrete_current_control,
         normalized_fraction,
@@ -57,9 +59,14 @@ except ImportError:  # The test suite imports these helpers as flat modules,
         OPT_EV_SOC_ENTITY,
         OPT_EV_TARGET_SOC_ENTITY,
     )
-    from device_controls import planning_path  # type: ignore[no-redef]
+    from const import OPTIMISATION_PROFILE_DAYS  # type: ignore[no-redef]
+    from device_controls import (  # type: ignore[no-redef]
+        CONTROL_TYPES,
+        planning_path,
+    )
     from optimisation import (  # type: ignore[no-redef]
         OptimisationInputError,
+        build_empirical_device_profile,
         daily_requirement,
         discrete_current_control,
         normalized_fraction,
@@ -73,6 +80,8 @@ except ImportError:  # The test suite imports these helpers as flat modules,
 # Reads one entity as ``{"state": str, "attributes": dict}``, raising
 # OptimisationInputError when it is missing or unavailable.
 EntityReader = Callable[[str], dict[str, Any]]
+# Resolves one control mapping's reviewed watts, or its live power sensor.
+PowerReader = Callable[[dict[str, Any]], Optional[float]]
 
 
 def build_services(
@@ -422,3 +431,108 @@ def build_services(
             })
     validate_service_windows(services, horizon)
     return services, samples, ev_battery
+
+
+def build_device_models(
+    devices: list[dict[str, Any]],
+    device_actuals: list[dict[str, Any]],
+    horizon: list[datetime],
+    control_mappings: dict[str, Any],
+    *,
+    mapped_power_w: PowerReader,
+    local_tz: tzinfo,
+) -> list[dict[str, Any]]:
+    """Return the controllable models, learning each device's recent profile.
+
+    Every device is inspected before anything is raised, so a multi-device
+    setup is not repaired one rediscovered failure at a time.
+
+    Each entry of ``devices`` is updated in place with the power, sample count
+    and inference just learned. That is load-bearing rather than incidental:
+    the caller uploads the same list and persists those fields as the device
+    metadata for the next run.
+    """
+    device_models: list[dict[str, Any]] = []
+    # Every device is inspected before anything is raised. One device's gap
+    # used to hide the rest, which turned a multi-device setup into a queue
+    # of one-at-a-time repairs.
+    device_gaps: list[str] = []
+    for device in devices:
+        planning_role = device["planning_role"]
+        control_type = device["control_type"]
+        if (
+            planning_role == "base_load" and control_type is not None
+        ) or (
+            planning_role == "controllable"
+            and control_type not in CONTROL_TYPES
+        ) or planning_role not in ("base_load", "controllable"):
+            device_gaps.append(
+                f"{device['name']} has an invalid planning role or control type"
+            )
+            continue
+        try:
+            empirical = {
+                day_type: build_empirical_device_profile(
+                    device_actuals,
+                    device["key"],
+                    str(local_tz),
+                    minimum_samples=2,
+                    day_type=day_type,
+                )
+                for day_type in ("weekday", "weekend")
+            }
+        except OptimisationInputError:
+            if planning_role == "controllable":
+                device_gaps.append(
+                    f"{device['name']} needs a complete empirical profile "
+                    "before it can be controllable"
+                )
+            continue
+        active_values = [
+            profile["active_power_w"] for profile in empirical.values()
+            if profile["active_power_w"] is not None
+        ]
+        empirical_active_power_w = (
+            round(sum(active_values) / len(active_values), 1)
+            if active_values else None
+        )
+        mapping = control_mappings.get(str(device["key"]), {})
+        mapped_power_w = mapped_power_w(
+            mapping if isinstance(mapping, dict) else {}
+        )
+        active_power_w = (
+            round(mapped_power_w, 1)
+            if mapped_power_w is not None
+            else empirical_active_power_w
+        )
+        profile_sample_count = sum(
+            int(profile["sample_count"]) for profile in empirical.values()
+        )
+        device["active_power_w"] = active_power_w
+        device["profile_sample_count"] = profile_sample_count
+        device["inference"] = {
+            **device["inference"],
+            "history_days": OPTIMISATION_PROFILE_DAYS,
+            "profile": "weekday_weekend_trimmed_mean_v1",
+        }
+        if planning_role == "base_load":
+            continue
+        forecast_w: list[float] = []
+        for start in horizon:
+            local = start.astimezone(local_tz)
+            day_type = "weekend" if local.weekday() >= 5 else "weekday"
+            forecast_w.append(empirical[day_type]["expected_w"][
+                local.hour * 4 + local.minute // 15
+            ])
+        device_models.append({
+            **device,
+            "load_type": device.get(
+                "load_type", device["suggested_load_type"]
+            ),
+            "planning_role": "controllable",
+            "control_type": control_type,
+            "forecast_w_by_slot": forecast_w,
+        })
+    if device_gaps:
+        raise OptimisationInputError(*device_gaps)
+    return device_models

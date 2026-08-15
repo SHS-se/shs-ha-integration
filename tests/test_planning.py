@@ -16,7 +16,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
 from optimisation import OptimisationInputError  # noqa: E402
-from planning import build_services  # noqa: E402
+from planning import build_device_models, build_services  # noqa: E402
 
 TODAY = date(2026, 8, 15)
 START = datetime(2026, 8, 15, 0, 0, tzinfo=timezone.utc)
@@ -317,6 +317,109 @@ class ServiceRoutingTests(unittest.TestCase):
         self.assertEqual(services, [])
         self.assertEqual(samples, {})
         self.assertIsNone(battery)
+
+
+def inventory_device(
+    key: str,
+    planning_role: str,
+    control_type: str | None,
+    *,
+    category: str = "heating",
+) -> dict[str, object]:
+    return {
+        "key": key,
+        "name": key,
+        "statistic_id": key,
+        "category": category,
+        "planning_role": planning_role,
+        "control_type": control_type,
+        "suggested_load_type": "duty_cycle",
+        "active_power_w": None,
+        "profile_sample_count": 0,
+        "inference": {"source": "test"},
+    }
+
+
+def complete_history(*keys: str, kwh: float = 0.25) -> list[dict[str, object]]:
+    """Fourteen days of every quarter, so weekday and weekend both learn."""
+    start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    return [
+        {
+            "start": (start + timedelta(days=day, minutes=15 * quarter)).isoformat(),
+            "device_energy_kwh": {key: kwh for key in keys},
+        }
+        for day in range(14)
+        for quarter in range(96)
+    ]
+
+
+class DeviceModelTests(unittest.TestCase):
+    def build(self, devices, actuals, mappings=None, watts=None):
+        return build_device_models(
+            devices,
+            actuals,
+            HORIZON,
+            mappings or {},
+            mapped_power_w=lambda mapping: watts,
+            local_tz=timezone.utc,
+        )
+
+    def test_every_devices_gap_is_reported_in_one_pass(self) -> None:
+        # The whole point of the aggregation: fixing one problem must not be
+        # the only way to discover the next one.
+        devices = [
+            inventory_device("sensor.a", "base_load", "setpoint"),
+            inventory_device("sensor.b", "controllable", "nonsense"),
+            inventory_device("sensor.c", "controllable", "setpoint"),
+        ]
+        with self.assertRaises(OptimisationInputError) as caught:
+            self.build(devices, [])
+        self.assertEqual(len(caught.exception.reasons), 3)
+        self.assertIn("sensor.a has an invalid planning role", caught.exception.reasons[0])
+        self.assertIn("sensor.b has an invalid planning role", caught.exception.reasons[1])
+        self.assertIn("sensor.c needs a complete empirical profile", caught.exception.reasons[2])
+
+    def test_a_base_load_device_without_history_is_skipped_quietly(self) -> None:
+        devices = [inventory_device("sensor.quiet", "base_load", None)]
+        self.assertEqual(self.build(devices, []), [])
+
+    def test_a_controllable_device_becomes_a_model_for_every_slot(self) -> None:
+        devices = [inventory_device("sensor.heater", "controllable", "setpoint")]
+        models = self.build(devices, complete_history("sensor.heater"))
+        self.assertEqual(len(models), 1)
+        self.assertEqual(len(models[0]["forecast_w_by_slot"]), len(HORIZON))
+        # 0.25 kWh in a quarter is a 1 kW draw.
+        self.assertEqual(set(models[0]["forecast_w_by_slot"]), {1_000.0})
+        self.assertEqual(models[0]["planning_role"], "controllable")
+        self.assertEqual(models[0]["load_type"], "duty_cycle")
+
+    def test_a_base_load_device_is_measured_but_never_modelled(self) -> None:
+        devices = [inventory_device("sensor.fridge", "base_load", None)]
+        models = self.build(devices, complete_history("sensor.fridge"))
+        self.assertEqual(models, [])
+        self.assertIsNotNone(devices[0]["active_power_w"])
+
+    def test_learned_measurements_are_written_back_for_the_next_run(self) -> None:
+        # The caller uploads this same list and persists these fields, so the
+        # in-place update is part of the contract rather than a side effect.
+        devices = [inventory_device("sensor.heater", "controllable", "setpoint")]
+        self.build(devices, complete_history("sensor.heater"))
+        self.assertEqual(devices[0]["active_power_w"], 1_000.0)
+        self.assertGreater(devices[0]["profile_sample_count"], 0)
+        self.assertEqual(
+            devices[0]["inference"]["profile"], "weekday_weekend_trimmed_mean_v1"
+        )
+        self.assertEqual(devices[0]["inference"]["source"], "test")
+
+    def test_reviewed_watts_win_over_the_learned_average(self) -> None:
+        devices = [inventory_device("sensor.heater", "controllable", "setpoint")]
+        self.build(
+            devices,
+            complete_history("sensor.heater"),
+            mappings={"sensor.heater": {"power": 4_321}},
+            watts=4_321.0,
+        )
+        self.assertEqual(devices[0]["active_power_w"], 4_321.0)
 
 
 if __name__ == "__main__":
