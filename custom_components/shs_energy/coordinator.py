@@ -102,10 +102,10 @@ from .device_controls import (
     apply_requested_configuration,
     is_room_thermal_control,
     mapping_report,
+    planning_path,
     requested_controllable_devices,
 )
 from .optimisation import (
-    ACTUAL_FIELD_BY_CATEGORY,
     OptimisationInputError,
     aggregate_category_changes,
     aggregate_device_changes,
@@ -120,6 +120,8 @@ from .optimisation import (
     parse_number,
     quarter_start,
     require_fresh_source,
+    service_daily_energy,
+    service_energy_today,
     state_is_on,
     utc_slots,
     validate_plan_contract,
@@ -1589,29 +1591,28 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for key, statistic_id in statistic_by_key.items()
         })
 
-    async def _daily_category_totals(
+    async def _daily_meter_totals(
         self,
         entities_by_category: dict[str, list[str]],
         start: datetime,
         end: datetime,
     ) -> dict[str, dict[str, float]]:
+        """Return ``{local_date: {entity_id: change_kwh}}`` per configured meter.
+
+        Services are sized from the individual meters they control, so this
+        stays per meter rather than pre-summing a category whose members may
+        belong to different planning models.
+        """
         all_entities = sorted(
             {entity for values in entities_by_category.values() for entity in values}
         )
-        per_day = await self._daily_changes(all_entities, start, end)
-        result: dict[str, dict[str, float]] = {}
-        for day, entity_values in per_day.items():
-            for category, entity_ids in entities_by_category.items():
-                values = [entity_values[value] for value in entity_ids if value in entity_values]
-                if values and len(values) == len(entity_ids):
-                    result.setdefault(category, {})[day] = sum(values)
-        return result
+        return await self._daily_changes(all_entities, start, end)
 
     def _build_services(
         self,
         options: dict[str, Any],
-        daily_totals: dict[str, dict[str, float]],
-        actuals: list[dict[str, Any]],
+        daily_changes: dict[str, dict[str, float]],
+        device_actuals: list[dict[str, Any]],
         horizon: list[datetime],
         device_models: list[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any] | None]:
@@ -1619,13 +1620,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         first = horizon[0]
         end = horizon[-1] + timedelta(minutes=15)
         today = dt_util.now().date()
-        done_today: dict[str, float] = {}
-        for category, field in ACTUAL_FIELD_BY_CATEGORY.items():
-            done_today[category] = sum(
-                float(row.get(field) or 0)
-                for row in actuals
-                if datetime.fromisoformat(row["start"]).astimezone(local_tz).date() == today
-            )
 
         services: list[dict[str, Any]] = []
         samples: dict[str, int] = {}
@@ -1635,17 +1629,18 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise OptimisationInputError("device control mappings must be an object")
 
         def mapped_controls(
-            category: str,
-            control_type: str,
+            path: str,
         ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+            """Return the models one planning model owns, with their mappings.
+
+            Selection is by control contract, never by meter category: the same
+            category may hold both a deferrable service and a room heater.
+            """
             pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
             for model in device_models:
-                if model["category"] != category:
+                if planning_path(model["control_type"], model["category"]) != path:
                     continue
-                if model["control_type"] != control_type:
-                    raise OptimisationInputError(
-                        f"{model['name']} must use {control_type} control"
-                    )
+                control_type = model["control_type"]
                 mapping = raw_mappings.get(str(model["key"]))
                 if (
                     not isinstance(mapping, dict)
@@ -1657,13 +1652,31 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 pairs.append((model, mapping))
             return pairs
 
+        def measured_daily_kwh(
+            controls: list[tuple[dict[str, Any], dict[str, Any]]],
+        ) -> dict[str, float]:
+            return service_daily_energy(
+                daily_changes,
+                (str(model["statistic_id"]) for model, _mapping in controls),
+            )
+
+        def completed_today_kwh(
+            controls: list[tuple[dict[str, Any], dict[str, Any]]],
+        ) -> float:
+            return service_energy_today(
+                device_actuals,
+                (str(model["key"]) for model, _mapping in controls),
+                today,
+                local_tz,
+            )
+
         def required_entity(option_key: str, label: str) -> str:
             entity_id = options.get(option_key)
             if not isinstance(entity_id, str) or not entity_id.strip():
                 raise OptimisationInputError(f"{label} is not configured")
             return entity_id
 
-        pool_controls = mapped_controls("pool_heating", "switch_schedule")
+        pool_controls = mapped_controls("pool")
         if pool_controls:
             category = "pool_heating"
             device = "pool"
@@ -1683,9 +1696,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                 minimum_run = max(minimum_run, int(parsed))
             requirement, count = daily_requirement(
-                daily_totals.get(category, {}), category
+                measured_daily_kwh(pool_controls), category
             )
             samples[category] = count
+            completed_today = completed_today_kwh(pool_controls)
             by_day: dict[date, list[int]] = {}
             for index, slot in enumerate(horizon):
                 by_day.setdefault(slot.astimezone(local_tz).date(), []).append(index)
@@ -1699,7 +1713,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     continue
                 required = requirement
                 if day == today:
-                    required = max(0.0, requirement - done_today.get(category, 0.0))
+                    required = max(0.0, requirement - completed_today)
                 if required <= 0:
                     continue
                 earliest = horizon[indices[0]]
@@ -1728,7 +1742,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "baseline_preferred_start": baseline.isoformat(),
                 })
 
-        boiler_controls = mapped_controls("hot_water", "permit_inhibit")
+        boiler_controls = mapped_controls("boiler")
         if boiler_controls:
             boiler_models = [model for model, _mapping in boiler_controls]
             expected_w = [
@@ -1781,7 +1795,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "priority": 1,
                 })
 
-        ev_controls = mapped_controls("ev_charging", "variable_power")
+        ev_controls = mapped_controls("ev")
         if ev_controls:
             connected_id = required_entity(
                 OPT_EV_CONNECTED_ENTITY,
@@ -2094,6 +2108,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not isinstance(control_mappings, dict):
             raise OptimisationInputError("device control mappings must be an object")
         device_models: list[dict[str, Any]] = []
+        # Every device is inspected before anything is raised. One device's gap
+        # used to hide the rest, which turned a multi-device setup into a queue
+        # of one-at-a-time repairs.
+        device_gaps: list[str] = []
         for device in devices:
             planning_role = device["planning_role"]
             control_type = device["control_type"]
@@ -2106,9 +2124,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "setpoint",
                 )
             ) or planning_role not in ("base_load", "controllable"):
-                raise OptimisationInputError(
+                device_gaps.append(
                     f"{device['name']} has an invalid planning role or control type"
                 )
+                continue
             try:
                 empirical = {
                     day_type: build_empirical_device_profile(
@@ -2120,12 +2139,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                     for day_type in ("weekday", "weekend")
                 }
-            except OptimisationInputError as err:
+            except OptimisationInputError:
                 if planning_role == "controllable":
-                    raise OptimisationInputError(
+                    device_gaps.append(
                         f"{device['name']} needs a complete empirical profile "
                         "before it can be controllable"
-                    ) from err
+                    )
                 continue
             active_values = [
                 profile["active_power_w"] for profile in empirical.values()
@@ -2172,6 +2191,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "control_type": control_type,
                 "forecast_w_by_slot": forecast_w,
             })
+        if device_gaps:
+            raise OptimisationInputError(*device_gaps)
         modelled_device_keys = tuple(
             str(model["key"]) for model in device_models
         )
@@ -2192,15 +2213,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for value in profile
         )
 
-        daily_totals = await self._daily_category_totals(
+        daily_meter_totals = await self._daily_meter_totals(
             entities_by_category,
             dt_util.start_of_local_day() - timedelta(days=30),
             dt_util.start_of_local_day(),
         )
         services, service_samples, ev_battery = self._build_services(
             options,
-            daily_totals,
-            profile_actuals,
+            daily_meter_totals,
+            device_profile_actuals,
             horizon,
             device_models,
         )
@@ -2304,24 +2325,18 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 OPT_BATTERY_DISCHARGE_EFFICIENCY,
             ),
         }
+        # Derived from the same routing the services were built from, so a
+        # capability can never claim a service the snapshot does not carry.
+        planned_paths = {
+            planning_path(model["control_type"], model["category"])
+            for model in device_models
+        }
         capabilities = {
             "pv": bool(pv_entities),
             "battery": battery is not None,
-            "pool": any(
-                model["category"] == "pool_heating"
-                and model["control_type"] == "switch_schedule"
-                for model in device_models
-            ),
-            "boiler": any(
-                model["category"] == "hot_water"
-                and model["control_type"] == "permit_inhibit"
-                for model in device_models
-            ),
-            "ev": any(
-                model["category"] == "ev_charging"
-                and model["control_type"] == "variable_power"
-                for model in device_models
-            ),
+            "pool": "pool" in planned_paths,
+            "boiler": "boiler" in planned_paths,
+            "ev": "ev" in planned_paths,
         }
         base_source_categories = (
             "total_consumption", "grid_import", "grid_export",
@@ -2576,7 +2591,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         except (OptimisationInputError, KeyError, TypeError, ValueError) as err:
                             snapshot_error = str(err)
                             if not self.optimisation_missing_inputs:
-                                self.optimisation_missing_inputs = [snapshot_error]
+                                self.optimisation_missing_inputs = list(
+                                    getattr(err, "reasons", None) or [snapshot_error]
+                                )
                             self._sync_optimisation_issue()
                             _LOGGER.warning("Optimisation plan skipped: %s", err)
                     else:

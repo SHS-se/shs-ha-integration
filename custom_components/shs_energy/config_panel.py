@@ -32,6 +32,7 @@ from .device_controls import (
     MAPPING_SCHEMA_VERSION,
     MAPPING_SCHEMA_VERSION_FIELD,
     MIGRATED_ROOM_AREA_FIELD,
+    apply_planner_support,
     is_room_thermal_control,
     mapping_report,
     migrate_device_control_mapping,
@@ -483,16 +484,20 @@ async def _configuration_payload(
             if isinstance(saved, dict) and saved.get("control_type") == control_type
             else {}
         )
-        report = mapping_report(
-            control_type,
-            saved,
-            known_entity_ids,
-            entity_names,
-            area_names,
-            entity_area_ids,
-            room_control=is_room_thermal_control(
-                control_type, str(device.get("category") or "")
+        report = apply_planner_support(
+            mapping_report(
+                control_type,
+                saved,
+                known_entity_ids,
+                entity_names,
+                area_names,
+                entity_area_ids,
+                room_control=is_room_thermal_control(
+                    control_type, str(device.get("category") or "")
+                ),
             ),
+            control_type,
+            str(device.get("category") or ""),
         )
         devices.append(
             {

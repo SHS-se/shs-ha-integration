@@ -182,6 +182,52 @@ def is_room_thermal_control(control_type: str | None, category: str | None) -> b
     )
 
 
+def planning_path(control_type: str | None, category: str | None) -> str | None:
+    """Return which planning model owns one controllable device.
+
+    This is the single authority on that routing. The website offers every
+    control type for every meter category, so a category never implies a
+    control contract: a pool-room floor heater metered as ``pool_heating`` but
+    asked to hold a setpoint belongs to its room's heat model, not to the pool
+    service. Callers that assumed the reverse turned one such pairing into a
+    whole-plan failure.
+
+    ``None`` means no model can plan the pairing, which keeps the meter in
+    base load instead of leaving it silently unscheduled.
+    """
+    if is_room_thermal_control(control_type, category):
+        return "room"
+    if control_type == "switch_schedule" and category == "pool_heating":
+        return "pool"
+    if control_type == "permit_inhibit" and category == "hot_water":
+        return "boiler"
+    if control_type == "variable_power" and category == "ev_charging":
+        return "ev"
+    return None
+
+
+def apply_planner_support(
+    report: dict[str, Any],
+    control_type: str | None,
+    category: str | None,
+) -> dict[str, Any]:
+    """Fail a locally complete mapping that no planning model can use."""
+    if report["mapping_status"] != "ready" or planning_path(
+        control_type, category
+    ) is not None:
+        return report
+    return {
+        **report,
+        "mapping_status": "invalid",
+        "mapping_error": (
+            f"the planner has no model for {str(control_type).replace('_', ' ')} "
+            f"control of a {str(category or 'unknown').replace('_', ' ')} meter; "
+            "choose another control type on the website or leave this meter in "
+            "base load"
+        ),
+    }
+
+
 def _text(mapping: dict[str, Any], key: str) -> bool:
     return isinstance(mapping.get(key), str) and bool(mapping[key].strip())
 
@@ -439,17 +485,21 @@ def apply_requested_configuration(
         configuration = requested.get(device["key"], {})
         requested_role = configuration.get("planning_role", "base_load")
         requested_control = configuration.get("control_type")
-        report = mapping_report(
-            requested_control if requested_role == "controllable" else None,
-            mappings.get(device["key"]),
-            known_entity_ids,
-            entity_names,
-            area_names,
-            entity_area_ids,
-            room_control=is_room_thermal_control(
-                requested_control,
-                str(device.get("category") or configuration.get("category") or ""),
+        category = str(
+            device.get("category") or configuration.get("category") or ""
+        )
+        report = apply_planner_support(
+            mapping_report(
+                requested_control if requested_role == "controllable" else None,
+                mappings.get(device["key"]),
+                known_entity_ids,
+                entity_names,
+                area_names,
+                entity_area_ids,
+                room_control=is_room_thermal_control(requested_control, category),
             ),
+            requested_control if requested_role == "controllable" else None,
+            category,
         )
         device["load_type"] = configuration.get(
             "load_type", device["suggested_load_type"]

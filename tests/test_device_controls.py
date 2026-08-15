@@ -13,6 +13,7 @@ from device_controls import (  # noqa: E402
     MIGRATED_ROOM_AREA_FIELD,
     apply_requested_configuration,
     is_room_thermal_control,
+    planning_path,
     mapping_report,
     migrate_device_control_mapping,
     migrate_device_control_mappings,
@@ -104,6 +105,7 @@ class DeviceControlMappingTests(unittest.TestCase):
     def test_ready_request_becomes_a_separate_controllable_device(self) -> None:
         devices = [{
             "key": "sensor.ev_energy",
+            "category": "ev_charging",
             "suggested_load_type": "variable_full_load",
         }]
         requested = {
@@ -345,6 +347,78 @@ class DeviceControlMappingTests(unittest.TestCase):
         )
         self.assertFalse(changed)
         self.assertEqual(migrated, current)
+
+
+class PlanningPathTests(unittest.TestCase):
+    def test_a_meter_category_never_dictates_the_control_contract(self) -> None:
+        # A floor heater metered as pool heating but asked to hold a setpoint
+        # belongs to its room, not to the pool service.
+        self.assertEqual(planning_path("setpoint", "pool_heating"), "room")
+        self.assertEqual(planning_path("switch_schedule", "pool_heating"), "pool")
+        self.assertEqual(planning_path("switch_schedule", "heating"), "room")
+        self.assertEqual(planning_path("permit_inhibit", "hot_water"), "boiler")
+        self.assertEqual(planning_path("variable_power", "ev_charging"), "ev")
+
+    def test_pairings_no_model_can_plan_are_named(self) -> None:
+        self.assertIsNone(planning_path("switch_schedule", "household"))
+        self.assertIsNone(planning_path("variable_power", "heating"))
+        self.assertIsNone(planning_path(None, "heating"))
+
+    def test_a_setpoint_pool_room_heater_stays_ready(self) -> None:
+        devices = [{
+            "key": "sensor.pool_room_floor_heater_energy",
+            "category": "pool_heating",
+            "suggested_load_type": "fixed_full_load",
+        }]
+        requested = {
+            "sensor.pool_room_floor_heater_energy": {
+                "planning_role": "controllable",
+                "control_type": "setpoint",
+            }
+        }
+        mappings = {
+            "sensor.pool_room_floor_heater_energy": {
+                "control_type": "setpoint",
+                "temperature_entity_id": "sensor.basement_bathroom_temperature",
+                "actuator_entity_ids": ["climate.pool_bathroom_floor_thermostat"],
+            }
+        }
+        apply_requested_configuration(
+            devices,
+            requested,
+            mappings,
+            area_names={"basement_bathroom": "Basement bathroom"},
+            entity_area_ids={
+                "climate.pool_bathroom_floor_thermostat": "basement_bathroom"
+            },
+        )
+        self.assertEqual(devices[0]["mapping_status"], "ready")
+        self.assertEqual(devices[0]["planning_role"], "controllable")
+        self.assertEqual(devices[0]["mapping_summary"]["room_key"], "basement_bathroom")
+
+    def test_an_unplannable_pairing_stays_in_base_load_with_a_reason(self) -> None:
+        devices = [{
+            "key": "sensor.washing_machine_energy",
+            "category": "household",
+            "suggested_load_type": "duty_cycle",
+        }]
+        requested = {
+            "sensor.washing_machine_energy": {
+                "planning_role": "controllable",
+                "control_type": "switch_schedule",
+            }
+        }
+        mappings = {
+            "sensor.washing_machine_energy": {
+                "control_type": "switch_schedule",
+                "actuator_entity_ids": ["switch.washing_machine"],
+                "power": 2000,
+            }
+        }
+        apply_requested_configuration(devices, requested, mappings)
+        self.assertEqual(devices[0]["mapping_status"], "invalid")
+        self.assertEqual(devices[0]["planning_role"], "base_load")
+        self.assertIn("no model for", devices[0]["mapping_error"])
 
 
 if __name__ == "__main__":

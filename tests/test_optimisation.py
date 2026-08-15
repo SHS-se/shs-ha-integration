@@ -21,6 +21,8 @@ from optimisation import (  # noqa: E402
     extract_timestamped_forecast,
     optimisation_plan_due,
     require_fresh_source,
+    service_daily_energy,
+    service_energy_today,
     suggested_device_planning,
     suggested_load_type,
     utc_slots,
@@ -581,3 +583,59 @@ class ModelVersionToleranceTests(unittest.TestCase):
 
     def test_an_unknown_planner_version_is_still_refused(self) -> None:
         self.assertNotIn("some-future-planner", SUPPORTED_OPTIMISATION_MODEL_VERSIONS)
+
+
+class ServiceMeteringTests(unittest.TestCase):
+    """A service is sized from its own meters, not from its meter category."""
+
+    daily = {
+        "2026-08-13": {
+            "sensor.pool_heater_energy": 8.0,
+            "sensor.pool_pump_energy": 2.0,
+            "sensor.pool_room_floor_heater_energy": 5.0,
+        },
+        "2026-08-14": {
+            "sensor.pool_heater_energy": 6.0,
+            "sensor.pool_pump_energy": 2.0,
+            "sensor.pool_room_floor_heater_energy": 4.0,
+        },
+    }
+
+    def test_a_room_heater_sharing_the_category_is_not_charged_to_the_service(
+        self,
+    ) -> None:
+        totals = service_daily_energy(
+            self.daily,
+            ["sensor.pool_heater_energy", "sensor.pool_pump_energy"],
+        )
+        self.assertEqual(totals, {"2026-08-13": 10.0, "2026-08-14": 8.0})
+
+    def test_a_day_missing_one_of_the_meters_is_dropped_not_undercounted(self) -> None:
+        daily = {**self.daily, "2026-08-15": {"sensor.pool_heater_energy": 7.0}}
+        totals = service_daily_energy(
+            daily,
+            ["sensor.pool_heater_energy", "sensor.pool_pump_energy"],
+        )
+        self.assertNotIn("2026-08-15", totals)
+
+    def test_energy_done_today_counts_only_this_service_s_devices(self) -> None:
+        rows = [
+            {
+                "start": "2026-08-15T06:00:00+00:00",
+                "device_energy_kwh": {
+                    "sensor.pool_heater_energy": 3.0,
+                    "sensor.pool_room_floor_heater_energy": 1.5,
+                },
+            },
+            {
+                "start": "2026-08-14T06:00:00+00:00",
+                "device_energy_kwh": {"sensor.pool_heater_energy": 9.0},
+            },
+        ]
+        done = service_energy_today(
+            rows,
+            {"sensor.pool_heater_energy", "sensor.pool_pump_energy"},
+            datetime(2026, 8, 15, tzinfo=timezone.utc).date(),
+            timezone.utc,
+        )
+        self.assertEqual(done, 3.0)

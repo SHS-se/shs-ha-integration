@@ -130,19 +130,13 @@ class SensorWiringTests(unittest.TestCase):
         self.assertNotIn("field.required_when", CONFIG_PANEL_FRONTEND)
         self.assertIn('"Optional departure timestamp"', sections)
         self.assertNotIn("departure timestamp entity is not configured", COORDINATOR)
-        self.assertIn(
-            'pool_controls = mapped_controls("pool_heating", "switch_schedule")',
-            COORDINATOR,
-        )
+        # Services are selected by planning path, never by meter category: a
+        # category may hold both a deferrable service and a room heater.
+        self.assertIn('pool_controls = mapped_controls("pool")', COORDINATOR)
         self.assertIn("if day_end > end:", COORDINATOR)
-        self.assertIn(
-            'boiler_controls = mapped_controls("hot_water", "permit_inhibit")',
-            COORDINATOR,
-        )
-        self.assertIn(
-            'ev_controls = mapped_controls("ev_charging", "variable_power")',
-            COORDINATOR,
-        )
+        self.assertIn('boiler_controls = mapped_controls("boiler")', COORDINATOR)
+        self.assertIn('ev_controls = mapped_controls("ev")', COORDINATOR)
+        self.assertNotIn("must use {control_type} control", COORDINATOR)
         self.assertNotIn('"id": "pool"', CONFIG_PANEL)
         self.assertNotIn('"id": "hot_water"', CONFIG_PANEL)
 

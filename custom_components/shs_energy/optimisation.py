@@ -43,7 +43,16 @@ ACTUAL_FIELD_BY_CATEGORY = {
 
 
 class OptimisationInputError(ValueError):
-    """A required optimisation input is absent or ambiguous."""
+    """A required optimisation input is absent or ambiguous.
+
+    ``reasons`` carries every independent gap found in one pass. Reporting them
+    together is what stops a multi-device setup from being repaired one
+    rediscovered failure at a time.
+    """
+
+    def __init__(self, *reasons: str) -> None:
+        super().__init__("; ".join(reasons))
+        self.reasons: list[str] = list(reasons)
 
 
 def suggested_load_type(name: str, category: str) -> tuple[str, dict[str, str]]:
@@ -555,6 +564,43 @@ def build_base_load_profile(
         }
         for quarter in range(96)
     ]
+
+
+def service_daily_energy(
+    daily_changes: dict[str, dict[str, float]],
+    statistic_ids: Iterable[str],
+) -> dict[str, float]:
+    """Daily energy on exactly the meters one service controls.
+
+    Sizing a service from its whole meter category over-states the requirement
+    whenever a sibling meter in that category is planned elsewhere — a room
+    heater sharing the pool category, say. A day missing any of the meters is
+    dropped rather than counted short.
+    """
+    wanted = list(statistic_ids)
+    totals: dict[str, float] = {}
+    for day, values in daily_changes.items():
+        measured = [values[value] for value in wanted if value in values]
+        if measured and len(measured) == len(wanted):
+            totals[day] = sum(measured)
+    return totals
+
+
+def service_energy_today(
+    device_actuals: list[dict[str, Any]],
+    device_keys: Iterable[str],
+    today: Any,
+    local_tz: Any,
+) -> float:
+    """Energy those same meters have already delivered today."""
+    wanted = set(device_keys)
+    return sum(
+        float(value)
+        for row in device_actuals
+        if datetime.fromisoformat(row["start"]).astimezone(local_tz).date() == today
+        for key, value in (row.get("device_energy_kwh") or {}).items()
+        if key in wanted
+    )
 
 
 def daily_requirement(
