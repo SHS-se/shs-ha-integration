@@ -23,6 +23,12 @@ COORDINATOR = (
     / "shs_energy"
     / "coordinator.py"
 ).read_text(encoding="utf-8")
+PLANNING = (
+    Path(__file__).parents[1]
+    / "custom_components"
+    / "shs_energy"
+    / "planning.py"
+).read_text(encoding="utf-8")
 CONFIGURATION = (
     Path(__file__).parents[1]
     / "custom_components"
@@ -105,11 +111,9 @@ class SensorWiringTests(unittest.TestCase):
             self.assertNotIn(retired_field, sections)
         self.assertIn("EV_PHASE_COUNT = 3", CONSTANTS)
         self.assertIn("EV_PHASE_VOLTAGE = 230.0", CONSTANTS)
-        self.assertIn("EV_PHASE_COUNT,", COORDINATOR)
-        self.assertIn("EV_PHASE_VOLTAGE,", COORDINATOR)
-        self.assertIn("options.get(OPT_EV_DEPARTURE_ENTITY)", COORDINATOR)
-        self.assertIn("planning_deadline = departure or end", COORDINATOR)
-        self.assertNotIn("OPT_EV_DEFAULT_DEPARTURE", COORDINATOR)
+        # The charging behaviour itself is covered by tests/test_planning.py,
+        # which executes it rather than reading the source.
+        self.assertNotIn("OPT_EV_DEFAULT_DEPARTURE", PLANNING)
         setup = INIT[INIT.index("async def async_setup_entry") :]
         self.assertIn(
             "RETIRED_PLANNING_OPTIONS.intersection(migrated_options)", setup
@@ -129,14 +133,11 @@ class SensorWiringTests(unittest.TestCase):
             self.assertNotIn(obsolete, sections)
         self.assertNotIn("field.required_when", CONFIG_PANEL_FRONTEND)
         self.assertIn('"Optional departure timestamp"', sections)
-        self.assertNotIn("departure timestamp entity is not configured", COORDINATOR)
-        # Services are selected by planning path, never by meter category: a
-        # category may hold both a deferrable service and a room heater.
-        self.assertIn('pool_controls = mapped_controls("pool")', COORDINATOR)
-        self.assertIn("if day_end > end:", COORDINATOR)
-        self.assertIn('boiler_controls = mapped_controls("boiler")', COORDINATOR)
-        self.assertIn('ev_controls = mapped_controls("ev")', COORDINATOR)
-        self.assertNotIn("must use {control_type} control", COORDINATOR)
+        self.assertNotIn("departure timestamp entity is not configured", PLANNING)
+        # Service selection and sizing are executed in tests/test_planning.py.
+        # This only guards the boundary that makes that possible: planning
+        # logic stays importable without Home Assistant.
+        self.assertNotIn("homeassistant", PLANNING)
         self.assertNotIn('"id": "pool"', CONFIG_PANEL)
         self.assertNotIn('"id": "hot_water"', CONFIG_PANEL)
 
