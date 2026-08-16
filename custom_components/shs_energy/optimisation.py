@@ -17,32 +17,6 @@ from zoneinfo import ZoneInfo
 
 SLOT_SECONDS = 900
 SLOT_HOURS = 0.25
-# A set, not a string, so the server can change planner without every
-# installation losing control until it updates through HACS. The server deploys
-# on push; this updates by hand, so the tolerant build has to land first and a
-# strict equality check made that impossible to sequence safely.
-#
-# v7 adds an objective for the two thirds of the horizon Nord Pool has not
-# priced (portal ENERGY_OPTIMISATION_ARCHITECTURE.md §1.4). The plan contract
-# itself is unchanged, which is why both are executable.
-#
-# v8 was published by the server on 2026-08-14 without this set being widened
-# first, which is the failure the paragraph above exists to prevent. Every plan
-# since then was rejected by `validate_plan_contract`, and because that
-# rejection returns before the plan is cached, three things followed: no plan
-# was ever stored for the executor to read, the actuals and thermal watermarks
-# never advanced, and `optimisation_plan_due` saw no cached plan and so
-# re-requested a full replan every quarter instead of every 45 minutes.
-#
-# v9 is listed before it exists, deliberately. The tolerant build has to be
-# installed before the server may publish the version, so the entry is added
-# one release ahead rather than at the moment of the switch.
-SUPPORTED_OPTIMISATION_MODEL_VERSIONS = frozenset({
-    "battery-export-planner-v6",
-    "shadow-price-planner-v7",
-    "thermal-room-planner-v8",
-    "marginal-value-planner-v9",
-})
 ACTUAL_FIELD_BY_CATEGORY = {
     "total_consumption": "total_load_kwh",
     "solar_production": "solar_production_kwh",
@@ -970,8 +944,15 @@ def validate_plan_contract(
         raise OptimisationInputError("optimisation plan schema is unsupported")
     if plan.get("mode") != "live":
         raise OptimisationInputError("optimisation plan mode is unsupported")
-    if plan.get("model_version") not in SUPPORTED_OPTIMISATION_MODEL_VERSIONS:
-        raise OptimisationInputError("optimisation model version is unsupported")
+    # `model_version` is deliberately *not* a gate. It names the algorithm, not
+    # the contract, and the two are independent: renaming the planner changes
+    # nothing this integration reads. Gating on it meant the server could brick
+    # every installation by renaming, which is exactly what happened on
+    # 2026-08-14 when v8 shipped against a set listing only v6 and v7.
+    #
+    # `schema_version` above is the real compatibility boundary, and it still
+    # refuses a contract this build cannot read. That check needs no allowlist
+    # anyone can forget to widen.
     if plan.get("status") not in ("ready", "incomplete", "infeasible"):
         raise OptimisationInputError("optimisation plan status is invalid")
 

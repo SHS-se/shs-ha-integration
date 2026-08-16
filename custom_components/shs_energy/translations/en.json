@@ -219,6 +219,10 @@
     "device_control_mapping": {
       "title": "Controllable devices need configuration",
       "description": "The website requests control mappings for these devices:\n\n{devices}\n\nOpen Configure on this integration. It fetches the latest website selections immediately; no Home Assistant restart is required. Until each matching mapping is complete, that device remains in empirical base load and existing controllers remain unchanged."
+    },
+    "optimisation_plan_refused": {
+      "title": "Energy plan refused by Home Assistant",
+      "description": "Smart Home Solutions returned an optimisation plan that this integration will not execute, so no planned device requests are being issued. Measurements are still being uploaded normally.\n\nReason: {reason}\n\nThis usually means the integration needs updating to a build that understands the current plan contract."
     }
   }
 }

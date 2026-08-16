@@ -37,6 +37,7 @@ from .const import (
     ISSUE_MISSING_CUSTOMER_INPUT,
     ISSUE_DEVICE_CONTROL_MAPPING,
     ISSUE_OPTIMISATION_CONFIGURATION,
+    ISSUE_OPTIMISATION_PLAN_REFUSED,
     ISSUE_SUBSCRIPTION_INACTIVE,
     MAX_KWH_PER_READING,
     MAX_THERMAL_SLOTS_PER_PUSH,
@@ -307,6 +308,27 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             is_fixable=False,
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_SUBSCRIPTION_INACTIVE,
+        )
+
+    def _sync_plan_refused_issue(self, reason: str | None) -> None:
+        """Surface a refused plan where a customer can actually see it.
+
+        A plan the integration will not execute is not a debug detail. Until
+        now it produced a log warning and an attribute on a diagnostic sensor,
+        so an installation could spend days publishing plans in the portal
+        while Home Assistant quietly executed none of them.
+        """
+        if reason is None:
+            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_OPTIMISATION_PLAN_REFUSED)
+            return
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            ISSUE_OPTIMISATION_PLAN_REFUSED,
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=ISSUE_OPTIMISATION_PLAN_REFUSED,
+            translation_placeholders={"reason": reason},
         )
 
     def _sync_optimisation_issue(self) -> None:
@@ -2350,8 +2372,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.actuals_accepted_until = result.get(
                     "actuals_accepted_until"
                 )
-                if result.get("plan"):
-                    validate_plan_contract(result["plan"], dt_util.utcnow())
             except ShsSubscriptionInactiveError:
                 self.last_optimisation_error = "subscription_inactive"
                 self._sync_subscription_issue(False)
@@ -2361,6 +2381,20 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.warning("Optimisation push skipped: %s", err)
                 self.async_update_listeners()
                 return
+
+            # The exchange itself succeeded, so the upload watermarks below are
+            # advanced whatever the plan turns out to be. Validating the plan
+            # inside the try above meant one unreadable plan also abandoned the
+            # actuals and thermal watermarks and the plan-due cache, so the same
+            # quarters were re-uploaded and a full replan was requested every
+            # quarter. An unusable plan must cost the plan, and nothing else.
+            plan_error: str | None = None
+            if result.get("plan"):
+                try:
+                    validate_plan_contract(result["plan"], dt_util.utcnow())
+                except OptimisationInputError as err:
+                    plan_error = str(err)
+                    _LOGGER.warning("Optimisation plan refused: %s", err)
 
             self.last_optimisation_error = snapshot_error
             self.last_optimisation_push = dt_util.utcnow().isoformat()
@@ -2375,10 +2409,18 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.last_thermal_slots_accepted = int(
                 result.get("thermal_slots_accepted") or 0
             )
-            if result.get("plan") and not configuration_changed:
+            if plan_error is not None:
+                # Keep whatever plan is already cached rather than replacing it
+                # with one that failed its contract, and say so loudly enough
+                # to be noticed: a refused plan means the executor is running
+                # on nothing, which used to show up only as a log line.
+                self.last_optimisation_error = plan_error
+                self._sync_plan_refused_issue(plan_error)
+            elif result.get("plan") and not configuration_changed:
                 self.last_optimisation_error = None
                 self.optimisation_plan = result["plan"]
                 stored["optimisation_plan"] = self.optimisation_plan
+                self._sync_plan_refused_issue(None)
             elif configuration_changed:
                 # The returned plan was built from the preceding website
                 # request. Never expose it after a role/control change; the

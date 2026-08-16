@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from pathlib import Path
 import sys
 import unittest
@@ -11,7 +12,6 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_en
 
 from optimisation import (  # noqa: E402
     OptimisationInputError,
-    SUPPORTED_OPTIMISATION_MODEL_VERSIONS,
     aggregate_category_changes,
     aggregate_device_changes,
     build_base_load_model,
@@ -687,35 +687,91 @@ if __name__ == "__main__":
 class ModelVersionToleranceTests(unittest.TestCase):
     """The server must be able to change planner without stopping control.
 
-    The set must always contain the version the server currently publishes and
-    the next one it will publish, so a portal deploy can land before every
-    installation has updated through HACS.
+    `model_version` names the algorithm; `schema_version` names the contract.
+    Only the second decides whether this build can read a plan, so the server
+    must be free to rename or replace its planner without an allowlist here
+    that someone has to remember to widen. Forgetting exactly that on
+    2026-08-14 stopped every plan being cached for days.
     """
 
-    def test_every_published_planner_version_is_executable(self) -> None:
+    def _plan(self, **overrides: Any) -> dict[str, Any]:
+        issued = datetime(2026, 8, 16, 12, 0, tzinfo=timezone.utc)
+        slot = {
+            "start": issued.isoformat(),
+            "binding": True,
+            "pool_w": 0,
+            "boiler_expected_w": 0,
+            "boiler_permitted": True,
+            "ev_w": 0,
+            "ev_target_current_a": 0,
+            "ev_min_current_a": 0,
+            "ev_max_current_a": 0,
+            "device_loads_w": {},
+            "battery_soc": 0.5,
+        }
+        return {
+            "schema_version": 5,
+            "mode": "live",
+            "capabilities": {
+                "pv": True,
+                "battery": False,
+                "pool": False,
+                "boiler": False,
+                "ev": False,
+            },
+            "slot_minutes": 15,
+            "model_version": "thermal-room-planner-v8",
+            "status": "ready",
+            "issued_at": issued.isoformat(),
+            "valid_until": (issued + timedelta(minutes=75)).isoformat(),
+            "binding_until": (issued + timedelta(hours=1)).isoformat(),
+            "services": [],
+            "device_models": [],
+            "plans": {
+                key: {
+                    "status": "ready",
+                    "slots": [
+                        {
+                            **slot,
+                            "start": (
+                                issued + timedelta(minutes=15 * index)
+                            ).isoformat(),
+                        }
+                        for index in range(4)
+                    ],
+                    "service_slots": {},
+                    "service_currents_a": {},
+                    "service_inhibited_slots": {},
+                }
+                for key in ("baseline", "priority", "cost")
+            },
+            **overrides,
+        }
+
+    def test_any_planner_name_is_executable_on_a_known_contract(self) -> None:
+        now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
         for version in (
             "battery-export-planner-v6",
             "shadow-price-planner-v7",
-            # Published by the server since 2026-08-14. Its absence silently
-            # stopped every plan being cached, which took the executor, both
-            # upload watermarks and the replan interval with it.
             "thermal-room-planner-v8",
+            "marginal-value-planner-v9",
+            "a-planner-nobody-has-written-yet",
         ):
             with self.subTest(version=version):
-                self.assertIn(version, SUPPORTED_OPTIMISATION_MODEL_VERSIONS)
+                validate_plan_contract(
+                    self._plan(model_version=version), now
+                )
 
-    def test_the_next_planner_version_is_tolerated_before_it_ships(self) -> None:
-        """The tolerant build must be installable before the server switches.
-
-        Listing the next version early is the whole mechanism; adding it at the
-        moment of the switch is what broke v8.
-        """
-        self.assertIn(
-            "marginal-value-planner-v9", SUPPORTED_OPTIMISATION_MODEL_VERSIONS
-        )
-
-    def test_an_unknown_planner_version_is_still_refused(self) -> None:
-        self.assertNotIn("some-future-planner", SUPPORTED_OPTIMISATION_MODEL_VERSIONS)
+    def test_an_unreadable_contract_is_still_refused(self) -> None:
+        now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
+        for field, value in (
+            ("schema_version", 6),
+            ("slot_minutes", 60),
+            ("mode", "shadow"),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaises(OptimisationInputError):
+                    validate_plan_contract(self._plan(**{field: value}), now)
 
 
 class ServiceMeteringTests(unittest.TestCase):
