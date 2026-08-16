@@ -687,17 +687,31 @@ if __name__ == "__main__":
 class ModelVersionToleranceTests(unittest.TestCase):
     """The server must be able to change planner without stopping control.
 
-    This build accepts v6 and v7 so the portal's version bump can land after
-    installations have updated, rather than needing to land before them - which
-    a strict equality check made impossible to sequence safely.
+    The set must always contain the version the server currently publishes and
+    the next one it will publish, so a portal deploy can land before every
+    installation has updated through HACS.
     """
 
-    def test_both_planner_versions_are_executable(self) -> None:
+    def test_every_published_planner_version_is_executable(self) -> None:
+        for version in (
+            "battery-export-planner-v6",
+            "shadow-price-planner-v7",
+            # Published by the server since 2026-08-14. Its absence silently
+            # stopped every plan being cached, which took the executor, both
+            # upload watermarks and the replan interval with it.
+            "thermal-room-planner-v8",
+        ):
+            with self.subTest(version=version):
+                self.assertIn(version, SUPPORTED_OPTIMISATION_MODEL_VERSIONS)
+
+    def test_the_next_planner_version_is_tolerated_before_it_ships(self) -> None:
+        """The tolerant build must be installable before the server switches.
+
+        Listing the next version early is the whole mechanism; adding it at the
+        moment of the switch is what broke v8.
+        """
         self.assertIn(
-            "battery-export-planner-v6", SUPPORTED_OPTIMISATION_MODEL_VERSIONS
-        )
-        self.assertIn(
-            "shadow-price-planner-v7", SUPPORTED_OPTIMISATION_MODEL_VERSIONS
+            "marginal-value-planner-v9", SUPPORTED_OPTIMISATION_MODEL_VERSIONS
         )
 
     def test_an_unknown_planner_version_is_still_refused(self) -> None:

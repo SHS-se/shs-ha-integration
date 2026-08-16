@@ -25,9 +25,23 @@ SLOT_HOURS = 0.25
 # v7 adds an objective for the two thirds of the horizon Nord Pool has not
 # priced (portal ENERGY_OPTIMISATION_ARCHITECTURE.md §1.4). The plan contract
 # itself is unchanged, which is why both are executable.
+#
+# v8 was published by the server on 2026-08-14 without this set being widened
+# first, which is the failure the paragraph above exists to prevent. Every plan
+# since then was rejected by `validate_plan_contract`, and because that
+# rejection returns before the plan is cached, three things followed: no plan
+# was ever stored for the executor to read, the actuals and thermal watermarks
+# never advanced, and `optimisation_plan_due` saw no cached plan and so
+# re-requested a full replan every quarter instead of every 45 minutes.
+#
+# v9 is listed before it exists, deliberately. The tolerant build has to be
+# installed before the server may publish the version, so the entry is added
+# one release ahead rather than at the moment of the switch.
 SUPPORTED_OPTIMISATION_MODEL_VERSIONS = frozenset({
     "battery-export-planner-v6",
     "shadow-price-planner-v7",
+    "thermal-room-planner-v8",
+    "marginal-value-planner-v9",
 })
 ACTUAL_FIELD_BY_CATEGORY = {
     "total_consumption": "total_load_kwh",
