@@ -138,8 +138,17 @@ class SensorWiringTests(unittest.TestCase):
         # This only guards the boundary that makes that possible: planning
         # logic stays importable without Home Assistant.
         self.assertNotIn("homeassistant", PLANNING)
-        self.assertNotIn('"id": "pool"', CONFIG_PANEL)
         self.assertNotIn('"id": "hot_water"', CONFIG_PANEL)
+        # The pool section is state, not a planning switch. It carries the
+        # water-temperature sensor and volume the store model needs, and must
+        # never regrow the retired per-service enable/confirm toggles.
+        pool_section = CONFIG_PANEL[
+            CONFIG_PANEL.index('"id": "pool"'):CONFIG_PANEL.index('"id": "ev"')
+        ]
+        self.assertIn("OPT_POOL_WATER_TEMPERATURE_ENTITY", pool_section)
+        self.assertIn("OPT_POOL_VOLUME_M3", pool_section)
+        for retired in ("planning_enabled", "deferrable_confirmed"):
+            self.assertNotIn(retired, pool_section)
 
     def test_retired_planning_switches_are_archived_and_ignored(self) -> None:
         setup = INIT[INIT.index("async def async_setup_entry") :]

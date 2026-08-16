@@ -68,6 +68,8 @@ from .const import (
     OPT_GRID_IMPORT_LIMIT_W,
     OPT_GRID_EXPORT_LIMIT_W,
     OPT_TERMINAL_SOC_MIN,
+    OPT_POOL_VOLUME_M3,
+    OPT_POOL_WATER_TEMPERATURE_ENTITY,
     OPT_TERMINAL_ENERGY_VALUE,
     OPT_PLANNING_MODE,
     PLANNING_MODE_DISABLED,
@@ -974,6 +976,36 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         outdoor = await self._outdoor_temperature_quarters(options, start, end)
         slots = build_thermal_slots(series, outdoor)
         return slots[-MAX_THERMAL_SLOTS_PER_PUSH:]
+
+    async def _pool_quarters(
+        self, options: dict[str, Any], start: datetime, end: datetime
+    ) -> list[dict[str, Any]]:
+        """Quarter-hour pool water temperature, when the sensor is mapped.
+
+        This is the training series for the pool's loss coefficient and its
+        heat pump's COP against air temperature. Neither is asked for at
+        commissioning, and neither can be fitted without it — the pool heater's
+        energy and the outdoor forecast are already stored server-side, so the
+        water temperature is the only missing term.
+        """
+        entity_id = options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY)
+        if not isinstance(entity_id, str) or not entity_id.strip():
+            return []
+        if start >= end:
+            return []
+        means = await self._statistics_means([entity_id], start, end)
+        quarters = quarter_means(means.get(entity_id, []))
+        return [
+            {
+                "start": slot.isoformat(),
+                "water_temperature_c": round(value, 3),
+                "quality": {
+                    "aggregation": "mean_of_recorder_5minute_means",
+                    "duration_seconds": 900,
+                },
+            }
+            for slot, value in sorted(quarters.items())
+        ][-MAX_THERMAL_SLOTS_PER_PUSH:]
 
     async def _daily_changes(
         self, entity_ids: list[str], start: datetime, end: datetime
@@ -1976,10 +2008,27 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "total_consumption", "grid_import", "grid_export",
             "solar_production", "battery_charge", "battery_discharge",
         )
+        # The pool's state, not its budget. A warm pool asks for nothing, which
+        # a median daily kWh could never express (§8.3).
+        pool_state: dict[str, Any] | None = None
+        pool_entity = options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY)
+        if isinstance(pool_entity, str) and pool_entity.strip():
+            pool_payload = self._entity_payload(pool_entity)
+            pool_state = {
+                "water_temperature_c": round(
+                    parse_number(pool_payload["state"], pool_entity), 3
+                ),
+                "volume_m3": parse_number(
+                    options.get(OPT_POOL_VOLUME_M3), OPT_POOL_VOLUME_M3
+                ),
+                "source_entity_ids": {"water_temperature": pool_entity},
+            }
+
         snapshot = {
             "schema_version": 5,
             "mode": "live",
             "capabilities": capabilities,
+            "pool": pool_state,
             "snapshot_id": str(uuid4()),
             "captured_at": captured.isoformat(),
             "timezone": str(dt_util.DEFAULT_TIME_ZONE),
@@ -2201,6 +2250,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     # plan; the website reports the gap on its readiness panel.
                     _LOGGER.debug("Thermal observations unavailable: %s", err)
                     thermal_slots = []
+                try:
+                    pool_slots = await self._pool_quarters(
+                        thermal_options, thermal_start, complete_end
+                    )
+                except (HomeAssistantError, OptimisationInputError, ValueError) as err:
+                    _LOGGER.debug("Pool observations unavailable: %s", err)
+                    pool_slots = []
                 last_plan = stored.get("optimisation_plan")
                 plan_due = optimisation_plan_due(
                     last_plan,
@@ -2270,6 +2326,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     and not devices
                     and not thermal_slots
                     and not price_slots
+                    and not pool_slots
                 ):
                     self.last_optimisation_error = snapshot_error
                     self.async_update_listeners()
@@ -2280,6 +2337,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     devices,
                     thermal_slots,
                     price_slots,
+                    pool_slots,
                     device_inventory_complete=True,
                 )
                 configuration = self._record_device_exchange(

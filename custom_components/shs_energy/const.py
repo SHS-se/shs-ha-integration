@@ -118,6 +118,15 @@ OPT_GRID_EXPORT_LIMIT_W = "grid_export_limit_w"
 OPT_TERMINAL_SOC_MIN = "terminal_soc_min"
 OPT_TERMINAL_ENERGY_VALUE = "terminal_energy_value_sek_per_kwh"
 
+# The pool is a store, not a load with a daily budget
+# (ENERGY_OPTIMISATION_ARCHITECTURE.md §8.3). Water temperature is the state the
+# planner schedules against, and volume is what converts a kWh into a degree.
+# Everything else about the pool — its loss coefficient and the heat pump's COP
+# against air temperature — is fitted from that series, the outdoor forecast and
+# the pool heater's already-metered energy, so none of it is asked for.
+OPT_POOL_WATER_TEMPERATURE_ENTITY = "pool_water_temperature_entity"
+OPT_POOL_VOLUME_M3 = "pool_volume_m3"
+
 OPT_EV_CONNECTED_ENTITY = "ev_connected_entity"
 OPT_EV_SOC_ENTITY = "ev_soc_entity"
 OPT_EV_TARGET_SOC_ENTITY = "ev_target_soc_entity"

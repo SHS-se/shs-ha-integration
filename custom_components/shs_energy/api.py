@@ -145,6 +145,7 @@ class ShsApiClient:
         devices: list[dict[str, Any]] | None = None,
         thermal_slots: list[dict[str, Any]] | None = None,
         price_slots: list[dict[str, Any]] | None = None,
+        pool_slots: list[dict[str, Any]] | None = None,
         *,
         device_inventory_complete: bool = False,
     ) -> dict[str, Any]:
@@ -162,6 +163,8 @@ class ShsApiClient:
             body["thermal_slots"] = thermal_slots
         if price_slots:
             body["price_slots"] = price_slots
+        if pool_slots:
+            body["pool_slots"] = pool_slots
         if snapshot is not None:
             body["snapshot"] = snapshot
         return await self._request(

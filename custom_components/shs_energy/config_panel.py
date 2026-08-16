@@ -340,6 +340,34 @@ def _configuration_sections() -> list[dict[str, Any]]:
             ],
         },
         {
+            "id": "pool",
+            "tab": "storage",
+            "title": "Pool store",
+            "description": (
+                "Water temperature is what the planner schedules against, so an "
+                "already-warm pool asks for nothing and a cloudy forecast can make "
+                "heating it early worthwhile. Volume converts energy into degrees. "
+                "The pool's heat loss and its heat pump's efficiency against air "
+                "temperature are learned from measurement and never entered."
+            ),
+            "fields": [
+                _field(
+                    c.OPT_POOL_WATER_TEMPERATURE_ENTITY,
+                    "Pool water temperature",
+                    "entity",
+                    domains=("sensor",),
+                ),
+                _field(
+                    c.OPT_POOL_VOLUME_M3,
+                    "Pool volume",
+                    "number",
+                    unit="m³",
+                    minimum=0.5,
+                    step=0.5,
+                ),
+            ],
+        },
+        {
             "id": "ev",
             "tab": "storage",
             "title": "EV obligation",
