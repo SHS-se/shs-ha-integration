@@ -14,7 +14,7 @@ from optimisation import (  # noqa: E402
     SUPPORTED_OPTIMISATION_MODEL_VERSIONS,
     aggregate_category_changes,
     aggregate_device_changes,
-    build_base_load_profile,
+    build_base_load_model,
     build_empirical_device_profile,
     calibration_summary,
     discrete_current_control,
@@ -143,42 +143,102 @@ class QuarterAggregationTests(unittest.TestCase):
                         "fridge": 0.125,
                     },
                 })
-        profile = build_base_load_profile(
+        model = build_base_load_model(
             rows,
             "UTC",
             device_slots=device_rows,
             modelled_device_keys=("pool-heater",),
         )
+        profile = model["by_weekday"][0]
 
         self.assertEqual(len(profile), 96)
         # The controllable pool heater is removed. The non-controllable fridge
         # remains inside the empirical base load learned from whole-home usage.
-        self.assertEqual(profile[0]["median_w"], 1500)
+        # The 20 kW outlier day must not drag the shared shape with it.
+        self.assertLess(profile[0]["median_w"], 3_000)
         self.assertGreater(profile[0]["p90_w"], profile[0]["median_w"])
-        self.assertEqual(profile[0]["sample_count"], 4)
 
-    def test_base_profile_selects_weekday_and_weekend_separately(self) -> None:
-        monday = datetime(2026, 8, 3, tzinfo=timezone.utc)
+    def test_base_model_separates_every_day_of_the_week(self) -> None:
+        """Saturday and Sunday must not share one weekend expectation."""
+        monday = datetime(2026, 6, 1, tzinfo=timezone.utc)
         rows = []
-        for day in range(7):
+        for day in range(28):
+            when_day = monday + timedelta(days=day)
+            # A quiet Sunday, a busy Saturday, an ordinary week.
+            if when_day.weekday() == 6:
+                kwh = 0.125
+            elif when_day.weekday() == 5:
+                kwh = 0.5
+            else:
+                kwh = 0.25
             for quarter in range(96):
-                when = monday + timedelta(days=day, minutes=quarter * 15)
                 rows.append({
-                    "start": when.isoformat(),
-                    "total_load_kwh": 0.5 if when.weekday() >= 5 else 0.25,
+                    "start": (
+                        when_day + timedelta(minutes=quarter * 15)
+                    ).isoformat(),
+                    "total_load_kwh": kwh,
                 })
 
-        weekday = build_base_load_profile(
-            rows, "UTC", minimum_samples=2,
-            day_type="weekday",
-        )
-        weekend = build_base_load_profile(
-            rows, "UTC", minimum_samples=2,
-            day_type="weekend",
+        model = build_base_load_model(rows, "UTC", minimum_samples=2)
+        saturday = model["by_weekday"][5][0]["median_w"]
+        sunday = model["by_weekday"][6][0]["median_w"]
+        weekday_w = model["by_weekday"][0][0]["median_w"]
+
+        self.assertGreater(saturday, weekday_w)
+        self.assertLess(sunday, weekday_w)
+        # The old weekday/weekend split averaged these two into one number.
+        self.assertGreater(saturday, sunday * 2)
+
+    def test_base_model_shrinks_to_the_shared_shape_without_evidence(
+        self,
+    ) -> None:
+        """One odd Saturday must not become every future Saturday."""
+        monday = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        rows = []
+        for day in range(7):
+            when_day = monday + timedelta(days=day)
+            kwh = 2.0 if when_day.weekday() == 5 else 0.25
+            for quarter in range(96):
+                rows.append({
+                    "start": (
+                        when_day + timedelta(minutes=quarter * 15)
+                    ).isoformat(),
+                    "total_load_kwh": kwh,
+                })
+
+        model = build_base_load_model(rows, "UTC", minimum_samples=1)
+        saturday = model["by_weekday"][5][0]
+
+        # A single sample earns part of the departure it claims, not all of
+        # it: 8 kW measured must not become an 8 kW standing expectation.
+        self.assertGreater(saturday["median_w"], 1_000)
+        self.assertLess(saturday["median_w"], 5_000)
+        # And the thin evidence has to be visible in the published band.
+        self.assertGreater(
+            saturday["p90_w"] - saturday["p10_w"],
+            saturday["median_w"] * 0.25,
         )
 
-        self.assertEqual(weekday[0]["median_w"], 1000)
-        self.assertEqual(weekend[0]["median_w"], 2000)
+    def test_base_model_weights_recent_days_more_heavily(self) -> None:
+        """A routine that changed three weeks ago must not still dominate."""
+        start = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        rows = []
+        for day in range(42):
+            # The household halved its standing load partway through.
+            kwh = 0.5 if day < 21 else 0.25
+            for quarter in range(96):
+                rows.append({
+                    "start": (
+                        start + timedelta(days=day, minutes=quarter * 15)
+                    ).isoformat(),
+                    "total_load_kwh": kwh,
+                })
+
+        model = build_base_load_model(rows, "UTC", minimum_samples=2)
+        expected = model["by_weekday"][0][0]["median_w"]
+
+        # An unweighted median of the whole window would sit at 2000 W.
+        self.assertLess(expected, 1_400)
 
 
 class ForecastTests(unittest.TestCase):

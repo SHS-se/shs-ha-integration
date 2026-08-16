@@ -101,7 +101,7 @@ from .optimisation import (
     OptimisationInputError,
     aggregate_category_changes,
     aggregate_device_changes,
-    build_base_load_profile,
+    build_base_load_model,
     calibration_summary,
     extract_timestamped_forecast,
     normalized_fraction,
@@ -1837,22 +1837,16 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         modelled_device_keys = tuple(
             str(model["key"]) for model in device_models
         )
-        profiles = {
-            day_type: build_base_load_profile(
-                profile_actuals,
-                str(dt_util.DEFAULT_TIME_ZONE),
-                device_slots=device_profile_actuals,
-                modelled_device_keys=modelled_device_keys,
-                minimum_samples=2,
-                day_type=day_type,
-            )
-            for day_type in ("weekday", "weekend")
-        }
-        sample_count = sum(
-            int(value["sample_count"])
-            for profile in profiles.values()
-            for value in profile
+        base_load = build_base_load_model(
+            profile_actuals,
+            str(dt_util.DEFAULT_TIME_ZONE),
+            device_slots=device_profile_actuals,
+            modelled_device_keys=modelled_device_keys,
+            minimum_samples=2,
+            now=captured,
         )
+        profiles = base_load["by_weekday"]
+        sample_count = int(base_load["sample_count"])
 
         daily_meter_totals = await self._daily_meter_totals(
             entities_by_category,
@@ -1902,8 +1896,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     f"PV forecast missing {start.isoformat()}"
                 )
             local = start.astimezone(dt_util.DEFAULT_TIME_ZONE)
-            day_type = "weekend" if local.weekday() >= 5 else "weekday"
-            bucket = profiles[day_type][local.hour * 4 + local.minute // 15]
+            bucket = profiles[local.weekday()][local.hour * 4 + local.minute // 15]
             supplier_import = import_prices.get(start)
             supplier_export = export_prices.get(start)
             grid = grid_slots.get(start)
