@@ -35,7 +35,7 @@ try:  # pragma: no cover - exercised by both import paths
     from .device_controls import CONTROL_TYPES, planning_path
     from .optimisation import (
         OptimisationInputError,
-        build_empirical_device_profile,
+        build_device_load_model,
         daily_requirement,
         discrete_current_control,
         normalized_fraction,
@@ -66,7 +66,7 @@ except ImportError:  # The test suite imports these helpers as flat modules,
     )
     from optimisation import (  # type: ignore[no-redef]
         OptimisationInputError,
-        build_empirical_device_profile,
+        build_device_load_model,
         daily_requirement,
         discrete_current_control,
         normalized_fraction,
@@ -471,16 +471,12 @@ def build_device_models(
             )
             continue
         try:
-            empirical = {
-                day_type: build_empirical_device_profile(
-                    device_actuals,
-                    device["key"],
-                    str(local_tz),
-                    minimum_samples=2,
-                    day_type=day_type,
-                )
-                for day_type in ("weekday", "weekend")
-            }
+            empirical = build_device_load_model(
+                device_actuals,
+                device["key"],
+                str(local_tz),
+                minimum_samples=2,
+            )
         except OptimisationInputError:
             if planning_role == "controllable":
                 device_gaps.append(
@@ -488,14 +484,7 @@ def build_device_models(
                     "before it can be controllable"
                 )
             continue
-        active_values = [
-            profile["active_power_w"] for profile in empirical.values()
-            if profile["active_power_w"] is not None
-        ]
-        empirical_active_power_w = (
-            round(sum(active_values) / len(active_values), 1)
-            if active_values else None
-        )
+        empirical_active_power_w = empirical["active_power_w"]
         mapping = control_mappings.get(str(device["key"]), {})
         # Named apart from the `mapped_power_w` reader deliberately: binding the
         # result to the reader's own name works for the first device and then
@@ -508,23 +497,19 @@ def build_device_models(
             if reviewed_power_w is not None
             else empirical_active_power_w
         )
-        profile_sample_count = sum(
-            int(profile["sample_count"]) for profile in empirical.values()
-        )
         device["active_power_w"] = active_power_w
-        device["profile_sample_count"] = profile_sample_count
+        device["profile_sample_count"] = int(empirical["sample_count"])
         device["inference"] = {
             **device["inference"],
             "history_days": OPTIMISATION_PROFILE_DAYS,
-            "profile": "weekday_weekend_trimmed_mean_v1",
+            "profile": empirical["method"],
         }
         if planning_role == "base_load":
             continue
         forecast_w: list[float] = []
         for start in horizon:
             local = start.astimezone(local_tz)
-            day_type = "weekend" if local.weekday() >= 5 else "weekday"
-            forecast_w.append(empirical[day_type]["expected_w"][
+            forecast_w.append(empirical["by_weekday"][local.weekday()][
                 local.hour * 4 + local.minute // 15
             ])
         device_models.append({

@@ -12,7 +12,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from math import ceil, isfinite
 from statistics import median
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo
 
 SLOT_SECONDS = 900
@@ -435,67 +435,38 @@ def _trimmed_mean(values: list[float]) -> float:
     return sum(kept) / len(kept)
 
 
-def build_empirical_device_profile(
-    device_slots: list[dict[str, Any]],
-    device_key: str,
-    timezone_name: str,
-    *,
-    minimum_samples: int = 2,
-    day_type: str,
-) -> dict[str, Any]:
-    """Learn a 96-quarter expected-power profile from measured device energy.
+def _weighted_trimmed_mean(pairs: list[tuple[float, float]]) -> float:
+    """Recency-weighted trimmed mean of ``(value, weight)`` pairs.
 
-    A trimmed mean is intentional. Median power would turn an intermittent
-    thermostat load into zero for most quarters, while copying active power
-    would invent exact switch-on times. The mean is the probability-weighted
-    expected draw visible in a planning graph.
+    A trimmed mean rather than a median is intentional for devices. Median
+    power turns an intermittent thermostat load into zero for most quarters,
+    while copying active power would invent exact switch-on times. The mean is
+    the probability-weighted expected draw a planning graph should show.
     """
-    if day_type not in ("weekday", "weekend"):
-        raise OptimisationInputError("day_type must be weekday or weekend")
-    local_tz = ZoneInfo(timezone_name)
-    samples: dict[int, list[float]] = defaultdict(list)
-    all_power: list[float] = []
-    for row in device_slots:
-        when = _timestamp(row.get("start"))
-        values = row.get("device_energy_kwh")
-        if when is None or not isinstance(values, dict) or device_key not in values:
+    if not pairs:
+        raise OptimisationInputError("cannot average without samples")
+    ordered = sorted(pairs)
+    total = sum(weight for _value, weight in ordered)
+    if total <= 0:
+        return sum(value for value, _weight in ordered) / len(ordered)
+    # Trim a tenth of the *weight* from each tail once there is enough evidence
+    # to spare it, so one sauna evening cannot define a quarter.
+    trim = total * 0.1 if len(ordered) >= 10 else 0.0
+    kept_value = 0.0
+    kept_weight = 0.0
+    seen = 0.0
+    for value, weight in ordered:
+        low = max(seen, trim)
+        high = min(seen + weight, total - trim)
+        seen += weight
+        usable = high - low
+        if usable <= 0:
             continue
-        energy = values[device_key]
-        if not isinstance(energy, (int, float)) or not isfinite(float(energy)):
-            continue
-        local = when.astimezone(local_tz)
-        if day_type == "weekday" and local.weekday() >= 5:
-            continue
-        if day_type == "weekend" and local.weekday() < 5:
-            continue
-        power_w = max(0.0, float(energy) * 4_000)
-        samples[local.hour * 4 + local.minute // 15].append(power_w)
-        all_power.append(power_w)
-
-    missing = [
-        quarter for quarter in range(96)
-        if len(samples[quarter]) < minimum_samples
-    ]
-    if missing:
-        raise OptimisationInputError(
-            f"{device_key} lacks {minimum_samples} {day_type} samples for "
-            f"{len(missing)} quarters"
-        )
-    positive = sorted(value for value in all_power if value > 25)
-    active_power_w: float | None = None
-    if positive:
-        threshold = max(25.0, positive[-1] * 0.5)
-        active_power_w = round(median(
-            value for value in positive if value >= threshold
-        ), 1)
-    return {
-        "expected_w": [
-            round(_trimmed_mean(samples[quarter]), 2)
-            for quarter in range(96)
-        ],
-        "sample_count": sum(len(values) for values in samples.values()),
-        "active_power_w": active_power_w,
-    }
+        kept_value += value * usable
+        kept_weight += usable
+    if kept_weight <= 0:
+        return sum(value * weight for value, weight in ordered) / total
+    return kept_value / kept_weight
 
 
 def _weighted_quantile(pairs: list[tuple[float, float]], fraction: float) -> float:
@@ -528,6 +499,140 @@ BASE_LOAD_RECENCY_HALFLIFE_DAYS = 14.0
 # shape needs more evidence than that, because it is a much finer claim.
 BASE_LOAD_LEVEL_SHRINKAGE_DAYS = 3.0
 BASE_LOAD_SHAPE_SHRINKAGE_SAMPLES = 8.0
+
+
+def _pooled_weekday_series(
+    observations: list[tuple[datetime, int, int, float]],
+    *,
+    reference: datetime,
+    centre: Callable[[list[tuple[float, float]]], float],
+    minimum_samples: int,
+    label: str,
+    quiet_threshold_w: float = 25.0,
+) -> dict[str, Any]:
+    """Pool a quarter-of-day shape, then let each weekday depart from it.
+
+    Shared by base load and by every metered device, because both had the same
+    defect: keying on weekday-versus-weekend gave every future weekday a
+    byte-identical series, while leaving a ten-day window with only two or
+    three weekend days to speak for every future weekend
+    (ENERGY_OPTIMISATION_ARCHITECTURE.md §1.6.3, §1.6.4).
+
+    Splitting into seven independent profiles would make the sample problem far
+    worse. This pools instead: one shared shape from every day, a scalar level
+    per weekday needing only a few whole days to emerge, and a per-quarter
+    deviation held near one until the samples justify moving it. Each departure
+    is shrunk by ``n / (n + k)``, so thin evidence collapses to the shared shape
+    rather than inventing a routine.
+
+    ``centre`` decides what "typical" means, and the two callers differ for a
+    real reason: a weighted median suits residual base load, while a device
+    needs a trimmed mean, since a median turns an intermittent thermostat into
+    zero for most quarters.
+    """
+    def weight_of(local: datetime) -> float:
+        age_days = max(
+            0.0,
+            (reference - local.astimezone(timezone.utc)).total_seconds() / 86_400,
+        )
+        return 0.5 ** (age_days / BASE_LOAD_RECENCY_HALFLIFE_DAYS)
+
+    # 1. The shared quarter-of-day shape, learned from every day in the window.
+    pooled: dict[int, list[tuple[float, float]]] = defaultdict(list)
+    for local, _weekday, quarter, value in observations:
+        pooled[quarter].append((value, weight_of(local)))
+
+    missing = [
+        quarter for quarter in range(96)
+        if len(pooled[quarter]) < minimum_samples
+    ]
+    if missing:
+        raise OptimisationInputError(
+            f"{label} lacks {minimum_samples} samples for {len(missing)} quarters"
+        )
+    shape = [centre(pooled[quarter]) for quarter in range(96)]
+
+    # A quarter that is reliably near zero carries no usable ratio, so it is
+    # excluded from every ratio below rather than dividing by almost nothing.
+    informative = {
+        quarter for quarter in range(96) if shape[quarter] > quiet_threshold_w
+    }
+
+    # 2. One level per calendar day, then one shrunk level per weekday. Levels
+    #    are taken over whole days so that a device which simply runs more on
+    #    Saturdays is separated from one that runs at a different hour.
+    by_date: dict[Any, list[float]] = defaultdict(list)
+    date_weight: dict[Any, float] = {}
+    date_weekday: dict[Any, int] = {}
+    for local, weekday, quarter, value in observations:
+        if quarter not in informative:
+            continue
+        key = local.date()
+        by_date[key].append(value / shape[quarter])
+        date_weight[key] = max(date_weight.get(key, 0.0), weight_of(local))
+        date_weekday[key] = weekday
+    day_levels: dict[int, list[tuple[float, float]]] = defaultdict(list)
+    for key, ratios in by_date.items():
+        day_levels[date_weekday[key]].append((median(ratios), date_weight[key]))
+
+    level: dict[int, float] = {}
+    for weekday in range(7):
+        entries = day_levels.get(weekday, [])
+        if not entries:
+            level[weekday] = 1.0
+            continue
+        raw = _weighted_quantile(entries, 0.5)
+        pull = len(entries) / (len(entries) + BASE_LOAD_LEVEL_SHRINKAGE_DAYS)
+        level[weekday] = 1.0 + (raw - 1.0) * pull
+
+    # 3. Per-quarter departures from that level, and the pooled relative spread
+    #    a thin cell inherits instead of claiming a tight band of its own.
+    cell: dict[tuple[int, int], list[tuple[float, float]]] = defaultdict(list)
+    relative: dict[int, list[tuple[float, float]]] = defaultdict(list)
+    for local, weekday, quarter, value in observations:
+        if quarter not in informative:
+            continue
+        expected = shape[quarter] * level[weekday]
+        if expected <= 0:
+            continue
+        ratio = (value / expected, weight_of(local))
+        cell[(weekday, quarter)].append(ratio)
+        relative[quarter].append(ratio)
+
+    deviation: dict[tuple[int, int], float] = {}
+    counts: dict[tuple[int, int], int] = {}
+    for weekday in range(7):
+        for quarter in range(96):
+            samples = cell.get((weekday, quarter), [])
+            counts[(weekday, quarter)] = len(samples)
+            if quarter in informative and samples:
+                pull = len(samples) / (
+                    len(samples) + BASE_LOAD_SHAPE_SHRINKAGE_SAMPLES
+                )
+                deviation[(weekday, quarter)] = 1.0 + (
+                    _weighted_quantile(samples, 0.5) - 1.0
+                ) * pull
+            else:
+                deviation[(weekday, quarter)] = 1.0
+
+    spread: dict[int, tuple[float, float]] = {}
+    for quarter in range(96):
+        samples = relative.get(quarter, [])
+        if quarter in informative and samples:
+            spread[quarter] = (
+                _weighted_quantile(samples, 0.1),
+                _weighted_quantile(samples, 0.9),
+            )
+        else:
+            spread[quarter] = (1.0, 1.0)
+
+    return {
+        "shape": shape,
+        "level": level,
+        "deviation": deviation,
+        "counts": counts,
+        "spread": spread,
+    }
 
 
 def build_base_load_model(
@@ -610,110 +715,32 @@ def build_base_load_model(
     if reference is None:
         raise OptimisationInputError("base-load profile has no usable samples")
 
-    def weight_of(local: datetime) -> float:
-        age_days = max(
-            0.0,
-            (reference - local.astimezone(timezone.utc)).total_seconds() / 86_400,
-        )
-        return 0.5 ** (age_days / BASE_LOAD_RECENCY_HALFLIFE_DAYS)
-
-    # 1. The shared quarter-of-day shape, learned from every day in the window.
-    pooled: dict[int, list[tuple[float, float]]] = defaultdict(list)
-    for local, _weekday, quarter, watts in observations:
-        pooled[quarter].append((watts, weight_of(local)))
-
-    missing = [
-        quarter for quarter in range(96)
-        if len(pooled[quarter]) < minimum_samples
-    ]
-    if missing:
-        raise OptimisationInputError(
-            f"base-load profile lacks {minimum_samples} samples for "
-            f"{len(missing)} quarters"
-        )
-    shape = [_weighted_quantile(pooled[quarter], 0.5) for quarter in range(96)]
-
-    # A quarter that is reliably near zero carries no usable ratio, so it is
-    # excluded from every ratio below rather than dividing by almost nothing.
-    informative = [quarter for quarter in range(96) if shape[quarter] > 25]
-
-    # 2. One level per calendar day, then one shrunk level per weekday.
-    by_date: dict[Any, list[float]] = defaultdict(list)
-    date_weight: dict[Any, float] = {}
-    date_weekday: dict[Any, int] = {}
-    for local, weekday, quarter, watts in observations:
-        if shape[quarter] <= 25:
-            continue
-        key = local.date()
-        by_date[key].append(watts / shape[quarter])
-        date_weight[key] = max(date_weight.get(key, 0.0), weight_of(local))
-        date_weekday[key] = weekday
-    day_levels: dict[int, list[tuple[float, float]]] = defaultdict(list)
-    for key, ratios in by_date.items():
-        day_levels[date_weekday[key]].append(
-            (median(ratios), date_weight[key])
-        )
-
-    level: dict[int, float] = {}
-    for weekday in range(7):
-        entries = day_levels.get(weekday, [])
-        if not entries:
-            level[weekday] = 1.0
-            continue
-        raw = _weighted_quantile(entries, 0.5)
-        pull = len(entries) / (len(entries) + BASE_LOAD_LEVEL_SHRINKAGE_DAYS)
-        level[weekday] = 1.0 + (raw - 1.0) * pull
-
-    # 3. Per-quarter departures from that level, held near one without evidence.
-    cell: dict[tuple[int, int], list[tuple[float, float]]] = defaultdict(list)
-    for local, weekday, quarter, watts in observations:
-        if shape[quarter] <= 25:
-            continue
-        expected = shape[quarter] * level[weekday]
-        if expected <= 0:
-            continue
-        cell[(weekday, quarter)].append((watts / expected, weight_of(local)))
-
-    # 4. Spread, measured on the pooled relative residual so that a quarter with
-    #    two samples inherits the window's real variability instead of claiming
-    #    a suspiciously tight band of its own.
-    relative: dict[int, list[tuple[float, float]]] = defaultdict(list)
-    for local, weekday, quarter, watts in observations:
-        if shape[quarter] <= 25:
-            continue
-        expected = shape[quarter] * level[weekday]
-        if expected <= 0:
-            continue
-        relative[quarter].append((watts / expected, weight_of(local)))
+    fitted = _pooled_weekday_series(
+        observations,
+        reference=reference,
+        centre=lambda pairs: _weighted_quantile(pairs, 0.5),
+        minimum_samples=minimum_samples,
+        label="base-load profile",
+    )
+    shape = fitted["shape"]
+    level = fitted["level"]
 
     by_weekday: dict[int, list[dict[str, float | int]]] = {}
     for weekday in range(7):
         rows: list[dict[str, float | int]] = []
         for quarter in range(96):
-            samples = cell.get((weekday, quarter), [])
-            count = len(samples)
-            if quarter in informative and count:
-                pull = count / (count + BASE_LOAD_SHAPE_SHRINKAGE_SAMPLES)
-                deviation = 1.0 + (
-                    _weighted_quantile(samples, 0.5) - 1.0
-                ) * pull
-            else:
-                deviation = 1.0
-            expected = shape[quarter] * level[weekday] * deviation
-
-            spread = relative.get(quarter, [])
-            if quarter in informative and spread:
-                low = _weighted_quantile(spread, 0.1)
-                high = _weighted_quantile(spread, 0.9)
-            else:
-                low = high = 1.0
+            count = fitted["counts"][(weekday, quarter)]
+            centre = (
+                shape[quarter] * level[weekday]
+                * fitted["deviation"][(weekday, quarter)]
+            )
+            low, high = fitted["spread"][quarter]
             # Thin evidence must widen the band rather than narrow it: the
             # published p10/p90 is the plan's only honest statement that a
             # weekend quarter rests on three samples.
             widen = (1.0 + BASE_LOAD_SHAPE_SHRINKAGE_SAMPLES / (count + 1)) ** 0.5
-            centre = shape[quarter] * level[weekday] * deviation
             rows.append({
-                "median_w": round(max(0.0, expected), 2),
+                "median_w": round(max(0.0, centre), 2),
                 "p10_w": round(
                     max(0.0, centre - (centre - centre * low) * widen), 2
                 ),
@@ -727,6 +754,97 @@ def build_base_load_model(
     return {
         "by_weekday": by_weekday,
         "sample_count": len(observations),
+        "day_levels": {
+            weekday: round(value, 4) for weekday, value in level.items()
+        },
+        "method": "pooled_shape_weekday_level_v1",
+    }
+
+
+def build_device_load_model(
+    device_slots: list[dict[str, Any]],
+    device_key: str,
+    timezone_name: str,
+    *,
+    minimum_samples: int = 2,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Learn one device's expected-power profile per weekday and quarter.
+
+    The same correction as `build_base_load_model`, applied to metered devices.
+    Until 2026-08-16 every controllable device — hot water above all — was keyed
+    on weekday-versus-weekend, so its forecast for two consecutive weekdays was
+    byte-identical and any apparent day-to-day variation in the published plan
+    came from the scheduler moving a fixed series, not from the forecast.
+
+    The centre statistic stays a trimmed mean rather than becoming a median, for
+    the reason it always was one: an intermittent thermostat load has a median
+    of zero in most quarters, and planning against zero would be worse than
+    planning against a flat average.
+    """
+    local_tz = ZoneInfo(timezone_name)
+    observations: list[tuple[datetime, int, int, float]] = []
+    all_power: list[float] = []
+    latest: datetime | None = None
+    for row in device_slots:
+        when = _timestamp(row.get("start"))
+        values = row.get("device_energy_kwh")
+        if when is None or not isinstance(values, dict) or device_key not in values:
+            continue
+        energy = values[device_key]
+        if not isinstance(energy, (int, float)) or not isfinite(float(energy)):
+            continue
+        local = when.astimezone(local_tz)
+        power_w = max(0.0, float(energy) * 4_000)
+        observations.append((
+            local,
+            local.weekday(),
+            local.hour * 4 + local.minute // 15,
+            power_w,
+        ))
+        all_power.append(power_w)
+        if latest is None or when > latest:
+            latest = when
+
+    reference = now or latest
+    if reference is None:
+        raise OptimisationInputError(f"{device_key} has no usable samples")
+
+    fitted = _pooled_weekday_series(
+        observations,
+        reference=reference,
+        centre=_weighted_trimmed_mean,
+        minimum_samples=minimum_samples,
+        label=device_key,
+    )
+    shape = fitted["shape"]
+    level = fitted["level"]
+
+    positive = sorted(value for value in all_power if value > 25)
+    active_power_w: float | None = None
+    if positive:
+        threshold = max(25.0, positive[-1] * 0.5)
+        active_power_w = round(median(
+            value for value in positive if value >= threshold
+        ), 1)
+
+    return {
+        "by_weekday": {
+            weekday: [
+                round(
+                    max(
+                        0.0,
+                        shape[quarter] * level[weekday]
+                        * fitted["deviation"][(weekday, quarter)],
+                    ),
+                    2,
+                )
+                for quarter in range(96)
+            ]
+            for weekday in range(7)
+        },
+        "sample_count": len(observations),
+        "active_power_w": active_power_w,
         "day_levels": {
             weekday: round(value, 4) for weekday, value in level.items()
         },

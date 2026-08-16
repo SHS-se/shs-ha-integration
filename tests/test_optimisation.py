@@ -15,7 +15,7 @@ from optimisation import (  # noqa: E402
     aggregate_category_changes,
     aggregate_device_changes,
     build_base_load_model,
-    build_empirical_device_profile,
+    build_device_load_model,
     calibration_summary,
     discrete_current_control,
     extract_timestamped_forecast,
@@ -109,18 +109,77 @@ class QuarterAggregationTests(unittest.TestCase):
                     for offset in (0, 5, 10)
                 ])
         slots = aggregate_device_changes(changes)
-        profile = build_empirical_device_profile(
+        model = build_device_load_model(
             slots,
             "sensor.water_boiler_energy",
             "UTC",
-            day_type="weekday",
+            minimum_samples=2,
+        )
+        profile = model["by_weekday"][0]
+
+        self.assertEqual(len(slots), 7 * 96)
+        self.assertEqual(profile[0], 1000)
+        self.assertEqual(profile[1], 0)
+        self.assertEqual(model["active_power_w"], 1000)
+
+    def test_device_profile_keeps_an_intermittent_load_off_the_median(
+        self,
+    ) -> None:
+        """A thermostat that runs one quarter in eight must not forecast zero.
+
+        The centre statistic stays a trimmed mean for exactly this case: a
+        median would report 0 W for seven quarters in eight and the planner
+        would size the service from nothing.
+        """
+        start = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        changes = {"sensor.boiler_energy": []}
+        for day in range(14):
+            for quarter in range(96):
+                quarter_start = start + timedelta(days=day, minutes=quarter * 15)
+                energy = 0.25 if quarter % 8 == 0 else 0.0
+                changes["sensor.boiler_energy"].extend([
+                    (quarter_start + timedelta(minutes=offset), energy / 3)
+                    for offset in (0, 5, 10)
+                ])
+        model = build_device_load_model(
+            aggregate_device_changes(changes),
+            "sensor.boiler_energy",
+            "UTC",
             minimum_samples=2,
         )
 
-        self.assertEqual(len(slots), 7 * 96)
-        self.assertEqual(profile["expected_w"][0], 1000)
-        self.assertEqual(profile["expected_w"][1], 0)
-        self.assertEqual(profile["active_power_w"], 1000)
+        self.assertGreater(model["by_weekday"][0][0], 500)
+
+    def test_device_profile_separates_days_of_the_week(self) -> None:
+        """Hot water on a Sunday is not hot water on a Tuesday."""
+        monday = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        changes = {"sensor.boiler_energy": []}
+        for day in range(28):
+            when_day = monday + timedelta(days=day)
+            # Twice the hot water on Sundays, when the house is home all day.
+            scale = 2.0 if when_day.weekday() == 6 else 1.0
+            for quarter in range(96):
+                quarter_start = when_day + timedelta(minutes=quarter * 15)
+                energy = 0.1 * scale if quarter % 4 == 0 else 0.0
+                changes["sensor.boiler_energy"].extend([
+                    (quarter_start + timedelta(minutes=offset), energy / 3)
+                    for offset in (0, 5, 10)
+                ])
+        model = build_device_load_model(
+            aggregate_device_changes(changes),
+            "sensor.boiler_energy",
+            "UTC",
+            minimum_samples=2,
+        )
+
+        tuesday = model["by_weekday"][1][0]
+        sunday = model["by_weekday"][6][0]
+        self.assertGreater(sunday, tuesday)
+        # And two ordinary weekdays are no longer byte-identical by
+        # construction — they may agree, but only because the evidence does.
+        self.assertEqual(
+            len(model["by_weekday"]), 7, "every weekday carries its own series"
+        )
 
     def test_base_profile_subtracts_only_controllable_devices(self) -> None:
         start = datetime(2026, 8, 1, tzinfo=timezone.utc)

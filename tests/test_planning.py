@@ -407,7 +407,7 @@ class DeviceModelTests(unittest.TestCase):
         self.assertEqual(devices[0]["active_power_w"], 1_000.0)
         self.assertGreater(devices[0]["profile_sample_count"], 0)
         self.assertEqual(
-            devices[0]["inference"]["profile"], "weekday_weekend_trimmed_mean_v1"
+            devices[0]["inference"]["profile"], "pooled_shape_weekday_level_v1"
         )
         self.assertEqual(devices[0]["inference"]["source"], "test")
 
