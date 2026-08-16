@@ -51,6 +51,7 @@ from .const import (
     OPT_PV_FORECAST_LATITUDE,
     OPT_PV_FORECAST_LONGITUDE,
     OPT_BATTERY_SOC_ENTITY,
+    OPT_EV_SOC_ENTITY,
     OPT_GRID_EXPORT_POWER_ENTITY,
     OPT_BATTERY_CAPACITY_KWH,
     OPT_BATTERY_CHARGE_MAX_W,
@@ -1531,6 +1532,47 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "price_slots_pushed": pushed,
         }
 
+    async def _measured_soc_quarters(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> dict[str, dict[str, float]]:
+        """Quarter-hour mean state of charge for the house and vehicle batteries.
+
+        Both are ``measurement`` sensors, so the recorder keeps five-minute
+        means for them exactly as it does for temperatures. Reading them here
+        is what lets the portal draw a measured SOC line; deriving one from
+        charge and discharge energy would be a second battery model, free to
+        drift from the one the planner uses.
+        """
+        options = resolved_options(self.hass, dict(self.entry.options))
+        wanted = {
+            "battery_soc": options.get(OPT_BATTERY_SOC_ENTITY),
+            "ev_soc": options.get(OPT_EV_SOC_ENTITY),
+        }
+        entity_ids = sorted({
+            entity_id for entity_id in wanted.values()
+            if isinstance(entity_id, str) and entity_id
+        })
+        if not entity_ids:
+            return {}
+        statistics = await self._statistics_means(entity_ids, start, end)
+        by_start: dict[str, dict[str, float]] = {}
+        for field, entity_id in wanted.items():
+            if not isinstance(entity_id, str) or not entity_id:
+                continue
+            for moment, value in quarter_means(
+                statistics.get(entity_id, [])
+            ).items():
+                try:
+                    fraction = normalized_fraction(value, entity_id)
+                except OptimisationInputError:
+                    # A sensor briefly reporting something impossible is not a
+                    # reason to drop the quarter's energy.
+                    continue
+                by_start.setdefault(moment.isoformat(), {})[field] = round(fraction, 6)
+        return by_start
+
     async def _actual_quarters(
         self,
         entities_by_category: dict[str, list[str]],
@@ -1541,6 +1583,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             entities_by_category, start, end
         )
         rows = aggregate_category_changes(changes)
+        # Attached to quarters that already carry energy: a row of nothing but
+        # a battery level has no measurement the portal can use.
+        soc_by_start = await self._measured_soc_quarters(start, end)
+        for row in rows:
+            row.update(soc_by_start.get(row["start"], {}))
         configured = {
             category for category, values in entities_by_category.items() if values
         }
