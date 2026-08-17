@@ -773,6 +773,49 @@ class ModelVersionToleranceTests(unittest.TestCase):
                     self._plan(model_version=version), now
                 )
 
+    def test_a_dispatched_device_is_not_judged_as_a_block(self) -> None:
+        """A schema 6 plan sizes stores by state, not by required_kwh.
+
+        This is the check that was missing when schema 6 shipped: the server
+        stopped emitting per-service blocks, the integration went on demanding
+        them, and every plan was refused with "workload is invalid" while the
+        portal reported the format unsupported.
+        """
+        now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
+        issued = datetime(2026, 8, 16, 12, 0, tzinfo=timezone.utc)
+        plan = self._plan(
+            schema_version=6,
+            model_version="marginal-value-planner-v9",
+            services=[{
+                "id": "pool:2026-08-16",
+                "device": "pool",
+                "earliest_start": issued.isoformat(),
+                "deadline": (issued + timedelta(hours=1)).isoformat(),
+                "required_kwh": 2.0,
+                "control": {"type": "fixed_power", "power_w": 3_500},
+                "min_run_slots": 4,
+                "priority": 2,
+            }],
+        )
+        for scenario in plan["plans"].values():
+            scenario["dispatched_devices"] = ["battery", "pool"]
+            scenario["service_slots"] = {"pool:2026-08-16": []}
+            # Power the block model would call unexplained, and a state-based
+            # plan calls Tuesday afternoon.
+            for offset, slot in enumerate(scenario["slots"]):
+                slot["pool_w"] = 3_500 if offset < 2 else 0
+
+        validate_plan_contract(plan, now)
+
+    def test_a_dispatched_scenario_still_declares_its_devices(self) -> None:
+        now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
+        plan = self._plan(schema_version=6)
+        for scenario in plan["plans"].values():
+            scenario["dispatched_devices"] = "pool"
+
+        with self.assertRaises(OptimisationInputError):
+            validate_plan_contract(plan, now)
+
     def test_an_unreadable_contract_is_still_refused(self) -> None:
         now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
         for field, value in (

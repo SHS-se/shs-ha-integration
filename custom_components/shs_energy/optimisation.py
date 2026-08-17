@@ -1255,8 +1255,23 @@ def validate_plan_contract(
         envelope_controls: list[list[dict[str, Any]]] = [
             [] for _slot in slots
         ]
+        # Devices the server planned as physical states rather than as fixed
+        # blocks. Every check below asks whether a service filled the window its
+        # `required_kwh` implies, which a dispatched store has neither of: it is
+        # sized by what its measured state is worth, slot by slot. Applying these
+        # to it refuses a correct plan for disobeying the model it replaced.
+        dispatched = scenario.get("dispatched_devices") or []
+        if not isinstance(dispatched, list) or any(
+            not isinstance(device, str) for device in dispatched
+        ):
+            raise OptimisationInputError(
+                f"{key} scenario dispatched devices are invalid"
+            )
+        dispatched_devices = set(dispatched)
         scenario_energy: dict[str, float] = {}
         for service_id, spec in service_specs.items():
+            if spec["device"] in dispatched_devices:
+                continue
             indices = service_slots[service_id]
             if (
                 not isinstance(indices, list)
@@ -1452,11 +1467,21 @@ def validate_plan_contract(
             scenario_energy[service_id] = delivered
         for index, slot in enumerate(slots):
             for device in ("pool", "ev"):
+                # A dispatched device has no discrete service schedule to match:
+                # its power is whatever its marginal value bought in that slot.
+                # Its physical bounds are still checked below.
+                if device in dispatched_devices:
+                    continue
                 if abs(float(slot[f"{device}_w"]) - expected_power[device][index]) > 0.01:
                     raise OptimisationInputError(
                         f"{key} scenario {device} power is not its discrete schedule"
                     )
-            if abs(float(slot["ev_target_current_a"]) - expected_current[index]) > 1e-6:
+            if (
+                "ev" not in dispatched_devices
+                and abs(
+                    float(slot["ev_target_current_a"]) - expected_current[index]
+                ) > 1e-6
+            ):
                 raise OptimisationInputError(
                     f"{key} scenario EV current is not its service schedule"
                 )
