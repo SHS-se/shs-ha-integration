@@ -157,31 +157,38 @@ def optimisation_plan_due(
     force: bool = False,
     retry_after_error: bool = False,
 ) -> bool:
-    """Request a plan before expiry and every quarter after a failed attempt."""
+    """Request a plan once per quarter, and immediately after a failure.
+
+    The snapshot is built only when a plan is due, so this interval is also how
+    stale the stored snapshot gets — and the server refuses to plan against a
+    snapshot older than fifteen minutes. Refreshing every 45 minutes therefore
+    left the stored snapshot unusable for two thirds of its life, which is what
+    made "replan now" fail with `captured_at must describe a fresh snapshot`
+    more often than it worked.
+
+    Replanning every quarter also matches how the plan is meant to be read
+    (ENERGY_OPTIMISATION_ARCHITECTURE.md §8.7): only the first slot is ever a
+    commitment and everything beyond it is a value estimate, so rebuilding on
+    the same cadence the slots are settled on is the natural interval rather
+    than a compromise.
+
+    The comparison is on quarter boundaries because that is the only clock this
+    is ever asked on. Pushes fire a fixed few seconds past each quarter while
+    `issued_at` carries whatever second the server stamped, so comparing exact
+    instants made the decision a coin flip: a plan issued at :51 past was not
+    due at a push at :22 and the quarter was skipped entirely.
+    """
     if now.tzinfo is None:
         raise OptimisationInputError("current time must be timezone-aware")
     if force or retry_after_error or not plan or plan.get("status") != "ready":
         return True
     try:
-        valid_until = datetime.fromisoformat(str(plan["valid_until"]))
+        issued_at = datetime.fromisoformat(str(plan["issued_at"]))
     except (KeyError, ValueError) as err:
-        raise OptimisationInputError("cached plan valid_until is invalid") from err
-    if valid_until.tzinfo is None:
-        raise OptimisationInputError("cached plan valid_until must include a timezone")
-    # Plans live for 75 minutes. A 30-minute margin normally refreshes them
-    # every 45 minutes and leaves two quarter-hour retry opportunities.
-    #
-    # Both sides are floored to the quarter because that is the only clock this
-    # ever gets asked on. Pushes fire a fixed few seconds past each quarter,
-    # while the threshold inherits whatever second the *server* stamped
-    # `issued_at` with — so a plan issued at :51 past put the threshold 29
-    # seconds beyond a push at :22, the replan was skipped, and the house ran on
-    # an hour-old plan. Comparing exact instants made that a coin flip on every
-    # cycle; comparing quarters makes the answer the same wherever in the
-    # quarter the question is asked.
-    return quarter_start(now) >= quarter_start(
-        valid_until.astimezone(timezone.utc) - timedelta(minutes=30)
-    )
+        raise OptimisationInputError("cached plan issued_at is invalid") from err
+    if issued_at.tzinfo is None:
+        raise OptimisationInputError("cached plan issued_at must include a timezone")
+    return quarter_start(now) > quarter_start(issued_at)
 
 
 def parse_number(raw: Any, label: str) -> float:

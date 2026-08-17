@@ -319,20 +319,23 @@ class ForecastTests(unittest.TestCase):
                 "deadline": horizon[4].isoformat(),
             }], horizon)
 
-    def test_plan_refresh_retries_before_expiry_and_after_failure(self) -> None:
-        issued = datetime(2026, 8, 10, 18, 0, tzinfo=timezone.utc)
-        plan = {
-            "status": "ready",
-            "valid_until": (issued + timedelta(minutes=75)).isoformat(),
-        }
+    def test_a_plan_is_rebuilt_once_per_quarter(self) -> None:
+        """The snapshot is only built when a plan is due, so this is also how
+        stale the stored snapshot is allowed to get. The server refuses to plan
+        against one older than fifteen minutes."""
+        issued = datetime(2026, 8, 10, 18, 0, 51, tzinfo=timezone.utc)
+        plan = {"status": "ready", "issued_at": issued.isoformat()}
+
+        # Same quarter as the issue: nothing to do yet.
         self.assertFalse(optimisation_plan_due(
-            plan, issued + timedelta(minutes=44)
+            plan, issued + timedelta(minutes=10)
+        ))
+        # The next quarter has begun, so a fresh snapshot is due.
+        self.assertTrue(optimisation_plan_due(
+            plan, datetime(2026, 8, 10, 18, 15, 22, tzinfo=timezone.utc)
         ))
         self.assertTrue(optimisation_plan_due(
-            plan, issued + timedelta(minutes=45)
-        ))
-        self.assertTrue(optimisation_plan_due(
-            plan, issued + timedelta(minutes=15), retry_after_error=True
+            plan, issued + timedelta(minutes=2), retry_after_error=True
         ))
 
     def test_extracts_timestamped_watts_and_reports_provenance(self) -> None:
@@ -404,25 +407,21 @@ class ForecastTests(unittest.TestCase):
     def test_a_replan_is_not_skipped_by_seconds_within_a_quarter(self) -> None:
         """The observed failure: a plan issued at :51 past, pushed at :22.
 
-        The threshold sat 29 seconds beyond the push, so the quarter was
-        skipped and the house ran on an hour-old plan through a replan it was
-        due. The push clock only ever asks on quarter boundaries, so the
-        comparison has to be made on the same clock.
+        Comparing exact instants made the decision a coin flip on the seconds,
+        so the quarter was skipped and the house ran on an hour-old plan
+        through a replan it was due. The push clock only ever asks on quarter
+        boundaries, so the comparison is made on the same clock.
         """
         issued = datetime(2026, 8, 17, 13, 30, 51, tzinfo=timezone.utc)
-        plan = {
-            "status": "ready",
-            "valid_until": (issued + timedelta(minutes=75)).isoformat(),
-        }
-        pushed = datetime(2026, 8, 17, 14, 15, 22, tzinfo=timezone.utc)
+        plan = {"status": "ready", "issued_at": issued.isoformat()}
 
-        self.assertTrue(optimisation_plan_due(plan, pushed))
-        # And the quarter before it is still too early.
-        self.assertFalse(
-            optimisation_plan_due(
-                plan, pushed - timedelta(minutes=15)
-            )
-        )
+        self.assertTrue(optimisation_plan_due(
+            plan, datetime(2026, 8, 17, 13, 45, 22, tzinfo=timezone.utc)
+        ))
+        # And a push inside the issuing quarter is still too early.
+        self.assertFalse(optimisation_plan_due(
+            plan, datetime(2026, 8, 17, 13, 30, 22, tzinfo=timezone.utc)
+        ))
 
     def test_stale_forecast_is_rejected(self) -> None:
         captured = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
