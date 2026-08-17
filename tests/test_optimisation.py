@@ -401,6 +401,29 @@ class ForecastTests(unittest.TestCase):
         self.assertEqual(result["correction_factor_by_lead_day"][:2], [0.8, 1.0])
         self.assertEqual(result["sample_count_by_lead_day"][:2], [2, 1])
 
+    def test_a_replan_is_not_skipped_by_seconds_within_a_quarter(self) -> None:
+        """The observed failure: a plan issued at :51 past, pushed at :22.
+
+        The threshold sat 29 seconds beyond the push, so the quarter was
+        skipped and the house ran on an hour-old plan through a replan it was
+        due. The push clock only ever asks on quarter boundaries, so the
+        comparison has to be made on the same clock.
+        """
+        issued = datetime(2026, 8, 17, 13, 30, 51, tzinfo=timezone.utc)
+        plan = {
+            "status": "ready",
+            "valid_until": (issued + timedelta(minutes=75)).isoformat(),
+        }
+        pushed = datetime(2026, 8, 17, 14, 15, 22, tzinfo=timezone.utc)
+
+        self.assertTrue(optimisation_plan_due(plan, pushed))
+        # And the quarter before it is still too early.
+        self.assertFalse(
+            optimisation_plan_due(
+                plan, pushed - timedelta(minutes=15)
+            )
+        )
+
     def test_stale_forecast_is_rejected(self) -> None:
         captured = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
         with self.assertRaisesRegex(OptimisationInputError, "stale"):

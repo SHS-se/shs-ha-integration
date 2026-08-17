@@ -170,7 +170,16 @@ def optimisation_plan_due(
         raise OptimisationInputError("cached plan valid_until must include a timezone")
     # Plans live for 75 minutes. A 30-minute margin normally refreshes them
     # every 45 minutes and leaves two quarter-hour retry opportunities.
-    return now.astimezone(timezone.utc) >= (
+    #
+    # Both sides are floored to the quarter because that is the only clock this
+    # ever gets asked on. Pushes fire a fixed few seconds past each quarter,
+    # while the threshold inherits whatever second the *server* stamped
+    # `issued_at` with — so a plan issued at :51 past put the threshold 29
+    # seconds beyond a push at :22, the replan was skipped, and the house ran on
+    # an hour-old plan. Comparing exact instants made that a coin flip on every
+    # cycle; comparing quarters makes the answer the same wherever in the
+    # quarter the question is asked.
+    return quarter_start(now) >= quarter_start(
         valid_until.astimezone(timezone.utc) - timedelta(minutes=30)
     )
 
