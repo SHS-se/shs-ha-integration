@@ -112,6 +112,7 @@ from .optimisation import (
     parse_number,
     quarter_start,
     require_fresh_source,
+    SNAPSHOT_SCHEMA_VERSION,
     utc_slots,
     validate_plan_contract,
 )
@@ -2047,7 +2048,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
 
         snapshot = {
-            "schema_version": 5,
+            "schema_version": SNAPSHOT_SCHEMA_VERSION,
             "mode": "live",
             "capabilities": capabilities,
             "pool": pool_state,

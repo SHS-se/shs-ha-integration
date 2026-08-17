@@ -17,6 +17,23 @@ from zoneinfo import ZoneInfo
 
 SLOT_SECONDS = 900
 SLOT_HOURS = 0.25
+
+# The snapshot version this build produces, and the plan versions it can read.
+#
+# Two separate numbers on purpose. The snapshot version tells the server what
+# this installation is able to *send* and, through it, what shape of plan it can
+# read back — so the server can offer the newer planner only to installations
+# that have already updated, and no plan is ever refused during a rollout. That
+# negotiation is what the v8 incident lacked: the server changed unilaterally
+# and every installation stopped executing.
+#
+# Schema 6 adds measured pool state to the snapshot, which is what lets the pool
+# be planned as a store with a temperature rather than a fixed daily energy
+# budget. A build that cannot send pool state cannot be given a plan that
+# assumes it, so the server keeps such a home on the schema 5 planner.
+SNAPSHOT_SCHEMA_VERSION = 6
+SUPPORTED_PLAN_SCHEMA_VERSIONS = frozenset({5, 6})
+
 ACTUAL_FIELD_BY_CATEGORY = {
     "total_consumption": "total_load_kwh",
     "solar_production": "solar_production_kwh",
@@ -940,7 +957,10 @@ def validate_plan_contract(
     """Validate the cached server plan before exposing any local request."""
     if not isinstance(plan, dict):
         raise OptimisationInputError("optimisation response has no plan object")
-    if plan.get("schema_version") != 5 or plan.get("slot_minutes") != 15:
+    if (
+        plan.get("schema_version") not in SUPPORTED_PLAN_SCHEMA_VERSIONS
+        or plan.get("slot_minutes") != 15
+    ):
         raise OptimisationInputError("optimisation plan schema is unsupported")
     if plan.get("mode") != "live":
         raise OptimisationInputError("optimisation plan mode is unsupported")

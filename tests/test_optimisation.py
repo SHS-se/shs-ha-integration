@@ -748,6 +748,17 @@ class ModelVersionToleranceTests(unittest.TestCase):
             **overrides,
         }
 
+    def test_both_readable_plan_schemas_are_accepted(self) -> None:
+        """A rollout must never leave an installation unable to read a plan.
+
+        The server offers schema 6 only to snapshots that declared 6, so both
+        versions are live at once while installations update.
+        """
+        now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
+        for version in (5, 6):
+            with self.subTest(schema_version=version):
+                validate_plan_contract(self._plan(schema_version=version), now)
+
     def test_any_planner_name_is_executable_on_a_known_contract(self) -> None:
         now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
         for version in (
@@ -765,7 +776,8 @@ class ModelVersionToleranceTests(unittest.TestCase):
     def test_an_unreadable_contract_is_still_refused(self) -> None:
         now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
         for field, value in (
-            ("schema_version", 6),
+            # 7 is beyond this build; 5 and 6 are both readable.
+            ("schema_version", 7),
             ("slot_minutes", 60),
             ("mode", "shadow"),
         ):
