@@ -370,7 +370,7 @@ def _configuration_sections() -> list[dict[str, Any]]:
         {
             "id": "ev",
             "tab": "storage",
-            "title": "EV obligation",
+            "title": "Electric vehicle",
             "description": (
                 "Vehicle state supplies the charging need. An optional departure "
                 "timestamp gives the target a specific deadline; without one, the "

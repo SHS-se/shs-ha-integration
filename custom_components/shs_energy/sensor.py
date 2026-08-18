@@ -355,6 +355,36 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
                 entities.add(entity_id)
         return next(iter(entities)) if len(entities) == 1 else None
 
+    def _reviewed_bounds(self) -> dict[str, float]:
+        """The installation's own current range, from the reviewed mapping.
+
+        The charger entity's own ``min`` is not that range. A Tesla exposes
+        0 A, which means "this number accepts zero", not "the car draws at
+        zero" — below the cable's floor the vehicle stops charging entirely.
+        Falling straight through to that attribute published a 0 A floor while
+        the reviewed mapping said 5 A, so anything reading the envelope was
+        told the charge could be modulated down to nothing.
+
+        Only an unambiguous range is used, which is the same invariant the
+        planner enforces when it builds the EV service: EV charging meters must
+        share one variable-power entity and one range.
+        """
+        mappings = self.coordinator.entry.options.get(
+            OPT_DEVICE_CONTROL_MAPPINGS, {}
+        )
+        ranges: set[tuple[float, float]] = set()
+        for mapping in mappings.values():
+            if mapping.get("control_type") != "variable_power":
+                continue
+            low = mapping.get("minimum_value")
+            high = mapping.get("maximum_value")
+            if isinstance(low, (int, float)) and isinstance(high, (int, float)):
+                ranges.add((float(low), float(high)))
+        if len(ranges) != 1:
+            return {}
+        low, high = next(iter(ranges))
+        return {"min_current_a": low, "max_current_a": high}
+
     @property
     def native_value(self) -> float | None:
         slot = self.coordinator.current_plan_slot
@@ -372,16 +402,19 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
             self.hass.states.get(current_entity) if current_entity else None
         )
         current_attributes = current_state.attributes if current_state else {}
+        reviewed = self._reviewed_bounds()
         return {
             "slot_start": slot.get("start"),
             "binding": slot.get("binding"),
             "minimum_current_a": slot.get("ev_min_current_a"),
             "maximum_current_a": slot.get("ev_max_current_a"),
             "charger_minimum_current_a": control.get(
-                "min_current_a", current_attributes.get("min")
+                "min_current_a",
+                reviewed.get("min_current_a", current_attributes.get("min")),
             ),
             "charger_maximum_current_a": control.get(
-                "max_current_a", current_attributes.get("max")
+                "max_current_a",
+                reviewed.get("max_current_a", current_attributes.get("max")),
             ),
             "current_step_a": control.get(
                 "current_step_a", current_attributes.get("step")
