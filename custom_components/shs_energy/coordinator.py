@@ -192,9 +192,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.optimisation_missing_inputs: list[str] = []
         self.optimisation_unplanned_services: list[str] = []
         self._attention: dict[str, dict[str, Any]] = {}
-        # The website's own view of every meter, so a warning can name the
-        # meter a customer has to change rather than an internal option key.
-        self.device_configuration: dict[str, dict[str, Any]] = {}
         self.device_control_mapping_gaps: list[str] = []
         self._loaded_options = dict(entry.options)
         self._optimisation_issue_grace_until = dt_util.utcnow() + timedelta(
@@ -715,7 +712,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for device in devices
         }
         stored["optimisation_device_configuration"] = configuration
-        self.device_configuration = configuration
         self._sync_device_control_issue(configuration, mappings)
         return configuration
 
@@ -2144,7 +2140,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # configuration gap, not a house without the equipment. Say so rather
         # than publishing a snapshot that quietly omits the store.
         self.optimisation_unplanned_services = unplanned_services(
-            options, planned_paths, self.device_configuration
+            options,
+            planned_paths,
+            # Read from the persisted exchange, never from an in-memory cache:
+            # a cache filled only when a device exchange happens is empty on
+            # every restart, and the first snapshot of the session then claims
+            # the home has no meter of the right category at all.
+            stored.get("optimisation_device_configuration", {}),
         )
         self._sync_unplanned_service_issue()
         base_source_categories = (

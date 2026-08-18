@@ -77,6 +77,27 @@ class AttentionSurfaceTests(unittest.TestCase):
             "a repair no card owns can leave that card green while it is open",
         )
 
+    def test_an_attention_item_is_built_from_persisted_state(self) -> None:
+        """State that only a device exchange fills is empty on every restart.
+
+        The unplanned-service warning names the meter a customer has to change,
+        which it read from an instance attribute set during the device
+        exchange. The optimisation push can run first, so the first warning of
+        a session announced that no meter was classified for the service at all
+        — about a home that has one. The persisted configuration is already an
+        argument to the snapshot builder; nothing needed caching.
+        """
+        call = COORDINATOR[
+            COORDINATOR.index("self.optimisation_unplanned_services = unplanned_services(") :
+        ]
+        call = call[: call.index("\n        )")]
+        self.assertIn('stored.get("optimisation_device_configuration"', call)
+        self.assertNotIn(
+            "self.device_configuration",
+            COORDINATOR,
+            "read the persisted exchange rather than caching it on the coordinator",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
