@@ -331,8 +331,17 @@ def build_services(
             raise OptimisationInputError(
                 f"{current_entity} step must be positive"
             )
-        connected_payload = read_entity(connected_id)
-        connected = state_is_on(connected_payload["state"])
+        _ = read_entity(connected_id)  # fail early on a broken control route
+    # Vehicle state is a measurement; the control route is a separate contract.
+    # Reading it here rather than inside the control branch is what lets an
+    # unrouted charger still report the car — the planner declines to dispatch
+    # what it may not control, and now says so instead of omitting the store.
+    if options.get(OPT_EV_CONNECTED_ENTITY):
+        connected_id = required_entity(
+            OPT_EV_CONNECTED_ENTITY,
+            "Vehicle connected-state entity",
+        )
+        connected = state_is_on(read_entity(connected_id)["state"])
         soc_id = required_entity(
             OPT_EV_SOC_ENTITY,
             "Vehicle battery SOC entity",
@@ -402,13 +411,16 @@ def build_services(
                 "soc": soc_id,
                 "target_soc": target_id,
                 "energy_remaining": remaining_entity,
-                "charge_current": current_entity,
+                "charge_current": current_entity if ev_controls else None,
             },
         }
 
+        # Only a routed charger produces a service. Without one the vehicle is
+        # reported and not planned, which is the state the store diagnostics
+        # exist to name.
         required = (
             max(0.0, target - soc) * capacity / EV_CHARGE_EFFICIENCY
-            if connected else 0.0
+            if connected and ev_controls else 0.0
         )
         if required > 0:
             planning_deadline = departure or end

@@ -519,5 +519,74 @@ class UnplannedServiceTests(unittest.TestCase):
         self.assertEqual(len(reports), 2)
 
 
+class VehicleStateWithoutAControlRouteTests(unittest.TestCase):
+    """A car the planner may not control is still a car it should report.
+
+    Vehicle state and the charger's control route are configured on opposite
+    sides of the boundary, and `build_services` used to read the first only
+    when the second existed. An unrouted charging meter therefore produced no
+    `ev_battery` at all, so the server could not so much as name the store it
+    was declining to plan.
+    """
+
+    ENTITIES = {
+        "binary_sensor.cable": {"state": "on", "attributes": {}},
+        "sensor.car_soc": {"state": "67", "attributes": {}},
+        "number.charge_limit": {"state": "80", "attributes": {}},
+        "sensor.car_energy_remaining": {"state": "51.5", "attributes": {}},
+    }
+
+    OPTIONS = {
+        "device_control_mappings": {},
+        "ev_connected_entity": "binary_sensor.cable",
+        "ev_soc_entity": "sensor.car_soc",
+        "ev_target_soc_entity": "number.charge_limit",
+        "ev_energy_remaining_entity": "sensor.car_energy_remaining",
+    }
+
+    def _build(self):
+        return build_services(
+            dict(self.OPTIONS),
+            {},
+            [],
+            HORIZON,
+            [],  # no device model routes to "ev"
+            read_entity=lambda entity_id: self.ENTITIES[entity_id],
+            local_tz=timezone.utc,
+            today=TODAY,
+        )
+
+    def test_an_unrouted_charger_still_reports_the_vehicle(self) -> None:
+        services, _samples, ev_battery = self._build()
+        self.assertIsNotNone(ev_battery)
+        self.assertTrue(ev_battery["connected"])
+        self.assertAlmostEqual(ev_battery["soc"], 0.67, places=4)
+        self.assertAlmostEqual(ev_battery["departure_target_soc"], 0.8, places=4)
+        # 51.5 kWh remaining at 67% is a 76.9 kWh pack.
+        self.assertAlmostEqual(ev_battery["capacity_kwh"], 76.866, places=2)
+
+    def test_an_unrouted_charger_produces_no_service(self) -> None:
+        """Reported, not planned: there is no actuator to hand a schedule to."""
+        services, _samples, _ev = self._build()
+        self.assertEqual([s for s in services if s["device"] == "ev"], [])
+
+    def test_the_charge_current_source_is_null_without_a_route(self) -> None:
+        _services, _samples, ev_battery = self._build()
+        self.assertIsNone(ev_battery["source_entity_ids"]["charge_current"])
+
+    def test_a_home_with_no_vehicle_configured_reports_none(self) -> None:
+        _services, _samples, ev_battery = build_services(
+            {"device_control_mappings": {}},
+            {},
+            [],
+            HORIZON,
+            [],
+            read_entity=lambda entity_id: self.ENTITIES[entity_id],
+            local_tz=timezone.utc,
+            today=TODAY,
+        )
+        self.assertIsNone(ev_battery)
+
+
 if __name__ == "__main__":
     unittest.main()
