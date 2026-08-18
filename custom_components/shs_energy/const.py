@@ -189,6 +189,7 @@ OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS = 120
 ISSUE_OPTIMISATION_CONFIGURATION = "optimisation_configuration"
 ISSUE_OPTIMISATION_PLAN_REFUSED = "optimisation_plan_refused"
 ISSUE_DEVICE_CONTROL_MAPPING = "device_control_mapping"
+ISSUE_UNPLANNED_SERVICE = "unplanned_service"
 
 # Storage keys for push bookkeeping.
 STORAGE_VERSION = 1

@@ -30,6 +30,7 @@ try:  # pragma: no cover - exercised by both import paths
         OPT_EV_ENERGY_REMAINING_ENTITY,
         OPT_EV_SOC_ENTITY,
         OPT_EV_TARGET_SOC_ENTITY,
+        OPT_POOL_WATER_TEMPERATURE_ENTITY,
     )
     from .const import OPTIMISATION_PROFILE_DAYS
     from .device_controls import CONTROL_TYPES, planning_path
@@ -58,6 +59,7 @@ except ImportError:  # The test suite imports these helpers as flat modules,
         OPT_EV_ENERGY_REMAINING_ENTITY,
         OPT_EV_SOC_ENTITY,
         OPT_EV_TARGET_SOC_ENTITY,
+        OPT_POOL_WATER_TEMPERATURE_ENTITY,
     )
     from const import OPTIMISATION_PROFILE_DAYS  # type: ignore[no-redef]
     from device_controls import (  # type: ignore[no-redef]
@@ -431,6 +433,68 @@ def build_services(
             })
     validate_service_windows(services, horizon)
     return services, samples, ev_battery
+
+
+# Telemetry that proves a home owns a service, against the planning path that
+# has to exist before the planner can act on it.
+_SERVICE_EVIDENCE: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
+    (
+        "ev",
+        "a vehicle",
+        (
+            OPT_EV_CONNECTED_ENTITY,
+            OPT_EV_SOC_ENTITY,
+            OPT_EV_TARGET_SOC_ENTITY,
+            OPT_EV_ENERGY_REMAINING_ENTITY,
+        ),
+        "set the EV charging meter to variable-power control on the website",
+    ),
+    (
+        "pool",
+        "a pool",
+        (OPT_POOL_WATER_TEMPERATURE_ENTITY,),
+        "set the pool heating meter to switch-schedule control on the website",
+    ),
+)
+
+
+def unplanned_services(
+    options: dict[str, Any],
+    planned_paths: set[str | None],
+) -> list[str]:
+    """Name each service this home has telemetry for but no control route.
+
+    Not an error: a home may own a pool thermometer and no controllable heater,
+    and that is a legitimate configuration. It must never be *silent*, though,
+    and it was. The capability flags are derived from the routed device models,
+    so a meter the website left in base load drops the whole store: the server
+    receives no vehicle at all, builds no bid for it, and writes no diagnostic
+    row explaining the omission. A car sat plugged in below its own charge
+    limit for two days while surplus was exported, and every surface said
+    "ready" with no errors.
+
+    The asymmetry is what makes this worth reporting. Telemetry is configured
+    per service and the control route is configured per *meter*, on the other
+    side of the boundary, so the two can disagree without either side looking
+    wrong on its own. Comparing them is the only place that disagreement is
+    visible.
+    """
+    reports: list[str] = []
+    for path, subject, option_keys, remedy in _SERVICE_EVIDENCE:
+        if path in planned_paths:
+            continue
+        configured = sorted(
+            key for key in option_keys
+            if isinstance(options.get(key), str) and options[key].strip()
+        )
+        if not configured:
+            continue
+        reports.append(
+            f"{subject} is configured ({', '.join(configured)}) but no meter "
+            f"routes to the {path} planner, so it is not being planned; "
+            f"{remedy}"
+        )
+    return reports
 
 
 def build_device_models(

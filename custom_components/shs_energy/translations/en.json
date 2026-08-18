@@ -223,6 +223,10 @@
     "optimisation_plan_refused": {
       "title": "Energy plan refused by Home Assistant",
       "description": "Smart Home Solutions returned an optimisation plan that this integration will not execute, so no planned device requests are being issued. Measurements are still being uploaded normally.\n\nReason: {reason}\n\nThis usually means the integration needs updating to a build that understands the current plan contract."
+    },
+    "unplanned_service": {
+      "title": "A service is configured but not being planned",
+      "description": "These services have telemetry configured here but no meter routed to them on the website, so the planner never sees them:\n\n{services}\n\nNothing is broken and the rest of the plan is unaffected, but the service contributes nothing to the objective: the store wins no energy, appears in no schedule, and no diagnostic explains the omission. Set the meter's planning role to controllable with the control type named above on the website, then open Configure on this integration to fetch the change."
     }
   }
 }

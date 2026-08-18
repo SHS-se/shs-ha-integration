@@ -16,7 +16,11 @@ import unittest
 sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
 from optimisation import OptimisationInputError  # noqa: E402
-from planning import build_device_models, build_services  # noqa: E402
+from planning import (  # noqa: E402
+    build_device_models,
+    build_services,
+    unplanned_services,
+)
 
 TODAY = date(2026, 8, 15)
 START = datetime(2026, 8, 15, 0, 0, tzinfo=timezone.utc)
@@ -454,6 +458,65 @@ class DeviceModelTests(unittest.TestCase):
             local_tz=timezone.utc,
         )
         self.assertEqual(len(seen), len(keys))
+
+
+class UnplannedServiceTests(unittest.TestCase):
+    """The gap that hid a connected car from the objective for two days.
+
+    Telemetry is configured per service, in Home Assistant; the control route
+    is configured per meter, on the website. Nothing compared the two, so a
+    vehicle whose charging meter sat in base load produced `capabilities.ev`
+    false, no `ev_battery` in the snapshot, no store, no bid and no diagnostic
+    row — while the plan reported "ready" with no errors and no missing inputs.
+    """
+
+    EV_OPTIONS = {
+        "ev_connected_entity": "binary_sensor.charge_cable",
+        "ev_soc_entity": "sensor.car_soc",
+        "ev_target_soc_entity": "number.charge_limit",
+        "ev_energy_remaining_entity": "sensor.car_energy_remaining",
+    }
+
+    def test_configured_vehicle_without_a_route_is_reported(self) -> None:
+        reports = unplanned_services(dict(self.EV_OPTIONS), {"pool", "boiler"})
+        self.assertEqual(len(reports), 1)
+        self.assertIn("a vehicle is configured", reports[0])
+        self.assertIn("ev_connected_entity", reports[0])
+        self.assertIn("variable-power", reports[0])
+
+    def test_a_routed_vehicle_is_silent(self) -> None:
+        self.assertEqual(
+            unplanned_services(dict(self.EV_OPTIONS), {"ev"}),
+            [],
+        )
+
+    def test_a_home_without_the_telemetry_is_silent(self) -> None:
+        """No vehicle configured is a house without a car, not a gap."""
+        self.assertEqual(unplanned_services({}, set()), [])
+
+    def test_blank_option_values_do_not_count_as_evidence(self) -> None:
+        self.assertEqual(
+            unplanned_services(
+                {"ev_connected_entity": "   ", "ev_soc_entity": ""}, set()
+            ),
+            [],
+        )
+
+    def test_pool_telemetry_without_a_route_is_reported(self) -> None:
+        reports = unplanned_services(
+            {"pool_water_temperature_entity": "sensor.pool_water"}, {"ev"}
+        )
+        self.assertEqual(len(reports), 1)
+        self.assertIn("a pool is configured", reports[0])
+        self.assertIn("switch-schedule", reports[0])
+
+    def test_every_unrouted_service_is_reported_together(self) -> None:
+        """One gap must not hide the next, as a first-failure raise would."""
+        reports = unplanned_services(
+            {**self.EV_OPTIONS, "pool_water_temperature_entity": "sensor.pool"},
+            set(),
+        )
+        self.assertEqual(len(reports), 2)
 
 
 if __name__ == "__main__":

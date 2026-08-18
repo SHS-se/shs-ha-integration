@@ -207,6 +207,9 @@ class ShsOptimisationStatusSensor(ShsBaseSensor):
             ),
             "capabilities": plan.get("capabilities", {}),
             "missing_inputs": self.coordinator.optimisation_missing_inputs,
+            # A store the planner never saw is otherwise invisible: it wins
+            # nothing, so it appears in no schedule and no diagnostic row.
+            "unplanned_services": self.coordinator.optimisation_unplanned_services,
             "validation_errors": plan.get("validation_errors", []),
         }
 

@@ -36,6 +36,7 @@ from .const import (
     DOMAIN,
     ISSUE_MISSING_CUSTOMER_INPUT,
     ISSUE_DEVICE_CONTROL_MAPPING,
+    ISSUE_UNPLANNED_SERVICE,
     ISSUE_OPTIMISATION_CONFIGURATION,
     ISSUE_OPTIMISATION_PLAN_REFUSED,
     ISSUE_SUBSCRIPTION_INACTIVE,
@@ -116,7 +117,7 @@ from .optimisation import (
     utc_slots,
     validate_plan_contract,
 )
-from .planning import build_device_models, build_services
+from .planning import build_device_models, build_services, unplanned_services
 from .thermal import (
     actuator_value,
     cooling_value,
@@ -189,6 +190,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.actuals_accepted_until: str | None = None
         self.last_thermal_slots_accepted = 0
         self.optimisation_missing_inputs: list[str] = []
+        self.optimisation_unplanned_services: list[str] = []
         self.device_control_mapping_gaps: list[str] = []
         self._loaded_options = dict(entry.options)
         self._optimisation_issue_grace_until = dt_util.utcnow() + timedelta(
@@ -358,6 +360,31 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             translation_placeholders={
                 "inputs": "\n".join(
                     f"- {value}" for value in self.optimisation_missing_inputs
+                )
+            },
+        )
+
+    def _sync_unplanned_service_issue(self) -> None:
+        """Surface a service the website left in base load, without blocking.
+
+        Deliberately a warning rather than a missing input: refusing to plan
+        the whole home because the car is unrouted would trade a silent partial
+        plan for no plan at all, and the rest of the objective is still correct
+        without it.
+        """
+        if not self.optimisation_unplanned_services:
+            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_UNPLANNED_SERVICE)
+            return
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            ISSUE_UNPLANNED_SERVICE,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_UNPLANNED_SERVICE,
+            translation_placeholders={
+                "services": "\n".join(
+                    f"- {value}" for value in self.optimisation_unplanned_services
                 )
             },
         )
@@ -2027,6 +2054,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "boiler": "boiler" in planned_paths,
             "ev": "ev" in planned_paths,
         }
+        # A capability that is off because no meter routes to it is a
+        # configuration gap, not a house without the equipment. Say so rather
+        # than publishing a snapshot that quietly omits the store.
+        self.optimisation_unplanned_services = unplanned_services(
+            options, planned_paths
+        )
+        self._sync_unplanned_service_issue()
         base_source_categories = (
             "total_consumption", "grid_import", "grid_export",
             "solar_production", "battery_charge", "battery_discharge",
