@@ -191,6 +191,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_thermal_slots_accepted = 0
         self.optimisation_missing_inputs: list[str] = []
         self.optimisation_unplanned_services: list[str] = []
+        self._attention: dict[str, dict[str, Any]] = {}
+        # The website's own view of every meter, so a warning can name the
+        # meter a customer has to change rather than an internal option key.
+        self.device_configuration: dict[str, dict[str, Any]] = {}
         self.device_control_mapping_gaps: list[str] = []
         self._loaded_options = dict(entry.options)
         self._optimisation_issue_grace_until = dt_util.utcnow() + timedelta(
@@ -278,19 +282,87 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._sync_missing_input_issue()
         return status
 
-    def _sync_missing_input_issue(self) -> None:
-        """Raise or clear the repair issue naming the unanswered questions."""
-        if not self.missing_questions:
-            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_MISSING_CUSTOMER_INPUT)
-            return
+    # ------------------------------------------------------------------
+    # Anything needing a person, recorded once and shown everywhere
+    # ------------------------------------------------------------------
+
+    @property
+    def attention_items(self) -> list[dict[str, Any]]:
+        """Everything currently asking for a decision, worst first.
+
+        The panel used to derive its readiness cards from a handful of fields
+        chosen by hand, so it could show four green "Ready" badges while Home
+        Assistant was displaying a repair warning about the same installation.
+        Both now come from `_set_attention`, which raises the repair and
+        records the item in one call — they cannot disagree, because there is
+        no second place to update.
+
+        Each item also carries where the fix lives. A warning that names a
+        problem without naming the field is only marginally better than
+        silence, which is what "set the EV charging meter to variable-power
+        control on the website" turned out to be.
+        """
+        order = {"error": 0, "warning": 1}
+        return sorted(
+            self._attention.values(),
+            key=lambda item: (order.get(item["severity"], 2), item["title"]),
+        )
+
+    def _set_attention(
+        self,
+        key: str,
+        *,
+        severity: str,
+        title: str,
+        detail: str,
+        fix: dict[str, Any],
+        items: list[str] | None = None,
+        placeholders: dict[str, str] | None = None,
+    ) -> None:
+        """Record one thing needing a person, and raise its repair."""
+        self._attention[key] = {
+            "key": key,
+            "severity": severity,
+            "title": title,
+            "detail": detail,
+            "items": list(items or []),
+            "fix": fix,
+        }
         ir.async_create_issue(
             self.hass,
             DOMAIN,
-            ISSUE_MISSING_CUSTOMER_INPUT,
+            key,
             is_fixable=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key=ISSUE_MISSING_CUSTOMER_INPUT,
-            translation_placeholders={
+            severity=(
+                ir.IssueSeverity.ERROR
+                if severity == "error"
+                else ir.IssueSeverity.WARNING
+            ),
+            translation_key=key,
+            translation_placeholders=placeholders or {},
+        )
+
+    def _clear_attention(self, key: str) -> None:
+        """Drop one item and its repair together."""
+        self._attention.pop(key, None)
+        ir.async_delete_issue(self.hass, DOMAIN, key)
+
+    def _sync_missing_input_issue(self) -> None:
+        """Raise or clear the repair issue naming the unanswered questions."""
+        if not self.missing_questions:
+            self._clear_attention(ISSUE_MISSING_CUSTOMER_INPUT)
+            return
+        self._set_attention(
+            ISSUE_MISSING_CUSTOMER_INPUT,
+            severity="warning",
+            title="The website is waiting for answers",
+            detail=(
+                "Billing and tariff questions have to be answered on the "
+                "Smart Home Solutions website before they take effect here."
+            ),
+            items=list(self.missing_questions),
+            fix={"kind": "website", "path": "/portal/settings/energy-tariffs"},
+            placeholders={
                 "questions": "\n".join(f"- {q}" for q in self.missing_questions)
             },
         )
@@ -302,15 +374,17 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _sync_subscription_issue(self, active: bool) -> None:
         """Raise or clear the subscription repair issue."""
         if active:
-            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_SUBSCRIPTION_INACTIVE)
+            self._clear_attention(ISSUE_SUBSCRIPTION_INACTIVE)
             return
-        ir.async_create_issue(
-            self.hass,
-            DOMAIN,
+        self._set_attention(
             ISSUE_SUBSCRIPTION_INACTIVE,
-            is_fixable=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key=ISSUE_SUBSCRIPTION_INACTIVE,
+            severity="warning",
+            title="The energy subscription is not active",
+            detail=(
+                "Planning stops when the subscription lapses. Monitoring "
+                "continues and nothing local is changed."
+            ),
+            fix={"kind": "website", "path": "/portal/billing"},
         )
 
     def _sync_plan_refused_issue(self, reason: str | None) -> None:
@@ -322,16 +396,19 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         while Home Assistant quietly executed none of them.
         """
         if reason is None:
-            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_OPTIMISATION_PLAN_REFUSED)
+            self._clear_attention(ISSUE_OPTIMISATION_PLAN_REFUSED)
             return
-        ir.async_create_issue(
-            self.hass,
-            DOMAIN,
+        self._set_attention(
             ISSUE_OPTIMISATION_PLAN_REFUSED,
-            is_fixable=False,
-            severity=ir.IssueSeverity.ERROR,
-            translation_key=ISSUE_OPTIMISATION_PLAN_REFUSED,
-            translation_placeholders={"reason": reason},
+            severity="error",
+            title="The latest plan was refused",
+            detail=(
+                "Home Assistant received a plan it will not execute, so no "
+                "planned control is running."
+            ),
+            items=[reason],
+            fix={"kind": "panel", "tab": "diagnostics", "section": None},
+            placeholders={"reason": reason},
         )
 
     def _sync_optimisation_issue(self) -> None:
@@ -346,18 +423,19 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or not self.optimisation_missing_inputs
             or transient_startup_gap
         ):
-            ir.async_delete_issue(
-                self.hass, DOMAIN, ISSUE_OPTIMISATION_CONFIGURATION
-            )
+            self._clear_attention(ISSUE_OPTIMISATION_CONFIGURATION)
             return
-        ir.async_create_issue(
-            self.hass,
-            DOMAIN,
+        self._set_attention(
             ISSUE_OPTIMISATION_CONFIGURATION,
-            is_fixable=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key=ISSUE_OPTIMISATION_CONFIGURATION,
-            translation_placeholders={
+            severity="warning",
+            title="Planning is missing an input it needs",
+            detail=(
+                "Every item below is a field on this panel. Planning stays off "
+                "until each one is filled in."
+            ),
+            items=list(self.optimisation_missing_inputs),
+            fix={"kind": "panel", "tab": "inputs", "section": None},
+            placeholders={
                 "inputs": "\n".join(
                     f"- {value}" for value in self.optimisation_missing_inputs
                 )
@@ -373,16 +451,19 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         without it.
         """
         if not self.optimisation_unplanned_services:
-            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_UNPLANNED_SERVICE)
+            self._clear_attention(ISSUE_UNPLANNED_SERVICE)
             return
-        ir.async_create_issue(
-            self.hass,
-            DOMAIN,
+        self._set_attention(
             ISSUE_UNPLANNED_SERVICE,
-            is_fixable=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key=ISSUE_UNPLANNED_SERVICE,
-            translation_placeholders={
+            severity="warning",
+            title="A service is configured but not being planned",
+            detail=(
+                "The equipment is set up here, but no meter on the website is "
+                "set to control it, so the planner never sees it."
+            ),
+            items=list(self.optimisation_unplanned_services),
+            fix={"kind": "website", "path": "/portal/energy-modeling"},
+            placeholders={
                 "services": "\n".join(
                     f"- {value}" for value in self.optimisation_unplanned_services
                 )
@@ -423,16 +504,20 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     str(device.get("name") or device["key"])
                 )
         if not self.device_control_mapping_gaps:
-            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_DEVICE_CONTROL_MAPPING)
+            self._clear_attention(ISSUE_DEVICE_CONTROL_MAPPING)
             return
-        ir.async_create_issue(
-            self.hass,
-            DOMAIN,
+        self._set_attention(
             ISSUE_DEVICE_CONTROL_MAPPING,
-            is_fixable=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key=ISSUE_DEVICE_CONTROL_MAPPING,
-            translation_placeholders={
+            severity="warning",
+            title="A controllable device needs its local entities",
+            detail=(
+                "The website asked for these devices to be controllable. Each "
+                "one has a card on the Devices tab; until it is complete the "
+                "device stays in base load and nothing local is changed."
+            ),
+            items=list(self.device_control_mapping_gaps),
+            fix={"kind": "panel", "tab": "devices", "section": None},
+            placeholders={
                 "devices": "\n".join(
                     f"- {name}" for name in self.device_control_mapping_gaps
                 )
@@ -630,6 +715,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for device in devices
         }
         stored["optimisation_device_configuration"] = configuration
+        self.device_configuration = configuration
         self._sync_device_control_issue(configuration, mappings)
         return configuration
 
@@ -2058,7 +2144,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # configuration gap, not a house without the equipment. Say so rather
         # than publishing a snapshot that quietly omits the store.
         self.optimisation_unplanned_services = unplanned_services(
-            options, planned_paths
+            options, planned_paths, self.device_configuration
         )
         self._sync_unplanned_service_issue()
         base_source_categories = (

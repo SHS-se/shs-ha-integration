@@ -226,7 +226,7 @@
     },
     "unplanned_service": {
       "title": "A service is configured but not being planned",
-      "description": "These services have telemetry configured here but no meter routed to them on the website, so the planner never sees them:\n\n{services}\n\nNothing is broken and the rest of the plan is unaffected, but the service contributes nothing to the objective: the store wins no energy, appears in no schedule, and no diagnostic explains the omission. Set the meter's planning role to controllable with the control type named above on the website, then open Configure on this integration to fetch the change."
+      "description": "The equipment below is set up in Home Assistant, but no meter on the Smart Home Solutions website is set to control it, so the planner never sees it:\n\n{services}\n\nNothing is broken and the rest of the plan is unaffected, but the service contributes nothing: it wins no energy and appears in no schedule. The SHS Energy configuration panel shows this at the top of every tab with a link straight to the page that fixes it."
     }
   }
 }

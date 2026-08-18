@@ -477,44 +477,82 @@ class UnplannedServiceTests(unittest.TestCase):
         "ev_energy_remaining_entity": "sensor.car_energy_remaining",
     }
 
+    METERS = {
+        "sensor.car_charging_lifetime_energy": {
+            "name": "Car charging energy",
+            "category": "ev_charging",
+        },
+    }
+
     def test_configured_vehicle_without_a_route_is_reported(self) -> None:
-        reports = unplanned_services(dict(self.EV_OPTIONS), {"pool", "boiler"})
+        reports = unplanned_services(
+            dict(self.EV_OPTIONS), {"pool", "boiler"}, self.METERS
+        )
         self.assertEqual(len(reports), 1)
-        self.assertIn("a vehicle is configured", reports[0])
-        self.assertIn("ev_connected_entity", reports[0])
-        self.assertIn("variable-power", reports[0])
+        self.assertIn("A vehicle is configured here", reports[0])
+
+    def test_the_report_names_what_the_customer_can_see(self) -> None:
+        """Option keys name nothing a person has ever been shown.
+
+        The first version of this warning listed `ev_connected_entity` and
+        friends, sent the customer looking for settings that do not appear in
+        any interface, and told them to change "the EV charging meter" without
+        saying which meter or to what.
+        """
+        report = unplanned_services(
+            dict(self.EV_OPTIONS), set(), self.METERS
+        )[0]
+        # The panel's own field labels and the entity ids they chose.
+        self.assertIn("Vehicle connected state", report)
+        self.assertIn("binary_sensor.charge_cable", report)
+        # The meter to change, by the name the website shows, and the setting.
+        self.assertIn("Car charging energy", report)
+        self.assertIn("Variable power", report)
+        # And none of the internal keys.
+        for key in self.EV_OPTIONS:
+            self.assertNotIn(key, report)
+
+    def test_a_home_with_no_candidate_meter_is_told_to_add_one(self) -> None:
+        report = unplanned_services(dict(self.EV_OPTIONS), set(), {})[0]
+        self.assertIn("no meter is classified as ev charging", report)
 
     def test_a_routed_vehicle_is_silent(self) -> None:
         self.assertEqual(
-            unplanned_services(dict(self.EV_OPTIONS), {"ev"}),
+            unplanned_services(dict(self.EV_OPTIONS), {"ev"}, self.METERS),
             [],
         )
 
     def test_a_home_without_the_telemetry_is_silent(self) -> None:
         """No vehicle configured is a house without a car, not a gap."""
-        self.assertEqual(unplanned_services({}, set()), [])
+        self.assertEqual(unplanned_services({}, set(), {}), [])
 
     def test_blank_option_values_do_not_count_as_evidence(self) -> None:
         self.assertEqual(
             unplanned_services(
-                {"ev_connected_entity": "   ", "ev_soc_entity": ""}, set()
+                {"ev_connected_entity": "   ", "ev_soc_entity": ""}, set(), {}
             ),
             [],
         )
 
     def test_pool_telemetry_without_a_route_is_reported(self) -> None:
         reports = unplanned_services(
-            {"pool_water_temperature_entity": "sensor.pool_water"}, {"ev"}
+            {"pool_water_temperature_entity": "sensor.pool_water"},
+            {"ev"},
+            {"sensor.pool_heater_energy": {
+                "name": "Pool heater", "category": "pool_heating",
+            }},
         )
         self.assertEqual(len(reports), 1)
-        self.assertIn("a pool is configured", reports[0])
-        self.assertIn("switch-schedule", reports[0])
+        self.assertIn("A pool is configured here", reports[0])
+        self.assertIn("Pool heater", reports[0])
+        self.assertIn("Switch schedule", reports[0])
 
     def test_every_unrouted_service_is_reported_together(self) -> None:
         """One gap must not hide the next, as a first-failure raise would."""
         reports = unplanned_services(
             {**self.EV_OPTIONS, "pool_water_temperature_entity": "sensor.pool"},
             set(),
+            self.METERS,
         )
         self.assertEqual(len(reports), 2)
 

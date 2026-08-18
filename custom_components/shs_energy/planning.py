@@ -31,6 +31,11 @@ try:  # pragma: no cover - exercised by both import paths
         OPT_EV_SOC_ENTITY,
         OPT_EV_TARGET_SOC_ENTITY,
         OPT_POOL_WATER_TEMPERATURE_ENTITY,
+        OPT_EV_PHASE_COUNT,
+        OPT_EV_PHASE_VOLTAGE,
+        OPT_EV_CHARGE_EFFICIENCY,
+        OPT_EV_KWH_PER_KM,
+        DEFAULT_EV_KWH_PER_KM,
     )
     from .const import OPTIMISATION_PROFILE_DAYS
     from .device_controls import CONTROL_TYPES, planning_path
@@ -60,6 +65,11 @@ except ImportError:  # The test suite imports these helpers as flat modules,
         OPT_EV_SOC_ENTITY,
         OPT_EV_TARGET_SOC_ENTITY,
         OPT_POOL_WATER_TEMPERATURE_ENTITY,
+        OPT_EV_PHASE_COUNT,
+        OPT_EV_PHASE_VOLTAGE,
+        OPT_EV_CHARGE_EFFICIENCY,
+        OPT_EV_KWH_PER_KM,
+        DEFAULT_EV_KWH_PER_KM,
     )
     from const import OPTIMISATION_PROFILE_DAYS  # type: ignore[no-redef]
     from device_controls import (  # type: ignore[no-redef]
@@ -84,6 +94,29 @@ except ImportError:  # The test suite imports these helpers as flat modules,
 EntityReader = Callable[[str], dict[str, Any]]
 # Resolves one control mapping's reviewed watts, or its live power sensor.
 PowerReader = Callable[[dict[str, Any]], Optional[float]]
+
+
+def _positive_option(
+    options: dict[str, Any],
+    key: str,
+    fallback: float,
+) -> float:
+    """Read a positive numeric option, falling back rather than failing.
+
+    A blank field or a zero would otherwise reach the electrical model, where
+    it divides. Falling back to the shipped default keeps the home plannable
+    and leaves the wrong value visible in the panel where it can be corrected.
+    """
+    value = options.get(key)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) if float(value) > 0 else fallback
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = float(value.replace(",", "."))
+        except ValueError:
+            return fallback
+        return parsed if parsed > 0 else fallback
+    return fallback
 
 
 def build_services(
@@ -275,6 +308,19 @@ def build_services(
                 "priority": 1,
             })
 
+    # The vehicle's electrical model, overridable because a fixed three-phase
+    # assumption silently trebles a single-phase charger's modelled power.
+    phase_count = _positive_option(options, OPT_EV_PHASE_COUNT, EV_PHASE_COUNT)
+    phase_voltage = _positive_option(
+        options, OPT_EV_PHASE_VOLTAGE, EV_PHASE_VOLTAGE
+    )
+    charge_efficiency = _positive_option(
+        options, OPT_EV_CHARGE_EFFICIENCY, EV_CHARGE_EFFICIENCY
+    )
+    kwh_per_km = _positive_option(
+        options, OPT_EV_KWH_PER_KM, DEFAULT_EV_KWH_PER_KM
+    )
+
     ev_controls = mapped_controls("ev")
     if ev_controls:
         connected_id = required_entity(
@@ -402,7 +448,8 @@ def build_services(
             "capacity_kwh": round(capacity, 3),
             "soc": round(soc, 6),
             "departure_target_soc": round(target, 6),
-            "charge_efficiency": EV_CHARGE_EFFICIENCY,
+            "charge_efficiency": round(charge_efficiency, 4),
+            "kwh_per_km": round(kwh_per_km, 4),
             "available_from": first.isoformat() if connected else None,
             "departure": departure.isoformat() if departure else None,
             "priority": 3,
@@ -419,7 +466,7 @@ def build_services(
         # reported and not planned, which is the state the store diagnostics
         # exist to name.
         required = (
-            max(0.0, target - soc) * capacity / EV_CHARGE_EFFICIENCY
+            max(0.0, target - soc) * capacity / charge_efficiency
             if connected and ev_controls else 0.0
         )
         if required > 0:
@@ -428,8 +475,8 @@ def build_services(
                 configured_min,
                 configured_max,
                 configured_step,
-                EV_PHASE_COUNT,
-                EV_PHASE_VOLTAGE,
+                phase_count,
+                phase_voltage,
                 label=current_entity,
             )
             services.append({
@@ -449,23 +496,32 @@ def build_services(
 
 # Telemetry that proves a home owns a service, against the planning path that
 # has to exist before the planner can act on it.
-_SERVICE_EVIDENCE: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
+#
+# Each option is paired with the label it carries on the configuration panel,
+# because an option key is an implementation detail: telling a customer that
+# `ev_soc_entity` is configured names something they have never seen and cannot
+# search for.
+_SERVICE_EVIDENCE: tuple[
+    tuple[str, str, tuple[tuple[str, str], ...], str, str], ...
+] = (
     (
         "ev",
-        "a vehicle",
+        "vehicle",
         (
-            OPT_EV_CONNECTED_ENTITY,
-            OPT_EV_SOC_ENTITY,
-            OPT_EV_TARGET_SOC_ENTITY,
-            OPT_EV_ENERGY_REMAINING_ENTITY,
+            (OPT_EV_CONNECTED_ENTITY, "Vehicle connected state"),
+            (OPT_EV_SOC_ENTITY, "Vehicle battery SOC"),
+            (OPT_EV_TARGET_SOC_ENTITY, "Vehicle target SOC"),
+            (OPT_EV_ENERGY_REMAINING_ENTITY, "Usable energy remaining"),
         ),
-        "set the EV charging meter to variable-power control on the website",
+        "ev_charging",
+        "Controllable \u00b7 Variable power",
     ),
     (
         "pool",
-        "a pool",
-        (OPT_POOL_WATER_TEMPERATURE_ENTITY,),
-        "set the pool heating meter to switch-schedule control on the website",
+        "pool",
+        ((OPT_POOL_WATER_TEMPERATURE_ENTITY, "Pool water temperature"),),
+        "pool_heating",
+        "Controllable \u00b7 Switch schedule",
     ),
 )
 
@@ -473,6 +529,7 @@ _SERVICE_EVIDENCE: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
 def unplanned_services(
     options: dict[str, Any],
     planned_paths: set[str | None],
+    meters: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
     """Name each service this home has telemetry for but no control route.
 
@@ -490,21 +547,40 @@ def unplanned_services(
     side of the boundary, so the two can disagree without either side looking
     wrong on its own. Comparing them is the only place that disagreement is
     visible.
+
+    The message names what the customer can see: the panel's own field labels,
+    the entity ids they chose, and the meter whose role has to change. Naming
+    option keys instead sent them looking for settings that do not exist.
     """
     reports: list[str] = []
-    for path, subject, option_keys, remedy in _SERVICE_EVIDENCE:
+    for path, subject, fields, category, control in _SERVICE_EVIDENCE:
         if path in planned_paths:
             continue
-        configured = sorted(
-            key for key in option_keys
+        configured = [
+            f"{label} ({options[key]})"
+            for key, label in fields
             if isinstance(options.get(key), str) and options[key].strip()
-        )
+        ]
         if not configured:
             continue
+        # The meters that could carry this service, by the website's own names.
+        candidates = sorted(
+            str(meter.get("name") or key)
+            for key, meter in (meters or {}).items()
+            if meter.get("category") == category
+        )
+        remedy = (
+            f"set {' or '.join(candidates)} to \u201c{control}\u201d on the website"
+            if candidates
+            else (
+                f"no meter is classified as {category.replace('_', ' ')} on the "
+                "website, so add one there first"
+            )
+        )
         reports.append(
-            f"{subject} is configured ({', '.join(configured)}) but no meter "
-            f"routes to the {path} planner, so it is not being planned; "
-            f"{remedy}"
+            f"A {subject} is configured here \u2014 {', '.join(configured)} \u2014 "
+            f"but no meter is set to control it, so it is not being planned. "
+            f"To fix: {remedy}."
         )
     return reports
 

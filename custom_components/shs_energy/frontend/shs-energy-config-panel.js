@@ -9,6 +9,19 @@ const TABS = [
 
 const MAPPINGS_KEY = "device_control_mappings";
 
+// Which readiness card owns each repair.
+//
+// The cards are per subsystem and the repairs are per cause, so the mapping
+// has to be stated. Without it a card computed from its own handful of fields
+// can read "Ready" while Home Assistant is showing a warning about the very
+// thing the card describes, which is how four green badges came to mean
+// nothing.
+const ATTENTION_BY_CARD = {
+  "Website roles": ["unplanned_service", "missing_customer_input", "subscription_inactive"],
+  "Local device mappings": ["device_control_mapping"],
+  "Electrical planner": ["optimisation_configuration", "optimisation_plan_refused"],
+};
+
 class ShsEnergyConfigPanel extends HTMLElement {
   constructor() {
     super();
@@ -517,6 +530,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _readinessCard(title, state, detail, items = []) {
+    // A card can never be greener than the repairs that belong to it.
+    const owned = this._attention().filter((item) =>
+      (ATTENTION_BY_CARD[title] || []).includes(item.key)
+    );
+    if (owned.length) {
+      state = owned.some((item) => item.severity === "error") ? "error" : "warning";
+      items = [...items, ...owned.map((item) => item.title)];
+    }
     return `<article class="summary-card ${this._escape(state)}">
       <div class="summary-top"><h3>${this._escape(title)}</h3>${this._statusBadge(state)}</div>
       <p>${this._escape(detail)}</p>
@@ -686,6 +707,53 @@ class ShsEnergyConfigPanel extends HTMLElement {
     </section>`;
   }
 
+  /**
+   * Everything currently asking for a decision, shown on every tab.
+   *
+   * The readiness cards used to be derived from a handful of hand-picked
+   * fields, so this panel could show four green badges while Home Assistant
+   * displayed a repair warning about the same installation. These come from
+   * the same call that raises the repairs, and each one carries where its fix
+   * lives, because a warning that names a problem without naming the field is
+   * only marginally better than silence.
+   */
+  _attention() {
+    return this._data?.attention || [];
+  }
+
+  _attentionForTab(tab) {
+    return this._attention().filter(
+      (item) => item.fix?.kind === "panel" && item.fix.tab === tab
+    );
+  }
+
+  _renderAttention() {
+    const items = this._attention();
+    if (!items.length) return "";
+    return `<div class="attention">
+      ${items
+        .map((item) => {
+          const fix = item.fix || {};
+          const action = fix.kind === "website"
+            ? fix.url
+              ? `<a class="fix" href="${this._escape(fix.url)}" target="_blank" rel="noreferrer">Open the website</a>`
+              : `<span class="fix muted">Fix on the Smart Home Solutions website: ${this._escape(fix.path || "/portal")}</span>`
+            : fix.tab
+              ? `<button type="button" class="fix" data-action="tab" data-tab="${this._escape(fix.tab)}">Go to ${this._escape((TABS.find(([id]) => id === fix.tab) || [null, fix.tab])[1])}</button>`
+              : "";
+          return `<article class="attention-item ${this._escape(item.severity)}">
+            <div class="attention-top">
+              <strong>${this._escape(item.title)}</strong>
+              ${action}
+            </div>
+            <p>${this._escape(item.detail)}</p>
+            ${(item.items || []).length ? `<ul>${item.items.map((line) => `<li>${this._escape(line)}</li>`).join("")}</ul>` : ""}
+          </article>`;
+        })
+        .join("")}
+    </div>`;
+  }
+
   _renderBody() {
     if (this._tab === "overview") return this._renderOverview();
     if (this._tab === "inputs") return this._renderSections("inputs");
@@ -741,11 +809,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
             <button type="button" class="primary" data-action="save" ${this._configurationDirty && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>${this._saving ? "Saving…" : "Save general changes"}</button>
           </div>
         </header>
-        <nav class="tabs" aria-label="Configuration sections">${TABS.map(([id, label]) => `<button type="button" data-action="tab" data-tab="${id}" class="${this._tab === id ? "active" : ""}">${label}</button>`).join("")}</nav>
+        <nav class="tabs" aria-label="Configuration sections">${TABS.map(([id, label]) => { const count = this._attentionForTab(id).length; return `<button type="button" data-action="tab" data-tab="${id}" class="${this._tab === id ? "active" : ""}${count ? " needs-attention" : ""}">${label}${count ? `<span class="tab-badge" aria-label="${count} item${count === 1 ? "" : "s"} to fix">${count}</span>` : ""}</button>`; }).join("")}</nav>
         <section class="content">
           ${this._error ? `<div class="alert error"><strong>Could not save or refresh</strong><span>${this._escape(this._error)}</span></div>` : ""}
           ${this._notice ? `<div class="alert notice"><span>${this._escape(this._notice)}</span></div>` : ""}
           ${this._data.portal.error ? `<div class="alert warning"><strong>Website role refresh failed</strong><span>${this._escape(this._data.portal.error)} The last saved website request is shown.</span></div>` : ""}
+          ${this._renderAttention()}
           ${this._renderBody()}
         </section>
         <footer><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Existing local controllers retain ownership.</span></footer>
@@ -777,6 +846,17 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .tabs { display:flex; gap:4px; padding:12px max(24px, calc((100vw - 1280px)/2)); overflow-x:auto; border-bottom:1px solid var(--divider-color); background:var(--primary-background-color); position:sticky; top:84px; z-index:4; }
       .tabs button { white-space:nowrap; border:0; border-radius:10px; padding:11px 16px; color:var(--secondary-text-color); background:transparent; font-weight:600; }
       .tabs button.active { color:var(--primary-text-color); background:var(--secondary-background-color); }
+      .tabs button.needs-attention { color:var(--warning-color, #ff9800); }
+      .tab-badge { display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; margin-left:7px; padding:0 5px; border-radius:9px; background:var(--warning-color, #ff9800); color:#1c1c1c; font-size:11px; font-weight:700; }
+      .attention { display:grid; gap:12px; margin-bottom:18px; }
+      .attention-item { margin:0; border:1px solid var(--warning-color, #ff9800); border-left-width:4px; border-radius:12px; padding:14px 16px; background:var(--card-background-color); }
+      .attention-item.error { border-color:var(--error-color, #db4437); }
+      .attention-top { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+      .attention-item p { margin:6px 0 0; color:var(--secondary-text-color); font-size:13px; }
+      .attention-item ul { margin:8px 0 0; padding-left:18px; font-size:13px; }
+      .attention-item li { margin:3px 0; }
+      .attention-item .fix { flex:none; border:0; border-radius:9px; padding:7px 13px; background:var(--primary-color, #03a9f4); color:var(--text-primary-color, #fff); font-weight:600; font-size:13px; text-decoration:none; cursor:pointer; }
+      .attention-item .fix.muted { background:transparent; color:var(--secondary-text-color); font-weight:500; padding:0; }
       .content { width:min(1280px, 100%); margin:0 auto; padding:24px 24px 96px; }
       .card { background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:16px; padding:24px; margin-bottom:20px; box-shadow:var(--ha-card-box-shadow, none); }
       .card h2 { margin:0 0 8px; font-size:20px; }

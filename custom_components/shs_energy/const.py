@@ -32,6 +32,26 @@ def backend_attributes(base_url: str) -> dict[str, str | None]:
     )
     return {"backend_environment": environment, "backend_host": host}
 
+
+# Where the customer-facing site lives, per backend. A repair that says "on the
+# website" without saying which page is only marginally better than silence.
+WEBSITE_ORIGIN_BY_ENVIRONMENT = {
+    "production": "https://smarthomesolutions.se",
+    "test": "https://test-smart-home-solutions.pages.dev",
+}
+
+
+def website_url(base_url: str, path: str) -> str | None:
+    """Absolute link to a page on the customer's own portal, or None.
+
+    None for a custom backend rather than a guess: an integration pointing at
+    somebody's self-hosted deployment cannot know where their site is, and a
+    wrong link is worse than a path the panel prints as text.
+    """
+    environment = backend_attributes(base_url)["backend_environment"]
+    origin = WEBSITE_ORIGIN_BY_ENVIRONMENT.get(str(environment))
+    return f"{origin}{path}" if origin else None
+
 # Options: each category maps to a list of energy sensor entity_ids
 # (total / total_increasing kWh sensors). Daily deltas are summed per category.
 CATEGORIES: tuple[str, ...] = (
@@ -132,14 +152,27 @@ OPT_EV_SOC_ENTITY = "ev_soc_entity"
 OPT_EV_TARGET_SOC_ENTITY = "ev_target_soc_entity"
 OPT_EV_DEPARTURE_ENTITY = "ev_departure_entity"
 OPT_EV_ENERGY_REMAINING_ENTITY = "ev_energy_remaining_entity"
+OPT_EV_PHASE_COUNT = "ev_phase_count"
+OPT_EV_PHASE_VOLTAGE = "ev_phase_voltage"
+OPT_EV_CHARGE_EFFICIENCY = "ev_charge_efficiency"
+OPT_EV_KWH_PER_KM = "ev_kwh_per_km"
 
 # Charger electrical characteristics are installation invariants, not customer
 # preferences. The number entity still supplies its commissioned current range
 # and increment, while every supported charger uses three 230 V phases.
+# Defaults for the vehicle's electrical model, every one of them overridable.
+#
+# These were fixed constants, and a fixed phase count is not a detail: a
+# single-phase 16 A charger delivers 3.7 kW and was modelled at 11 kW, so the
+# planner believed it could fill a car three times faster than the cable can.
+# Nothing surfaced that, because a wrong number produces a confident plan rather
+# than an error. Anything that changes what a plan means has to be reachable
+# from the panel; see OPT_EV_PHASE_COUNT and friends below.
 EV_CHARGE_EFFICIENCY = 0.92
 EV_MIN_RUN_SLOTS = 1
 EV_PHASE_COUNT = 3
 EV_PHASE_VOLTAGE = 230.0
+DEFAULT_EV_KWH_PER_KM = 0.16
 
 # Preserve superseded UI-owned values during migration, but never use them to
 # decide whether a website-selected device appears in an advisory plan.

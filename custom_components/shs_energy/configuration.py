@@ -56,6 +56,14 @@ from .const import (
     OPT_PV_FORECAST_LATITUDE,
     OPT_PV_FORECAST_LONGITUDE,
     OPT_TERMINAL_ENERGY_VALUE,
+    OPT_EV_PHASE_COUNT,
+    OPT_EV_PHASE_VOLTAGE,
+    OPT_EV_CHARGE_EFFICIENCY,
+    OPT_EV_KWH_PER_KM,
+    EV_PHASE_COUNT,
+    EV_PHASE_VOLTAGE,
+    EV_CHARGE_EFFICIENCY,
+    DEFAULT_EV_KWH_PER_KM,
     OPT_TERMINAL_SOC_MIN,
 )
 from .device_controls import is_room_thermal_control
@@ -86,6 +94,14 @@ def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
         OPT_BATTERY_EXPORT_MIN_PRICE: 2.5,
         OPT_TERMINAL_SOC_MIN: 0.2,
         OPT_TERMINAL_ENERGY_VALUE: 1.0,
+        # The vehicle's electrical model. Defaults describe the common Swedish
+        # three-phase installation and are wrong for a single-phase charger by
+        # a factor of three, which is why they are options rather than
+        # constants.
+        OPT_EV_PHASE_COUNT: EV_PHASE_COUNT,
+        OPT_EV_PHASE_VOLTAGE: EV_PHASE_VOLTAGE,
+        OPT_EV_CHARGE_EFFICIENCY: EV_CHARGE_EFFICIENCY,
+        OPT_EV_KWH_PER_KM: DEFAULT_EV_KWH_PER_KM,
     }
 
 

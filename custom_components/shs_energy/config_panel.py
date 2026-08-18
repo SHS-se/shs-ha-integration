@@ -376,7 +376,10 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 "timestamp gives the target a specific deadline; without one, the "
                 "planner uses the end of its rolling horizon. Charger current bounds "
                 "and the optional charging-power sensor come from its Variable Power "
-                "device card; the electrical model is fixed at three 230 V phases."
+                "device card. The electrical model below converts those amps into "
+                "watts, so it has to match the cable actually installed: a "
+                "single-phase charger set to three phases is planned at three times "
+                "the power it can deliver."
             ),
             "fields": [
                 _field(
@@ -403,6 +406,56 @@ def _configuration_sections() -> list[dict[str, Any]]:
                         "When provided, the entity must contain a timezone-aware "
                         "timestamp. Leave it empty to plan toward the target over "
                         "the rolling horizon."
+                    ),
+                ),
+                _field(
+                    c.OPT_EV_PHASE_COUNT,
+                    "Charger phases",
+                    "number",
+                    step=1,
+                    minimum=1,
+                    maximum=3,
+                    help_text=(
+                        "How many phases the charge cable uses. One for a "
+                        "single-phase installation, three for the common Swedish "
+                        "three-phase one."
+                    ),
+                ),
+                _field(
+                    c.OPT_EV_PHASE_VOLTAGE,
+                    "Phase voltage",
+                    "number",
+                    unit="V",
+                    step=1,
+                    minimum=100,
+                    maximum=500,
+                ),
+                _field(
+                    c.OPT_EV_CHARGE_EFFICIENCY,
+                    "Charging efficiency",
+                    "number",
+                    step=0.01,
+                    minimum=0.5,
+                    maximum=1,
+                    help_text=(
+                        "Share of the energy drawn from the wall that reaches the "
+                        "battery. Lowering it makes the planner buy more to deliver "
+                        "the same range."
+                    ),
+                ),
+                _field(
+                    c.OPT_EV_KWH_PER_KM,
+                    "Consumption",
+                    "number",
+                    unit="kWh/km",
+                    step=0.005,
+                    minimum=0.05,
+                    maximum=1,
+                    help_text=(
+                        "What the car uses per kilometre. This converts state of "
+                        "charge into range, which is the unit the planner values the "
+                        "car in — so it is also what makes a winter kilometre worth "
+                        "more than a summer one."
                     ),
                 ),
                 _field(
@@ -608,6 +661,26 @@ async def _configuration_payload(
             "error": portal_error,
             "requested_devices": len(devices),
         },
+        # Everything currently asking for a decision, with a resolved link
+        # where the fix lives on the website. Same source as the Home Assistant
+        # repairs, so the panel cannot show green while a warning is up.
+        "attention": [
+            {
+                **item,
+                "fix": (
+                    {
+                        **item["fix"],
+                        "url": shs_const.website_url(
+                            entry.data[shs_const.CONF_BASE_URL],
+                            item["fix"].get("path", "/portal"),
+                        ),
+                    }
+                    if item["fix"].get("kind") == "website"
+                    else item["fix"]
+                ),
+            }
+            for item in coordinator.attention_items
+        ],
         "readiness": {
             "planning_mode": options.get(shs_const.OPT_PLANNING_MODE),
             "requested_devices": len(devices),

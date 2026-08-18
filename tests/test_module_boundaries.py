@@ -115,6 +115,61 @@ class ModuleBoundaryTests(unittest.TestCase):
             "a new module must be classified as pure or Home Assistant-facing",
         )
 
+    def test_every_repair_is_raised_through_one_recorder(self) -> None:
+        """A repair the panel does not know about is how green means nothing.
+
+        The panel's readiness cards were derived from fields chosen by hand, so
+        an installation could show four "Ready" badges while Home Assistant
+        displayed a warning about it. `_set_attention` raises the repair and
+        records the panel item in one call; a second `async_create_issue`
+        anywhere would let the two drift apart again.
+        """
+        source = (PACKAGE / "coordinator.py").read_text(encoding="utf-8")
+        creates = [
+            number
+            for number, line in enumerate(source.splitlines(), start=1)
+            if "async_create_issue(" in line and not line.strip().startswith("#")
+        ]
+        self.assertEqual(
+            len(creates),
+            1,
+            "every repair must go through _set_attention so the panel sees it; "
+            f"found calls on lines {creates}",
+        )
+        tree = ast.parse(source)
+        owners = [
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and any(
+                isinstance(inner, ast.Attribute)
+                and inner.attr == "async_create_issue"
+                for inner in ast.walk(node)
+            )
+        ]
+        self.assertEqual(owners, ["_set_attention"])
+
+    def test_every_raised_repair_has_a_translation(self) -> None:
+        """A repair with no strings entry renders as a bare key to the user."""
+        import json
+
+        source = (PACKAGE / "const.py").read_text(encoding="utf-8")
+        keys = {
+            line.split("=", 1)[1].strip().strip('"')
+            for line in source.splitlines()
+            if line.startswith("ISSUE_")
+        }
+        for name in ("strings.json", "translations/en.json"):
+            with self.subTest(file=name):
+                issues = json.loads(
+                    (PACKAGE / name).read_text(encoding="utf-8")
+                ).get("issues", {})
+                self.assertEqual(
+                    sorted(keys - set(issues)),
+                    [],
+                    f"{name} is missing a repair translation",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
