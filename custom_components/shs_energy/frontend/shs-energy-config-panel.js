@@ -551,6 +551,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const portal = this._data.portal;
     const mappingState = readiness.ready_devices === readiness.requested_devices ? "ready" : "warning";
     const inputState = readiness.missing_inputs.length ? "warning" : "ready";
+    const plannerState = readiness.last_plan_error ? "error" : inputState;
+    const plannerProblems = [
+      ...readiness.missing_inputs,
+      ...(readiness.last_plan_error ? [readiness.last_plan_error] : []),
+    ];
     const thermalState = thermal.status === "observations_published" || thermal.status === "not_requested" ? "ready" : "warning";
     return `
       <div class="safety-note"><strong>Configuration and visualization only.</strong> This panel does not call, replace or enable any heater, charger, relay, climate entity or Node-RED flow.</div>
@@ -571,11 +576,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
         )}
         ${this._readinessCard(
           "Electrical planner",
-          inputState,
-          readiness.missing_inputs.length
+          plannerState,
+          readiness.last_plan_error
+            ? "The latest planning exchange failed."
+            : readiness.missing_inputs.length
             ? "The electrical plan is waiting for the inputs below."
             : "No currently reported electrical input gaps.",
-          readiness.missing_inputs
+          plannerProblems
         )}
         ${this._readinessCard(
           "Thermal observations",

@@ -59,6 +59,17 @@ class AttentionSurfaceTests(unittest.TestCase):
         card = card[: card.index("_renderOverview")]
         self.assertIn("ATTENTION_BY_CARD[title]", card)
 
+    def test_a_failed_planning_exchange_makes_the_planner_card_red(self) -> None:
+        """Input readiness cannot hide a transport or server failure."""
+        overview = FRONTEND[FRONTEND.index("_renderOverview()") :]
+        overview = overview[: overview.index("_thermalStatusText")]
+        self.assertIn(
+            'const plannerState = readiness.last_plan_error ? "error" : inputState',
+            overview,
+        )
+        self.assertIn('"The latest planning exchange failed."', overview)
+        self.assertIn("plannerProblems", overview)
+
     def test_every_repair_is_owned_by_a_readiness_card(self) -> None:
         raised = {
             line.split("=", 1)[1].strip().strip('"')
