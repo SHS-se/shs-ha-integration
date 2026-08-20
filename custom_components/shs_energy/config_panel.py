@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 
 from . import const as shs_const
 from .api import ShsApiError
+from .api_contract import INTEGRATION_VERSION
 from .configuration import (
     area_name_by_id,
     async_discover_configuration,
@@ -44,7 +45,7 @@ PANEL_URL = "shs-energy"
 PANEL_ELEMENT = "shs-energy-config-panel-v3"
 STATIC_URL = "/shs_energy_frontend"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
-FRONTEND_ASSET_VERSION = "0.7.0-beta.9"
+FRONTEND_ASSET_VERSION = INTEGRATION_VERSION
 
 
 def _field(

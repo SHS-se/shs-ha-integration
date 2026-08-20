@@ -6,6 +6,8 @@ Domain invariants for plans remain in :mod:`optimisation`.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 API_VERSION = 1
@@ -14,7 +16,9 @@ SUPPORTED_SNAPSHOT_SCHEMA_VERSIONS = frozenset({5, 6})
 SUPPORTED_PLAN_SCHEMA_VERSIONS = frozenset({5, 6})
 MINIMUM_SNAPSHOT_SCHEMA_VERSION = 5
 MINIMUM_PLAN_SCHEMA_VERSION = 5
-INTEGRATION_VERSION = "0.7.0-beta.30"
+INTEGRATION_VERSION = json.loads(
+    Path(__file__).with_name("manifest.json").read_text(encoding="utf-8")
+)["version"]
 
 
 class ApiContractError(ValueError):
