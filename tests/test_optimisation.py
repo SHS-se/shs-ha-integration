@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 from typing import Any
 from pathlib import Path
 import sys
@@ -494,6 +495,8 @@ class ForecastTests(unittest.TestCase):
             },
             "slot_minutes": 15,
             "model_version": "battery-export-planner-v6",
+            "plan_id": "11111111-1111-4111-8111-111111111111",
+            "snapshot_id": "22222222-2222-4222-8222-222222222222",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(hours=2, minutes=30)).isoformat(),
@@ -557,6 +560,8 @@ class ForecastTests(unittest.TestCase):
             },
             "slot_minutes": 15,
             "model_version": "battery-export-planner-v6",
+            "plan_id": "11111111-1111-4111-8111-111111111111",
+            "snapshot_id": "22222222-2222-4222-8222-222222222222",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -612,6 +617,8 @@ class ForecastTests(unittest.TestCase):
             },
             "slot_minutes": 15,
             "model_version": "battery-export-planner-v6",
+            "plan_id": "11111111-1111-4111-8111-111111111111",
+            "snapshot_id": "22222222-2222-4222-8222-222222222222",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -665,6 +672,8 @@ class ForecastTests(unittest.TestCase):
             },
             "slot_minutes": 15,
             "model_version": "battery-export-planner-v6",
+            "plan_id": "11111111-1111-4111-8111-111111111111",
+            "snapshot_id": "22222222-2222-4222-8222-222222222222",
             "status": "ready",
             "issued_at": now.isoformat(),
             "valid_until": (now + timedelta(minutes=75)).isoformat(),
@@ -743,6 +752,8 @@ class ModelVersionToleranceTests(unittest.TestCase):
             },
             "slot_minutes": 15,
             "model_version": "thermal-room-planner-v8",
+            "plan_id": "11111111-1111-4111-8111-111111111111",
+            "snapshot_id": "22222222-2222-4222-8222-222222222222",
             "status": "ready",
             "issued_at": issued.isoformat(),
             "valid_until": (issued + timedelta(minutes=75)).isoformat(),
@@ -780,6 +791,15 @@ class ModelVersionToleranceTests(unittest.TestCase):
         for version in (5, 6):
             with self.subTest(schema_version=version):
                 validate_plan_contract(self._plan(schema_version=version), now)
+
+    def test_real_provider_dispatched_ev_fixture_is_executable(self) -> None:
+        fixture_path = Path(__file__).parent / "fixtures" / (
+            "schema-6-dispatched-ev-plan.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        now = datetime.fromisoformat(fixture["validation_time"].replace("Z", "+00:00"))
+
+        validate_plan_contract(fixture["plan"], now)
 
     def test_any_planner_name_is_executable_on_a_known_contract(self) -> None:
         now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
@@ -836,6 +856,60 @@ class ModelVersionToleranceTests(unittest.TestCase):
             scenario["dispatched_devices"] = "pool"
 
         with self.assertRaises(OptimisationInputError):
+            validate_plan_contract(plan, now)
+
+    def test_dispatched_ev_envelope_is_checked_against_its_zero_work_service(
+        self,
+    ) -> None:
+        """Regression for the plan refused on 2026-08-20.
+
+        Marginal dispatch owns EV power even after departure work reaches zero;
+        the empty service schedule still carries the physical charger bounds.
+        """
+        now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
+        issued = datetime(2026, 8, 16, 12, 0, tzinfo=timezone.utc)
+        plan = self._plan(
+            schema_version=6,
+            model_version="marginal-value-planner-v10",
+            capabilities={
+                "pv": True,
+                "battery": False,
+                "pool": False,
+                "boiler": False,
+                "ev": True,
+            },
+            services=[{
+                "id": "ev:horizon",
+                "device": "ev",
+                "earliest_start": issued.isoformat(),
+                "deadline": (issued + timedelta(hours=1)).isoformat(),
+                "required_kwh": 0,
+                "control": {
+                    "type": "discrete_current",
+                    "min_current_a": 5,
+                    "max_current_a": 16,
+                    "current_step_a": 1,
+                    "phase_count": 3,
+                    "voltage_v": 230,
+                },
+                "min_run_slots": 2,
+                "priority": 3,
+            }],
+        )
+        for scenario in plan["plans"].values():
+            scenario["dispatched_devices"] = ["ev"]
+            scenario["service_slots"] = {"ev:horizon": []}
+            scenario["service_currents_a"] = {"ev:horizon": []}
+            slot = scenario["slots"][0]
+            slot["ev_w"] = 5 * 3 * 230
+            slot["ev_target_current_a"] = 5
+            slot["ev_min_current_a"] = 5
+            slot["ev_max_current_a"] = 16
+
+        validate_plan_contract(plan, now)
+
+        plan["plans"]["baseline"]["slots"][0]["ev_max_current_a"] = 17
+        with self.assertRaisesRegex(OptimisationInputError, "charger capability"):
             validate_plan_contract(plan, now)
 
     def test_an_unreadable_contract_is_still_refused(self) -> None:

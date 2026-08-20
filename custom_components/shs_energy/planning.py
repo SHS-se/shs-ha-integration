@@ -469,7 +469,12 @@ def build_services(
             max(0.0, target - soc) * capacity / charge_efficiency
             if connected and ev_controls else 0.0
         )
-        if required > 0:
+        # The service is also the charger's hardware contract. Keep it in the
+        # snapshot while the routed car is connected even when its departure
+        # requirement is already zero; schema-6 marginal dispatch may still
+        # buy cheap surplus, and the server must never invent phase/current
+        # limits for that decision.
+        if connected and ev_controls:
             planning_deadline = departure or end
             control = discrete_current_control(
                 configured_min,

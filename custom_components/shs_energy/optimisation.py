@@ -13,7 +13,13 @@ from datetime import datetime, timedelta, timezone
 from math import ceil, isfinite
 from statistics import median
 from typing import Any, Callable, Iterable
+from uuid import UUID
 from zoneinfo import ZoneInfo
+
+try:  # pragma: no cover - package in HA, flat module in the pure test suite
+    from .api_contract import SNAPSHOT_SCHEMA_VERSION, SUPPORTED_PLAN_SCHEMA_VERSIONS
+except ImportError:
+    from api_contract import SNAPSHOT_SCHEMA_VERSION, SUPPORTED_PLAN_SCHEMA_VERSIONS
 
 SLOT_SECONDS = 900
 SLOT_HOURS = 0.25
@@ -31,9 +37,6 @@ SLOT_HOURS = 0.25
 # be planned as a store with a temperature rather than a fixed daily energy
 # budget. A build that cannot send pool state cannot be given a plan that
 # assumes it, so the server keeps such a home on the schema 5 planner.
-SNAPSHOT_SCHEMA_VERSION = 6
-SUPPORTED_PLAN_SCHEMA_VERSIONS = frozenset({5, 6})
-
 ACTUAL_FIELD_BY_CATEGORY = {
     "total_consumption": "total_load_kwh",
     "solar_production": "solar_production_kwh",
@@ -991,6 +994,13 @@ def validate_plan_contract(
     # anyone can forget to widen.
     if plan.get("status") not in ("ready", "incomplete", "infeasible"):
         raise OptimisationInputError("optimisation plan status is invalid")
+    try:
+        UUID(str(plan["plan_id"]))
+        UUID(str(plan["snapshot_id"]))
+    except (KeyError, TypeError, ValueError, AttributeError) as err:
+        raise OptimisationInputError(
+            "optimisation plan identifiers are invalid"
+        ) from err
 
     current = now.astimezone(timezone.utc)
     issued = _timestamp(plan.get("issued_at"))
@@ -1286,8 +1296,6 @@ def validate_plan_contract(
         dispatched_devices = set(dispatched)
         scenario_energy: dict[str, float] = {}
         for service_id, spec in service_specs.items():
-            if spec["device"] in dispatched_devices:
-                continue
             indices = service_slots[service_id]
             if (
                 not isinstance(indices, list)
@@ -1302,6 +1310,29 @@ def validate_plan_contract(
                     f"{key} scenario {service_id} schedule is invalid"
                 )
             control = spec["control"]
+            if spec["device"] in dispatched_devices:
+                # State-based dispatch replaces the workload schedule, but it
+                # does not replace the actuator contract. Schema 6 carries an
+                # empty service schedule plus the real EV current control so
+                # every returned envelope can still be checked against the
+                # charger that will execute it.
+                if indices:
+                    raise OptimisationInputError(
+                        f"{key} scenario {service_id} dispatched schedule is not empty"
+                    )
+                if control["type"] == "discrete_current":
+                    currents = service_currents[service_id]
+                    if not isinstance(currents, list) or currents:
+                        raise OptimisationInputError(
+                            f"{key} scenario {service_id} dispatched currents are not empty"
+                        )
+                    for index, start in enumerate(starts):
+                        if (
+                            spec["earliest"] <= start
+                            and start + timedelta(minutes=15) <= spec["deadline"]
+                        ):
+                            envelope_controls[index].append(control)
+                continue
             if control["type"] != "duty_cycle" and any(
                 index > 0 and value != indices[index - 1] + 1
                 for index, value in enumerate(indices)

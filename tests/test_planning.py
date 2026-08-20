@@ -288,6 +288,21 @@ class EvServiceTests(unittest.TestCase):
             datetime.fromisoformat(services[0]["deadline"]), departure
         )
 
+    def test_a_routed_connected_car_keeps_its_control_at_the_target_soc(self) -> None:
+        self.states["sensor.soc"]["state"] = "80"
+        services, _samples, _battery = self.plan(self.options)
+
+        self.assertEqual(len(services), 1)
+        self.assertEqual(services[0]["required_kwh"], 0)
+        self.assertEqual(services[0]["control"], {
+            "type": "discrete_current",
+            "min_current_a": 6.0,
+            "max_current_a": 16.0,
+            "current_step_a": 1.0,
+            "phase_count": 3,
+            "voltage_v": 230.0,
+        })
+
     def test_a_departure_outside_the_horizon_is_refused(self) -> None:
         self.states["sensor.departure"] = {
             "state": (HORIZON[-1] + timedelta(days=2)).isoformat(),

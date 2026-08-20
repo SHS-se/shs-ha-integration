@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from urllib.parse import urlencode
+from uuid import uuid4
 
 import aiohttp
+
+from .api_contract import (
+    API_VERSION,
+    INTEGRATION_VERSION,
+    SUPPORTED_PLAN_SCHEMA_VERSIONS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -15,6 +23,22 @@ REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 class ShsApiError(Exception):
     """Base error talking to SHS."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "api_error",
+        request_id: str | None = None,
+        path: str | None = None,
+        retryable: bool = False,
+    ) -> None:
+        self.code = code
+        self.request_id = request_id
+        self.path = path
+        self.retryable = retryable
+        suffix = f" [request_id={request_id}]" if request_id else ""
+        super().__init__(f"{message}{suffix}")
 
 
 class ShsAuthError(ShsApiError):
@@ -49,7 +73,12 @@ class ShsApiClient:
         json_body: dict[str, Any] | None = None,
         authenticated: bool = True,
     ) -> dict[str, Any]:
-        headers = {}
+        request_id = str(uuid4())
+        headers = {
+            "X-Request-ID": request_id,
+            "X-SHS-API-Version": str(API_VERSION),
+            "X-SHS-Integration-Version": INTEGRATION_VERSION,
+        }
         if authenticated:
             if not self._device_token:
                 raise ShsAuthError("no device token configured")
@@ -64,23 +93,87 @@ class ShsApiClient:
                 timeout=REQUEST_TIMEOUT,
             ) as resp:
                 try:
-                    payload: dict[str, Any] = await resp.json()
+                    decoded: Any = await resp.json()
+                    payload = decoded if isinstance(decoded, dict) else {}
                 except (aiohttp.ContentTypeError, ValueError):
                     payload = {}
 
+                response_request_id = (
+                    payload.get("request_id")
+                    if isinstance(payload.get("request_id"), str)
+                    else resp.headers.get("X-Request-ID") or request_id
+                )
+                error_info = payload.get("error_info")
+                structured_error = (
+                    error_info if isinstance(error_info, dict) else None
+                )
+
                 if resp.status == 401:
-                    raise ShsAuthError(payload.get("error", "unauthorized"))
+                    raise ShsAuthError(
+                        str(
+                            structured_error.get("message")
+                            if structured_error
+                            else "device token rejected"
+                        ),
+                        code=str(
+                            structured_error.get("code")
+                            if structured_error
+                            else "unauthorized"
+                        ),
+                        request_id=response_request_id,
+                    )
                 if resp.status == 402:
-                    raise ShsSubscriptionInactiveError("subscription_inactive")
+                    raise ShsSubscriptionInactiveError(
+                        "subscription inactive",
+                        code="subscription_inactive",
+                        request_id=response_request_id,
+                    )
                 if resp.status >= 400:
-                    # The server names the offending value in `detail`; without
-                    # it a rejected batch gives no clue which row was at fault.
-                    message = f"{path} failed: {resp.status} {payload.get('error', '')}"
-                    detail = payload.get("detail")
-                    raise ShsApiError(f"{message} ({detail})" if detail else message)
-                return payload
-        except aiohttp.ClientError as err:
-            raise ShsApiError(f"connection error calling {path}: {err}") from err
+                    if structured_error:
+                        details = structured_error.get("details")
+                        message = str(
+                            structured_error.get("message")
+                            or structured_error.get("code")
+                            or "request failed"
+                        )
+                        if details not in (None, ""):
+                            message = f"{message} ({details})"
+                        raise ShsApiError(
+                            message,
+                            code=str(structured_error.get("code") or "api_error"),
+                            request_id=response_request_id,
+                            path=(
+                                str(structured_error["path"])
+                                if structured_error.get("path") is not None
+                                else None
+                            ),
+                            retryable=bool(structured_error.get("retryable")),
+                        )
+                    raise ShsApiError(
+                        f"{path} returned HTTP {resp.status} without an SHS API envelope",
+                        code="upstream_transport_failure",
+                        request_id=response_request_id,
+                        retryable=resp.status >= 500,
+                    )
+                if (
+                    payload.get("api_version") != API_VERSION
+                    or payload.get("ok") is not True
+                    or not isinstance(payload.get("data"), dict)
+                    or not isinstance(payload.get("request_id"), str)
+                ):
+                    raise ShsApiError(
+                        f"{path} returned an invalid SHS API envelope",
+                        code="invalid_response_envelope",
+                        request_id=response_request_id,
+                    )
+                return payload["data"]
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            raise ShsApiError(
+                f"connection error calling {path}: {err}",
+                code="upstream_transport_failure",
+                request_id=request_id,
+                retryable=True,
+            ) from err
 
     async def pair(
         self, pairing_code: str, device_name: str
@@ -151,6 +244,11 @@ class ShsApiClient:
     ) -> dict[str, Any]:
         """Push aggregate, per-device and thermal quarters, plus a plan."""
         body: dict[str, Any] = {
+            "api_version": API_VERSION,
+            "accepted_plan_schema_versions": sorted(
+                SUPPORTED_PLAN_SCHEMA_VERSIONS
+            ),
+            "integration_version": INTEGRATION_VERSION,
             "actual_slots": actual_slots,
             "devices": devices or [],
         }
@@ -171,4 +269,25 @@ class ShsApiClient:
             "POST",
             "energy-optimisation-ingest",
             json_body=body,
+        )
+
+    async def acknowledge_optimisation_plan(
+        self,
+        plan: dict[str, Any],
+        outcome: str,
+        error: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Acknowledge the exact generated plan after local validation."""
+        return await self._request(
+            "POST",
+            "energy-optimisation-plan-ack",
+            json_body={
+                "api_version": API_VERSION,
+                "plan_id": plan["plan_id"],
+                "snapshot_id": plan["snapshot_id"],
+                "plan_schema_version": plan["schema_version"],
+                "integration_version": INTEGRATION_VERSION,
+                "outcome": outcome,
+                "error": error,
+            },
         )

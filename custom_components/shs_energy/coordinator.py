@@ -28,6 +28,7 @@ from .api import (
     ShsAuthError,
     ShsSubscriptionInactiveError,
 )
+from .api_contract import ApiContractError, validate_server_contract
 from .const import (
     BACKFILL_MAX_DAYS,
     CATEGORIES,
@@ -206,9 +207,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             status = await self.client.status()
+            validate_server_contract(status)
         except ShsAuthError as err:
             raise UpdateFailed(f"device token rejected: {err}") from err
-        except ShsApiError as err:
+        except (ShsApiError, ApiContractError) as err:
             raise UpdateFailed(str(err)) from err
 
         active = bool(status.get("subscription_active"))
@@ -2305,12 +2307,41 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         return snapshot
 
+    async def _retry_pending_plan_ack(self, stored: dict[str, Any]) -> bool:
+        """Retry one durable plan acknowledgement; return whether store changed."""
+        pending = stored.get("optimisation_pending_plan_ack")
+        if not isinstance(pending, dict) or not isinstance(
+            pending.get("plan"), dict
+        ):
+            return False
+        try:
+            await self.client.acknowledge_optimisation_plan(
+                pending["plan"],
+                str(pending["outcome"]),
+                pending.get("error"),
+            )
+        except (KeyError, TypeError) as err:
+            _LOGGER.error("Cannot acknowledge plan without contract identifiers: %s", err)
+            stored.pop("optimisation_pending_plan_ack", None)
+            return True
+        except ShsApiError as err:
+            if err.code == "stale_plan_ack":
+                _LOGGER.info("Discarding acknowledgement for superseded plan: %s", err)
+                stored.pop("optimisation_pending_plan_ack", None)
+                return True
+            _LOGGER.warning("Plan acknowledgement will be retried: %s", err)
+            return False
+        stored.pop("optimisation_pending_plan_ack", None)
+        return True
+
     async def async_optimisation_push(
         self, _now: datetime | None = None, *, force_plan: bool = False
     ) -> None:
         """Upload completed quarters and refresh or retry the rolling plan."""
         async with self._push_lock:
             stored = await self._store.async_load() or {}
+            if await self._retry_pending_plan_ack(stored):
+                await self._store.async_save(stored)
             previous_configuration = dict(
                 stored.get("optimisation_device_configuration", {})
             )
@@ -2512,9 +2543,18 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # quarters were re-uploaded and a full replan was requested every
             # quarter. An unusable plan must cost the plan, and nothing else.
             plan_error: str | None = None
-            if result.get("plan"):
+            returned_plan = result.get("plan")
+            acknowledgement_plan = (
+                {
+                    key: returned_plan.get(key)
+                    for key in ("plan_id", "snapshot_id", "schema_version")
+                }
+                if isinstance(returned_plan, dict)
+                else None
+            )
+            if returned_plan:
                 try:
-                    validate_plan_contract(result["plan"], dt_util.utcnow())
+                    validate_plan_contract(returned_plan, dt_util.utcnow())
                 except OptimisationInputError as err:
                     plan_error = str(err)
                     _LOGGER.warning("Optimisation plan refused: %s", err)
@@ -2539,11 +2579,26 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # on nothing, which used to show up only as a log line.
                 self.last_optimisation_error = plan_error
                 self._sync_plan_refused_issue(plan_error)
+                stored["optimisation_pending_plan_ack"] = {
+                    "plan": acknowledgement_plan,
+                    "outcome": "rejected",
+                    "error": {
+                        "code": "plan_contract_rejected",
+                        "message": plan_error,
+                        "path": None,
+                        "details": [plan_error],
+                    },
+                }
             elif result.get("plan") and not configuration_changed:
                 self.last_optimisation_error = None
                 self.optimisation_plan = result["plan"]
                 stored["optimisation_plan"] = self.optimisation_plan
                 self._sync_plan_refused_issue(None)
+                stored["optimisation_pending_plan_ack"] = {
+                    "plan": acknowledgement_plan,
+                    "outcome": "accepted",
+                    "error": None,
+                }
             elif configuration_changed:
                 # The returned plan was built from the preceding website
                 # request. Never expose it after a role/control change; the
@@ -2551,10 +2606,26 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.optimisation_plan = None
                 stored.pop("optimisation_plan", None)
                 self.last_optimisation_error = "device configuration changed; replan pending"
+                if returned_plan:
+                    stored["optimisation_pending_plan_ack"] = {
+                        "plan": acknowledgement_plan,
+                        "outcome": "rejected",
+                        "error": {
+                            "code": "local_configuration_changed",
+                            "message": (
+                                "Home Assistant device configuration changed while "
+                                "the plan was generated"
+                            ),
+                            "path": None,
+                            "details": None,
+                        },
+                    }
             elif self.optimisation_plan is None:
                 self.optimisation_plan = stored.get("optimisation_plan")
             stored["last_optimisation_push"] = self.last_optimisation_push
             await self._store.async_save(stored)
+            if await self._retry_pending_plan_ack(stored):
+                await self._store.async_save(stored)
             self.async_update_listeners()
 
     @property
