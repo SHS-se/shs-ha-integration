@@ -64,7 +64,7 @@
           "terminal_energy_value_sek_per_kwh": "Value of stored terminal energy (SEK/kWh)",
           "ev_connected_entity": "EV connected entity",
           "ev_soc_entity": "EV state of charge entity",
-          "ev_target_soc_entity": "EV target state of charge entity",
+          "ev_target_soc_entity": "EV charge-limit entity",
           "ev_departure_entity": "Optional EV departure timestamp entity",
           "ev_energy_remaining_entity": "EV energy remaining entity (kWh)"
         }
@@ -129,11 +129,11 @@
       },
       "ev": {
         "title": "EV planning",
-        "description": "The charge-current entity supplies its raw bounds. The planner uses three 230 V phases and derives usable capacity from live SOC and remaining energy. Departure is optional; without it the target is planned over the rolling horizon.",
+        "description": "The charge-current entity supplies its raw bounds. The planner uses three 230 V phases and derives usable capacity from live SOC and remaining energy. Departure is optional; without it the planner works toward the car's charge limit over the rolling horizon.",
         "data": {
           "ev_connected_entity": "EV connected entity",
           "ev_soc_entity": "EV state of charge",
-          "ev_target_soc_entity": "EV target state of charge",
+          "ev_target_soc_entity": "EV charge limit",
           "ev_departure_entity": "Optional departure timestamp entity",
           "ev_energy_remaining_entity": "Energy remaining (kWh)"
         }

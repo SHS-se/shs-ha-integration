@@ -394,7 +394,7 @@ def build_services(
         )
         target_id = required_entity(
             OPT_EV_TARGET_SOC_ENTITY,
-            "Vehicle target SOC entity",
+            "Vehicle charge-limit entity",
         )
         soc_payload = read_entity(soc_id)
         soc = normalized_fraction(soc_payload["state"], OPT_EV_SOC_ENTITY)

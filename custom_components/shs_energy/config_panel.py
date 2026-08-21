@@ -373,9 +373,10 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "tab": "storage",
             "title": "Electric vehicle",
             "description": (
-                "Vehicle state supplies the charging need. An optional departure "
-                "timestamp gives the target a specific deadline; without one, the "
-                "planner uses the end of its rolling horizon. Charger current bounds "
+                "Vehicle state supplies the charging need, and the car's own charge "
+                "limit caps it. An optional departure timestamp gives that "
+                "limit a specific deadline; without one, the planner uses the "
+                "end of its rolling horizon. Charger current bounds "
                 "and the optional charging-power sensor come from its Variable Power "
                 "device card. The electrical model below converts those amps into "
                 "watts, so it has to match the cable actually installed: a "
@@ -396,8 +397,15 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 ),
                 _field(
                     c.OPT_EV_TARGET_SOC_ENTITY,
-                    "Vehicle target SOC",
+                    "Vehicle charge limit",
                     "entity",
+                    help_text=(
+                        "The car's own charge limit, which it will refuse to "
+                        "charge past. The planner treats it as a hard ceiling "
+                        "on the vehicle store, so it never buys more range "
+                        "than this allows, and plans toward it when no "
+                        "departure is set."
+                    ),
                 ),
                 _field(
                     c.OPT_EV_DEPARTURE_ENTITY,
@@ -405,8 +413,8 @@ def _configuration_sections() -> list[dict[str, Any]]:
                     "entity",
                     help_text=(
                         "When provided, the entity must contain a timezone-aware "
-                        "timestamp. Leave it empty to plan toward the target over "
-                        "the rolling horizon."
+                        "timestamp. Leave it empty to plan toward the charge "
+                        "limit over the rolling horizon."
                     ),
                 ),
                 _field(
