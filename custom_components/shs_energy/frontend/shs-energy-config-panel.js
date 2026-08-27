@@ -388,7 +388,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
         ? this._data.devices
             .find((device) => device.key === deviceKey)
             ?.fields || []
-        : this._data.sections.flatMap((section) => section.fields);
+        : this._data.sections.flatMap((section) => [
+            ...(section.toggle ? [section.toggle] : []),
+            ...section.fields,
+          ]);
     return { key, scope, deviceKey, field: fields.find((item) => item.key === key) };
   }
 
@@ -511,32 +514,41 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _renderSection(section) {
-    // A section can name one field as its master switch. The switch itself
-    // always renders, in the header where it reads as a statement about the
-    // house rather than as one setting among many; everything else is hidden
-    // while it is off, because settings for equipment that is not here are
-    // noise the customer has to scroll past and decide about.
-    const gate = section.enabled_by
-      ? section.fields.find((field) => field.key === section.enabled_by)
-      : undefined;
+    // A section may carry a switch saying whether the equipment is here at
+    // all. It sits beside the title because that is a statement about the
+    // house, not one setting among the ones it governs — which is also why it
+    // arrives as `section.toggle` and never inside `section.fields`, so it can
+    // never be drawn into the grid below.
+    //
+    // Off folds the section to its heading. Settings for equipment a home does
+    // not have are noise a customer has to scroll past and decide about, and
+    // the values behind them are kept: `_save` sends the whole draft, so
+    // switching back on returns everything untouched.
+    const gate = section.toggle;
     const on = gate ? Boolean(this._draft[gate.key]) : true;
-    const body = section.fields.filter((field) => field !== gate);
-    return `<section class="card form-card${gate && !on ? " section-off" : ""}">
-      <div class="section-head">
+    const label = gate ? this._escape(gate.label) : "";
+    const head = `<div class="section-head">
         <h2>${this._escape(section.title)}</h2>
-        ${gate ? `<label class="switch section-switch"><input type="checkbox" data-field-key="${this._escape(gate.key)}" data-scope="configuration" data-device-key="" ${on ? "checked" : ""}><span></span></label>` : ""}
-      </div>
+        ${
+          gate
+            ? `<label class="switch section-switch" title="${label}"><input type="checkbox" aria-label="${label}" data-field-key="${this._escape(gate.key)}" data-scope="configuration" data-device-key="" ${on ? "checked" : ""}><span></span></label>`
+            : ""
+        }
+      </div>`;
+    if (!on) {
+      return `<section class="card form-card section-off">
+      ${head}
+      <p class="description">${this._escape(gate.help || `${gate.label} — off.`)}</p>
+    </section>`;
+    }
+    return `<section class="card form-card">
+      ${head}
       ${section.description ? `<p class="description">${this._escape(section.description)}</p>` : ""}
-      ${gate && gate.help ? `<p class="description">${this._escape(gate.help)}</p>` : ""}
-      ${
-        on
-          ? `<div class="field-grid">
-        ${body
+      <div class="field-grid">
+        ${section.fields
           .map((field) => this._renderField(field, this._draft[field.key]))
           .join("")}
-      </div>`
-          : ""
-      }
+      </div>
     </section>`;
   }
 

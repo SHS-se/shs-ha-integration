@@ -50,12 +50,11 @@ class StoreToggleWiringTests(unittest.TestCase):
         for section_id, name in STORE_SECTIONS.items():
             with self.subTest(section=section_id):
                 body = self._section(section_id)
-                # Named to the renderer, so the header can show it apart from
-                # the settings it governs.
-                self.assertIn(f'"enabled_by": c.{name}', body)
-                # And present as a field, or the generic save path has nothing
-                # to persist and the generic loader nothing to read.
-                self.assertIn(f"c.{name},", body)
+                # Carried beside the title, never among the settings it
+                # governs, so no renderer can draw it into the grid.
+                self.assertIn(f'"toggle": _field(\n                c.{name},', body)
+                fields = body[body.index('"fields": ['):]
+                self.assertNotIn(name, fields)
 
     def test_a_switch_is_off_by_nothing_and_on_by_default(self) -> None:
         """An installation predating these keys must plan exactly as before."""
@@ -66,13 +65,31 @@ class StoreToggleWiringTests(unittest.TestCase):
                 # read as absent forever.
                 self.assertIsInstance(getattr(const, name), str)
 
-    def test_the_frontend_hides_a_section_it_is_told_is_off(self) -> None:
+    def test_the_frontend_folds_a_section_it_is_told_is_off(self) -> None:
         renderer = FRONTEND[FRONTEND.index("_renderSection(section) {"):]
         renderer = renderer[: renderer.index("\n  _renderSections(")]
-        self.assertIn("section.enabled_by", renderer)
-        # The switch renders whatever the state is; the body only when on.
+        self.assertIn("const gate = section.toggle;", renderer)
+        # The switch sits in the heading, and the fields are unreachable when
+        # off: an early return rather than a conditional inside the markup,
+        # because the latter is what let a half-applied version render both.
         self.assertIn("section-switch", renderer)
-        self.assertRegex(renderer, r"on\s*\?\s*`<div class=\"field-grid\">")
+        off, live = renderer.split("if (!on) {", 1)
+        folded, expanded = live.split("return `<section class=\"card form-card\">", 1)
+        self.assertNotIn("field-grid", folded)
+        self.assertIn("field-grid", expanded)
+        self.assertIn("section.fields", expanded)
+
+    def test_the_switch_is_still_reachable_when_it_is_not_a_field(self) -> None:
+        """`_onChange` resolves a field by key from the sections, so a switch
+        held outside `fields` has to be added back there or it does nothing."""
+        lookup = FRONTEND[FRONTEND.index("_fieldFromElement(element) {"):]
+        lookup = lookup[: lookup.index("\n  _onChange(")]
+        self.assertIn("section.toggle ? [section.toggle] : []", lookup)
+
+    def test_the_save_path_persists_a_switch_that_is_not_a_field(self) -> None:
+        """Same gap on the Python side: validation walks a section's fields."""
+        self.assertIn("for field in section_fields(section):", CONFIG_PANEL)
+        self.assertIn("def section_fields(", CONFIG_PANEL)
 
     def test_the_snapshot_drops_what_the_panel_hid(self) -> None:
         """The four surfaces, each named where it is decided."""

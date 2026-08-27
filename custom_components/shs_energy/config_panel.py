@@ -237,6 +237,19 @@ def _control_fields(device: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     return fields
 
 
+def section_fields(section: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every field a section persists, its own switch included.
+
+    A section's `toggle` is deliberately not in `fields`: it states whether the
+    equipment is here at all, so it belongs beside the title rather than among
+    the settings it governs, and keeping it out of `fields` is what stops any
+    renderer drawing it as one. It still has to be validated and saved like
+    anything else, which is what this is for.
+    """
+    toggle = section.get("toggle")
+    return [*([toggle] if toggle else []), *section["fields"]]
+
+
 def _configuration_sections() -> list[dict[str, Any]]:
     """Return the editable non-device configuration grouped for the panel."""
     c = shs_const
@@ -313,18 +326,16 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "tab": "storage",
             "title": "House battery",
             "description": "Export is a customer preference and remains advisory until a reviewed local battery executor exists.",
-            "enabled_by": c.OPT_BATTERY_ENABLED,
-            "fields": [
-                _field(
-                    c.OPT_BATTERY_ENABLED,
-                    "This home has a house battery",
-                    "toggle",
-                    help_text=(
-                        "Off tells the planner the equipment is not here: the "
-                        "settings below are hidden and no battery is planned, "
-                        "charged or discharged. Metering is unaffected."
-                    ),
+            "toggle": _field(
+                c.OPT_BATTERY_ENABLED,
+                "This home has a house battery",
+                "toggle",
+                help_text=(
+                    "Switched off, so no battery is planned, charged or "
+                    "discharged. Metering is unaffected."
                 ),
+            ),
+            "fields": [
                 _field(c.OPT_BATTERY_SOC_ENTITY, "Battery state of charge", "entity", domains=("sensor",)),
                 _field(c.OPT_BATTERY_CAPACITY_KWH, "Usable capacity", "number", unit="kWh", minimum=0.1, step=0.1),
                 _field(c.OPT_BATTERY_CHARGE_MAX_W, "Maximum charge power", "number", unit="W", minimum=1, step=1),
@@ -362,18 +373,16 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 "The pool's heat loss and its heat pump's efficiency against air "
                 "temperature are learned from measurement and never entered."
             ),
-            "enabled_by": c.OPT_POOL_ENABLED,
-            "fields": [
-                _field(
-                    c.OPT_POOL_ENABLED,
-                    "This home has a heated pool",
-                    "toggle",
-                    help_text=(
-                        "Off tells the planner the equipment is not here: the "
-                        "settings below are hidden and no pool heating is "
-                        "planned. Metering is unaffected."
-                    ),
+            "toggle": _field(
+                c.OPT_POOL_ENABLED,
+                "This home has a heated pool",
+                "toggle",
+                help_text=(
+                    "Switched off, so no pool heating is planned. Metering is "
+                    "unaffected."
                 ),
+            ),
+            "fields": [
                 _field(
                     c.OPT_POOL_WATER_TEMPERATURE_ENTITY,
                     "Pool water temperature",
@@ -405,18 +414,16 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 "single-phase charger set to three phases is planned at three times "
                 "the power it can deliver."
             ),
-            "enabled_by": c.OPT_EV_ENABLED,
-            "fields": [
-                _field(
-                    c.OPT_EV_ENABLED,
-                    "This home charges an electric vehicle",
-                    "toggle",
-                    help_text=(
-                        "Off tells the planner the equipment is not here: the "
-                        "settings below are hidden and no charging is planned. "
-                        "Metering is unaffected."
-                    ),
+            "toggle": _field(
+                c.OPT_EV_ENABLED,
+                "This home charges an electric vehicle",
+                "toggle",
+                help_text=(
+                    "Switched off, so no vehicle charging is planned. Metering "
+                    "is unaffected."
                 ),
+            ),
+            "fields": [
                 _field(
                     c.OPT_EV_CONNECTED_ENTITY,
                     "Vehicle connected state",
@@ -983,7 +990,7 @@ async def async_apply_configuration(
     options = resolved_options(hass, {**dict(entry.options), **incoming})
     options.pop("setup_method", None)
     for section in _configuration_sections():
-        for field in section["fields"]:
+        for field in section_fields(section):
             key = field["key"]
             if key not in options:
                 if field.get("required"):
