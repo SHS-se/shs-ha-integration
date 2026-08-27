@@ -53,6 +53,7 @@ from .const import (
     OPT_PV_FORECAST_ENTITIES,
     OPT_PV_FORECAST_LATITUDE,
     OPT_PV_FORECAST_LONGITUDE,
+    OPT_BATTERY_ENABLED,
     OPT_BATTERY_SOC_ENTITY,
     OPT_EV_SOC_ENTITY,
     OPT_GRID_EXPORT_POWER_ENTITY,
@@ -118,7 +119,12 @@ from .optimisation import (
     utc_slots,
     validate_plan_contract,
 )
-from .planning import build_device_models, build_services, unplanned_services
+from .planning import (
+    build_device_models,
+    build_services,
+    disabled_store_paths,
+    unplanned_services,
+)
 from .thermal import (
     actuator_value,
     cooling_value,
@@ -1906,9 +1912,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pv = {start: 0.0 for start in horizon}
             pv_used = []
             pv_issued = captured
+        # A battery switched off is a home without one, so it is not read, not
+        # published and not planned. `capabilities.battery` follows from this
+        # being None, which keeps one fact in one place.
         battery_entity = (
             self._entity_payload(options[OPT_BATTERY_SOC_ENTITY])
             if options.get(OPT_BATTERY_SOC_ENTITY)
+            and options.get(OPT_BATTERY_ENABLED, True)
             else None
         )
         price_catalog = self.supplier_prices
@@ -2131,12 +2141,16 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             planning_path(model["control_type"], model["category"])
             for model in device_models
         }
+        # A store the customer switched off leaves the routed paths too, or the
+        # snapshot would claim a capability whose service `build_services`
+        # deliberately did not build.
+        switched_off = disabled_store_paths(options)
         capabilities = {
             "pv": bool(pv_entities),
             "battery": battery is not None,
-            "pool": "pool" in planned_paths,
+            "pool": "pool" in planned_paths and "pool" not in switched_off,
             "boiler": "boiler" in planned_paths,
-            "ev": "ev" in planned_paths,
+            "ev": "ev" in planned_paths and "ev" not in switched_off,
         }
         # A capability that is off because no meter routes to it is a
         # configuration gap, not a house without the equipment. Say so rather
@@ -2159,7 +2173,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # a median daily kWh could never express (§8.3).
         pool_state: dict[str, Any] | None = None
         pool_entity = options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY)
-        if isinstance(pool_entity, str) and pool_entity.strip():
+        if (
+            isinstance(pool_entity, str)
+            and pool_entity.strip()
+            and "pool" not in switched_off
+        ):
             pool_payload = self._entity_payload(pool_entity)
             pool_state = {
                 "water_temperature_c": round(

@@ -30,6 +30,8 @@ try:  # pragma: no cover - exercised by both import paths
         OPT_EV_ENERGY_REMAINING_ENTITY,
         OPT_EV_SOC_ENTITY,
         OPT_EV_TARGET_SOC_ENTITY,
+        OPT_EV_ENABLED,
+        OPT_POOL_ENABLED,
         OPT_POOL_WATER_TEMPERATURE_ENTITY,
         OPT_EV_PHASE_COUNT,
         OPT_EV_PHASE_VOLTAGE,
@@ -64,6 +66,8 @@ except ImportError:  # The test suite imports these helpers as flat modules,
         OPT_EV_ENERGY_REMAINING_ENTITY,
         OPT_EV_SOC_ENTITY,
         OPT_EV_TARGET_SOC_ENTITY,
+        OPT_EV_ENABLED,
+        OPT_POOL_ENABLED,
         OPT_POOL_WATER_TEMPERATURE_ENTITY,
         OPT_EV_PHASE_COUNT,
         OPT_EV_PHASE_VOLTAGE,
@@ -137,6 +141,7 @@ def build_services(
     services: list[dict[str, Any]] = []
     samples: dict[str, int] = {}
     ev_battery: dict[str, Any] | None = None
+    switched_off = disabled_store_paths(options)
     raw_mappings = options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
     if not isinstance(raw_mappings, dict):
         raise OptimisationInputError("device control mappings must be an object")
@@ -149,6 +154,8 @@ def build_services(
         Selection is by control contract, never by meter category: the same
         category may hold both a deferrable service and a room heater.
         """
+        if path in switched_off:
+            return []
         pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for model in device_models:
             if planning_path(model["control_type"], model["category"]) != path:
@@ -382,7 +389,7 @@ def build_services(
     # Reading it here rather than inside the control branch is what lets an
     # unrouted charger still report the car — the planner declines to dispatch
     # what it may not control, and now says so instead of omitting the store.
-    if options.get(OPT_EV_CONNECTED_ENTITY):
+    if options.get(OPT_EV_CONNECTED_ENTITY) and "ev" not in switched_off:
         connected_id = required_entity(
             OPT_EV_CONNECTED_ENTITY,
             "Vehicle connected-state entity",
@@ -506,6 +513,36 @@ def build_services(
 # because an option key is an implementation detail: telling a customer that
 # `ev_soc_entity` is configured names something they have never seen and cannot
 # search for.
+# Which store each toggle switches off, by the planning path the rest of the
+# system already routes on.
+_STORE_ENABLED_OPTION: dict[str, str] = {
+    "pool": OPT_POOL_ENABLED,
+    "ev": OPT_EV_ENABLED,
+}
+
+
+def disabled_store_paths(options: dict[str, Any]) -> set[str]:
+    """Return the planning paths this home has switched off.
+
+    One source of truth, because the alternative is three: the services built
+    here, the capability flags the coordinator derives from routed meters, and
+    the unplanned-service report. Those are computed in different places from
+    different inputs, and a store that is off has to disappear from all three or
+    the snapshot contradicts itself — a capability claiming a service the
+    snapshot does not carry is the failure `planned_paths` was introduced to
+    stop.
+
+    Absent means enabled. `optimisation_defaults` supplies True, and reading a
+    missing key as off would silently unplan every home that upgrades before it
+    next saves its configuration.
+    """
+    return {
+        path
+        for path, key in _STORE_ENABLED_OPTION.items()
+        if key in options and not options[key]
+    }
+
+
 _SERVICE_EVIDENCE: tuple[
     tuple[str, str, tuple[tuple[str, str], ...], str, str], ...
 ] = (
@@ -558,8 +595,14 @@ def unplanned_services(
     option keys instead sent them looking for settings that do not exist.
     """
     reports: list[str] = []
+    switched_off = disabled_store_paths(options)
     for path, subject, fields, category, control in _SERVICE_EVIDENCE:
         if path in planned_paths:
+            continue
+        # A store the customer switched off is not a home missing a control
+        # route. Reporting it would send them to the website to fix a meter
+        # they deliberately took out of planning.
+        if path in switched_off:
             continue
         configured = [
             f"{label} ({options[key]})"

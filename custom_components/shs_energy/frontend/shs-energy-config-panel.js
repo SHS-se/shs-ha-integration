@@ -511,14 +511,32 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _renderSection(section) {
-    return `<section class="card form-card">
-      <h2>${this._escape(section.title)}</h2>
+    // A section can name one field as its master switch. The switch itself
+    // always renders, in the header where it reads as a statement about the
+    // house rather than as one setting among many; everything else is hidden
+    // while it is off, because settings for equipment that is not here are
+    // noise the customer has to scroll past and decide about.
+    const gate = section.enabled_by
+      ? section.fields.find((field) => field.key === section.enabled_by)
+      : undefined;
+    const on = gate ? Boolean(this._draft[gate.key]) : true;
+    const body = section.fields.filter((field) => field !== gate);
+    return `<section class="card form-card${gate && !on ? " section-off" : ""}">
+      <div class="section-head">
+        <h2>${this._escape(section.title)}</h2>
+        ${gate ? `<label class="switch section-switch"><input type="checkbox" data-field-key="${this._escape(gate.key)}" data-scope="configuration" data-device-key="" ${on ? "checked" : ""}><span></span></label>` : ""}
+      </div>
       ${section.description ? `<p class="description">${this._escape(section.description)}</p>` : ""}
-      <div class="field-grid">
-        ${section.fields
+      ${gate && gate.help ? `<p class="description">${this._escape(gate.help)}</p>` : ""}
+      ${
+        on
+          ? `<div class="field-grid">
+        ${body
           .map((field) => this._renderField(field, this._draft[field.key]))
           .join("")}
-      </div>
+      </div>`
+          : ""
+      }
     </section>`;
   }
 
@@ -903,6 +921,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .toggle-field { display:grid; grid-template-columns:1fr auto; align-items:center; gap:12px; padding:8px 0; }
       .toggle-field .field-label { margin:0; }
       .toggle-field .field-help { grid-column:1/-1; margin:0; }
+      .section-head { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+      .section-head h2 { margin:0; }
+      .section-switch { flex:0 0 auto; }
+      /* A section that is off keeps its heading legible and stops competing
+         for attention with the ones that describe equipment this home has. */
+      .form-card.section-off h2 { opacity:.7; }
+      .form-card.section-off .description { margin-bottom:0; }
       .switch input { position:absolute; opacity:0; }
       .switch span { display:block; width:48px; height:28px; border-radius:20px; background:var(--disabled-color); position:relative; transition:.2s; }
       .switch span:after { content:""; position:absolute; width:22px; height:22px; left:3px; top:3px; border-radius:50%; background:white; box-shadow:0 1px 3px #0005; transition:.2s; }

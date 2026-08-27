@@ -33,6 +33,7 @@ from .const import (
     OPT_BATTERY_EXPORT_RESERVE_SOC,
     OPT_BATTERY_DISCHARGE_MAX_W,
     OPT_BATTERY_MAX_SOC,
+    OPT_BATTERY_ENABLED,
     OPT_BATTERY_MIN_SOC,
     OPT_BATTERY_SOC_ENTITY,
     OPT_BATTERY_TARGET_IS_HARD,
@@ -59,6 +60,8 @@ from .const import (
     OPT_EV_PHASE_COUNT,
     OPT_EV_PHASE_VOLTAGE,
     OPT_EV_CHARGE_EFFICIENCY,
+    OPT_EV_ENABLED,
+    OPT_POOL_ENABLED,
     OPT_EV_KWH_PER_KM,
     EV_PHASE_COUNT,
     EV_PHASE_VOLTAGE,
@@ -79,6 +82,11 @@ def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
         OPT_FORECAST_RESOLUTION_MINUTES: DEFAULT_FORECAST_RESOLUTION_MINUTES,
         OPT_PV_FORECAST_LATITUDE: hass.config.latitude,
         OPT_PV_FORECAST_LONGITUDE: hass.config.longitude,
+        # Every store is part of the home until someone says otherwise, so an
+        # installation that predates these keys is unchanged by them.
+        OPT_BATTERY_ENABLED: True,
+        OPT_POOL_ENABLED: True,
+        OPT_EV_ENABLED: True,
         OPT_BATTERY_MIN_SOC: 0.05,
         OPT_BATTERY_MAX_SOC: 1.0,
         OPT_BATTERY_TARGET_SOC: 0.8,

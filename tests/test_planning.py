@@ -19,6 +19,7 @@ from optimisation import OptimisationInputError  # noqa: E402
 from planning import (  # noqa: E402
     build_device_models,
     build_services,
+    disabled_store_paths,
     unplanned_services,
 )
 
@@ -643,3 +644,75 @@ class VehicleStateWithoutAControlRouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StoreEnabledTests(unittest.TestCase):
+    """A store switched off is a home without the equipment.
+
+    That is a different claim from "configured but not routed", which
+    `unplanned_services` exists to report and which sends the customer to the
+    website to fix a meter. Confusing the two would nag every home that
+    deliberately took a store out of planning.
+    """
+
+    def test_an_absent_key_leaves_the_store_planned(self) -> None:
+        """The upgrade path. `optimisation_defaults` supplies True, but an
+        options dict written before these keys existed carries neither, and
+        reading a missing key as off would silently unplan every such home."""
+        self.assertEqual(disabled_store_paths({}), set())
+
+    def test_only_an_explicit_false_switches_a_store_off(self) -> None:
+        self.assertEqual(disabled_store_paths({"pool_enabled": True}), set())
+        self.assertEqual(disabled_store_paths({"pool_enabled": False}), {"pool"})
+        self.assertEqual(
+            disabled_store_paths({"pool_enabled": False, "ev_enabled": False}),
+            {"pool", "ev"},
+        )
+
+    def test_a_switched_off_pool_builds_no_service(self) -> None:
+        services, _samples, _battery = build_services(
+            {
+                "device_control_mappings": PoolServiceTests.mappings,
+                "pool_enabled": False,
+            },
+            daily(**{"sensor.pool_heater_energy": 8.0}),
+            [],
+            HORIZON,
+            [PoolServiceTests.pool_switch],
+            read_entity=lambda entity_id: self.fail(
+                f"a switched-off pool must not read {entity_id}"
+            ),
+            local_tz=timezone.utc,
+            today=TODAY,
+        )
+        self.assertEqual([s for s in services if s["device"] == "pool"], [])
+
+    def test_a_switched_off_vehicle_is_neither_planned_nor_published(self) -> None:
+        """Both halves. The control route and the car's own state are read in
+        separate branches — an unrouted charger still publishes the vehicle so
+        it can be reported as undispatched — so switching the store off has to
+        silence both or the snapshot carries a store nothing will bid for."""
+        services, _samples, battery = build_services(
+            {**EvServiceTests.options, "ev_enabled": False},
+            {},
+            [],
+            HORIZON,
+            [EvServiceTests.charger],
+            read_entity=lambda entity_id: self.fail(
+                f"a switched-off vehicle must not read {entity_id}"
+            ),
+            local_tz=timezone.utc,
+            today=TODAY,
+        )
+        self.assertEqual([s for s in services if s["device"] == "ev"], [])
+        self.assertIsNone(battery)
+
+    def test_a_switched_off_store_is_not_reported_as_unrouted(self) -> None:
+        configured = {
+            "pool_water_temperature_entity": "sensor.pool_temperature",
+        }
+        self.assertEqual(len(unplanned_services(configured, set(), {})), 1)
+        self.assertEqual(
+            unplanned_services({**configured, "pool_enabled": False}, set(), {}),
+            [],
+        )

@@ -121,6 +121,21 @@ OPT_GRID_EXPORT_POWER_ENTITY = "grid_export_power_entity"
 OPT_OUTDOOR_TEMPERATURE_ENTITY = "outdoor_temperature_entity"
 OPT_WEATHER_FORECAST_ENTITY = "weather_forecast_entity"
 
+# Whether a store is part of this home at all.
+#
+# Distinct from every other option in that it answers a question about the
+# building rather than about a preference: a house with no pool is not a house
+# whose pool is warm enough. Off means the planner is told the equipment is not
+# there, which is a different claim from "configured but not routed" — the one
+# `unplanned_services` exists to report — and the two must not look alike.
+#
+# Defaults are True in `optimisation_defaults`, so an installation that predates
+# these keys plans exactly as it did before and the toggle is only ever a
+# deliberate opt-out.
+OPT_BATTERY_ENABLED = "battery_enabled"
+OPT_POOL_ENABLED = "pool_enabled"
+OPT_EV_ENABLED = "ev_enabled"
+
 OPT_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
 OPT_BATTERY_CHARGE_MAX_W = "battery_charge_max_w"
 OPT_BATTERY_DISCHARGE_MAX_W = "battery_discharge_max_w"

@@ -313,7 +313,18 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "tab": "storage",
             "title": "House battery",
             "description": "Export is a customer preference and remains advisory until a reviewed local battery executor exists.",
+            "enabled_by": c.OPT_BATTERY_ENABLED,
             "fields": [
+                _field(
+                    c.OPT_BATTERY_ENABLED,
+                    "This home has a house battery",
+                    "toggle",
+                    help_text=(
+                        "Off tells the planner the equipment is not here: the "
+                        "settings below are hidden and no battery is planned, "
+                        "charged or discharged. Metering is unaffected."
+                    ),
+                ),
                 _field(c.OPT_BATTERY_SOC_ENTITY, "Battery state of charge", "entity", domains=("sensor",)),
                 _field(c.OPT_BATTERY_CAPACITY_KWH, "Usable capacity", "number", unit="kWh", minimum=0.1, step=0.1),
                 _field(c.OPT_BATTERY_CHARGE_MAX_W, "Maximum charge power", "number", unit="W", minimum=1, step=1),
@@ -351,7 +362,18 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 "The pool's heat loss and its heat pump's efficiency against air "
                 "temperature are learned from measurement and never entered."
             ),
+            "enabled_by": c.OPT_POOL_ENABLED,
             "fields": [
+                _field(
+                    c.OPT_POOL_ENABLED,
+                    "This home has a heated pool",
+                    "toggle",
+                    help_text=(
+                        "Off tells the planner the equipment is not here: the "
+                        "settings below are hidden and no pool heating is "
+                        "planned. Metering is unaffected."
+                    ),
+                ),
                 _field(
                     c.OPT_POOL_WATER_TEMPERATURE_ENTITY,
                     "Pool water temperature",
@@ -383,7 +405,18 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 "single-phase charger set to three phases is planned at three times "
                 "the power it can deliver."
             ),
+            "enabled_by": c.OPT_EV_ENABLED,
             "fields": [
+                _field(
+                    c.OPT_EV_ENABLED,
+                    "This home charges an electric vehicle",
+                    "toggle",
+                    help_text=(
+                        "Off tells the planner the equipment is not here: the "
+                        "settings below are hidden and no charging is planned. "
+                        "Metering is unaffected."
+                    ),
+                ),
                 _field(
                     c.OPT_EV_CONNECTED_ENTITY,
                     "Vehicle connected state",
