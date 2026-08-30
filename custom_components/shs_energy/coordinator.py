@@ -2197,6 +2197,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "snapshot_id": str(uuid4()),
             "captured_at": captured.isoformat(),
             "timezone": str(dt_util.DEFAULT_TIME_ZONE),
+            # Where the house is, as a property of the home rather than of any
+            # one forecast. It used to be published only inside `sources.pv`,
+            # which quietly made weather a privilege of homes that generate:
+            # a house without panels still sits in the same weather, and its
+            # rooms still gain heat from the same sun.
+            "location": {
+                "latitude": round(self.hass.config.latitude, 5),
+                "longitude": round(self.hass.config.longitude, 5),
+            },
             "slot_minutes": 15,
             "slots": slots,
             "sources": {
