@@ -66,6 +66,13 @@ THERMAL_MIN_SAMPLE_COVERAGE = 0.6
 COOLING_MODES = ("cool", "dry", "fan_only")
 UNUSABLE_STATES = ("unknown", "unavailable", "none", "")
 
+# Weather providers publish on the hour and drop the hour already under way,
+# so the first entry is routinely later than the first planning quarter. That
+# quarter's weather is not unknown, it is the entry that starts minutes after
+# it, and reading it there is interpolation inside the provider's own
+# resolution rather than extrapolation beyond its horizon.
+FORECAST_LEAD_IN = timedelta(hours=1)
+
 
 def _as_float(value: Any) -> float | None:
     try:
@@ -228,9 +235,12 @@ def interpolate_hourly_forecast(
 ) -> dict[datetime, float]:
     """Resample an hourly weather forecast onto planning quarters.
 
-    Linear interpolation between the bracketing hours; quarters outside the
-    forecast's own range are left absent rather than flat-extrapolated, so a
+    Linear interpolation between the bracketing hours; quarters past the
+    forecast's own end are left absent rather than flat-extrapolated, so a
     short provider horizon stays visibly short instead of inventing weather.
+    Quarters within ``FORECAST_LEAD_IN`` before its first entry take that
+    entry, which is the same forecast read a few minutes early rather than a
+    guess about weather the provider never described.
     """
     points = sorted(
         (moment.astimezone(timezone.utc), value)
@@ -244,7 +254,11 @@ def interpolate_hourly_forecast(
     index = 0
     for slot in starts:
         aligned = slot.astimezone(timezone.utc)
-        if aligned < points[0][0] or aligned > points[-1][0]:
+        if aligned > points[-1][0]:
+            continue
+        if aligned < points[0][0]:
+            if points[0][0] - aligned < FORECAST_LEAD_IN:
+                result[slot] = round(points[0][1], 4)
             continue
         while index + 1 < len(points) and points[index + 1][0] < aligned:
             index += 1

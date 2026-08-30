@@ -2307,10 +2307,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         outdoor_forecast, outdoor_entity = await self._outdoor_forecast(
             options, horizon
         )
-        if outdoor_forecast:
-            snapshot["outdoor_temperature_c"] = [
-                outdoor_forecast.get(start) for start in horizon
-            ]
+        outdoor_series = [outdoor_forecast.get(start) for start in horizon]
+        if outdoor_forecast and None not in outdoor_series:
+            snapshot["outdoor_temperature_c"] = outdoor_series
             snapshot["sources"]["outdoor_temperature"] = {
                 "provider": "home_assistant_weather",
                 "entity_ids": [outdoor_entity] if outdoor_entity else [],
@@ -2319,6 +2318,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "quality": "provider_raw",
                 "sample_count": len(outdoor_forecast),
             }
+        elif outdoor_forecast:
+            _LOGGER.debug(
+                "Outdoor forecast covers %s of %s planning quarters, so room "
+                "comfort forecasting is left to the website",
+                len(horizon) - outdoor_series.count(None),
+                len(horizon),
+            )
         if pv_entities:
             self._record_forecast_ledger(
                 stored, {start: pv[start] for start in horizon}, captured

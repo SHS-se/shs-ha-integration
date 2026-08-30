@@ -141,6 +141,18 @@ class ForecastTests(unittest.TestCase):
         result = interpolate_hourly_forecast([(START, 10.0)], [at(15)])
         self.assertEqual(result, {})
 
+    def test_reads_the_first_entry_for_the_quarter_just_before_it(self) -> None:
+        # A provider that has dropped the hour under way starts at the next
+        # hour, leaving the planner's first quarters ahead of it.
+        records = [(START, 10.0), (at(60), 14.0)]
+        starts = [at(-45), at(-30), at(-15)]
+        result = interpolate_hourly_forecast(records, starts)
+        self.assertEqual([result[start] for start in starts], [10.0, 10.0, 10.0])
+
+    def test_does_not_reach_back_a_whole_hour(self) -> None:
+        result = interpolate_hourly_forecast([(START, 10.0)], [at(-60)])
+        self.assertEqual(result, {})
+
 
 class BuildSlotsTests(unittest.TestCase):
     def test_requires_both_temperature_and_duty(self) -> None:
