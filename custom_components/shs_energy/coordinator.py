@@ -41,7 +41,6 @@ from .const import (
     ISSUE_OPTIMISATION_CONFIGURATION,
     ISSUE_OPTIMISATION_PLAN_REFUSED,
     ISSUE_SUBSCRIPTION_INACTIVE,
-    MAX_KWH_PER_READING,
     MAX_THERMAL_SLOTS_PER_PUSH,
     THERMAL_BACKFILL_HOURS,
     OPT_OUTDOOR_TEMPERATURE_ENTITY,
@@ -125,6 +124,7 @@ from .planning import (
     disabled_store_paths,
     unplanned_services,
 )
+from .readings import daily_category_readings, usable_change
 from .thermal import (
     actuator_value,
     cooling_value,
@@ -181,6 +181,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_push_date: str | None = None
         self.last_push_error: str | None = None
         self.skipped_readings: list[str] = []
+        self.incomplete_readings: list[str] = []
         self.supplier_cost_days = 0
         self.tariff_catalog: dict[str, Any] | None = None
         self.supplier_prices: dict[str, Any] | None = None
@@ -851,7 +852,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for row in rows:
                 start_value = row.get("start")
                 change = row.get("change")
-                if start_value is None or change is None or change < 0:
+                if start_value is None or change is None:
+                    continue
+                energy = usable_change(change)
+                if energy is None:
                     continue
                 if isinstance(start_value, datetime):
                     start_utc = start_value.astimezone(timezone.utc)
@@ -862,7 +866,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # pushed as if it were complete. Keep the window half-open.
                 if start_utc >= end_utc:
                     continue
-                values.append((start_utc, float(change)))
+                values.append((start_utc, energy))
             result[entity_id] = values
         return result
 
@@ -1427,29 +1431,23 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         today_start = dt_util.start_of_local_day()
         start = today_start - timedelta(days=days_back)
         per_day = await self._daily_changes(all_entities, start, today_start)
-        readings: list[dict[str, Any]] = []
-        skipped: list[str] = []
-        for day, entity_changes in sorted(per_day.items()):
-            for category, entity_ids in daily_entities_by_category.items():
-                if not entity_ids or any(
-                    entity not in entity_changes for entity in entity_ids
-                ):
-                    # A category made from several meters is only meaningful
-                    # when every mapped meter covers the day. Missing is
-                    # unknown, never a smaller-looking partial total.
-                    continue
-                values = [entity_changes[entity] for entity in entity_ids]
-                kwh = round(sum(values), 3)
-                if kwh > MAX_KWH_PER_READING:
-                    skipped.append(f"{category} {day} ({kwh} kWh)")
-                    continue
-                readings.append({"date": day, "category": category, "kwh": kwh})
+        readings, skipped, incomplete = daily_category_readings(
+            per_day, daily_entities_by_category
+        )
         self.skipped_readings = skipped
+        self.incomplete_readings = incomplete
         if skipped:
             _LOGGER.warning(
                 "Skipped implausible daily readings, most likely a reset "
                 "counter behind one of the mapped sensors: %s",
                 "; ".join(skipped),
+            )
+        if incomplete:
+            _LOGGER.warning(
+                "Categories left unreported because a mapped meter is silent. "
+                "The portal shows no figure at all for these days until the "
+                "sensor reports again: %s",
+                "; ".join(incomplete),
             )
 
         calculations, catalog_hash, tariff_attempted = await self._tariff_calculations(

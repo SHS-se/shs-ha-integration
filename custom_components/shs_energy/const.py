@@ -260,5 +260,13 @@ SUPPLIER_BACKFILL_MAX_DAYS = 450
 # single row, so it is dropped here instead.
 MAX_KWH_PER_READING = 10000
 
+# A meter that loses power comes back reporting slightly less than the recorder
+# last saw (7862.724003 -> 7862.724), so the period's change is a microscopic
+# negative. That is the counter's own rounding, not energy nobody measured, and
+# reading it as "this meter is missing" costs the whole category that day. Below
+# this magnitude a negative change is worth zero; a larger drop is a reset whose
+# energy really is unknown, and stays dropped.
+MAX_NEGATIVE_CHANGE_KWH = 0.05
+
 ISSUE_SUBSCRIPTION_INACTIVE = "subscription_inactive"
 ISSUE_MISSING_CUSTOMER_INPUT = "missing_customer_input"

@@ -138,6 +138,7 @@ class ShsLastPushSensor(ShsBaseSensor):
             "last_error": self.coordinator.last_push_error,
             "last_calculation_error": self.coordinator.last_calculation_error,
             "skipped_readings": self.coordinator.skipped_readings,
+            "incomplete_readings": self.coordinator.incomplete_readings,
             "supplier_cost_days": self.coordinator.supplier_cost_days,
         }
 

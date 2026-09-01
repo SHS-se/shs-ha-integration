@@ -26,6 +26,7 @@ PURE_MODULES = (
     "device_controls",
     "optimisation",
     "planning",
+    "readings",
     "supplier",
     "tariff",
     "thermal",
