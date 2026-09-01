@@ -50,17 +50,32 @@ ACTUAL_FIELD_BY_CATEGORY = {
 }
 
 
+# What the reader can actually do about a gap. The panel steers on this, and
+# getting it wrong is worse than saying nothing: "every item below is a field
+# on this panel" sent someone hunting a settings page for a shortfall of
+# recorder history, which no field on any page can reach.
+REMEDY_SETTING = "setting"  # a field on the panel, waiting to be filled in
+REMEDY_WAITING = "waiting"  # nothing to fill in; history to accrue, or a source to return
+REMEDY_DEFECT = "defect"  # neither — worth reporting rather than hunting for
+
+
 class OptimisationInputError(ValueError):
     """A required optimisation input is absent or ambiguous.
 
     ``reasons`` carries every independent gap found in one pass. Reporting them
     together is what stops a multi-device setup from being repaired one
     rediscovered failure at a time.
+
+    ``remedy`` says which kind of gap it is, because the three want opposite
+    things from the reader: fill a field, wait, or report a bug. It defaults to
+    ``REMEDY_SETTING`` so an untagged raise keeps pointing at the panel; tag the
+    raise wherever no setting could possibly answer it.
     """
 
-    def __init__(self, *reasons: str) -> None:
+    def __init__(self, *reasons: str, remedy: str = REMEDY_SETTING) -> None:
         super().__init__("; ".join(reasons))
         self.reasons: list[str] = list(reasons)
+        self.remedy = remedy
 
 
 def suggested_load_type(name: str, category: str) -> tuple[str, dict[str, str]]:
@@ -117,7 +132,9 @@ def suggested_device_planning(
 def quarter_start(value: datetime) -> datetime:
     """Floor an aware timestamp to a UTC quarter-hour boundary."""
     if value.tzinfo is None:
-        raise OptimisationInputError("timestamp must be timezone-aware")
+        raise OptimisationInputError(
+            "timestamp must be timezone-aware", remedy=REMEDY_DEFECT
+        )
     utc = value.astimezone(timezone.utc)
     epoch = int(utc.timestamp())
     return datetime.fromtimestamp(epoch - epoch % SLOT_SECONDS, timezone.utc)
@@ -182,7 +199,9 @@ def optimisation_plan_due(
     due at a push at :22 and the quarter was skipped entirely.
     """
     if now.tzinfo is None:
-        raise OptimisationInputError("current time must be timezone-aware")
+        raise OptimisationInputError(
+            "current time must be timezone-aware", remedy=REMEDY_DEFECT
+        )
     if force or retry_after_error or not plan or plan.get("status") != "ready":
         return True
     try:
@@ -572,7 +591,8 @@ def _pooled_weekday_series(
     ]
     if missing:
         raise OptimisationInputError(
-            f"{label} lacks {minimum_samples} samples for {len(missing)} quarters"
+            f"{label} lacks {minimum_samples} samples for {len(missing)} quarters",
+            remedy=REMEDY_WAITING,
         )
     shape = [centre(pooled[quarter]) for quarter in range(96)]
 
@@ -737,7 +757,9 @@ def build_base_load_model(
 
     reference = now or latest
     if reference is None:
-        raise OptimisationInputError("base-load profile has no usable samples")
+        raise OptimisationInputError(
+            "base-load profile has no usable samples", remedy=REMEDY_WAITING
+        )
 
     fitted = _pooled_weekday_series(
         observations,
@@ -832,7 +854,9 @@ def build_device_load_model(
 
     reference = now or latest
     if reference is None:
-        raise OptimisationInputError(f"{device_key} has no usable samples")
+        raise OptimisationInputError(
+            f"{device_key} has no usable samples", remedy=REMEDY_WAITING
+        )
 
     fitted = _pooled_weekday_series(
         observations,
@@ -975,14 +999,20 @@ def validate_plan_contract(
 ) -> None:
     """Validate the cached server plan before exposing any local request."""
     if not isinstance(plan, dict):
-        raise OptimisationInputError("optimisation response has no plan object")
+        raise OptimisationInputError(
+            "optimisation response has no plan object", remedy=REMEDY_DEFECT
+        )
     if (
         plan.get("schema_version") not in SUPPORTED_PLAN_SCHEMA_VERSIONS
         or plan.get("slot_minutes") != 15
     ):
-        raise OptimisationInputError("optimisation plan schema is unsupported")
+        raise OptimisationInputError(
+            "optimisation plan schema is unsupported", remedy=REMEDY_DEFECT
+        )
     if plan.get("mode") != "live":
-        raise OptimisationInputError("optimisation plan mode is unsupported")
+        raise OptimisationInputError(
+            "optimisation plan mode is unsupported", remedy=REMEDY_DEFECT
+        )
     # `model_version` is deliberately *not* a gate. It names the algorithm, not
     # the contract, and the two are independent: renaming the planner changes
     # nothing this integration reads. Gating on it meant the server could brick
@@ -993,7 +1023,9 @@ def validate_plan_contract(
     # refuses a contract this build cannot read. That check needs no allowlist
     # anyone can forget to widen.
     if plan.get("status") not in ("ready", "incomplete", "infeasible"):
-        raise OptimisationInputError("optimisation plan status is invalid")
+        raise OptimisationInputError(
+            "optimisation plan status is invalid", remedy=REMEDY_DEFECT
+        )
     try:
         UUID(str(plan["plan_id"]))
         UUID(str(plan["snapshot_id"]))

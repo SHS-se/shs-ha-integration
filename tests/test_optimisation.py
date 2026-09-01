@@ -13,6 +13,9 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_en
 
 from optimisation import (  # noqa: E402
     OptimisationInputError,
+    REMEDY_DEFECT,
+    REMEDY_SETTING,
+    REMEDY_WAITING,
     aggregate_category_changes,
     aggregate_device_changes,
     build_base_load_model,
@@ -979,3 +982,46 @@ class ServiceMeteringTests(unittest.TestCase):
             timezone.utc,
         )
         self.assertEqual(done, 3.0)
+
+
+class RemedyClassificationTests(unittest.TestCase):
+    """What a reader is told to do about a gap has to match what it is.
+
+    The panel says "every item below is a field on this panel" and offers a
+    button to that page. For a shortfall of recorder history that sentence is
+    false and the button leads nowhere useful, so the raise site has to say
+    which of the three kinds of gap it is.
+    """
+
+    def test_an_untagged_gap_still_points_at_the_panel(self) -> None:
+        self.assertEqual(OptimisationInputError("x is not set").remedy, REMEDY_SETTING)
+
+    def test_reasons_survive_alongside_the_remedy(self) -> None:
+        error = OptimisationInputError("a", "b", remedy=REMEDY_DEFECT)
+        self.assertEqual(error.reasons, ["a", "b"])
+        self.assertEqual(str(error), "a; b")
+        self.assertEqual(error.remedy, REMEDY_DEFECT)
+
+    def test_thin_base_load_history_is_something_to_wait_for(self) -> None:
+        """The reported case: 'base-load profile lacks 2 samples for N quarters'."""
+        start = datetime(2026, 8, 30, tzinfo=timezone.utc)
+        # One day of quarters cannot give two samples per quarter-of-day.
+        slots = [
+            {
+                "start": (start + timedelta(minutes=15 * index)).isoformat(),
+                "total_load_kwh": 0.2,
+            }
+            for index in range(96)
+        ]
+
+        with self.assertRaises(OptimisationInputError) as caught:
+            build_base_load_model(slots, "UTC", minimum_samples=2)
+
+        self.assertEqual(caught.exception.remedy, REMEDY_WAITING)
+        self.assertIn("lacks 2 samples", str(caught.exception))
+
+    def test_an_unreadable_plan_is_a_defect_to_report(self) -> None:
+        with self.assertRaises(OptimisationInputError) as caught:
+            validate_plan_contract(None, datetime(2026, 8, 31, tzinfo=timezone.utc))
+
+        self.assertEqual(caught.exception.remedy, REMEDY_DEFECT)

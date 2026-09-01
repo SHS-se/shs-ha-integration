@@ -104,6 +104,9 @@ from .device_controls import (
 )
 from .optimisation import (
     OptimisationInputError,
+    REMEDY_DEFECT,
+    REMEDY_SETTING,
+    REMEDY_WAITING,
     aggregate_category_changes,
     aggregate_device_changes,
     build_base_load_model,
@@ -160,6 +163,35 @@ from .supplier import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# One banner per kind of gap, because the three ask opposite things of the
+# reader. Offering "Go to Energy inputs" for a shortfall of recorder history
+# sends someone through every field on that page looking for the one at fault,
+# and there is none — so only the first carries a button at all.
+PLANNING_BANNER_BY_REMEDY: dict[str, tuple[str, str, dict[str, Any]]] = {
+    REMEDY_SETTING: (
+        "Planning is missing an input it needs",
+        "Every item below is a field on this panel. Planning stays off "
+        "until each one is filled in.",
+        {"kind": "panel", "tab": "inputs", "section": None},
+    ),
+    REMEDY_WAITING: (
+        "Planning is waiting for data, not for you",
+        "Nothing below is a setting, so there is nothing to change here. "
+        "Planning resumes on its own once the sources named below have "
+        "reported for long enough — usually a few days after a restart or an "
+        "outage. If one is still listed a week from now, treat it as a bug "
+        "and report it with a screenshot of this message.",
+        {"kind": "none"},
+    ),
+    REMEDY_DEFECT: (
+        "Planning stopped on something you cannot fix",
+        "This is not a setting on this panel and not something waiting on "
+        "data: it is most likely a bug in the integration. Please report it "
+        "with a screenshot of this message and the Home Assistant log.",
+        {"kind": "none"},
+    ),
+}
+
 
 class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Poll status/catalogue and own recorder aggregation plus nightly upload."""
@@ -198,6 +230,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.actuals_accepted_until: str | None = None
         self.last_thermal_slots_accepted = 0
         self.optimisation_missing_inputs: list[str] = []
+        self.optimisation_missing_remedy: str = REMEDY_SETTING
         self.optimisation_unplanned_services: list[str] = []
         self._attention: dict[str, dict[str, Any]] = {}
         self.device_control_mapping_gaps: list[str] = []
@@ -431,16 +464,17 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ):
             self._clear_attention(ISSUE_OPTIMISATION_CONFIGURATION)
             return
+        title, detail, fix = PLANNING_BANNER_BY_REMEDY.get(
+            self.optimisation_missing_remedy,
+            PLANNING_BANNER_BY_REMEDY[REMEDY_DEFECT],
+        )
         self._set_attention(
             ISSUE_OPTIMISATION_CONFIGURATION,
             severity="warning",
-            title="Planning is missing an input it needs",
-            detail=(
-                "Every item below is a field on this panel. Planning stays off "
-                "until each one is filled in."
-            ),
+            title=title,
+            detail=detail,
             items=list(self.optimisation_missing_inputs),
-            fix={"kind": "panel", "tab": "inputs", "section": None},
+            fix=dict(fix),
             placeholders={
                 "inputs": "\n".join(
                     f"- {value}" for value in self.optimisation_missing_inputs
@@ -1571,6 +1605,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.optimisation_missing_inputs = [
             labels.get(value, value) for value in missing
         ]
+        self.optimisation_missing_remedy = REMEDY_SETTING
         self._sync_optimisation_issue()
         if missing:
             raise OptimisationInputError(
@@ -1583,7 +1618,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if state is None:
             raise OptimisationInputError(f"{entity_id} does not exist")
         if state.state in ("unknown", "unavailable"):
-            raise OptimisationInputError(f"{entity_id} is {state.state}")
+            raise OptimisationInputError(
+                f"{entity_id} is {state.state}", remedy=REMEDY_WAITING
+            )
         return {
             "entity_id": entity_id,
             "state": state.state,
@@ -1671,7 +1708,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"days must be between 1 and {PRICE_BACKFILL_MAX_DAYS}"
             )
         if self.tariff_catalog is None:
-            raise OptimisationInputError("grid tariff catalogue is unavailable")
+            raise OptimisationInputError(
+                "grid tariff catalogue is unavailable", remedy=REMEDY_WAITING
+            )
         start_of_today = dt_util.start_of_local_day()
         start = start_of_today - timedelta(days=days)
         end = quarter_start(dt_util.utcnow())
@@ -1999,7 +2038,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         control_mappings = options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
         if not isinstance(control_mappings, dict):
-            raise OptimisationInputError("device control mappings must be an object")
+            raise OptimisationInputError(
+                "device control mappings must be an object",
+                remedy=REMEDY_DEFECT,
+            )
         device_models = build_device_models(
             devices,
             device_profile_actuals,
@@ -2036,7 +2078,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         if self.tariff_catalog is None:
-            raise OptimisationInputError("grid tariff catalogue is unavailable")
+            raise OptimisationInputError(
+                "grid tariff catalogue is unavailable", remedy=REMEDY_WAITING
+            )
         grid_slots = {
             datetime.fromisoformat(value["start"]): value
             for value in grid_price_forecast(
@@ -2478,6 +2522,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )[OPT_PLANNING_MODE]
                     if mode == PLANNING_MODE_DISABLED:
                         self.optimisation_missing_inputs = []
+                        self.optimisation_missing_remedy = REMEDY_SETTING
                         self._sync_optimisation_issue()
                     elif mode == PLANNING_MODE_LIVE:
                         try:
@@ -2491,6 +2536,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 self.optimisation_missing_inputs = list(
                                     err.reasons or [snapshot_error]
                                 )
+                                self.optimisation_missing_remedy = err.remedy
                             self._sync_optimisation_issue()
                             _LOGGER.warning("Optimisation plan skipped: %s", err)
                         except (KeyError, TypeError, ValueError) as err:
@@ -2505,6 +2551,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             )
                             if not self.optimisation_missing_inputs:
                                 self.optimisation_missing_inputs = [snapshot_error]
+                                self.optimisation_missing_remedy = REMEDY_DEFECT
                             self._sync_optimisation_issue()
                             _LOGGER.exception(
                                 "Unable to build the optimisation snapshot"
@@ -2514,6 +2561,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             f"unsupported planning mode {mode!r}; review the integration"
                         )
                         self.optimisation_missing_inputs = [snapshot_error]
+                        self.optimisation_missing_remedy = REMEDY_DEFECT
                         self._sync_optimisation_issue()
                 # Price the quarters just measured as well as the ones ahead, so
                 # the portal's history tab is priced on the same exchange that

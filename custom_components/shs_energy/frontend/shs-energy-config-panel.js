@@ -771,13 +771,19 @@ class ShsEnergyConfigPanel extends HTMLElement {
       ${items
         .map((item) => {
           const fix = item.fix || {};
-          const action = fix.kind === "website"
-            ? fix.url
-              ? `<a class="fix" href="${this._escape(fix.url)}" target="_blank" rel="noreferrer">Open the website</a>`
-              : `<span class="fix muted">Fix on the Smart Home Solutions website: ${this._escape(fix.path || "/portal")}</span>`
-            : fix.tab
-              ? `<button type="button" class="fix" data-action="tab" data-tab="${this._escape(fix.tab)}">Go to ${this._escape((TABS.find(([id]) => id === fix.tab) || [null, fix.tab])[1])}</button>`
-              : "";
+          // "none" is a deliberate answer, not a missing one: the warning has
+          // nowhere to send anybody. A button here would promise a field to
+          // change, and every reader who pressed it would search a settings
+          // page for a problem no setting on it can reach.
+          const action = fix.kind === "none"
+            ? `<span class="fix muted">Nothing to change here</span>`
+            : fix.kind === "website"
+              ? fix.url
+                ? `<a class="fix" href="${this._escape(fix.url)}" target="_blank" rel="noreferrer">Open the website</a>`
+                : `<span class="fix muted">Fix on the Smart Home Solutions website: ${this._escape(fix.path || "/portal")}</span>`
+              : fix.tab
+                ? `<button type="button" class="fix" data-action="tab" data-tab="${this._escape(fix.tab)}">Go to ${this._escape((TABS.find(([id]) => id === fix.tab) || [null, fix.tab])[1])}</button>`
+                : "";
           return `<article class="attention-item ${this._escape(item.severity)}">
             <div class="attention-top">
               <strong>${this._escape(item.title)}</strong>

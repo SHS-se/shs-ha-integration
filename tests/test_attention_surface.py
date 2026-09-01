@@ -42,7 +42,9 @@ class AttentionSurfaceTests(unittest.TestCase):
         for call in COORDINATOR.split("self._set_attention(")[1:]:
             body = call[: call.index("\n        )")]
             with self.subTest(item=body.split(",", 1)[0].strip()):
-                self.assertIn("fix={", body)
+                # Either a literal, or one resolved from a table that this
+                # file separately proves covers every case it can be asked for.
+                self.assertRegex(body, r"fix=(\{|dict\(fix\))")
 
     def test_the_frontend_renders_and_routes_attention(self) -> None:
         self.assertIn("_renderAttention()", FRONTEND)
@@ -87,6 +89,46 @@ class AttentionSurfaceTests(unittest.TestCase):
             [],
             "a repair no card owns can leave that card green while it is open",
         )
+
+    def test_a_banner_exists_for_every_kind_of_gap(self) -> None:
+        """A remedy with no banner would fall back to the wrong instruction."""
+        table = COORDINATOR[COORDINATOR.index("PLANNING_BANNER_BY_REMEDY") :]
+        table = table[: table.index("\n}")]
+        for remedy in ("REMEDY_SETTING", "REMEDY_WAITING", "REMEDY_DEFECT"):
+            with self.subTest(remedy=remedy):
+                self.assertIn(f"{remedy}: (", table)
+
+    def test_only_an_actionable_gap_sends_the_reader_to_a_tab(self) -> None:
+        """The reported bug: "Go to Energy inputs" for a shortfall of history.
+
+        A button that names a page promises a field on it. Where no setting can
+        answer the gap, the banner has to carry no destination at all.
+        """
+        table = COORDINATOR[COORDINATOR.index("PLANNING_BANNER_BY_REMEDY") :]
+        table = table[: table.index("\n}")]
+        setting, rest = table.split("REMEDY_WAITING", 1)
+        self.assertIn('"kind": "panel"', setting)
+        self.assertNotIn('"kind": "panel"', rest)
+        self.assertEqual(rest.count('{"kind": "none"}'), 2)
+
+    def test_the_frontend_offers_no_button_when_there_is_nowhere_to_go(self) -> None:
+        self.assertIn('fix.kind === "none"', FRONTEND)
+        # And such an item must not badge a tab it cannot send anyone to.
+        routing = FRONTEND[FRONTEND.index("_attentionForTab(tab)") :]
+        routing = routing[: routing.index("_renderAttention()")]
+        self.assertIn('item.fix?.kind === "panel"', routing)
+
+    def test_a_gap_no_setting_can_answer_is_tagged_at_the_raise(self) -> None:
+        """Classification belongs where the reason is known, not in a matcher.
+
+        Deciding this by matching the message text downstream is how the
+        base-load shortfall came to be announced as a missing panel field.
+        """
+        optimisation = (PACKAGE / "optimisation.py").read_text(encoding="utf-8")
+        self.assertIn("remedy: str = REMEDY_SETTING", optimisation)
+        start = optimisation.index("lacks {minimum_samples} samples")
+        raise_call = optimisation[start : optimisation.index("\n        )", start)]
+        self.assertIn("remedy=REMEDY_WAITING", raise_call)
 
     def test_an_attention_item_is_built_from_persisted_state(self) -> None:
         """State that only a device exchange fills is empty on every restart.
