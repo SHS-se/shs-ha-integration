@@ -375,6 +375,17 @@ def complete_history(*keys: str, kwh: float = 0.25) -> list[dict[str, object]]:
 
 class DeviceModelTests(unittest.TestCase):
     def build(self, devices, actuals, mappings=None, watts=None):
+        models, _degraded = build_device_models(
+            devices,
+            actuals,
+            HORIZON,
+            mappings or {},
+            mapped_power_w=lambda mapping: watts,
+            local_tz=timezone.utc,
+        )
+        return models
+
+    def build_with_degraded(self, devices, actuals, mappings=None, watts=None):
         return build_device_models(
             devices,
             actuals,
@@ -394,14 +405,15 @@ class DeviceModelTests(unittest.TestCase):
         ]
         with self.assertRaises(OptimisationInputError) as caught:
             self.build(devices, [])
-        self.assertEqual(len(caught.exception.reasons), 3)
+        # Only the contract violations still raise. A device with no history is
+        # a device to leave out, not a reason to refuse the whole home a plan.
+        self.assertEqual(len(caught.exception.reasons), 2)
         self.assertIn("sensor.a has an invalid planning role", caught.exception.reasons[0])
         self.assertIn("sensor.b has an invalid planning role", caught.exception.reasons[1])
-        self.assertIn("sensor.c needs a complete empirical profile", caught.exception.reasons[2])
 
     def test_a_base_load_device_without_history_is_skipped_quietly(self) -> None:
         devices = [inventory_device("sensor.quiet", "base_load", None)]
-        self.assertEqual(self.build(devices, []), [])
+        self.assertEqual(self.build(devices, []), [])  # base load, so nothing to report
 
     def test_a_controllable_device_becomes_a_model_for_every_slot(self) -> None:
         devices = [inventory_device("sensor.heater", "controllable", "setpoint")]
@@ -412,6 +424,53 @@ class DeviceModelTests(unittest.TestCase):
         self.assertEqual(set(models[0]["forecast_w_by_slot"]), {1_000.0})
         self.assertEqual(models[0]["planning_role"], "controllable")
         self.assertEqual(models[0]["load_type"], "duty_cycle")
+
+    def test_a_meter_that_stopped_reporting_stops_being_modelled(self) -> None:
+        """The pool-heater failure, in miniature.
+
+        A device that died mid-window still has dense older days, so it passed
+        the pooled quarter-of-day bar and joined `modelled_device_keys` — and
+        `build_base_load_model` then discarded every whole-home quarter since
+        it stopped, which took the entire home unplanned.
+        """
+        devices = [
+            inventory_device("sensor.alive", "controllable", "setpoint"),
+            inventory_device("sensor.died", "controllable", "setpoint"),
+        ]
+        history = complete_history("sensor.alive")
+        # The dead one reports densely for the first half and then never again.
+        for index, row in enumerate(history):
+            if index < len(history) // 2:
+                row["device_energy_kwh"]["sensor.died"] = 0.25
+
+        models, degraded = self.build_with_degraded(devices, history)
+
+        self.assertEqual([model["key"] for model in models], ["sensor.alive"])
+        self.assertEqual([item["key"] for item in degraded], ["sensor.died"])
+        self.assertEqual(devices[1]["profile_status"], "stale")
+        self.assertIn("last reported", degraded[0]["reason"])
+
+    def test_one_silent_meter_never_costs_the_home_its_plan(self) -> None:
+        devices = [
+            inventory_device("sensor.alive", "controllable", "setpoint"),
+            inventory_device("sensor.silent", "controllable", "setpoint"),
+        ]
+        models, degraded = self.build_with_degraded(
+            devices, complete_history("sensor.alive")
+        )
+        self.assertEqual([model["key"] for model in models], ["sensor.alive"])
+        self.assertEqual([item["key"] for item in degraded], ["sensor.silent"])
+        self.assertEqual(degraded[0]["reason"], "has no usable history")
+
+    def test_a_device_reporting_throughout_is_still_modelled(self) -> None:
+        """The bar must not evict healthy devices."""
+        devices = [inventory_device("sensor.heater", "controllable", "setpoint")]
+        models, degraded = self.build_with_degraded(
+            devices, complete_history("sensor.heater")
+        )
+        self.assertEqual(len(models), 1)
+        self.assertEqual(degraded, [])
+        self.assertEqual(devices[0]["profile_status"], "ready")
 
     def test_a_base_load_device_is_measured_but_never_modelled(self) -> None:
         devices = [inventory_device("sensor.fridge", "base_load", None)]

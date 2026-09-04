@@ -211,6 +211,7 @@ class ShsOptimisationStatusSensor(ShsBaseSensor):
             # A store the planner never saw is otherwise invisible: it wins
             # nothing, so it appears in no schedule and no diagnostic row.
             "unplanned_services": self.coordinator.optimisation_unplanned_services,
+            "degraded_devices": self.coordinator.optimisation_degraded_devices,
             "validation_errors": plan.get("validation_errors", []),
         }
 

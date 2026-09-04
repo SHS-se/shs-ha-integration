@@ -37,6 +37,7 @@ from .const import (
     DOMAIN,
     ISSUE_MISSING_CUSTOMER_INPUT,
     ISSUE_DEVICE_CONTROL_MAPPING,
+    ISSUE_DEGRADED_DEVICE,
     ISSUE_UNPLANNED_SERVICE,
     ISSUE_OPTIMISATION_CONFIGURATION,
     ISSUE_OPTIMISATION_PLAN_REFUSED,
@@ -230,6 +231,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.actuals_accepted_until: str | None = None
         self.last_thermal_slots_accepted = 0
         self.optimisation_missing_inputs: list[str] = []
+        self.optimisation_degraded_devices: list[dict[str, str]] = []
         self.optimisation_missing_remedy: str = REMEDY_SETTING
         self.optimisation_unplanned_services: list[str] = []
         self._attention: dict[str, dict[str, Any]] = {}
@@ -480,6 +482,37 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     f"- {value}" for value in self.optimisation_missing_inputs
                 )
             },
+        )
+
+    def _sync_degraded_device_issue(self) -> None:
+        """Name a device left out of the plan because its meter went quiet.
+
+        A warning rather than a missing input, for the same reason the
+        unplanned service is one: the plan is still right about every other
+        load, and one silent meter taking the whole home unplanned is a worse
+        failure than a plan that does not schedule that one device. Its energy
+        stays inside base load, so nothing is double counted while it is out.
+        """
+        if not self.optimisation_degraded_devices:
+            self._clear_attention(ISSUE_DEGRADED_DEVICE)
+            return
+        items = [
+            f"{device['name']} ({device['statistic_id']}) {device['reason']}"
+            for device in self.optimisation_degraded_devices
+        ]
+        self._set_attention(
+            ISSUE_DEGRADED_DEVICE,
+            severity="warning",
+            title="A device is not being planned because its meter went quiet",
+            detail=(
+                "Planning continues without it and its energy is counted as "
+                "base load. Nothing on this panel can restore it: the sensor "
+                "below has to start reporting again in Home Assistant, or be "
+                "removed from the Energy Dashboard if the equipment is gone."
+            ),
+            items=items,
+            fix={"kind": "none"},
+            placeholders={"devices": "\n".join(f"- {line}" for line in items)},
         )
 
     def _sync_unplanned_service_issue(self) -> None:
@@ -2042,7 +2075,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "device control mappings must be an object",
                 remedy=REMEDY_DEFECT,
             )
-        device_models = build_device_models(
+        device_models, degraded_devices = build_device_models(
             devices,
             device_profile_actuals,
             horizon,
@@ -2050,6 +2083,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             mapped_power_w=self._mapped_power_w,
             local_tz=dt_util.DEFAULT_TIME_ZONE,
         )
+        self.optimisation_degraded_devices = degraded_devices
+        self._sync_degraded_device_issue()
         modelled_device_keys = tuple(
             str(model["key"]) for model in device_models
         )

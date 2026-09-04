@@ -16,6 +16,7 @@ service actually controls, never from the whole meter category.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone, tzinfo
+from math import isfinite
 from typing import Any, Callable, Optional
 
 try:  # pragma: no cover - exercised by both import paths
@@ -39,10 +40,16 @@ try:  # pragma: no cover - exercised by both import paths
         OPT_EV_KWH_PER_KM,
         DEFAULT_EV_KWH_PER_KM,
     )
-    from .const import OPTIMISATION_PROFILE_DAYS
+    from .const import (
+        DEVICE_PROFILE_MAX_SILENCE_HOURS,
+        DEVICE_PROFILE_MIN_COVERAGE,
+        OPTIMISATION_PROFILE_DAYS,
+    )
     from .device_controls import CONTROL_TYPES, planning_path
     from .optimisation import (
         OptimisationInputError,
+        REMEDY_DEFECT,
+        _timestamp,
         build_device_load_model,
         daily_requirement,
         discrete_current_control,
@@ -75,13 +82,19 @@ except ImportError:  # The test suite imports these helpers as flat modules,
         OPT_EV_KWH_PER_KM,
         DEFAULT_EV_KWH_PER_KM,
     )
-    from const import OPTIMISATION_PROFILE_DAYS  # type: ignore[no-redef]
+    from const import (  # type: ignore[no-redef]
+        DEVICE_PROFILE_MAX_SILENCE_HOURS,
+        DEVICE_PROFILE_MIN_COVERAGE,
+        OPTIMISATION_PROFILE_DAYS,
+    )
     from device_controls import (  # type: ignore[no-redef]
         CONTROL_TYPES,
         planning_path,
     )
     from optimisation import (  # type: ignore[no-redef]
         OptimisationInputError,
+        REMEDY_DEFECT,
+        _timestamp,
         build_device_load_model,
         daily_requirement,
         discrete_current_control,
@@ -633,6 +646,60 @@ def unplanned_services(
     return reports
 
 
+def _hours(value: timedelta) -> str:
+    """Render a silence long enough to matter, in whole hours or days."""
+    total = max(0.0, value.total_seconds())
+    if total < 3600:
+        return f"{int(total // 60)} min"
+    if total < 48 * 3600:
+        return f"{total / 3600:.0f} h"
+    return f"{total / 86400:.1f} days"
+
+
+def _device_window_coverage(
+    device_actuals: list[dict[str, Any]],
+    device_key: str,
+    window_end: datetime,
+) -> tuple[float, timedelta]:
+    """Return how much of the window a device covers, and how long it is silent.
+
+    The denominator is every quarter some device reported, which is the window
+    as the recorder actually saw it — a fixed count would call a short window
+    thin and a purge-shortened one catastrophic.
+    """
+    seen = 0
+    total = 0
+    latest: datetime | None = None
+    for row in device_actuals:
+        when = _timestamp(row.get("start"))
+        values = row.get("device_energy_kwh")
+        if when is None or not isinstance(values, dict):
+            continue
+        total += 1
+        value = values.get(device_key)
+        if isinstance(value, (int, float)) and isfinite(float(value)):
+            seen += 1
+            if latest is None or when > latest:
+                latest = when
+    if total == 0:
+        return 0.0, timedelta.max
+    silent_for = (
+        timedelta.max if latest is None
+        else max(timedelta(0), window_end - latest.astimezone(timezone.utc))
+    )
+    return seen / total, silent_for
+
+
+def _degraded_device(device: dict[str, Any], reason: str) -> dict[str, str]:
+    """Name a device left out of the plan, and the meter behind it."""
+    return {
+        "key": str(device["key"]),
+        "name": str(device["name"]),
+        "statistic_id": str(device.get("statistic_id") or device["key"]),
+        "reason": reason,
+    }
+
+
 def build_device_models(
     devices: list[dict[str, Any]],
     device_actuals: list[dict[str, Any]],
@@ -657,6 +724,11 @@ def build_device_models(
     # used to hide the rest, which turned a multi-device setup into a queue
     # of one-at-a-time repairs.
     device_gaps: list[str] = []
+    degraded: list[dict[str, str]] = []
+    window_end = horizon[0].astimezone(timezone.utc) if horizon else (
+        datetime.now(timezone.utc)
+    )
+    max_silence = timedelta(hours=DEVICE_PROFILE_MAX_SILENCE_HOURS)
     for device in devices:
         planning_role = device["planning_role"]
         control_type = device["control_type"]
@@ -678,12 +750,31 @@ def build_device_models(
                 minimum_samples=2,
             )
         except OptimisationInputError:
+            # Deliberately not fatal any more. Refusing to plan the whole home
+            # because one meter fell silent traded a plan that was right about
+            # every other load for no plan at all — the same argument the
+            # unplanned-service warning is built on. The device drops out of
+            # the model set instead, which leaves its energy inside base load.
             if planning_role == "controllable":
-                device_gaps.append(
-                    f"{device['name']} needs a complete empirical profile "
-                    "before it can be controllable"
-                )
+                device["profile_status"] = "unavailable"
+                degraded.append(_degraded_device(device, "has no usable history"))
             continue
+        # Only a device that will be modelled has to clear these bars. A
+        # base-load device never joins `modelled_device_keys`, so it gates no
+        # quarter and its coverage is nobody else's problem.
+        if planning_role == "controllable":
+            covered, silent_for = _device_window_coverage(
+                device_actuals, device["key"], window_end
+            )
+            if covered < DEVICE_PROFILE_MIN_COVERAGE or silent_for > max_silence:
+                device["profile_status"] = "stale"
+                degraded.append(_degraded_device(
+                    device,
+                    f"covers {covered:.0%} of the window and last reported "
+                    f"{_hours(silent_for)} ago",
+                ))
+                continue
+            device["profile_status"] = "ready"
         empirical_active_power_w = empirical["active_power_w"]
         mapping = control_mappings.get(str(device["key"]), {})
         # Named apart from the `mapped_power_w` reader deliberately: binding the
@@ -722,5 +813,5 @@ def build_device_models(
             "forecast_w_by_slot": forecast_w,
         })
     if device_gaps:
-        raise OptimisationInputError(*device_gaps)
-    return device_models
+        raise OptimisationInputError(*device_gaps, remedy=REMEDY_DEFECT)
+    return device_models, degraded

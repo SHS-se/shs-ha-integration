@@ -18,7 +18,7 @@ const MAPPINGS_KEY = "device_control_mappings";
 // nothing.
 const ATTENTION_BY_CARD = {
   "Website roles": ["unplanned_service", "missing_customer_input", "subscription_inactive"],
-  "Local device mappings": ["device_control_mapping"],
+  "Local device mappings": ["device_control_mapping", "degraded_device"],
   "Electrical planner": ["optimisation_configuration", "optimisation_plan_refused"],
 };
 
