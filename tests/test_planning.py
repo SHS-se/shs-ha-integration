@@ -275,6 +275,15 @@ class EvServiceTests(unittest.TestCase):
         deadline = datetime.fromisoformat(services[0]["deadline"])
         self.assertEqual(deadline, HORIZON[-1] + timedelta(minutes=15))
 
+    def test_unplugging_preserves_the_charging_plan_and_hardware_contract(self) -> None:
+        connected_services, _, connected_battery = self.plan(self.options)
+        self.states["binary_sensor.connected"]["state"] = "off"
+        services, _, battery = self.plan(self.options)
+        self.assertEqual(services, connected_services)
+        self.assertFalse(battery["connected"])
+        self.assertEqual(battery["available_from"], connected_battery["available_from"])
+        self.assertEqual(battery["soc"], connected_battery["soc"])
+
     def test_a_stated_departure_becomes_the_deadline(self) -> None:
         departure = HORIZON[40]
         self.states["sensor.departure"] = {

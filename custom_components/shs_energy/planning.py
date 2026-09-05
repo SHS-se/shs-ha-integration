@@ -440,7 +440,7 @@ def build_services(
 
         departure: datetime | None = None
         departure_entity = options.get(OPT_EV_DEPARTURE_ENTITY)
-        if connected and isinstance(departure_entity, str) and departure_entity:
+        if isinstance(departure_entity, str) and departure_entity:
             departure_raw = read_entity(departure_entity)["state"]
             try:
                 departure = datetime.fromisoformat(
@@ -457,7 +457,7 @@ def build_services(
             departure = departure.astimezone(timezone.utc)
             if departure <= first or departure > end:
                 raise OptimisationInputError(
-                    "connected EV departure must fall inside the 72-hour horizon"
+                    "EV departure must fall inside the 72-hour horizon"
                 )
 
         ev_battery = {
@@ -470,7 +470,7 @@ def build_services(
             "departure_target_soc": round(target, 6),
             "charge_efficiency": round(charge_efficiency, 4),
             "kwh_per_km": round(kwh_per_km, 4),
-            "available_from": first.isoformat() if connected else None,
+            "available_from": first.isoformat(),
             "departure": departure.isoformat() if departure else None,
             "priority": 3,
             "source_entity_ids": {
@@ -487,14 +487,15 @@ def build_services(
         # exist to name.
         required = (
             max(0.0, target - soc) * capacity / charge_efficiency
-            if connected and ev_controls else 0.0
+            if ev_controls else 0.0
         )
         # The service is also the charger's hardware contract. Keep it in the
-        # snapshot while the routed car is connected even when its departure
-        # requirement is already zero; schema-6 marginal dispatch may still
+        # snapshot regardless of cable state or remaining energy. Planning
+        # assumes the car can be plugged in; cable state stays live telemetry.
+        # Schema-6 marginal dispatch may still
         # buy cheap surplus, and the server must never invent phase/current
         # limits for that decision.
-        if connected and ev_controls:
+        if ev_controls:
             planning_deadline = departure or end
             control = discrete_current_control(
                 configured_min,
