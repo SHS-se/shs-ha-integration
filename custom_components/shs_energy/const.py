@@ -140,6 +140,9 @@ OPT_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
 OPT_BATTERY_CHARGE_MAX_W = "battery_charge_max_w"
 OPT_BATTERY_DISCHARGE_MAX_W = "battery_discharge_max_w"
 OPT_BATTERY_MIN_SOC = "battery_min_soc"
+# The inverter enforces its own discharge cut-off. Reading it beats
+# trusting a number typed beside it, which drifts the moment either moves.
+OPT_BATTERY_MIN_SOC_ENTITY = "battery_min_soc_entity"
 OPT_BATTERY_MAX_SOC = "battery_max_soc"
 OPT_BATTERY_TARGET_SOC = "battery_target_soc"
 OPT_BATTERY_TARGET_IS_HARD = "battery_target_is_hard"

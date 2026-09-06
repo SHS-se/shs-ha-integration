@@ -278,6 +278,28 @@ def normalized_fraction(raw: Any, label: str) -> float:
     raise OptimisationInputError(f"{label} must be 0..1 or 0..100 percent")
 
 
+def discharge_cut_off(configured: float, raw: Any | None, label: str) -> float:
+    """The SOC floor to plan against, preferring what the inverter enforces.
+
+    `battery_min_soc` is typed into the panel, and the two drift the moment
+    either moves: a plan built on 5% while the hardware cuts off at 20% promises
+    energy the inverter refuses to deliver, and the controller then spends the
+    evening asking for a discharge that never arrives.
+
+    A home that exposes no cut-off entity, and a reading that is briefly
+    unusable, both keep the configured figure. Losing a whole plan over one
+    optional reading would be worse than planning against the number the
+    installer entered — and unlike the cut-off itself, that number is never
+    silently wrong about the hardware, only possibly stale.
+    """
+    if raw is None:
+        return configured
+    try:
+        return normalized_fraction(raw, label)
+    except OptimisationInputError:
+        return configured
+
+
 def state_is_on(raw: Any) -> bool:
     """Interpret only Home Assistant's explicit boolean states."""
     if raw is True or raw == "on":
