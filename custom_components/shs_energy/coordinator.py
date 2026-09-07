@@ -228,6 +228,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.latest_calculation: dict[str, Any] | None = None
         self.optimisation_plan: dict[str, Any] | None = None
         self.last_optimisation_push: str | None = None
+        self._answered_replan_request_id: str | None = None
         self.last_optimisation_error: str | None = None
         self.last_actual_slots_accepted = 0
         self.actuals_accepted_until: str | None = None
@@ -413,6 +414,66 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_price_refresh(self, _now: datetime | None = None) -> None:
         """Refresh server prices on native Swedish market-quarter boundaries."""
         await self.async_request_refresh()
+
+    async def async_replan_poll(self, _now: datetime | None = None) -> None:
+        """Answer a replan the household asked for on the website.
+
+        The website used to rebuild the plan itself from the snapshot stored
+        beside it. That snapshot is only replaced when this integration pushes
+        one, so for most of every quarter it was already past the planner's
+        fifteen-minute freshness limit and the button failed. The house is the
+        only thing that can supply a fresh measurement, so it is asked for one.
+
+        Nothing here is load-bearing for correctness: a request this poll never
+        sees is settled anyway by the next quarter-hour push, because the server
+        prices every plan with the curves as they stand when it solves. This
+        only decides whether the person waits seconds or a quarter of an hour,
+        and gives them a reason when the answer is that no plan can be built.
+        """
+        try:
+            status = await self.client.status()
+        except (ShsApiError, ShsAuthError) as err:
+            _LOGGER.debug("Replan poll skipped: %s", err)
+            return
+        requested = status.get("pending_replan_request_id")
+        if not isinstance(requested, str) or not requested:
+            return
+        # One attempt per request. A failure is reported below and withdraws the
+        # request server-side, so retrying here would only replace one stale
+        # explanation with another.
+        if requested == self._answered_replan_request_id:
+            return
+        self._answered_replan_request_id = requested
+
+        mode = resolved_options(self.hass, dict(self.entry.options))[
+            OPT_PLANNING_MODE
+        ]
+        if mode != PLANNING_MODE_LIVE:
+            # Not a fault, and not something waiting will fix: say it plainly
+            # rather than leaving the website to time the request out.
+            await self._report_replan_failure(
+                requested,
+                "planning is turned off for this home in Home Assistant",
+            )
+            return
+
+        await self.async_optimisation_push(
+            force_plan=True, replan_request_id=requested
+        )
+        # The push records why it could not plan, in the same words the repair
+        # issue uses. A push that produced a plan clears it, and the server has
+        # already marked the request answered by then.
+        if self.last_optimisation_error is not None:
+            await self._report_replan_failure(
+                requested, self.last_optimisation_error
+            )
+
+    async def _report_replan_failure(self, request_id: str, detail: str) -> None:
+        """Tell the website why, tolerating a server that cannot be reached."""
+        try:
+            await self.client.report_replan_failure(request_id, detail)
+        except (ShsApiError, ShsAuthError) as err:
+            _LOGGER.debug("Replan failure report skipped: %s", err)
 
     def _sync_subscription_issue(self, active: bool) -> None:
         """Raise or clear the subscription repair issue."""
@@ -2476,9 +2537,19 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return True
 
     async def async_optimisation_push(
-        self, _now: datetime | None = None, *, force_plan: bool = False
+        self,
+        _now: datetime | None = None,
+        *,
+        force_plan: bool = False,
+        replan_request_id: str | None = None,
     ) -> None:
-        """Upload completed quarters and refresh or retry the rolling plan."""
+        """Upload completed quarters and refresh or retry the rolling plan.
+
+        `replan_request_id` names a replan the household asked for on the
+        website, so the server can mark it answered by the plan this push
+        produces. It travels with the snapshot rather than alone: only a
+        generated plan settles a request.
+        """
         async with self._push_lock:
             stored = await self._store.async_load() or {}
             if await self._retry_pending_plan_ack(stored):
@@ -2660,6 +2731,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     price_slots,
                     pool_slots,
                     device_inventory_complete=True,
+                    replan_request_id=replan_request_id,
                 )
                 configuration = self._record_device_exchange(
                     stored, devices, result

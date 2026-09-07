@@ -264,6 +264,12 @@ STORAGE_VERSION = 1
 STORAGE_KEY_TEMPLATE = "shs_energy.{entry_id}"
 
 STATUS_POLL_INTERVAL_HOURS = 1
+# How soon a replan asked for on the website is picked up. The status endpoint
+# is one small read, so this can be far shorter than the hourly poll that also
+# refreshes the tariff catalogue and supplier prices. A house that never hears
+# the request is not stranded: the server settles it from the ordinary
+# quarter-hour push, so this only decides how long the person waits.
+REPLAN_POLL_INTERVAL_MINUTES = 5
 PRICE_REFRESH_SECOND = 5
 PUSH_TIME_HOUR = 0
 PUSH_TIME_MINUTE = 20

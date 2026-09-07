@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -11,7 +12,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_track_time_change
+from homeassistant.helpers.event import (
+    async_track_time_change,
+    async_track_time_interval,
+)
 
 from .api import ShsApiClient
 from .config_panel import async_apply_configuration, async_register_config_panel
@@ -30,6 +34,7 @@ from .const import (
     OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS,
     OPTIMISATION_STARTUP_RETRY_SECONDS,
     PRICE_BACKFILL_MAX_DAYS,
+    REPLAN_POLL_INTERVAL_MINUTES,
     OPT_AUTOMATIC_SETUP,
     OPT_CONFIGURATION_SCHEMA_VERSION,
     OPT_DEVICE_CONTROL_MAPPINGS,
@@ -282,6 +287,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         hass,
         _async_delayed_startup_optimisation_push(coordinator),
         name="shs_energy_startup_optimisation_push",
+    )
+    # A replan asked for on the website. Its own poll rather than the quarter's
+    # exchange, because a person is waiting on it: the quarter would answer it
+    # too, up to fifteen minutes later.
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass,
+            coordinator.async_replan_poll,
+            timedelta(minutes=REPLAN_POLL_INTERVAL_MINUTES),
+        )
     )
 
     # React to changed local meter and device-control mappings.

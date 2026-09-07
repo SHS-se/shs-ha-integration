@@ -16,6 +16,9 @@ SUPPORTED_SNAPSHOT_SCHEMA_VERSIONS = frozenset({5, 6})
 SUPPORTED_PLAN_SCHEMA_VERSIONS = frozenset({5, 6})
 MINIMUM_SNAPSHOT_SCHEMA_VERSION = 5
 MINIMUM_PLAN_SCHEMA_VERSION = 5
+# ReplanFailureRequest.error is capped at this by the contract; a longer report
+# is refused outright, which would lose the explanation rather than shorten it.
+MAX_REPLAN_ERROR_CHARS = 1000
 INTEGRATION_VERSION = json.loads(
     Path(__file__).with_name("manifest.json").read_text(encoding="utf-8")
 )["version"]
@@ -69,3 +72,11 @@ def validate_server_contract(status: Any) -> None:
     latest_request = status.get("latest_plan_request_id")
     if latest_request is not None and not isinstance(latest_request, str):
         raise ApiContractError("integration status request correlation is invalid")
+    # Absent on a server older than the queued-replan contract, which is why
+    # this is only checked when present: an integration must keep planning for
+    # a house whose server cannot yet be asked to replan.
+    pending_replan = status.get("pending_replan_request_id")
+    if pending_replan is not None and (
+        not isinstance(pending_replan, str) or not pending_replan
+    ):
+        raise ApiContractError("integration status replan request is invalid")

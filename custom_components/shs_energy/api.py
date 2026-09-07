@@ -13,6 +13,7 @@ import aiohttp
 from .api_contract import (
     API_VERSION,
     INTEGRATION_VERSION,
+    MAX_REPLAN_ERROR_CHARS,
     SUPPORTED_PLAN_SCHEMA_VERSIONS,
 )
 
@@ -194,6 +195,27 @@ class ShsApiClient:
         """Fetch subscription status for the paired customer."""
         return await self._request("GET", "integration-status")
 
+    async def report_replan_failure(
+        self, replan_request_id: str, error: str
+    ) -> dict[str, Any]:
+        """Say why a replan the household asked for could not be produced.
+
+        Sent on the status endpoint rather than one of its own: it is the same
+        conversation, and the reply is the status document either way. Without
+        it the website has nothing to show but a spinner, because a snapshot
+        this house cannot build is not something the server can discover.
+        """
+        return await self._request(
+            "POST",
+            "integration-status",
+            json_body={
+                "replan_request_id": replan_request_id,
+                # The server caps this; sending more would be refused outright
+                # and lose the explanation altogether.
+                "error": error[:MAX_REPLAN_ERROR_CHARS],
+            },
+        )
+
     async def tariff(self) -> dict[str, Any]:
         """Fetch the global catalogue and questionnaire-derived home inputs."""
         return await self._request("GET", "integration-tariff")
@@ -241,6 +263,7 @@ class ShsApiClient:
         pool_slots: list[dict[str, Any]] | None = None,
         *,
         device_inventory_complete: bool = False,
+        replan_request_id: str | None = None,
     ) -> dict[str, Any]:
         """Push aggregate, per-device and thermal quarters, plus a plan."""
         body: dict[str, Any] = {
@@ -265,6 +288,10 @@ class ShsApiClient:
             body["pool_slots"] = pool_slots
         if snapshot is not None:
             body["snapshot"] = snapshot
+            # Only a snapshot can answer a request, because only a snapshot
+            # produces a plan. The server refuses the pair without one.
+            if replan_request_id is not None:
+                body["replan_request_id"] = replan_request_id
         return await self._request(
             "POST",
             "energy-optimisation-ingest",
