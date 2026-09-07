@@ -71,7 +71,6 @@ class DeviceControlMappingTests(unittest.TestCase):
         report = mapping_report("permit_inhibit", {
             "control_type": "switch_schedule",
             "actuator_entity_ids": ["switch.boiler"],
-            "min_run_slots": 4,
         })
         self.assertEqual(report["mapping_status"], "not_configured")
         self.assertIsNone(report["mapped_control_type"])
@@ -80,7 +79,6 @@ class DeviceControlMappingTests(unittest.TestCase):
         report = mapping_report("switch_schedule", {
             "control_type": "switch_schedule",
             "actuator_entity_ids": ["switch.pool_heater"],
-            "min_run_slots": 4,
         }, {"switch.some_other_device"})
         self.assertEqual(report["mapping_status"], "invalid")
         self.assertIn("no longer exist", report["mapping_error"])
@@ -245,7 +243,6 @@ class DeviceControlMappingTests(unittest.TestCase):
                 "availability_entity_id": "input_boolean.pool_enabled",
                 "power_entity_id": "sensor.pool_power",
                 "power_w": 900,
-                "min_run_slots": 4,
             },
             "permit": {
                 "control_type": "permit_inhibit",

@@ -292,10 +292,6 @@ def mapping_errors(
     elif control_type == "switch_schedule":
         if not _entities(mapping, "actuator_entity_ids"):
             errors.append("at least one switch actuator is required")
-        if "min_run_slots" in mapping and not _positive_number(
-            mapping, "min_run_slots"
-        ):
-            errors.append("minimum run slots must be positive")
     elif control_type == "variable_power":
         if not _text(mapping, "control_entity_id"):
             errors.append("number control entity is required")
@@ -435,7 +431,7 @@ def mapping_report(
         "entity_count": entity_count,
         "configured_fields": sorted(
             key
-            for key in (*active_entity_fields, "power", "min_run_slots", "max_inhibit_slots", "minimum_value", "maximum_value")
+            for key in (*active_entity_fields, "power", "max_inhibit_slots", "minimum_value", "maximum_value")
             if _present(mapping.get(key))
         ),
     }

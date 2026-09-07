@@ -187,7 +187,6 @@ OPT_EV_KWH_PER_KM = "ev_kwh_per_km"
 # than an error. Anything that changes what a plan means has to be reachable
 # from the panel; see OPT_EV_PHASE_COUNT and friends below.
 EV_CHARGE_EFFICIENCY = 0.92
-EV_MIN_RUN_SLOTS = 1
 EV_PHASE_COUNT = 3
 EV_PHASE_VOLTAGE = 230.0
 DEFAULT_EV_KWH_PER_KM = 0.16

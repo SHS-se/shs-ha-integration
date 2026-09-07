@@ -101,6 +101,12 @@ class PoolServiceTests(unittest.TestCase):
             today=TODAY,
         )
 
+    def test_generated_pool_services_have_no_minimum_runtime(self) -> None:
+        services, _samples, _ev = self.plan([self.pool_switch, self.pool_pump])
+        self.assertTrue(services)
+        for service in services:
+            self.assertNotIn("min_run_slots", service)
+
     def test_a_setpoint_heater_in_the_pool_category_does_not_break_the_plan(
         self,
     ) -> None:

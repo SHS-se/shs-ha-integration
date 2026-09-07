@@ -485,7 +485,6 @@ class ForecastTests(unittest.TestCase):
                 "phase_count": 3,
                 "voltage_v": 230,
             },
-            "min_run_slots": 2,
         }
         plan = {
             "schema_version": 5,
@@ -839,7 +838,6 @@ class ModelVersionToleranceTests(unittest.TestCase):
                 "deadline": (issued + timedelta(hours=1)).isoformat(),
                 "required_kwh": 2.0,
                 "control": {"type": "fixed_power", "power_w": 3_500},
-                "min_run_slots": 4,
                 "priority": 2,
             }],
         )
@@ -896,7 +894,6 @@ class ModelVersionToleranceTests(unittest.TestCase):
                     "phase_count": 3,
                     "voltage_v": 230,
                 },
-                "min_run_slots": 2,
                 "priority": 3,
             }],
         )

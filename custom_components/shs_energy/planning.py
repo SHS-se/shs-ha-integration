@@ -22,7 +22,6 @@ from typing import Any, Callable, Optional
 try:  # pragma: no cover - exercised by both import paths
     from .const import (
         EV_CHARGE_EFFICIENCY,
-        EV_MIN_RUN_SLOTS,
         EV_PHASE_COUNT,
         EV_PHASE_VOLTAGE,
         OPT_DEVICE_CONTROL_MAPPINGS,
@@ -64,7 +63,6 @@ except ImportError:  # The test suite imports these helpers as flat modules,
     # without Home Assistant installed, so the package parent does not exist.
     from const import (  # type: ignore[no-redef]
         EV_CHARGE_EFFICIENCY,
-        EV_MIN_RUN_SLOTS,
         EV_PHASE_COUNT,
         EV_PHASE_VOLTAGE,
         OPT_DEVICE_CONTROL_MAPPINGS,
@@ -217,17 +215,6 @@ def build_services(
             parse_number(model.get("active_power_w"), f"{model['name']} power")
             for model, _mapping in pool_controls
         )
-        minimum_run = 1
-        for model, mapping in pool_controls:
-            value = mapping.get("min_run_slots")
-            if value in (None, ""):
-                continue
-            parsed = parse_number(value, f"{model['name']} minimum run")
-            if not parsed.is_integer() or parsed < 1:
-                raise OptimisationInputError(
-                    f"{model['name']} minimum run must be a positive whole number"
-                )
-            minimum_run = max(minimum_run, int(parsed))
         requirement, count = daily_requirement(
             measured_daily_kwh(pool_controls), category
         )
@@ -270,7 +257,6 @@ def build_services(
                     "type": "fixed_power",
                     "power_w": rated_power_w,
                 },
-                "min_run_slots": minimum_run,
                 "priority": 2,
                 "baseline_preferred_start": baseline.isoformat(),
             })
@@ -512,7 +498,6 @@ def build_services(
                 "deadline": planning_deadline.isoformat(),
                 "required_kwh": round(required, 3),
                 "control": control,
-                "min_run_slots": EV_MIN_RUN_SLOTS,
                 "priority": 3,
                 "baseline_preferred_start": first.isoformat(),
             })

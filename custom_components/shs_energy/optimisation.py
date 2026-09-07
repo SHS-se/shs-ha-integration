@@ -1081,7 +1081,6 @@ def validate_plan_contract(
         service_id = service.get("id")
         device = service.get("device")
         required_kwh = service.get("required_kwh")
-        minimum = service.get("min_run_slots")
         earliest = _timestamp(service.get("earliest_start"))
         deadline = _timestamp(service.get("deadline"))
         control = service.get("control")
@@ -1109,9 +1108,7 @@ def validate_plan_contract(
                 or not 100 <= power_w <= 100_000
             ):
                 raise OptimisationInputError("optimisation fixed-power service is invalid")
-            if device == "boiler" or isinstance(minimum, bool) or not isinstance(
-                minimum, int
-            ) or minimum < 1:
+            if device == "boiler":
                 raise OptimisationInputError(
                     "optimisation fixed-power service is invalid"
                 )
@@ -1131,10 +1128,6 @@ def validate_plan_contract(
                 control.get("voltage_v"),
                 label="optimisation EV service",
             )
-            if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < 1:
-                raise OptimisationInputError(
-                    "optimisation current service minimum run is invalid"
-                )
         elif control.get("type") == "duty_cycle":
             rated_power_w = control.get("rated_power_w")
             expected_power = control.get("expected_power_w_by_slot")
@@ -1171,7 +1164,6 @@ def validate_plan_contract(
         service_specs[service_id] = {
             "device": device,
             "required_kwh": float(required_kwh),
-            "min_run_slots": minimum if normalized_control["type"] != "duty_cycle" else None,
             "earliest": earliest,
             "deadline": deadline,
             "control": normalized_control,
@@ -1397,7 +1389,7 @@ def validate_plan_contract(
             if control["type"] == "fixed_power":
                 required_count = (
                     0 if spec["required_kwh"] == 0 else max(
-                        spec["min_run_slots"],
+                        1,
                         ceil(
                             spec["required_kwh"]
                             / (control["power_w"] / 1000 * SLOT_HOURS)
@@ -1434,7 +1426,7 @@ def validate_plan_contract(
                 max_slot_kwh = control["max_current_a"] * per_amp_slot_kwh
                 minimum_count = (
                     0 if spec["required_kwh"] == 0 else max(
-                        spec["min_run_slots"],
+                        1,
                         ceil(spec["required_kwh"] / max_slot_kwh - 1e-9),
                     )
                 )

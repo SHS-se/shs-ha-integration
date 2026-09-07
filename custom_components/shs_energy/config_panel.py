@@ -212,14 +212,6 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
             domains=("switch", "input_boolean", "climate"),
         ),
         POWER_FIELD,
-        _field(
-            "min_run_slots",
-            "Minimum run",
-            "number",
-            unit="15-minute slots",
-            minimum=1,
-            step=1,
-        ),
     ),
     "variable_power": _number_control_fields(),
 }
