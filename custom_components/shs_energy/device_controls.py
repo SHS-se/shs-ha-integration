@@ -77,6 +77,13 @@ _ENTITY_FIELDS_BY_CONTROL_TYPE: dict[str, tuple[str, ...]] = {
         "temperature_entity_id",
         "actuator_entity_ids",
         "companion_actuator_entity_ids",
+        # Equipment that runs to a hysteresis window rather than an on/off
+        # command: the planner moves the band, and the machine still chooses
+        # when to run inside it. A schedule alone can only switch such a device
+        # in and out, which is not how it is actually driven. Optional, so an
+        # on/off mapping stays complete without them.
+        "start_temperature_entity_id",
+        "stop_temperature_entity_id",
     ),
     "variable_power": ("control_entity_id",),
 }
@@ -337,6 +344,34 @@ def _offset_errors(mapping: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _window_errors(mapping: dict[str, Any]) -> list[str]:
+    """A hysteresis window is a pair, and it has to stay inside a reviewed band.
+
+    Both ends are required together because writing one alone inverts or
+    collapses the window the equipment runs to. The band is required with them
+    for the same reason the offset's is: without it the planner could ask for
+    any temperature the register accepts.
+    """
+    start = _text(mapping, "start_temperature_entity_id")
+    stop = _text(mapping, "stop_temperature_entity_id")
+    if not start and not stop:
+        return []
+    errors: list[str] = []
+    if not start:
+        errors.append("a start temperature entity is required with a stop temperature")
+    if not stop:
+        errors.append("a stop temperature entity is required with a start temperature")
+    minimum = _number(mapping, "temperature_minimum")
+    maximum = _number(mapping, "temperature_maximum")
+    if minimum is None:
+        errors.append("minimum temperature is required with a temperature window")
+    if maximum is None:
+        errors.append("maximum temperature is required with a temperature window")
+    if minimum is not None and maximum is not None and minimum >= maximum:
+        errors.append("minimum temperature must be below maximum temperature")
+    return errors
+
+
 def mapping_errors(
     mapping: dict[str, Any],
     control_type: str,
@@ -366,6 +401,7 @@ def mapping_errors(
     elif control_type == "switch_schedule":
         if not _entities(mapping, "actuator_entity_ids"):
             errors.append("at least one switch actuator is required")
+        errors.extend(_window_errors(mapping))
     elif control_type == "variable_power":
         if not _text(mapping, "control_entity_id"):
             errors.append("number control entity is required")
@@ -513,6 +549,8 @@ def mapping_report(
                 "maximum_value",
                 "offset_minimum",
                 "offset_maximum",
+                "temperature_minimum",
+                "temperature_maximum",
             )
             if _present(mapping.get(key))
         ),
