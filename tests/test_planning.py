@@ -15,7 +15,10 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
-from optimisation import OptimisationInputError  # noqa: E402
+from optimisation import (  # noqa: E402
+    OptimisationInputError,
+    build_base_load_model,
+)
 from planning import (  # noqa: E402
     build_device_models,
     build_services,
@@ -476,6 +479,100 @@ class DeviceModelTests(unittest.TestCase):
         self.assertEqual([model["key"] for model in models], ["sensor.alive"])
         self.assertEqual([item["key"] for item in degraded], ["sensor.silent"])
         self.assertEqual(degraded[0]["reason"], "has no usable history")
+        self.assertEqual(degraded[0]["status"], "quiet")
+
+    def test_a_meter_that_has_only_just_started_is_not_called_silent(self) -> None:
+        """The pool-heater report, and the reason it was worth reporting.
+
+        A meter whose counter reset keeps reporting throughout, so nothing has
+        gone quiet. Fitting the profile before checking coverage meant the fit
+        failed first and the device was described as having no history at all,
+        which sent the reader looking for a fault in a working sensor.
+        """
+        devices = [
+            inventory_device("sensor.alive", "controllable", "setpoint"),
+            inventory_device("sensor.new", "controllable", "setpoint"),
+        ]
+        history = complete_history("sensor.alive")
+        # Reporting steadily, but only for the last eleven hours of the window.
+        for row in history[-44:]:
+            row["device_energy_kwh"]["sensor.new"] = 0.25
+
+        models, degraded = self.build_with_degraded(devices, history)
+
+        self.assertEqual([model["key"] for model in models], ["sensor.alive"])
+        self.assertEqual([item["key"] for item in degraded], ["sensor.new"])
+        self.assertEqual(devices[1]["profile_status"], "warming")
+        # The distinction the separate notification is routed on.
+        self.assertEqual(degraded[0]["status"], "warming")
+        reason = degraded[0]["reason"]
+        self.assertIn("11 h of history", reason)
+        self.assertNotIn("no usable history", reason)
+        self.assertNotIn("last reported", reason)
+        # It must say how much longer, or it is just a restatement of the fault.
+        self.assertIn("more", reason)
+
+    def test_a_quiet_meter_and_a_new_one_are_reported_apart(self) -> None:
+        """They share a list but must not share a remedy."""
+        devices = [
+            inventory_device("sensor.alive", "controllable", "setpoint"),
+            inventory_device("sensor.died", "controllable", "setpoint"),
+            inventory_device("sensor.new", "controllable", "setpoint"),
+        ]
+        history = complete_history("sensor.alive")
+        for index, row in enumerate(history):
+            if index < len(history) // 2:
+                row["device_energy_kwh"]["sensor.died"] = 0.25
+        for row in history[-44:]:
+            row["device_energy_kwh"]["sensor.new"] = 0.25
+
+        _models, degraded = self.build_with_degraded(devices, history)
+
+        self.assertEqual(
+            {item["key"]: item["status"] for item in degraded},
+            {"sensor.died": "quiet", "sensor.new": "warming"},
+        )
+
+    def test_a_meter_with_empty_quarters_is_never_modelled(self) -> None:
+        """Why there is no flat or nameplate fallback for an unshaped device.
+
+        A meter that reports only while its equipment runs covers most of the
+        window, so it clears the coverage bar, but every night quarter is
+        empty. It is tempting to plan it on a flat profile rather than drop it.
+
+        It must not be. `build_base_load_model` discards every whole-home
+        quarter a modelled device did not meter, so admitting this device
+        empties base load of all 32 night quarters-of-day and takes the entire
+        home unplanned — trading one unscheduled device for no plan at all.
+        The second half of this test is the reason for the first.
+        """
+        devices = [inventory_device("sensor.daytime", "controllable", "setpoint")]
+        history = complete_history("sensor.alive")
+        for row in history:
+            when = datetime.fromisoformat(str(row["start"]))
+            if 6 <= when.hour < 22:
+                row["device_energy_kwh"]["sensor.daytime"] = 0.25
+
+        models, degraded = self.build_with_degraded(devices, history)
+
+        self.assertEqual(models, [])
+        self.assertEqual(devices[0]["profile_status"], "unshaped")
+        self.assertIn("too unevenly", degraded[0]["reason"])
+
+        # And the harm avoided, so nobody relaxes the bar without seeing it.
+        actuals = [
+            {"start": row["start"], "total_load_kwh": 0.4} for row in history
+        ]
+        build_base_load_model(  # sound while the device stays out
+            actuals, "UTC", device_slots=history,
+            modelled_device_keys=("sensor.alive",), minimum_samples=2,
+        )
+        with self.assertRaises(OptimisationInputError):
+            build_base_load_model(
+                actuals, "UTC", device_slots=history,
+                modelled_device_keys=("sensor.alive", "sensor.daytime"),
+                minimum_samples=2,
+            )
 
     def test_a_device_reporting_throughout_is_still_modelled(self) -> None:
         """The bar must not evict healthy devices."""

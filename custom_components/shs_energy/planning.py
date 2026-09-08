@@ -642,16 +642,41 @@ def _hours(value: timedelta) -> str:
     return f"{total / 86400:.1f} days"
 
 
+# One metered quarter, as a duration. Coverage is counted in quarters, and a
+# person asking why their device is not being planned wants hours.
+SLOT = timedelta(minutes=15)
+
+
+def _coverage_shortfall(seen: int, covered: float) -> timedelta:
+    """How much longer a meter reporting steadily needs to clear the bar.
+
+    The window slides, so a meter reporting from now on gains coverage in real
+    time: the quarters still owed are what ``seen`` would have to grow by to
+    reach the threshold at the window's present size.
+    """
+    if covered <= 0:
+        return timedelta.max
+    return max(
+        timedelta(0),
+        seen * (DEVICE_PROFILE_MIN_COVERAGE / covered - 1.0) * SLOT,
+    )
+
+
 def _device_window_coverage(
     device_actuals: list[dict[str, Any]],
     device_key: str,
     window_end: datetime,
-) -> tuple[float, timedelta]:
-    """Return how much of the window a device covers, and how long it is silent.
+) -> tuple[int, float, timedelta]:
+    """Return a device's metered quarters, its coverage, and its silence.
 
     The denominator is every quarter some device reported, which is the window
     as the recorder actually saw it — a fixed count would call a short window
     thin and a purge-shortened one catastrophic.
+
+    The raw count comes back alongside the ratio because zero quarters and too
+    few quarters are different faults with different remedies, and reporting
+    them as one number is what made a meter that had only just started look
+    like a meter that had died.
     """
     seen = 0
     total = 0
@@ -668,21 +693,29 @@ def _device_window_coverage(
             if latest is None or when > latest:
                 latest = when
     if total == 0:
-        return 0.0, timedelta.max
+        return 0, 0.0, timedelta.max
     silent_for = (
         timedelta.max if latest is None
         else max(timedelta(0), window_end - latest.astimezone(timezone.utc))
     )
-    return seen / total, silent_for
+    return seen, seen / total, silent_for
 
 
-def _degraded_device(device: dict[str, Any], reason: str) -> dict[str, str]:
-    """Name a device left out of the plan, and the meter behind it."""
+def _degraded_device(
+    device: dict[str, Any], reason: str, *, status: str
+) -> dict[str, str]:
+    """Name a device left out of the plan, and the meter behind it.
+
+    ``status`` separates a meter that has gone quiet from one that is merely
+    new. Both leave the device unplanned, but only the first is something a
+    person can act on, so they must not share a notification.
+    """
     return {
         "key": str(device["key"]),
         "name": str(device["name"]),
         "statistic_id": str(device.get("statistic_id") or device["key"]),
         "reason": reason,
+        "status": status,
     }
 
 
@@ -728,6 +761,51 @@ def build_device_models(
                 f"{device['name']} has an invalid planning role or control type"
             )
             continue
+        # Only a device that will be modelled has to clear these bars, and it
+        # must clear them *before* its profile is fitted. A base-load device
+        # never joins `modelled_device_keys`, so it gates no quarter and its
+        # coverage is nobody else's problem.
+        #
+        # The order is load-bearing. Coverage is not caution about a thin
+        # profile: `build_base_load_model` discards every whole-home quarter a
+        # modelled device did not meter, so admitting a device that covers a
+        # tenth of the window leaves base load with a tenth of its quarters and
+        # takes the entire home unplanned. Fitting first meant a device with a
+        # little history failed on the fit and was reported as having none.
+        if planning_role == "controllable":
+            seen, covered, silent_for = _device_window_coverage(
+                device_actuals, device["key"], window_end
+            )
+            if seen == 0:
+                device["profile_status"] = "unavailable"
+                degraded.append(_degraded_device(
+                    device, "has no usable history", status="quiet",
+                ))
+                continue
+            if silent_for > max_silence:
+                device["profile_status"] = "stale"
+                degraded.append(_degraded_device(
+                    device,
+                    f"covers {covered:.0%} of the window and last reported "
+                    f"{_hours(silent_for)} ago",
+                    status="quiet",
+                ))
+                continue
+            if covered < DEVICE_PROFILE_MIN_COVERAGE:
+                # Reporting now, just not for long enough. Nothing is wrong and
+                # nothing can be fixed, so this says how far along it is rather
+                # than asking anyone to go looking at the equipment.
+                device["profile_status"] = "warming"
+                degraded.append(_degraded_device(
+                    device,
+                    f"has {_hours(seen * SLOT)} of history covering "
+                    f"{covered:.0%} of the last "
+                    f"{OPTIMISATION_PROFILE_DAYS} days, and needs "
+                    f"{DEVICE_PROFILE_MIN_COVERAGE:.0%} — about "
+                    f"{_hours(_coverage_shortfall(seen, covered))} more",
+                    status="warming",
+                ))
+                continue
         try:
             empirical = build_device_load_model(
                 device_actuals,
@@ -736,30 +814,30 @@ def build_device_models(
                 minimum_samples=2,
             )
         except OptimisationInputError:
-            # Deliberately not fatal any more. Refusing to plan the whole home
-            # because one meter fell silent traded a plan that was right about
+            # Deliberately not fatal. Refusing to plan the whole home because
+            # one meter cannot be shaped traded a plan that was right about
             # every other load for no plan at all — the same argument the
-            # unplanned-service warning is built on. The device drops out of
-            # the model set instead, which leaves its energy inside base load.
+            # unplanned-service warning is built on.
+            #
+            # Reached only by a device that already cleared the coverage bars
+            # above, so it means the window is well covered but some
+            # quarter-of-day is still thin. There is deliberately no flat or
+            # nameplate fallback here: `_pooled_weekday_series` raises exactly
+            # when some quarter holds fewer than two device samples, which is
+            # also exactly when `build_base_load_model` would discard that
+            # quarter-of-day for every modelled device. Planning such a device
+            # on an invented profile does not rescue it — it takes the whole
+            # home unplanned instead.
             if planning_role == "controllable":
-                device["profile_status"] = "unavailable"
-                degraded.append(_degraded_device(device, "has no usable history"))
-            continue
-        # Only a device that will be modelled has to clear these bars. A
-        # base-load device never joins `modelled_device_keys`, so it gates no
-        # quarter and its coverage is nobody else's problem.
-        if planning_role == "controllable":
-            covered, silent_for = _device_window_coverage(
-                device_actuals, device["key"], window_end
-            )
-            if covered < DEVICE_PROFILE_MIN_COVERAGE or silent_for > max_silence:
-                device["profile_status"] = "stale"
+                device["profile_status"] = "unshaped"
                 degraded.append(_degraded_device(
                     device,
-                    f"covers {covered:.0%} of the window and last reported "
-                    f"{_hours(silent_for)} ago",
+                    "reports too unevenly across the day to model — some "
+                    "quarters have no measurements at all",
+                    status="quiet",
                 ))
-                continue
+            continue
+        if planning_role == "controllable":
             device["profile_status"] = "ready"
         empirical_active_power_w = empirical["active_power_w"]
         mapping = control_mappings.get(str(device["key"]), {})

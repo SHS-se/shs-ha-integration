@@ -39,6 +39,7 @@ from .const import (
     ISSUE_DEVICE_CONTROL_MAPPING,
     ISSUE_DEGRADED_DEVICE,
     ISSUE_UNPLANNED_SERVICE,
+    ISSUE_WARMING_DEVICE,
     ISSUE_OPTIMISATION_CONFIGURATION,
     ISSUE_OPTIMISATION_PLAN_REFUSED,
     ISSUE_SUBSCRIPTION_INACTIVE,
@@ -548,31 +549,65 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     def _sync_degraded_device_issue(self) -> None:
-        """Name a device left out of the plan because its meter went quiet.
+        """Name a device left out of the plan, and say which kind of gap it is.
 
         A warning rather than a missing input, for the same reason the
         unplanned service is one: the plan is still right about every other
         load, and one silent meter taking the whole home unplanned is a worse
         failure than a plan that does not schedule that one device. Its energy
         stays inside base load, so nothing is double counted while it is out.
+
+        Two issues rather than one, because the remedies are opposites. A quiet
+        meter wants someone to go and look; a meter that has only just started
+        reporting wants nobody to do anything, and telling that reader their
+        sensor had "stopped reporting" sent them looking for a fault in
+        equipment that was working correctly.
         """
-        if not self.optimisation_degraded_devices:
-            self._clear_attention(ISSUE_DEGRADED_DEVICE)
-            return
+        for key, status, title, detail in (
+            (
+                ISSUE_DEGRADED_DEVICE,
+                "quiet",
+                "A device is not being planned because its meter is unreliable",
+                (
+                    "Planning continues without it and its energy is counted "
+                    "as base load. Nothing on this panel can restore it: the "
+                    "sensor below has to start reporting reliably again in "
+                    "Home Assistant, or be removed from the Energy Dashboard "
+                    "if the equipment is gone."
+                ),
+            ),
+            (
+                ISSUE_WARMING_DEVICE,
+                "warming",
+                "A device is still building up the history needed to plan it",
+                (
+                    "Nothing is wrong and there is nothing to fix. The meter "
+                    "is reporting; the planner simply has not watched it for "
+                    "long enough yet. Its energy is counted as base load "
+                    "until then, and it starts being scheduled on its own as "
+                    "soon as it has enough history."
+                ),
+            ),
+        ):
+            self._sync_degraded_group(key, status, title, detail)
+
+    def _sync_degraded_group(
+        self, key: str, status: str, title: str, detail: str
+    ) -> None:
+        """Raise or clear one of those two warnings from the shared list."""
         items = [
             f"{device['name']} ({device['statistic_id']}) {device['reason']}"
             for device in self.optimisation_degraded_devices
+            if device.get("status", "quiet") == status
         ]
+        if not items:
+            self._clear_attention(key)
+            return
         self._set_attention(
-            ISSUE_DEGRADED_DEVICE,
+            key,
             severity="warning",
-            title="A device is not being planned because its meter went quiet",
-            detail=(
-                "Planning continues without it and its energy is counted as "
-                "base load. Nothing on this panel can restore it: the sensor "
-                "below has to start reporting again in Home Assistant, or be "
-                "removed from the Energy Dashboard if the equipment is gone."
-            ),
+            title=title,
+            detail=detail,
             items=items,
             fix={"kind": "none"},
             placeholders={"devices": "\n".join(f"- {line}" for line in items)},

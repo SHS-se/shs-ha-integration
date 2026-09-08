@@ -229,8 +229,12 @@
       "description": "Smart Home Solutions returned an optimisation plan that this integration will not execute, so no planned device requests are being issued. Measurements are still being uploaded normally.\n\nReason: {reason}\n\nThis usually means the integration needs updating to a build that understands the current plan contract."
     },
     "degraded_device": {
-      "title": "A device is not being planned because its meter went quiet",
-      "description": "The meter behind each device below has stopped reporting for long enough that its recent history cannot be trusted:\n\n{devices}\n\nPlanning continues without them. Each one's energy is counted as ordinary base load rather than scheduled on its own, so nothing is double counted and the rest of the plan is unaffected — a single silent meter no longer stops the whole home being planned.\n\nThere is nothing to change in the SHS Energy configuration panel. Either the sensor starts reporting again in Home Assistant, or, if the equipment is gone for good, remove it from the Home Assistant Energy Dashboard so the planner stops expecting it."
+      "title": "A device is not being planned because its meter is unreliable",
+      "description": "The meter behind each device below is not reporting dependably enough for its recent history to be trusted — either it has gone quiet, or it reports too unevenly across the day to model:\n\n{devices}\n\nPlanning continues without them. Each one's energy is counted as ordinary base load rather than scheduled on its own, so nothing is double counted and the rest of the plan is unaffected — a single bad meter no longer stops the whole home being planned.\n\nThere is nothing to change in the SHS Energy configuration panel. Either the sensor starts reporting reliably again in Home Assistant, or, if the equipment is gone for good, remove it from the Home Assistant Energy Dashboard so the planner stops expecting it."
+    },
+    "warming_device": {
+      "title": "A device is still building up the history needed to plan it",
+      "description": "The meter behind each device below is reporting normally, but the planner has not been able to watch it for long enough yet to learn how it behaves across the day:\n\n{devices}\n\nNothing is wrong and there is nothing to fix. This is the normal state for a newly added meter, and for one whose history was lost — a counter that reset, or a recorder purge. Each device's energy is counted as ordinary base load in the meantime, so nothing is double counted and the rest of the plan is unaffected.\n\nEach line says how much history the meter has and roughly how much longer it needs. The device starts being scheduled on its own as soon as it gets there, with nothing to change in the SHS Energy configuration panel and no action in Home Assistant."
     }
   }
 }

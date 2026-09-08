@@ -258,6 +258,11 @@ ISSUE_OPTIMISATION_PLAN_REFUSED = "optimisation_plan_refused"
 ISSUE_DEVICE_CONTROL_MAPPING = "device_control_mapping"
 ISSUE_UNPLANNED_SERVICE = "unplanned_service"
 ISSUE_DEGRADED_DEVICE = "degraded_device"
+# Kept apart from the degraded issue on purpose. A meter that has gone quiet
+# wants someone to go and look at the equipment; a meter that has only just
+# started reporting wants nobody to do anything at all. Sharing one
+# notification told the second group to check a sensor that was working.
+ISSUE_WARMING_DEVICE = "warming_device"
 
 # Storage keys for push bookkeeping.
 STORAGE_VERSION = 1
