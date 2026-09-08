@@ -22,15 +22,12 @@ from homeassistant.helpers.storage import Store
 from .api import ShsApiClient
 from .config_panel import async_apply_configuration, async_register_config_panel
 from .const import (
-    CONFIGURATION_SCHEMA_VERSION,
     CONFIGURABLE_CATEGORIES,
     CONF_BASE_URL,
     CONF_DEVICE_TOKEN,
     PUSH_TIME_HOUR,
     PUSH_TIME_MINUTE,
     PRICE_REFRESH_SECOND,
-    RETIRED_PLANNING_OPTIONS,
-    RETIRED_SUPPLIER_PRICE_OPTIONS,
     OPTIMISATION_PUSH_SECOND,
     OPTIMISATION_STARTUP_DELAY_SECONDS,
     OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS,
@@ -38,10 +35,8 @@ from .const import (
     PRICE_BACKFILL_MAX_DAYS,
     REPLAN_POLL_INTERVAL_MINUTES,
     OPT_AUTOMATIC_SETUP,
-    OPT_CONFIGURATION_SCHEMA_VERSION,
     OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_DISCOVERY_EVIDENCE,
-    OPT_LEGACY_CONFIGURATION_ARCHIVE,
     OPT_PLANNING_MODE,
     OPT_PREFIX_ENTITIES,
     DOMAIN,
@@ -53,10 +48,7 @@ from .configuration import (
 )
 from .controller import ScheduledController
 from .coordinator import ShsStatusCoordinator
-from .device_controls import (
-    migrate_device_control_mappings,
-    recover_legacy_ev_options,
-)
+from .migration import mapped_entity_ids, migrate_options
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
@@ -179,68 +171,21 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
     """Set up from a config entry."""
-    migrated_options = dict(entry.options)
-    options_changed = False
-    legacy_archive = migrated_options.get(OPT_LEGACY_CONFIGURATION_ARCHIVE, {})
-    legacy_archive = dict(legacy_archive) if isinstance(legacy_archive, dict) else {}
-    for key in RETIRED_SUPPLIER_PRICE_OPTIONS.intersection(migrated_options):
-        legacy_archive.setdefault(key, migrated_options[key])
-        migrated_options.pop(key)
-        options_changed = True
-    for key in RETIRED_PLANNING_OPTIONS.intersection(migrated_options):
-        legacy_archive.setdefault(key, migrated_options[key])
-        migrated_options.pop(key)
-        options_changed = True
-    if legacy_archive:
-        migrated_options[OPT_LEGACY_CONFIGURATION_ARCHIVE] = legacy_archive
-    mappings = migrated_options.get(OPT_DEVICE_CONTROL_MAPPINGS)
-    if isinstance(mappings, dict):
-        mapped_entity_ids = {
-            entity_id
-            for mapping in mappings.values()
-            if isinstance(mapping, dict)
-            for key, value in mapping.items()
-            if key.endswith("_entity_id") or key.endswith("_entity_ids")
-            for entity_id in (value if isinstance(value, list) else [value])
-            if isinstance(entity_id, str) and entity_id
-        }
-        entity_area_ids = {
-            entity_id: area_id
-            for entity_id in mapped_entity_ids
-            if (area_id := entity_area_id(hass, entity_id)) is not None
-        }
-        entity_limits = {
-            state.entity_id: (
-                state.attributes.get("min"),
-                state.attributes.get("max"),
-            )
-            for state in hass.states.async_all()
-        }
-        migrated_mappings, mappings_changed = migrate_device_control_mappings(
-            mappings,
-            entity_area_ids=entity_area_ids,
-            entity_limits=entity_limits,
-        )
-        migrated_options[OPT_DEVICE_CONTROL_MAPPINGS] = migrated_mappings
-        options_changed = options_changed or mappings_changed
-        migrated_options, ev_options_changed = recover_legacy_ev_options(
-            migrated_options,
-            migrated_mappings,
-        )
-        options_changed = options_changed or ev_options_changed
-    if (
-        migrated_options.get(OPT_CONFIGURATION_SCHEMA_VERSION)
-        != CONFIGURATION_SCHEMA_VERSION
-    ):
-        migrated_options[OPT_CONFIGURATION_SCHEMA_VERSION] = (
-            CONFIGURATION_SCHEMA_VERSION
-        )
-        options_changed = True
+    options = dict(entry.options)
+    entity_area_ids = {
+        entity_id: area_id
+        for entity_id in mapped_entity_ids(options)
+        if (area_id := entity_area_id(hass, entity_id)) is not None
+    }
+    entity_limits = {
+        state.entity_id: (state.attributes.get("min"), state.attributes.get("max"))
+        for state in hass.states.async_all()
+    }
+    migrated_options, options_changed = migrate_options(
+        options, entity_area_ids=entity_area_ids, entity_limits=entity_limits,
+    )
     if options_changed:
-        hass.config_entries.async_update_entry(
-            entry,
-            options=migrated_options,
-        )
+        hass.config_entries.async_update_entry(entry, options=migrated_options)
     client = ShsApiClient(
         async_get_clientsession(hass),
         entry.data[CONF_BASE_URL],

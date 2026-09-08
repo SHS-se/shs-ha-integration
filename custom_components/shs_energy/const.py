@@ -251,9 +251,7 @@ RETIRED_PLANNING_OPTIONS = frozenset({
     "ev_deferrable_confirmed",
     "ev_electrical_confirmed",
     "ev_battery_kwh",
-    "ev_charge_efficiency",
     "ev_min_run_slots",
-    "ev_phase_count",
     "ev_voltage",
     "ev_default_departure",
 })

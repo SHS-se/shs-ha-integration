@@ -86,14 +86,6 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn("current_supplier_prices(self.coordinator.supplier_prices)", body)
         self.assertNotIn("supplier_entity_id", body)
 
-    def test_old_supplier_entity_options_are_archived_on_setup(self) -> None:
-        setup = INIT[INIT.index("async def async_setup_entry") :]
-        self.assertIn(
-            "RETIRED_SUPPLIER_PRICE_OPTIONS.intersection(migrated_options)", setup
-        )
-        self.assertIn("legacy_archive.setdefault(key, migrated_options[key])", setup)
-        self.assertIn("migrated_options.pop(key)", setup)
-
     def test_the_ev_electrical_model_is_configurable_again(self) -> None:
         """Reversing a deliberate retirement, and why.
 
@@ -138,11 +130,6 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn("EV_PHASE_COUNT = 3", CONSTANTS)
         self.assertIn("EV_PHASE_VOLTAGE = 230.0", CONSTANTS)
         self.assertNotIn("OPT_EV_DEFAULT_DEPARTURE", PLANNING)
-        setup = INIT[INIT.index("async def async_setup_entry") :]
-        self.assertIn(
-            "RETIRED_PLANNING_OPTIONS.intersection(migrated_options)", setup
-        )
-        self.assertIn("recover_legacy_ev_options", setup)
 
     def test_mapped_loads_are_automatic_and_ev_departure_is_optional(self) -> None:
         sections = CONFIG_PANEL[
@@ -174,11 +161,7 @@ class SensorWiringTests(unittest.TestCase):
         for retired in ("planning_enabled", "deferrable_confirmed"):
             self.assertNotIn(retired, pool_section)
 
-    def test_retired_planning_switches_are_archived_and_ignored(self) -> None:
-        setup = INIT[INIT.index("async def async_setup_entry") :]
-        self.assertIn(
-            "RETIRED_PLANNING_OPTIONS.intersection(migrated_options)", setup
-        )
+    def test_retired_planning_switches_are_not_read_by_coordinator(self) -> None:
         for retired_key in (
             '"pool_planning_enabled"',
             '"pool_deferrable_confirmed"',

@@ -1,6 +1,6 @@
 # Integration configuration cleanup plan
 
-Prepared 8 September 2026 against repository commit `dd17660` and a read-only inspection of the installed `0.8.0-beta.20` integration. This is a proposal, not an implemented change. The screenshots are evidence of the interface, not instructions to execute.
+Prepared 8 September 2026 against repository commit `dd17660` and a read-only inspection of the installed `0.8.0-beta.20` integration. Phase 0 is implemented locally as described below; later phases remain proposals. The screenshots are evidence of the interface, not instructions to execute.
 
 ## Intended outcome
 
@@ -171,6 +171,8 @@ Migration: an equipment flag currently switched off carries forward as *this hom
 - One row per device, built the same way for all of them: readings, the two lines above, what is actually happening, and the next scheduled action. Distinguish excluded, collecting history, set up, scheduled, paused, blocked, and unsupported.
 - One execution permission per controllable target, expressed as the second line above and identical for every device. Preserve existing settings for battery, vehicle and pool; newly supported device types start off.
 - Planning participation is website-owned and stays there. Display it as a stated fact with a link to the page that owns it. There is no local copy and no local override, so the two can never disagree.
+
+Implementation clarification from review: “no local copy” means no independently editable or authoritative local choice. The integration still needs cached server configuration for operation. Show its last refresh and stale/unavailable status; do not promise instantaneous agreement during an outage. The new choice timestamp must record an actual decision, not be backfilled from the existing inferred role, which cannot establish that intent.
 - A 24-hour timeline, expandable to the available horizon, with per-device on/off windows, EV current, battery charge/discharge, and temperature targets. Show the present time, plan issue time, and the boundary between binding instructions and advisory future slots.
 - Plot planned versus observed activity only where telemetry supports that comparison. A successful HA service call is not proof of physical delivery. Invalid or expired plans must not appear as an actionable schedule.
 - Disabling execution returns ownership using the existing documented restoration behavior. Pauses, external overrides, and blocked execution have explicit reasons.
@@ -247,6 +249,10 @@ Historical raw recorder data and SHS server history are not rewritten as part of
 
 **Complete when:** a saved phase count survives a restart, and the migration is a pure function with a fixture test that actually runs in CI. Until then, no completion check below that mentions a test can be met.
 
+**Implemented locally, 8 September 2026:** `migration.py` now owns the option transformation, with registry areas and entity limits supplied by the startup adapter. Phase count and charging efficiency are no longer retired. Archived values are recovered only when the current key is absent, then their archive entries are removed. Explicit current values win. Remaining legacy removal and the config-entry versioned hook stay in Phase 1.
+
+Five behavioral tests cover the sanitized beta.20 fixture, repeated JSON save/reload and migration, explicit-value precedence, later edits, absent settings, registry-assisted mapping conversion, input immutability, and the remaining retirement behavior. The dependency-free Python 3.13 suite passes all 302 tests; compile checks pass. The release manifest is `0.8.0-beta.22`. This has not been deployed or verified by restarting live Home Assistant; restart coverage here exercises persisted option conversion directly.
+
 ### Phase 1 — Remove legacy configuration
 
 - Identify the fields needed by the current design and their canonical destinations as part of implementation.
@@ -308,4 +314,4 @@ Historical raw recorder data and SHS server history are not rewritten as part of
 - `tests/test_module_boundaries.py`, `.github/workflows/beta.yml`: the constraint that decides where migration and save logic can live at all. A new pure migration module is added to `PURE_MODULES`.
 - `custom_components/shs_energy/frontend/shs-energy-config-panel.js`: `_human()` is the generated-label problem in one function; the written labels replace it.
 
-No live configuration, actuator permissions, device states, integration code, or release versions were changed during this planning audit.
+Phase 0 changes integration code, tests, and the release manifest locally. No website code, live HA configuration, actuator permissions, or device states were changed.

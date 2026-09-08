@@ -25,6 +25,7 @@ PURE_MODULES = (
     "api_contract",
     "const",
     "device_controls",
+    "migration",
     "optimisation",
     "planning",
     "readings",

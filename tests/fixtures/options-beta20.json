@@ -1,0 +1,25 @@
+{
+  "_configuration_schema_version": 3,
+  "_legacy_configuration_archive": {
+    "ev_phase_count": 1,
+    "ev_charge_efficiency": 0.87,
+    "pool_planning_enabled": false
+  },
+  "planning_mode": "live",
+  "ev_control_enabled": false,
+  "battery_control_enabled": false,
+  "pool_control_enabled": false,
+  "ev_phase_voltage": 240,
+  "supplier_import_price_entity": "sensor.old_import_price",
+  "entities_ev_charging": ["sensor.car_energy"],
+  "device_control_mappings": {
+    "sensor.car_energy": {
+      "_mapping_schema_version": 2,
+      "control_type": "variable_power",
+      "control_entity_id": "number.car_current",
+      "minimum_value": 5,
+      "maximum_value": 16,
+      "power": "sensor.car_power"
+    }
+  }
+}
