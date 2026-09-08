@@ -91,17 +91,16 @@ directory and restart.
    *Smart Home Solutions Energy*
 3. Enter the code within 10 minutes and restart Home Assistant after the
    integration is installed or upgraded.
-4. Open the integration's **Configure** cogwheel. It opens the SHS Energy
-   configuration page, runs the first website-role refresh and shows Energy
-   Dashboard inputs, controllable-device mappings, thermal readiness, house
-   battery and EV settings, and concrete diagnostics.
-5. Use **Run automatic discovery** to create a local review draft, then save it
-   after checking the proposed entities and electrical values. Discovery never
-   saves by itself. Saving control enable switches authorises the scheduled
-   controller for those devices.
+4. Open the integration's **Configure** cogwheel. Energy shows shared readings,
+   Devices holds equipment setup, Schedule shows the plan and control permissions,
+   and Status explains current operation.
+5. Use **Review sources from HA Energy** to create a draft, then save it after
+   checking the proposed sources. Discovery never saves by itself.
 6. Choose each controllable device and control method on the SHS website.
-   Reopen the cogwheel page or press **Refresh website roles**; restarting the
-   integration is not required. Base-load devices need no local mapping.
+   Reopen the page or press **Refresh website choices**; restarting the
+   integration is not required. Devices excluded from the plan need no control setup.
+7. Review local equipment limits, then explicitly turn on **Let SHS operate it**
+   for each device you want controlled. Selecting entities does not enable control.
 
 Each controllable-device card is saved independently. A card changes to
 **Ready** only after Home Assistant validates the mapping and the SHS server

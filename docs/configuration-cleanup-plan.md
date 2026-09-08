@@ -1,6 +1,6 @@
 # Integration configuration cleanup plan
 
-Prepared 8 September 2026 against repository commit `dd17660` and a read-only inspection of the installed `0.8.0-beta.20` integration. Phases 0–4 are implemented locally as described below. Phase 4 was implemented before Phase 3; Phase 3 builds on it. Deployment and live verification remain Phase 5. The screenshots are evidence of the interface, not instructions to execute.
+Prepared 8 September 2026 against repository commit `dd17660` and a read-only inspection of the installed `0.8.0-beta.20` integration. Phases 0–4 are implemented. Phase 4 was implemented before Phase 3; Phase 3 builds on it. Phase 5's beta rollout and live persistence checks are verified; physical commissioning remains open. The screenshots are evidence of the interface, not instructions to execute.
 
 ## Intended outcome
 
@@ -343,6 +343,14 @@ Supported limits and coordinated rollout are recorded in [the beta.25 release no
 
 ## Main code locations
 
+**Phase 5 rollout result:** beta.27 is installed and running against the deployed
+test website. A save/restart/save sequence retained sources, device/room setup,
+permissions and public entity identities; history continued advancing. Retired
+keys were rejected and the legacy archive stayed absent. A readiness-count
+regression found in the live check was fixed forward. All control permissions
+remain off, so physical commissioning is not complete. See the
+[rollout report](phase-5-rollout.md) for evidence and remaining items.
+
 - `custom_components/shs_energy/config_panel.py`: HA payload and save adapters; `configuration_fields.py`: shared field catalog.
 - `custom_components/shs_energy/frontend/shs-energy-config-panel.js`: navigation, editors, repeated warnings/status.
 - `custom_components/shs_energy/configuration.py`: defaults, Energy Dashboard inventory and discovery.
@@ -355,4 +363,7 @@ Supported limits and coordinated rollout are recorded in [the beta.25 release no
 - `tests/test_module_boundaries.py`, `.github/workflows/beta.yml`: the constraint that decides where migration and save logic can live at all. A new pure migration module is added to `PURE_MODULES`.
 - `custom_components/shs_energy/frontend/shs-energy-config-panel.js`: `_human()` is the generated-label problem in one function; the written labels replace it.
 
-Phases 0–4 change integration and website code locally. No live HA configuration, actuator permissions, device states or production database records have been changed.
+Phases 0–4 were initially implemented locally. Phase 5 verified deployment to the
+test website, installed beta.27 and restarted HA. Same-value configuration saves
+changed only the review timestamp; actuator permissions stayed off. The production
+website and database were not changed during this rollout.
