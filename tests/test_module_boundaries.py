@@ -26,6 +26,7 @@ PURE_MODULES = (
     "const",
     "device_controls",
     "migration",
+    "configuration_schema",
     "optimisation",
     "planning",
     "readings",

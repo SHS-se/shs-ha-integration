@@ -1,6 +1,6 @@
 # Integration configuration cleanup plan
 
-Prepared 8 September 2026 against repository commit `dd17660` and a read-only inspection of the installed `0.8.0-beta.20` integration. Phase 0 is implemented locally as described below; later phases remain proposals. The screenshots are evidence of the interface, not instructions to execute.
+Prepared 8 September 2026 against repository commit `dd17660` and a read-only inspection of the installed `0.8.0-beta.20` integration. Phases 0 and 1 are implemented locally as described below; later phases remain proposals. The screenshots are evidence of the interface, not instructions to execute.
 
 ## Intended outcome
 
@@ -263,6 +263,25 @@ Five behavioral tests cover the sanitized beta.20 fixture, repeated JSON save/re
 
 **Complete when:** migrated storage contains no retired values or archive, runtime reads only canonical fields, current required settings and execution permissions are carried forward, and rerunning migration does not change the result. Historical behavior parity is not required.
 
+**Implemented locally in `0.8.0-beta.23`:** HA config-entry version 2 calls the pure conversion through `async_migrate_entry`; normal startup no longer converts options. Canonical write contracts reject historical field names. General panel saves send only editable fields, including settings in disabled sections. Device saves no longer invoke migration or retain arbitrary submitted fields.
+
+| Previous representation | Current destination or removal |
+| --- | --- |
+| `_legacy_configuration_archive` | Recover absent current EV phase count/efficiency, then delete the archive. |
+| `_configuration_schema_version`, `_mapping_schema_version` | Removed; HA's config-entry version owns the upgrade. |
+| Mapping `power_entity_id`, `power_w` | Import into absent `power`, then delete aliases. Explicit `power` wins. |
+| Mapping `current_limit`, old current/power entity keys and amp bounds | Convert once to `variable_power`, `control_entity_id`, `minimum_value`, `maximum_value`. |
+| Old EV card observations and electrical facts | Import unambiguous values into their current top-level EV fields, then remove card copies. |
+| Top-level EV current entity/range | Import missing fields only into an identified EV mapping, then delete top-level aliases. Hardware selector bounds are not guessed during migration. |
+| `_migrated_room_area_id`, `area_id` | Import into the current `room_area_id` association, then remove old fields. |
+| Old comfort/override helpers, availability and minimum-run mapping fields | Removed; no current runtime consumer. Current device power and inhibit limits remain. |
+| Old top-level boiler/pool schedule, power and enable/confirmation fields | Removed; current runtime uses device models/mappings and the current equipment/execution switches. |
+| Unknown options and obsolete discovery evidence | Removed; the explicit current schema determines retained fields. |
+| Unrequested device records | Retained under their existing keys. Their current fields survive re-inclusion. |
+| Controller ownership journal and recorder/server history | Untouched. Operational handover still uses its original addresses. |
+
+Diagnostics includes an expandable upgrade report containing field names only, with imports, removals, and setup gaps found at upgrade time. It is not a legacy-value archive. Tests cover the conversion fixture, alias precedence, invalid/missing setup, unrequested devices, rejected legacy writes, the actual entry-hook adapter, and the actual frontend save method. CI now explicitly sets up Node and runs that dependency-free frontend test alongside the Python suite. Local checks pass: 304 Python tests, one frontend test, compilation, and diff validation. Live HA has not been upgraded or restarted for this phase.
+
 ### Phase 2 — Consolidate current configuration
 
 - Establish the shared field schema, strict public write interface, and canonical runtime accessor.
@@ -306,12 +325,13 @@ Five behavioral tests cover the sanitized beta.20 fixture, repeated JSON save/re
 - `custom_components/shs_energy/config_panel.py`: field schema, payload, validation, save endpoints.
 - `custom_components/shs_energy/frontend/shs-energy-config-panel.js`: navigation, editors, repeated warnings/status.
 - `custom_components/shs_energy/configuration.py`: defaults, Energy Dashboard inventory and discovery.
-- `custom_components/shs_energy/device_controls.py`: mapping migration, readiness, and control routing.
-- `custom_components/shs_energy/__init__.py`, `config_flow.py`, `const.py`: startup migration and version ownership.
+- `custom_components/shs_energy/device_controls.py`: current mapping readiness and control routing.
+- `custom_components/shs_energy/migration.py`, `configuration_schema.py`: one-time import and strict current write contracts.
+- `custom_components/shs_energy/__init__.py`, `config_flow.py`, `const.py`: HA migration hook and version ownership.
 - `custom_components/shs_energy/planning.py`, `coordinator.py`: model inputs, exchange state, history and plan validity.
 - `custom_components/shs_energy/controller.py`, `sensor.py`: execution, restoration, and public state.
 - `tests/test_device_controls.py`, `test_controller.py`, `test_attention_surface.py`, `test_store_toggles.py`, `test_planning.py`: existing coverage to extend; add real config-entry migration/save/reload tests once Phase 0 makes them runnable.
 - `tests/test_module_boundaries.py`, `.github/workflows/beta.yml`: the constraint that decides where migration and save logic can live at all. A new pure migration module is added to `PURE_MODULES`.
 - `custom_components/shs_energy/frontend/shs-energy-config-panel.js`: `_human()` is the generated-label problem in one function; the written labels replace it.
 
-Phase 0 changes integration code, tests, and the release manifest locally. No website code, live HA configuration, actuator permissions, or device states were changed.
+Phases 0 and 1 change integration code, tests, CI checks, and the release manifest locally. No website code, live HA configuration, actuator permissions, or device states were changed.

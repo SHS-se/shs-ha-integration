@@ -172,7 +172,7 @@ class SensorWiringTests(unittest.TestCase):
             '"ev_planning_enabled"',
             '"ev_deferrable_confirmed"',
         ):
-            self.assertIn(retired_key, CONSTANTS)
+            self.assertNotIn(retired_key, CONSTANTS)
             self.assertNotIn(retired_key, COORDINATOR)
 
     def test_general_configuration_replans_after_reload(self) -> None:

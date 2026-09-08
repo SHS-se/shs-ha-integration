@@ -62,9 +62,10 @@ CONTROL_TYPES = (
     "setpoint",
 )
 
-MAPPING_SCHEMA_VERSION = 2
-MAPPING_SCHEMA_VERSION_FIELD = "_mapping_schema_version"
-MIGRATED_ROOM_AREA_FIELD = "_migrated_room_area_id"
+if __package__:
+    from .configuration_schema import ROOM_AREA_FIELD
+else:
+    from configuration_schema import ROOM_AREA_FIELD
 
 _ENTITY_FIELDS_BY_CONTROL_TYPE: dict[str, tuple[str, ...]] = {
     "setpoint": (
@@ -91,142 +92,8 @@ _ENTITY_FIELDS_BY_CONTROL_TYPE: dict[str, tuple[str, ...]] = {
     "variable_power": ("control_entity_id",),
 }
 
-_LEGACY_EV_OPTION_FIELDS = (
-    ("ev_connected_entity", "connected_entity_id"),
-    ("ev_soc_entity", "soc_entity_id"),
-    ("ev_target_soc_entity", "target_soc_entity_id"),
-    ("ev_departure_entity", "departure_entity_id"),
-    ("ev_energy_remaining_entity", "energy_remaining_entity_id"),
-)
-
-
 def _present(value: Any) -> bool:
     return value not in (None, "", [])
-
-
-def migrate_device_control_mapping(
-    mapping: dict[str, Any],
-    *,
-    entity_area_ids: dict[str, str] | None = None,
-    entity_limits: dict[str, tuple[Any, Any]] | None = None,
-    recover_room: bool = True,
-) -> tuple[dict[str, Any], bool]:
-    """Upgrade every historical mapping contract without dropping old values.
-
-    Canonical fields are added alongside retired fields. Keeping the original
-    keys makes the migration lossless while runtime validation considers only
-    the current contract.
-    """
-    migrated = dict(mapping)
-    before = dict(migrated)
-    old_version = migrated.get(MAPPING_SCHEMA_VERSION_FIELD)
-    is_unversioned = not isinstance(old_version, int)
-
-    original_control_type = migrated.get("control_type")
-    if original_control_type == "current_limit":
-        migrated.setdefault("_migrated_from_control_type", original_control_type)
-        migrated["control_type"] = "variable_power"
-
-    def copy_first(target: str, *sources: str) -> None:
-        if _present(migrated.get(target)):
-            return
-        for source in sources:
-            if _present(migrated.get(source)):
-                migrated[target] = migrated[source]
-                return
-
-    copy_first("power", "power_entity_id", "power_w")
-    if migrated.get("control_type") == "variable_power":
-        copy_first(
-            "control_entity_id",
-            "current_control_entity_id",
-            "power_control_entity_id",
-        )
-        copy_first("minimum_value", "min_current_a")
-        copy_first("maximum_value", "max_current_a")
-        control_entity_id = migrated.get("control_entity_id")
-        limits = (entity_limits or {}).get(control_entity_id)
-        if limits is not None:
-            if not _present(migrated.get("minimum_value")) and _present(limits[0]):
-                migrated["minimum_value"] = limits[0]
-            if not _present(migrated.get("maximum_value")) and _present(limits[1]):
-                migrated["maximum_value"] = limits[1]
-
-    needs_room_recovery = recover_room and is_unversioned and (
-        migrated.get("control_type") == "setpoint"
-        or _text(migrated, "temperature_entity_id")
-    )
-    if needs_room_recovery:
-        actuator_areas = {
-            (entity_area_ids or {}).get(entity_id)
-            for entity_id in migrated.get("actuator_entity_ids", [])
-            if isinstance(entity_id, str)
-            and (entity_area_ids or {}).get(entity_id)
-        }
-        room_area_id: Any = None
-        if len(actuator_areas) == 1:
-            room_area_id = next(iter(actuator_areas))
-        elif _text(migrated, "area_id"):
-            room_area_id = migrated["area_id"]
-        else:
-            temperature_entity_id = migrated.get("temperature_entity_id")
-            if isinstance(temperature_entity_id, str):
-                room_area_id = (entity_area_ids or {}).get(temperature_entity_id)
-        if _present(room_area_id):
-            migrated[MIGRATED_ROOM_AREA_FIELD] = room_area_id
-
-    if not needs_room_recovery or _present(
-        migrated.get(MIGRATED_ROOM_AREA_FIELD)
-    ):
-        migrated[MAPPING_SCHEMA_VERSION_FIELD] = MAPPING_SCHEMA_VERSION
-    return migrated, migrated != before
-
-
-def migrate_device_control_mappings(
-    mappings: dict[str, Any],
-    *,
-    entity_area_ids: dict[str, str] | None = None,
-    entity_limits: dict[str, tuple[Any, Any]] | None = None,
-) -> tuple[dict[str, Any], bool]:
-    """Upgrade a complete mapping collection, preserving every device key."""
-    migrated: dict[str, Any] = {}
-    changed = False
-    for device_key, raw_mapping in mappings.items():
-        if not isinstance(raw_mapping, dict):
-            migrated[device_key] = raw_mapping
-            continue
-        value, value_changed = migrate_device_control_mapping(
-            raw_mapping,
-            entity_area_ids=entity_area_ids,
-            entity_limits=entity_limits,
-        )
-        migrated[device_key] = value
-        changed = changed or value_changed
-    return migrated, changed
-
-
-def recover_legacy_ev_options(
-    options: dict[str, Any],
-    mappings: dict[str, Any],
-) -> tuple[dict[str, Any], bool]:
-    """Recover EV telemetry that older releases stored inside its device card."""
-    migrated = dict(options)
-    before = dict(migrated)
-    mapping_values = [
-        mapping for mapping in mappings.values() if isinstance(mapping, dict)
-    ]
-    for option_key, mapping_key in _LEGACY_EV_OPTION_FIELDS:
-        if _present(migrated.get(option_key)):
-            continue
-        candidates = {
-            mapping[mapping_key]
-            for mapping in mapping_values
-            if isinstance(mapping.get(mapping_key), str)
-            and mapping[mapping_key].strip()
-        }
-        if len(candidates) == 1:
-            migrated[option_key] = next(iter(candidates))
-    return migrated, migrated != before
 
 
 def is_room_thermal_control(control_type: str | None, category: str | None) -> bool:
@@ -498,13 +365,13 @@ def mapping_report(
             for value in existing_actuators
             if not (entity_area_ids or {}).get(value)
         ]
-        migrated_room_area = mapping.get(MIGRATED_ROOM_AREA_FIELD)
-        migrated_room_valid = (
-            isinstance(migrated_room_area, str)
-            and bool(migrated_room_area.strip())
-            and (area_names is None or migrated_room_area in area_names)
+        saved_room_area = mapping.get(ROOM_AREA_FIELD)
+        saved_room_valid = (
+            isinstance(saved_room_area, str)
+            and bool(saved_room_area.strip())
+            and (area_names is None or saved_room_area in area_names)
         )
-        if missing_areas and not migrated_room_valid:
+        if missing_areas and not saved_room_valid:
             labels = ", ".join(
                 (entity_names or {}).get(value, value) for value in missing_areas
             )
@@ -529,16 +396,16 @@ def mapping_report(
             area_id = next(iter(actuator_areas))
             if area_names is not None and area_id not in area_names:
                 errors.append("the controlled actuator's Home Assistant room no longer exists")
-        elif migrated_room_valid and (
-            not actuator_areas or actuator_areas == {migrated_room_area}
+        elif saved_room_valid and (
+            not actuator_areas or actuator_areas == {saved_room_area}
         ):
-            area_id = migrated_room_area
-        elif isinstance(migrated_room_area, str) and area_names is not None:
-            if migrated_room_area not in area_names:
-                errors.append("the migrated Home Assistant room no longer exists")
+            area_id = saved_room_area
+        elif isinstance(saved_room_area, str) and area_names is not None:
+            if saved_room_area not in area_names:
+                errors.append("the saved Home Assistant room no longer exists")
             elif actuator_areas:
                 errors.append(
-                    "the controlled actuator room conflicts with the migrated room"
+                    "the controlled actuator room conflicts with the saved room"
                 )
     entity_count = sum(
         len(value) if isinstance(value, list) else 1

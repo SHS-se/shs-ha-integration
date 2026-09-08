@@ -1,4 +1,4 @@
-"""Pure option conversion; the entry adapter supplies registry observations."""
+"""One-time import of old option formats into the current persisted schema."""
 
 from __future__ import annotations
 
@@ -6,16 +6,26 @@ from copy import deepcopy
 from typing import Any
 
 if __package__:
-    from . import const as c
-    from .device_controls import migrate_device_control_mappings, recover_legacy_ev_options
-else:  # Flat imports used by the dependency-free test suite.
-    import const as c
-    from device_controls import migrate_device_control_mappings, recover_legacy_ev_options
+    from .configuration_schema import MAPPING_KEYS, OPTION_KEYS, PERSISTED_KEYS, ROOM_AREA_FIELD
+else:
+    from configuration_schema import MAPPING_KEYS, OPTION_KEYS, PERSISTED_KEYS, ROOM_AREA_FIELD
+
+ARCHIVE_KEY = "_legacy_configuration_archive"
+EV_FIELDS = {
+    "ev_connected_entity": "connected_entity_id",
+    "ev_soc_entity": "soc_entity_id",
+    "ev_target_soc_entity": "target_soc_entity_id",
+    "ev_departure_entity": "departure_entity_id",
+    "ev_energy_remaining_entity": "energy_remaining_entity_id",
+    "ev_phase_count": "phase_count",
+    "ev_phase_voltage": "voltage",
+    "ev_charge_efficiency": "charge_efficiency",
+}
 
 
 def mapped_entity_ids(options: dict[str, Any]) -> set[str]:
-    """Entities whose registry areas can supply a historical room association."""
-    mappings = options.get(c.OPT_DEVICE_CONTROL_MAPPINGS)
+    """Entities whose registry areas can supply a current room association."""
+    mappings = options.get("device_control_mappings")
     if not isinstance(mappings, dict):
         return set()
     return {
@@ -33,38 +43,121 @@ def migrate_options(
     options: dict[str, Any],
     *,
     entity_area_ids: dict[str, str] | None = None,
-    entity_limits: dict[str, tuple[Any, Any]] | None = None,
 ) -> tuple[dict[str, Any], bool]:
-    """Convert persisted options without defaults, IO, or changing the input.
+    """Import needed values once, remove old representations, and report names.
 
-    Active EV electrical settings were accidentally retired in beta.20.
-    Recover an archived value only when no explicit current value exists,
-    then remove that archive entry so subsequent starts cannot resurrect it.
-    Remaining legacy retirement is unchanged until the Phase 1 migration.
+    Explicit current values win, including zero and false. Hardware bounds are
+    not inferred from live states: a missing reviewed limit stays missing.
+    No archive, defaults, credentials, or command journal is written here.
     """
-    migrated = deepcopy(options)
-    archive = migrated.get(c.OPT_LEGACY_CONFIGURATION_ARCHIVE, {})
-    archive = dict(archive) if isinstance(archive, dict) else {}
-    for key in (c.OPT_EV_PHASE_COUNT, c.OPT_EV_CHARGE_EFFICIENCY):
-        if key in archive:
-            if key not in migrated:
-                migrated[key] = archive[key]
-            del archive[key]
+    result = {key: deepcopy(value) for key, value in options.items() if key in PERSISTED_KEYS}
+    prior = options.get("_migration_report", {})
+    report = {
+        kind: set(prior.get(kind, [])) if isinstance(prior, dict) else set()
+        for kind in ("imported", "removed", "needs_attention")
+    }
+    report["removed"].update(set(options) - PERSISTED_KEYS)
+    archive = options.get(ARCHIVE_KEY, {})
+    archive = archive if isinstance(archive, dict) else {}
+    for key in ("ev_phase_count", "ev_charge_efficiency"):
+        if key not in result and key in archive:
+            result[key] = deepcopy(archive[key])
+            report["imported"].add(key)
+    if "ev_phase_voltage" not in result and "ev_voltage" in options:
+        result["ev_phase_voltage"] = options["ev_voltage"]
+        report["imported"].add("ev_phase_voltage")
 
-    retired = c.RETIRED_SUPPLIER_PRICE_OPTIONS | c.RETIRED_PLANNING_OPTIONS
-    for key in retired.intersection(migrated):
-        archive.setdefault(key, migrated.pop(key))
-    if archive:
-        migrated[c.OPT_LEGACY_CONFIGURATION_ARCHIVE] = archive
-    else:
-        migrated.pop(c.OPT_LEGACY_CONFIGURATION_ARCHIVE, None)
-
-    mappings = migrated.get(c.OPT_DEVICE_CONTROL_MAPPINGS)
-    if isinstance(mappings, dict):
-        mappings, _changed = migrate_device_control_mappings(
-            mappings, entity_area_ids=entity_area_ids, entity_limits=entity_limits,
+    raw_mappings = options.get("device_control_mappings", {})
+    if not isinstance(raw_mappings, dict):
+        raw_mappings = {}
+        report["needs_attention"].add("device_control_mappings")
+    # Convert EV observations before dropping their former card fields.
+    ev_mappings = {
+        key: mapping for key, mapping in raw_mappings.items()
+        if isinstance(mapping, dict) and (
+            mapping.get("control_type") == "current_limit"
+            or (mapping.get("control_type") == "variable_power" and (
+                key in options.get("entities_ev_charging", [])
+                or "connected_entity_id" in mapping
+                or "soc_entity_id" in mapping
+                or (options.get("ev_charge_current_entity") is not None
+                    and mapping.get("control_entity_id") == options["ev_charge_current_entity"])
+            ))
         )
-        migrated[c.OPT_DEVICE_CONTROL_MAPPINGS] = mappings
-        migrated, _changed = recover_legacy_ev_options(migrated, mappings)
-    migrated[c.OPT_CONFIGURATION_SCHEMA_VERSION] = c.CONFIGURATION_SCHEMA_VERSION
-    return migrated, migrated != options
+    }
+    for current, old in EV_FIELDS.items():
+        if current in result:
+            continue
+        candidates = [m[old] for m in ev_mappings.values() if old in m]
+        if candidates and all(value == candidates[0] for value in candidates):
+            result[current] = deepcopy(candidates[0])
+            report["imported"].add(current)
+        elif candidates:
+            report["needs_attention"].add(current)
+
+    mappings = {}
+    for key, raw in raw_mappings.items():
+        path = f"device_control_mappings.{key}"
+        if not isinstance(raw, dict):
+            mappings[key] = {}
+            report["needs_attention"].add(path)
+            continue
+        draft = deepcopy(raw)
+        if draft.get("control_type") == "current_limit":
+            draft["control_type"] = "variable_power"
+            report["imported"].add(f"{path}.control_type")
+
+        def copy_first(target, *sources):
+            if target in draft:
+                return
+            for source in sources:
+                if source in raw:
+                    draft[target] = deepcopy(raw[source])
+                    report["imported"].add(f"{path}.{target}")
+                    return
+
+        copy_first("power", "power_entity_id", "power_w")
+        copy_first(ROOM_AREA_FIELD, "_migrated_room_area_id", "area_id")
+        if draft.get("control_type") == "variable_power":
+            copy_first("control_entity_id", "current_control_entity_id", "power_control_entity_id")
+            copy_first("minimum_value", "min_current_a")
+            copy_first("maximum_value", "max_current_a")
+            if key in ev_mappings:
+                for target, source in (("control_entity_id", "ev_charge_current_entity"),
+                                       ("minimum_value", "ev_min_current_a"),
+                                       ("maximum_value", "ev_max_current_a")):
+                    if target not in draft and source in options:
+                        draft[target] = deepcopy(options[source])
+                        report["imported"].add(f"{path}.{target}")
+        if ROOM_AREA_FIELD not in draft and (
+            draft.get("control_type") == "setpoint" or "temperature_entity_id" in draft
+        ):
+            areas = {(entity_area_ids or {}).get(e) for e in draft.get("actuator_entity_ids", [])}
+            areas.discard(None)
+            if len(areas) == 1:
+                draft[ROOM_AREA_FIELD] = areas.pop()
+                report["imported"].add(f"{path}.{ROOM_AREA_FIELD}")
+            else:
+                report["needs_attention"].add(f"{path}.{ROOM_AREA_FIELD}")
+        allowed = MAPPING_KEYS.get(draft.get("control_type"), {"control_type"})
+        mappings[key] = {field: value for field, value in draft.items() if field in allowed}
+        report["removed"].update(f"{path}.{field}" for field in set(raw) - allowed)
+        required = {
+            "variable_power": ("control_entity_id", "minimum_value", "maximum_value"),
+            "permit_inhibit": ("actuator_entity_ids", "max_inhibit_slots"),
+            "setpoint": ("actuator_entity_ids", "temperature_entity_id"),
+            "switch_schedule": ("actuator_entity_ids",),
+        }.get(draft.get("control_type"))
+        if required is None:
+            report["needs_attention"].add(f"{path}.control_type")
+        else:
+            report["needs_attention"].update(f"{path}.{field}" for field in required if field not in draft)
+    if "device_control_mappings" in options:
+        result["device_control_mappings"] = mappings
+    evidence = result.get("discovery_evidence")
+    if isinstance(evidence, dict):
+        result["discovery_evidence"] = {key: value for key, value in evidence.items() if key in OPTION_KEYS}
+        report["removed"].update(f"discovery_evidence.{key}" for key in set(evidence) - OPTION_KEYS)
+    if any(report.values()):
+        result["_migration_report"] = {kind: sorted(names) for kind, names in report.items()}
+    return result, result != options

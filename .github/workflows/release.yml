@@ -36,10 +36,16 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Run integration checks
         run: |
           python -m unittest discover -s tests -v
           python -m compileall -q custom_components/shs_energy
+          node --test tests/frontend-config-save.test.js
 
       - name: Read and validate the release version
         id: version

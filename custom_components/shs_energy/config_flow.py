@@ -11,6 +11,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import ShsApiClient, ShsApiError, ShsPairingError
 from .const import (
+    CONFIG_ENTRY_VERSION,
     CONF_BASE_URL,
     CONF_CUSTOMER_NAME,
     CONF_DEVICE_NAME,
@@ -26,7 +27,7 @@ from .const import (
 class ShsEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
     """Pair with the SHS portal using a single-use pairing code."""
 
-    VERSION = 1
+    VERSION = CONFIG_ENTRY_VERSION
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None

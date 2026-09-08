@@ -1,5 +1,7 @@
 # Smart Home Solutions Energy — Home Assistant integration
 
+Upgrading to `0.8.0-beta.23`: read the [configuration migration release notes](docs/releases/0.8.0-beta.23.md). This version removes legacy configuration and raises the config-entry version; earlier builds cannot load the upgraded entry.
+
 Pushes privacy-bounded energy data from Home Assistant to your
 [Smart Home Solutions](https://prod-smart-home-solutions.pages.dev) portal. It
 keeps the existing daily energy/tariff exchange and adds a home-scoped,

@@ -107,13 +107,14 @@ class StoreToggleWiringTests(unittest.TestCase):
 
         The renderer stops drawing the fields, so anything that saved only what
         is on screen would quietly wipe an entity id the customer spent time
-        choosing. `_save` sends the whole draft instead, and the draft is only
-        ever written by `_setField`.
+        choosing. `_save` selects editable keys from every section, including
+        collapsed sections. The frontend test also executes that save path.
         """
         saver = FRONTEND[FRONTEND.index("async _save() {"):]
         saver = saver[: saver.index("\n  async _saveDevice(")]
         self.assertIn("this._clone(this._draft)", saver)
-        self.assertNotIn("section.fields", saver)
+        self.assertIn("this._data.sections.flatMap", saver)
+        self.assertNotIn(".filter(", saver)
 
     def test_no_store_toggle_is_left_unrouted(self) -> None:
         """A constant nobody consults is worse than no constant at all."""

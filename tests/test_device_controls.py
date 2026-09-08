@@ -9,17 +9,12 @@ import unittest
 sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
 from device_controls import (  # noqa: E402
-    MAPPING_SCHEMA_VERSION_FIELD,
-    MIGRATED_ROOM_AREA_FIELD,
     apply_requested_configuration,
     battery_control_errors,
     pool_band_errors,
     is_room_thermal_control,
     planning_path,
     mapping_report,
-    migrate_device_control_mapping,
-    migrate_device_control_mappings,
-    recover_legacy_ev_options,
     requested_controllable_devices,
 )
 
@@ -181,171 +176,16 @@ class DeviceControlMappingTests(unittest.TestCase):
         self.assertEqual(report["mapping_status"], "ready")
         self.assertNotIn("room_key", report["mapping_summary"])
 
-    def test_migrated_room_preserves_a_valid_setpoint_mapping(self) -> None:
-        mapping, changed = migrate_device_control_mapping(
-            {
-                "control_type": "setpoint",
-                "area_id": "office",
-                "temperature_entity_id": "sensor.office_temperature",
-                "actuator_entity_ids": ["switch.office_heater"],
-                "override_entity_id": "input_text.retired_override",
-            },
-            entity_area_ids={"sensor.office_temperature": "office"},
-        )
-        self.assertTrue(changed)
-        self.assertEqual(mapping[MIGRATED_ROOM_AREA_FIELD], "office")
-        report = mapping_report(
-            "setpoint",
-            mapping,
-            {
-                "sensor.office_temperature",
-                "switch.office_heater",
-            },
-            area_names={"office": "Office"},
-            entity_area_ids={},
-        )
+    def test_saved_room_association_remains_current_configuration(self):
+        report = mapping_report("setpoint", {
+            "control_type": "setpoint", "room_area_id": "office",
+            "temperature_entity_id": "sensor.temperature",
+            "actuator_entity_ids": ["climate.heater"],
+        }, {"sensor.temperature", "climate.heater"},
+            area_names={"office": "Office"}, entity_area_ids={})
         self.assertEqual(report["mapping_status"], "ready")
-        self.assertEqual(report["mapping_summary"]["room_name"], "Office")
+        self.assertEqual(report["mapping_summary"]["room_key"], "office")
 
-    def test_room_recovery_retries_when_registries_are_not_ready(self) -> None:
-        original = {
-            "control_type": "setpoint",
-            "temperature_entity_id": "sensor.office_temperature",
-            "actuator_entity_ids": ["switch.office_heater"],
-        }
-        waiting, changed = migrate_device_control_mapping(original)
-        self.assertFalse(changed)
-        self.assertNotIn(MAPPING_SCHEMA_VERSION_FIELD, waiting)
-
-        recovered, changed = migrate_device_control_mapping(
-            waiting,
-            entity_area_ids={"sensor.office_temperature": "office"},
-        )
-        self.assertTrue(changed)
-        self.assertEqual(recovered[MIGRATED_ROOM_AREA_FIELD], "office")
-        self.assertIn(MAPPING_SCHEMA_VERSION_FIELD, recovered)
-
-    def test_every_historical_mapping_contract_is_migrated_losslessly(self) -> None:
-        mappings = {
-            "setpoint": {
-                "control_type": "setpoint",
-                "area_id": "office",
-                "temperature_entity_id": "sensor.office_temperature",
-                "setpoint_entity_id": "climate.office",
-                "actuator_entity_ids": ["climate.office"],
-                "comfort_high_entity_id": "input_number.office_high",
-                "comfort_low_entity_id": "input_number.office_low",
-                "override_entity_id": "input_text.office_override",
-                "override_timer_entity_id": "input_number.office_timer",
-                "power_entity_id": "sensor.office_power",
-            },
-            "switch": {
-                "control_type": "switch_schedule",
-                "actuator_entity_ids": ["switch.pool"],
-                "availability_entity_id": "input_boolean.pool_enabled",
-                "power_entity_id": "sensor.pool_power",
-                "power_w": 900,
-            },
-            "permit": {
-                "control_type": "permit_inhibit",
-                "actuator_entity_ids": ["switch.boiler"],
-                "availability_entity_id": "input_boolean.boiler_enabled",
-                "power_w": 3000,
-                "max_inhibit_slots": 4,
-            },
-            "variable": {
-                "control_type": "variable_power",
-                "power_control_entity_id": "number.pool_output",
-                "availability_entity_id": "input_boolean.pool_enabled",
-            },
-            "current": {
-                "control_type": "current_limit",
-                "current_control_entity_id": "number.ev_current",
-                "connected_entity_id": "binary_sensor.ev_connected",
-                "soc_entity_id": "sensor.ev_soc",
-                "target_soc_entity_id": "number.ev_target_soc",
-                "min_current_a": 6,
-                "max_current_a": 16,
-                "current_step_a": 1,
-                "phase_count": 3,
-                "voltage": 230,
-                "battery_capacity_kwh": 77,
-                "power_entity_id": "sensor.ev_power",
-            },
-        }
-        original = {key: dict(value) for key, value in mappings.items()}
-        migrated, changed = migrate_device_control_mappings(
-            mappings,
-            entity_area_ids={
-                "climate.office": "office",
-                "sensor.office_temperature": "office",
-            },
-            entity_limits={"number.pool_output": (0, 100)},
-        )
-        self.assertTrue(changed)
-        self.assertEqual(set(migrated), set(original))
-        for key, old_mapping in original.items():
-            for field, value in old_mapping.items():
-                if field == "control_type" and value == "current_limit":
-                    continue
-                self.assertEqual(migrated[key][field], value)
-
-        self.assertEqual(migrated["setpoint"]["power"], "sensor.office_power")
-        self.assertEqual(migrated["switch"]["power"], "sensor.pool_power")
-        self.assertEqual(migrated["permit"]["power"], 3000)
-        self.assertEqual(migrated["variable"]["control_entity_id"], "number.pool_output")
-        self.assertEqual(migrated["variable"]["minimum_value"], 0)
-        self.assertEqual(migrated["variable"]["maximum_value"], 100)
-        self.assertEqual(migrated["current"]["control_type"], "variable_power")
-        self.assertEqual(migrated["current"]["control_entity_id"], "number.ev_current")
-        self.assertEqual(migrated["current"]["minimum_value"], 6)
-        self.assertEqual(migrated["current"]["maximum_value"], 16)
-        repeated, changed = migrate_device_control_mappings(
-            migrated,
-            entity_area_ids={
-                "climate.office": "office",
-                "sensor.office_temperature": "office",
-            },
-            entity_limits={"number.pool_output": (0, 100)},
-        )
-        self.assertFalse(changed)
-        self.assertEqual(repeated, migrated)
-
-    def test_legacy_ev_card_telemetry_moves_to_current_settings(self) -> None:
-        mapping = {
-            "control_type": "current_limit",
-            "connected_entity_id": "binary_sensor.ev_connected",
-            "soc_entity_id": "sensor.ev_soc",
-            "target_soc_entity_id": "number.ev_target_soc",
-            "departure_entity_id": "sensor.ev_departure",
-            "energy_remaining_entity_id": "sensor.ev_energy_remaining",
-            "power_entity_id": "sensor.car_charging_power",
-        }
-        options, changed = recover_legacy_ev_options({}, {"car": mapping})
-        self.assertTrue(changed)
-        self.assertEqual(
-            options,
-            {
-                "ev_connected_entity": "binary_sensor.ev_connected",
-                "ev_soc_entity": "sensor.ev_soc",
-                "ev_target_soc_entity": "number.ev_target_soc",
-                "ev_departure_entity": "sensor.ev_departure",
-                "ev_energy_remaining_entity": "sensor.ev_energy_remaining",
-            },
-        )
-        migrated_mapping, _changed = migrate_device_control_mapping(mapping)
-        self.assertEqual(
-            migrated_mapping["power"], "sensor.car_charging_power"
-        )
-
-    def test_current_ev_settings_win_over_legacy_card_values(self) -> None:
-        current = {"ev_soc_entity": "sensor.current_ev_soc"}
-        migrated, changed = recover_legacy_ev_options(
-            current,
-            {"car": {"soc_entity_id": "sensor.old_ev_soc"}},
-        )
-        self.assertFalse(changed)
-        self.assertEqual(migrated, current)
 
 
 class PlanningPathTests(unittest.TestCase):

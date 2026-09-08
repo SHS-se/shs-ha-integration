@@ -173,7 +173,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._notice = "";
     this._render();
     const configuration = this._clone(this._draft);
-    delete configuration[MAPPINGS_KEY];
+    const editable = new Set(this._data.sections.flatMap((section) =>
+      [...(section.toggle ? [section.toggle] : []), ...section.fields].map((field) => field.key)));
+    for (const key of Object.keys(configuration)) {
+      if (!editable.has(key)) delete configuration[key];
+    }
     try {
       await this._hass.callWS({
         type: "shs_energy/config/save",
@@ -750,6 +754,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
       <h2>Configuration diagnostics</h2>
       <p class="description">These are the concrete states used by the readiness cards. Secrets and raw recorder rows are never shown here.</p>
       <dl>${rows.map(([label, value]) => `<div><dt>${this._escape(label)}</dt><dd>${this._escape(value ?? "—")}</dd></div>`).join("")}</dl>
+      ${values.migration ? `<details><summary>Configuration upgrade</summary>
+        <p>Settings changed during the upgrade. Previous values were not retained.</p>
+        ${[["imported", "Settings carried forward"], ["removed", "Old fields removed"], ["needs_attention", "Setup gaps found during upgrade"]].map(([key, label]) =>
+          `<h3>${label}</h3><ul>${values.migration[key].map((name) => `<li>${this._escape(name)}</li>`).join("")}</ul>`).join("")}
+      </details>` : ""}
       ${readiness.missing_inputs.length ? `<h3>Planner input gaps</h3><ul>${readiness.missing_inputs.map((item) => `<li>${this._escape(item)}</li>`).join("")}</ul>` : ""}
     </section>`;
   }

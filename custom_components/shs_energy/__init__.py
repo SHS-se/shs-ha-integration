@@ -23,6 +23,7 @@ from .api import ShsApiClient
 from .config_panel import async_apply_configuration, async_register_config_panel
 from .const import (
     CONFIGURABLE_CATEGORIES,
+    CONFIG_ENTRY_VERSION,
     CONF_BASE_URL,
     CONF_DEVICE_TOKEN,
     PUSH_TIME_HOUR,
@@ -169,23 +170,27 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
-    """Set up from a config entry."""
+async def async_migrate_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
+    """Convert version-one options once before setting up the integration."""
+    if entry.version > CONFIG_ENTRY_VERSION:
+        return False
+    if entry.version == CONFIG_ENTRY_VERSION:
+        return True
     options = dict(entry.options)
     entity_area_ids = {
         entity_id: area_id
         for entity_id in mapped_entity_ids(options)
         if (area_id := entity_area_id(hass, entity_id)) is not None
     }
-    entity_limits = {
-        state.entity_id: (state.attributes.get("min"), state.attributes.get("max"))
-        for state in hass.states.async_all()
-    }
-    migrated_options, options_changed = migrate_options(
-        options, entity_area_ids=entity_area_ids, entity_limits=entity_limits,
+    migrated_options, _changed = migrate_options(options, entity_area_ids=entity_area_ids)
+    hass.config_entries.async_update_entry(
+        entry, options=migrated_options, version=CONFIG_ENTRY_VERSION, minor_version=1,
     )
-    if options_changed:
-        hass.config_entries.async_update_entry(entry, options=migrated_options)
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
+    """Set up the current configuration; migration is owned by the entry hook."""
     client = ShsApiClient(
         async_get_clientsession(hass),
         entry.data[CONF_BASE_URL],

@@ -25,18 +25,14 @@ from .configuration import (
     entity_area_id,
     entity_area_id_by_id,
     entity_display_name_by_id,
-    optimisation_defaults,
     resolved_options,
     suggest_device_control_mapping,
 )
+from .configuration_schema import ROOM_AREA_FIELD, merge_options, validate_mapping_keys
 from .device_controls import (
-    MAPPING_SCHEMA_VERSION,
-    MAPPING_SCHEMA_VERSION_FIELD,
-    MIGRATED_ROOM_AREA_FIELD,
     apply_planner_support,
     is_room_thermal_control,
     mapping_report,
-    migrate_device_control_mapping,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -939,6 +935,7 @@ async def _configuration_payload(
             ],
         },
         "diagnostics": {
+            "migration": options.get("_migration_report"),
             "subscription_active": bool((coordinator.data or {}).get("subscription_active")),
             "tariff_status": coordinator.tariff_status,
             "last_tariff_error": coordinator.last_tariff_error,
@@ -949,21 +946,6 @@ async def _configuration_payload(
             "thermal_slots_accepted_until": thermal_accepted_until,
         },
     }
-
-
-def _allowed_configuration_keys(hass: HomeAssistant, entry: ConfigEntry) -> set[str]:
-    allowed = {
-        value
-        for name, value in vars(shs_const).items()
-        if name.startswith("OPT_") and isinstance(value, str)
-    }
-    allowed.update(optimisation_defaults(hass))
-    allowed.update(
-        f"{shs_const.OPT_PREFIX_ENTITIES}{category}"
-        for category in shs_const.CONFIGURABLE_CATEGORIES
-    )
-    allowed.update(entry.options)
-    return allowed
 
 
 def _normalise_field_value(
@@ -1076,34 +1058,21 @@ def _normalise_device_mapping(
     mapping: dict[str, Any],
     existing_mapping: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Validate one mapping while retaining lossless migration data."""
+    """Validate only the current device contract."""
     control_type = str(device.get("control_type") or "")
     if control_type not in CONTROL_FIELDS:
         raise ValueError(f"{device['name']}: unsupported control type")
 
-    entity_limits = {
-        state.entity_id: (
-            state.attributes.get("min"),
-            state.attributes.get("max"),
-        )
-        for state in hass.states.async_all()
-    }
-    submitted, _changed = migrate_device_control_mapping(
-        mapping,
-        entity_limits=entity_limits,
-        recover_room=False,
-    )
+    validate_mapping_keys(mapping)
+    submitted = dict(mapping)
     if submitted.get("control_type") != control_type:
-        raise ValueError(
-            f"{device['name']}: mapping belongs to a different control type"
-        )
+        raise ValueError(f"{device['name']}: mapping belongs to a different control type")
     normalised = dict(submitted)
-    normalised["control_type"] = control_type
-    normalised[MAPPING_SCHEMA_VERSION_FIELD] = MAPPING_SCHEMA_VERSION
-    normalised.pop(MIGRATED_ROOM_AREA_FIELD, None)
-    migrated_room_area = (existing_mapping or {}).get(MIGRATED_ROOM_AREA_FIELD)
-    if isinstance(migrated_room_area, str) and migrated_room_area.strip():
-        normalised[MIGRATED_ROOM_AREA_FIELD] = migrated_room_area
+    # Room associations are derived from HA, not edited in the device form.
+    normalised.pop(ROOM_AREA_FIELD, None)
+    saved_room = (existing_mapping or {}).get(ROOM_AREA_FIELD)
+    if saved_room:
+        normalised[ROOM_AREA_FIELD] = saved_room
 
     fields = _control_fields(device)
     for field in fields:
@@ -1136,6 +1105,9 @@ def _normalise_device_mapping(
         raise ValueError(
             f"{device['name']}: {report['mapping_error'] or 'mapping is incomplete'}"
         )
+    room = report["mapping_summary"].get("room_key")
+    if room:
+        normalised[ROOM_AREA_FIELD] = room
     return normalised
 
 
@@ -1147,12 +1119,7 @@ async def async_apply_configuration(
     """Validate and persist a complete or partial non-device update."""
     if shs_const.OPT_DEVICE_CONTROL_MAPPINGS in incoming:
         raise ValueError("device mappings must be saved from their own card")
-    unknown = sorted(set(incoming) - _allowed_configuration_keys(hass, entry))
-    if unknown:
-        raise ValueError("unknown configuration keys: " + ", ".join(unknown))
-
-    options = resolved_options(hass, {**dict(entry.options), **incoming})
-    options.pop("setup_method", None)
+    options = resolved_options(hass, merge_options(dict(entry.options), incoming))
     for section in _configuration_sections():
         for field in section_fields(section):
             key = field["key"]

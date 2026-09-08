@@ -75,19 +75,10 @@ CONFIGURABLE_CATEGORIES = CATEGORIES + OPTIMISATION_EXTRA_CATEGORIES
 
 OPT_PREFIX_ENTITIES = "entities_"  # e.g. options["entities_heating"] = [...]
 
-# The supplier sells the energy itself; the grid tariff never covers it. Point
-# these at whatever integration provides those prices to get an all-in figure.
-
 # Price-forecast slot length. Swedish settlement moved to quarter-hours, and an
 # optimiser wants the series on its own timestep, so this is configurable.
 OPT_FORECAST_RESOLUTION_MINUTES = "forecast_resolution_minutes"
-RETIRED_SUPPLIER_PRICE_OPTIONS = frozenset({
-    "supplier_import_price_entity",
-    "supplier_export_price_entity",
-    "supplier_import_forecast_entity",
-    "supplier_export_forecast_entity",
-    "electricity_price_area",
-})
+
 DEFAULT_FORECAST_RESOLUTION_MINUTES = 15
 
 # Planning is opt-in. Monitoring and tariff uploads keep working when planning
@@ -100,9 +91,7 @@ OPT_AUTOMATIC_SETUP = "automatic_setup"
 OPT_DISCOVERY_EVIDENCE = "discovery_evidence"
 OPT_CONFIGURATION_REVIEWED_AT = "configuration_reviewed_at"
 OPT_DEVICE_CONTROL_MAPPINGS = "device_control_mappings"
-OPT_CONFIGURATION_SCHEMA_VERSION = "_configuration_schema_version"
-OPT_LEGACY_CONFIGURATION_ARCHIVE = "_legacy_configuration_archive"
-CONFIGURATION_SCHEMA_VERSION = 3
+CONFIG_ENTRY_VERSION = 2
 
 # Live optimisation inputs. Forecast entities must expose timestamped values;
 # the integration does not infer a provider, unit, location or missing series.
@@ -222,9 +211,6 @@ OPT_EV_PHASE_VOLTAGE = "ev_phase_voltage"
 OPT_EV_CHARGE_EFFICIENCY = "ev_charge_efficiency"
 OPT_EV_KWH_PER_KM = "ev_kwh_per_km"
 
-# Charger electrical characteristics are installation invariants, not customer
-# preferences. The number entity still supplies its commissioned current range
-# and increment, while every supported charger uses three 230 V phases.
 # Defaults for the vehicle's electrical model, every one of them overridable.
 #
 # These were fixed constants, and a fixed phase count is not a detail: a
@@ -237,24 +223,6 @@ EV_CHARGE_EFFICIENCY = 0.92
 EV_PHASE_COUNT = 3
 EV_PHASE_VOLTAGE = 230.0
 DEFAULT_EV_KWH_PER_KM = 0.16
-
-# Preserve superseded UI-owned values during migration, but never use them to
-# decide whether a website-selected device appears in an advisory plan.
-RETIRED_PLANNING_OPTIONS = frozenset({
-    "pool_planning_enabled",
-    "pool_deferrable_confirmed",
-    "pool_deadline",
-    "pool_baseline_start",
-    "boiler_planning_enabled",
-    "boiler_deferrable_confirmed",
-    "ev_planning_enabled",
-    "ev_deferrable_confirmed",
-    "ev_electrical_confirmed",
-    "ev_battery_kwh",
-    "ev_min_run_slots",
-    "ev_voltage",
-    "ev_default_departure",
-})
 
 OPTIMISATION_ACTUAL_BACKFILL_HOURS = 72
 OPTIMISATION_PROFILE_DAYS = 10
