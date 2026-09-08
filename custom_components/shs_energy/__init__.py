@@ -9,13 +9,15 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import (
     async_track_time_change,
     async_track_time_interval,
 )
+
+from homeassistant.helpers.storage import Store
 
 from .api import ShsApiClient
 from .config_panel import async_apply_configuration, async_register_config_panel
@@ -47,7 +49,9 @@ from .const import (
 from .configuration import (
     async_discover_configuration,
     entity_area_id,
+    resolved_options,
 )
+from .controller import ScheduledController
 from .coordinator import ShsStatusCoordinator
 from .device_controls import (
     migrate_device_control_mappings,
@@ -243,10 +247,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         entry.data[CONF_DEVICE_TOKEN],
     )
     coordinator = ShsStatusCoordinator(hass, entry, client)
-    await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
+    controller = ScheduledController(
+        hass, coordinator, Store(hass, 1, f"shs_energy.controller.{entry.entry_id}"),
+        lambda: resolved_options(hass, dict(entry.options)),
+    )
+    coordinator.controller = controller
+    # Recover local ownership before contacting the cloud. A network outage
+    # must not prevent restoration of commands left by the previous process.
+    await controller.async_start()
+    try:
+        await coordinator.async_config_entry_first_refresh()
+    except BaseException:
+        await controller.async_stop()
+        raise
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    def schedule_controller() -> None:
+        if not controller.closed and controller.initialized and not controller.lock.locked():
+            entry.async_create_background_task(
+                hass, controller.async_tick(), name="shs_energy_controller_update",
+            )
+
+    entry.async_on_unload(coordinator.async_add_listener(schedule_controller))
+    entry.async_on_unload(async_track_time_interval(hass, controller.async_tick, timedelta(seconds=5)))
+    entry.async_on_unload(async_track_time_change(hass, controller.async_tick, minute=[0, 15, 30, 45], second=0))
+    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, controller.async_stop))
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except BaseException:
+        await controller.async_stop()
+        raise
+    schedule_controller()
 
     # Nightly push shortly after midnight; also catch up on startup in case
     # HA was down at the scheduled time.
@@ -321,4 +352,5 @@ async def _async_options_updated(
 
 async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
     """Unload a config entry."""
+    await entry.runtime_data.controller.async_stop()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

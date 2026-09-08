@@ -72,6 +72,7 @@ from .const import (
     DEFAULT_EV_KWH_PER_KM,
     OPT_TERMINAL_SOC_MIN,
 )
+from . import const as controller_const
 from .device_controls import is_room_thermal_control
 from .optimisation import suggested_device_planning, suggested_load_type
 
@@ -81,6 +82,10 @@ def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
     return {
         OPT_PLANNING_MODE: DEFAULT_PLANNING_MODE,
         OPT_AUTOMATIC_SETUP: True,
+        controller_const.OPT_EV_CONTROL_ENABLED: False,
+        controller_const.OPT_POOL_CONTROL_ENABLED: False,
+        controller_const.OPT_BATTERY_MODE_BASELINE: "Maximum Self Consumption",
+        controller_const.OPT_BATTERY_MEASUREMENT_CHARGE_POSITIVE: True,
         OPT_DEVICE_CONTROL_MAPPINGS: {},
         OPT_FORECAST_RESOLUTION_MINUTES: DEFAULT_FORECAST_RESOLUTION_MINUTES,
         OPT_PV_FORECAST_LATITUDE: hass.config.latitude,

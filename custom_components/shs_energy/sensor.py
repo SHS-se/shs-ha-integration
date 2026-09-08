@@ -59,6 +59,7 @@ async def async_setup_entry(
             ShsPlanRequestSensor(coordinator, "pool"),
             ShsPlanRequestSensor(coordinator, "ev"),
             ShsEvPlanCurrentSensor(coordinator),
+            *[ShsControllerSensor(coordinator, device) for device in ("battery", "ev", "pool")],
         ]
     )
     added_component_keys: set[str] = set()
@@ -298,7 +299,7 @@ class ShsPlanRequestSensor(ShsBaseSensor):
             "plan_status": (
                 self.coordinator.optimisation_plan or {}
             ).get("status"),
-            "advisory_only": True,
+            "advisory_only": not self.coordinator.entry.options.get(f"{self.device}_control_enabled", False),
         }
         if self.device == "ev":
             attributes.update({
@@ -422,7 +423,7 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
                 "current_step_a", current_attributes.get("step")
             ),
             "current_entity": current_entity,
-            "advisory_only": True,
+            "advisory_only": not self.coordinator.entry.options.get("ev_control_enabled", False),
         }
 
 
@@ -749,3 +750,30 @@ class ShsCurrentGridCostSensor(ShsBaseSensor):
             "how_this_is_calculated": [_explain(value) for value in components],
             "components": components,
         }
+
+
+class ShsControllerSensor(ShsBaseSensor):
+    """Local execution status; command acknowledgement is not physical power."""
+
+    def __init__(self, coordinator, device):
+        super().__init__(coordinator)
+        self.device = device
+        self._attr_name = f"{device.title()} controller"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_{device}_controller"
+
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        self.async_on_remove(self.coordinator.controller.add_listener(self.async_write_ha_state))
+
+    @property
+    def native_value(self):
+        return self.coordinator.controller.status[self.device]["state"]
+
+    @property
+    def available(self):
+        # Local faults must remain visible during a cloud update failure.
+        return True
+
+    @property
+    def extra_state_attributes(self):
+        return {key: value for key, value in self.coordinator.controller.status[self.device].items() if key != "state"}

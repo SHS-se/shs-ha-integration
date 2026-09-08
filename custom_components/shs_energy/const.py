@@ -353,3 +353,11 @@ MAX_NEGATIVE_CHANGE_KWH = 0.05
 
 ISSUE_SUBSCRIPTION_INACTIVE = "subscription_inactive"
 ISSUE_MISSING_CUSTOMER_INPUT = "missing_customer_input"
+
+# Scheduled execution is independent of inclusion in the plan.
+OPT_EV_CONTROL_ENABLED = "ev_control_enabled"
+OPT_POOL_CONTROL_ENABLED = "pool_control_enabled"
+OPT_EV_CHARGE_SWITCH_ENTITY = "ev_charge_switch_entity"
+OPT_POOL_PERMISSION_ENTITY = "pool_permission_entity"
+OPT_BATTERY_MODE_BASELINE = "battery_mode_baseline"
+OPT_BATTERY_MEASUREMENT_CHARGE_POSITIVE = "battery_measurement_charge_positive"

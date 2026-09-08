@@ -28,9 +28,10 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
   controllable. Solar, battery, pool, water heating and EV planning are
   independent capabilities; a home without any of them is still a valid
   integration and can use price-led planning for the equipment it does have.
-- **Advisory only**: a website-selected device with a complete local mapping is
-  included in the plan automatically. The integration publishes and visualises
-  schedules, but it does not switch, inhibit, or set any Home Assistant entity.
+- **Optional scheduled control**: a website-selected device with a complete
+  local mapping is included in the plan automatically. Battery, EV and pool
+  execution have independent switches, all off by default, on the Storage tab.
+  With control enabled, the integration executes the current binding plan.
 - **Website-only example**: the portal can render a promotional scenario from
   fixed numbers bundled with the website. Home Assistant cannot create or
   upload demo data, and the ingestion database accepts live plans only.
@@ -94,8 +95,8 @@ directory and restart.
    battery and EV settings, and concrete diagnostics.
 5. Use **Run automatic discovery** to create a local review draft, then save it
    after checking the proposed entities and electrical values. Discovery never
-   saves by itself and this page never operates a relay, heater, charger,
-   climate entity or Node-RED flow.
+   saves by itself. Saving control enable switches authorises the scheduled
+   controller for those devices.
 6. Choose each controllable device and control method on the SHS website.
    Reopen the cogwheel page or press **Refresh website roles**; restarting the
    integration is not required. Base-load devices need no local mapping.
@@ -222,52 +223,59 @@ staff overrides are returned by the backend on the next exchange.
 - HA retains the detailed source history used for local aggregation and
   calibration.
 
-## Planned and reactive automations
+## Scheduled controller
 
-The integration deliberately does not turn relays or chargers on directly.
-Commission one visible executor automation (or an existing Node-RED gate) per
-device. Both planned and reactive logic feed that same executor so they cannot
-race each other.
+Version one controls the house battery, EV and pool from the accepted priority
+plan. Open Configure → Storage: **Battery control** contains the battery switch;
+**EV and pool control** contains the other two. These are execution switches,
+separate from the existing store inclusion switches. They all default to off.
+Reactive surplus allocation and import shedding are not implemented.
 
-The executor should consume:
+- **Battery:** uses the mapped mode, signed W/kW target and measured power.
+  Mode changes are acknowledged before power is written; reversals do not
+  stage through zero. SOC limits and reviewed charge/discharge ratings gate
+  requests. Measurement must reach the requested power within 15 seconds and
+  within 100 W or 10%, whichever is larger. Command and measurement signs are
+  configured separately. Disable, expiry, source/authority loss, startup and
+  orderly unload write zero then the configured baseline mode (default:
+  Maximum Self Consumption). Baseline mode acknowledgement and observed power
+  are distinct; a register readback alone cannot prove physical handover.
+- **EV:** uses the planned device's reviewed current mapping and requires an
+  explicit charging start/stop switch. Positive slots set supported amperes
+  before starting; zero slots stop charging without writing an invalid 0 A.
+  Cable state and live SOC/charge target gate charging. Handover restores the
+  current and charging-switch state captured before execution.
+- **Pool:** requires the mapped Celsius start/stop band and reviewed bounds.
+  The installed band is captured before the first write. Heat slots use that
+  band; off slots lower it below measured water temperature while preserving
+  hysteresis width and reviewed bounds. An optional accessory permission is
+  enabled on heat slots. Handover restores the captured band and permission.
+  A lower bound that prevents deferral is reported as `limited`. The Nibe's
+  thermostat and shared-compressor controls retain physical ownership: an
+  accepted band is not reported as delivered heat.
 
-- `Energy plan status`: only `ready` authorises a planned request;
-- `<device> planned request`: bounded watts for the current binding quarter;
-  unavailable means the planner has no authority, while zero is an explicit
-  off request inside a valid plan. For the boiler specifically, reviewed rated
-  watts means the thermostat is permitted to cycle and zero means inhibited;
-  the separate empirical `expected_power_w` attribute is never a forced-on
-  command; and
-- `EV planned current`: the forecast target in amperes plus the current
-  quarter's deadline-safe minimum and hardware maximum as attributes; and
-- `Reactive surplus`: live, non-negative grid export watts for a central local
-  allocator.
+Each device has an optional **manual override** entity: on releases scheduled
+control and suspends requests until it returns off. Unknown overrides also
+prevent execution. Source measurements must be available and reported within
+120 seconds. All commands are bounded by entity limits and supported steps.
 
-Advisory slots after either price series ends never produce a local planned
-request, even while they remain visible in the 72-hour portal comparison.
+Execution runs at quarter boundaries, after plan updates, and every five
+seconds to check guards and expiry. Advisory quarters have no command authority.
+A per-device fault releases that device and is latched until a new plan, slot or
+configuration changes; it does not stop the other devices. Failed restoration
+is retained and retried. Ownership and original settings are persisted before
+writes so restart recovery uses the old entities even after mappings change.
 
-For a binary pool executor, apply this order:
+The **Battery controller**, **EV controller** and **Pool controller** sensors
+show requests, reasons and faults. Battery `confirmed` means measured power
+matched; EV `commanded` and pool `scheduled` only mean actuator settings were
+accepted. The existing planned-request sensors remain available; boiler and
+room execution are outside this first version.
 
-1. safety, manual override, hard temperature/hygiene and completion guards;
-2. existing minimum-on/off and coupled pump/heater rules;
-3. a planned request above the device's stable power threshold;
-4. a reactive request only after surplus exceeds device power plus reserve for
-   a stable period; and
-5. measured power confirmation before treating the device as running or
-   reallocating its watts.
-
-For a water boiler, keep the local thermostat in charge of cycling. Treat a
-positive boiler request only as permission and zero as a temporary inhibit,
-after applying hygiene, hard-temperature, manual and maximum-off guards. Never
-turn the element on merely because `expected_power_w` is positive.
-
-For an EV executor, begin from `EV planned current`, then let the local reactive
-controller trim it in supported steps inside the published minimum/maximum
-envelope using actual import/export and battery state. Track delivered energy
-against the departure obligation, retain local connection/SOC/manual gates,
-and confirm achieved charging power. A large unplanned import sheds eligible
-loads in reverse service priority. Baseline schedules remain active whenever
-the plan is unavailable; they are not deleted or silently recreated.
+Before enabling a device, disable its previous automation/Node-RED command owner
+and review its local mappings. This release does not change live enable switches
+or commission hardware. An abrupt HA/machine outage cannot run restoration;
+the inverter's independent watchdog behaviour still requires physical testing.
 
 ## Notes
 

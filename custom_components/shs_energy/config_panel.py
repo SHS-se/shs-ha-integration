@@ -300,7 +300,7 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "id": "planning",
             "tab": "overview",
             "title": "Planning",
-            "description": "Monitoring remains active when planning is off. Saving configuration never operates a device.",
+            "description": "Monitoring remains active when planning is off. Enabled controllers execute binding plans and restore their baseline when planning stops.",
             "fields": [
                 _field(
                     c.OPT_PLANNING_MODE,
@@ -384,9 +384,9 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "tab": "storage",
             "title": "Battery control",
             "description": (
-                "How to command the battery, as opposed to what it is. Filling "
-                "this in does not start control: the switch below does, and "
-                "only after the response, sign and confirmation behaviour "
+                "Scheduled battery execution. Filling "
+                "this in does not start control: the switch below does. Enable "
+                "after the response, sign and confirmation behaviour "
                 "above have actually been measured on this installation."
             ),
             "toggle": _field(
@@ -414,6 +414,8 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 ),
                 _field(c.OPT_BATTERY_MODE_DISCHARGE, "Mode value meaning discharge", "text"),
                 _field(c.OPT_BATTERY_MODE_IDLE, "Mode value meaning hold", "text"),
+                _field(c.OPT_BATTERY_MODE_BASELINE, "Baseline mode", "text", help_text="Restored on disable, expiry, fault and startup. Sigenergy uses Maximum Self Consumption."),
+                _field(c.OPT_BATTERY_MEASUREMENT_CHARGE_POSITIVE, "Measured battery power is positive when charging", "toggle", help_text="The measurement sign is independent of the power command sign."),
                 _field(
                     c.OPT_BATTERY_POWER_ENTITY,
                     "Power target",
@@ -461,6 +463,19 @@ def _configuration_sections() -> list[dict[str, Any]]:
                     "text",
                     help_text="The value that entity reports while the planner holds authority.",
                 ),
+            ],
+        },
+        {
+            "id": "scheduled_control",
+            "tab": "storage",
+            "title": "EV and pool control",
+            "description": "Execute the current binding plan. Each device can be tested independently. Disable restores the settings captured before control; reactive adjustments are not included.",
+            "fields": [
+                _field(c.OPT_EV_CONTROL_ENABLED, "Control EV charging", "toggle"),
+                _field(c.OPT_EV_CHARGE_SWITCH_ENTITY, "EV charging start/stop switch", "entity", domains=("switch", "input_boolean"), help_text="Required for execution. Off slots stop charging without writing a current below the charger's minimum."),
+                _field(c.OPT_POOL_CONTROL_ENABLED, "Control pool heating", "toggle"),
+                _field(c.OPT_POOL_PERMISSION_ENTITY, "Pool accessory permission", "entity", domains=("switch", "input_boolean"), help_text="Optional. Enabled with a heat slot and restored on handover. Off slots lower the temperature band."),
+                *[_field(f"{device}_control_override_entity", f"{label} manual override", "entity", domains=("input_boolean", "binary_sensor", "switch"), help_text="On returns this device to its captured baseline and suspends planned commands.") for device, label in (("battery", "Battery"), ("ev", "EV"), ("pool", "Pool"))],
             ],
         },
         {
