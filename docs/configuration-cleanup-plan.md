@@ -36,6 +36,7 @@ Priority updated after review: remove legacy configuration and compatibility log
 | `ev_phase_count` and `ev_charge_efficiency` are active editable options but also listed in `RETIRED_PLANNING_OPTIONS`. Startup removes them and runtime supplies defaults. | Give these current hardware parameters one canonical representation and remove the conflicting legacy logic in the cleanup. Reproducing historical startup behavior is not a prerequisite. |
 | The entity search returned 24 matching SHS sensors plus its update entity. Planned-request sensors currently have unknown values. | Unknown values during an invalid plan are not grounds for deleting entities or their history. |
 | Every push declares `device_inventory_complete`, and the server retires each stored device absent from that list. | An upload exclusion must not drop a device from the declared inventory. Being uploaded and being present are different facts. |
+| A device's planning role is populated from the integration's own suggestion by an insert trigger and is never null, so a deliberate exclusion and a role nobody has ever set are the same stored value. | The integration cannot choose between silence and a warning. The server must record that the choice was made. |
 | The website may request a current-limit control method that the integration does not implement. The device reports itself unconfigured indefinitely, with nothing said. | Show an unsupported request as unsupported, naming the method and where it was chosen. |
 | Nothing anywhere reads `_legacy_configuration_archive`. The retired EV phase count and efficiency survive only inside it. | Read those two back into their canonical keys before the archive is deleted; afterwards the values are unrecoverable. |
 | Continuous integration installs no dependencies and runs `unittest discover`. `test_module_boundaries.py` keeps tests out of the Home Assistant modules, where the migration and every save path live. | Their only present coverage is string matching against source text. Migration and save logic must reach the pure tier before any of it can be tested. |
@@ -118,31 +119,51 @@ Make this the default landing page once initial setup is complete.
 
 Every device SHS knows about carries exactly two switches, in this order, with these meanings:
 
-1. **Include in the plan.** SHS works out when this device should run and shows it on the timeline. Nothing is switched. Off means its energy is simply counted with the rest of the house.
-2. **Let SHS operate it.** SHS writes to the device at the planned times. Off means the plan is advice, and the device's own controls keep deciding.
+1. **Include in the plan.** SHS works out when this device should run and shows it on the timeline. Nothing is switched. Off means its energy is simply counted with the rest of the house. Chosen on the website, for the reasons below, and shown here.
+2. **Let SHS operate it.** SHS writes to the device at the planned times. Off means the plan is advice, and the device's own controls keep deciding. Chosen here.
 
-Wording may improve; the separation may not. Neither switch may sit among the entity pickers — they belong in their own row, visibly apart from the setup fields, so that filling in an entity can never read as granting permission. Turning the first off hides and deletes nothing. The second cannot be turned on while the first is off, nor while required setup is missing; in both cases it is disabled with the reason shown, never present and quietly ineffective.
+Wording may improve; the separation may not. Neither line may sit among the entity pickers — they belong in their own row, visibly apart from the setup fields, so that filling in an entity can never read as granting permission. Turning the first off hides and deletes nothing. The second cannot be turned on while the first is off, nor while required setup is missing; in both cases it is disabled with the reason shown, never present and quietly ineffective.
 
 **Only for equipment the home has.** A home without a pool shows no pool switches, no pool section and no pool warning. Existence is answered by the equipment being there — a configured meter, a mapped device — together with the explicit "this home has a house battery / a heated pool / an electric vehicle" answers already stored. Those three carry forward as the answer to that question alone. Today they double as the planning switch, which is the conflation this split exists to end: the help text currently says switching one off means nothing is planned, which is the first switch above wearing the wrong label.
 
-#### Where each switch is stored
+#### Include in the plan belongs to the website
 
-The two are not symmetrical today and the plan must not pretend otherwise.
+Decided: the planner runs on the website, so what it plans is chosen there. The integration does not offer that switch, does not keep a copy of it, and no device-token endpoint for writing planning roles is needed.
 
-- *Let SHS operate it* is local, and already exists for the battery, vehicle and pool. New device types extend the same mechanism. No server work.
-- *Include in the plan* is local for those same three, where the existing "this home has…" flag performs it. For the metered devices it is server-owned: it lives in the device's planning role on the website, and the only writer is a database function granted to signed-in website users and guarded on their session. The integration authenticates with a device token and has no such session, so it cannot write that field at all.
+For a metered device the choice is the device's planning role, already owned and edited on the website. The pool and the vehicle are reached the same way, through the role on the meter that heats or charges them. The house battery is the one exception: it is modelled plant-level rather than as a controllable meter, so it has no role record, and its inclusion stays local.
 
-One of two things therefore has to happen before a metered device gets a local *Include in the plan* switch, and it should be settled before Phase 3 begins:
+Locally, then, the row reads: **what the website decided** (shown, linked, not editable) and **Let SHS operate it** (the local switch). Two lines, one of them belonging to someone else, and it should look like it — a stated fact with a link, not a control that failed to save.
 
-- **(a)** Add a device-token endpoint that sets the planning role, with revision checking so the two writers cannot silently overwrite each other. This is coordinated server work and belongs in the same release.
-- **(b)** Show the switch for those devices as a read-only state with its value, where it was set, and a link to that page.
+#### A device leaving the plan is a normal outcome
 
-(b) is the honest description of what exists now and is what should ship if (a) is not funded alongside. What must not ship is a local switch that looks identical to the working ones and quietly disagrees with the server.
+It is not an error, not a warning, and not a degraded state. It means one thing: that device's energy is counted with the rest of the house again. Four of the five obligations that follow are already met and must not regress; the fifth is the work.
+
+- **The setup demand clears itself.** The mapping issue is raised only for devices the website currently asks to be controllable, so a removed device leaves that list and its warning goes with it. Already correct.
+- **The local setup survives.** Its entities, limits and room stay saved and out of the active list, ready if the device is included again. Nothing is deleted on removal, and re-inclusion asks no questions that were already answered. Already the intended behaviour, and the reason the plan keeps the unrequested mapping rather than treating it as legacy.
+- **Anything being operated is handed back.** When the plan carries no capability for a device the controller restores it and reports it idle with the reason, rather than faulting. Already correct, and the restoration journal keeps that true across a restart.
+- **Nothing is written afterwards.** Restoration returns the device to the settings captured before control, and the executor stays out until the device is included again. Already correct.
+- **No warning about equipment the customer removed on purpose.** This is the gap.
+
+#### The gap, and the one server change it needs
+
+The unplanned-service warning fires when a home has telemetry for a pool, vehicle or battery that nothing is routed to control. It exists for a good reason — a car once sat plugged in below its charge limit for two days while surplus was exported, and every surface said ready — and it should not be deleted. But it cannot currently tell a deliberate exclusion from an accidental omission, so switching the pool out of the plan on the website would raise "A service is configured but not being planned" and send the customer back to fix what they had just chosen.
+
+The reason it cannot tell is on the server. The planning role is populated from the integration's own suggestion by an insert trigger and the column is not nullable, so "the customer excluded this" and "it defaulted to counted-with-the-house and nobody has ever looked at it" are the same stored value. No client can distinguish them.
+
+**So the server records that the choice was made** — a set-at timestamp, or an equivalent that survives later pushes — and returns it with the device configuration. The integration then stays silent when a device was deliberately left out, and keeps warning when nothing was ever decided. That is a small, contained change and it is the only server work this requirement needs.
+
+The suppression itself already exists and already states the principle: a store the customer switched off is not a home missing a control route, and reporting it would send them to the website to fix a meter they deliberately took out of planning. It is keyed on the local equipment flag today. It needs the website's answer as a second source, on the same rule.
+
+#### What the local equipment flags become
+
+"This home has a house battery / a heated pool / an electric vehicle" stops being a planning switch and answers only what it says. It gates whether the equipment appears at all, which is what makes a home without a pool show nothing about pools.
+
+Migration: an equipment flag currently switched off carries forward as *this home does not have that equipment*. The visible outcome is identical — the section is hidden and nothing is planned — and no customer sees a device start being planned because a switch changed meaning underneath them. Someone who does own the equipment and only wanted it out of the plan turns existence back on and makes that choice on the website, where it now lives. Say this in the release notes.
 
 - Global planning on/off, independent of monitoring.
 - One row per device/system: **Data**, **Planning participation**, **Control permission**, **Actual execution**, and next scheduled action. Distinguish excluded, collecting history, mapped, scheduled, paused, blocked, and unsupported.
 - One explicit execution permission per controllable target, expressed as the second switch above. Preserve existing settings for battery, vehicle and pool; newly supported device types start off.
-- Planning participation for metered devices remains website-owned until option (a) above is built. Display it locally as the first switch, read-only, and link to the page that owns it. When local editing arrives it writes through to that same server-owned record with revision checking; a competing local boolean is never acceptable.
+- Planning participation is website-owned and stays there. Display it as a stated fact with a link to the page that owns it. There is no local copy and no local override, so the two can never disagree.
 - A 24-hour timeline, expandable to the available horizon, with per-device on/off windows, EV current, battery charge/discharge, and temperature targets. Show the present time, plan issue time, and the boundary between binding instructions and advisory future slots.
 - Plot planned versus observed activity only where telemetry supports that comparison. A successful HA service call is not proof of physical delivery. Invalid or expired plans must not appear as an actionable schedule.
 - Disabling execution returns ownership using the existing documented restoration behavior. Pauses, external overrides, and blocked execution have explicit reasons.
@@ -246,7 +267,7 @@ Historical raw recorder data and SHS server history are not rewritten as part of
 - Add the canonical operational-status view and plan timeline endpoint/visualization. The current config payload does not include the complete schedule or controller reports, so this requires backend work as well as rendering.
 - Update documentation and remove stale statements that imply execution is impossible or that mapped switches are necessarily running.
 
-**Complete when:** ordinary laundry setup shows its populated temperature, actuator, and power fields; empty alternative controls are absent. Editing EV or pool setup requires one editor. The panel and status sensor agree on the current invalid-plan case. No customer-facing string is produced from a stored identifier. Renaming a device in Home Assistant changes what is shown and nothing else. Planning and operating are two switches everywhere they appear, and a home without a pool sees nothing about pools. Desktop, narrow-screen, keyboard, unsaved-edit, and error-state checks pass.
+**Complete when:** ordinary laundry setup shows its populated temperature, actuator, and power fields; empty alternative controls are absent. Editing EV or pool setup requires one editor. The panel and status sensor agree on the current invalid-plan case. No customer-facing string is produced from a stored identifier. Renaming a device in Home Assistant changes what is shown and nothing else. Planning and operating read as two separate things everywhere they appear, and a home without a pool sees nothing about pools. A device the website takes out of the plan produces no warning anywhere, keeps its saved setup, and is handed back if it was being operated. Desktop, narrow-screen, keyboard, unsaved-edit, and error-state checks pass.
 
 ### Phase 4 — Complete per-device execution support
 
@@ -255,7 +276,7 @@ Historical raw recorder data and SHS server history are not rewritten as part of
 - Resolve shared actuators, minimum-run/inhibit constraints, local thermostat ownership, and existing automations before enabling a target.
 - Keep unsupported methods visibly unsupported; do not create cosmetic enable switches that do nothing. New adapters remain disabled until explicitly enabled. The current-limit method is the live example: the website can request it, the integration has no adapter, and the device reports itself unconfigured indefinitely with nothing shown. Name the method, say it is not supported yet, and say where it was chosen.
 
-**Complete when:** each enabled target demonstrably follows a valid binding slot, respects its hardware constraints and external ownership, and restores correctly on disable, expiry, override, error, restart, or mapping edit. A failed acknowledgement is visible and is not reported as delivered power.
+**Complete when:** each enabled target demonstrably follows a valid binding slot, respects its hardware constraints and external ownership, and restores correctly on disable, expiry, override, error, restart, mapping edit, or removal from the plan on the website. A failed acknowledgement is visible and is not reported as delivered power.
 
 ### Phase 5 — Controlled rollout and final cleanup
 
