@@ -127,6 +127,22 @@ class QuarterAggregationTests(unittest.TestCase):
         self.assertEqual(profile[1], 0)
         self.assertEqual(model["active_power_w"], 1000)
 
+    def test_device_profile_ignores_out_of_range_meter_corrections(self) -> None:
+        start = datetime(2026, 8, 3, tzinfo=timezone.utc)
+        key = "sensor.water_boiler_energy"
+        slots = [
+            {"start": (start + timedelta(minutes=15 * quarter)).isoformat(),
+             "device_energy_kwh": {key: 0.25}}
+            for quarter in range(7 * 96)
+        ]
+        for index, invalid in enumerate((500.0, -1.0, True)):
+            slots[index]["device_energy_kwh"][key] = invalid
+        model = build_device_load_model(slots, key, "UTC", minimum_samples=2)
+        self.assertEqual(model["active_power_w"], 1000)
+        self.assertEqual(model["sample_count"], 7 * 96 - 3)
+        for profile in model["by_weekday"].values():
+            self.assertTrue(all(abs(value - 1000) < 0.1 for value in profile))
+
     def test_device_profile_keeps_an_intermittent_load_off_the_median(
         self,
     ) -> None:

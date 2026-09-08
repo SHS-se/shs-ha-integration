@@ -863,7 +863,13 @@ def build_device_load_model(
         if not isinstance(energy, (int, float)) or not isfinite(float(energy)):
             continue
         local = when.astimezone(local_tz)
-        power_w = max(0.0, float(energy) * 4_000)
+        power_w = float(energy) * 4_000
+        # The device contract supports 0..100 kW. Counter corrections and
+        # unit errors outside that range are not observations of a running
+        # device. Exclude them from both the profile and the active estimate;
+        # clipping would invent consumption and still distort scheduling.
+        if isinstance(energy, bool) or not 0 <= power_w <= 100_000:
+            continue
         observations.append((
             local,
             local.weekday(),
