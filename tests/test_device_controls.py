@@ -12,6 +12,7 @@ from device_controls import (  # noqa: E402
     MAPPING_SCHEMA_VERSION_FIELD,
     MIGRATED_ROOM_AREA_FIELD,
     apply_requested_configuration,
+    battery_control_errors,
     is_room_thermal_control,
     planning_path,
     mapping_report,
@@ -420,3 +421,155 @@ class PlanningPathTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _room(**extra):
+    """A complete setpoint mapping, before any optional thermal lever."""
+    return {
+        "control_type": "setpoint",
+        "temperature_entity_id": "sensor.lounge",
+        "actuator_entity_ids": ["climate.lounge"],
+        **extra,
+    }
+
+
+class ThermalLeverTests(unittest.TestCase):
+    """A heat pump is permitted, nudged, or told a mode — not given watts."""
+
+    def report(self, mapping):
+        return mapping_report(
+            "setpoint", mapping, {"sensor.lounge", "climate.lounge",
+                                  "switch.permit", "select.demand",
+                                  "number.offset"},
+            entity_area_ids={"climate.lounge": "lounge"},
+            area_names={"lounge": "Lounge"},
+        )
+
+    def test_an_existing_setpoint_mapping_is_unchanged(self) -> None:
+        """The new levers are optional, so no saved mapping may break."""
+        self.assertEqual(self.report(_room())["mapping_status"], "ready")
+
+    def test_permission_and_mode_need_no_extra_configuration(self) -> None:
+        report = self.report(_room(
+            permit_entity_id="switch.permit",
+            mode_entity_id="select.demand",
+        ))
+        self.assertEqual(report["mapping_status"], "ready")
+        self.assertIn("permit_entity_id", report["mapping_summary"]["configured_fields"])
+        self.assertIn("mode_entity_id", report["mapping_summary"]["configured_fields"])
+
+    def test_an_offset_without_bounds_is_refused(self) -> None:
+        """The one lever that can drive equipment past what was reviewed."""
+        report = self.report(_room(offset_entity_id="number.offset"))
+        self.assertEqual(report["mapping_status"], "invalid")
+        self.assertIn("minimum offset is required", report["mapping_error"])
+        self.assertIn("maximum offset is required", report["mapping_error"])
+
+    def test_an_inverted_offset_band_is_refused(self) -> None:
+        report = self.report(_room(
+            offset_entity_id="number.offset",
+            offset_minimum=3.0,
+            offset_maximum=-3.0,
+        ))
+        self.assertEqual(report["mapping_status"], "invalid")
+        self.assertIn("below maximum offset", report["mapping_error"])
+
+    def test_a_bounded_offset_is_ready(self) -> None:
+        report = self.report(_room(
+            offset_entity_id="number.offset",
+            offset_minimum=-3.0,
+            offset_maximum=3.0,
+        ))
+        self.assertEqual(report["mapping_status"], "ready")
+
+    def test_a_zero_minimum_offset_is_a_bound_not_a_blank(self) -> None:
+        """0 is falsey; a bound of zero must not read as unset."""
+        report = self.report(_room(
+            offset_entity_id="number.offset",
+            offset_minimum=0,
+            offset_maximum=3.0,
+        ))
+        self.assertEqual(report["mapping_status"], "ready")
+
+    def test_a_deleted_lever_entity_is_caught(self) -> None:
+        report = self.report(_room(permit_entity_id="switch.gone"))
+        self.assertEqual(report["mapping_status"], "invalid")
+        self.assertIn("no longer exist", report["mapping_error"])
+
+
+def _battery(**extra):
+    return {
+        "battery_enabled": True,
+        "battery_control_enabled": True,
+        "battery_mode_entity": "select.mode",
+        "battery_mode_charge": "Command Charging (PV First)",
+        "battery_mode_discharge": "Command Discharging (ESS First)",
+        "battery_mode_idle": "Standby",
+        "battery_power_entity": "number.target",
+        "battery_power_unit": "kW",
+        "battery_power_measurement_entity": "sensor.battery_power",
+        "battery_soc_entity": "sensor.soc",
+        **extra,
+    }
+
+
+class BatteryControlTests(unittest.TestCase):
+    """Plant-level, because there is one battery and it is already a store."""
+
+    def test_a_complete_mapping_has_no_errors(self) -> None:
+        self.assertEqual(battery_control_errors(_battery()), [])
+
+    def test_control_switched_off_asks_for_nothing(self) -> None:
+        """A home that never wants the planner writing must not be nagged."""
+        self.assertEqual(battery_control_errors({"battery_control_enabled": False}), [])
+
+    def test_every_missing_field_is_reported_in_one_pass(self) -> None:
+        errors = battery_control_errors({
+            "battery_enabled": True, "battery_control_enabled": True,
+        })
+        self.assertIn("battery mode entity is required", errors)
+        self.assertIn("battery power target entity is required", errors)
+        self.assertIn("measured battery power entity is required", errors)
+        self.assertIn("battery state of charge entity is required", errors)
+        self.assertIn("the mode value meaning charge is required", errors)
+
+    def test_reusing_one_mode_value_is_refused(self) -> None:
+        """Charge and discharge are separate modes, not one signed request."""
+        errors = battery_control_errors(_battery(battery_mode_discharge="Standby"))
+        self.assertIn(
+            "charge, discharge and idle must be different mode values", errors
+        )
+
+    def test_an_unknown_power_unit_is_refused(self) -> None:
+        self.assertTrue(any(
+            "power unit" in error
+            for error in battery_control_errors(_battery(battery_power_unit="watts"))
+        ))
+
+    def test_claiming_authority_requires_reading_it_back(self) -> None:
+        """Otherwise authority never held cannot be told from authority lost."""
+        errors = battery_control_errors(_battery(
+            battery_authority_entity="switch.remote",
+        ))
+        self.assertIn(
+            "a confirmation entity is required alongside the authority switch",
+            errors,
+        )
+
+    def test_a_confirmation_entity_needs_its_expected_state(self) -> None:
+        errors = battery_control_errors(_battery(
+            battery_authority_entity="switch.remote",
+            battery_authority_confirm_entity="sensor.work_mode",
+        ))
+        self.assertIn("the state confirming remote control is required", errors)
+
+    def test_a_complete_handshake_is_accepted(self) -> None:
+        self.assertEqual(battery_control_errors(_battery(
+            battery_authority_entity="switch.remote",
+            battery_authority_confirm_entity="sensor.work_mode",
+            battery_authority_confirm_state="Remote EMS",
+        )), [])
+
+    def test_control_without_a_battery_is_refused(self) -> None:
+        errors = battery_control_errors(_battery(battery_enabled=False))
+        self.assertIn("this home is not marked as having a house battery", errors)

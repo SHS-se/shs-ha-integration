@@ -10,6 +10,41 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any
 
+try:  # pragma: no cover - package in HA, flat module in the pure test suite
+    from .const import (
+        BATTERY_POWER_UNITS,
+        OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY,
+        OPT_BATTERY_AUTHORITY_CONFIRM_STATE,
+        OPT_BATTERY_AUTHORITY_ENTITY,
+        OPT_BATTERY_CONTROL_ENABLED,
+        OPT_BATTERY_ENABLED,
+        OPT_BATTERY_MODE_CHARGE,
+        OPT_BATTERY_MODE_DISCHARGE,
+        OPT_BATTERY_MODE_ENTITY,
+        OPT_BATTERY_MODE_IDLE,
+        OPT_BATTERY_POWER_ENTITY,
+        OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
+        OPT_BATTERY_POWER_UNIT,
+        OPT_BATTERY_SOC_ENTITY,
+    )
+except ImportError:  # pragma: no cover - flat import path
+    from const import (  # type: ignore[no-redef]
+        BATTERY_POWER_UNITS,
+        OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY,
+        OPT_BATTERY_AUTHORITY_CONFIRM_STATE,
+        OPT_BATTERY_AUTHORITY_ENTITY,
+        OPT_BATTERY_CONTROL_ENABLED,
+        OPT_BATTERY_ENABLED,
+        OPT_BATTERY_MODE_CHARGE,
+        OPT_BATTERY_MODE_DISCHARGE,
+        OPT_BATTERY_MODE_ENTITY,
+        OPT_BATTERY_MODE_IDLE,
+        OPT_BATTERY_POWER_ENTITY,
+        OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
+        OPT_BATTERY_POWER_UNIT,
+        OPT_BATTERY_SOC_ENTITY,
+    )
+
 CONTROL_TYPES = (
     "switch_schedule",
     "variable_power",
@@ -27,6 +62,15 @@ _ENTITY_FIELDS_BY_CONTROL_TYPE: dict[str, tuple[str, ...]] = {
         "setpoint_entity_id",
         "actuator_entity_ids",
         "companion_actuator_entity_ids",
+        # The thermal executor may request a bounded offset, a demand mode, or
+        # a permission instead of a temperature. A machine with its own
+        # controller — a heat pump reached over Modbus — accepts these and does
+        # not accept arbitrary watts, so a mapping that can only carry a
+        # setpoint cannot express how it is actually driven. All optional: an
+        # existing setpoint mapping stays complete without them.
+        "offset_entity_id",
+        "mode_entity_id",
+        "permit_entity_id",
     ),
     "permit_inhibit": ("actuator_entity_ids",),
     "switch_schedule": (
@@ -264,6 +308,35 @@ def _power_source(mapping: dict[str, Any]) -> bool:
     )
 
 
+def _number(mapping: dict[str, Any], key: str) -> float | None:
+    try:
+        value = float(mapping.get(key))
+    except (TypeError, ValueError):
+        return None
+    return value if isfinite(value) else None
+
+
+def _offset_errors(mapping: dict[str, Any]) -> list[str]:
+    """A bounded offset is only usable when its bounds are actually stated.
+
+    An unbounded offset entity is the one lever here that can drive equipment
+    past what was reviewed, so the bounds are required with it rather than
+    optional beside it. Without the entity there is nothing to bound.
+    """
+    if not _text(mapping, "offset_entity_id"):
+        return []
+    minimum = _number(mapping, "offset_minimum")
+    maximum = _number(mapping, "offset_maximum")
+    errors: list[str] = []
+    if minimum is None:
+        errors.append("minimum offset is required with an offset entity")
+    if maximum is None:
+        errors.append("maximum offset is required with an offset entity")
+    if minimum is not None and maximum is not None and minimum >= maximum:
+        errors.append("minimum offset must be below maximum offset")
+    return errors
+
+
 def mapping_errors(
     mapping: dict[str, Any],
     control_type: str,
@@ -284,6 +357,7 @@ def mapping_errors(
     if control_type == "setpoint":
         if not _entities(mapping, "actuator_entity_ids"):
             errors.append("at least one heater or climate actuator is required")
+        errors.extend(_offset_errors(mapping))
     elif control_type == "permit_inhibit":
         if not _entities(mapping, "actuator_entity_ids"):
             errors.append("at least one permit/inhibit actuator is required")
@@ -431,7 +505,15 @@ def mapping_report(
         "entity_count": entity_count,
         "configured_fields": sorted(
             key
-            for key in (*active_entity_fields, "power", "max_inhibit_slots", "minimum_value", "maximum_value")
+            for key in (
+                *active_entity_fields,
+                "power",
+                "max_inhibit_slots",
+                "minimum_value",
+                "maximum_value",
+                "offset_minimum",
+                "offset_maximum",
+            )
             if _present(mapping.get(key))
         ),
     }
@@ -508,6 +590,72 @@ def apply_requested_configuration(
         if ready and isinstance(reviewed_power, (int, float)):
             device["active_power_w"] = float(reviewed_power)
     return devices
+
+
+def battery_control_errors(options: dict[str, Any]) -> list[str]:
+    """Return what still stops the storage executor from commanding a battery.
+
+    Plant-level rather than a device control type. There is one battery, the
+    planner already models it as a store with its own charge and discharge
+    variables, and giving it a control type would route it through
+    ``planning_path`` as a controllable load as well — subtracting it from base
+    load and scheduling it a second time.
+
+    Every gap is reported in one pass, for the same reason device mappings are:
+    commissioning a battery one rediscovered missing field at a time is how a
+    half-configured executor gets switched on.
+    """
+    if not options.get(OPT_BATTERY_CONTROL_ENABLED):
+        return []
+    errors: list[str] = []
+    if not options.get(OPT_BATTERY_ENABLED):
+        errors.append("this home is not marked as having a house battery")
+    for key, label in (
+        (OPT_BATTERY_MODE_ENTITY, "battery mode entity"),
+        (OPT_BATTERY_POWER_ENTITY, "battery power target entity"),
+        (OPT_BATTERY_POWER_MEASUREMENT_ENTITY, "measured battery power entity"),
+        (OPT_BATTERY_SOC_ENTITY, "battery state of charge entity"),
+    ):
+        if not _text(options, key):
+            errors.append(f"{label} is required")
+    # Naming the modes is what makes a flow reversal expressible at all. A
+    # mapping without them can raise and lower a number that the inverter is
+    # not in a mode to honour.
+    for key, label in (
+        (OPT_BATTERY_MODE_CHARGE, "charge"),
+        (OPT_BATTERY_MODE_DISCHARGE, "discharge"),
+        (OPT_BATTERY_MODE_IDLE, "idle"),
+    ):
+        if not _text(options, key):
+            errors.append(f"the mode value meaning {label} is required")
+    modes = [
+        options.get(key)
+        for key in (
+            OPT_BATTERY_MODE_CHARGE,
+            OPT_BATTERY_MODE_DISCHARGE,
+            OPT_BATTERY_MODE_IDLE,
+        )
+        if _text(options, key)
+    ]
+    if len(modes) != len(set(modes)):
+        errors.append("charge, discharge and idle must be different mode values")
+    unit = options.get(OPT_BATTERY_POWER_UNIT)
+    if unit not in BATTERY_POWER_UNITS:
+        errors.append(
+            "battery power unit must be one of: " + ", ".join(BATTERY_POWER_UNITS)
+        )
+    # The handshake is two halves. Claiming remote control without reading back
+    # whether it was granted leaves the executor unable to tell authority it
+    # never had from authority it has lost.
+    claims = _text(options, OPT_BATTERY_AUTHORITY_ENTITY)
+    confirms = _text(options, OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY)
+    if claims and not confirms:
+        errors.append(
+            "a confirmation entity is required alongside the authority switch"
+        )
+    if confirms and not _text(options, OPT_BATTERY_AUTHORITY_CONFIRM_STATE):
+        errors.append("the state confirming remote control is required")
+    return errors
 
 
 def requested_controllable_devices(

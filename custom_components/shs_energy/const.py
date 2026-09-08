@@ -151,6 +151,40 @@ OPT_BATTERY_DISCHARGE_EFFICIENCY = "battery_discharge_efficiency"
 OPT_BATTERY_EXPORT_ENABLED = "battery_export_enabled"
 OPT_BATTERY_EXPORT_RESERVE_SOC = "battery_export_reserve_soc"
 OPT_BATTERY_EXPORT_MIN_PRICE = "battery_export_min_price_sek_per_kwh"
+
+# The storage executor's mapping. Deliberately plant-level rather than a
+# device control type: there is one battery, it is already modelled as a store
+# with its own charge and discharge variables, and routing it through
+# `planning_path` would additionally schedule it as a controllable load and
+# subtract it from base load — counting the same plant twice.
+#
+# Commanding the battery stays off until someone turns it on. Reading a
+# register is not permission to write it, so the mapping being complete is not
+# the same as being authorised to use it.
+OPT_BATTERY_CONTROL_ENABLED = "battery_control_enabled"
+OPT_BATTERY_MODE_ENTITY = "battery_mode_entity"
+# Charge-first and discharge-first are separate modes on real inverters rather
+# than the sign of one request, so reversing flow is a mode write plus a power
+# write. These name the option strings that mean each, per installation.
+OPT_BATTERY_MODE_CHARGE = "battery_mode_charge"
+OPT_BATTERY_MODE_DISCHARGE = "battery_mode_discharge"
+OPT_BATTERY_MODE_IDLE = "battery_mode_idle"
+OPT_BATTERY_POWER_ENTITY = "battery_power_entity"
+# Sigenergy writes kW where the planner speaks W, and publishes both a signed
+# power sensor and an inverted copy. Both are per-installation facts that must
+# be settled by measurement at commissioning, not assumed.
+OPT_BATTERY_POWER_UNIT = "battery_power_unit"
+OPT_BATTERY_DISCHARGE_IS_NEGATIVE = "battery_discharge_is_negative"
+# Authority is a handshake: one entity claims remote control, another confirms
+# it was granted. Losing the confirmation is a loss of a required control
+# source, not a reason to keep writing.
+OPT_BATTERY_AUTHORITY_ENTITY = "battery_authority_entity"
+OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY = "battery_authority_confirm_entity"
+OPT_BATTERY_AUTHORITY_CONFIRM_STATE = "battery_authority_confirm_state"
+# Confirm from measurement, never from the command that was sent.
+OPT_BATTERY_POWER_MEASUREMENT_ENTITY = "battery_power_measurement_entity"
+
+BATTERY_POWER_UNITS = ("W", "kW")
 OPT_GRID_IMPORT_LIMIT_W = "grid_import_limit_w"
 OPT_GRID_EXPORT_LIMIT_W = "grid_export_limit_w"
 OPT_TERMINAL_SOC_MIN = "terminal_soc_min"
@@ -263,6 +297,10 @@ ISSUE_DEGRADED_DEVICE = "degraded_device"
 # started reporting wants nobody to do anything at all. Sharing one
 # notification told the second group to check a sensor that was working.
 ISSUE_WARMING_DEVICE = "warming_device"
+# Raised only when someone has switched battery control on. A complete
+# mapping is not authorisation, but an incomplete one that has been
+# authorised is the half-configured executor this warning exists to catch.
+ISSUE_BATTERY_CONTROL = "battery_control"
 
 # Storage keys for push bookkeeping.
 STORAGE_VERSION = 1

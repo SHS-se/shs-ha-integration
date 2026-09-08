@@ -235,6 +235,10 @@
     "warming_device": {
       "title": "A device is still building up the history needed to plan it",
       "description": "The meter behind each device below is reporting normally, but the planner has not been able to watch it for long enough yet to learn how it behaves across the day:\n\n{devices}\n\nNothing is wrong and there is nothing to fix. This is the normal state for a newly added meter, and for one whose history was lost — a counter that reset, or a recorder purge. Each device's energy is counted as ordinary base load in the meantime, so nothing is double counted and the rest of the plan is unaffected.\n\nEach line says how much history the meter has and roughly how much longer it needs. The device starts being scheduled on its own as soon as it gets there, with nothing to change in the SHS Energy configuration panel and no action in Home Assistant."
+    },
+    "battery_control": {
+      "title": "Battery control is switched on but not fully configured",
+      "description": "Battery control has been switched on for this home, but the battery control section is not complete:\n\n{gaps}\n\nThe planner still schedules the battery and the rest of the plan is unaffected. Nothing will command the battery until these are filled in, so the inverter's own controller keeps deciding — which is the safe state, not a fault.\n\nFinish the battery control section in the SHS Energy configuration panel, under Storage. A complete section is still not a commissioned one: response, sign and confirmation behaviour have to be measured on this installation before the planner is allowed to rely on them."
     }
   }
 }

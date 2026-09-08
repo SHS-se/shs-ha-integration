@@ -176,6 +176,41 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
             help_text="For coupled equipment such as a circulation pump.",
         ),
         POWER_FIELD,
+        _field(
+            "permit_entity_id",
+            "Heating permission",
+            "entity",
+            domains=("switch", "input_boolean"),
+            help_text="Optional. A machine that decides its own duty can be permitted or withheld instead of being given a temperature.",
+        ),
+        _field(
+            "mode_entity_id",
+            "Demand or operating mode",
+            "entity",
+            domains=("select", "input_select", "climate", "water_heater"),
+            help_text="Optional. For equipment whose demand is chosen from named modes rather than a number.",
+        ),
+        _field(
+            "offset_entity_id",
+            "Bounded offset",
+            "entity",
+            domains=("number", "input_number"),
+            help_text="Optional. Nudges the machine's own curve instead of overriding it. Both bounds are required with it.",
+        ),
+        _field(
+            "offset_minimum",
+            "Minimum offset",
+            "number",
+            step=0.1,
+            help_text="The most this may lower the machine's own target.",
+        ),
+        _field(
+            "offset_maximum",
+            "Maximum offset",
+            "number",
+            step=0.1,
+            help_text="The most this may raise it. Requests are clamped here, never beyond.",
+        ),
     ),
     "permit_inhibit": (
         _field(
@@ -342,6 +377,90 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 _field(c.OPT_BATTERY_EXPORT_ENABLED, "Allow planned battery export", "toggle"),
                 _field(c.OPT_BATTERY_EXPORT_RESERVE_SOC, "Export reserve SOC", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
                 _field(c.OPT_BATTERY_EXPORT_MIN_PRICE, "Minimum export price", "number", unit="SEK/kWh", minimum=0, step=0.01),
+            ],
+        },
+        {
+            "id": "battery_control",
+            "tab": "storage",
+            "title": "Battery control",
+            "description": (
+                "How to command the battery, as opposed to what it is. Filling "
+                "this in does not start control: the switch below does, and "
+                "only after the response, sign and confirmation behaviour "
+                "above have actually been measured on this installation."
+            ),
+            "toggle": _field(
+                c.OPT_BATTERY_CONTROL_ENABLED,
+                "Let the planner command this battery",
+                "toggle",
+                help_text=(
+                    "Switched off, so the battery is planned but never "
+                    "written to, and its own controller keeps deciding."
+                ),
+            ),
+            "fields": [
+                _field(
+                    c.OPT_BATTERY_MODE_ENTITY,
+                    "Control mode",
+                    "entity",
+                    domains=("select", "input_select"),
+                    help_text="The entity that selects charging, discharging or holding.",
+                ),
+                _field(
+                    c.OPT_BATTERY_MODE_CHARGE,
+                    "Mode value meaning charge",
+                    "text",
+                    help_text="Copy the option exactly as the mode entity spells it.",
+                ),
+                _field(c.OPT_BATTERY_MODE_DISCHARGE, "Mode value meaning discharge", "text"),
+                _field(c.OPT_BATTERY_MODE_IDLE, "Mode value meaning hold", "text"),
+                _field(
+                    c.OPT_BATTERY_POWER_ENTITY,
+                    "Power target",
+                    "entity",
+                    domains=("number", "input_number"),
+                    help_text="The number written to request charge or discharge power.",
+                ),
+                _field(
+                    c.OPT_BATTERY_POWER_UNIT,
+                    "Power target unit",
+                    "select",
+                    choices=tuple((value, value) for value in c.BATTERY_POWER_UNITS),
+                    help_text="What the target above is written in. Inverters commonly take kW where the planner works in W.",
+                ),
+                _field(
+                    c.OPT_BATTERY_DISCHARGE_IS_NEGATIVE,
+                    "Discharge is written as a negative number",
+                    "toggle",
+                    help_text="Settle this by measurement, not assumption; an inverted sign charges when the plan says discharge.",
+                ),
+                _field(
+                    c.OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
+                    "Measured battery power",
+                    "entity",
+                    domains=("sensor",),
+                    help_text="Used to confirm what the battery actually did. A command is not evidence that it happened.",
+                ),
+                _field(
+                    c.OPT_BATTERY_AUTHORITY_ENTITY,
+                    "Remote control switch",
+                    "entity",
+                    domains=("switch", "input_boolean"),
+                    help_text="Optional. The entity that claims remote control from the inverter's own controller.",
+                ),
+                _field(
+                    c.OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY,
+                    "Remote control confirmation",
+                    "entity",
+                    domains=("sensor", "binary_sensor"),
+                    help_text="Required with the switch above: reads back whether remote control was actually granted.",
+                ),
+                _field(
+                    c.OPT_BATTERY_AUTHORITY_CONFIRM_STATE,
+                    "State confirming remote control",
+                    "text",
+                    help_text="The value that entity reports while the planner holds authority.",
+                ),
             ],
         },
         {

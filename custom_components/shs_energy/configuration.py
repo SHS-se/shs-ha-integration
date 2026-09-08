@@ -28,9 +28,12 @@ from .const import (
     OPT_BATTERY_CHARGE_EFFICIENCY,
     OPT_BATTERY_CHARGE_MAX_W,
     OPT_BATTERY_DISCHARGE_EFFICIENCY,
+    OPT_BATTERY_CONTROL_ENABLED,
+    OPT_BATTERY_DISCHARGE_IS_NEGATIVE,
     OPT_BATTERY_EXPORT_ENABLED,
     OPT_BATTERY_EXPORT_MIN_PRICE,
     OPT_BATTERY_EXPORT_RESERVE_SOC,
+    OPT_BATTERY_POWER_UNIT,
     OPT_BATTERY_DISCHARGE_MAX_W,
     OPT_BATTERY_MAX_SOC,
     OPT_BATTERY_ENABLED,
@@ -100,6 +103,12 @@ def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
         OPT_BATTERY_EXPORT_ENABLED: False,
         OPT_BATTERY_EXPORT_RESERVE_SOC: 0.8,
         OPT_BATTERY_EXPORT_MIN_PRICE: 2.5,
+        # Commanding the battery stays off until the response, sign and
+        # confirmation behaviour have been measured on the installation. A
+        # discovered entity is an offer to configure, never an authorisation.
+        OPT_BATTERY_CONTROL_ENABLED: False,
+        OPT_BATTERY_POWER_UNIT: "W",
+        OPT_BATTERY_DISCHARGE_IS_NEGATIVE: True,
         OPT_TERMINAL_SOC_MIN: 0.2,
         OPT_TERMINAL_ENERGY_VALUE: 1.0,
         # The vehicle's electrical model. Defaults describe the common Swedish

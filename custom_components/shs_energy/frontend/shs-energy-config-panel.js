@@ -23,7 +23,11 @@ const ATTENTION_BY_CARD = {
     "degraded_device",
     "warming_device",
   ],
-  "Electrical planner": ["optimisation_configuration", "optimisation_plan_refused"],
+  "Electrical planner": [
+    "optimisation_configuration",
+    "optimisation_plan_refused",
+    "battery_control",
+  ],
 };
 
 class ShsEnergyConfigPanel extends HTMLElement {

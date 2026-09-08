@@ -40,6 +40,7 @@ from .const import (
     ISSUE_DEGRADED_DEVICE,
     ISSUE_UNPLANNED_SERVICE,
     ISSUE_WARMING_DEVICE,
+    ISSUE_BATTERY_CONTROL,
     ISSUE_OPTIMISATION_CONFIGURATION,
     ISSUE_OPTIMISATION_PLAN_REFUSED,
     ISSUE_SUBSCRIPTION_INACTIVE,
@@ -100,6 +101,7 @@ from .configuration import (
 )
 from .device_controls import (
     apply_requested_configuration,
+    battery_control_errors,
     is_room_thermal_control,
     mapping_report,
     planning_path,
@@ -611,6 +613,30 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             items=items,
             fix={"kind": "none"},
             placeholders={"devices": "\n".join(f"- {line}" for line in items)},
+        )
+
+    def _sync_battery_control_issue(self, options: dict[str, Any]) -> None:
+        """Name what still stops an authorised battery from being commanded.
+
+        Only reachable once someone has switched control on, so it never nags
+        a home that is content to let the inverter decide. Planning continues
+        either way: an unwritable battery is still modelled as a store.
+        """
+        errors = battery_control_errors(options)
+        if not errors:
+            self._clear_attention(ISSUE_BATTERY_CONTROL)
+            return
+        self._set_attention(
+            ISSUE_BATTERY_CONTROL,
+            severity="warning",
+            title="Battery control is switched on but not fully configured",
+            detail=(
+                "The planner still schedules the battery, but nothing will "
+                "command it until the battery control section is complete."
+            ),
+            items=list(errors),
+            fix={"kind": "panel", "tab": "storage"},
+            placeholders={"gaps": "\n".join(f"- {value}" for value in errors)},
         )
 
     def _sync_unplanned_service_issue(self) -> None:
@@ -2369,6 +2395,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             stored.get("optimisation_device_configuration", {}),
         )
         self._sync_unplanned_service_issue()
+        self._sync_battery_control_issue(options)
         base_source_categories = (
             "total_consumption", "grid_import", "grid_export",
             "solar_production", "battery_charge", "battery_discharge",
