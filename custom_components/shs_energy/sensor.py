@@ -59,7 +59,7 @@ async def async_setup_entry(
             ShsPlanRequestSensor(coordinator, "pool"),
             ShsPlanRequestSensor(coordinator, "ev"),
             ShsEvPlanCurrentSensor(coordinator),
-            *[ShsControllerSensor(coordinator, device) for device in ("battery", "ev", "pool")],
+            *[ShsControllerSensor(coordinator, device) for device in ("battery", "ev", "pool", "devices")],
         ]
     )
     added_component_keys: set[str] = set()
@@ -767,6 +767,9 @@ class ShsControllerSensor(ShsBaseSensor):
 
     @property
     def native_value(self):
+        if self.device == "devices":
+            states = {value["state"] for key, value in self.coordinator.controller.status.items() if key.startswith("device:")}
+            return next((state for state in ("fault", "overridden", "unsupported", "commanded", "idle") if state in states), "disabled")
         return self.coordinator.controller.status[self.device]["state"]
 
     @property
@@ -776,4 +779,6 @@ class ShsControllerSensor(ShsBaseSensor):
 
     @property
     def extra_state_attributes(self):
+        if self.device == "devices":
+            return {"devices": {key.removeprefix("device:"): value for key, value in self.coordinator.controller.status.items() if key.startswith("device:")}}
         return {key: value for key, value in self.coordinator.controller.status[self.device].items() if key != "state"}

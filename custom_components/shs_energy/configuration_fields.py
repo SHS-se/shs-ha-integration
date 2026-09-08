@@ -212,6 +212,23 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
 }
 
 
+EXECUTION_FIELDS = (
+    _field("control_enabled", "Control according to the plan", "toggle",
+           help_text="Enable only after assigning control ownership here and disabling competing automations. Unsupported plans never operate the device."),
+    _field("control_override_entity", "Manual override", "entity", domains=("input_boolean", "binary_sensor")),
+)
+for kind in ("setpoint", "switch_schedule", "permit_inhibit"):
+    CONTROL_FIELDS[kind] += EXECUTION_FIELDS
+CONTROL_FIELDS["setpoint"] += (
+    _field("minimum_temperature_c", "Lowest allowed target", "number", unit="°C", minimum=5, maximum=35),
+    _field("maximum_temperature_c", "Highest allowed target", "number", unit="°C", minimum=5, maximum=35),
+)
+CONTROL_FIELDS["switch_schedule"] += (
+    _field("minimum_on_seconds", "Minimum continuous on time", "number", unit="s", minimum=0, maximum=900),
+    _field("minimum_off_seconds", "Minimum continuous off time", "number", unit="s", minimum=0, maximum=900),
+)
+
+
 def _control_fields(device: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     """Return the control contract, adding room inputs to on/off heaters."""
     control_type = str(device.get("control_type") or "")

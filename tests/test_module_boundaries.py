@@ -25,6 +25,7 @@ PURE_MODULES = (
     "api_contract",
     "const",
     "device_controls",
+    "device_commands",
     "migration",
     "configuration_schema",
     "configuration_fields",

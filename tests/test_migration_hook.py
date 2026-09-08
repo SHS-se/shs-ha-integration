@@ -60,7 +60,7 @@ class EntryMigrationHookTests(unittest.IsolatedAsyncioTestCase):
         adapter = Mock(side_effect=update)
         hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=adapter))
         await ns["async_migrate_entry"](hass, entry)
-        self.assertEqual(entry.version, 3)
+        self.assertEqual(entry.version, CONFIG_ENTRY_VERSION)
         self.assertEqual(entry.options["rooms"]["office"]["temperature_entity_id"], "sensor.temp")
         self.assertNotIn("temperature_entity_id", entry.options["device_control_mappings"]["sensor.heater"])
         await ns["async_migrate_entry"](hass, entry)

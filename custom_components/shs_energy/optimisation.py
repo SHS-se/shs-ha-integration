@@ -1022,6 +1022,12 @@ def require_fresh_source(
         raise OptimisationInputError(f"{label} is stale")
 
 
+if __package__:
+    from .device_commands import validate_commands
+else:
+    from device_commands import validate_commands
+
+
 def validate_plan_contract(
     plan: Any, now: datetime, *, require_recent_issue: bool = True
 ) -> None:
@@ -1235,6 +1241,11 @@ def validate_plan_contract(
         for slot in slots:
             if not isinstance(slot, dict):
                 raise OptimisationInputError(f"{key} scenario has an invalid slot")
+            if plan["schema_version"] == 7:
+                try:
+                    validate_commands(slot.get("device_commands"), device_models)
+                except ValueError as err:
+                    raise OptimisationInputError(str(err)) from err
             start = _timestamp(slot.get("start"))
             if start is None or (
                 previous is not None

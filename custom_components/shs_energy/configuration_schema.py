@@ -6,10 +6,12 @@ from math import isfinite
 import re
 from typing import Any
 if __package__:
+    from .device_commands import execution_setup_errors
     from . import const as c
     from .configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS
     from .device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_band_errors
 else:
+    from device_commands import execution_setup_errors
     import const as c
     from configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS
     from device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_band_errors
@@ -263,6 +265,13 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
         stored.pop(key, None)
         return result
     validate_mapping_keys(submitted)
+    # Stopping control must work even when an existing target has disappeared.
+    # This exception permits only the stop flag; all setup edits still validate.
+    if submitted.get("control_enabled") is False and key in stored:
+        current = resolve_configuration(existing)["device_control_mappings"][key]
+        if {k: v for k, v in submitted.items() if k != "control_enabled"} == {k: v for k, v in current.items() if k != "control_enabled"}:
+            stored[key]["control_enabled"] = False
+            return result
     kind = device["control_type"]
     if submitted.get("control_type") != kind:
         raise ValueError(f"{device['name']}: configuration belongs to a different control type")
@@ -273,6 +282,10 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
         value = normalise_field_value(read_entity, field, submitted.get(field["key"]), context=device["name"])
         if value is not None:
             mapping[field["key"]] = value
+    if mapping.get("control_enabled"):
+        errors = execution_setup_errors(mapping)
+        if errors:
+            raise ValueError(f"{device['name']}: " + "; ".join(errors))
     report = mapping_report(kind, mapping, set(entity_names), entity_names, area_names, entity_area_ids,
                             room_control=is_room_thermal_control(kind, device.get("category")))
     if report["mapping_status"] != "ready":

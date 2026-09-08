@@ -1,6 +1,6 @@
 # Smart Home Solutions Energy — Home Assistant integration
 
-Upgrading to `0.8.0-beta.24`: read the [configuration consolidation release notes](docs/releases/0.8.0-beta.24.md). This version consolidates shared room observations and raises the config-entry version to 3; earlier builds cannot load the upgraded entry.
+Upgrading to `0.8.0-beta.25`: read the [device execution release notes](docs/releases/0.8.0-beta.25.md). Deploy the schema-7 website contract first. This release raises the config-entry version to 4; earlier builds cannot load the upgraded entry.
 
 Pushes privacy-bounded energy data from Home Assistant to your
 [Smart Home Solutions](https://prod-smart-home-solutions.pages.dev) portal. It

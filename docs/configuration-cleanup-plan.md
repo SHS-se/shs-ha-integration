@@ -312,12 +312,19 @@ Validation: 311 dependency-free Python tests and three frontend tests, including
 
 ### Phase 4 — Complete per-device execution support
 
+- First establish the schema-7 executable `device_commands` channel in the website contract, optimiser, and HA validator. Schema-6 per-device watts are forecasts, not switch or temperature instructions. Coordinate the release: deploy the website with schema 6/7 support first, then upgrade the integration to request 7; do not infer commands from older slots.
 - Reuse the existing controller's command ownership, locking, acknowledgement, journaling, and restoration mechanisms through capability-specific adapters.
 - Add supported room setpoint, switch-schedule, and permit/inhibit execution paths, plus variable-power support where a valid plan contract exists. Establish the website/plan API requirements before implementing a new adapter.
 - Resolve shared actuators, minimum-run/inhibit constraints, local thermostat ownership, and existing automations before enabling a target.
 - Keep unsupported methods visibly unsupported; do not create cosmetic enable switches that do nothing. New adapters remain disabled until explicitly enabled. The current-limit method is the live example: the website can request it, the integration has no adapter, and the device reports itself unconfigured indefinitely with nothing shown. Name the method, say it is not supported yet, and say where it was chosen.
 
-**Complete when:** each enabled target demonstrably follows a valid binding slot, respects its hardware constraints and external ownership, and restores correctly on disable, expiry, override, error, restart, mapping edit, or removal from the plan on the website. A failed acknowledgement is visible and is not reported as delivered power.
+**Complete when:** the schema-7 contract, optimiser output, HA reader, and coordinated release checks agree; each enabled target demonstrably follows a valid binding slot, respects its hardware constraints and external ownership, and restores correctly on disable, expiry, override, error, restart, mapping edit, or removal from the plan on the website. A failed acknowledgement is visible and is not reported as delivered power.
+
+**Implemented locally in `0.8.0-beta.25`, with matching website changes:** the optimiser emits explicit per-device commands. Room relays use a bounded discrete search before electrical/thermal simulation; room setpoints use the planned temperature trajectory and comfort bounds; hot-water permission is explicit. The existing EV executor retains its amp envelope and charge-switch sequencing. Unsupported methods and missing executable plans carry reasons and cannot be newly enabled.
+
+All generic paths use the same controller lock, journal, service acknowledgement, failure reporting, and handover flow as system controllers. Current planning ownership is checked from the website inventory, independently of cached plan membership. Shared targets are refused; external changes suspend control durably; minimum relay run times can defer restoration while retaining its journal. New paths default off and require reviewed limits. Config-entry version 4 prevents older executors from loading these journal records.
+
+Supported limits and coordinated rollout are recorded in [the beta.25 release notes](releases/0.8.0-beta.25.md). Local verification includes the real server-generated schema-7 plan fixture in the HA validator, controller lifecycle tests, optimiser/negotiation tests, and portal reader tests. Phase 3's four-page redesign has not been implemented in this checkout; the existing device cards and diagnostics expose these controls and states. Website deployment, HA upgrade, and physical device confirmation remain Phase 5.
 
 ### Phase 5 — Controlled rollout and final cleanup
 

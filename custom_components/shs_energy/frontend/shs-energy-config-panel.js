@@ -700,6 +700,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
       <div class="device-body">
         <div class="device-meta"><span>${this._escape(this._human(device.category))}</span><span>${this._escape(this._human(device.load_type))}</span><span>Website: controllable</span></div>
         ${device.stale_mapping_control_type ? `<div class="inline-warning">The website changed this device from ${this._escape(this._human(device.stale_mapping_control_type))} to ${this._escape(this._human(device.control_type))}. The old mapping is ignored.</div>` : ""}
+        ${device.execution_reason ? `<div class="inline-warning">Control unavailable: ${this._escape(device.execution_reason)}. The method is selected on the website.</div>` : ""}
+        ${device.execution_status ? `<p>Control: ${this._escape(device.execution_status.state)} — ${this._escape(device.execution_status.reason || "")}</p>` : ""}
         ${device.mapping_error ? `<div class="inline-warning"><strong>Currently saved configuration:</strong> ${this._escape(device.mapping_error)}</div>` : ""}
         ${deviceError ? `<div class="inline-error"><strong>Could not save this configuration</strong><span>${this._escape(deviceError)}</span></div>` : ""}
         <div class="device-actions">
@@ -767,6 +769,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
       ["Electrical history accepted until", readiness.actuals_accepted_until],
       ["Accepted thermal slots", values.last_thermal_slots_accepted],
       ["Thermal history accepted through", values.thermal_slots_accepted_until],
+      ...Object.entries(values.controllers || {}).map(([key, status]) => {
+        const device = this._data.devices.find(item => `device:${item.key}` === key);
+        return [`${device?.name || key} control`, `${status.state}${status.reason ? `: ${status.reason}` : ""}`];
+      }),
     ];
     return `<section class="card diagnostics">
       <h2>Configuration diagnostics</h2>

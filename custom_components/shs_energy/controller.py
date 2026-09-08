@@ -1,4 +1,4 @@
-"""One local command owner for the binding battery, EV and pool schedule.
+"""One local command owner for binding system and per-device schedules.
 
 The journal is saved *before* taking ownership. Restarts and mapping edits restore
 using the old mapping, never through newly selected entities. Service completion
@@ -14,8 +14,10 @@ from math import isfinite
 from typing import Any
 
 try:
+    from .device_commands import actuator_targets, execution_setup_errors, validate_commands
     from .device_controls import battery_control_errors, pool_band_errors, planning_path
 except ImportError:  # Pure executor tests, without importing Home Assistant.
+    from device_commands import actuator_targets, execution_setup_errors, validate_commands
     from device_controls import battery_control_errors, pool_band_errors, planning_path
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,6 +70,8 @@ class ScheduledController:
         self.failed = {}
         self.initialized = False
         self.command_times = {}
+        self.overrides = {}
+        self.requested_types = {}
 
     def add_listener(self, listener):
         self.listeners.add(listener)
@@ -113,6 +117,13 @@ class ScheduledController:
         return value
 
     def eligible(self, device, options):
+        if device.startswith("device:"):
+            key = device.removeprefix("device:")
+            mapping = options.get("device_control_mappings", {}).get(key, {})
+            if self.requested_types.get(key) != mapping.get("control_type") or not mapping.get("control_enabled", False) or device in self.overrides:
+                return False
+            override = mapping.get("control_override_entity")
+            return not override or self.state(override).state == "off"
         if not options.get(f"{device}_control_enabled", False):
             return False
         if not options.get(f"{device}_enabled", True):
@@ -149,6 +160,15 @@ class ScheduledController:
                 raise ValueError(f"{entity}: target is not a supported step")
             service, data = "set_value", {"value": value}
             equal = abs(finite(state.state) - value) < 1e-6
+        elif domain == "climate":
+            value = finite(value)
+            low, high = finite(state.attributes["min_temp"]), finite(state.attributes["max_temp"])
+            if state.state != "heat" or self.hass.config.units.temperature_unit != "°C":
+                raise ValueError(f"{entity}: setpoint execution requires an active Celsius heating thermostat")
+            if not low <= value <= high:
+                raise ValueError(f"{entity}: target outside hardware bounds")
+            service, data = "set_temperature", {"temperature": value}
+            equal = abs(finite(state.attributes["temperature"]) - value) < 1e-6
         elif domain in ("select", "input_select"):
             if value not in state.attributes.get("options", []):
                 raise ValueError(f"{entity}: unsupported mode {value}")
@@ -161,6 +181,11 @@ class ScheduledController:
             equal = state.state == value
         else:
             raise ValueError(f"{entity}: unsupported actuator domain")
+        record = self.records.get(getattr(self, "device", ""))
+        if record is not None and not self.restoring:
+            record.setdefault("last_commands", {})[entity] = value
+            await self.save()
+        self.check_authority()
         if not equal:
             self.command_times[entity] = datetime.now(timezone.utc)
             await asyncio.wait_for(
@@ -173,7 +198,8 @@ class ScheduledController:
     def matches(self, entity, value):
         state = self.state(entity)
         if isinstance(value, (int, float)):
-            return abs(finite(state.state) - value) < 1e-6
+            measured = state.attributes["temperature"] if entity.startswith("climate.") else state.state
+            return abs(finite(measured) - value) < 1e-6
         return state.state == value
 
     async def confirm(self, predicate, error):
@@ -193,12 +219,13 @@ class ScheduledController:
                    for actuator in actuators if actuator in self.command_times)
 
     async def save(self):
-        await self.store.async_save({"records": self.records})
+        await self.store.async_save({"records": self.records, "overrides": self.overrides})
 
     async def capture(self, device, options, entities):
         if device in self.records:
             return self.records[device]
-        originals = {entity: self.state(entity).state for entity in entities if entity}
+        originals = {entity: (self.state(entity).attributes["temperature"] if entity.startswith("climate.")
+                              else self.state(entity).state) for entity in entities if entity}
         record = {"options": deepcopy(options), "originals": originals}
         self.records[device] = record
         await self.save()
@@ -223,7 +250,29 @@ class ScheduledController:
         await self.save()
         self.restoring = True
         try:
-            if device == "battery":
+            if device.startswith("device:"):
+                changed = set(record.get("externally_changed", []))
+                for entity, expected in record.get("last_commands", {}).items():
+                    if not self.matches(entity, expected) and not self.matches(entity, original[entity]):
+                        changed.add(entity)
+                if changed:
+                    record["externally_changed"] = sorted(changed)
+                    self.overrides[device] = "Actuator changed externally; switch local control off and on to resume"
+                    await self.save()
+                mapping = options["device_control_mappings"][device.removeprefix("device:")]
+                if mapping["control_type"] == "switch_schedule":
+                    now = datetime.now(timezone.utc)
+                    for entity, value in original.items():
+                        at = record.get("transition_times", {}).get(entity)
+                        last = record.get("last_commands", {}).get(entity)
+                        if at and last != value and entity not in record.get("externally_changed", []):
+                            minimum = mapping["minimum_on_seconds" if last == "on" else "minimum_off_seconds"]
+                            if (now - datetime.fromisoformat(at)).total_seconds() < minimum:
+                                raise ValueError("restoration waiting for minimum relay run time")
+                for entity, value in original.items():
+                    if entity not in record.get("externally_changed", []):
+                        await self.command(entity, value)
+            elif device == "battery":
                 await self.command(options["battery_power_entity"], 0)
                 await self.command(options["battery_mode_entity"], options["battery_mode_baseline"])
                 await self.confirm(
@@ -376,6 +425,104 @@ class ScheduledController:
         return {"state": "confirmed", "requested_power_w": charge-discharge,
                 "measured_power_w": self.watts(measured_entity)}
 
+    async def execute_device(self, device, options, slot):
+        key = device.removeprefix("device:")
+        mapping = options["device_control_mappings"][key]
+        models = self.coordinator.optimisation_plan["device_models"]
+        validate_commands(slot["device_commands"], models)
+        command = slot["device_commands"][key]
+        if command["type"] == "unavailable":
+            await self.restore(device)
+            return {"state": "unsupported", "reason": command["reason"]}
+        if command["type"] != mapping["control_type"]:
+            raise ValueError("the website command does not match the reviewed local method")
+        errors = execution_setup_errors(mapping)
+        if errors:
+            raise ValueError("; ".join(errors))
+        targets = actuator_targets(mapping)
+        # Every enabled owner reserves its targets, even before it captures a
+        # baseline. This refuses both sides of an overlap before either writes.
+        for other_key, other in options.get("device_control_mappings", {}).items():
+            if other_key != key and other.get("control_enabled") and set(targets) & set(actuator_targets(other)):
+                raise ValueError("another enabled device shares this actuator")
+        system_targets = {options.get(field) for field in (
+            "battery_power_entity", "battery_mode_entity", "battery_authority_entity",
+            "ev_charge_switch_entity", "pool_start_temperature_entity", "pool_stop_temperature_entity", "pool_permission_entity")}
+        if set(targets) & system_targets:
+            raise ValueError("actuator is assigned to a system controller")
+        record = self.records.get(device)
+        if record:
+            changed = [entity for entity, value in record.get("last_commands", {}).items() if not self.matches(entity, value)]
+            if changed:
+                record["externally_changed"] = changed
+                self.overrides[device] = "Actuator changed externally; switch local control off and on to resume"
+                await self.save()
+                await self.restore(device)
+                return {"state": "overridden", "reason": self.overrides[device]}
+        values = {}
+        kind = command["type"]
+        if kind == "setpoint":
+            low = max(mapping["minimum_temperature_c"], command["minimum_c"])
+            high = min(mapping["maximum_temperature_c"], command["maximum_c"])
+            if not low <= command["target_c"] <= high:
+                raise ValueError("planned temperature exceeds reviewed bounds")
+            for entity in targets:
+                state = self.state(entity)
+                if entity.startswith("climate."):
+                    if state.state != "heat" or self.hass.config.units.temperature_unit != "°C":
+                        raise ValueError("setpoint execution requires an active Celsius heating thermostat")
+                    step = finite(state.attributes.get("target_temp_step", 0.1))
+                    origin = finite(state.attributes["min_temp"])
+                else:
+                    if state.attributes.get("unit_of_measurement") != "°C":
+                        raise ValueError("temperature control must use Celsius")
+                    step, origin = finite(state.attributes.get("step", 1)), finite(state.attributes["min"])
+                if step <= 0:
+                    raise ValueError("invalid temperature step")
+                value = origin + round((command["target_c"] - origin) / step) * step
+                if not low <= value <= high:
+                    raise ValueError("no hardware temperature step fits the plan envelope")
+                values[entity] = value
+        else:
+            on = command["permitted"] if kind == "permit_inhibit" else command["on_seconds"] == 900
+            values = {entity: "on" if on else "off" for entity in targets}
+            now = datetime.now(timezone.utc)
+            if record and kind == "permit_inhibit" and not on:
+                since = record.get("inhibited_since")
+                if since and (now - datetime.fromisoformat(since)).total_seconds() >= mapping["max_inhibit_slots"] * 900:
+                    raise ValueError("maximum continuous inhibit reached")
+            if kind == "switch_schedule" and not record:
+                for entity, value in values.items():
+                    state = self.state(entity)
+                    if state.state != value:
+                        at = getattr(state, "last_changed", None)
+                        if at is None:
+                            raise ValueError("cannot establish the actuator's current run time")
+                        minimum = mapping["minimum_on_seconds" if state.state == "on" else "minimum_off_seconds"]
+                        if (now - at).total_seconds() < minimum:
+                            raise ValueError("initial switch transition violates the reviewed minimum run time")
+            if record and kind == "switch_schedule":
+                for entity, value in values.items():
+                    previous = record.get("last_commands", {}).get(entity)
+                    changed_at = record.get("transition_times", {}).get(entity)
+                    if changed_at and previous != value:
+                        minimum = mapping["minimum_on_seconds" if previous == "on" else "minimum_off_seconds"]
+                        if (now - datetime.fromisoformat(changed_at)).total_seconds() < minimum:
+                            raise ValueError("planned switch transition violates the reviewed minimum run time")
+        record = await self.capture(device, options, targets)
+        now = datetime.now(timezone.utc).isoformat()
+        if kind == "permit_inhibit":
+            if command["permitted"]:
+                record.pop("inhibited_since", None)
+            else:
+                record.setdefault("inhibited_since", now)
+        for entity, value in values.items():
+            if record.get("last_commands", {}).get(entity) != value:
+                record.setdefault("transition_times", {})[entity] = now
+            await self.command(entity, value)
+        await self.save()
+        return {"state": "commanded", "reason": "actuator targets acknowledged; delivered heat or power is not inferred"}
+
     async def async_start(self):
         try:
             saved = await self.store.async_load() or {}
@@ -384,6 +531,7 @@ class ScheduledController:
                 self.report(device, "fault", reason=f"cannot load restoration journal: {err}")
             return
         self.records = saved.get("records", {})
+        self.overrides = saved.get("overrides", {})
         options = self.options()
         if options.get("battery_control_enabled") and not battery_control_errors(options):
             # A fresh enable also starts from a known baseline, not from a
@@ -407,7 +555,22 @@ class ScheduledController:
             slot = self.coordinator.current_plan_slot
             plan = self.coordinator.optimisation_plan or {}
             self.active_options, self.active_slot = deepcopy(options), deepcopy(slot)
-            for device in DEVICES:
+            mappings = options.get("device_control_mappings", {})
+            generic = {"device:" + key for key, mapping in mappings.items() if mapping.get("control_enabled")}
+            generic.update(key for key in self.records if key.startswith("device:"))
+            if generic:
+                self.requested_types = {}
+                try:
+                    requested = await self.coordinator.async_cached_device_configuration()
+                    self.requested_types = {item["key"]: item.get("control_type") for item in requested}
+                except Exception as err:
+                    # Without current planning ownership, hand back all targets.
+                    _LOGGER.error("Cannot read device planning ownership: %s", err)
+            for device in tuple(self.overrides):
+                if not mappings.get(device.removeprefix("device:"), {}).get("control_enabled"):
+                    del self.overrides[device]
+                    await self.save()
+            for device in (*DEVICES, *sorted(generic)):
                 self.device = device
                 key = repr((options, plan.get("plan_id"), slot))
                 try:
@@ -416,15 +579,18 @@ class ScheduledController:
                         await self.restore(device)
                     if not self.eligible(device, options):
                         self.failed.pop(device, None)
-                        self.report(device, "disabled", reason="control disabled or manually overridden")
+                        self.report(device, "overridden" if device in self.overrides else "disabled", reason=self.overrides.get(device, "control disabled, excluded from the plan, or manually overridden"))
                         continue
-                    if not slot or not plan.get("capabilities", {}).get(device):
+                    supported = (plan.get("schema_version") == 7 and device.removeprefix("device:") in slot.get("device_commands", {})
+                                 if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device))
+                    if not slot or not supported:
                         await self.restore(device)
                         self.report(device, "idle", reason="no binding plan for this device")
                         continue
                     if self.failed.get(device) == key:
                         continue
-                    result = await getattr(self, f"execute_{device}")(options, slot)
+                    result = (await self.execute_device(device, options, slot) if device.startswith("device:")
+                              else await getattr(self, f"execute_{device}")(options, slot))
                     self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"))
                 except Exception as err:
                     self.failed[device] = key

@@ -129,6 +129,7 @@ async def _configuration_payload(
     area_names = area_name_by_id(hass)
     entity_area_ids = entity_area_id_by_id(hass)
     devices: list[dict[str, Any]] = []
+    active_commands = (coordinator.current_plan_slot or {}).get("device_commands", {})
     for device in requested:
         control_type = str(device.get("control_type") or "")
         saved = mappings.get(device["key"])
@@ -152,6 +153,11 @@ async def _configuration_payload(
             control_type,
             str(device.get("category") or ""),
         )
+        command = active_commands.get(device["key"])
+        execution_reason = (command.get("reason") if command and command.get("type") == "unavailable"
+                            else None if command else "Awaiting an executable schema-7 plan from the website")
+        if control_type not in {"setpoint", "switch_schedule", "permit_inhibit", "variable_power"}:
+            execution_reason = f"The {control_type} method selected on the website is not supported by this integration"
         devices.append(
             {
                 "key": device["key"],
@@ -171,7 +177,10 @@ async def _configuration_payload(
                 "suggested_mapping": _mapping_suggestions(
                     hass, device, control_type
                 ),
-                "fields": list(_control_fields(device)),
+                "execution_reason": execution_reason,
+                "execution_status": coordinator.controller.status.get("device:" + device["key"]),
+                "fields": [field for field in _control_fields(device)
+                           if field["key"] != "control_enabled" or not execution_reason or saved_mapping.get("control_enabled")],
                 **report,
             }
         )
@@ -298,6 +307,7 @@ async def _configuration_payload(
             ],
         },
         "diagnostics": {
+            "controllers": dict(coordinator.controller.status),
             "migration": options.get("_migration_report"),
             "subscription_active": bool((coordinator.data or {}).get("subscription_active")),
             "tariff_status": coordinator.tariff_status,
@@ -348,6 +358,10 @@ async def async_apply_device_mapping(
     if device is None:
         raise ValueError("the website no longer requests this controllable device")
 
+    if incoming and incoming.get("control_enabled"):
+        command = (entry.runtime_data.current_plan_slot or {}).get("device_commands", {}).get(device_key)
+        if not command or command.get("type") == "unavailable":
+            raise ValueError("Device control requires an executable schema-7 plan from the website")
     options = save_device(
         dict(entry.options), device_key, incoming, device,
         lambda entity: _read_entity(hass, entity),

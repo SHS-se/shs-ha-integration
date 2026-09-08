@@ -34,8 +34,8 @@ REQUEST_ID = "2f1c0c74-9d31-4f0e-9a45-9c6f2f5f0a11"
 def status(**overrides):
     return {
         "api_version": API_VERSION,
-        "supported_snapshot_schema_versions": [5, 6],
-        "supported_plan_schema_versions": [5, 6],
+        "supported_snapshot_schema_versions": [5, 6, 7],
+        "supported_plan_schema_versions": [5, 6, 7],
         "minimum_snapshot_schema_version": 5,
         "minimum_plan_schema_version": 5,
         "latest_plan_request_id": None,
