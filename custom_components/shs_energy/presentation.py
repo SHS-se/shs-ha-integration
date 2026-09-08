@@ -75,6 +75,16 @@ def system_fields(system):
     return result
 
 
+def device_readiness(devices):
+    """Count included equipment, using the same rows the customer sees."""
+    included = [device for device in devices if device.get("included")]
+    return {
+        "requested_devices": len(included),
+        "ready_devices": sum(device.get("mapping_status") == "ready" for device in included),
+        "device_mapping_gaps": [device["name"] for device in included if device.get("mapping_status") != "ready"],
+    }
+
+
 def equipment_present(options, system, devices, configured_keys=()):
     if not options.get(system + "_enabled"):
         return False

@@ -27,7 +27,7 @@ from .configuration import (
     suggest_device_control_mapping,
 )
 from .configuration_fields import _control_fields, _configuration_sections, LABELS
-from .presentation import complete_device_views, timeline, system_fields, device_name
+from .presentation import complete_device_views, timeline, system_fields, device_name, device_readiness
 from .configuration_schema import (
     prepare_options, save_device,
 )
@@ -189,9 +189,6 @@ async def _configuration_payload(
             }
         )
 
-    ready_devices = [
-        device for device in devices if device["planning_role"] == "controllable" and device["mapping_status"] == "ready"
-    ]
     thermal_devices = [
         device
         for device in devices
@@ -267,7 +264,7 @@ async def _configuration_payload(
             "status": "error" if portal_error else "synchronised",
             "refreshed_at": choices.get("refreshed_at"),
             "error": portal_error,
-            "requested_devices": len(devices),
+            "requested_devices": device_readiness(devices)["requested_devices"],
         },
         # Everything currently asking for a decision, with a resolved link
         # where the fix lives on the website. Same source as the Home Assistant
@@ -291,13 +288,7 @@ async def _configuration_payload(
         ],
         "readiness": {
             "planning_mode": options.get(shs_const.OPT_PLANNING_MODE),
-            "requested_devices": len(devices),
-            "ready_devices": len(ready_devices),
-            "device_mapping_gaps": [
-                device["name"]
-                for device in devices
-                if device.get("included") and device["mapping_status"] != "ready"
-            ],
+            **device_readiness(devices),
             "missing_inputs": list(coordinator.optimisation_missing_inputs),
             "last_plan_error": coordinator.last_optimisation_error,
             "last_plan_attempt": coordinator.last_optimisation_attempt or exchange_status.get("last_optimisation_attempt"),

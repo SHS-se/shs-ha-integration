@@ -4,12 +4,23 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import unittest
-from presentation import operational_status, timeline, complete_device_views, device_name, system_fields
+from presentation import operational_status, timeline, complete_device_views, device_name, system_fields, device_readiness
 from configuration_schema import configuration_defaults, shared_devices
 from planning import unplanned_services
 
 
 class PresentationTests(unittest.TestCase):
+    def test_readiness_counts_only_included_equipment_including_home_battery(self):
+        devices = [
+            {"name": "Fridge", "included": False, "mapping_status": "not_configured"},
+            {"name": "Battery", "included": True, "mapping_status": "ready"},
+            {"name": "Heater", "included": True, "mapping_status": "invalid"},
+            {"name": "Excluded heater", "included": False, "mapping_status": "ready"},
+        ]
+        self.assertEqual(device_readiness(devices), {
+            "requested_devices": 2, "ready_devices": 1, "device_mapping_gaps": ["Heater"],
+        })
+
     def setUp(self):
         self.plan = json.loads((Path(__file__).parent / 'fixtures/schema-7-device-plan.json').read_text())['plan']
         self.now = datetime.fromisoformat(self.plan['issued_at']) + timedelta(minutes=6)

@@ -1,6 +1,6 @@
 # Smart Home Solutions Energy — Home Assistant integration
 
-Upgrading to `0.8.0-beta.25`: read the [device execution release notes](docs/releases/0.8.0-beta.25.md). Deploy the schema-7 website contract first. This release raises the config-entry version to 4; earlier builds cannot load the upgraded entry.
+Upgrading to `0.8.0-beta.27`: read the [four-page configuration release notes](docs/releases/0.8.0-beta.26.md) and [rollout checks](docs/releases/0.8.0-beta.27.md). Deploy the website database/API changes first. Config-entry version 4 prevents earlier builds from loading the upgraded entry.
 
 Pushes privacy-bounded energy data from Home Assistant to your
 [Smart Home Solutions](https://prod-smart-home-solutions.pages.dev) portal. It
@@ -181,9 +181,8 @@ The supported automation/MCP surface is:
   capabilities requiring review without changing anything; and
 - `shs_energy.apply_configuration`: validates and stores only the explicit
   non-device options supplied by the caller. It never re-runs discovery while applying;
-  controllable-device mappings are saved independently from their cards. A
-  complete mapping is the inclusion decision; there are no separate
-  planning-enable or deferrability-confirmation options; and
+  device setup is saved independently from each editor. Website inclusion and
+  local permission to operate remain separate; and
 - `shs_energy.backfill_prices`: reprices `days` of history and pushes it. Every
   exchange already sends the all-in price for the quarters around it, so this is
   only needed to cover history recorded before the integration started sending
@@ -278,8 +277,9 @@ writes so restart recovery uses the old entities even after mappings change.
 The **Battery controller**, **EV controller** and **Pool controller** sensors
 show requests, reasons and faults. Battery `confirmed` means measured power
 matched; EV `commanded` and pool `scheduled` only mean actuator settings were
-accepted. The existing planned-request sensors remain available; boiler and
-room execution are outside this first version.
+accepted. The existing planned-request sensors remain available. The **Devices
+controller** sensor reports room and hot-water execution, including unsupported
+instructions, overrides and pending restoration.
 
 Before enabling a device, disable its previous automation/Node-RED command owner
 and review its local mappings. This release does not change live enable switches
