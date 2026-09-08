@@ -341,7 +341,7 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
         return None
 
     def _current_entity(self) -> str | None:
-        mappings = self.coordinator.entry.options.get(
+        mappings = resolved_options(self.hass, dict(self.coordinator.entry.options)).get(
             OPT_DEVICE_CONTROL_MAPPINGS, {}
         )
         entities: set[str] = set()
@@ -372,7 +372,7 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
         planner enforces when it builds the EV service: EV charging meters must
         share one variable-power entity and one range.
         """
-        mappings = self.coordinator.entry.options.get(
+        mappings = resolved_options(self.hass, dict(self.coordinator.entry.options)).get(
             OPT_DEVICE_CONTROL_MAPPINGS, {}
         )
         ranges: set[tuple[float, float]] = set()

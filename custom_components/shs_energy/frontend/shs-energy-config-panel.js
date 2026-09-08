@@ -176,7 +176,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const editable = new Set(this._data.sections.flatMap((section) =>
       [...(section.toggle ? [section.toggle] : []), ...section.fields].map((field) => field.key)));
     for (const key of Object.keys(configuration)) {
-      if (!editable.has(key)) delete configuration[key];
+      if (!editable.has(key) || JSON.stringify(configuration[key]) === JSON.stringify(this._savedDraft?.[key])) {
+        delete configuration[key];
+      }
     }
     try {
       await this._hass.callWS({
@@ -222,7 +224,23 @@ class ShsEnergyConfigPanel extends HTMLElement {
       const savedMapping = this._clone(
         result.panel?.configuration?.[MAPPINGS_KEY]?.[deviceKey] ?? mapping
       );
-      if (result.panel) this._data = result.panel;
+      if (result.panel) {
+        this._data = result.panel;
+        // Room sources are shared. Refresh saved views while retaining other drafts.
+        const current = result.panel.configuration?.[MAPPINGS_KEY] || {};
+        for (const [key, updated] of Object.entries(current)) {
+          if (key === deviceKey) continue;
+          const draft = this._draft[MAPPINGS_KEY]?.[key];
+          const previous = this._savedDraft[MAPPINGS_KEY]?.[key];
+          if (!this._deviceDirty(key)) {
+            this._draft[MAPPINGS_KEY][key] = this._clone(updated);
+          } else if (draft && draft.temperature_entity_id === previous?.temperature_entity_id) {
+            if (updated.temperature_entity_id === undefined) delete draft.temperature_entity_id;
+            else draft.temperature_entity_id = updated.temperature_entity_id;
+          }
+          this._savedDraft[MAPPINGS_KEY][key] = this._clone(updated);
+        }
+      }
       if (!this._draft[MAPPINGS_KEY]) this._draft[MAPPINGS_KEY] = {};
       if (!this._savedDraft[MAPPINGS_KEY]) this._savedDraft[MAPPINGS_KEY] = {};
       if (savedMapping) {

@@ -8,6 +8,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from controller import ScheduledController, pool_band
+from configuration_schema import resolve_configuration
 
 
 class State:
@@ -145,7 +146,8 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.slot['pool_w'] = 0
         await self.controller.async_start()
         self.options['pool_control_enabled'] = False
-        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options))
+        self.options['rooms'] = {'office': {'temperature_entity_id': 'sensor.new'}}
+        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: resolve_configuration(self.options))
         await other.async_start()
         self.assertEqual(float(self.states['number.start'].state), 29.5)
         self.assertEqual(float(self.states['number.stop'].state), 30)

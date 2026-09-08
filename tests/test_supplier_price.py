@@ -62,6 +62,9 @@ CONSTANTS = (
 ).read_text(encoding="utf-8")
 
 
+FIELDS = (Path(__file__).parents[1] / "custom_components/shs_energy/configuration_fields.py").read_text()
+SCHEMA = (Path(__file__).parents[1] / "custom_components/shs_energy/configuration_schema.py").read_text()
+
 class SensorWiringTests(unittest.TestCase):
     """Guard the parts a Home-Assistant-free test cannot exercise directly."""
 
@@ -102,9 +105,9 @@ class SensorWiringTests(unittest.TestCase):
         which must be correctable without a release, and a preference or a
         derived value, which must not come back.
         """
-        sections = CONFIG_PANEL[
-            CONFIG_PANEL.index('"id": "ev"') :
-            CONFIG_PANEL.index("def _entry_state")
+        sections = FIELDS[
+            FIELDS.index('"id": "ev"') :
+            len(FIELDS)
         ]
         for installation_fact in (
             "OPT_EV_PHASE_COUNT",
@@ -132,9 +135,9 @@ class SensorWiringTests(unittest.TestCase):
         self.assertNotIn("OPT_EV_DEFAULT_DEPARTURE", PLANNING)
 
     def test_mapped_loads_are_automatic_and_ev_departure_is_optional(self) -> None:
-        sections = CONFIG_PANEL[
-            CONFIG_PANEL.index('"id": "ev"') :
-            CONFIG_PANEL.index("def _entry_state")
+        sections = FIELDS[
+            FIELDS.index('"id": "ev"') :
+            len(FIELDS)
         ]
         for obsolete in (
             "OPT_EV_PLANNING_ENABLED",
@@ -153,8 +156,8 @@ class SensorWiringTests(unittest.TestCase):
         # The pool section is state, not a planning switch. It carries the
         # water-temperature sensor and volume the store model needs, and must
         # never regrow the retired per-service enable/confirm toggles.
-        pool_section = CONFIG_PANEL[
-            CONFIG_PANEL.index('"id": "pool"'):CONFIG_PANEL.index('"id": "ev"')
+        pool_section = FIELDS[
+            FIELDS.index('"id": "pool"'):FIELDS.index('"id": "ev"')
         ]
         self.assertIn("OPT_POOL_WATER_TEMPERATURE_ENTITY", pool_section)
         self.assertIn("OPT_POOL_VOLUME_M3", pool_section)
@@ -196,7 +199,6 @@ class SensorWiringTests(unittest.TestCase):
         ]
         self.assertIn("async_optimisation_push(force_plan=True)", refresh)
         self.assertIn('"panel": panel', CONFIG_PANEL)
-        self.assertIn("if (result.panel) this._data = result.panel", CONFIG_PANEL_FRONTEND)
         self.assertIn("options_update_requires_reload()", INIT)
         live_update = COORDINATOR[
             COORDINATOR.index("def options_update_requires_reload") :
@@ -209,9 +211,9 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn("?v={FRONTEND_ASSET_VERSION}", CONFIG_PANEL)
 
     def test_setpoint_room_is_derived_instead_of_edited(self) -> None:
-        fields = CONFIG_PANEL[
-            CONFIG_PANEL.index("CONTROL_FIELDS") :
-            CONFIG_PANEL.index("def _configuration_sections")
+        fields = FIELDS[
+            FIELDS.index("CONTROL_FIELDS") :
+            FIELDS.index("def _configuration_sections")
         ]
         self.assertNotIn('"area_id"', fields)
 
@@ -254,8 +256,8 @@ class SensorWiringTests(unittest.TestCase):
             "OPT_BATTERY_EXPORT_MIN_PRICE",
         ):
             with self.subTest(option=option):
-                self.assertIn(option, CONFIGURATION)
-                self.assertIn(option, CONFIG_PANEL)
+                self.assertIn(option, SCHEMA)
+                self.assertIn(option, FIELDS)
                 self.assertIn(option, COORDINATOR)
         self.assertIn('"battery_export_enabled"', COORDINATOR)
         self.assertIn('"battery_export_reserve_soc"', COORDINATOR)

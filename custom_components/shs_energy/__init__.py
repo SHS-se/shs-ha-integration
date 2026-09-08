@@ -171,7 +171,7 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
-    """Convert version-one options once before setting up the integration."""
+    """Convert older configuration records once before setting up the integration."""
     if entry.version > CONFIG_ENTRY_VERSION:
         return False
     if entry.version == CONFIG_ENTRY_VERSION:

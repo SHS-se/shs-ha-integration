@@ -21,28 +21,12 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONFIGURABLE_CATEGORIES,
-    DEFAULT_FORECAST_RESOLUTION_MINUTES,
-    DEFAULT_PLANNING_MODE,
     OPT_AUTOMATIC_SETUP,
     OPT_BATTERY_CAPACITY_KWH,
-    OPT_BATTERY_CHARGE_EFFICIENCY,
     OPT_BATTERY_CHARGE_MAX_W,
-    OPT_BATTERY_DISCHARGE_EFFICIENCY,
-    OPT_BATTERY_CONTROL_ENABLED,
-    OPT_BATTERY_DISCHARGE_IS_NEGATIVE,
-    OPT_BATTERY_EXPORT_ENABLED,
-    OPT_BATTERY_EXPORT_MIN_PRICE,
-    OPT_BATTERY_EXPORT_RESERVE_SOC,
-    OPT_BATTERY_POWER_UNIT,
     OPT_BATTERY_DISCHARGE_MAX_W,
-    OPT_BATTERY_MAX_SOC,
-    OPT_BATTERY_ENABLED,
-    OPT_BATTERY_MIN_SOC,
     OPT_BATTERY_SOC_ENTITY,
-    OPT_BATTERY_TARGET_IS_HARD,
-    OPT_BATTERY_TARGET_SOC,
     OPT_DISCOVERY_EVIDENCE,
-    OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_OUTDOOR_TEMPERATURE_ENTITY,
     OPT_WEATHER_FORECAST_ENTITY,
     OPT_EV_CONNECTED_ENTITY,
@@ -50,86 +34,23 @@ from .const import (
     OPT_EV_ENERGY_REMAINING_ENTITY,
     OPT_EV_SOC_ENTITY,
     OPT_EV_TARGET_SOC_ENTITY,
-    OPT_FORECAST_RESOLUTION_MINUTES,
     OPT_GRID_EXPORT_LIMIT_W,
     OPT_GRID_EXPORT_POWER_ENTITY,
     OPT_GRID_IMPORT_LIMIT_W,
-    OPT_PLANNING_MODE,
     OPT_PREFIX_ENTITIES,
     OPT_PV_FORECAST_ENTITIES,
-    OPT_PV_FORECAST_LATITUDE,
-    OPT_PV_FORECAST_LONGITUDE,
-    OPT_TERMINAL_ENERGY_VALUE,
-    OPT_EV_PHASE_COUNT,
-    OPT_EV_PHASE_VOLTAGE,
-    OPT_EV_CHARGE_EFFICIENCY,
-    OPT_EV_ENABLED,
-    OPT_POOL_ENABLED,
-    OPT_EV_KWH_PER_KM,
-    EV_PHASE_COUNT,
-    EV_PHASE_VOLTAGE,
-    EV_CHARGE_EFFICIENCY,
-    DEFAULT_EV_KWH_PER_KM,
-    OPT_TERMINAL_SOC_MIN,
 )
-from . import const as controller_const
+from .configuration_schema import configuration_defaults, resolve_configuration
 from .device_controls import is_room_thermal_control
 from .optimisation import suggested_device_planning, suggested_load_type
 
 
 def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
-    """Defaults with product meaning, shared by the UI and runtime."""
-    return {
-        OPT_PLANNING_MODE: DEFAULT_PLANNING_MODE,
-        OPT_AUTOMATIC_SETUP: True,
-        controller_const.OPT_EV_CONTROL_ENABLED: False,
-        controller_const.OPT_POOL_CONTROL_ENABLED: False,
-        controller_const.OPT_BATTERY_MODE_BASELINE: "Maximum Self Consumption",
-        controller_const.OPT_BATTERY_MEASUREMENT_CHARGE_POSITIVE: True,
-        OPT_DEVICE_CONTROL_MAPPINGS: {},
-        OPT_FORECAST_RESOLUTION_MINUTES: DEFAULT_FORECAST_RESOLUTION_MINUTES,
-        OPT_PV_FORECAST_LATITUDE: hass.config.latitude,
-        OPT_PV_FORECAST_LONGITUDE: hass.config.longitude,
-        # Every store is part of the home until someone says otherwise, so an
-        # installation that predates these keys is unchanged by them.
-        OPT_BATTERY_ENABLED: True,
-        OPT_POOL_ENABLED: True,
-        OPT_EV_ENABLED: True,
-        OPT_BATTERY_MIN_SOC: 0.05,
-        OPT_BATTERY_MAX_SOC: 1.0,
-        OPT_BATTERY_TARGET_SOC: 0.8,
-        # A target is a preference by default. Making 80% hard can force a
-        # flexible load onto night import while solar is reserved for storage.
-        OPT_BATTERY_TARGET_IS_HARD: False,
-        OPT_BATTERY_CHARGE_EFFICIENCY: 0.95,
-        OPT_BATTERY_DISCHARGE_EFFICIENCY: 0.95,
-        # Export from storage is an explicit customer preference. It is
-        # advisory until a separately reviewed battery executor exists.
-        OPT_BATTERY_EXPORT_ENABLED: False,
-        OPT_BATTERY_EXPORT_RESERVE_SOC: 0.8,
-        OPT_BATTERY_EXPORT_MIN_PRICE: 2.5,
-        # Commanding the battery stays off until the response, sign and
-        # confirmation behaviour have been measured on the installation. A
-        # discovered entity is an offer to configure, never an authorisation.
-        OPT_BATTERY_CONTROL_ENABLED: False,
-        OPT_BATTERY_POWER_UNIT: "W",
-        OPT_BATTERY_DISCHARGE_IS_NEGATIVE: True,
-        OPT_TERMINAL_SOC_MIN: 0.2,
-        OPT_TERMINAL_ENERGY_VALUE: 1.0,
-        # The vehicle's electrical model. Defaults describe the common Swedish
-        # three-phase installation and are wrong for a single-phase charger by
-        # a factor of three, which is why they are options rather than
-        # constants.
-        OPT_EV_PHASE_COUNT: EV_PHASE_COUNT,
-        OPT_EV_PHASE_VOLTAGE: EV_PHASE_VOLTAGE,
-        OPT_EV_CHARGE_EFFICIENCY: EV_CHARGE_EFFICIENCY,
-        OPT_EV_KWH_PER_KM: DEFAULT_EV_KWH_PER_KM,
-    }
+    return configuration_defaults(hass.config.latitude, hass.config.longitude)
 
 
 def resolved_options(hass: HomeAssistant, options: dict[str, Any]) -> dict[str, Any]:
-    """Apply real runtime defaults; selector placeholders are not persisted."""
-    return {**optimisation_defaults(hass), **dict(options)}
+    return resolve_configuration(options, hass.config.latitude, hass.config.longitude)
 
 
 def area_name_by_id(hass: HomeAssistant) -> dict[str, str]:

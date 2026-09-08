@@ -27,6 +27,7 @@ PURE_MODULES = (
     "device_controls",
     "migration",
     "configuration_schema",
+    "configuration_fields",
     "optimisation",
     "planning",
     "readings",

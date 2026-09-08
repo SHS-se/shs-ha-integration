@@ -290,6 +290,14 @@ Diagnostics includes an expandable upgrade report containing field names only, w
 
 **Complete when:** every current setting has one owner and editor, current values survive save/reload, invalid setup is explicit, and no runtime compatibility path exists.
 
+**Implemented locally in `0.8.0-beta.24`:** one pure field catalog now supplies both panel descriptions and accepted write keys. A pure save layer validates submitted values and cross-field constraints; the HA endpoints supply only entity facts and persistence. General saves submit changed public fields, keeping defaults and derived views out of storage. Internal scheduling/discovery settings are no longer public writes.
+
+Config-entry version 3 moves room temperature sources into `rooms[area_id]`; heaters retain their existing mapping key and `room_area_id` reference. A shared runtime accessor expands the room observation for telemetry, mapping readiness, planning, and sensors. Editing a source updates the room and refreshes other device views without discarding unrelated drafts. Device-specific controls and existing system fields retain their canonical owners; the extra unrequested EV mapping remains stored. No recorder, server history, or controller journal identifiers change.
+
+The migration is one-time and idempotent. Conflicting temperature sources for the same room fail explicitly before committing the upgrade; select one source in the existing configuration before retrying. Current canonical room values take precedence if already present. There is no runtime legacy lookup or archive.
+
+Validation: 311 dependency-free Python tests and three frontend tests, including shared-source save/reload, input immutability, invalid writes, inactive records, version-2 upgrade, and controller journal recovery through the canonical accessor. Compilation and diff checks pass. This phase is local only; no live HA upgrade or website changes.
+
 ### Phase 3 — Four-page interface and consistent status
 
 - Land the two server changes first: a record that a planning choice was made, and a home-level planning choice for the house battery. Without them the rows cannot be built consistently and the interface should not ship.
@@ -322,7 +330,7 @@ Diagnostics includes an expandable upgrade report containing field names only, w
 
 ## Main code locations
 
-- `custom_components/shs_energy/config_panel.py`: field schema, payload, validation, save endpoints.
+- `custom_components/shs_energy/config_panel.py`: HA payload and save adapters; `configuration_fields.py`: shared field catalog.
 - `custom_components/shs_energy/frontend/shs-energy-config-panel.js`: navigation, editors, repeated warnings/status.
 - `custom_components/shs_energy/configuration.py`: defaults, Energy Dashboard inventory and discovery.
 - `custom_components/shs_energy/device_controls.py`: current mapping readiness and control routing.
@@ -334,4 +342,4 @@ Diagnostics includes an expandable upgrade report containing field names only, w
 - `tests/test_module_boundaries.py`, `.github/workflows/beta.yml`: the constraint that decides where migration and save logic can live at all. A new pure migration module is added to `PURE_MODULES`.
 - `custom_components/shs_energy/frontend/shs-energy-config-panel.js`: `_human()` is the generated-label problem in one function; the written labels replace it.
 
-Phases 0 and 1 change integration code, tests, CI checks, and the release manifest locally. No website code, live HA configuration, actuator permissions, or device states were changed.
+Phases 0, 1 and 2 change integration code, tests, CI checks, and the release manifest locally. No website code, live HA configuration, actuator permissions, or device states were changed.

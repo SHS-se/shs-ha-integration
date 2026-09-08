@@ -63,9 +63,9 @@ CONTROL_TYPES = (
 )
 
 if __package__:
-    from .configuration_schema import ROOM_AREA_FIELD
+    from .const import ROOM_AREA_FIELD
 else:
-    from configuration_schema import ROOM_AREA_FIELD
+    from const import ROOM_AREA_FIELD
 
 _ENTITY_FIELDS_BY_CONTROL_TYPE: dict[str, tuple[str, ...]] = {
     "setpoint": (

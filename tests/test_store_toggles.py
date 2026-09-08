@@ -22,8 +22,8 @@ import unittest
 PACKAGE = Path(__file__).parents[1] / "custom_components" / "shs_energy"
 sys.path.insert(0, str(PACKAGE))
 
-CONFIG_PANEL = (PACKAGE / "config_panel.py").read_text(encoding="utf-8")
-CONFIGURATION = (PACKAGE / "configuration.py").read_text(encoding="utf-8")
+CONFIG_PANEL = (PACKAGE / "configuration_fields.py").read_text(encoding="utf-8")
+CONFIGURATION = (PACKAGE / "configuration_schema.py").read_text(encoding="utf-8")
 COORDINATOR = (PACKAGE / "coordinator.py").read_text(encoding="utf-8")
 FRONTEND = (
     PACKAGE / "frontend" / "shs-energy-config-panel.js"
@@ -88,7 +88,7 @@ class StoreToggleWiringTests(unittest.TestCase):
 
     def test_the_save_path_persists_a_switch_that_is_not_a_field(self) -> None:
         """Same gap on the Python side: validation walks a section's fields."""
-        self.assertIn("for field in section_fields(section):", CONFIG_PANEL)
+        self.assertIn("for field in section_fields(section)", CONFIGURATION)
         self.assertIn("def section_fields(", CONFIG_PANEL)
 
     def test_the_snapshot_drops_what_the_panel_hid(self) -> None:

@@ -151,7 +151,24 @@ def migrate_options(
         if required is None:
             report["needs_attention"].add(f"{path}.control_type")
         else:
-            report["needs_attention"].update(f"{path}.{field}" for field in required if field not in draft)
+            report["needs_attention"].update(f"{path}.{field}" for field in required if field not in draft
+                and not (field == "temperature_entity_id" and result.get("rooms", {}).get(draft.get(ROOM_AREA_FIELD), {}).get(field)))
+    rooms = deepcopy(result.get("rooms", {}))
+    sources = {}
+    for key, mapping in mappings.items():
+        room = mapping.get(ROOM_AREA_FIELD)
+        if room and "temperature_entity_id" in mapping:
+            sources.setdefault(room, set()).add(mapping.pop("temperature_entity_id"))
+            report["removed"].add(f"device_control_mappings.{key}.temperature_entity_id")
+    for room, candidates in sources.items():
+        if room in rooms:
+            continue
+        if len(candidates) != 1:
+            raise ValueError(f"Room {room} has conflicting temperature sources; select one before upgrading")
+        rooms[room] = {"temperature_entity_id": candidates.pop()}
+        report["imported"].add(f"rooms.{room}.temperature_entity_id")
+    if rooms:
+        result["rooms"] = rooms
     if "device_control_mappings" in options:
         result["device_control_mappings"] = mappings
     evidence = result.get("discovery_evidence")

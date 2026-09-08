@@ -49,6 +49,23 @@ class EntryMigrationHookTests(unittest.IsolatedAsyncioTestCase):
         adapter.assert_called_once()
         ns["migrate_options"].assert_called_once()
 
+    async def test_version_two_moves_room_source_once(self):
+        ns = entry_hook()
+        entry = SimpleNamespace(version=2, options={"device_control_mappings": {
+            "sensor.heater": {"control_type": "setpoint", "room_area_id": "office",
+                "actuator_entity_ids": ["climate.heater"], "temperature_entity_id": "sensor.temp"}}})
+        def update(target, **fields):
+            for key, value in fields.items():
+                setattr(target, key, value)
+        adapter = Mock(side_effect=update)
+        hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=adapter))
+        await ns["async_migrate_entry"](hass, entry)
+        self.assertEqual(entry.version, 3)
+        self.assertEqual(entry.options["rooms"]["office"]["temperature_entity_id"], "sensor.temp")
+        self.assertNotIn("temperature_entity_id", entry.options["device_control_mappings"]["sensor.heater"])
+        await ns["async_migrate_entry"](hass, entry)
+        adapter.assert_called_once()
+
     async def test_future_versions_are_not_downgraded(self):
         ns = entry_hook()
         self.assertFalse(await ns["async_migrate_entry"](None, SimpleNamespace(version=CONFIG_ENTRY_VERSION + 1)))

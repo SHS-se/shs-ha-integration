@@ -702,7 +702,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         active_mappings = (
             mappings
             if mappings is not None
-            else self.entry.options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
+            else resolved_options(self.hass, dict(self.entry.options)).get(OPT_DEVICE_CONTROL_MAPPINGS, {})
         )
         if not isinstance(active_mappings, dict):
             active_mappings = {}
@@ -758,6 +758,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         live_keys = {
             OPT_CONFIGURATION_REVIEWED_AT,
             OPT_DEVICE_CONTROL_MAPPINGS,
+            "rooms",
         }
         return bool(changed - live_keys)
 
@@ -886,13 +887,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             stored.get("optimisation_device_configuration", {}),
             mappings
             if mappings is not None
-            else self.entry.options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
+            else resolved_options(self.hass, dict(self.entry.options)).get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
             {state.entity_id for state in self.hass.states.async_all()},
             entity_display_name_by_id(self.hass),
             area_name_by_id(self.hass),
             entity_area_id_by_id(self.hass),
         )
-        active_mappings = mappings if mappings is not None else self.entry.options.get(
+        active_mappings = mappings if mappings is not None else resolved_options(self.hass, dict(self.entry.options)).get(
             OPT_DEVICE_CONTROL_MAPPINGS, {}
         )
         if not isinstance(active_mappings, dict):
@@ -969,7 +970,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 apply_requested_configuration(
                     devices,
                     configuration,
-                    self.entry.options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
+                    resolved_options(self.hass, dict(self.entry.options)).get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
                     {state.entity_id for state in self.hass.states.async_all()},
                     entity_display_name_by_id(self.hass),
                     area_name_by_id(self.hass),

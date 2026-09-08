@@ -66,8 +66,8 @@ class OptionMigrationTests(unittest.TestCase):
         self.assertEqual(set(migrated["device_control_mappings"]), {"heater", "car", "unrequested"})
         heater = migrated["device_control_mappings"]["heater"]
         self.assertEqual(heater, {"control_type": "setpoint", "room_area_id": "office",
-            "temperature_entity_id": "sensor.temperature", "actuator_entity_ids": ["climate.heater"],
-            "power": "sensor.power"})
+            "actuator_entity_ids": ["climate.heater"], "power": "sensor.power"})
+        self.assertEqual(migrated["rooms"], {"office": {"temperature_entity_id": "sensor.temperature"}})
         self.assertEqual(migrated["device_control_mappings"]["car"], {
             "control_type": "variable_power", "control_entity_id": "number.current",
             "minimum_value": 5, "maximum_value": 16,
