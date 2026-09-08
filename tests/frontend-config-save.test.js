@@ -112,6 +112,36 @@ test('all attention is shown on Status and an informational item has no warning 
   assert.equal(panel._attentionForTab('status').length, 1); assert.equal(panel._attentionForTab('devices').length, 0);
 });
 
+test('Status renders counted warnings and affected fields above collapsed diagnostics even when ready', () => {
+  const panel = makePanel();
+  panel._tab = 'status';
+  Object.assign(panel._data, {
+    operation: { state: 'ready', label: 'Ready', reason: 'A validated plan is available' },
+    diagnostics: {}, readiness: {}, portal: {},
+    attention: [
+      { title: 'Battery setup incomplete', severity: 'warning', detail: 'Choose the missing control entity.',
+        items: ['Battery authority entity <missing>'], fix: { kind: 'panel', tab: 'devices' } },
+      { title: 'Tariff answers needed', severity: 'warning', detail: 'Complete the tariff settings.',
+        items: ['Electricity supplier'], fix: { kind: 'website', url: 'https://example.com/settings' } },
+      { title: 'Learning', severity: 'info', detail: 'Collecting history', fix: { kind: 'none' } },
+    ],
+  });
+  const html = panel._renderBody();
+  assert.match(html, /A validated plan is available/);
+  assert.equal((html.match(/class="attention-item warning"/g) || []).length, panel._attentionForTab('status').length);
+  assert.match(html, /Choose the missing control entity\./);
+  assert.match(html, /Battery authority entity &lt;missing&gt;/);
+  assert.match(html, /data-tab="devices"/);
+  assert.match(html, /Electricity supplier/);
+  assert.match(html, /href="https:\/\/example.com\/settings"/);
+  assert.match(html, /Collecting history/);
+  assert.ok(html.indexOf('Battery setup incomplete') < html.indexOf('<details'));
+  assert.doesNotMatch(html, /View status/);
+
+  panel._data.attention = [];
+  assert.doesNotMatch(panel._renderBody(), /class="attention"|attention-item/);
+});
+
 test('system fields are saved with their device and excluded from general saves', async () => {
   const panel = makePanel(); panel._entryId = 'entry';
   panel._data.devices = [{ key: '$battery', name: 'Battery', system_fields: [{ key: 'battery_capacity_kwh' }] }];
