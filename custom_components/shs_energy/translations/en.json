@@ -239,6 +239,10 @@
     "battery_control": {
       "title": "Battery control is switched on but not fully configured",
       "description": "Battery control has been switched on for this home, but the battery control section is not complete:\n\n{gaps}\n\nThe planner still schedules the battery and the rest of the plan is unaffected. Nothing will command the battery until these are filled in, so the inverter's own controller keeps deciding — which is the safe state, not a fault.\n\nFinish the battery control section in the SHS Energy configuration panel, under Storage. A complete section is still not a commissioned one: response, sign and confirmation behaviour have to be measured on this installation before the planner is allowed to rely on them."
+    },
+    "pool_control": {
+      "title": "The pool temperature band is incomplete",
+      "description": "Part of the pool's temperature band has been configured, but not all of it:\n\n{gaps}\n\nThe pool is still planned and its switches still run. The band simply will not be written until it is complete, because writing one end alone inverts or collapses the window the heat pump runs to.\n\nFinish the pool store section in the SHS Energy configuration panel, under Storage. The band belongs to the pool itself, so it is set once however many meters heat it."
     }
   }
 }

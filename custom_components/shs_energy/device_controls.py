@@ -26,6 +26,11 @@ try:  # pragma: no cover - package in HA, flat module in the pure test suite
         OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
         OPT_BATTERY_POWER_UNIT,
         OPT_BATTERY_SOC_ENTITY,
+        OPT_POOL_ENABLED,
+        OPT_POOL_START_TEMPERATURE_ENTITY,
+        OPT_POOL_STOP_TEMPERATURE_ENTITY,
+        OPT_POOL_TEMPERATURE_MAXIMUM,
+        OPT_POOL_TEMPERATURE_MINIMUM,
     )
 except ImportError:  # pragma: no cover - flat import path
     from const import (  # type: ignore[no-redef]
@@ -43,6 +48,11 @@ except ImportError:  # pragma: no cover - flat import path
         OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
         OPT_BATTERY_POWER_UNIT,
         OPT_BATTERY_SOC_ENTITY,
+        OPT_POOL_ENABLED,
+        OPT_POOL_START_TEMPERATURE_ENTITY,
+        OPT_POOL_STOP_TEMPERATURE_ENTITY,
+        OPT_POOL_TEMPERATURE_MAXIMUM,
+        OPT_POOL_TEMPERATURE_MINIMUM,
     )
 
 CONTROL_TYPES = (
@@ -77,13 +87,6 @@ _ENTITY_FIELDS_BY_CONTROL_TYPE: dict[str, tuple[str, ...]] = {
         "temperature_entity_id",
         "actuator_entity_ids",
         "companion_actuator_entity_ids",
-        # Equipment that runs to a hysteresis window rather than an on/off
-        # command: the planner moves the band, and the machine still chooses
-        # when to run inside it. A schedule alone can only switch such a device
-        # in and out, which is not how it is actually driven. Optional, so an
-        # on/off mapping stays complete without them.
-        "start_temperature_entity_id",
-        "stop_temperature_entity_id",
     ),
     "variable_power": ("control_entity_id",),
 }
@@ -344,31 +347,39 @@ def _offset_errors(mapping: dict[str, Any]) -> list[str]:
     return errors
 
 
-def _window_errors(mapping: dict[str, Any]) -> list[str]:
-    """A hysteresis window is a pair, and it has to stay inside a reviewed band.
+def _band_errors(
+    values: dict[str, Any],
+    *,
+    start_key: str,
+    stop_key: str,
+    minimum_key: str,
+    maximum_key: str,
+    subject: str,
+) -> list[str]:
+    """A hysteresis band is a pair, and it stays inside a reviewed range.
 
     Both ends are required together because writing one alone inverts or
-    collapses the window the equipment runs to. The band is required with them
-    for the same reason the offset's is: without it the planner could ask for
-    any temperature the register accepts.
+    collapses the window the equipment runs to. The range is required with them
+    for the same reason the thermal offset's is: without it the planner could
+    ask for any temperature the register accepts.
     """
-    start = _text(mapping, "start_temperature_entity_id")
-    stop = _text(mapping, "stop_temperature_entity_id")
+    start = _text(values, start_key)
+    stop = _text(values, stop_key)
     if not start and not stop:
         return []
     errors: list[str] = []
     if not start:
-        errors.append("a start temperature entity is required with a stop temperature")
+        errors.append(f"a {subject} start temperature entity is required with a stop temperature")
     if not stop:
-        errors.append("a stop temperature entity is required with a start temperature")
-    minimum = _number(mapping, "temperature_minimum")
-    maximum = _number(mapping, "temperature_maximum")
+        errors.append(f"a {subject} stop temperature entity is required with a start temperature")
+    minimum = _number(values, minimum_key)
+    maximum = _number(values, maximum_key)
     if minimum is None:
-        errors.append("minimum temperature is required with a temperature window")
+        errors.append(f"a minimum {subject} temperature is required with a temperature band")
     if maximum is None:
-        errors.append("maximum temperature is required with a temperature window")
+        errors.append(f"a maximum {subject} temperature is required with a temperature band")
     if minimum is not None and maximum is not None and minimum >= maximum:
-        errors.append("minimum temperature must be below maximum temperature")
+        errors.append(f"the minimum {subject} temperature must be below the maximum")
     return errors
 
 
@@ -401,7 +412,6 @@ def mapping_errors(
     elif control_type == "switch_schedule":
         if not _entities(mapping, "actuator_entity_ids"):
             errors.append("at least one switch actuator is required")
-        errors.extend(_window_errors(mapping))
     elif control_type == "variable_power":
         if not _text(mapping, "control_entity_id"):
             errors.append("number control entity is required")
@@ -549,8 +559,6 @@ def mapping_report(
                 "maximum_value",
                 "offset_minimum",
                 "offset_maximum",
-                "temperature_minimum",
-                "temperature_maximum",
             )
             if _present(mapping.get(key))
         ),
@@ -694,6 +702,26 @@ def battery_control_errors(options: dict[str, Any]) -> list[str]:
     if confirms and not _text(options, OPT_BATTERY_AUTHORITY_CONFIRM_STATE):
         errors.append("the state confirming remote control is required")
     return errors
+
+
+def pool_band_errors(options: dict[str, Any]) -> list[str]:
+    """Return what stops the pool's temperature band from being written.
+
+    Plant-level, for the same reason the battery's mapping is: the pool service
+    is built from every device routed to it, and a heater and its circulation
+    pump share one body of water and one pair of registers. One band per store
+    keeps a single writer on those registers.
+    """
+    if not options.get(OPT_POOL_ENABLED):
+        return []
+    return _band_errors(
+        options,
+        start_key=OPT_POOL_START_TEMPERATURE_ENTITY,
+        stop_key=OPT_POOL_STOP_TEMPERATURE_ENTITY,
+        minimum_key=OPT_POOL_TEMPERATURE_MINIMUM,
+        maximum_key=OPT_POOL_TEMPERATURE_MAXIMUM,
+        subject="pool",
+    )
 
 
 def requested_controllable_devices(

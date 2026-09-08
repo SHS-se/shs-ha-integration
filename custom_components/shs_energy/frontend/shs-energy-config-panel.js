@@ -27,6 +27,7 @@ const ATTENTION_BY_CARD = {
     "optimisation_configuration",
     "optimisation_plan_refused",
     "battery_control",
+    "pool_control",
   ],
 };
 

@@ -41,6 +41,7 @@ from .const import (
     ISSUE_UNPLANNED_SERVICE,
     ISSUE_WARMING_DEVICE,
     ISSUE_BATTERY_CONTROL,
+    ISSUE_POOL_CONTROL,
     ISSUE_OPTIMISATION_CONFIGURATION,
     ISSUE_OPTIMISATION_PLAN_REFUSED,
     ISSUE_SUBSCRIPTION_INACTIVE,
@@ -102,6 +103,7 @@ from .configuration import (
 from .device_controls import (
     apply_requested_configuration,
     battery_control_errors,
+    pool_band_errors,
     is_room_thermal_control,
     mapping_report,
     planning_path,
@@ -633,6 +635,30 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             detail=(
                 "The planner still schedules the battery, but nothing will "
                 "command it until the battery control section is complete."
+            ),
+            items=list(errors),
+            fix={"kind": "panel", "tab": "storage"},
+            placeholders={"gaps": "\n".join(f"- {value}" for value in errors)},
+        )
+
+    def _sync_pool_control_issue(self, options: dict[str, Any]) -> None:
+        """Name a pool temperature band that is only half filled in.
+
+        One band per pool, however many meters heat it, so this is checked on
+        the store rather than on each device mapping.
+        """
+        errors = pool_band_errors(options)
+        if not errors:
+            self._clear_attention(ISSUE_POOL_CONTROL)
+            return
+        self._set_attention(
+            ISSUE_POOL_CONTROL,
+            severity="warning",
+            title="The pool temperature band is incomplete",
+            detail=(
+                "The pool is still planned and its switches still run, but "
+                "its temperature band will not be written until the pool "
+                "store section is complete."
             ),
             items=list(errors),
             fix={"kind": "panel", "tab": "storage"},
@@ -2396,6 +2422,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._sync_unplanned_service_issue()
         self._sync_battery_control_issue(options)
+        self._sync_pool_control_issue(options)
         base_source_categories = (
             "total_consumption", "grid_import", "grid_export",
             "solar_production", "battery_charge", "battery_discharge",

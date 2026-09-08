@@ -199,6 +199,19 @@ OPT_TERMINAL_ENERGY_VALUE = "terminal_energy_value_sek_per_kwh"
 OPT_POOL_WATER_TEMPERATURE_ENTITY = "pool_water_temperature_entity"
 OPT_POOL_VOLUME_M3 = "pool_volume_m3"
 
+# The band the pool water is held in, for equipment that runs to a hysteresis
+# window rather than an on/off command.
+#
+# A property of the store, not of each meter that heats it. The pool service is
+# built from every device routed to it — a heater and its circulation pump —
+# and they share one body of water and one pair of registers. Hanging the band
+# off each device mapping asked for it once per meter, invited two mappings to
+# disagree about the same window, and left two writers for one actuator.
+OPT_POOL_START_TEMPERATURE_ENTITY = "pool_start_temperature_entity"
+OPT_POOL_STOP_TEMPERATURE_ENTITY = "pool_stop_temperature_entity"
+OPT_POOL_TEMPERATURE_MINIMUM = "pool_temperature_minimum"
+OPT_POOL_TEMPERATURE_MAXIMUM = "pool_temperature_maximum"
+
 OPT_EV_CONNECTED_ENTITY = "ev_connected_entity"
 OPT_EV_SOC_ENTITY = "ev_soc_entity"
 OPT_EV_TARGET_SOC_ENTITY = "ev_target_soc_entity"
@@ -301,6 +314,7 @@ ISSUE_WARMING_DEVICE = "warming_device"
 # mapping is not authorisation, but an incomplete one that has been
 # authorised is the half-configured executor this warning exists to catch.
 ISSUE_BATTERY_CONTROL = "battery_control"
+ISSUE_POOL_CONTROL = "pool_control"
 
 # Storage keys for push bookkeeping.
 STORAGE_VERSION = 1

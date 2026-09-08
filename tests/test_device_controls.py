@@ -13,6 +13,7 @@ from device_controls import (  # noqa: E402
     MIGRATED_ROOM_AREA_FIELD,
     apply_requested_configuration,
     battery_control_errors,
+    pool_band_errors,
     is_room_thermal_control,
     planning_path,
     mapping_report,
@@ -575,91 +576,84 @@ class BatteryControlTests(unittest.TestCase):
         self.assertIn("this home is not marked as having a house battery", errors)
 
 
-def _pool(**extra):
-    """A complete switch_schedule mapping, before any temperature band."""
+def _pool_options(**extra):
     return {
-        "control_type": "switch_schedule",
-        "actuator_entity_ids": ["switch.pool_heater"],
+        "pool_enabled": True,
+        "pool_start_temperature_entity": "number.pool_start",
+        "pool_stop_temperature_entity": "number.pool_stop",
+        "pool_temperature_minimum": 24.0,
+        "pool_temperature_maximum": 32.0,
         **extra,
     }
 
 
-class TemperatureWindowTests(unittest.TestCase):
-    """The Nibe pool runs to a start/stop band, not an on/off command."""
+class PoolBandTests(unittest.TestCase):
+    """One band per pool, not one per meter that heats it."""
 
-    known = {
-        "switch.pool_heater",
-        "number.pool_start",
-        "number.pool_stop",
-    }
+    def test_a_complete_band_has_no_errors(self) -> None:
+        self.assertEqual(pool_band_errors(_pool_options()), [])
 
-    def report(self, mapping):
-        return mapping_report("switch_schedule", mapping, self.known)
+    def test_no_band_at_all_is_fine(self) -> None:
+        """The band is optional; an on/off pool schedule still works."""
+        self.assertEqual(pool_band_errors({"pool_enabled": True}), [])
 
-    def test_an_on_off_schedule_needs_no_band(self) -> None:
-        """The band is optional, so no saved pool mapping may break."""
-        self.assertEqual(self.report(_pool())["mapping_status"], "ready")
+    def test_a_home_without_a_pool_is_never_asked(self) -> None:
+        self.assertEqual(
+            pool_band_errors(_pool_options(pool_enabled=False)), []
+        )
 
-    def test_a_bounded_band_is_ready(self) -> None:
-        report = self.report(_pool(
-            start_temperature_entity_id="number.pool_start",
-            stop_temperature_entity_id="number.pool_stop",
-            temperature_minimum=24.0,
-            temperature_maximum=32.0,
-        ))
-        self.assertEqual(report["mapping_status"], "ready")
-        fields = report["mapping_summary"]["configured_fields"]
-        self.assertIn("start_temperature_entity_id", fields)
-        self.assertIn("temperature_maximum", fields)
-
-    def test_one_end_of_the_band_alone_is_refused(self) -> None:
+    def test_one_end_alone_is_refused(self) -> None:
         """Writing a start without a stop inverts the window."""
-        report = self.report(_pool(
-            start_temperature_entity_id="number.pool_start",
-            temperature_minimum=24.0,
-            temperature_maximum=32.0,
-        ))
-        self.assertEqual(report["mapping_status"], "invalid")
-        self.assertIn("stop temperature entity is required", report["mapping_error"])
+        errors = pool_band_errors(_pool_options(pool_stop_temperature_entity=""))
+        self.assertTrue(any("stop temperature entity is required" in e for e in errors))
 
     def test_a_band_without_bounds_is_refused(self) -> None:
-        report = self.report(_pool(
-            start_temperature_entity_id="number.pool_start",
-            stop_temperature_entity_id="number.pool_stop",
+        errors = pool_band_errors(_pool_options(
+            pool_temperature_minimum=None, pool_temperature_maximum=None,
         ))
-        self.assertEqual(report["mapping_status"], "invalid")
-        self.assertIn("minimum temperature is required", report["mapping_error"])
-        self.assertIn("maximum temperature is required", report["mapping_error"])
+        self.assertTrue(any("minimum pool temperature is required" in e for e in errors))
+        self.assertTrue(any("maximum pool temperature is required" in e for e in errors))
 
     def test_inverted_bounds_are_refused(self) -> None:
-        report = self.report(_pool(
-            start_temperature_entity_id="number.pool_start",
-            stop_temperature_entity_id="number.pool_stop",
-            temperature_minimum=32.0,
-            temperature_maximum=24.0,
+        errors = pool_band_errors(_pool_options(
+            pool_temperature_minimum=32.0, pool_temperature_maximum=24.0,
         ))
-        self.assertEqual(report["mapping_status"], "invalid")
-        self.assertIn("below maximum temperature", report["mapping_error"])
+        self.assertTrue(any("must be below the maximum" in e for e in errors))
 
     def test_a_zero_bound_is_a_bound_not_a_blank(self) -> None:
-        report = self.report(_pool(
-            start_temperature_entity_id="number.pool_start",
-            stop_temperature_entity_id="number.pool_stop",
-            temperature_minimum=0,
-            temperature_maximum=32.0,
-        ))
-        self.assertEqual(report["mapping_status"], "ready")
+        self.assertEqual(
+            pool_band_errors(_pool_options(pool_temperature_minimum=0)), []
+        )
 
-    def test_a_deleted_band_entity_is_caught(self) -> None:
-        report = self.report(_pool(
-            start_temperature_entity_id="number.pool_start",
-            stop_temperature_entity_id="number.gone",
-            temperature_minimum=24.0,
-            temperature_maximum=32.0,
-        ))
-        self.assertEqual(report["mapping_status"], "invalid")
-        self.assertIn("no longer exist", report["mapping_error"])
+
+class PoolDeviceMappingTests(unittest.TestCase):
+    def test_a_pool_device_is_not_asked_for_a_band(self) -> None:
+        """The regression: every switch_schedule meter offered its own band.
+
+        The pool service is built from a heater and its circulation pump. Each
+        one carrying a band asked for it twice, let two mappings disagree about
+        the same window, and left two writers on one pair of registers.
+        """
+        for mapping in (
+            {
+                "control_type": "switch_schedule",
+                "actuator_entity_ids": ["switch.pool_heater"],
+            },
+            {
+                "control_type": "switch_schedule",
+                "actuator_entity_ids": ["switch.pool_pump"],
+            },
+        ):
+            report = mapping_report(
+                "switch_schedule", mapping,
+                {"switch.pool_heater", "switch.pool_pump"},
+            )
+            with self.subTest(mapping=mapping["actuator_entity_ids"]):
+                self.assertEqual(report["mapping_status"], "ready")
+                self.assertNotIn(
+                    "start_temperature_entity_id",
+                    report["mapping_summary"]["configured_fields"],
+                )
 
     def test_the_pool_still_routes_to_the_pool_model(self) -> None:
-        """A band is extra reach, not a different planning contract."""
         self.assertEqual(planning_path("switch_schedule", "pool_heating"), "pool")
