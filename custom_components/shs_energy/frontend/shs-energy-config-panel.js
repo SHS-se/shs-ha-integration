@@ -4,6 +4,7 @@ const TABS = [
   ["devices", "Devices"],
   ["thermal", "Thermal"],
   ["storage", "Storage & EV"],
+  ["controller", "Controller"],
   ["diagnostics", "Diagnostics"],
 ];
 
@@ -808,10 +809,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _renderBody() {
     if (this._tab === "overview") return this._renderOverview();
-    if (this._tab === "inputs") return this._renderSections("inputs");
     if (this._tab === "devices") return this._renderDevices();
     if (this._tab === "thermal") return this._renderThermal();
-    if (this._tab === "storage") return this._renderSections("storage");
+    if (["inputs", "storage", "controller"].includes(this._tab)) return this._renderSections(this._tab);
     return this._renderDiagnostics();
   }
 

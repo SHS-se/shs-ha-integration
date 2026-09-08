@@ -637,7 +637,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "command it until the battery control section is complete."
             ),
             items=list(errors),
-            fix={"kind": "panel", "tab": "storage"},
+            fix={"kind": "panel", "tab": "controller"},
             placeholders={"gaps": "\n".join(f"- {value}" for value in errors)},
         )
 
@@ -661,7 +661,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "store section is complete."
             ),
             items=list(errors),
-            fix={"kind": "panel", "tab": "storage"},
+            fix={"kind": "panel", "tab": "controller"},
             placeholders={"gaps": "\n".join(f"- {value}" for value in errors)},
         )
 

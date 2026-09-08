@@ -381,17 +381,17 @@ def _configuration_sections() -> list[dict[str, Any]]:
         },
         {
             "id": "battery_control",
-            "tab": "storage",
+            "tab": "controller",
             "title": "Battery control",
             "description": (
                 "Scheduled battery execution. Filling "
                 "this in does not start control: the switch below does. Enable "
                 "after the response, sign and confirmation behaviour "
-                "above have actually been measured on this installation."
+                "have been checked on this installation."
             ),
             "toggle": _field(
                 c.OPT_BATTERY_CONTROL_ENABLED,
-                "Let the planner command this battery",
+                "Execute the battery plan",
                 "toggle",
                 help_text=(
                     "Switched off, so the battery is planned but never "
@@ -466,8 +466,45 @@ def _configuration_sections() -> list[dict[str, Any]]:
             ],
         },
         {
+            "id": "pool_control",
+            "tab": "controller",
+            "title": "Pool temperature control",
+            "description": "Settings the controller writes when Control pool heating is enabled. The pool's planning inputs remain on Storage & EV.",
+            "fields": [
+                _field(
+                    c.OPT_POOL_START_TEMPERATURE_ENTITY,
+                    "Start heating below",
+                    "entity",
+                    domains=("number", "input_number"),
+                    help_text="Optional. For a pool held in a temperature band rather than switched on and off; the controller moves the band and the heat pump still picks when to run. One band per pool, however many meters heat it.",
+                ),
+                _field(
+                    c.OPT_POOL_STOP_TEMPERATURE_ENTITY,
+                    "Stop heating at",
+                    "entity",
+                    domains=("number", "input_number"),
+                    help_text="Required with the entity above: writing one end alone inverts or collapses the band.",
+                ),
+                _field(
+                    c.OPT_POOL_TEMPERATURE_MINIMUM,
+                    "Coldest the band may be set to",
+                    "number",
+                    unit="°C",
+                    step=0.1,
+                    help_text="Both bounds are required with a temperature band. Requests are clamped here, never beyond.",
+                ),
+                _field(
+                    c.OPT_POOL_TEMPERATURE_MAXIMUM,
+                    "Warmest the band may be set to",
+                    "number",
+                    unit="°C",
+                    step=0.1,
+                ),
+            ],
+        },
+        {
             "id": "scheduled_control",
-            "tab": "storage",
+            "tab": "controller",
             "title": "EV and pool control",
             "description": "Execute the current binding plan. Each device can be tested independently. Disable restores the settings captured before control; reactive adjustments are not included.",
             "fields": [
@@ -523,35 +560,6 @@ def _configuration_sections() -> list[dict[str, Any]]:
                     unit="m³",
                     minimum=0.5,
                     step=0.5,
-                ),
-                _field(
-                    c.OPT_POOL_START_TEMPERATURE_ENTITY,
-                    "Start heating below",
-                    "entity",
-                    domains=("number", "input_number"),
-                    help_text="Optional. For a pool held in a temperature band rather than switched on and off; the planner moves the band and the heat pump still picks when to run. One band per pool, however many meters heat it.",
-                ),
-                _field(
-                    c.OPT_POOL_STOP_TEMPERATURE_ENTITY,
-                    "Stop heating at",
-                    "entity",
-                    domains=("number", "input_number"),
-                    help_text="Required with the entity above: writing one end alone inverts or collapses the band.",
-                ),
-                _field(
-                    c.OPT_POOL_TEMPERATURE_MINIMUM,
-                    "Coldest the band may be set to",
-                    "number",
-                    unit="°C",
-                    step=0.1,
-                    help_text="Both bounds are required with a temperature band. Requests are clamped here, never beyond.",
-                ),
-                _field(
-                    c.OPT_POOL_TEMPERATURE_MAXIMUM,
-                    "Warmest the band may be set to",
-                    "number",
-                    unit="°C",
-                    step=0.1,
                 ),
             ],
         },

@@ -30,7 +30,7 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
   integration and can use price-led planning for the equipment it does have.
 - **Optional scheduled control**: a website-selected device with a complete
   local mapping is included in the plan automatically. Battery, EV and pool
-  execution have independent switches, all off by default, on the Storage tab.
+  execution have independent switches, all off by default, on the Controller tab.
   With control enabled, the integration executes the current binding plan.
 - **Website-only example**: the portal can render a promotional scenario from
   fixed numbers bundled with the website. Home Assistant cannot create or
@@ -226,7 +226,7 @@ staff overrides are returned by the backend on the next exchange.
 ## Scheduled controller
 
 Version one controls the house battery, EV and pool from the accepted priority
-plan. Open Configure → Storage: **Battery control** contains the battery switch;
+plan. Open Configure → Controller: **Battery control** contains the battery switch;
 **EV and pool control** contains the other two. These are execution switches,
 separate from the existing store inclusion switches. They all default to off.
 Reactive surplus allocation and import shedding are not implemented.
