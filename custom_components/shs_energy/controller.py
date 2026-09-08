@@ -72,6 +72,7 @@ class ScheduledController:
         self.command_times = {}
         self.overrides = {}
         self.requested_types = {}
+        self.requested_systems = set()
 
     def add_listener(self, listener):
         self.listeners.add(listener)
@@ -119,11 +120,15 @@ class ScheduledController:
     def eligible(self, device, options):
         if device.startswith("device:"):
             key = device.removeprefix("device:")
+            if key in options.get("excluded_device_readings", []):
+                return False
             mapping = options.get("device_control_mappings", {}).get(key, {})
             if self.requested_types.get(key) != mapping.get("control_type") or not mapping.get("control_enabled", False) or device in self.overrides:
                 return False
             override = mapping.get("control_override_entity")
             return not override or self.state(override).state == "off"
+        if device not in self.requested_systems:
+            return False
         if not options.get(f"{device}_control_enabled", False):
             return False
         if not options.get(f"{device}_enabled", True):
@@ -558,12 +563,19 @@ class ScheduledController:
             mappings = options.get("device_control_mappings", {})
             generic = {"device:" + key for key, mapping in mappings.items() if mapping.get("control_enabled")}
             generic.update(key for key in self.records if key.startswith("device:"))
-            if generic:
+            if generic or any(options.get(d + "_control_enabled") for d in DEVICES) or self.records:
                 self.requested_types = {}
+                self.requested_systems = set()
                 try:
                     requested = await self.coordinator.async_cached_device_configuration()
                     self.requested_types = {item["key"]: item.get("control_type") for item in requested}
+                    self.requested_systems = {planning_path(item.get("control_type"), item.get("category")) for item in requested if item["key"] not in options.get("excluded_device_readings", [])}
+                    choices = await self.coordinator.async_cached_planning_configuration()
+                    if choices.get("home", {}).get("battery", {}).get("included") is True:
+                        self.requested_systems.add("battery")
                 except Exception as err:
+                    self.requested_types = {}
+                    self.requested_systems = set()
                     # Without current planning ownership, hand back all targets.
                     _LOGGER.error("Cannot read device planning ownership: %s", err)
             for device in tuple(self.overrides):

@@ -603,6 +603,9 @@ def unplanned_services(
         # they deliberately took out of planning.
         if path in switched_off:
             continue
+        category_devices = [meter for meter in (meters or {}).values() if meter.get("category") == category and planning_path(meter.get("control_type"), category) != "room"]
+        if category_devices and all(meter.get("planning_role") == "base_load" and meter.get("planning_choice_at") for meter in category_devices):
+            continue
         configured = [
             f"{label} ({options[key]})"
             for key, label in fields

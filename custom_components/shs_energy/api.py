@@ -264,6 +264,7 @@ class ShsApiClient:
         *,
         device_inventory_complete: bool = False,
         replan_request_id: str | None = None,
+        equipment: dict[str, bool] | None = None,
     ) -> dict[str, Any]:
         """Push aggregate, per-device and thermal quarters, plus a plan."""
         body: dict[str, Any] = {
@@ -275,6 +276,8 @@ class ShsApiClient:
             "actual_slots": actual_slots,
             "devices": devices or [],
         }
+        if equipment is not None:
+            body["equipment"] = equipment
         if device_inventory_complete:
             body["device_inventory_complete"] = True
         # Optional quarter series are omitted when this is only a device

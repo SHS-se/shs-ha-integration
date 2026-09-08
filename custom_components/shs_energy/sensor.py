@@ -155,35 +155,7 @@ class ShsOptimisationStatusSensor(ShsBaseSensor):
 
     @property
     def native_value(self) -> str:
-        mode = resolved_options(
-            self.hass, dict(self.coordinator.entry.options)
-        )[OPT_PLANNING_MODE]
-        if mode == PLANNING_MODE_DISABLED:
-            return "disabled"
-        plan = self.coordinator.optimisation_plan
-        if self.coordinator.optimisation_missing_inputs:
-            return "not_configured"
-        if not plan:
-            return "unavailable"
-        try:
-            validate_plan_contract(
-                plan, datetime.now(timezone.utc), require_recent_issue=False
-            )
-        except OptimisationInputError:
-            return "invalid"
-        if self.coordinator.current_plan_slot is None:
-            if plan.get("status") != "ready":
-                return str(plan.get("status", "invalid"))
-            try:
-                now = datetime.now(timezone.utc)
-                if now >= datetime.fromisoformat(plan["valid_until"]):
-                    return "expired"
-                if now >= datetime.fromisoformat(plan["binding_until"]):
-                    return "advisory_only"
-                return "ready"
-            except (KeyError, TypeError, ValueError):
-                return "invalid"
-        return "ready"
+        return self.coordinator.operational_status["state"]
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

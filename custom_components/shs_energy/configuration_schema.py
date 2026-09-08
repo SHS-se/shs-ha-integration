@@ -299,3 +299,8 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
         mapping.pop(ROOM_AREA_FIELD, None)
     stored[key] = mapping
     return result
+
+
+def shared_devices(devices, options):
+    excluded = set(options.get("excluded_device_readings", []))
+    return [device for device in devices if device["key"] not in excluded]

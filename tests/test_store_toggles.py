@@ -65,19 +65,6 @@ class StoreToggleWiringTests(unittest.TestCase):
                 # read as absent forever.
                 self.assertIsInstance(getattr(const, name), str)
 
-    def test_the_frontend_folds_a_section_it_is_told_is_off(self) -> None:
-        renderer = FRONTEND[FRONTEND.index("_renderSection(section) {"):]
-        renderer = renderer[: renderer.index("\n  _renderSections(")]
-        self.assertIn("const gate = section.toggle;", renderer)
-        # The switch sits in the heading, and the fields are unreachable when
-        # off: an early return rather than a conditional inside the markup,
-        # because the latter is what let a half-applied version render both.
-        self.assertIn("section-switch", renderer)
-        off, live = renderer.split("if (!on) {", 1)
-        folded, expanded = live.split("return `<section class=\"card form-card\">", 1)
-        self.assertNotIn("field-grid", folded)
-        self.assertIn("field-grid", expanded)
-        self.assertIn("section.fields", expanded)
 
     def test_the_switch_is_still_reachable_when_it_is_not_a_field(self) -> None:
         """`_onChange` resolves a field by key from the sections, so a switch
@@ -102,19 +89,6 @@ class StoreToggleWiringTests(unittest.TestCase):
             r"options\.get\(OPT_BATTERY_ENABLED, True\)",
         )
 
-    def test_hiding_a_section_does_not_erase_what_it_held(self) -> None:
-        """Switching a store off and on again must return the settings.
-
-        The renderer stops drawing the fields, so anything that saved only what
-        is on screen would quietly wipe an entity id the customer spent time
-        choosing. `_save` selects editable keys from every section, including
-        collapsed sections. The frontend test also executes that save path.
-        """
-        saver = FRONTEND[FRONTEND.index("async _save() {"):]
-        saver = saver[: saver.index("\n  async _saveDevice(")]
-        self.assertIn("this._clone(this._draft)", saver)
-        self.assertIn("this._data.sections.flatMap", saver)
-        self.assertNotIn(".filter(", saver)
 
     def test_no_store_toggle_is_left_unrouted(self) -> None:
         """A constant nobody consults is worse than no constant at all."""

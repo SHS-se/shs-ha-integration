@@ -32,7 +32,7 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
   integration and can use price-led planning for the equipment it does have.
 - **Optional scheduled control**: a website-selected device with a complete
   local mapping is included in the plan automatically. Battery, EV and pool
-  execution have independent switches, all off by default, on the Controller tab.
+  execution have independent switches, all off by default, on Schedule.
   With control enabled, the integration executes the current binding plan.
 - **Website-only example**: the portal can render a promotional scenario from
   fixed numbers bundled with the website. Home Assistant cannot create or
@@ -153,16 +153,22 @@ supplier terms, and returns separate import/export series; no Tibber or Nord
 Pool Home Assistant integration is required. For an EV current entity,
 automatic setup shows both its raw
 selector bounds and the proposed usable minimum, maximum and increment. Those
-operating values are saved in the Variable Power device card; this matters when
+operating values are saved in the vehicle editor on Devices; this matters when
 an entity exposes an `off` value such as 0 A below the charger's real charging
 floor. The planner chooses one confirmed valid current for every 15-minute slot
-and derives power using the installation-wide three-phase 230 V contract. It
+and derives power using the reviewed phase count and voltage. It
 never treats the entity's instantaneous state as fixed charger power. Usable
 battery capacity is derived from live remaining energy and SOC, charging
-efficiency is fixed at 92%, and a timezone-aware departure timestamp is
+efficiency uses the reviewed vehicle setting, and a timezone-aware departure timestamp is
 optional. When it is absent, the current target SOC is planned over the rolling
-72-hour horizon. None of these derived or invariant values are user
-configuration.
+72-hour horizon. Derived capacity is read-only; electrical parameters remain
+reviewable in the vehicle editor.
+
+Configuration has four pages: **Energy**, **Devices**, **Schedule** and **Status**.
+Setup and permission to operate are separate. Invalid or expired plans never
+appear as actionable schedules; normal history accumulation is informational.
+See the [beta.26 release notes](docs/releases/0.8.0-beta.26.md) for the required
+website database/API deployment before upgrading HA.
 
 The configuration page is available only to Home Assistant administrators and
 stores reviewed settings in Home Assistant's config-entry storage. Do not edit
@@ -227,10 +233,11 @@ staff overrides are returned by the backend on the next exchange.
 
 ## Scheduled controller
 
-Version one controls the house battery, EV and pool from the accepted priority
-plan. Open Configure → Controller: **Battery control** contains the battery switch;
-**EV and pool control** contains the other two. These are execution switches,
-separate from the existing store inclusion switches. They all default to off.
+The controller operates supported devices from the accepted priority plan.
+Open Configure → Schedule: each device has the same **Include in the plan**
+summary, chosen on the website, and **Let SHS operate it** switch, chosen here.
+Equipment presence and entity setup are in Devices. New control permissions
+default to off.
 Reactive surplus allocation and import shedding are not implemented.
 
 - **Battery:** uses the mapped mode, signed W/kW target and measured power.

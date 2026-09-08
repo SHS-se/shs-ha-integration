@@ -26,7 +26,8 @@ from .configuration import (
     resolved_options,
     suggest_device_control_mapping,
 )
-from .configuration_fields import _control_fields, _configuration_sections
+from .configuration_fields import _control_fields, _configuration_sections, LABELS
+from .presentation import complete_device_views, timeline, system_fields, device_name
 from .configuration_schema import (
     prepare_options, save_device,
 )
@@ -82,6 +83,7 @@ def _entity_catalog(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "domain": state.entity_id.split(".", 1)[0],
                 "state": str(state.state)[:120],
                 "unit": state.attributes.get("unit_of_measurement"),
+                "last_updated": state.last_updated.isoformat(),
                 "device_class": state.attributes.get("device_class"),
                 "minimum": state.attributes.get("min"),
                 "maximum": state.attributes.get("max"),
@@ -119,6 +121,8 @@ async def _configuration_payload(
         portal_error = str(err)
         requested = await coordinator.async_cached_device_configuration()
 
+    choices = await coordinator.async_cached_planning_configuration()
+    requested = choices["devices"]
     options = resolved_options(hass, dict(entry.options))
     exchange_status = await coordinator.async_cached_exchange_status()
     mappings = options.get(shs_const.OPT_DEVICE_CONTROL_MAPPINGS, {})
@@ -131,7 +135,7 @@ async def _configuration_payload(
     devices: list[dict[str, Any]] = []
     active_commands = (coordinator.current_plan_slot or {}).get("device_commands", {})
     for device in requested:
-        control_type = str(device.get("control_type") or "")
+        control_type = str(device.get("control_type") or (mappings.get(device["key"]) or {}).get("control_type") or "")
         saved = mappings.get(device["key"])
         saved_mapping = (
             dict(saved)
@@ -166,6 +170,7 @@ async def _configuration_payload(
                 "category": device.get("category"),
                 "load_type": device.get("load_type"),
                 "planning_role": device.get("planning_role"),
+                "planning_choice_at": device.get("planning_choice_at"),
                 "control_type": control_type,
                 "mapping": saved_mapping,
                 "stale_mapping_control_type": (
@@ -179,19 +184,18 @@ async def _configuration_payload(
                 ),
                 "execution_reason": execution_reason,
                 "execution_status": coordinator.controller.status.get("device:" + device["key"]),
-                "fields": [field for field in _control_fields(device)
-                           if field["key"] != "control_enabled" or not execution_reason or saved_mapping.get("control_enabled")],
+                "fields": list(_control_fields({**device, "control_type": control_type})),
                 **report,
             }
         )
 
     ready_devices = [
-        device for device in devices if device["mapping_status"] == "ready"
+        device for device in devices if device["planning_role"] == "controllable" and device["mapping_status"] == "ready"
     ]
     thermal_devices = [
         device
         for device in devices
-        if is_room_thermal_control(device["control_type"], device.get("category"))
+        if device["planning_role"] == "controllable" and is_room_thermal_control(device["control_type"], device.get("category"))
         and (
             device["control_type"] == "setpoint"
             or bool(device.get("mapping", {}).get("temperature_entity_id"))
@@ -227,7 +231,29 @@ async def _configuration_payload(
         thermal_status = "observations_published"
 
     plan = coordinator.optimisation_plan or {}
+    operation = coordinator.operational_status
+    devices = complete_device_views(devices, options, choices, operation, plan,
+        coordinator.controller.status, entity_names, area_names, datetime.now(timezone.utc), entry.options.keys())
+    for device in devices:
+        mapping = device.get("mapping", {})
+        source_ids = [mapping.get("temperature_entity_id"), mapping.get("power")]
+        if device.get("system"):
+            system = device["system"]
+            source_ids.extend([options.get(system + "_soc_entity"), options.get(system + "_water_temperature_entity")])
+        device["readings"] = []
+        for entity_id in dict.fromkeys(value for value in source_ids if isinstance(value, str)):
+            state = hass.states.get(entity_id)
+            if state:
+                device["readings"].append({"name": state.attributes.get("friendly_name") or "Reading",
+                    "value": state.state, "unit": state.attributes.get("unit_of_measurement", ""),
+                    "updated_at": state.last_updated.isoformat()})
     return {
+        "labels": LABELS,
+        "operation": operation,
+        "timeline": timeline(plan, operation),
+        "website_url": shs_const.website_url(entry.data[shs_const.CONF_BASE_URL], "/portal/energy-modeling?tab=devices"),
+        "configured_keys": list(entry.options),
+        "meter_inventory": [{"key": d["key"], "name": device_name(entity_names.get(d["key"]) or d["name"])} for d in requested],
         "entry": {
             "entry_id": entry.entry_id,
             "title": entry.title,
@@ -239,6 +265,7 @@ async def _configuration_payload(
         "devices": devices,
         "portal": {
             "status": "error" if portal_error else "synchronised",
+            "refreshed_at": choices.get("refreshed_at"),
             "error": portal_error,
             "requested_devices": len(devices),
         },
@@ -269,18 +296,19 @@ async def _configuration_payload(
             "device_mapping_gaps": [
                 device["name"]
                 for device in devices
-                if device["mapping_status"] != "ready"
+                if device.get("included") and device["mapping_status"] != "ready"
             ],
             "missing_inputs": list(coordinator.optimisation_missing_inputs),
             "last_plan_error": coordinator.last_optimisation_error,
+            "last_plan_attempt": coordinator.last_optimisation_attempt or exchange_status.get("last_optimisation_attempt"),
             "last_plan_push": (
                 coordinator.last_optimisation_push
                 or exchange_status.get("last_optimisation_push")
             ),
-            "plan_status": plan.get("status"),
+            "plan_status": operation["state"],
             "plan_model_version": plan.get("model_version"),
             "actual_slots_accepted": coordinator.last_actual_slots_accepted,
-            "actuals_accepted_until": coordinator.actuals_accepted_until,
+            "actuals_accepted_until": coordinator.actuals_accepted_until or exchange_status.get("actuals_accepted_until"),
         },
         "thermal": {
             "status": thermal_status,
@@ -351,19 +379,44 @@ async def async_apply_device_mapping(
     entry: ConfigEntry,
     device_key: str,
     incoming: dict[str, Any] | None,
+    configuration: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate, report and save a device and its shared room observation."""
-    requested = await entry.runtime_data.async_cached_device_configuration()
+    choices = await entry.runtime_data.async_cached_planning_configuration()
+    requested = choices["devices"]
     device = next((item for item in requested if item["key"] == device_key), None)
     if device is None:
-        raise ValueError("the website no longer requests this controllable device")
+        if device_key not in {"$battery", "$ev", "$pool"}:
+            raise ValueError("This device is no longer in the website inventory")
+        if incoming:
+            raise ValueError("This equipment has no device meter to configure")
+        system = device_key[1:]
+        if set(configuration or {}) - {field["key"] for field in system_fields(system)}:
+            raise ValueError("These settings belong to another device")
+        await async_apply_configuration(hass, entry, configuration or {})
+        return {"mapping_status": "ready", "mapping_error": None, "mapping_summary": {}}
 
-    if incoming and incoming.get("control_enabled"):
+
+    if device.get("planning_role") != "controllable":
+        saved = resolved_options(hass, dict(entry.options)).get("device_control_mappings", {}).get(device_key, {})
+        device = {**device, "control_type": saved.get("control_type")}
+        if incoming and incoming.get("control_enabled") and not saved.get("control_enabled"):
+            raise ValueError("Include this device on the website before enabling control")
+    if incoming and incoming.get("control_enabled") and device.get("planning_role") == "controllable":
         command = (entry.runtime_data.current_plan_slot or {}).get("device_commands", {}).get(device_key)
         if not command or command.get("type") == "unavailable":
             raise ValueError("Device control requires an executable schema-7 plan from the website")
+    existing = dict(entry.options)
+    if configuration:
+        panel = await _configuration_payload(hass, entry, refresh_roles=False)
+        view = next((item for item in panel["devices"] if item["key"] == device_key), None)
+        allowed = {field["key"] for field in (view or {}).get("system_fields", [])}
+        if set(configuration) - allowed:
+            raise ValueError("These settings belong to another device")
+        existing = prepare_options(existing, configuration, lambda entity: _read_entity(hass, entity),
+                                   latitude=hass.config.latitude, longitude=hass.config.longitude)
     options = save_device(
-        dict(entry.options), device_key, incoming, device,
+        existing, device_key, incoming, device,
         lambda entity: _read_entity(hass, entity),
         entity_names=entity_display_name_by_id(hass),
         area_names=area_name_by_id(hass), entity_area_ids=entity_area_id_by_id(hass),
@@ -493,6 +546,7 @@ async def websocket_save_configuration(
         vol.Required("config_entry"): str,
         vol.Required("device_key"): str,
         vol.Required("mapping"): vol.Any(dict, None),
+        vol.Optional("configuration", default={}): dict,
     }
 )
 @websocket_api.async_response
@@ -512,12 +566,58 @@ async def websocket_save_device_configuration(
             entry,
             msg["device_key"],
             dict(msg["mapping"]) if msg["mapping"] is not None else None,
+            msg["configuration"],
         )
         panel = await _configuration_payload(hass, entry, refresh_roles=False)
     except (ShsApiError, TypeError, ValueError) as err:
         connection.send_error(msg["id"], "invalid_device_mapping", str(err))
         return
     connection.send_result(msg["id"], {"saved": True, **report, "panel": panel})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{shs_const.DOMAIN}/status/get", vol.Required("config_entry"): str})
+@websocket_api.async_response
+async def websocket_get_status(hass, connection, msg):
+    entry = _entry_from_message(hass, msg["config_entry"])
+    if entry is None or _entry_state(entry) != "loaded":
+        connection.send_error(msg["id"], "not_loaded", "The integration is not loaded")
+        return
+    coordinator = entry.runtime_data
+    status = coordinator.operational_status
+    connection.send_result(msg["id"], {"operation": status,
+        "timeline": timeline(coordinator.optimisation_plan, status),
+        "controllers": dict(coordinator.controller.status)})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{shs_const.DOMAIN}/config/control", vol.Required("config_entry"): str,
+    vol.Required("device_key"): str, vol.Required("enabled"): bool})
+@websocket_api.async_response
+async def websocket_control_permission(hass, connection, msg):
+    entry = _entry_from_message(hass, msg["config_entry"])
+    if entry is None or _entry_state(entry) != "loaded":
+        connection.send_error(msg["id"], "not_loaded", "The integration is not loaded")
+        return
+    try:
+        panel = await _configuration_payload(hass, entry, refresh_roles=False)
+        device = next((d for d in panel["devices"] if d["key"] == msg["device_key"]), None)
+        if device is None:
+            raise ValueError("This equipment is no longer present")
+        if msg["enabled"] and device["permission"]["reason"]:
+            raise ValueError(device["permission"]["reason"])
+        if system := device.get("system"):
+            await async_apply_configuration(hass, entry, {system + "_control_enabled": msg["enabled"]})
+        else:
+            mapping = dict(panel["configuration"].get("device_control_mappings", {}).get(device["key"], {}))
+            if not mapping:
+                raise ValueError("Set up this device first")
+            mapping["control_enabled"] = msg["enabled"]
+            await async_apply_device_mapping(hass, entry, device["key"], mapping)
+        await entry.runtime_data.controller.async_tick()
+        connection.send_result(msg["id"], await _configuration_payload(hass, entry, refresh_roles=False))
+    except (ShsApiError, ValueError, TypeError) as err:
+        connection.send_error(msg["id"], "control_permission_failed", str(err))
 
 
 async def async_register_config_panel(hass: HomeAssistant) -> None:
@@ -539,6 +639,8 @@ async def async_register_config_panel(hass: HomeAssistant) -> None:
         require_admin=True,
         config_panel_domain=shs_const.DOMAIN,
     )
+    websocket_api.async_register_command(hass, websocket_get_status)
+    websocket_api.async_register_command(hass, websocket_control_permission)
     websocket_api.async_register_command(hass, websocket_get_configuration)
     websocket_api.async_register_command(hass, websocket_discover_configuration)
     websocket_api.async_register_command(hass, websocket_save_configuration)

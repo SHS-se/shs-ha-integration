@@ -1,6 +1,6 @@
 # Integration configuration cleanup plan
 
-Prepared 8 September 2026 against repository commit `dd17660` and a read-only inspection of the installed `0.8.0-beta.20` integration. Phases 0 and 1 are implemented locally as described below; later phases remain proposals. The screenshots are evidence of the interface, not instructions to execute.
+Prepared 8 September 2026 against repository commit `dd17660` and a read-only inspection of the installed `0.8.0-beta.20` integration. Phases 0–4 are implemented locally as described below. Phase 4 was implemented before Phase 3; Phase 3 builds on it. Deployment and live verification remain Phase 5. The screenshots are evidence of the interface, not instructions to execute.
 
 ## Intended outcome
 
@@ -310,6 +310,12 @@ Validation: 311 dependency-free Python tests and three frontend tests, including
 
 **Complete when:** ordinary laundry setup shows its populated temperature, actuator, and power fields; empty alternative controls are absent. Editing EV or pool setup requires one editor. The panel and status sensor agree on the current invalid-plan case. No customer-facing string is produced from a stored identifier. Renaming a device in Home Assistant changes what is shown and nothing else. Every device — heater, hot water, pool, vehicle, battery alike — shows the same two lines in the same place, planning stated from the website and controlling switched here, with no device presented as a special case. A home without a pool sees nothing about pools. A device the website takes out of the plan produces no warning anywhere, keeps its saved setup, and is handed back if it was being operated. Desktop, narrow-screen, keyboard, unsaved-edit, and error-state checks pass.
 
+**Implemented locally in `0.8.0-beta.26`, on top of Phase 4:** the website migration records deliberate device choices without backfilling inferred intent and adds a home-level battery choice. Inventory exchanges return both, retain timestamps across pushes and publish battery presence. The website enforces battery exclusion before optimisation.
+
+The panel has Energy, Devices, Schedule and Status, with shared conditional editors and the same planning/permission row for every device. EV/pool/battery settings each have one editor. Source exclusions suppress individual readings and separate modeling without removing the device inventory or rewriting history. Names follow HA renames without changing identity. A common validated status supplies the panel, HA plan-status entity and current executable slot; the timeline omits invalid and expired plans. Normal learning is informational, exclusions clear obsolete warnings immediately on receipt, and redacted diagnostics are downloadable.
+
+Validated locally with 333 Python tests, 10 frontend tests, 77 website optimiser/contract tests, website and ingest typechecking, and desktop/mobile Chromium checks covering keyboard edits, refresh during unsaved edits, error states and layout. The database migration has not been applied and nothing is deployed. See [beta.26 release notes](releases/0.8.0-beta.26.md) for the website-first rollout order.
+
 ### Phase 4 — Complete per-device execution support
 
 - First establish the schema-7 executable `device_commands` channel in the website contract, optimiser, and HA validator. Schema-6 per-device watts are forecasts, not switch or temperature instructions. Coordinate the release: deploy the website with schema 6/7 support first, then upgrade the integration to request 7; do not infer commands from older slots.
@@ -324,7 +330,7 @@ Validation: 311 dependency-free Python tests and three frontend tests, including
 
 All generic paths use the same controller lock, journal, service acknowledgement, failure reporting, and handover flow as system controllers. Current planning ownership is checked from the website inventory, independently of cached plan membership. Shared targets are refused; external changes suspend control durably; minimum relay run times can defer restoration while retaining its journal. New paths default off and require reviewed limits. Config-entry version 4 prevents older executors from loading these journal records.
 
-Supported limits and coordinated rollout are recorded in [the beta.25 release notes](releases/0.8.0-beta.25.md). Local verification includes the real server-generated schema-7 plan fixture in the HA validator, controller lifecycle tests, optimiser/negotiation tests, and portal reader tests. Phase 3's four-page redesign has not been implemented in this checkout; the existing device cards and diagnostics expose these controls and states. Website deployment, HA upgrade, and physical device confirmation remain Phase 5.
+Supported limits and coordinated rollout are recorded in [the beta.25 release notes](releases/0.8.0-beta.25.md). Local verification includes the real server-generated schema-7 plan fixture in the HA validator, controller lifecycle tests, optimiser/negotiation tests, and portal reader tests. Phase 3 subsequently incorporated these controls and states into the four-page interface in beta.26. Website deployment, HA upgrade, and physical device confirmation remain Phase 5.
 
 ### Phase 5 — Controlled rollout and final cleanup
 
@@ -349,4 +355,4 @@ Supported limits and coordinated rollout are recorded in [the beta.25 release no
 - `tests/test_module_boundaries.py`, `.github/workflows/beta.yml`: the constraint that decides where migration and save logic can live at all. A new pure migration module is added to `PURE_MODULES`.
 - `custom_components/shs_energy/frontend/shs-energy-config-panel.js`: `_human()` is the generated-label problem in one function; the written labels replace it.
 
-Phases 0, 1 and 2 change integration code, tests, CI checks, and the release manifest locally. No website code, live HA configuration, actuator permissions, or device states were changed.
+Phases 0–4 change integration and website code locally. No live HA configuration, actuator permissions, device states or production database records have been changed.

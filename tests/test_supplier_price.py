@@ -185,7 +185,7 @@ class SensorWiringTests(unittest.TestCase):
 
     def test_device_cards_have_an_independent_save_button(self) -> None:
         self.assertIn('data-action="save-device"', CONFIG_PANEL_FRONTEND)
-        self.assertIn("Save configuration", CONFIG_PANEL_FRONTEND)
+        self.assertIn("Save setup", CONFIG_PANEL_FRONTEND)
 
     def test_device_card_save_replans_and_refreshes_readiness_immediately(self) -> None:
         save = CONFIG_PANEL[
@@ -271,7 +271,7 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn("await async_register_config_panel(hass)", INIT)
 
     def test_configuration_panel_websockets_require_an_admin(self) -> None:
-        self.assertEqual(CONFIG_PANEL.count("@websocket_api.require_admin"), 4)
+        self.assertEqual(CONFIG_PANEL.count("@websocket_api.require_admin"), 6)
         self.assertNotIn("connection.require_admin", CONFIG_PANEL)
 
 

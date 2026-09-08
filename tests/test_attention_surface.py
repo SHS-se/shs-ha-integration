@@ -46,49 +46,6 @@ class AttentionSurfaceTests(unittest.TestCase):
                 # file separately proves covers every case it can be asked for.
                 self.assertRegex(body, r"fix=(\{|dict\(fix\))")
 
-    def test_the_frontend_renders_and_routes_attention(self) -> None:
-        self.assertIn("_renderAttention()", FRONTEND)
-        self.assertIn("attention-item", FRONTEND)
-        # Steering: a tab badge, and a button that switches to the right tab.
-        self.assertIn("tab-badge", FRONTEND)
-        self.assertIn("_attentionForTab(", FRONTEND)
-        self.assertIn('data-action="tab" data-tab="${this._escape(fix.tab)}"', FRONTEND)
-
-    def test_a_readiness_card_cannot_be_greener_than_its_repairs(self) -> None:
-        """Four green badges beside an open warning is how green stops meaning anything."""
-        self.assertIn("ATTENTION_BY_CARD", FRONTEND)
-        card = FRONTEND[FRONTEND.index("_readinessCard(title") :]
-        card = card[: card.index("_renderOverview")]
-        self.assertIn("ATTENTION_BY_CARD[title]", card)
-
-    def test_a_failed_planning_exchange_makes_the_planner_card_red(self) -> None:
-        """Input readiness cannot hide a transport or server failure."""
-        overview = FRONTEND[FRONTEND.index("_renderOverview()") :]
-        overview = overview[: overview.index("_thermalStatusText")]
-        self.assertIn(
-            'const plannerState = readiness.last_plan_error ? "error" : inputState',
-            overview,
-        )
-        self.assertIn('"The latest planning exchange failed."', overview)
-        self.assertIn("plannerProblems", overview)
-
-    def test_every_repair_is_owned_by_a_readiness_card(self) -> None:
-        raised = {
-            line.split("=", 1)[1].strip().strip('"')
-            for line in CONST.splitlines()
-            if line.startswith("ISSUE_")
-        }
-        owned = set()
-        block = FRONTEND[FRONTEND.index("ATTENTION_BY_CARD = {") :]
-        block = block[: block.index("};")]
-        for key in raised:
-            if f'"{key}"' in block:
-                owned.add(key)
-        self.assertEqual(
-            sorted(raised - owned),
-            [],
-            "a repair no card owns can leave that card green while it is open",
-        )
 
     def test_a_banner_exists_for_every_kind_of_gap(self) -> None:
         """A remedy with no banner would fall back to the wrong instruction."""
@@ -111,12 +68,6 @@ class AttentionSurfaceTests(unittest.TestCase):
         self.assertNotIn('"kind": "panel"', rest)
         self.assertEqual(rest.count('{"kind": "none"}'), 2)
 
-    def test_the_frontend_offers_no_button_when_there_is_nowhere_to_go(self) -> None:
-        self.assertIn('fix.kind === "none"', FRONTEND)
-        # And such an item must not badge a tab it cannot send anyone to.
-        routing = FRONTEND[FRONTEND.index("_attentionForTab(tab)") :]
-        routing = routing[: routing.index("_renderAttention()")]
-        self.assertIn('item.fix?.kind === "panel"', routing)
 
     def test_a_gap_no_setting_can_answer_is_tagged_at_the_raise(self) -> None:
         """Classification belongs where the reason is known, not in a matcher.

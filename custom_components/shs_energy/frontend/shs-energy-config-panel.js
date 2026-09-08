@@ -1,36 +1,5 @@
-const TABS = [
-  ["overview", "Overview"],
-  ["inputs", "Energy inputs"],
-  ["devices", "Devices"],
-  ["thermal", "Thermal"],
-  ["storage", "Storage & EV"],
-  ["controller", "Controller"],
-  ["diagnostics", "Diagnostics"],
-];
-
+const TABS = [["energy", "Energy"], ["devices", "Devices"], ["schedule", "Schedule"], ["status", "Status"]];
 const MAPPINGS_KEY = "device_control_mappings";
-
-// Which readiness card owns each repair.
-//
-// The cards are per subsystem and the repairs are per cause, so the mapping
-// has to be stated. Without it a card computed from its own handful of fields
-// can read "Ready" while Home Assistant is showing a warning about the very
-// thing the card describes, which is how four green badges came to mean
-// nothing.
-const ATTENTION_BY_CARD = {
-  "Website roles": ["unplanned_service", "missing_customer_input", "subscription_inactive"],
-  "Local device mappings": [
-    "device_control_mapping",
-    "degraded_device",
-    "warming_device",
-  ],
-  "Electrical planner": [
-    "optimisation_configuration",
-    "optimisation_plan_refused",
-    "battery_control",
-    "pool_control",
-  ],
-};
 
 class ShsEnergyConfigPanel extends HTMLElement {
   constructor() {
@@ -41,7 +10,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._data = undefined;
     this._draft = undefined;
     this._savedDraft = undefined;
-    this._tab = "overview";
+    this._tab = "schedule";
+    this._search = "";
+    this._room = "";
+    this._category = "";
+    this._expanded = new Set();
+    this._added = new Set();
+    this._fullHorizon = false;
+    this._selectedSlot = null;
     this._loading = false;
     this._saving = false;
     this._savingDeviceKey = "";
@@ -51,6 +27,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._entryId = new URLSearchParams(window.location.search).get("config_entry");
     this._boundClick = (event) => this._onClick(event);
     this._boundChange = (event) => this._onChange(event);
+    this._boundInput = (event) => { if (event.target.dataset.filter) this._onChange(event); };
     this._boundBeforeUnload = (event) => {
       if (!this._dirty) return;
       event.preventDefault();
@@ -72,7 +49,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
   connectedCallback() {
     this.shadowRoot.addEventListener("click", this._boundClick);
     this.shadowRoot.addEventListener("change", this._boundChange);
+    this.shadowRoot.addEventListener("input", this._boundInput);
     window.addEventListener("beforeunload", this._boundBeforeUnload);
+    this._poller = setInterval(() => this._poll(), 30000);
     this._render();
     if (this._hass && !this._data && !this._loading) {
       this._load(true);
@@ -82,7 +61,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
   disconnectedCallback() {
     this.shadowRoot.removeEventListener("click", this._boundClick);
     this.shadowRoot.removeEventListener("change", this._boundChange);
+    this.shadowRoot.removeEventListener("input", this._boundInput);
     window.removeEventListener("beforeunload", this._boundBeforeUnload);
+    clearInterval(this._poller);
   }
 
   _clone(value) {
@@ -98,28 +79,33 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .replaceAll("'", "&#039;");
   }
 
-  _human(value) {
-    return String(value ?? "")
-      .replaceAll("_", " ")
-      .replace(/\b\w/g, (character) => character.toUpperCase());
+  _label(value) { return this._data?.labels?.[value] || "Not available"; }
+
+  _time(value) {
+    return value ? new Date(value).toLocaleString(this._hass?.locale?.language || undefined, { dateStyle: "medium", timeStyle: "short" }) : "Not yet";
+  }
+
+  _generalFields() {
+    const owned = new Set((this._data.devices || []).flatMap(d => d.system_fields || []).map(f => f.key));
+    return this._data.sections.flatMap(section => [...(section.toggle ? [section.toggle] : []), ...section.fields])
+      .filter(f => !owned.has(f.key) && !f.key.endsWith("_control_enabled"));
+  }
+
+  _patch(fields) {
+    return Object.fromEntries(fields.filter(f => JSON.stringify(this._draft[f.key]) !== JSON.stringify(this._savedDraft[f.key]))
+      .map(f => [f.key, this._draft[f.key] ?? null]));
   }
 
   get _dirty() {
     return JSON.stringify(this._draft) !== JSON.stringify(this._savedDraft);
   }
 
-  get _configurationDirty() {
-    const draft = this._clone(this._draft || {});
-    const saved = this._clone(this._savedDraft || {});
-    delete draft[MAPPINGS_KEY];
-    delete saved[MAPPINGS_KEY];
-    return JSON.stringify(draft) !== JSON.stringify(saved);
-  }
+  get _configurationDirty() { return Object.keys(this._patch(this._generalFields())).length > 0; }
 
   _deviceDirty(deviceKey) {
-    const draft = this._draft?.[MAPPINGS_KEY]?.[deviceKey];
-    const saved = this._savedDraft?.[MAPPINGS_KEY]?.[deviceKey];
-    return JSON.stringify(draft) !== JSON.stringify(saved);
+    const device = this._data?.devices?.find(d => d.key === deviceKey);
+    return JSON.stringify(this._draft?.[MAPPINGS_KEY]?.[deviceKey]) !== JSON.stringify(this._savedDraft?.[MAPPINGS_KEY]?.[deviceKey])
+      || Object.keys(this._patch(device?.system_fields || [])).length > 0;
   }
 
   _entityLabel(entityId) {
@@ -148,12 +134,15 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (this._entryId) message.config_entry = this._entryId;
     try {
       const data = await this._hass.callWS(message);
-      this._data = data;
+      this._mergePanel(data);
       this._deviceErrors = {};
       if (!data.requires_entry_selection) {
         this._entryId = data.entry.entry_id;
-        this._draft = this._clone(data.configuration);
-        this._savedDraft = this._clone(data.configuration);
+        if (!this._draft) {
+          this._draft = this._clone(data.configuration);
+          this._savedDraft = this._clone(data.configuration);
+          if (!data.configuration.configuration_reviewed_at) this._tab = "energy";
+        }
       }
     } catch (error) {
       this._error = error?.message || String(error);
@@ -172,14 +161,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._error = "";
     this._notice = "";
     this._render();
-    const configuration = this._clone(this._draft);
-    const editable = new Set(this._data.sections.flatMap((section) =>
-      [...(section.toggle ? [section.toggle] : []), ...section.fields].map((field) => field.key)));
-    for (const key of Object.keys(configuration)) {
-      if (!editable.has(key) || JSON.stringify(configuration[key]) === JSON.stringify(this._savedDraft?.[key])) {
-        delete configuration[key];
-      }
-    }
+    const configuration = this._patch(this._generalFields());
     try {
       await this._hass.callWS({
         type: "shs_energy/config/save",
@@ -187,10 +169,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
         configuration,
       });
       const savedMappings = this._clone(this._savedDraft?.[MAPPINGS_KEY] || {});
-      this._savedDraft = this._clone(this._draft);
+      for (const key of Object.keys(configuration)) this._savedDraft[key] = this._clone(this._draft[key]);
       this._savedDraft[MAPPINGS_KEY] = savedMappings;
+      this._discovery = null;
       this._notice =
-        "General configuration saved. Device-card drafts still need their own Save configuration button.";
+        "Energy and planning settings saved. Device edits have their own Save button.";
     } catch (error) {
       this._error = error?.message || String(error);
     } finally {
@@ -220,6 +203,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         config_entry: this._entryId,
         device_key: deviceKey,
         mapping,
+        configuration: this._patch(this._data.devices.find(d => d.key === deviceKey)?.system_fields || []),
       });
       const savedMapping = this._clone(
         result.panel?.configuration?.[MAPPINGS_KEY]?.[deviceKey] ?? mapping
@@ -251,14 +235,15 @@ class ShsEnergyConfigPanel extends HTMLElement {
         delete this._savedDraft[MAPPINGS_KEY][deviceKey];
       }
       const device = this._data.devices.find((item) => item.key === deviceKey);
+      for (const field of device?.system_fields || []) this._savedDraft[field.key] = this._clone(this._draft[field.key]);
       if (device) {
         device.mapping_status = result.mapping_status;
         device.mapping_error = result.mapping_error;
         device.mapping_summary = result.mapping_summary || {};
       }
       this._notice = mapping
-        ? `${device?.name || deviceKey} is saved and ${result.mapping_status === "ready" ? "ready" : this._human(result.mapping_status)} on the website.`
-        : `${device?.name || deviceKey} is no longer locally mapped.`;
+        ? `${device?.name || deviceKey} is saved and ${result.mapping_status === "ready" ? "ready" : this._label(result.mapping_status)}.`
+        : `${device?.name || deviceKey} setup was removed.`;
     } catch (error) {
       this._deviceErrors[deviceKey] = error?.message || String(error);
     } finally {
@@ -278,12 +263,15 @@ class ShsEnergyConfigPanel extends HTMLElement {
         type: "shs_energy/config/discover",
         config_entry: this._entryId,
       });
-      const mappings = this._clone(this._draft?.[MAPPINGS_KEY] || {});
-      this._draft = this._clone(result.configuration);
-      this._draft[MAPPINGS_KEY] = mappings;
-      this._draft.automatic_setup = true;
+      const sources = this._data.sections.filter(s => s.tab === "energy" && s.id !== "sharing").flatMap(s => s.fields);
+      for (const field of sources) {
+        if (JSON.stringify(this._draft[field.key]) !== JSON.stringify(this._savedDraft[field.key])) continue;
+        if (field.key in result.configuration) this._draft[field.key] = this._clone(result.configuration[field.key]);
+        else delete this._draft[field.key];
+      }
+      this._discovery = result;
       this._notice =
-        "Automatic discovery produced a reviewable draft. Nothing has been saved yet.";
+        "Review the proposed source changes below, then Save or Cancel. Your current selections are still in use.";
     } catch (error) {
       this._error = error?.message || String(error);
     } finally {
@@ -295,6 +283,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _discard() {
     this._draft = this._clone(this._savedDraft);
     this._error = "";
+    this._discovery = null;
     this._notice = "Changes discarded.";
     this._render();
   }
@@ -398,7 +387,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     }
     this._clearDeviceError(deviceKey);
     this._notice =
-      "The local mapping was removed from the draft. Until mapped again, this device stays in measured base load.";
+      "Setup removed from this draft. Save to apply, or Cancel to keep the saved setup.";
     this._render();
   }
 
@@ -432,6 +421,17 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (!(element instanceof HTMLInputElement || element instanceof HTMLSelectElement)) {
       return;
     }
+    if (element.dataset.filter) {
+      this["_" + element.dataset.filter] = element.value; this._render(); return;
+    }
+    if (element.dataset.share) {
+      const excluded = new Set(this._draft.excluded_device_readings || []);
+      if (element.checked) excluded.delete(element.dataset.share); else excluded.add(element.dataset.share);
+      this._draft.excluded_device_readings = [...excluded]; this._render(); return;
+    }
+    if (element.dataset.permission) {
+      this._control(element.dataset.permission, element.checked); return;
+    }
     if (!element.dataset.fieldKey) return;
     const { key, scope, deviceKey, field } = this._fieldFromElement(element);
     if (!field) return;
@@ -457,7 +457,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (!button) return;
     const action = button.dataset.action;
     if (!action) return;
-    if (action === "back") this._goBack();
+    if (action === "download") this._download();
+    else if (action === "horizon") { this._fullHorizon = !this._fullHorizon; this._render(); }
+    else if (action === "slot") { this._selectedSlot = Number(button.dataset.index); this._render(); }
+    else if (action === "edit-device") { this._tab = "devices"; this._expanded.add("device:" + button.dataset.deviceKey); this._render(); }
+    else if (action === "add-field") { this._added.add(button.dataset.token); this._render(); }
+    else if (action === "cancel-device") this._cancelDevice(button.dataset.deviceKey);
+    else if (action === "back") this._goBack();
     else if (action === "save") this._save();
     else if (action === "save-device") this._saveDevice(button.dataset.deviceKey);
     else if (action === "discard") this._discard();
@@ -493,7 +499,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _statusBadge(status, label) {
-    return `<span class="badge ${this._escape(status)}">${this._escape(label || this._human(status))}</span>`;
+    return `<span class="badge ${this._escape(status)}">${this._escape(label || this._label(status))}</span>`;
   }
 
   _renderField(field, value, scope = "configuration", deviceKey = "") {
@@ -501,7 +507,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const label = this._escape(field.label);
     const help = field.help ? `<div class="field-help">${this._escape(field.help)}</div>` : "";
     const required = field.required ? '<span class="required">Required</span>' : "";
-    const common = `data-field-key="${key}" data-scope="${this._escape(scope)}" data-device-key="${this._escape(deviceKey)}"`;
+    const common = `aria-label="${label}" data-field-key="${key}" data-scope="${this._escape(scope)}" data-device-key="${this._escape(deviceKey)}"`;
     let control = "";
     if (field.kind === "toggle") {
       control = `<label class="switch"><input type="checkbox" ${common} ${value ? "checked" : ""}><span></span></label>`;
@@ -525,7 +531,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
             )
             .join("")}
         </div>
-        <div class="add-row"><input type="text" list="shs-entity-list" placeholder="Search or enter an entity"><button type="button" class="secondary small" data-action="add-multi" data-scope="${this._escape(scope)}" data-device-key="${this._escape(deviceKey)}" data-field-key="${key}">Add</button></div>
+        <div class="add-row"><input type="text" aria-label="Add ${label}" list="shs-entity-list" placeholder="Search or enter an entity"><button type="button" class="secondary small" data-action="add-multi" data-scope="${this._escape(scope)}" data-device-key="${this._escape(deviceKey)}" data-field-key="${key}">Add</button></div>
       </div>`;
     } else if (field.kind === "number") {
       const displayed = value === undefined || value === null || value === ""
@@ -545,307 +551,231 @@ class ShsEnergyConfigPanel extends HTMLElement {
     </div>`;
   }
 
-  _renderSection(section) {
-    // A section may carry a switch saying whether the equipment is here at
-    // all. It sits beside the title because that is a statement about the
-    // house, not one setting among the ones it governs — which is also why it
-    // arrives as `section.toggle` and never inside `section.fields`, so it can
-    // never be drawn into the grid below.
-    //
-    // Off folds the section to its heading. Settings for equipment a home does
-    // not have are noise a customer has to scroll past and decide about, and
-    // the values behind them are kept: `_save` sends the whole draft, so
-    // switching back on returns everything untouched.
-    const gate = section.toggle;
-    const on = gate ? Boolean(this._draft[gate.key]) : true;
-    const label = gate ? this._escape(gate.label) : "";
-    const head = `<div class="section-head">
-        <h2>${this._escape(section.title)}</h2>
-        ${
-          gate
-            ? `<label class="switch section-switch" title="${label}"><input type="checkbox" aria-label="${label}" data-field-key="${this._escape(gate.key)}" data-scope="configuration" data-device-key="" ${on ? "checked" : ""}><span></span></label>`
-            : ""
+  _mergePanel(data) {
+    if (this._draft && data.configuration) {
+      for (const key of new Set([...Object.keys(this._savedDraft), ...Object.keys(data.configuration)])) {
+        if (key === MAPPINGS_KEY) continue;
+        if (JSON.stringify(this._draft[key]) === JSON.stringify(this._savedDraft[key])) {
+          if (key in data.configuration) this._draft[key] = this._clone(data.configuration[key]);
+          else delete this._draft[key];
         }
-      </div>`;
-    if (!on) {
-      return `<section class="card form-card section-off">
-      ${head}
-      <p class="description">${this._escape(gate.help || `${gate.label} — off.`)}</p>
-    </section>`;
+        if (key in data.configuration) this._savedDraft[key] = this._clone(data.configuration[key]);
+        else delete this._savedDraft[key];
+      }
+      for (const key of new Set([...Object.keys(this._savedDraft[MAPPINGS_KEY] || {}), ...Object.keys(data.configuration[MAPPINGS_KEY] || {})])) {
+        this._draft[MAPPINGS_KEY] ||= {}; this._savedDraft[MAPPINGS_KEY] ||= {};
+        if (JSON.stringify(this._draft[MAPPINGS_KEY][key]) === JSON.stringify(this._savedDraft[MAPPINGS_KEY][key])) {
+          this._draft[MAPPINGS_KEY][key] = this._clone(data.configuration[MAPPINGS_KEY]?.[key]);
+        }
+        this._savedDraft[MAPPINGS_KEY][key] = this._clone(data.configuration[MAPPINGS_KEY]?.[key]);
+      }
     }
-    return `<section class="card form-card">
-      ${head}
-      ${section.description ? `<p class="description">${this._escape(section.description)}</p>` : ""}
-      <div class="field-grid">
-        ${section.fields
-          .map((field) => this._renderField(field, this._draft[field.key]))
-          .join("")}
-      </div>
-    </section>`;
+    this._data = data;
   }
 
-  _renderSections(tab) {
-    return this._data.sections
-      .filter((section) => section.tab === tab)
-      .map((section) => this._renderSection(section))
-      .join("");
+  async _poll() {
+    if (!this._entryId || this._loading || this._saving || this._savingDeviceKey || document.hidden) return;
+    try {
+      const data = await this._hass.callWS({ type: "shs_energy/config/get", config_entry: this._entryId, refresh_roles: false });
+      this._mergePanel(data); this._refreshError = ""; this._render();
+    } catch (error) { this._refreshError = error?.message || String(error); this._render(); }
   }
 
-  _readinessCard(title, state, detail, items = []) {
-    // A card can never be greener than the repairs that belong to it.
-    const owned = this._attention().filter((item) =>
-      (ATTENTION_BY_CARD[title] || []).includes(item.key)
-    );
-    if (owned.length) {
-      state = owned.some((item) => item.severity === "error") ? "error" : "warning";
-      items = [...items, ...owned.map((item) => item.title)];
+  async _control(key, enabled) {
+    if (this._saving || this._savingDeviceKey) return;
+    this._savingDeviceKey = key; this._error = ""; this._render();
+    try {
+      const data = await this._hass.callWS({ type: "shs_energy/config/control", config_entry: this._entryId, device_key: key, enabled });
+      this._mergePanel(data);
+      this._notice = enabled ? "Permission saved. SHS may operate this device while the plan is valid." : "Permission removed. Any settings SHS still owns will be restored; progress is shown in Status.";
+    } catch (error) { this._error = error?.message || String(error); }
+    finally { this._savingDeviceKey = ""; this._render(); }
+  }
+
+  _cancelDevice(key) {
+    if (this._draft[MAPPINGS_KEY]) this._draft[MAPPINGS_KEY][key] = this._clone(this._savedDraft[MAPPINGS_KEY]?.[key]);
+    for (const field of this._data.devices.find(d => d.key === key)?.system_fields || []) {
+      if (field.key in this._savedDraft) this._draft[field.key] = this._clone(this._savedDraft[field.key]);
+      else delete this._draft[field.key];
     }
-    return `<article class="summary-card ${this._escape(state)}">
-      <div class="summary-top"><h3>${this._escape(title)}</h3>${this._statusBadge(state)}</div>
-      <p>${this._escape(detail)}</p>
-      ${items.length ? `<ul>${items.map((item) => `<li>${this._escape(item)}</li>`).join("")}</ul>` : ""}
-    </article>`;
+    this._clearDeviceError(key); this._render();
   }
 
-  _renderOverview() {
-    const readiness = this._data.readiness;
-    const thermal = this._data.thermal;
-    const portal = this._data.portal;
-    const mappingState = readiness.ready_devices === readiness.requested_devices ? "ready" : "warning";
-    const inputState = readiness.missing_inputs.length ? "warning" : "ready";
-    const plannerState = readiness.last_plan_error ? "error" : inputState;
-    const plannerProblems = [
-      ...readiness.missing_inputs,
-      ...(readiness.last_plan_error ? [readiness.last_plan_error] : []),
-    ];
-    const thermalState = thermal.status === "observations_published" || thermal.status === "not_requested" ? "ready" : "warning";
-    return `
-      <div class="safety-note"><strong>Configuration and visualization only.</strong> This panel does not call, replace or enable any heater, charger, relay, climate entity or Node-RED flow.</div>
-      <div class="summary-grid">
-        ${this._readinessCard(
-          "Website roles",
-          portal.status === "synchronised" ? "ready" : "error",
-          portal.status === "synchronised"
-            ? `${portal.requested_devices} controllable device request${portal.requested_devices === 1 ? "" : "s"} received.`
-            : "The last saved website roles are shown because refresh failed.",
-          portal.error ? [portal.error] : []
-        )}
-        ${this._readinessCard(
-          "Local device mappings",
-          mappingState,
-          `${readiness.ready_devices} of ${readiness.requested_devices} requested devices are ready.`,
-          readiness.device_mapping_gaps
-        )}
-        ${this._readinessCard(
-          "Electrical planner",
-          plannerState,
-          readiness.last_plan_error
-            ? "The latest planning exchange failed."
-            : readiness.missing_inputs.length
-            ? "The electrical plan is waiting for the inputs below."
-            : "No currently reported electrical input gaps.",
-          plannerProblems
-        )}
-        ${this._readinessCard(
-          "Thermal observations",
-          thermalState,
-          this._thermalStatusText(thermal),
-          thermal.zones.filter((zone) => zone.mapping_status !== "ready").map((zone) => `${zone.name}: ${zone.mapping_error || this._human(zone.mapping_status)}`)
-        )}
-      </div>
-      <section class="card workflow">
-        <div><span>1</span><strong>Choose roles on the website</strong><small>Base-load devices need no local setup.</small></div>
-        <div><span>2</span><strong>Refresh website roles</strong><small>The latest request is fetched whenever this panel opens.</small></div>
-        <div><span>3</span><strong>Map local entities</strong><small>Review suggestions; incomplete controls stay in base load.</small></div>
-        <div><span>4</span><strong>Observe readiness</strong><small>History and plans become visible without changing existing control ownership.</small></div>
-      </section>
-      ${this._renderSections("overview")}
-    `;
+  _download() {
+    // Deliberate allowlist: no options, entity addresses, names, URLs, raw errors or recorder rows.
+    const value = { version: 1, exported_at: new Date().toISOString(),
+      plan: { state: this._data.operation.state, issued_at: this._data.operation.issued_at,
+        binding_until: this._data.operation.binding_until, valid_until: this._data.operation.valid_until },
+      devices: this._data.devices.map((d, index) => ({ device: index + 1, included: d.included,
+        control_enabled: d.permission.enabled, state: d.execution_status?.state })),
+      delivery: { last_daily_push: this._data.diagnostics.last_daily_push,
+        last_plan_push: this._data.readiness.last_plan_push, electrical_history_until: this._data.readiness.actuals_accepted_until,
+        thermal_history_until: this._data.diagnostics.thermal_slots_accepted_until },
+      upgrade: this._data.diagnostics.migration ? Object.fromEntries(["imported", "removed", "needs_attention"].map(k => [k, this._data.diagnostics.migration[k]?.length || 0])) : null };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }));
+    const a = document.createElement("a"); a.href = url; a.download = "shs-diagnostics.json"; a.click(); URL.revokeObjectURL(url);
   }
 
-  _thermalStatusText(thermal) {
-    const messages = {
-      not_requested: "No setpoint-controlled thermal zones are requested by the website.",
-      device_mappings_required: `${thermal.mapped_zones} of ${thermal.requested_zones} heating-device mappings are complete.`,
-      outdoor_sources_required: "Zone mappings are ready; measured outdoor temperature and weather forecast still need confirmation.",
-      waiting_for_history: "Inputs are mapped. Waiting for complete recorder quarters to be accepted by the website.",
-      observations_published: thermal.accepted_until
-        ? `Thermal observations have been accepted through ${thermal.accepted_until}. ${thermal.last_slots_accepted} new or repeated slots were accepted in the latest exchange.`
-        : `${thermal.last_slots_accepted} thermal observation slots were accepted in the latest exchange.`,
+  _present(value) { return value !== undefined && value !== null && value !== "" && (!Array.isArray(value) || value.length > 0); }
+
+  _fields(fields, values, scope = "configuration", deviceKey = "") {
+    const visible = [], optional = [];
+    const linked = {
+      pool_start_temperature_entity: ["pool_stop_temperature_entity", "pool_temperature_minimum", "pool_temperature_maximum"],
+      offset_entity_id: ["offset_minimum", "offset_maximum"],
+      battery_authority_entity: ["battery_authority_confirm_entity", "battery_authority_confirm_state"],
     };
-    return messages[thermal.status] || this._human(thermal.status);
+    const dependent = new Set(Object.entries(linked).filter(([key]) => this._present(values[key])).flatMap(([, keys]) => keys));
+    for (const field of fields) {
+      const token = `${scope}:${deviceKey}:${field.key}`;
+      const required = field.required || dependent.has(field.key);
+      const populated = this._present(values[field.key]) && (field.kind !== "toggle" || values[field.key] || this._data.configured_keys?.includes(field.key));
+      const inheritedLocation = ["pv_forecast_latitude", "pv_forecast_longitude"].includes(field.key) && !this._data.configured_keys?.includes(field.key);
+      if (required || (populated && !inheritedLocation) || this._added.has(token)) visible.push(this._renderField({ ...field, required }, values[field.key], scope, deviceKey));
+      else if (!["permit_entity_id", "mode_entity_id", "offset_entity_id", "offset_minimum", "offset_maximum", "companion_actuator_entity_ids"].includes(field.key)) {
+        optional.push(`<button class="text" data-action="add-field" data-token="${this._escape(token)}">Add ${this._escape(field.label.toLowerCase())}</button>`);
+      }
+    }
+    return `<div class="field-grid">${visible.join("")}</div>${optional.length ? `<details class="compact" data-open-key="optional:${this._escape(scope + deviceKey + fields[0]?.key)}"><summary>Add a setting</summary>${optional.join("")}</details>` : ""}`;
+  }
+
+  _renderSection(section) {
+    const fields = section.fields;
+    const summary = fields.filter(f => this._present(this._draft[f.key])).map(f => {
+      const value = this._draft[f.key];
+      return Array.isArray(value) ? `${f.label}: ${value.length}` : f.label;
+    }).join(" · ") || "No settings configured";
+    const id = "section:" + section.id;
+    return `<details class="card compact" data-open-key="${id}" ${this._expanded.has(id) ? "open" : ""}>
+      <summary>${this._escape(section.title)}<span>${this._escape(summary)}</span></summary>
+      ${section.description ? `<p class="description">${this._escape(section.description)}</p>` : ""}
+      ${this._fields(fields, this._draft)}
+    </details>`;
+  }
+
+  _renderEnergy() {
+    const sections = this._data.sections.filter(s => s.tab === "energy" && s.id !== "sharing");
+    const changes = this._patch(sections.flatMap(s => s.fields));
+    const selected = sections.flatMap(s => s.fields).flatMap(field => {
+      const value = this._draft[field.key];
+      return (Array.isArray(value) ? value : typeof value === "string" && value.includes(".") ? [value] : [])
+        .map(id => ({ field, id, entity: this._data.entities.find(e => e.entity_id === id) }));
+    });
+    return `<div class="page-intro"><h2>Energy shared with SHS</h2><p>Daily energy totals, completed 15-minute readings, device profiles and room temperatures help SHS predict demand. Devices remain counted within the household total.</p></div>
+      ${this._discovery ? `<section class="card"><h2>Review proposed source changes</h2>${Object.keys(changes).length ? `<ul>${Object.entries(changes).map(([key, value]) => {
+        const field = sections.flatMap(s => s.fields).find(f => f.key === key);
+        return `<li><strong>${this._escape(field?.label || "Source")}</strong>: ${this._escape(JSON.stringify(this._savedDraft[key] ?? []))} → ${this._escape(JSON.stringify(value))}</li>`;
+      }).join("")}</ul>` : "No source changes proposed."}<p>Save changes to apply, or Cancel to retain your current sources.</p></section>` : ""}
+      ${sections.map(s => this._renderSection(s)).join("")}
+      <details class="card compact"><summary>Individual device readings</summary><p>Choose which devices send individual readings. Excluded devices remain in the website inventory and inside household totals; their individual load is not scheduled. Shared room observations may still be sent for another heater in the same room.</p>
+      ${(this._data.meter_inventory || []).map(d => `<label class="choice-row"><span>${this._escape(d.name)}</span><input type="checkbox" aria-label="Share ${this._escape(d.name)} readings" data-share="${this._escape(d.key)}" ${(this._draft.excluded_device_readings || []).includes(d.key) ? "" : "checked"}></label>`).join("")}</details>
+      <p class="muted">Solar location ${this._data.configured_keys?.some(k => ["pv_forecast_latitude", "pv_forecast_longitude"].includes(k)) ? "uses your configured override" : "comes from Home Assistant"}. An override can be added in Solar and electrical measurements.</p>
+      <details class="card compact"><summary>Current readings · ${selected.length} selected sources</summary><div class="table-wrap"><table><thead><tr><th>Source</th><th>Used for</th><th>Reading</th><th>Last update</th><th>Selected in</th></tr></thead><tbody>${selected.map(({ field, entity, id }) => `<tr><td>${this._escape(entity?.name || id)}</td><td>${this._escape(field.label)}</td><td>${this._escape(entity ? `${entity.state} ${entity.unit || ""}` : "Unavailable")}</td><td>${this._time(entity?.last_updated)}</td><td>${this._data.configured_keys?.includes(field.key) ? "SHS configuration" : "HA Energy / discovery"}</td></tr>`).join("")}</tbody></table></div></details>`;
+  }
+
+  _choices(device) {
+    const permission = device.permission;
+    const disabled = Boolean(this._saving || this._savingDeviceKey || (!permission.enabled && (this._refreshError || permission.reason || this._deviceDirty(device.key))));
+    return `<div class="choices">
+      <div class="choice-row"><span>Include in the plan</span><strong>${this._escape(device.choice_label)} · <a href="${this._escape(this._data.website_url)}" target="_blank" rel="noreferrer">Website</a></strong></div>
+      <div class="choice-row"><span>Let SHS operate it</span><label class="switch"><input type="checkbox" aria-label="Let SHS operate ${this._escape(device.name)}" data-permission="${this._escape(device.key)}" ${permission.enabled ? "checked" : ""} ${disabled ? "disabled" : ""}><span></span></label>
+      <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Off leaves the device's own controls in charge."))}</small></div>
+    </div>`;
   }
 
   _renderDevice(device) {
     const mapping = this._mapping(device.key) || {};
     const dirty = this._deviceDirty(device.key);
-    const saving = this._savingDeviceKey === device.key;
-    const deviceError = this._deviceErrors[device.key] || "";
-    const saveStatus = deviceError
-      ? "Save failed — correct the message above"
-      : dirty
-      ? "Unsaved changes in this card"
-      : device.mapping_status === "ready"
-        ? "Saved and ready"
-        : "Complete the required fields, then save this card";
-    const open = device.mapping_status !== "ready" || dirty ? "open" : "";
-    const suggestionCount = Object.keys(device.suggested_mapping || {}).filter(
-      (key) => key !== "control_type" && mapping[key] === undefined
-    ).length;
-    return `<details class="card device-card" ${open}>
-      <summary>
-        <div><strong>${this._escape(device.name)}</strong><small>${this._escape(device.statistic_id)}</small></div>
-        <div class="device-summary">${this._statusBadge(device.mapping_status)}<span>${this._escape(this._human(device.control_type))}</span></div>
-      </summary>
-      <div class="device-body">
-        <div class="device-meta"><span>${this._escape(this._human(device.category))}</span><span>${this._escape(this._human(device.load_type))}</span><span>Website: controllable</span></div>
-        ${device.stale_mapping_control_type ? `<div class="inline-warning">The website changed this device from ${this._escape(this._human(device.stale_mapping_control_type))} to ${this._escape(this._human(device.control_type))}. The old mapping is ignored.</div>` : ""}
-        ${device.execution_reason ? `<div class="inline-warning">Control unavailable: ${this._escape(device.execution_reason)}. The method is selected on the website.</div>` : ""}
-        ${device.execution_status ? `<p>Control: ${this._escape(device.execution_status.state)} — ${this._escape(device.execution_status.reason || "")}</p>` : ""}
-        ${device.mapping_error ? `<div class="inline-warning"><strong>Currently saved configuration:</strong> ${this._escape(device.mapping_error)}</div>` : ""}
-        ${deviceError ? `<div class="inline-error"><strong>Could not save this configuration</strong><span>${this._escape(deviceError)}</span></div>` : ""}
-        <div class="device-actions">
-          <div class="device-action-group"><button type="button" class="secondary" data-action="use-suggestions" data-device-key="${this._escape(device.key)}" ${suggestionCount ? "" : "disabled"}>Use ${suggestionCount} suggestion${suggestionCount === 1 ? "" : "s"}</button>
-          <button type="button" class="text danger" data-action="clear-mapping" data-device-key="${this._escape(device.key)}">Remove local mapping</button></div>
-        </div>
-        <div class="field-grid">
-          ${device.fields
-            .map((field) => this._renderField(field, mapping[field.key], "mapping", device.key))
-            .join("")}
-        </div>
-        <div class="device-save-row">
-          <span>${this._escape(saveStatus)}</span>
-          <button type="button" class="primary" data-action="save-device" data-device-key="${this._escape(device.key)}" ${dirty && !this._savingDeviceKey && !this._saving ? "" : "disabled"}>${saving ? "Saving…" : "Save configuration"}</button>
-        </div>
-      </div>
-    </details>`;
+    const id = "device:" + device.key;
+    const edit = this._expanded.has(id) || dirty;
+    return `<details class="card device-card" data-open-key="${this._escape(id)}" ${edit ? "open" : ""}>
+      <summary><div><strong>${this._escape(device.name)}</strong><small>${this._escape(device.room_name || "No room")} · ${this._escape(this._label(device.category))}</small></div>
+        ${this._statusBadge(device.included ? device.mapping_status : "base_load")}</summary>
+      <div class="device-body"><p>${this._escape(this._label(device.control_type))}</p>
+        ${device.mapping_error ? `<p class="inline-warning">${this._escape(device.mapping_error)}</p>` : ""}
+        ${this._deviceErrors[device.key] ? `<p role="alert" class="inline-error">${this._escape(this._deviceErrors[device.key])}</p>` : ""}
+        ${this._fields(device.fields || [], mapping, "mapping", device.key)}
+        ${this._fields(device.system_fields || [], this._draft, "configuration", device.key)}
+        ${Object.keys(device.suggested_mapping || {}).some(k => k !== "control_type" && !this._present(mapping[k])) ? `<button class="text" data-action="use-suggestions" data-device-key="${this._escape(device.key)}">Review suggested setup</button>` : ""}
+        ${device.fields?.length || device.system_fields?.length ? `<div class="device-save-row"><span>${dirty ? "Unsaved setup changes" : "Saved setup"}</span><button class="text" data-action="cancel-device" data-device-key="${this._escape(device.key)}" ${dirty ? "" : "disabled"}>Cancel</button><button class="primary" data-action="save-device" data-device-key="${this._escape(device.key)}" ${dirty && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>Save setup</button></div>` : `<p>Choose how this device runs on the website to set it up here.</p>`}
+        ${this._choices(device)}
+        <small class="muted">${this._escape(device.statistic_id || "Equipment settings")}</small>
+      </div></details>`;
   }
 
   _renderDevices() {
     const devices = this._data.devices;
-    return `
-      <section class="page-intro">
-        <h2>Website-requested controllable devices</h2>
-        <p>Only these devices are separated from measured base load. A request becomes effective only after its local mapping is complete and saved.</p>
-      </section>
-      ${devices.length ? devices.map((device) => this._renderDevice(device)).join("") : `<section class="card empty"><h2>No controllable devices requested</h2><p>Choose a device and its control method on the SHS website, then refresh website roles here.</p></section>`}
-      ${this._renderSections("devices")}
-    `;
+    const filtered = devices.filter(d => (!this._search || `${d.name} ${d.room_name || ""}`.toLowerCase().includes(this._search.toLowerCase())) && (!this._room || d.room_name === this._room) && (!this._category || d.category === this._category));
+    const select = (key, placeholder, values, label) => `<select aria-label="${placeholder}" data-filter="${key}"><option value="">${placeholder}</option>${values.map(v => `<option value="${this._escape(v)}" ${this["_" + key] === v ? "selected" : ""}>${this._escape(label(v))}</option>`).join("")}</select>`;
+    const equipment = this._data.sections.filter(s => s.toggle && ["battery_enabled", "pool_enabled", "ev_enabled"].includes(s.toggle.key));
+    return `<div class="page-intro"><h2>Devices in your home</h2><p>Set up each device once. Selecting an entity never gives SHS permission to operate it.</p></div>
+      <div class="filters"><input type="text" aria-label="Search devices" placeholder="Search devices" data-filter="search" value="${this._escape(this._search)}">${select("room", "All rooms", [...new Set(devices.map(d => d.room_name || "No room"))], v => v)}${select("category", "All types", [...new Set(devices.map(d => d.category))], v => this._label(v))}</div>
+      ${filtered.map(d => this._renderDevice(d)).join("") || '<p>No matching devices.</p>'}
+      <details class="card compact"><summary>Equipment present in this home</summary><p>These choices describe what is installed. Planning participation is chosen on the website.</p>${equipment.map(s => this._renderField(s.toggle, this._draft[s.toggle.key])).join("")}</details>`;
   }
 
-  _renderThermal() {
-    const thermal = this._data.thermal;
-    return `
-      <section class="card thermal-status">
-        <div class="summary-top"><div><h2>Thermal model input status</h2><p>${this._escape(this._thermalStatusText(thermal))}</p></div>${this._statusBadge(thermal.status === "observations_published" || thermal.status === "not_requested" ? "ready" : "warning", this._human(thermal.status))}</div>
-        <div class="thermal-grid">
-          <div><strong>${thermal.mapped_rooms}</strong><span>rooms from ${thermal.mapped_zones}/${thermal.requested_zones} mapped heaters</span></div>
-          <div><strong>${thermal.outdoor_temperature_ready ? "Ready" : "Missing"}</strong><span>measured outdoor temperature</span></div>
-          <div><strong>${thermal.weather_forecast_ready ? "Ready" : "Missing"}</strong><span>outdoor forecast</span></div>
-          <div><strong>${this._escape(thermal.accepted_until || "—")}</strong><span>observations accepted through</span></div>
-        </div>
-        ${thermal.zones.length ? `<table><thead><tr><th>Heating meter</th><th>Room</th><th>Mapping</th><th>Reason</th></tr></thead><tbody>${thermal.zones.map((zone) => `<tr><td>${this._escape(zone.name)}</td><td>${this._escape(zone.room_name || "—")}</td><td>${this._statusBadge(zone.mapping_status)}</td><td>${this._escape(zone.mapping_error || "Complete")}</td></tr>`).join("")}</tbody></table>` : ""}
-      </section>
-      ${this._renderSections("thermal")}
-      <section class="card explanation"><h2>What happens next?</h2><p>After complete 15-minute recorder intervals exist, the integration publishes room temperature, actual heating/cooling duty and outdoor conditions. The website joins those observations to its room-owned Comfort schedule and learns one response model per room. Energy history by itself is not treated as a room-temperature model.</p></section>
-    `;
+  _commandText(device, slot) {
+    if (device.system && !this._data.timeline?.capabilities?.[device.system]) return "No instruction";
+    if (device.system === "battery") return slot.battery_charge_w > 0 ? `Charge ${slot.battery_charge_w} W` : slot.battery_discharge_w > 0 ? `Discharge ${slot.battery_discharge_w} W` : "Hold";
+    if (device.system === "ev") return slot.ev_target_current_a > 0 ? `Charge ${slot.ev_target_current_a} A` : "Charging off";
+    if (device.system === "pool") return slot.pool_w > 0 ? `Heat · ${slot.pool_w} W planned` : "No heating requested";
+    const command = slot.commands?.[device.key];
+    if (!command) return "No instruction";
+    if (command.type === "setpoint") return `Hold ${command.target_c} °C`;
+    if (command.type === "switch_schedule") return command.on_seconds ? "On" : "Off";
+    if (command.type === "permit_inhibit") return command.permitted ? "Allowed to run" : "Paused";
+    if (command.type === "variable_power") return `${command.value} ${command.unit}`;
+    return command.reason || "No supported instruction";
   }
 
-  _renderDiagnostics() {
-    const values = this._data.diagnostics;
-    const readiness = this._data.readiness;
-    const rows = [
-      ["Integration entry", `${this._data.entry.title} (${this._data.entry.state})`],
-      ["Subscription", values.subscription_active ? "Active" : "Inactive or unavailable"],
-      ["Tariff", values.tariff_status],
-      ["Last tariff error", values.last_tariff_error],
-      ["Last daily push", values.last_daily_push],
-      ["Last daily push error", values.last_daily_push_error],
-      ["Last planning push", readiness.last_plan_push],
-      ["Plan status", readiness.plan_status],
-      ["Plan model", readiness.plan_model_version],
-      ["Last planning error", values.last_optimisation_error],
-      ["Accepted electrical slots", readiness.actual_slots_accepted],
-      ["Electrical history accepted until", readiness.actuals_accepted_until],
-      ["Accepted thermal slots", values.last_thermal_slots_accepted],
-      ["Thermal history accepted through", values.thermal_slots_accepted_until],
-      ...Object.entries(values.controllers || {}).map(([key, status]) => {
-        const device = this._data.devices.find(item => `device:${item.key}` === key);
-        return [`${device?.name || key} control`, `${status.state}${status.reason ? `: ${status.reason}` : ""}`];
-      }),
-    ];
-    return `<section class="card diagnostics">
-      <h2>Configuration diagnostics</h2>
-      <p class="description">These are the concrete states used by the readiness cards. Secrets and raw recorder rows are never shown here.</p>
-      <dl>${rows.map(([label, value]) => `<div><dt>${this._escape(label)}</dt><dd>${this._escape(value ?? "—")}</dd></div>`).join("")}</dl>
-      ${values.migration ? `<details><summary>Configuration upgrade</summary>
-        <p>Settings changed during the upgrade. Previous values were not retained.</p>
-        ${[["imported", "Settings carried forward"], ["removed", "Old fields removed"], ["needs_attention", "Setup gaps found during upgrade"]].map(([key, label]) =>
-          `<h3>${label}</h3><ul>${values.migration[key].map((name) => `<li>${this._escape(name)}</li>`).join("")}</ul>`).join("")}
-      </details>` : ""}
-      ${readiness.missing_inputs.length ? `<h3>Planner input gaps</h3><ul>${readiness.missing_inputs.map((item) => `<li>${this._escape(item)}</li>`).join("")}</ul>` : ""}
-    </section>`;
+  _renderSchedule() {
+    const status = this._data.operation;
+    const now = Date.parse(status.now);
+    const available = (this._refreshError ? [] : this._data.timeline?.slots || []).filter(slot => Date.parse(slot.start) + 900000 > now);
+    const slots = this._fullHorizon ? available : available.filter(slot => Date.parse(slot.start) < now + 86400000);
+    const devices = this._data.devices;
+    const start = Date.parse(slots[0]?.start), end = Date.parse(slots.at(-1)?.start) + 900000;
+    const position = (now - start) / (end - start) * 100;
+    const selected = slots[this._selectedSlot];
+    return `<div class="card"><div class="status-heading"><h2>Your schedule</h2>${this._statusBadge(status.state, status.label)}</div>
+      <p>${this._escape(status.reason)}</p><p class="muted">Issued ${this._time(status.issued_at)} · Instructions until ${this._time(status.binding_until)}</p>
+      ${slots.length ? `<button class="text" data-action="horizon">${this._fullHorizon ? "Show next 24 hours" : "Show full available plan"}</button><p class="muted">Solid: instructions · Striped: future advice · Red line: now. Select a quarter to inspect its requests.</p><div class="timeline-scroll"><div class="timeline"><div class="timeline-times"><span>${this._time(slots[0].start)}</span><span>${this._time(slots.at(-1).start)}</span></div>
+      ${devices.filter(d => d.included).map(d => `<div class="timeline-row"><strong>${this._escape(d.name)}</strong><div class="timeline-track">${slots.map((slot, index) => {
+        const text = this._commandText(d, slot);
+        const active = !["Off", "Hold", "Charging off", "No heating requested", "No instruction", "Paused"].includes(text) && slot.commands?.[d.key]?.type !== "unavailable";
+        return `<button class="slot ${active ? "running" : ""} ${slot.binding ? "" : "advisory"}" data-action="slot" data-index="${index}" aria-label="${this._escape(d.name + ', ' + this._time(slot.start) + ', ' + text + (slot.binding ? ', instruction' : ', advice'))}" title="${this._escape(text)}"></button>`;
+      }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Instructions" : "Advice only"}</h3><ul>${devices.filter(d => d.included).map(d => `<li>${this._escape(d.name)}: ${this._escape(this._commandText(d, selected))}</li>`).join("")}</ul></div>` : ""}` : `<p>No actionable schedule is available. Details are in Status.</p>`}
+      <p>Targets shown here are requests. They do not prove that heat, charging or power was delivered.</p></div>
+      ${this._data.sections.filter(s => s.id === "planning").map(s => this._renderSection(s)).join("")}
+      ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
+      <p class="muted">Planning is chosen on the website. Permission to operate is chosen here. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
+      ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._commandText(d, slots[1]))}` : ""}</small></article>`).join("")}`;
   }
 
-  /**
-   * Everything currently asking for a decision, shown on every tab.
-   *
-   * The readiness cards used to be derived from a handful of hand-picked
-   * fields, so this panel could show four green badges while Home Assistant
-   * displayed a repair warning about the same installation. These come from
-   * the same call that raises the repairs, and each one carries where its fix
-   * lives, because a warning that names a problem without naming the field is
-   * only marginally better than silence.
-   */
-  _attention() {
-    return this._data?.attention || [];
-  }
-
-  _attentionForTab(tab) {
-    return this._attention().filter(
-      (item) => item.fix?.kind === "panel" && item.fix.tab === tab
-    );
-  }
-
+  _attention() { return this._data?.attention || []; }
+  _attentionForTab(tab) { return tab === "status" ? this._attention().filter(i => i.severity !== "info") : []; }
   _renderAttention() {
-    const items = this._attention();
-    if (!items.length) return "";
-    return `<div class="attention">
-      ${items
-        .map((item) => {
-          const fix = item.fix || {};
-          // "none" is a deliberate answer, not a missing one: the warning has
-          // nowhere to send anybody. A button here would promise a field to
-          // change, and every reader who pressed it would search a settings
-          // page for a problem no setting on it can reach.
-          const action = fix.kind === "none"
-            ? `<span class="fix muted">Nothing to change here</span>`
-            : fix.kind === "website"
-              ? fix.url
-                ? `<a class="fix" href="${this._escape(fix.url)}" target="_blank" rel="noreferrer">Open the website</a>`
-                : `<span class="fix muted">Fix on the Smart Home Solutions website: ${this._escape(fix.path || "/portal")}</span>`
-              : fix.tab
-                ? `<button type="button" class="fix" data-action="tab" data-tab="${this._escape(fix.tab)}">Go to ${this._escape((TABS.find(([id]) => id === fix.tab) || [null, fix.tab])[1])}</button>`
-                : "";
-          return `<article class="attention-item ${this._escape(item.severity)}">
-            <div class="attention-top">
-              <strong>${this._escape(item.title)}</strong>
-              ${action}
-            </div>
-            <p>${this._escape(item.detail)}</p>
-            ${(item.items || []).length ? `<ul>${item.items.map((line) => `<li>${this._escape(line)}</li>`).join("")}</ul>` : ""}
-          </article>`;
-        })
-        .join("")}
-    </div>`;
+    return this._attention().map(item => `<article class="attention-item ${this._escape(item.severity)}"><strong>${this._escape(item.title)}</strong><p>${this._escape(item.detail)}</p>${item.items?.length ? `<ul>${item.items.map(i => `<li>${this._escape(i)}</li>`).join("")}</ul>` : ""}
+      ${item.fix?.url ? `<a href="${this._escape(item.fix.url)}" target="_blank" rel="noreferrer">Open website settings</a>` : item.fix?.tab ? `<button class="text" data-action="tab" data-tab="${this._escape(item.fix.tab)}">Open ${this._escape(TABS.find(([id]) => id === item.fix.tab)?.[1] || "settings")}</button>` : ""}</article>`).join("");
+  }
+
+  _renderStatus() {
+    const status = this._data.operation, values = this._data.diagnostics, readiness = this._data.readiness;
+    const rows = (items) => `<dl>${items.map(([label, value]) => `<div><dt>${this._escape(label)}</dt><dd>${this._escape(value ?? "Not yet")}</dd></div>`).join("")}</dl>`;
+    const controllers = this._data.devices.map(d => [d.name, `${this._label(d.execution_status?.state)}${d.execution_status?.reason ? ': ' + d.execution_status.reason : ''}`]);
+    return `<section class="card"><div class="status-heading"><h2>Integration status</h2>${this._statusBadge(status.state, status.label)}</div><p>${this._escape(status.reason)}</p>${this._refreshError ? `<p role="alert">Status refresh failed: ${this._escape(this._refreshError)}. These readings may be stale.</p>` : ""}<button class="secondary" data-action="download">Download redacted diagnostics</button></section>
+      <div class="attention">${this._tab === "status" ? "" : this._attention().length ? `<button class="secondary" data-action="tab" data-tab="status">${this._attention().some(i => i.severity !== "info") ? this._attention().filter(i => i.severity !== "info").length + " items need attention" : "Learning in progress"} · View status</button>` : ""}</div>
+      <details class="card diagnostics compact"><summary>Data delivery</summary>${rows([["Latest daily delivery", this._time(values.last_daily_push)], ["Latest daily error", values.last_daily_push_error], ["Latest planning attempt", this._time(readiness.last_plan_attempt)], ["Latest successful exchange", this._time(readiness.last_plan_push)], ["Electrical readings received through", this._time(readiness.actuals_accepted_until)], ["New electrical quarters in latest exchange", readiness.actual_slots_accepted], ["Room readings received through", this._time(values.thermal_slots_accepted_until)], ["New room quarters in latest exchange", values.last_thermal_slots_accepted], ["Website choices received", this._time(this._data.portal.refreshed_at)]])}<p>Zero new quarters does not erase earlier history.</p></details>
+      <details class="card diagnostics compact"><summary>Planner</summary>${rows([["Current plan", status.label], ["Plan identifier", status.plan_id], ["Issued", this._time(status.issued_at)], ["Instructions until", this._time(status.binding_until)], ["Valid until", this._time(status.valid_until)], ["Latest exchange error", values.last_optimisation_error], ["Tariff", this._label(values.tariff_status)], ["Subscription", values.subscription_active ? "Active" : "Inactive or unavailable"]])}${readiness.missing_inputs?.length ? `<ul>${readiness.missing_inputs.map(i => `<li>${this._escape(i)}</li>`).join("")}</ul>` : ""}</details>
+      <details class="card diagnostics compact"><summary>Device execution</summary>${rows(controllers)}<p>A confirmed target means Home Assistant accepted the setting. Physical delivery requires a measurement.</p></details>
+      ${values.migration ? `<details class="card compact"><summary>Configuration upgrade</summary>${[["imported", "Settings carried forward"], ["removed", "Old fields removed"], ["needs_attention", "Setup gaps found at upgrade"]].map(([key, label]) => `<h3>${label}</h3><ul>${(values.migration[key] || []).map(name => `<li>${this._escape(name)}</li>`).join("")}</ul>`).join("")}</details>` : ""}`;
   }
 
   _renderBody() {
-    if (this._tab === "overview") return this._renderOverview();
+    if (this._tab === "energy") return this._renderEnergy();
     if (this._tab === "devices") return this._renderDevices();
-    if (this._tab === "thermal") return this._renderThermal();
-    if (["inputs", "storage", "controller"].includes(this._tab)) return this._renderSections(this._tab);
-    return this._renderDiagnostics();
+    if (this._tab === "schedule") return this._renderSchedule();
+    return this._renderStatus();
   }
 
   _renderEntrySelection() {
@@ -868,6 +798,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _render() {
     if (!this.shadowRoot) return;
+    const active = this.shadowRoot.activeElement;
+    const focusKey = active?.dataset.fieldKey;
+    const focusDevice = active?.dataset.deviceKey;
+    const focusFilter = active?.dataset.filter;
+    const selection = active && "selectionStart" in active ? active.selectionStart : null;
+    for (const node of this.shadowRoot.querySelectorAll("details[data-open-key]")) {
+      if (node.open) this._expanded.add(node.dataset.openKey); else this._expanded.delete(node.dataset.openKey);
+    }
     if (!this._hass || (this._loading && !this._data)) {
       this.shadowRoot.innerHTML = `${this._styles()}<div class="center"><div class="spinner"></div><p>Loading SHS Energy configuration…</p></div>`;
       return;
@@ -888,23 +826,27 @@ class ShsEnergyConfigPanel extends HTMLElement {
           <button type="button" class="icon-button" data-action="back" aria-label="Back">←</button>
           <div class="title"><h1>SHS Energy configuration</h1><p>${this._escape(this._data.entry.title)} · ${this._escape(this._data.entry.state)}</p></div>
           <div class="toolbar">
-            <button type="button" class="secondary" data-action="refresh" ${this._loading ? "disabled" : ""}>${this._loading ? "Refreshing…" : "Refresh website roles"}</button>
-            <button type="button" class="secondary" data-action="discover" ${this._loading ? "disabled" : ""}>Run automatic discovery</button>
+            <button type="button" class="secondary" data-action="refresh" ${this._loading ? "disabled" : ""}>${this._loading ? "Refreshing…" : "Refresh website choices"}</button>
+            <button type="button" class="secondary" data-action="discover" ${this._loading ? "disabled" : ""}>Review sources from HA Energy</button>
             <button type="button" class="text" data-action="discard" ${this._dirty ? "" : "disabled"}>Discard</button>
-            <button type="button" class="primary" data-action="save" ${this._configurationDirty && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>${this._saving ? "Saving…" : "Save general changes"}</button>
+            <button type="button" class="primary" data-action="save" ${this._configurationDirty && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>${this._saving ? "Saving…" : "Save changes"}</button>
           </div>
         </header>
         <nav class="tabs" aria-label="Configuration sections">${TABS.map(([id, label]) => { const count = this._attentionForTab(id).length; return `<button type="button" data-action="tab" data-tab="${id}" class="${this._tab === id ? "active" : ""}${count ? " needs-attention" : ""}">${label}${count ? `<span class="tab-badge" aria-label="${count} item${count === 1 ? "" : "s"} to fix">${count}</span>` : ""}</button>`; }).join("")}</nav>
         <section class="content">
           ${this._error ? `<div class="alert error"><strong>Could not save or refresh</strong><span>${this._escape(this._error)}</span></div>` : ""}
           ${this._notice ? `<div class="alert notice"><span>${this._escape(this._notice)}</span></div>` : ""}
-          ${this._data.portal.error ? `<div class="alert warning"><strong>Website role refresh failed</strong><span>${this._escape(this._data.portal.error)} The last saved website request is shown.</span></div>` : ""}
-          ${this._renderAttention()}
+          ${this._data.portal.error ? `<div class="alert warning"><strong>Website choices could not be refreshed</strong><span>${this._escape(this._data.portal.error)} The last received choices are shown.</span></div>` : ""}
+          ${this._tab === "status" ? "" : this._attention().length ? `<button class="secondary" data-action="tab" data-tab="status">${this._attention().some(i => i.severity !== "info") ? this._attention().filter(i => i.severity !== "info").length + " items need attention" : "Learning in progress"} · View status</button>` : ""}
+          ${this._tab !== "status" && this._data.devices.some(d => d.execution_status?.state === "fault") ? `<div role="alert" class="alert error"><span>Device execution needs attention: ${this._data.devices.filter(d => d.execution_status?.state === "fault").map(d => this._escape(d.name)).join(", ")}</span><button class="secondary" data-action="tab" data-tab="status">View status</button></div>` : ""}
           ${this._renderBody()}
         </section>
-        <footer><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Existing local controllers retain ownership.</span></footer>
+        <footer aria-live="polite"><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Planning is chosen on the website. Permission to operate is chosen here.</span></footer>
         ${this._renderDatalist()}
       </main>`;
+    const fields = [...this.shadowRoot.querySelectorAll("input,select")];
+    const target = fields.find(el => focusFilter ? el.dataset.filter === focusFilter : focusKey && el.dataset.fieldKey === focusKey && el.dataset.deviceKey === focusDevice);
+    if (target) { target.focus(); if (selection !== null && target.type === "text") target.setSelectionRange(selection, selection); }
   }
 
   _styles() {
@@ -915,6 +857,36 @@ class ShsEnergyConfigPanel extends HTMLElement {
       button { cursor:pointer; }
       button:disabled { cursor:default; opacity:.48; }
       .shell { min-height:100vh; }
+      button:focus-visible, summary:focus-visible, a:focus-visible { outline:3px solid var(--primary-color); outline-offset:3px; }
+      .switch input:focus-visible + span { outline:3px solid var(--primary-color); outline-offset:3px; }
+      .switch input:disabled + span { opacity:.45; }
+      .schedule-device { padding:16px 20px; margin-bottom:12px; }
+      .schedule-device h2 { font-size:17px; }
+      .schedule-device .choices { margin:6px 0; padding:2px 0; }
+      .choice-row { display:grid; grid-template-columns:1fr auto; gap:8px; padding:10px 0; }
+      .choice-row small { grid-column:1/-1; color:var(--secondary-text-color); }
+      .choices { border-top:1px solid var(--divider-color); border-bottom:1px solid var(--divider-color); margin:14px 0; padding:8px 0; }
+      .filters { display:flex; gap:12px; margin:18px 0; flex-wrap:wrap; }
+      .filters > * { flex:1; min-width:150px; }
+      .compact summary { cursor:pointer; font-weight:600; padding:8px 0; }
+      .compact summary span { display:block; font-size:13px; font-weight:400; color:var(--secondary-text-color); margin-top:6px; }
+      .source-list { display:grid; gap:8px; margin:15px 0; }
+      .source-list small { color:var(--secondary-text-color); }
+      .timeline-scroll { overflow-x:auto; }
+      .timeline { min-width:720px; }
+      .timeline-row { display:grid; grid-template-columns:160px 1fr; gap:12px; padding:10px 0; align-items:center; }
+      .timeline-track { display:flex; height:30px; position:relative; background:var(--secondary-background-color); }
+      .slot { flex:1; min-width:2px; padding:0; border:0; border-right:1px solid var(--card-background-color); background:transparent; }
+      .slot.running { background:var(--primary-color); }
+      .slot.advisory { opacity:.35; background-image:repeating-linear-gradient(45deg,transparent,transparent 2px,#fff5 2px,#fff5 4px); }
+      .now-line { position:absolute; height:100%; width:2px; background:var(--error-color); pointer-events:none; }
+      .timeline-times { display:flex; justify-content:space-between; margin-left:172px; color:var(--secondary-text-color); font-size:12px; }
+      .status-heading { display:flex; justify-content:space-between; gap:18px; align-items:center; }
+      .info { border-color:var(--primary-color) !important; }
+      .table-wrap { overflow-x:auto; }
+      .muted { color:var(--secondary-text-color); }
+      a { color:var(--primary-color); }
+
       .topbar { min-height:84px; padding:16px 24px; display:flex; align-items:center; gap:16px; position:sticky; top:0; z-index:5; background:var(--app-header-background-color, var(--card-background-color)); color:var(--app-header-text-color, var(--primary-text-color)); border-bottom:1px solid var(--divider-color); }
       .icon-button { width:44px; height:44px; border:0; border-radius:50%; background:transparent; color:inherit; font-size:28px; }
       .icon-button:hover { background:rgba(127,127,127,.14); }
@@ -948,24 +920,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .description, .page-intro p, .explanation p { color:var(--secondary-text-color); margin:0 0 22px; line-height:1.55; }
       .page-intro { margin:4px 0 20px; }
       .page-intro h2 { margin:0 0 6px; }
-      .safety-note { padding:15px 18px; margin-bottom:20px; border-radius:12px; color:var(--primary-text-color); background:color-mix(in srgb, var(--info-color, #039be5) 12%, var(--card-background-color)); border:1px solid color-mix(in srgb, var(--info-color, #039be5) 45%, transparent); }
-      .summary-grid { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:14px; margin-bottom:20px; }
-      .summary-card { margin:0; min-height:170px; background:var(--card-background-color); border:1px solid var(--divider-color); border-top:4px solid var(--divider-color); border-radius:14px; padding:18px; }
       .summary-card.ready { border-top-color:var(--success-color, #43a047); }
       .summary-card.warning { border-top-color:var(--warning-color, #ff9800); }
       .summary-card.error { border-top-color:var(--error-color, #db4437); }
-      .summary-card h3 { margin:0; font-size:16px; }
-      .summary-card p { color:var(--secondary-text-color); line-height:1.45; margin:14px 0 0; }
-      .summary-card ul { margin:12px 0 0; padding-left:18px; color:var(--secondary-text-color); font-size:13px; }
-      .summary-top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
       .badge { display:inline-flex; align-items:center; padding:4px 9px; border-radius:999px; white-space:nowrap; font-size:12px; font-weight:700; color:var(--secondary-text-color); background:var(--secondary-background-color); }
       .badge.ready, .badge.synchronised, .badge.observations_published { color:var(--success-color, #2e7d32); background:color-mix(in srgb, var(--success-color, #43a047) 14%, transparent); }
       .badge.warning, .badge.not_configured, .badge.device_mappings_required, .badge.outdoor_sources_required, .badge.waiting_for_history { color:var(--warning-color, #ef6c00); background:color-mix(in srgb, var(--warning-color, #ff9800) 14%, transparent); }
       .badge.error, .badge.invalid { color:var(--error-color, #c62828); background:color-mix(in srgb, var(--error-color, #db4437) 12%, transparent); }
-      .workflow { display:grid; grid-template-columns:repeat(4,1fr); gap:18px; }
-      .workflow div { display:grid; grid-template-columns:32px 1fr; column-gap:10px; }
-      .workflow span { width:30px; height:30px; display:grid; place-items:center; border-radius:50%; color:var(--primary-color); background:color-mix(in srgb, var(--primary-color) 12%, transparent); font-weight:700; grid-row:span 2; }
-      .workflow small { color:var(--secondary-text-color); line-height:1.4; margin-top:4px; }
       .field-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:18px 24px; }
       .field { min-width:0; }
       .field-label { display:flex; justify-content:space-between; gap:8px; align-items:center; min-height:22px; margin-bottom:7px; }
@@ -1003,21 +964,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .device-card summary::-webkit-details-marker { display:none; }
       .device-card summary > div:first-child { display:flex; flex-direction:column; min-width:0; }
       .device-card summary small { color:var(--secondary-text-color); overflow:hidden; text-overflow:ellipsis; }
-      .device-summary { display:flex; gap:12px; align-items:center; color:var(--secondary-text-color); white-space:nowrap; }
       .device-body { border-top:1px solid var(--divider-color); padding:22px; }
-      .device-meta { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
-      .device-meta span { padding:5px 9px; border-radius:8px; background:var(--secondary-background-color); color:var(--secondary-text-color); font-size:12px; }
-      .device-actions { display:flex; justify-content:space-between; gap:10px; align-items:center; margin:14px 0 20px; }
-      .device-action-group { display:flex; flex-wrap:wrap; gap:8px; }
       .device-save-row { display:flex; justify-content:flex-end; align-items:center; gap:16px; margin-top:24px; padding-top:18px; border-top:1px solid var(--divider-color); }
       .device-save-row span { color:var(--secondary-text-color); font-size:13px; }
       .inline-warning { padding:11px 13px; margin:10px 0; border-radius:9px; color:var(--warning-color); background:color-mix(in srgb, var(--warning-color) 10%, transparent); }
       .inline-error { display:flex; gap:10px; align-items:center; padding:11px 13px; margin:10px 0; border-radius:9px; color:var(--error-color); background:color-mix(in srgb, var(--error-color) 10%, transparent); }
       .inline-error span { flex:1; }
-      .thermal-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:22px 0; }
-      .thermal-grid div { padding:16px; border-radius:12px; background:var(--secondary-background-color); display:flex; flex-direction:column; gap:5px; }
-      .thermal-grid strong { font-size:21px; }
-      .thermal-grid span { color:var(--secondary-text-color); font-size:12px; }
       table { width:100%; border-collapse:collapse; margin-top:18px; }
       th, td { padding:12px 10px; text-align:left; border-top:1px solid var(--divider-color); }
       th { color:var(--secondary-text-color); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
@@ -1037,8 +989,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .center { min-height:100vh; display:grid; place-content:center; justify-items:center; color:var(--secondary-text-color); }
       .spinner { width:36px; height:36px; border:3px solid var(--divider-color); border-top-color:var(--primary-color); border-radius:50%; animation:spin .8s linear infinite; }
       @keyframes spin { to { transform:rotate(360deg); } }
-      @media (max-width:1000px) { .summary-grid, .workflow { grid-template-columns:repeat(2,1fr); } .topbar { flex-wrap:wrap; } .toolbar { width:100%; } .tabs { top:132px; } }
-      @media (max-width:700px) { .topbar { padding:12px; position:relative; } .tabs { top:0; position:sticky; padding:8px 12px; } .content { padding:16px 12px 88px; } .toolbar { display:grid; grid-template-columns:1fr 1fr; } .field-grid, .summary-grid, .workflow, .thermal-grid { grid-template-columns:1fr; } .card { padding:18px; border-radius:13px; } .device-card { padding:0; } .device-summary > span:last-child { display:none; } .diagnostics dl div { grid-template-columns:1fr; gap:5px; } footer span:last-child { display:none; } }
+      @media (max-width:1000px) { .topbar { flex-wrap:wrap; } .toolbar { width:100%; } .tabs { top:132px; } }
+      @media (max-width:700px) { .topbar { padding:12px; position:relative; } .tabs { top:0; position:sticky; padding:8px 12px; } .content { padding:16px 12px 88px; } .toolbar { display:grid; grid-template-columns:1fr 1fr; } .field-grid { grid-template-columns:1fr; } .card { padding:18px; border-radius:13px; } .device-card { padding:0; } .diagnostics dl div { grid-template-columns:1fr; gap:5px; } footer span:last-child { display:none; } }
     </style>`;
   }
 }

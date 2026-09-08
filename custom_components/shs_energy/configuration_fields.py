@@ -8,6 +8,30 @@ else:
     import const as shs_const
     from device_controls import is_room_thermal_control
 
+LABELS = {
+    "switch_schedule": "Turns on and off", "setpoint": "Holds a temperature",
+    "permit_inhibit": "Allowed to run", "variable_power": "Runs at a chosen power",
+    "current_limit": "Charges at a chosen current", "fixed_full_load": "Runs at full power",
+    "variable_full_load": "Varies its power", "duty_cycle": "Cycles on and off",
+    "inverter": "Adjusts continuously", "ready": "Ready", "invalid": "Needs attention",
+    "not_configured": "Not set up", "unavailable": "Unavailable", "disabled": "Off",
+    "expired": "Expired", "advisory_only": "Advice only", "incomplete": "Waiting for inputs",
+    "infeasible": "No workable schedule", "warning": "Needs attention", "error": "Needs attention",
+    "fault": "Needs attention", "overridden": "Manual control", "unsupported": "Not supported",
+    "commanded": "Target confirmed", "idle": "Waiting", "active": "Operating",
+    "synchronised": "Up to date", "base_load": "Excluded", "controllable": "Included",
+    "heating": "Heating", "cooling": "Cooling", "hot_water": "Hot water",
+    "pool_heating": "Pool", "ev_charging": "Vehicle", "household": "Household",
+    "property_energy": "Other equipment", "battery": "House battery", "pool": "Pool", "ev": "Vehicle",
+    "not_requested": "Not needed", "waiting_for_history": "Collecting history",
+    "observations_published": "Readings received", "device_mappings_required": "Device setup needed",
+    "outdoor_sources_required": "Outdoor readings needed", "loaded": "Connected",
+    "live": "Planning on", "configured": "Configured", "missing": "Missing",
+    "baseline": "Own settings restored", "stopped": "Stopped", "limited": "At an operating limit",
+    "scheduled": "Following the schedule", "confirmed": "Measured power confirmed",
+}
+
+
 def _field(
     key: str,
     label: str,
@@ -62,7 +86,7 @@ def _temperature_field(*, required: bool) -> dict[str, Any]:
     """Describe a mandatory setpoint source or optional room upgrade."""
     return _field(
         "temperature_entity_id",
-        "Room or process temperature",
+        "Room temperature",
         "entity",
         domains=("sensor", "climate"),
         required=required,
@@ -83,7 +107,7 @@ def _number_control_fields() -> tuple[dict[str, Any], ...]:
     return (
         _field(
             "control_entity_id",
-            "Controlled number entity",
+            "Power or current control",
             "entity",
             domains=("number", "input_number"),
             required=True,
@@ -115,22 +139,22 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
         TEMPERATURE_FIELD,
         _field(
             "setpoint_entity_id",
-            "Direct setpoint",
+            "Temperature target",
             "entity",
             domains=("number", "input_number", "climate"),
             help_text="Use this when one entity contains the current target temperature.",
         ),
         _field(
             "actuator_entity_ids",
-            "Controlled heater or climate actuator(s)",
+            "Heater or thermostat",
             "entities",
             domains=("switch", "climate", "input_boolean"),
             required=True,
-            help_text="These entities reveal actual heating duty. Their Home Assistant area defines the room; this page does not operate them.",
+            help_text="Choose the heater or thermostat. Its Home Assistant area identifies the room. Permission to operate it is chosen separately.",
         ),
         _field(
             "companion_actuator_entity_ids",
-            "Required companion actuator(s)",
+            "Equipment that must run together",
             "entities",
             domains=("switch", "climate", "input_boolean"),
             help_text="For coupled equipment such as a circulation pump.",
@@ -202,7 +226,7 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
         ),
         _field(
             "companion_actuator_entity_ids",
-            "Required companion actuator(s)",
+            "Equipment that must run together",
             "entities",
             domains=("switch", "input_boolean", "climate"),
         ),
@@ -273,9 +297,11 @@ def _configuration_sections() -> list[dict[str, Any]]:
         ("household", "Household energy"),
     )
     return [
+        {"id": "sharing", "tab": "energy", "title": "Device readings", "fields": [
+            _field("excluded_device_readings", "Devices whose individual readings are not shared", "entities", domains=("sensor",))]},
         {
             "id": "planning",
-            "tab": "overview",
+            "tab": "schedule",
             "title": "Planning",
             "description": "Monitoring remains active when planning is off. Enabled controllers execute binding plans and restore their baseline when planning stops.",
             "fields": [
@@ -290,7 +316,7 @@ def _configuration_sections() -> list[dict[str, Any]]:
         },
         {
             "id": "metering",
-            "tab": "inputs",
+            "tab": "energy",
             "title": "Energy Dashboard meters",
             "description": "Every listed sensor is summed into its category. Device meters remain classified separately by the website.",
             "fields": [
@@ -305,7 +331,7 @@ def _configuration_sections() -> list[dict[str, Any]]:
         },
         {
             "id": "prices_forecasts",
-            "tab": "inputs",
+            "tab": "energy",
             "title": "Solar and electrical measurements",
             "description": "Supplier and price area are configured on the Smart Home Solutions website; prices are fetched and calculated by the service.",
             "fields": [
@@ -317,9 +343,9 @@ def _configuration_sections() -> list[dict[str, Any]]:
         },
         {
             "id": "thermal_sources",
-            "tab": "thermal",
+            "tab": "energy",
             "title": "Shared outdoor conditions",
-            "description": "Room sensors and actuators are mapped on each setpoint-controlled device. These shared sources let the website learn weather response and project it forward.",
+            "description": "Shared outdoor readings help predict heating needs. Room temperature sources are set up with their devices.",
             "fields": [
                 _field(c.OPT_OUTDOOR_TEMPERATURE_ENTITY, "Measured outdoor temperature", "entity", domains=("sensor",)),
                 _field(c.OPT_WEATHER_FORECAST_ENTITY, "Outdoor weather forecast", "entity", domains=("weather",)),
@@ -327,9 +353,9 @@ def _configuration_sections() -> list[dict[str, Any]]:
         },
         {
             "id": "house_battery",
-            "tab": "storage",
+            "tab": "devices",
             "title": "House battery",
-            "description": "Export is a customer preference and remains advisory until a reviewed local battery executor exists.",
+            "description": "Battery readings, operating limits and controls.",
             "toggle": _field(
                 c.OPT_BATTERY_ENABLED,
                 "This home has a house battery",
@@ -344,21 +370,21 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 _field(c.OPT_BATTERY_CAPACITY_KWH, "Usable capacity", "number", unit="kWh", minimum=0.1, step=0.1),
                 _field(c.OPT_BATTERY_CHARGE_MAX_W, "Maximum charge power", "number", unit="W", minimum=1, step=1),
                 _field(c.OPT_BATTERY_DISCHARGE_MAX_W, "Maximum discharge power", "number", unit="W", minimum=1, step=1),
-                _field(c.OPT_BATTERY_MIN_SOC_ENTITY, "Discharge cut-off SOC sensor", "entity", domains=("sensor", "number")),
-                _field(c.OPT_BATTERY_MIN_SOC, "Minimum SOC", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
-                _field(c.OPT_BATTERY_MAX_SOC, "Maximum SOC", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
-                _field(c.OPT_BATTERY_TARGET_SOC, "Preferred terminal SOC", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
-                _field(c.OPT_BATTERY_TARGET_IS_HARD, "Make terminal target mandatory", "toggle"),
+                _field(c.OPT_BATTERY_MIN_SOC_ENTITY, "Minimum battery charge sensor", "entity", domains=("sensor", "number")),
+                _field(c.OPT_BATTERY_MIN_SOC, "Minimum charge", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
+                _field(c.OPT_BATTERY_MAX_SOC, "Maximum charge", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
+                _field(c.OPT_BATTERY_TARGET_SOC, "Preferred charge at the end of the plan", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
+                _field(c.OPT_BATTERY_TARGET_IS_HARD, "Require the preferred end charge", "toggle"),
                 _field(c.OPT_BATTERY_CHARGE_EFFICIENCY, "Charge efficiency", "number", unit="%", minimum=1, maximum=100, step=1, scale=100),
                 _field(c.OPT_BATTERY_DISCHARGE_EFFICIENCY, "Discharge efficiency", "number", unit="%", minimum=1, maximum=100, step=1, scale=100),
                 _field(c.OPT_BATTERY_EXPORT_ENABLED, "Allow planned battery export", "toggle"),
-                _field(c.OPT_BATTERY_EXPORT_RESERVE_SOC, "Export reserve SOC", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
+                _field(c.OPT_BATTERY_EXPORT_RESERVE_SOC, "Charge reserved before exporting", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
                 _field(c.OPT_BATTERY_EXPORT_MIN_PRICE, "Minimum export price", "number", unit="SEK/kWh", minimum=0, step=0.01),
             ],
         },
         {
             "id": "battery_control",
-            "tab": "controller",
+            "tab": "devices",
             "title": "Battery control",
             "description": (
                 "Scheduled battery execution. Filling "
@@ -444,9 +470,9 @@ def _configuration_sections() -> list[dict[str, Any]]:
         },
         {
             "id": "pool_control",
-            "tab": "controller",
+            "tab": "devices",
             "title": "Pool temperature control",
-            "description": "Settings the controller writes when Control pool heating is enabled. The pool's planning inputs remain on Storage & EV.",
+            "description": "The pool temperature limits and the controls used to keep within them.",
             "fields": [
                 _field(
                     c.OPT_POOL_START_TEMPERATURE_ENTITY,
@@ -481,7 +507,7 @@ def _configuration_sections() -> list[dict[str, Any]]:
         },
         {
             "id": "scheduled_control",
-            "tab": "controller",
+            "tab": "devices",
             "title": "EV and pool control",
             "description": "Execute the current binding plan. Each device can be tested independently. Disable restores the settings captured before control; reactive adjustments are not included.",
             "fields": [
@@ -494,19 +520,19 @@ def _configuration_sections() -> list[dict[str, Any]]:
         },
         {
             "id": "electrical_limits",
-            "tab": "storage",
+            "tab": "devices",
             "title": "Electrical and horizon limits",
             "fields": [
                 _field(c.OPT_GRID_IMPORT_LIMIT_W, "Grid import limit", "number", unit="W", minimum=1, step=1),
                 _field(c.OPT_GRID_EXPORT_LIMIT_W, "Grid export limit", "number", unit="W", minimum=1, step=1),
-                _field(c.OPT_TERMINAL_SOC_MIN, "Hard minimum terminal SOC", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
+                _field(c.OPT_TERMINAL_SOC_MIN, "Minimum charge at the end of the plan", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
                 _field(c.OPT_TERMINAL_ENERGY_VALUE, "Remaining battery value", "number", unit="SEK/kWh", minimum=0, step=0.01),
             ],
         },
         {
             "id": "pool",
-            "tab": "storage",
-            "title": "Pool store",
+            "tab": "devices",
+            "title": "Pool",
             "description": (
                 "Water temperature is what the planner schedules against, so an "
                 "already-warm pool asks for nothing and a cloudy forecast can make "
@@ -542,7 +568,7 @@ def _configuration_sections() -> list[dict[str, Any]]:
         },
         {
             "id": "ev",
-            "tab": "storage",
+            "tab": "devices",
             "title": "Electric vehicle",
             "description": (
                 "Vehicle state supplies the charging need, and the car's own charge "
@@ -572,7 +598,7 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 ),
                 _field(
                     c.OPT_EV_SOC_ENTITY,
-                    "Vehicle battery SOC",
+                    "Vehicle battery charge",
                     "entity",
                     domains=("sensor",),
                 ),

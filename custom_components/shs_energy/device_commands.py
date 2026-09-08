@@ -48,27 +48,27 @@ def actuator_targets(mapping):
 def execution_setup_errors(mapping):
     kind = mapping.get('control_type')
     if kind not in ('setpoint', 'switch_schedule', 'permit_inhibit'):
-        return ['this control method has no generic executor; EV current uses the EV controller']
+        return ['this method is not supported for this device']
     if mapping.get('companion_actuator_entity_ids'):
-        return ['coupled actuators require an explicit interlock and handover contract']
+        return ['equipment that must run together is not supported yet']
     if kind == 'permit_inhibit':
         maximum = mapping.get('max_inhibit_slots')
         if not numeric(maximum) or maximum < 1 or maximum != int(maximum):
-            return ['a whole-number maximum inhibit duration is required']
+            return ['choose the maximum number of quarters this device may be paused']
     targets = actuator_targets(mapping)
     if not targets:
-        return ['no execution actuator is configured']
+        return ['choose the switch or temperature control SHS should use']
     if kind == 'setpoint':
         low, high = mapping.get('minimum_temperature_c'), mapping.get('maximum_temperature_c')
         if not numeric(low) or not numeric(high) or not 5 <= low < high <= 35:
             return ['reviewed minimum and maximum temperatures are required']
         if mapping.get('companion_actuator_entity_ids') or any(mapping.get(k) for k in ('permit_entity_id', 'mode_entity_id', 'offset_entity_id')):
-            return ['alternative or coupled setpoint controls need an explicit command contract']
+            return ['this combination of temperature controls is not supported yet']
         if any(t.split('.')[0] not in ('climate', 'number', 'input_number') for t in targets):
-            return ['setpoint execution requires climate or temperature number entities']
+            return ['choose a thermostat or a writable temperature target']
     else:
         if any(t.split('.')[0] not in ('switch', 'input_boolean') for t in targets):
-            return ['scheduled execution requires switch or input_boolean actuators']
+            return ['choose an on/off switch']
         if kind == 'switch_schedule' and any(not numeric(mapping.get(k)) or not 0 <= mapping[k] <= 900 for k in ('minimum_on_seconds', 'minimum_off_seconds')):
             return ['reviewed minimum on and off times are required']
     return []

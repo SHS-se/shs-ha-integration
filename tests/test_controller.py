@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock
 from types import SimpleNamespace
 import sys
 import unittest
@@ -71,6 +72,10 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.coordinator = SimpleNamespace(current_plan_slot=self.slot, optimisation_plan={
             'plan_id': 'test', 'capabilities': dict.fromkeys(('battery', 'ev', 'pool'), True),
             'device_models': [{'key': 'charger', 'category': 'ev_charging', 'control_type': 'variable_power'}]})
+        self.coordinator.async_cached_device_configuration = AsyncMock(return_value=[
+            {"key": "charger", "control_type": "variable_power", "category": "ev_charging"},
+            {"key": "pool", "control_type": "switch_schedule", "category": "pool_heating"}])
+        self.coordinator.async_cached_planning_configuration = AsyncMock(return_value={"home": {"battery": {"included": True}}})
         self.calls = []
         self.store = Store()
         async def call(domain, service, data, blocking):
@@ -291,6 +296,30 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pool_band((29.5, 30), 20, False, 24, 32, .1), (24, 24.5))
         with self.assertRaises(ValueError):
             pool_band((20, 30), 29, False, 24, 32, .1)
+    async def test_battery_website_exclusion_restores_even_with_cached_plan(self):
+        self.options['battery_control_enabled'] = True
+        await self.controller.async_start()
+        self.assertIn('battery', self.controller.records)
+        self.coordinator.async_cached_planning_configuration.return_value = {'home': {'battery': {'included': False}}}
+        self.calls.clear()
+        await self.controller.async_tick()
+        self.assertEqual(self.states['select.mode'].state, 'Baseline')
+        self.assertNotIn('battery', self.controller.records)
+        self.assertEqual(self.controller.status['battery']['state'], 'disabled')
+        self.calls.clear()
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [])
+
+    async def test_vehicle_website_exclusion_restores_without_deleting_setup(self):
+        self.options['ev_control_enabled'] = True
+        before = deepcopy(self.options)
+        await self.controller.async_start()
+        self.coordinator.async_cached_device_configuration.return_value = []
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.charge'].state, 'off')
+        self.assertEqual(self.options, before)
+        self.assertNotIn('ev', self.controller.records)
+
 
 if __name__ == '__main__':
     unittest.main()
