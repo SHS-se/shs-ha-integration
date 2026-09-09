@@ -457,9 +457,69 @@ class DeviceModelTests(unittest.TestCase):
         )
         self.assertEqual(model["sample_count"], len(history))
         self.assertEqual(model["estimated_sample_count"], len(history) - 44)
-        # Each device consumes 1 kW; do not leave the new one in base load
-        # and then count its future schedule on top of it.
-        self.assertEqual({row["median_w"] for row in model["by_weekday"][0]}, {1000})
+        # The mature device is subtracted throughout. The new device is only
+        # subtracted where measured; its unknown past stays conservatively in
+        # the residual instead of being reconstructed from its recent profile.
+        self.assertGreaterEqual(
+            min(row["median_w"] for row in model["by_weekday"][0]), 1900,
+        )
+
+    def test_new_pool_heating_does_not_erase_older_household_consumption(self) -> None:
+        # Regression for the September 9 replay: 142 metered quarters out of
+        # 959, with heater power greater than the historical household base.
+        # These are constructed readings, not raw data from the replay export.
+        start = START - timedelta(minutes=959 * 15)
+        history = []
+        actuals = []
+        for q in range(959):
+            when = (start + timedelta(minutes=q * 15)).isoformat()
+            measured = {"sensor.mature": 0.05}
+            if q >= 959 - 142:
+                measured["sensor.pool"] = 0.28  # 1120 W heat pump
+            history.append({"start": when, "device_energy_kwh": measured})
+            actuals.append({
+                "start": when,
+                "total_load_kwh": 0.15 + sum(measured.values()),  # 600 W base
+            })
+        devices = [inventory_device("sensor.pool", "controllable", "switch_schedule",
+                                    category="pool_heating")]
+        models, degraded = self.build_with_degraded(devices, history, watts=1120)
+        self.assertEqual(len(models), 1)
+        self.assertEqual(degraded, [])
+        self.assertEqual(models[0]["profile_sample_count"], 142)
+        model = build_base_load_model(
+            actuals, "UTC", device_slots=history,
+            modelled_device_keys=("sensor.mature", "sensor.pool"),
+            minimum_samples=2,
+        )
+        self.assertEqual(model["sample_count"], 959)
+        self.assertEqual(model["estimated_sample_count"], 817)
+        for profile in model["by_weekday"].values():
+            self.assertEqual({row["median_w"] for row in profile}, {600})
+
+    def test_unmetered_consumption_is_not_silently_removed_from_the_baseline(self) -> None:
+        history = complete_history("sensor.pool", kwh=0.28)
+        # It may have been running before metering started. Without readings
+        # there is no evidence to separate that consumption from the house.
+        for row in history[:-142]:
+            del row["device_energy_kwh"]["sensor.pool"]
+        actuals = [{"start": row["start"], "total_load_kwh": 0.43}
+                   for row in history]
+        model = build_base_load_model(
+            actuals, "UTC", device_slots=history, modelled_device_keys=("sensor.pool",),
+        )
+        self.assertGreater(
+            min(row["median_w"] for row in model["by_weekday"][0]), 1500,
+        )
+
+    def test_measured_zero_household_consumption_is_not_given_an_artificial_floor(self) -> None:
+        history = complete_history("sensor.pool", kwh=0)
+        model = build_base_load_model(
+            [{"start": row["start"], "total_load_kwh": 0} for row in history],
+            "UTC", device_slots=history, modelled_device_keys=("sensor.pool",),
+        )
+        for profile in model["by_weekday"].values():
+            self.assertEqual({row["median_w"] for row in profile}, {0})
 
     def test_no_device_evidence_keeps_a_conservative_household_baseline(self) -> None:
         history = complete_history("sensor.other")

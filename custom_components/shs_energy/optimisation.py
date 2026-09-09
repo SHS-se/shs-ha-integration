@@ -712,12 +712,16 @@ def build_base_load_model(
 ) -> dict[str, Any]:
     """Forecast residual base load per weekday and quarter, with honest bands.
 
-    Measured device energy is subtracted where available. Missing device
-    quarters use an estimate from that device's available readings, preserving
-    whole-home observations when a new meter starts. With no device evidence,
-    nothing is subtracted: the baseline may conservatively include that load.
-    ``estimated_sample_count`` identifies this uncertainty separately from the
-    number of measured whole-home quarters.
+    Subtract only device energy measured in the same household quarter.
+    A device's forecast is not evidence of its past consumption: projecting a
+    new meter's recent running pattern backwards can subtract energy that was
+    never used and clamp an otherwise healthy residual to zero.
+
+    Keep quarters with missing device readings, leaving the unmetered share
+    inside base load. This can overestimate future uncontrollable demand until
+    metering matures, but cannot erase measured household demand by guessing.
+    ``estimated_sample_count`` counts these incompletely separated quarters.
+    Device planning eligibility is independent of this historical accounting.
 
     Keying purely on weekday-versus-weekend, as this did until 2026-08-16, has
     two defects that compound. Every future weekday receives a byte-identical
@@ -749,12 +753,6 @@ def build_base_load_model(
         if when is not None and isinstance(values, dict):
             device_energy_by_start[when.astimezone(timezone.utc)] = values
 
-    device_profiles = {
-        key: build_device_load_model(
-            device_slots or [], key, timezone_name, allow_partial=True, now=now,
-        )["by_weekday"]
-        for key in modelled_device_keys
-    }
     estimated_sample_count = 0
     observations: list[tuple[datetime, int, int, float]] = []
     latest: datetime | None = None
@@ -765,7 +763,6 @@ def build_base_load_model(
             continue
         device_values = device_energy_by_start.get(when.astimezone(timezone.utc), {})
         local = when.astimezone(local_tz)
-        quarter = local.hour * 4 + local.minute // 15
         modelled_kwh = 0.0
         estimated = False
         for key in modelled_device_keys:
@@ -774,7 +771,7 @@ def build_base_load_model(
                     and isfinite(float(value)) and 0 <= value <= 25):
                 modelled_kwh += float(value)
             else:
-                modelled_kwh += device_profiles[key][local.weekday()][quarter] / 4_000
+                # Missing is unknown, not an invitation to invent a deduction.
                 estimated = True
         estimated_sample_count += int(estimated)
         base_kwh = max(0.0, float(total) - modelled_kwh)
