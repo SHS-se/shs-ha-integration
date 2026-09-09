@@ -2091,21 +2091,16 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _build_services(
         self,
         options: dict[str, Any],
-        daily_changes: dict[str, dict[str, float]],
-        device_actuals: list[dict[str, Any]],
         horizon: list[datetime],
         device_models: list[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any] | None]:
         """Inject Home Assistant's clock and entity reads into pure planning."""
         return build_services(
             options,
-            daily_changes,
-            device_actuals,
             horizon,
             device_models,
             read_entity=self._entity_payload,
             local_tz=dt_util.DEFAULT_TIME_ZONE,
-            today=dt_util.now().date(),
         )
 
     @staticmethod
@@ -2294,15 +2289,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         profiles = base_load["by_weekday"]
         sample_count = int(base_load["sample_count"])
 
-        daily_meter_totals = await self._daily_meter_totals(
-            entities_by_category,
-            dt_util.start_of_local_day() - timedelta(days=30),
-            dt_util.start_of_local_day(),
-        )
         services, service_samples, ev_battery = self._build_services(
             options,
-            daily_meter_totals,
-            device_profile_actuals,
             horizon,
             device_models,
         )
@@ -2492,6 +2480,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "source_entity_ids": {"water_temperature": pool_entity},
             }
 
+        if capabilities["pool"] and pool_state is None:
+            raise OptimisationInputError("Pool water temperature is not configured")
+
         snapshot = {
             "schema_version": SNAPSHOT_SCHEMA_VERSION,
             "mode": "live",
@@ -2537,8 +2528,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     }),
                     "issued_at": captured.isoformat(),
                     "valid_until": (captured + timedelta(hours=2)).isoformat(),
-                    "quality": "measured",
+                    "quality": ("synthetic" if base_load["estimated_sample_count"] else "measured"),
                     "sample_count": sample_count,
+                    "estimated_sample_count": base_load["estimated_sample_count"],
                 },
                 "import_price": {
                     "provider": "smart_home_solutions",

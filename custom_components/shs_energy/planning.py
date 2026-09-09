@@ -16,7 +16,6 @@ service actually controls, never from the whole meter category.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone, tzinfo
-from math import isfinite
 from typing import Any, Callable, Optional
 
 try:  # pragma: no cover - exercised by both import paths
@@ -40,22 +39,16 @@ try:  # pragma: no cover - exercised by both import paths
         DEFAULT_EV_KWH_PER_KM,
     )
     from .const import (
-        DEVICE_PROFILE_MAX_SILENCE_HOURS,
-        DEVICE_PROFILE_MIN_COVERAGE,
         OPTIMISATION_PROFILE_DAYS,
     )
     from .device_controls import CONTROL_TYPES, planning_path
     from .optimisation import (
         OptimisationInputError,
         REMEDY_DEFECT,
-        _timestamp,
         build_device_load_model,
-        daily_requirement,
         discrete_current_control,
         normalized_fraction,
         parse_number,
-        service_daily_energy,
-        service_energy_today,
         state_is_on,
         validate_service_windows,
     )
@@ -81,8 +74,6 @@ except ImportError:  # The test suite imports these helpers as flat modules,
         DEFAULT_EV_KWH_PER_KM,
     )
     from const import (  # type: ignore[no-redef]
-        DEVICE_PROFILE_MAX_SILENCE_HOURS,
-        DEVICE_PROFILE_MIN_COVERAGE,
         OPTIMISATION_PROFILE_DAYS,
     )
     from device_controls import (  # type: ignore[no-redef]
@@ -92,14 +83,10 @@ except ImportError:  # The test suite imports these helpers as flat modules,
     from optimisation import (  # type: ignore[no-redef]
         OptimisationInputError,
         REMEDY_DEFECT,
-        _timestamp,
         build_device_load_model,
-        daily_requirement,
         discrete_current_control,
         normalized_fraction,
         parse_number,
-        service_daily_energy,
-        service_energy_today,
         state_is_on,
         validate_service_windows,
     )
@@ -136,14 +123,11 @@ def _positive_option(
 
 def build_services(
     options: dict[str, Any],
-    daily_changes: dict[str, dict[str, float]],
-    device_actuals: list[dict[str, Any]],
     horizon: list[datetime],
     device_models: list[dict[str, Any]],
     *,
     read_entity: EntityReader,
     local_tz: tzinfo,
-    today: date,
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any] | None]:
     """Build the deferrable services, their sample counts and EV battery state."""
     first = horizon[0]
@@ -183,24 +167,6 @@ def build_services(
             pairs.append((model, mapping))
         return pairs
 
-    def measured_daily_kwh(
-        controls: list[tuple[dict[str, Any], dict[str, Any]]],
-    ) -> dict[str, float]:
-        return service_daily_energy(
-            daily_changes,
-            (str(model["statistic_id"]) for model, _mapping in controls),
-        )
-
-    def completed_today_kwh(
-        controls: list[tuple[dict[str, Any], dict[str, Any]]],
-    ) -> float:
-        return service_energy_today(
-            device_actuals,
-            (str(model["key"]) for model, _mapping in controls),
-            today,
-            local_tz,
-        )
-
     def required_entity(option_key: str, label: str) -> str:
         entity_id = options.get(option_key)
         if not isinstance(entity_id, str) or not entity_id.strip():
@@ -215,51 +181,21 @@ def build_services(
             parse_number(model.get("active_power_w"), f"{model['name']} power")
             for model, _mapping in pool_controls
         )
-        requirement, count = daily_requirement(
-            measured_daily_kwh(pool_controls), category
-        )
-        samples[category] = count
-        completed_today = completed_today_kwh(pool_controls)
-        by_day: dict[date, list[int]] = {}
-        for index, slot in enumerate(horizon):
-            by_day.setdefault(slot.astimezone(local_tz).date(), []).append(index)
-        for day, indices in sorted(by_day.items()):
-            day_end = datetime.combine(
-                day + timedelta(days=1),
-                datetime.min.time(),
-                tzinfo=local_tz,
-            ).astimezone(timezone.utc)
-            if day_end > end:
-                continue
-            required = requirement
-            if day == today:
-                required = max(0.0, requirement - completed_today)
-            if required <= 0:
-                continue
-            earliest = horizon[indices[0]]
-            deadline = day_end
-            active_indices = [
-                index
-                for index in indices
-                if sum(
-                    float(model["forecast_w_by_slot"][index])
-                    for model, _mapping in pool_controls
-                ) > 0
-            ]
-            baseline = horizon[active_indices[0]] if active_indices else earliest
-            services.append({
-                "id": f"{device}:{day.isoformat()}",
-                "device": device,
-                "earliest_start": earliest.isoformat(),
-                "deadline": deadline.isoformat(),
-                "required_kwh": round(required, 3),
-                "control": {
-                    "type": "fixed_power",
-                    "power_w": rated_power_w,
-                },
-                "priority": 2,
-                "baseline_preferred_start": baseline.isoformat(),
-            })
+        if rated_power_w <= 0:
+            raise OptimisationInputError("Pool heating power must be positive")
+        samples[category] = 0  # No historical daily energy requirement.
+        # Carry the hardware contract even with no history or heat demand.
+        # Temperature and the value curve determine energy in the store planner.
+        services.append({
+            "id": f"{device}:{first.isoformat()}",
+            "device": device,
+            "earliest_start": first.isoformat(),
+            "deadline": end.isoformat(),
+            "required_kwh": 0.0,
+            "control": {"type": "fixed_power", "power_w": rated_power_w},
+            "priority": 2,
+            "baseline_preferred_start": first.isoformat(),
+        })
 
     boiler_controls = mapped_controls("boiler")
     if boiler_controls:
@@ -635,75 +571,6 @@ def unplanned_services(
     return reports
 
 
-def _hours(value: timedelta) -> str:
-    """Render a silence long enough to matter, in whole hours or days."""
-    total = max(0.0, value.total_seconds())
-    if total < 3600:
-        return f"{int(total // 60)} min"
-    if total < 48 * 3600:
-        return f"{total / 3600:.0f} h"
-    return f"{total / 86400:.1f} days"
-
-
-# One metered quarter, as a duration. Coverage is counted in quarters, and a
-# person asking why their device is not being planned wants hours.
-SLOT = timedelta(minutes=15)
-
-
-def _coverage_shortfall(seen: int, covered: float) -> timedelta:
-    """How much longer a meter reporting steadily needs to clear the bar.
-
-    The window slides, so a meter reporting from now on gains coverage in real
-    time: the quarters still owed are what ``seen`` would have to grow by to
-    reach the threshold at the window's present size.
-    """
-    if covered <= 0:
-        return timedelta.max
-    return max(
-        timedelta(0),
-        seen * (DEVICE_PROFILE_MIN_COVERAGE / covered - 1.0) * SLOT,
-    )
-
-
-def _device_window_coverage(
-    device_actuals: list[dict[str, Any]],
-    device_key: str,
-    window_end: datetime,
-) -> tuple[int, float, timedelta]:
-    """Return a device's metered quarters, its coverage, and its silence.
-
-    The denominator is every quarter some device reported, which is the window
-    as the recorder actually saw it — a fixed count would call a short window
-    thin and a purge-shortened one catastrophic.
-
-    The raw count comes back alongside the ratio because zero quarters and too
-    few quarters are different faults with different remedies, and reporting
-    them as one number is what made a meter that had only just started look
-    like a meter that had died.
-    """
-    seen = 0
-    total = 0
-    latest: datetime | None = None
-    for row in device_actuals:
-        when = _timestamp(row.get("start"))
-        values = row.get("device_energy_kwh")
-        if when is None or not isinstance(values, dict):
-            continue
-        total += 1
-        value = values.get(device_key)
-        if isinstance(value, (int, float)) and isfinite(float(value)):
-            seen += 1
-            if latest is None or when > latest:
-                latest = when
-    if total == 0:
-        return 0, 0.0, timedelta.max
-    silent_for = (
-        timedelta.max if latest is None
-        else max(timedelta(0), window_end - latest.astimezone(timezone.utc))
-    )
-    return seen, seen / total, silent_for
-
-
 def _degraded_device(
     device: dict[str, Any], reason: str, *, status: str
 ) -> dict[str, str]:
@@ -730,8 +597,8 @@ def build_device_models(
     *,
     mapped_power_w: PowerReader,
     local_tz: tzinfo,
-) -> list[dict[str, Any]]:
-    """Return the controllable models, learning each device's recent profile.
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Build control models independently of historical profile readiness.
 
     Every device is inspected before anything is raised, so a multi-device
     setup is not repaired one rediscovered failure at a time.
@@ -747,10 +614,6 @@ def build_device_models(
     # of one-at-a-time repairs.
     device_gaps: list[str] = []
     degraded: list[dict[str, str]] = []
-    window_end = horizon[0].astimezone(timezone.utc) if horizon else (
-        datetime.now(timezone.utc)
-    )
-    max_silence = timedelta(hours=DEVICE_PROFILE_MAX_SILENCE_HOURS)
     for device in devices:
         planning_role = device["planning_role"]
         control_type = device["control_type"]
@@ -764,84 +627,14 @@ def build_device_models(
                 f"{device['name']} has an invalid planning role or control type"
             )
             continue
-        # Only a device that will be modelled has to clear these bars, and it
-        # must clear them *before* its profile is fitted. A base-load device
-        # never joins `modelled_device_keys`, so it gates no quarter and its
-        # coverage is nobody else's problem.
-        #
-        # The order is load-bearing. Coverage is not caution about a thin
-        # profile: `build_base_load_model` discards every whole-home quarter a
-        # modelled device did not meter, so admitting a device that covers a
-        # tenth of the window leaves base load with a tenth of its quarters and
-        # takes the entire home unplanned. Fitting first meant a device with a
-        # little history failed on the fit and was reported as having none.
-        if planning_role == "controllable":
-            seen, covered, silent_for = _device_window_coverage(
-                device_actuals, device["key"], window_end
-            )
-            if seen == 0:
-                device["profile_status"] = "unavailable"
-                degraded.append(_degraded_device(
-                    device, "has no usable history", status="quiet",
-                ))
-                continue
-            if silent_for > max_silence:
-                device["profile_status"] = "stale"
-                degraded.append(_degraded_device(
-                    device,
-                    f"covers {covered:.0%} of the window and last reported "
-                    f"{_hours(silent_for)} ago",
-                    status="quiet",
-                ))
-                continue
-            if covered < DEVICE_PROFILE_MIN_COVERAGE:
-                # Reporting now, just not for long enough. Nothing is wrong and
-                # nothing can be fixed, so this says how far along it is rather
-                # than asking anyone to go looking at the equipment.
-                device["profile_status"] = "warming"
-                degraded.append(_degraded_device(
-                    device,
-                    f"has {_hours(seen * SLOT)} of history covering "
-                    f"{covered:.0%} of the last "
-                    f"{OPTIMISATION_PROFILE_DAYS} days, and needs "
-                    f"{DEVICE_PROFILE_MIN_COVERAGE:.0%} — about "
-                    f"{_hours(_coverage_shortfall(seen, covered))} more",
-                    status="warming",
-                ))
-                continue
-        try:
-            empirical = build_device_load_model(
-                device_actuals,
-                device["key"],
-                str(local_tz),
-                minimum_samples=2,
-            )
-        except OptimisationInputError:
-            # Deliberately not fatal. Refusing to plan the whole home because
-            # one meter cannot be shaped traded a plan that was right about
-            # every other load for no plan at all — the same argument the
-            # unplanned-service warning is built on.
-            #
-            # Reached only by a device that already cleared the coverage bars
-            # above, so it means the window is well covered but some
-            # quarter-of-day is still thin. There is deliberately no flat or
-            # nameplate fallback here: `_pooled_weekday_series` raises exactly
-            # when some quarter holds fewer than two device samples, which is
-            # also exactly when `build_base_load_model` would discard that
-            # quarter-of-day for every modelled device. Planning such a device
-            # on an invented profile does not rescue it — it takes the whole
-            # home unplanned instead.
-            if planning_role == "controllable":
-                device["profile_status"] = "unshaped"
-                degraded.append(_degraded_device(
-                    device,
-                    "reports too unevenly across the day to model — some "
-                    "quarters have no measurements at all",
-                    status="quiet",
-                ))
-            continue
-        if planning_role == "controllable":
-            device["profile_status"] = "ready"
+        empirical = build_device_load_model(
+            device_actuals, device["key"], str(local_tz),
+            minimum_samples=2, allow_partial=True,
+        )
+        device["profile_status"] = (
+            "ready" if empirical["method"] == "pooled_shape_weekday_level_v1"
+            else "warming" if empirical["sample_count"] else "unavailable"
+        )
         empirical_active_power_w = empirical["active_power_w"]
         mapping = control_mappings.get(str(device["key"]), {})
         # Named apart from the `mapped_power_w` reader deliberately: binding the
@@ -863,6 +656,19 @@ def build_device_models(
             "profile": empirical["method"],
         }
         if planning_role == "base_load":
+            continue
+        path = planning_path(control_type, device["category"])
+        if path != "ev" and (active_power_w is None or active_power_w <= 0):
+            degraded.append(_degraded_device(
+                device, "needs configured running power or a measured heating cycle",
+                status="quiet",
+            ))
+            continue
+        if path == "boiler" and empirical["sample_count"] == 0:
+            degraded.append(_degraded_device(
+                device, "needs consumption readings to estimate hot-water demand",
+                status="warming",
+            ))
             continue
         forecast_w: list[float] = []
         for start in horizon:

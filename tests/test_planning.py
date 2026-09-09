@@ -84,24 +84,15 @@ class PoolServiceTests(unittest.TestCase):
         },
     }
 
-    def plan(self, models: list[dict[str, object]], **kwargs: object):
+    def plan(self, models: list[dict[str, object]]):
         return build_services(
             {"device_control_mappings": self.mappings},
-            kwargs.get("daily_changes", daily(
-                **{
-                    "sensor.pool_heater_energy": 8.0,
-                    "sensor.pool_pump_energy": 2.0,
-                    "sensor.pool_room_floor_heater_energy": 5.0,
-                }
-            )),
-            kwargs.get("device_actuals", []),
             HORIZON,
             models,
             read_entity=lambda entity_id: self.fail(
                 f"a pool plan must not read {entity_id}"
             ),
             local_tz=timezone.utc,
-            today=TODAY,
         )
 
     def test_generated_pool_services_have_no_minimum_runtime(self) -> None:
@@ -130,8 +121,8 @@ class PoolServiceTests(unittest.TestCase):
             [service["required_kwh"] for service in with_room],
             [service["required_kwh"] for service in without_room],
         )
-        # Its own meters measured 8 + 2 kWh a day, not 8 + 2 + 5.
-        self.assertEqual(with_room[0]["required_kwh"], 10.0)
+        # Demand comes from temperature, not historical daily energy.
+        self.assertEqual(with_room[0]["required_kwh"], 0.0)
 
     def test_the_service_is_rated_from_its_own_devices(self) -> None:
         services, _samples, _ev = self.plan(
@@ -139,39 +130,14 @@ class PoolServiceTests(unittest.TestCase):
         )
         self.assertEqual(services[0]["control"]["power_w"], 6_000)
 
-    def test_energy_already_delivered_today_reduces_only_today(self) -> None:
-        actuals = [{
-            "start": START.isoformat(),
-            "device_energy_kwh": {
-                "sensor.pool_heater_energy": 4.0,
-                "sensor.pool_room_floor_heater_energy": 3.0,
-            },
-        }]
-        services, _samples, _ev = self.plan(
-            [self.pool_switch, self.pool_pump, self.pool_room],
-            device_actuals=actuals,
-        )
-        today_service = next(
-            service for service in services if service["id"].endswith(TODAY.isoformat())
-        )
-        # 10 required, 4 delivered by this service's own meters; the room
-        # heater's 3 kWh belong to its room, not to the pool.
-        self.assertEqual(today_service["required_kwh"], 6.0)
-
-    def test_a_pool_with_too_few_measured_days_is_reported_not_hidden(self) -> None:
-        sparse = {
-            day: values
-            for index, (day, values) in enumerate(
-                daily(**{
-                    "sensor.pool_heater_energy": 8.0,
-                    "sensor.pool_pump_energy": 2.0,
-                }).items()
-            )
-            if index < 3
-        }
-        with self.assertRaises(OptimisationInputError) as caught:
-            self.plan([self.pool_switch, self.pool_pump], daily_changes=sparse)
-        self.assertIn("measured active days", str(caught.exception))
+    def test_pool_hardware_contract_does_not_require_a_daily_budget(self) -> None:
+        services, samples, _ev = self.plan([self.pool_switch, self.pool_pump])
+        self.assertEqual(samples["pool_heating"], 0)
+        self.assertEqual(len(services), 1)
+        self.assertEqual(services[0]["required_kwh"], 0)
+        self.assertEqual(services[0]["earliest_start"], HORIZON[0].isoformat())
+        self.assertEqual(services[0]["deadline"],
+                         (HORIZON[-1] + timedelta(minutes=15)).isoformat())
 
 
 class BoilerServiceTests(unittest.TestCase):
@@ -188,13 +154,10 @@ class BoilerServiceTests(unittest.TestCase):
                     "max_inhibit_slots": 20,
                 },
             }},
-            {},
-            [],
             HORIZON,
             [boiler],
             read_entity=lambda entity_id: self.fail("no entity read is needed"),
             local_tz=timezone.utc,
-            today=TODAY,
         )
         self.assertTrue(services)
         self.assertEqual(samples["hot_water"], 1_000)
@@ -219,13 +182,10 @@ class BoilerServiceTests(unittest.TestCase):
                         "max_inhibit_slots": 20,
                     },
                 }},
-                {},
-                [],
                 HORIZON,
                 [boiler],
                 read_entity=lambda entity_id: self.fail("no entity read is needed"),
                 local_tz=timezone.utc,
-                today=TODAY,
             )
         self.assertIn("exceeds its reviewed rating", str(caught.exception))
 
@@ -266,13 +226,10 @@ class EvServiceTests(unittest.TestCase):
     def plan(self, options: dict[str, object]):
         return build_services(
             options,
-            {},
-            [],
             HORIZON,
             [self.charger],
             read_entity=lambda entity_id: self.states[entity_id],
             local_tz=timezone.utc,
-            today=TODAY,
         )
 
     def test_a_connected_car_without_a_departure_charges_across_the_horizon(
@@ -344,13 +301,10 @@ class ServiceRoutingTests(unittest.TestCase):
                     "actuator_entity_ids": ["switch.office_heater"],
                 },
             }},
-            {},
-            [],
             HORIZON,
             [heater],
             read_entity=lambda entity_id: self.fail("no entity read is needed"),
             local_tz=timezone.utc,
-            today=TODAY,
         )
         self.assertEqual(services, [])
         self.assertEqual(samples, {})
@@ -443,136 +397,113 @@ class DeviceModelTests(unittest.TestCase):
         self.assertEqual(models[0]["planning_role"], "controllable")
         self.assertEqual(models[0]["load_type"], "duty_cycle")
 
-    def test_a_meter_that_stopped_reporting_stops_being_modelled(self) -> None:
-        """The pool-heater failure, in miniature.
+    def test_configured_state_based_devices_plan_without_any_history(self) -> None:
+        for control_type, category in (("switch_schedule", "pool_heating"),
+                                       ("setpoint", "heating"),
+                                       ("variable_power", "ev_charging")):
+            with self.subTest(category=category):
+                devices = [inventory_device("sensor.new", "controllable",
+                                            control_type, category=category)]
+                models, degraded = self.build_with_degraded(devices, [], watts=772)
+                self.assertEqual(len(models), 1)
+                self.assertEqual(degraded, [])
+                self.assertEqual(models[0]["active_power_w"], 772)
+                self.assertEqual(models[0]["profile_sample_count"], 0)
+                # Capacity does not become an invented 24-hour duty cycle.
+                self.assertEqual(set(models[0]["forecast_w_by_slot"]), {0})
 
-        A device that died mid-window still has dense older days, so it passed
-        the pooled quarter-of-day bar and joined `modelled_device_keys` — and
-        `build_base_load_model` then discarded every whole-home quarter since
-        it stopped, which took the entire home unplanned.
-        """
-        devices = [
-            inventory_device("sensor.alive", "controllable", "setpoint"),
-            inventory_device("sensor.died", "controllable", "setpoint"),
-        ]
-        history = complete_history("sensor.alive")
-        # The dead one reports densely for the first half and then never again.
-        for index, row in enumerate(history):
-            if index < len(history) // 2:
-                row["device_energy_kwh"]["sensor.died"] = 0.25
+    def test_ev_current_contract_does_not_need_measured_watts(self) -> None:
+        devices = [inventory_device("sensor.ev", "controllable", "variable_power",
+                                    category="ev_charging")]
+        models, degraded = self.build_with_degraded(devices, [])
+        self.assertEqual(len(models), 1)
+        self.assertEqual(degraded, [])
 
-        models, degraded = self.build_with_degraded(devices, history)
-
-        self.assertEqual([model["key"] for model in models], ["sensor.alive"])
-        self.assertEqual([item["key"] for item in degraded], ["sensor.died"])
-        self.assertEqual(devices[1]["profile_status"], "stale")
-        self.assertIn("last reported", degraded[0]["reason"])
-
-    def test_one_silent_meter_never_costs_the_home_its_plan(self) -> None:
-        devices = [
-            inventory_device("sensor.alive", "controllable", "setpoint"),
-            inventory_device("sensor.silent", "controllable", "setpoint"),
-        ]
-        models, degraded = self.build_with_degraded(
-            devices, complete_history("sensor.alive")
-        )
-        self.assertEqual([model["key"] for model in models], ["sensor.alive"])
-        self.assertEqual([item["key"] for item in degraded], ["sensor.silent"])
-        self.assertEqual(degraded[0]["reason"], "has no usable history")
-        self.assertEqual(degraded[0]["status"], "quiet")
-
-    def test_a_meter_that_has_only_just_started_is_not_called_silent(self) -> None:
-        """The pool-heater report, and the reason it was worth reporting.
-
-        A meter whose counter reset keeps reporting throughout, so nothing has
-        gone quiet. Fitting the profile before checking coverage meant the fit
-        failed first and the device was described as having no history at all,
-        which sent the reader looking for a fault in a working sensor.
-        """
-        devices = [
-            inventory_device("sensor.alive", "controllable", "setpoint"),
-            inventory_device("sensor.new", "controllable", "setpoint"),
-        ]
-        history = complete_history("sensor.alive")
-        # Reporting steadily, but only for the last eleven hours of the window.
-        for row in history[-44:]:
-            row["device_energy_kwh"]["sensor.new"] = 0.25
-
-        models, degraded = self.build_with_degraded(devices, history)
-
-        self.assertEqual([model["key"] for model in models], ["sensor.alive"])
-        self.assertEqual([item["key"] for item in degraded], ["sensor.new"])
-        self.assertEqual(devices[1]["profile_status"], "warming")
-        # The distinction the separate notification is routed on.
-        self.assertEqual(degraded[0]["status"], "warming")
-        reason = degraded[0]["reason"]
-        self.assertIn("11 h of history", reason)
-        self.assertNotIn("no usable history", reason)
-        self.assertNotIn("last reported", reason)
-        # It must say how much longer, or it is just a restatement of the fault.
-        self.assertIn("more", reason)
-
-    def test_a_quiet_meter_and_a_new_one_are_reported_apart(self) -> None:
-        """They share a list but must not share a remedy."""
-        devices = [
-            inventory_device("sensor.alive", "controllable", "setpoint"),
-            inventory_device("sensor.died", "controllable", "setpoint"),
-            inventory_device("sensor.new", "controllable", "setpoint"),
-        ]
-        history = complete_history("sensor.alive")
-        for index, row in enumerate(history):
-            if index < len(history) // 2:
-                row["device_energy_kwh"]["sensor.died"] = 0.25
-        for row in history[-44:]:
-            row["device_energy_kwh"]["sensor.new"] = 0.25
-
-        _models, degraded = self.build_with_degraded(devices, history)
-
-        self.assertEqual(
-            {item["key"]: item["status"] for item in degraded},
-            {"sensor.died": "quiet", "sensor.new": "warming"},
-        )
-
-    def test_a_meter_with_empty_quarters_is_never_modelled(self) -> None:
-        """Why there is no flat or nameplate fallback for an unshaped device.
-
-        A meter that reports only while its equipment runs covers most of the
-        window, so it clears the coverage bar, but every night quarter is
-        empty. It is tempting to plan it on a flat profile rather than drop it.
-
-        It must not be. `build_base_load_model` discards every whole-home
-        quarter a modelled device did not meter, so admitting this device
-        empties base load of all 32 night quarters-of-day and takes the entire
-        home unplanned — trading one unscheduled device for no plan at all.
-        The second half of this test is the reason for the first.
-        """
-        devices = [inventory_device("sensor.daytime", "controllable", "setpoint")]
-        history = complete_history("sensor.alive")
-        for row in history:
-            when = datetime.fromisoformat(str(row["start"]))
-            if 6 <= when.hour < 22:
-                row["device_energy_kwh"]["sensor.daytime"] = 0.25
-
-        models, degraded = self.build_with_degraded(devices, history)
-
+    def test_missing_pool_power_is_still_reported(self) -> None:
+        devices = [inventory_device("sensor.pool", "controllable", "switch_schedule",
+                                    category="pool_heating")]
+        models, degraded = self.build_with_degraded(devices, [])
         self.assertEqual(models, [])
-        self.assertEqual(devices[0]["profile_status"], "unshaped")
-        self.assertIn("too unevenly", degraded[0]["reason"])
+        self.assertIn("configured running power", degraded[0]["reason"])
 
-        # And the harm avoided, so nobody relaxes the bar without seeing it.
-        actuals = [
-            {"start": row["start"], "total_load_kwh": 0.4} for row in history
-        ]
-        build_base_load_model(  # sound while the device stays out
+    def test_boiler_rating_alone_does_not_supply_hot_water_demand(self) -> None:
+        devices = [inventory_device("sensor.boiler", "controllable", "permit_inhibit",
+                                    category="hot_water")]
+        models, degraded = self.build_with_degraded(devices, [], watts=3000)
+        self.assertEqual(models, [])
+        self.assertIn("hot-water demand", degraded[0]["reason"])
+
+    def test_eleven_hours_of_history_can_supply_running_power(self) -> None:
+        devices = [inventory_device("sensor.new", "controllable", "switch_schedule",
+                                    category="pool_heating")]
+        history = complete_history("sensor.alive")
+        for row in history[-44:]:
+            row["device_energy_kwh"]["sensor.new"] = 0.193
+        models, degraded = self.build_with_degraded(devices, history)
+        self.assertEqual(len(models), 1)
+        self.assertEqual(degraded, [])
+        self.assertEqual(models[0]["active_power_w"], 772)
+        self.assertEqual(models[0]["profile_status"], "warming")
+
+    def test_missing_device_quarters_preserve_the_household_history(self) -> None:
+        history = complete_history("sensor.alive")
+        for row in history[-44:]:
+            row["device_energy_kwh"]["sensor.new"] = 0.25
+        actuals = [{"start": row["start"], "total_load_kwh": 0.75}
+                   for row in history]
+        model = build_base_load_model(
             actuals, "UTC", device_slots=history,
-            modelled_device_keys=("sensor.alive",), minimum_samples=2,
+            modelled_device_keys=("sensor.alive", "sensor.new"), minimum_samples=2,
         )
-        with self.assertRaises(OptimisationInputError):
-            build_base_load_model(
-                actuals, "UTC", device_slots=history,
-                modelled_device_keys=("sensor.alive", "sensor.daytime"),
-                minimum_samples=2,
-            )
+        self.assertEqual(model["sample_count"], len(history))
+        self.assertEqual(model["estimated_sample_count"], len(history) - 44)
+        # Each device consumes 1 kW; do not leave the new one in base load
+        # and then count its future schedule on top of it.
+        self.assertEqual({row["median_w"] for row in model["by_weekday"][0]}, {1000})
+
+    def test_no_device_evidence_keeps_a_conservative_household_baseline(self) -> None:
+        history = complete_history("sensor.other")
+        model = build_base_load_model(
+            [{"start": row["start"], "total_load_kwh": 0.5} for row in history],
+            "UTC", device_slots=history, modelled_device_keys=("sensor.new",),
+        )
+        self.assertEqual(model["estimated_sample_count"], len(history))
+        self.assertEqual({row["median_w"] for row in model["by_weekday"][0]}, {2000})
+
+    def test_a_measured_zero_is_not_replaced_by_estimated_consumption(self) -> None:
+        history = complete_history("sensor.pool", kwh=0.25)
+        # The quarter at midnight is explicitly off every day.
+        for index in range(0, len(history), 96):
+            history[index]["device_energy_kwh"]["sensor.pool"] = 0.0
+        model = build_base_load_model(
+            [{"start": row["start"], "total_load_kwh": 0.5} for row in history],
+            "UTC", device_slots=history, modelled_device_keys=("sensor.pool",),
+        )
+        self.assertEqual(model["estimated_sample_count"], 0)
+        self.assertEqual(model["by_weekday"][0][0]["median_w"], 2000)
+        self.assertEqual(model["by_weekday"][0][1]["median_w"], 1000)
+
+    def test_new_pool_model_reaches_service_construction_with_no_readings(self) -> None:
+        devices = [inventory_device("sensor.pool", "controllable", "switch_schedule",
+                                    category="pool_heating")]
+        mappings = {"sensor.pool": {"control_type": "switch_schedule", "power": 772}}
+        models, degraded = self.build_with_degraded(devices, [], mappings, watts=772)
+        services, _samples, _ev = build_services(
+            {"device_control_mappings": mappings}, HORIZON, models,
+            read_entity=lambda _key: self.fail("no historical state is needed"),
+            local_tz=timezone.utc,
+        )
+        self.assertEqual(degraded, [])
+        self.assertEqual(services[0]["control"], {"type": "fixed_power", "power_w": 772})
+
+    def test_old_device_history_does_not_disable_a_configured_control(self) -> None:
+        history = complete_history("sensor.pool")[:96 * 4]
+        devices = [inventory_device("sensor.pool", "controllable", "switch_schedule",
+                                    category="pool_heating")]
+        models, degraded = self.build_with_degraded(devices, history, watts=772)
+        self.assertEqual(len(models), 1)
+        self.assertEqual(degraded, [])
+        self.assertEqual(models[0]["active_power_w"], 772)
 
     def test_a_device_reporting_throughout_is_still_modelled(self) -> None:
         """The bar must not evict healthy devices."""
@@ -772,13 +703,10 @@ class VehicleStateWithoutAControlRouteTests(unittest.TestCase):
     def _build(self):
         return build_services(
             dict(self.OPTIONS),
-            {},
-            [],
             HORIZON,
             [],  # no device model routes to "ev"
             read_entity=lambda entity_id: self.ENTITIES[entity_id],
             local_tz=timezone.utc,
-            today=TODAY,
         )
 
     def test_an_unrouted_charger_still_reports_the_vehicle(self) -> None:
@@ -802,13 +730,10 @@ class VehicleStateWithoutAControlRouteTests(unittest.TestCase):
     def test_a_home_with_no_vehicle_configured_reports_none(self) -> None:
         _services, _samples, ev_battery = build_services(
             {"device_control_mappings": {}},
-            {},
-            [],
             HORIZON,
             [],
             read_entity=lambda entity_id: self.ENTITIES[entity_id],
             local_tz=timezone.utc,
-            today=TODAY,
         )
         self.assertIsNone(ev_battery)
 
@@ -846,15 +771,12 @@ class StoreEnabledTests(unittest.TestCase):
                 "device_control_mappings": PoolServiceTests.mappings,
                 "pool_enabled": False,
             },
-            daily(**{"sensor.pool_heater_energy": 8.0}),
-            [],
             HORIZON,
             [PoolServiceTests.pool_switch],
             read_entity=lambda entity_id: self.fail(
                 f"a switched-off pool must not read {entity_id}"
             ),
             local_tz=timezone.utc,
-            today=TODAY,
         )
         self.assertEqual([s for s in services if s["device"] == "pool"], [])
 
@@ -865,15 +787,12 @@ class StoreEnabledTests(unittest.TestCase):
         silence both or the snapshot carries a store nothing will bid for."""
         services, _samples, battery = build_services(
             {**EvServiceTests.options, "ev_enabled": False},
-            {},
-            [],
             HORIZON,
             [EvServiceTests.charger],
             read_entity=lambda entity_id: self.fail(
                 f"a switched-off vehicle must not read {entity_id}"
             ),
             local_tz=timezone.utc,
-            today=TODAY,
         )
         self.assertEqual([s for s in services if s["device"] == "ev"], [])
         self.assertIsNone(battery)

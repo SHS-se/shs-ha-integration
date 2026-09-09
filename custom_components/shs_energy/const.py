@@ -228,23 +228,6 @@ DEFAULT_EV_KWH_PER_KM = 0.16
 OPTIMISATION_ACTUAL_BACKFILL_HOURS = 72
 OPTIMISATION_PROFILE_DAYS = 10
 
-# What a device must still be doing to be planned as its own load rather than
-# left inside base load.
-#
-# `build_base_load_model` subtracts every modelled device from the whole-home
-# total per quarter, and discards any quarter a modelled device is missing
-# from — correctly, because treating it as zero would count that device twice.
-# But a device qualified for that set on quarter-of-day coverage *pooled over
-# the window*, which a device that died mid-window still passes on its older
-# days. One pool heater that stopped reporting therefore voided every quarter
-# since it stopped, and the home went unplanned.
-#
-# So a device now has to cover the window it gates. Below either bar it is
-# dropped from the model set, which leaves its energy inside base load: not
-# scheduled, not double counted, and not able to void anybody else's quarter.
-DEVICE_PROFILE_MIN_COVERAGE = 0.5
-DEVICE_PROFILE_MAX_SILENCE_HOURS = 6
-
 # Thermal history rides the same quarter-hour grid as electrical actuals. The
 # recorder's `purge_keep_days` bounds how far back a gap can still be filled;
 # a 72-hour sweep re-offers recent quarters on every push so a late-settling

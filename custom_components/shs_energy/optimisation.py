@@ -712,10 +712,12 @@ def build_base_load_model(
 ) -> dict[str, Any]:
     """Forecast residual base load per weekday and quarter, with honest bands.
 
-    The caller must pass only device keys with complete empirical profiles.
-    A missing device quarter makes the corresponding whole-home quarter
-    unknown; treating it as zero would leak that device back into the residual
-    and then count its forecast a second time.
+    Measured device energy is subtracted where available. Missing device
+    quarters use an estimate from that device's available readings, preserving
+    whole-home observations when a new meter starts. With no device evidence,
+    nothing is subtracted: the baseline may conservatively include that load.
+    ``estimated_sample_count`` identifies this uncertainty separately from the
+    number of measured whole-home quarters.
 
     Keying purely on weekday-versus-weekend, as this did until 2026-08-16, has
     two defects that compound. Every future weekday receives a byte-identical
@@ -747,6 +749,13 @@ def build_base_load_model(
         if when is not None and isinstance(values, dict):
             device_energy_by_start[when.astimezone(timezone.utc)] = values
 
+    device_profiles = {
+        key: build_device_load_model(
+            device_slots or [], key, timezone_name, allow_partial=True, now=now,
+        )["by_weekday"]
+        for key in modelled_device_keys
+    }
+    estimated_sample_count = 0
     observations: list[tuple[datetime, int, int, float]] = []
     latest: datetime | None = None
     for row in actual_slots:
@@ -755,19 +764,20 @@ def build_base_load_model(
         if when is None or not isinstance(total, (int, float)) or not isfinite(float(total)):
             continue
         device_values = device_energy_by_start.get(when.astimezone(timezone.utc), {})
-        if any(
-            key not in device_values
-            or not isinstance(device_values[key], (int, float))
-            or not isfinite(float(device_values[key]))
-            for key in modelled_device_keys
-        ):
-            continue
-        modelled_kwh = sum(
-            max(0.0, float(device_values[key]))
-            for key in modelled_device_keys
-        )
-        base_kwh = max(0.0, float(total) - modelled_kwh)
         local = when.astimezone(local_tz)
+        quarter = local.hour * 4 + local.minute // 15
+        modelled_kwh = 0.0
+        estimated = False
+        for key in modelled_device_keys:
+            value = device_values.get(key)
+            if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and isfinite(float(value)) and 0 <= value <= 25):
+                modelled_kwh += float(value)
+            else:
+                modelled_kwh += device_profiles[key][local.weekday()][quarter] / 4_000
+                estimated = True
+        estimated_sample_count += int(estimated)
+        base_kwh = max(0.0, float(total) - modelled_kwh)
         observations.append((
             local,
             local.weekday(),
@@ -822,6 +832,7 @@ def build_base_load_model(
     return {
         "by_weekday": by_weekday,
         "sample_count": len(observations),
+        "estimated_sample_count": estimated_sample_count,
         "day_levels": {
             weekday: round(value, 4) for weekday, value in level.items()
         },
@@ -836,6 +847,7 @@ def build_device_load_model(
     *,
     minimum_samples: int = 2,
     now: datetime | None = None,
+    allow_partial: bool = False,
 ) -> dict[str, Any]:
     """Learn one device's expected-power profile per weekday and quarter.
 
@@ -880,22 +892,6 @@ def build_device_load_model(
         if latest is None or when > latest:
             latest = when
 
-    reference = now or latest
-    if reference is None:
-        raise OptimisationInputError(
-            f"{device_key} has no usable samples", remedy=REMEDY_WAITING
-        )
-
-    fitted = _pooled_weekday_series(
-        observations,
-        reference=reference,
-        centre=_weighted_trimmed_mean,
-        minimum_samples=minimum_samples,
-        label=device_key,
-    )
-    shape = fitted["shape"]
-    level = fitted["level"]
-
     positive = sorted(value for value in all_power if value > 25)
     active_power_w: float | None = None
     if positive:
@@ -903,6 +899,40 @@ def build_device_load_model(
         active_power_w = round(median(
             value for value in positive if value >= threshold
         ), 1)
+
+    counts = [0] * 96
+    totals = [0.0] * 96
+    for _local, _weekday, quarter, value in observations:
+        counts[quarter] += 1
+        totals[quarter] += value
+    if allow_partial and min(counts) < minimum_samples:
+        # An observed quarter uses its own mean. Unobserved times use the
+        # device-wide mean; with no observations we subtract nothing from the
+        # household baseline. Rated power is capacity, never assumed demand.
+        mean_w = sum(all_power) / len(all_power) if all_power else 0.0
+        shape = [
+            round(totals[q] / counts[q] if counts[q] else mean_w, 2)
+            for q in range(96)
+        ]
+        return {
+            "by_weekday": {day: list(shape) for day in range(7)},
+            "sample_count": len(observations),
+            "active_power_w": active_power_w,
+            "day_levels": {day: 1.0 for day in range(7)},
+            "method": "partial_history_mean_v1",
+        }
+
+    reference = now or latest
+    if reference is None:
+        raise OptimisationInputError(
+            f"{device_key} has no usable samples", remedy=REMEDY_WAITING
+        )
+    fitted = _pooled_weekday_series(
+        observations, reference=reference, centre=_weighted_trimmed_mean,
+        minimum_samples=minimum_samples, label=device_key,
+    )
+    shape = fitted["shape"]
+    level = fitted["level"]
 
     return {
         "by_weekday": {
