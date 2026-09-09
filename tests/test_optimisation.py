@@ -348,6 +348,34 @@ class QuarterAggregationTests(unittest.TestCase):
 
 
 class ForecastTests(unittest.TestCase):
+    def test_horizon_includes_current_quarter_at_and_between_boundaries(self) -> None:
+        boundary = datetime(2026, 9, 9, 10, 45, tzinfo=timezone.utc)
+        for seconds in (0, 20, 43, 899):
+            with self.subTest(seconds=seconds):
+                horizon = utc_slots(boundary + timedelta(seconds=seconds), 72)
+                self.assertEqual(horizon[0], boundary)
+                self.assertEqual(len(horizon), 288)
+                self.assertTrue(all(
+                    right - left == timedelta(minutes=15)
+                    for left, right in zip(horizon, horizon[1:])
+                ))
+
+    def test_completed_history_abuts_current_forecast(self) -> None:
+        captured = datetime(2026, 9, 9, 10, 45, 20, tzinfo=timezone.utc)
+        horizon = utc_slots(captured, 72)
+        previous = horizon[0] - timedelta(minutes=15)
+        history = aggregate_category_changes({
+            "total_consumption": [
+                (previous + timedelta(minutes=offset), 0.1)
+                for offset in (0, 5, 10)
+            ],
+        })
+        self.assertEqual(len(history), 1)
+        self.assertEqual(
+            datetime.fromisoformat(history[0]["start"]) + timedelta(minutes=15),
+            horizon[0],
+        )
+
     def test_service_window_validation(self) -> None:
         captured = datetime(2026, 8, 10, 17, 47, tzinfo=timezone.utc)
         horizon = utc_slots(captured, 72)

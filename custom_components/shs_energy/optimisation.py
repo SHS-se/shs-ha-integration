@@ -1697,8 +1697,6 @@ def validate_plan_contract(
 
 
 def utc_slots(start: datetime, hours: int) -> list[datetime]:
-    """Build contiguous real-time slots; DST changes need no special casing."""
+    """Include the current quarter; a snapshot taken seconds late must not skip it."""
     cursor = quarter_start(start)
-    if cursor < start.astimezone(timezone.utc):
-        cursor += timedelta(seconds=SLOT_SECONDS)
     return [cursor + timedelta(seconds=SLOT_SECONDS * index) for index in range(hours * 4)]

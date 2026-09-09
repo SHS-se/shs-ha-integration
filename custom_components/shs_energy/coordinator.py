@@ -2296,10 +2296,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 label="battery SOC",
             )
 
-        # Short-term recorder statistics may still be settling immediately at
-        # the boundary. Keeping a full-quarter safety lag avoids publishing a
-        # low partial bucket as history or learning from it.
-        profile_end = quarter_start(captured) - timedelta(minutes=15)
+        # Include every completed quarter. The aggregators require all three
+        # five-minute samples and omit incomplete recorder buckets.
+        profile_end = quarter_start(captured)
         profile_start = profile_end - timedelta(
             days=OPTIMISATION_PROFILE_DAYS
         )
@@ -2743,10 +2742,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     category_entities = entities.setdefault(device["category"], [])
                     if device["statistic_id"] not in category_entities:
                         category_entities.append(device["statistic_id"])
-                # Do not race the recorder's five-minute statistics job. Actual
-                # history may trail real time by one quarter; live reactive
-                # control continues to use the local power sensor directly.
-                complete_end = quarter_start(dt_util.utcnow()) - timedelta(minutes=15)
+                # Query through the last completed quarter. Aggregation rejects
+                # incomplete buckets; a blanket extra-quarter delay also
+                # suppressed readings that the recorder had already finished.
+                complete_end = quarter_start(dt_util.utcnow())
                 accepted = stored.get("optimisation_actuals_accepted_until")
                 if accepted:
                     # Re-send the last accepted quarter once. The database
