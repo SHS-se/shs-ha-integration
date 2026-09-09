@@ -840,6 +840,26 @@ def build_base_load_model(
     }
 
 
+def base_load_source(
+    model: dict[str, Any], entity_ids: list[str], issued_at: datetime,
+) -> dict[str, Any]:
+    """Describe measured recorder provenance separately from model estimates.
+
+    Missing device readings affect the residual estimate, not the origin of
+    the whole-house readings. Synthetic sources are demo data and are rejected
+    by the live ingestion contract.
+    """
+    return {
+        "provider": "home_assistant_recorder",
+        "entity_ids": entity_ids,
+        "issued_at": issued_at.isoformat(),
+        "valid_until": (issued_at + timedelta(hours=2)).isoformat(),
+        "quality": "measured",
+        "sample_count": model["sample_count"],
+        "estimated_sample_count": model["estimated_sample_count"],
+    }
+
+
 def build_device_load_model(
     device_slots: list[dict[str, Any]],
     device_key: str,

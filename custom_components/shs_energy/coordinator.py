@@ -117,6 +117,7 @@ from .optimisation import (
     aggregate_category_changes,
     aggregate_device_changes,
     build_base_load_model,
+    base_load_source,
     calibration_summary,
     discharge_cut_off,
     extract_timestamped_forecast,
@@ -2287,7 +2288,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             now=captured,
         )
         profiles = base_load["by_weekday"]
-        sample_count = int(base_load["sample_count"])
 
         services, service_samples, ev_battery = self._build_services(
             options,
@@ -2517,21 +2517,17 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         "longitude": round(pv_longitude, 5),
                     },
                 } if pv_entities else None),
-                "base_load": {
-                    "provider": "home_assistant_recorder",
-                    "entity_ids": sorted({
+                "base_load": base_load_source(
+                    base_load,
+                    sorted({
                         entity_id
                         for category in base_source_categories
                         for entity_id in entities_by_category[category]
                     } | {
                         str(model["statistic_id"]) for model in device_models
                     }),
-                    "issued_at": captured.isoformat(),
-                    "valid_until": (captured + timedelta(hours=2)).isoformat(),
-                    "quality": ("synthetic" if base_load["estimated_sample_count"] else "measured"),
-                    "sample_count": sample_count,
-                    "estimated_sample_count": base_load["estimated_sample_count"],
-                },
+                    captured,
+                ),
                 "import_price": {
                     "provider": "smart_home_solutions",
                     "entity_ids": ["shs:supplier_import"],

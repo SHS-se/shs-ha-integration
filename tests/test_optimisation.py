@@ -20,6 +20,7 @@ from optimisation import (  # noqa: E402
     aggregate_category_changes,
     aggregate_device_changes,
     build_base_load_model,
+    base_load_source,
     build_device_load_model,
     calibration_summary,
     discrete_current_control,
@@ -201,6 +202,31 @@ class QuarterAggregationTests(unittest.TestCase):
         self.assertEqual(
             len(model["by_weekday"]), 7, "every weekday carries its own series"
         )
+
+    def test_estimated_device_subtraction_keeps_live_recorder_provenance(self) -> None:
+        start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        actuals = [
+            {"start": (start + timedelta(minutes=15 * q)).isoformat(),
+             "total_load_kwh": 0.5}
+            for q in range(96 * 4)
+        ]
+        for measured_quarters in (0, 44, len(actuals)):
+            with self.subTest(measured_quarters=measured_quarters):
+                device_slots = [
+                    {"start": row["start"], "device_energy_kwh": {"pool": 0.193}}
+                    for row in actuals[len(actuals) - measured_quarters:]
+                ]
+                model = build_base_load_model(
+                    actuals, "UTC", device_slots=device_slots,
+                    modelled_device_keys=("pool",),
+                )
+                source = base_load_source(model, ["sensor.house", "pool"], start)
+                self.assertEqual(source["quality"], "measured")
+                self.assertEqual(source["sample_count"], len(actuals))
+                self.assertEqual(source["estimated_sample_count"],
+                                 len(actuals) - measured_quarters)
+                self.assertEqual(source["entity_ids"], ["sensor.house", "pool"])
+                self.assertGreater(source["valid_until"], source["issued_at"])
 
     def test_base_profile_subtracts_only_controllable_devices(self) -> None:
         start = datetime(2026, 8, 1, tzinfo=timezone.utc)
