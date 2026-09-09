@@ -121,6 +121,34 @@ def _positive_option(
     return fallback
 
 
+def pool_heating_running(
+    models: list[dict[str, Any]],
+    mappings: dict[str, Any],
+    entity_state: Callable[[str], Any],
+) -> bool | None:
+    """Whether the mapped heating switches are already enabled, never inferred from watts."""
+    entities: set[str] = set()
+    for model in models:
+        if model.get("planning_role") != "controllable" or planning_path(
+            model["control_type"], model["category"]
+        ) != "pool":
+            continue
+        mapping = mappings.get(model["key"], {})
+        actuators = mapping.get("actuator_entity_ids", [])
+        if not actuators:
+            return None
+        entities.update(actuators)
+        entities.update(mapping.get("companion_actuator_entity_ids", []))
+    if not entities:
+        return None
+    states = [entity_state(entity) for entity in sorted(entities)]
+    if any(state == "off" or state is False for state in states):
+        return False
+    if all(state == "on" or state is True for state in states):
+        return True
+    return None
+
+
 def build_services(
     options: dict[str, Any],
     horizon: list[datetime],

@@ -134,6 +134,7 @@ from .planning import (
     build_device_models,
     build_services,
     disabled_store_paths,
+    pool_heating_running,
     unplanned_services,
 )
 from .readings import daily_category_readings, usable_change
@@ -2533,6 +2534,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
                 "volume_m3": parse_number(
                     options.get(OPT_POOL_VOLUME_M3), OPT_POOL_VOLUME_M3
+                ),
+                "heating_running": pool_heating_running(
+                    device_models, control_mappings,
+                    lambda entity: getattr(self.hass.states.get(entity), "state", None),
                 ),
                 "source_entity_ids": {"water_temperature": pool_entity},
             }

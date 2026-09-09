@@ -23,6 +23,7 @@ from planning import (  # noqa: E402
     build_device_models,
     build_services,
     disabled_store_paths,
+    pool_heating_running,
     unplanned_services,
 )
 
@@ -866,3 +867,24 @@ class StoreEnabledTests(unittest.TestCase):
             unplanned_services({**configured, "pool_enabled": False}, set(), {}),
             [],
         )
+
+
+class PoolRunningStateTests(unittest.TestCase):
+    def test_pool_continuation_uses_switches_and_companions_not_power_or_floor_heat(self):
+        models = [PoolServiceTests.pool_switch, PoolServiceTests.pool_pump, PoolServiceTests.pool_room]
+        mappings = {key: dict(value) for key, value in PoolServiceTests.mappings.items()}
+        mappings["sensor.pool_heater_energy"]["companion_actuator_entity_ids"] = ["switch.flow"]
+        states = {"switch.pool_heater": "on", "switch.pool_pump": "on", "switch.flow": "on"}
+        self.assertIs(pool_heating_running(models, mappings, states.get), True)
+        states["switch.flow"] = "off"
+        self.assertIs(pool_heating_running(models, mappings, states.get), False)
+        states["switch.flow"] = "unavailable"
+        self.assertIsNone(pool_heating_running(models, mappings, states.get))
+        states["switch.pool_heater"] = "off"
+        self.assertIs(pool_heating_running(models, mappings, states.get), False)
+
+    def test_unknown_or_unmapped_actuators_never_claim_a_running_heater(self):
+        model = PoolServiceTests.pool_switch
+        self.assertIsNone(pool_heating_running([model], PoolServiceTests.mappings, lambda _: None))
+        self.assertIsNone(pool_heating_running([model], {}, lambda _: "on"))
+        self.assertIsNone(pool_heating_running([], {}, lambda _: "on"))
