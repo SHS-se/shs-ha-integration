@@ -199,3 +199,20 @@ test('discovery changes sources only, retaining pending source and device edits'
   assert.equal(panel._draft.battery_capacity_kwh, 12);
   assert.deepEqual(JSON.parse(JSON.stringify(panel._draft.grid)), ['sensor.new']);
 });
+
+test('status shows automatic recovery and delivery failures without claiming readiness', () => {
+  const panel = Object.create(context.Panel.prototype);
+  panel._hass = {};
+  panel._data = { operation: { state: 'unavailable', label: 'Unavailable', reason: 'Waiting for a plan', recovering: true },
+    diagnostics: { last_optimisation_error: 'Planner unavailable', last_runtime_error: 'offline' },
+    readiness: {}, portal: {}, devices: [], attention: [], labels: {} };
+  let html = panel._renderStatus();
+  assert.match(html, /Requesting a fresh plan automatically/);
+  assert.match(html, /Latest planning error: Planner unavailable/);
+  assert.match(html, /Website status delivery failed: offline/);
+  panel._data.operation = { state: 'ready', label: 'Ready', reason: 'A validated plan is available' };
+  panel._refreshError = 'connection lost';
+  html = panel._renderStatus();
+  assert.match(html, /Status unconfirmed/);
+  assert.doesNotMatch(html, />Ready<\/span>/);
+});

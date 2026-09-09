@@ -252,6 +252,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.tariff_components: dict[str, dict[str, str]] = {}
         self._push_lock = asyncio.Lock()
+        self._runtime_lock = asyncio.Lock()
+        self._recovery_attempts = 0
+        self._recovery_retry_at: datetime | None = None
+        self._recovering = False
+        self.last_runtime_report: str | None = None
+        self.last_runtime_error: str | None = None
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, STORAGE_KEY_TEMPLATE.format(entry_id=entry.entry_id)
         )
@@ -425,58 +431,97 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Refresh server prices on native Swedish market-quarter boundaries."""
         await self.async_request_refresh()
 
-    async def async_replan_poll(self, _now: datetime | None = None) -> None:
-        """Answer a replan the household asked for on the website.
+    async def async_restore_plan(self) -> None:
+        """Restore durable state before entities/controllers expose readiness.
 
-        The website used to rebuild the plan itself from the snapshot stored
-        beside it. That snapshot is only replaced when this integration pushes
-        one, so for most of every quarter it was already past the planner's
-        fifteen-minute freshness limit and the button failed. The house is the
-        only thing that can supply a fresh measurement, so it is asked for one.
-
-        Nothing here is load-bearing for correctness: a request this poll never
-        sees is settled anyway by the next quarter-hour push, because the server
-        prices every plan with the curves as they stand when it solves. This
-        only decides whether the person waits seconds or a quarter of an hour,
-        and gives them a reason when the answer is that no plan can be built.
+        The shared operational_status validator still gates every command;
+        expired or invalid saved plans remain visible for diagnosis only.
         """
-        try:
-            status = await self.client.status()
-        except (ShsApiError, ShsAuthError) as err:
-            _LOGGER.debug("Replan poll skipped: %s", err)
-            return
+        stored = await self._store.async_load() or {}
+        self.optimisation_plan = stored.get("optimisation_plan")
+        self.last_optimisation_push = stored.get("last_optimisation_push")
+        self.last_optimisation_attempt = stored.get("last_optimisation_attempt")
+
+    async def async_report_runtime(self) -> dict[str, Any]:
+        """Serialize fresh reports so an older local read cannot win a race."""
+        async with self._runtime_lock:
+            operation = self.operational_status
+            try:
+                status = await self.client.report_runtime({
+                    "observed_at": operation["now"],
+                    "plan_id": operation["plan_id"],
+                    "state": operation["state"],
+                    "reason": operation["reason"][:1000],
+                    "binding_until": operation["binding_until"],
+                    "valid_until": operation["valid_until"],
+                    "recovering": self._recovering,
+                    "retry_at": operation["retry_at"],
+                    "last_error": (self.last_optimisation_error or "")[:1000] or None,
+                })
+                validate_server_contract(status)
+                self.last_runtime_report = dt_util.utcnow().isoformat()
+                self.last_runtime_error = None
+                return status
+            except (ShsApiError, ShsAuthError, ApiContractError) as err:
+                self.last_runtime_error = str(err)
+                _LOGGER.debug("Runtime report failed: %s", err)
+                return {}
+            finally:
+                self.async_update_listeners()
+
+    async def async_replan_poll(self, _now: datetime | None = None) -> None:
+        """Report readiness each minute and repair lost/unusable plans.
+
+        Recovery is independent of a website request and of heartbeat delivery.
+        Only one recovery runs at a time; failures back off to five minutes.
+        """
+        status = await self.async_report_runtime()
         requested = status.get("pending_replan_request_id")
-        if not isinstance(requested, str) or not requested:
-            return
-        # One attempt per request. A failure is reported below and withdraws the
-        # request server-side, so retrying here would only replace one stale
-        # explanation with another.
         if requested == self._answered_replan_request_id:
-            return
-        self._answered_replan_request_id = requested
-
-        mode = resolved_options(self.hass, dict(self.entry.options))[
-            OPT_PLANNING_MODE
-        ]
+            requested = None
+        mode = resolved_options(self.hass, dict(self.entry.options))[OPT_PLANNING_MODE]
         if mode != PLANNING_MODE_LIVE:
-            # Not a fault, and not something waiting will fix: say it plainly
-            # rather than leaving the website to time the request out.
-            await self._report_replan_failure(
-                requested,
-                "planning is turned off for this home in Home Assistant",
-            )
+            if requested:
+                await self._report_replan_failure(
+                    requested, "planning is turned off for this home in Home Assistant",
+                )
+                self._answered_replan_request_id = requested
             return
-
-        await self.async_optimisation_push(
-            force_plan=True, replan_request_id=requested
-        )
-        # The push records why it could not plan, in the same words the repair
-        # issue uses. A push that produced a plan clears it, and the server has
-        # already marked the request answered by then.
-        if self.last_optimisation_error is not None:
-            await self._report_replan_failure(
-                requested, self.last_optimisation_error
+        if self._push_lock.locked() or self._recovering:
+            return
+        now = dt_util.utcnow()
+        if self.operational_status["actionable"]:
+            self._recovery_attempts = 0
+            self._recovery_retry_at = None
+            if not requested:
+                return
+        elif not requested and self._recovery_retry_at and now < self._recovery_retry_at:
+            return
+        self._recovering = True
+        self._recovery_retry_at = None
+        try:
+            await self.async_report_runtime()
+            await self.async_optimisation_push(
+                force_plan=True, replan_request_id=requested
             )
+            if requested:
+                if self.last_optimisation_error is not None:
+                    await self._report_replan_failure(requested, self.last_optimisation_error)
+                self._answered_replan_request_id = requested
+        except Exception as err:
+            self.last_optimisation_error = f"Automatic plan recovery failed: {err}"
+            raise
+        finally:
+            self._recovering = False
+            if self.operational_status["actionable"]:
+                self._recovery_attempts = 0
+                self._recovery_retry_at = None
+            else:
+                self._recovery_attempts = min(self._recovery_attempts + 1, 4)
+                self._recovery_retry_at = dt_util.utcnow() + timedelta(
+                    minutes=min(2 ** (self._recovery_attempts - 1), 5),
+                )
+            await self.async_report_runtime()
 
     async def _report_replan_failure(self, request_id: str, detail: str) -> None:
         """Tell the website why, tolerating a server that cannot be reached."""
@@ -1006,6 +1051,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._store.async_save(stored)
             self.async_update_listeners()
             requested = requested_controllable_devices(configuration)
+        await self.async_report_runtime()
         if configuration_changed and resolved_options(
             self.hass, dict(self.entry.options)
         )[OPT_PLANNING_MODE] == PLANNING_MODE_LIVE:
@@ -1066,9 +1112,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @property
     def operational_status(self) -> dict[str, Any]:
         from .presentation import operational_status
-        return operational_status(self.optimisation_plan,
+        result = operational_status(self.optimisation_plan,
             resolved_options(self.hass, dict(self.entry.options))[OPT_PLANNING_MODE],
             self.optimisation_missing_inputs, datetime.now(timezone.utc))
+        result["recovering"] = self._recovering
+        result["retry_at"] = self._recovery_retry_at.isoformat() if self._recovery_retry_at else None
+        return result
 
     async def async_cached_exchange_status(self) -> dict[str, Any]:
         """Return durable exchange watermarks for the configuration panel."""
@@ -2971,6 +3020,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if await self._retry_pending_plan_ack(stored):
                 await self._store.async_save(stored)
             self.async_update_listeners()
+        await self.async_report_runtime()
 
     @property
     def current_plan_slot(self) -> dict[str, Any] | None:

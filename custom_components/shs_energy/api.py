@@ -195,6 +195,16 @@ class ShsApiClient:
         """Fetch subscription status for the paired customer."""
         return await self._request("GET", "integration-status")
 
+    async def report_runtime(self, runtime: dict[str, Any]) -> dict[str, Any]:
+        """Report current local readiness, independently of plan acceptance."""
+        result = await self._request(
+            "POST", "integration-status",
+            json_body={"api_version": API_VERSION, "runtime": runtime},
+        )
+        if result.get("runtime_received") is not True:
+            raise ShsApiError("Website did not confirm storing the current HA status")
+        return result
+
     async def report_replan_failure(
         self, replan_request_id: str, error: str
     ) -> dict[str, Any]:

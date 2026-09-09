@@ -75,6 +75,7 @@ async def _async_delayed_startup_optimisation_push(
     )
     for attempt in range(attempts):
         await coordinator.async_optimisation_push(force_plan=True)
+        await coordinator.async_report_runtime()
         if not coordinator.optimisation_input_gap_is_transient():
             return
         if attempt + 1 < attempts:
@@ -205,6 +206,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     coordinator.controller = controller
     # Recover local ownership before contacting the cloud. A network outage
     # must not prevent restoration of commands left by the previous process.
+    await coordinator.async_restore_plan()
     await controller.async_start()
     try:
         await coordinator.async_config_entry_first_refresh()

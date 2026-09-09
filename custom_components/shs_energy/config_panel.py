@@ -336,6 +336,8 @@ async def _configuration_payload(
             "last_daily_push": coordinator.last_push_date,
             "last_daily_push_error": coordinator.last_push_error,
             "last_optimisation_error": coordinator.last_optimisation_error,
+            "last_runtime_report": coordinator.last_runtime_report,
+            "last_runtime_error": coordinator.last_runtime_error,
             "last_thermal_slots_accepted": thermal_slots,
             "thermal_slots_accepted_until": thermal_accepted_until,
         },
