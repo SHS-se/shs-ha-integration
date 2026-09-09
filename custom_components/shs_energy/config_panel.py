@@ -40,10 +40,12 @@ from .device_controls import (
 _LOGGER = logging.getLogger(__name__)
 
 PANEL_URL = "shs-energy"
-PANEL_ELEMENT = "shs-energy-config-panel-v3"
 STATIC_URL = "/shs_energy_frontend"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 FRONTEND_ASSET_VERSION = INTEGRATION_VERSION
+# Custom elements cannot be redefined in an open browser session. Version the
+# element as well as the module URL so an update cannot reuse the old class.
+PANEL_ELEMENT = f"shs-energy-config-panel-{FRONTEND_ASSET_VERSION.replace('.', '-')}"
 
 
 def _entry_state(entry: ConfigEntry) -> str:

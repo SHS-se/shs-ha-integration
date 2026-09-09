@@ -207,7 +207,8 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn("OPT_DEVICE_CONTROL_MAPPINGS", live_update)
 
     def test_panel_asset_uses_a_new_component_and_cache_key(self) -> None:
-        self.assertIn('PANEL_ELEMENT = "shs-energy-config-panel-v3"', CONFIG_PANEL)
+        self.assertIn('FRONTEND_ASSET_VERSION = INTEGRATION_VERSION', CONFIG_PANEL)
+        self.assertIn('PANEL_ELEMENT = f"shs-energy-config-panel-{FRONTEND_ASSET_VERSION.replace(\'.\', \'-\')}"', CONFIG_PANEL)
         self.assertIn("?v={FRONTEND_ASSET_VERSION}", CONFIG_PANEL)
 
     def test_setpoint_room_is_derived_instead_of_edited(self) -> None:

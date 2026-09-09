@@ -1,5 +1,7 @@
 const TABS = [["energy", "Energy"], ["devices", "Devices"], ["schedule", "Schedule"], ["status", "Status"]];
 const MAPPINGS_KEY = "device_control_mappings";
+const FRONTEND_VERSION = new URL(import.meta.url).searchParams.get("v");
+const PANEL_ELEMENT = `shs-energy-config-panel-${FRONTEND_VERSION.replaceAll(".", "-")}`;
 
 class ShsEnergyConfigPanel extends HTMLElement {
   constructor() {
@@ -603,7 +605,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _download() {
     // Deliberate allowlist: no options, entity addresses, names, URLs, raw errors or recorder rows.
-    const value = { version: 1, exported_at: new Date().toISOString(),
+    const value = { version: 1, frontend_version: FRONTEND_VERSION, exported_at: new Date().toISOString(),
+      attention: this._attention().map(item => ({ key: item.key, severity: item.severity })),
       plan: { state: this._data.operation.state, issued_at: this._data.operation.issued_at,
         binding_until: this._data.operation.binding_until, valid_until: this._data.operation.valid_until },
       devices: this._data.devices.map((d, index) => ({ device: index + 1, included: d.included,
@@ -997,6 +1000,6 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 }
 
-if (!customElements.get("shs-energy-config-panel-v3")) {
-  customElements.define("shs-energy-config-panel-v3", ShsEnergyConfigPanel);
+if (!customElements.get(PANEL_ELEMENT)) {
+  customElements.define(PANEL_ELEMENT, ShsEnergyConfigPanel);
 }

@@ -2,8 +2,32 @@ const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { test } = require('node:test');
 const vm = require('node:vm');
-const context = vm.createContext({ HTMLElement: class {}, customElements: { define() {}, get() {} } });
-vm.runInContext(readFileSync('custom_components/shs_energy/frontend/shs-energy-config-panel.js', 'utf8') + '\nglobalThis.Panel = ShsEnergyConfigPanel;', context);
+const frontendVersion = JSON.parse(readFileSync('custom_components/shs_energy/manifest.json', 'utf8')).version;
+const frontendSource = readFileSync('custom_components/shs_energy/frontend/shs-energy-config-panel.js', 'utf8');
+const loadPanel = (registry, version = frontendVersion) => {
+  const context = vm.createContext({ URL, HTMLElement: class {}, customElements: registry });
+  const moduleUrl = `https://ha.example/shs_energy_frontend/shs-energy-config-panel.js?v=${version}`;
+  vm.runInContext(frontendSource.replaceAll('import.meta.url', JSON.stringify(moduleUrl)) + '\nglobalThis.Panel = ShsEnergyConfigPanel;', context);
+  return context;
+};
+const context = loadPanel({ define() {}, get() {} });
+
+test('an open session loads the new panel instead of reusing a previously registered class', () => {
+  const oldPanel = class {};
+  const elements = new Map([['shs-energy-config-panel-v3', oldPanel]]);
+  const registry = {
+    get: name => elements.get(name),
+    define: (name, element) => { assert.equal(elements.has(name), false); elements.set(name, element); },
+  };
+  const previous = loadPanel(registry, '0.8.0-beta.29');
+  const updated = loadPanel(registry);
+  const name = `shs-energy-config-panel-${frontendVersion.replaceAll('.', '-')}`;
+  assert.equal(elements.get(name), updated.Panel);
+  assert.notEqual(elements.get(name), previous.Panel);
+  assert.equal(elements.get('shs-energy-config-panel-v3'), oldPanel);
+  loadPanel(registry); // Re-importing the same release does not redefine it.
+  assert.equal(elements.get(name), updated.Panel);
+});
 
 test('saving retains disabled equipment settings and excludes metadata and mappings', async () => {
   const panel = Object.create(context.Panel.prototype);
@@ -137,6 +161,16 @@ test('Status renders counted warnings and affected fields above collapsed diagno
   assert.match(html, /Collecting history/);
   assert.ok(html.indexOf('Battery setup incomplete') < html.indexOf('<details'));
   assert.doesNotMatch(html, /View status/);
+
+  // Exercise the full panel, including its tab badge, rather than only the
+  // attention helper: the original regression left that helper disconnected.
+  panel._hass = {};
+  panel._data.entry = { title: 'Test home', state: 'loaded' };
+  panel._data.entities = [];
+  panel.shadowRoot = { querySelectorAll: () => [], innerHTML: '' };
+  context.Panel.prototype._render.call(panel);
+  assert.match(panel.shadowRoot.innerHTML, /aria-label="2 items to fix">2<\/span>/);
+  assert.equal((panel.shadowRoot.innerHTML.match(/class="attention-item warning"/g) || []).length, 2);
 
   panel._data.attention = [];
   assert.doesNotMatch(panel._renderBody(), /class="attention"|attention-item/);
