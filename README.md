@@ -202,6 +202,14 @@ for boiler/pool/EV, a dedicated *EV planned current* sensor, and one monetary
 sensor for every tariff component. Removed tariff components remain as entities
 with an inactive state so Home Assistant retains their history.
 
+The *Total import price* and *Total export price* sensors expose a `forecast`
+attribute with 15-minute entries (`start` in UTC and `price_sek_per_kwh`). Each
+price includes both supplier and grid charges or credits, from the current
+quarter through the end of tomorrow where both prices are published. Missing
+prices are omitted; if either source is unavailable the forecast is empty.
+The *Grid import price* sensor has no forecast attribute. *Grid export price*
+retains its grid-only forecast because export credits can vary by load period.
+
 Every device declared in Home Assistant's Energy Dashboard is also published
 as a stable home-local inventory item with complete 15-minute energy values.
 The portal proposes one of four editable electrical characteristics: fixed full

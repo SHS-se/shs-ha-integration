@@ -866,6 +866,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return []
 
     @property
+    def total_price_forecast(self) -> list[dict[str, Any]]:
+        """Published all-in quarter prices from this slot through tomorrow."""
+        return self._price_quarters(
+            self.supplier_prices,
+            quarter_start(dt_util.utcnow()),
+            dt_util.start_of_local_day() + timedelta(days=2),
+        )
+
+    @property
     def demand_charge(self) -> dict[str, Any] | None:
         """The effektavgift rule in force right now, if the revision has one."""
         catalog = self.tariff_catalog

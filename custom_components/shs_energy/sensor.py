@@ -502,6 +502,13 @@ class ShsTotalPriceSensor(ShsBaseSensor):
                 f"{self.direction}_price_sek_per_kwh"
             ),
             "supplier_price_sek_per_kwh": self._supplier_price(),
+            "forecast": [
+                {
+                    "start": slot["start"],
+                    "price_sek_per_kwh": slot[f"{self.direction}_price_sek_per_kwh"],
+                }
+                for slot in self.coordinator.total_price_forecast
+            ],
             "supplier": (self.coordinator.supplier_prices or {}).get(
                 "configuration", {}
             ).get("supplier"),
@@ -540,18 +547,11 @@ class ShsGridPriceSensor(ShsBaseSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         prices = self.coordinator.grid_prices or {}
-        key = f"{self.direction}_price_sek_per_kwh"
         shared = {
             "load_period": prices.get("load_period"),
             "vat_rate": prices.get("vat_rate"),
             "tariff_revision": prices.get("tariff_revision"),
             "excludes": "electricity supplier energy price",
-            # Published ahead of time, so this is exact rather than predicted.
-            # Shaped for an optimiser: one entry per slot, UTC start, price.
-            "forecast": [
-                {"start": slot["start"], "price_sek_per_kwh": slot[key]}
-                for slot in self.coordinator.grid_price_forecast
-            ],
         }
         if self.direction == "import":
             demand = self.coordinator.demand_charge
@@ -574,6 +574,13 @@ class ShsGridPriceSensor(ShsBaseSensor):
             }
         return {
             **shared,
+            "forecast": [
+                {
+                    "start": slot["start"],
+                    "price_sek_per_kwh": slot["export_price_sek_per_kwh"],
+                }
+                for slot in self.coordinator.grid_price_forecast
+            ],
             "price_sek_per_kwh_ex_vat": prices.get("export_price_sek_per_kwh_ex_vat"),
         }
 
