@@ -50,6 +50,7 @@ from .configuration import (
 )
 from .controller import ScheduledController
 from .control_setup import ControlSetup, VerifiedBindingStore, read_binding_file
+from .control_agreement import ControlAgreement, POLL_SECONDS
 from .control_setup_ha import inventory, legacy_claims
 from .coordinator import ShsStatusCoordinator
 from .migration import mapped_entity_ids, migrate_options
@@ -217,12 +218,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         lambda values: legacy_claims(hass, values, own_entry_id=entry.entry_id),
         lock=hass.data.setdefault("shs_energy_control_setup_lock", asyncio.Lock()),
     )
+    agreement_store = Store(hass, 1, f"shs_energy.control_agreement.{entry.entry_id}",
+                            atomic_writes=True, private=True)
+    coordinator.control_agreement = ControlAgreement(
+        VerifiedBindingStore(agreement_store,
+            lambda: hass.async_add_executor_job(read_binding_file, agreement_store.path),
+            agreement_store.key, lambda: hass.state is CoreState.stopping),
+        coordinator.control_setup, client.control_agreement,
+    )
     # Recover local ownership before contacting the cloud. A network outage
     # must not prevent restoration of commands left by the previous process.
     await coordinator.async_restore_plan()
     await controller.async_start()
     try:
         await coordinator.control_setup.async_load()
+        await coordinator.control_agreement.async_load()
         await coordinator.async_config_entry_first_refresh()
     except BaseException:
         await controller.async_stop()
@@ -234,6 +244,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
                 hass, controller.async_tick(), name="shs_energy_controller_update",
             )
 
+    entry.async_on_unload(coordinator.control_agreement.close)
+    entry.async_on_unload(async_track_time_interval(
+        hass, coordinator.control_agreement.async_poll, timedelta(seconds=POLL_SECONDS)))
+    entry.async_create_background_task(
+        hass, coordinator.control_agreement.async_poll(), name="shs_energy_control_agreement")
     entry.async_on_unload(coordinator.async_add_listener(schedule_controller))
     entry.async_on_unload(async_track_time_interval(hass, controller.async_tick, timedelta(seconds=5)))
     entry.async_on_unload(async_track_time_change(hass, controller.async_tick, minute=[0, 15, 30, 45], second=0))

@@ -1,11 +1,9 @@
-/** Contract conformance reference; not an executor or migration runner.
+/** Shared contract validation; not an executor or migration runner.
  * Keep the complete v1 bundle byte-identical in both repositories.
  */
 import Ajv from "npm:ajv@6.12.6";
 
-const schema = JSON.parse(
-  await Deno.readTextFile(new URL("schema.json", import.meta.url)),
-);
+import schema from "./schema.json" with { type: "json" };
 const shape = new Ajv({
   allErrors: true,
   coerceTypes: false,

@@ -191,6 +191,10 @@ class ShsApiClient:
             # 401 here means the code was wrong/expired, not a token problem.
             raise ShsPairingError(str(err)) from err
 
+    async def control_agreement(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Dedicated authenticated settings/authority exchange, independent of ingest."""
+        return await self._request("POST", "control-agreement", request)
+
     async def status(self) -> dict[str, Any]:
         """Fetch subscription status for the paired customer."""
         return await self._request("GET", "integration-status")

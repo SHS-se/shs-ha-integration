@@ -230,3 +230,13 @@ test('control validation reports local readiness with control off and escapes se
   assert.match(html, /Your pool automation owns all Nibe and pump actions/);
   assert.doesNotMatch(html, /<script>/);
 });
+
+test('agreement distinguishes pending settings and expired authority with escaped errors', () => {
+  const panel = makePanel();
+  panel._data.control_setup = { controls: [], targets: [] };
+  panel._data.control_agreement = { synchronization: 'pending', desired_epoch: 3, authority: 'expired', lease: null, error: '<offline>' };
+  const html = panel._renderControlSetup();
+  assert.match(html, /Settings: pending · Desired epoch 3 · Authority: expired/);
+  assert.match(html, /&lt;offline&gt;/);
+  assert.doesNotMatch(html, /Authority expires/);
+});

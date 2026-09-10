@@ -197,7 +197,7 @@ def _report(errors, resolved, claims, capabilities):
     return {'status': 'invalid' if errors else 'ready', 'errors': errors,
             'resolved': {role: e['entity_id'] for role, e in resolved.items()},
             'capabilities': capabilities, 'claims': [list(k) for k in sorted(claims)],
-            'control_enabled': False, 'agreement': 'not_acknowledged'}
+            'control_enabled': False, 'agreement': 'not_evaluated'}
 
 
 def _exact(values, keys, label):

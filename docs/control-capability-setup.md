@@ -97,7 +97,8 @@ IDs and values above are illustrative, not installation defaults. The server
 allocates the control ID; local setup never invents/rekeys a historical meter.
 The configured integration entry determines home scope. Endpoint saves cannot
 modify that scope. Server-side ID membership and accepted desired revisions are
-part of step 3, so every local response remains `agreement: not_acknowledged`.
+part of step 3. Local validation reports `agreement: not_evaluated`; the separate
+`control_agreement` status reports persisted/server acknowledgement and authority.
 
 `status: ready` means only that the complete local binding proposal validated.
 `errors` carries field paths/codes/messages. `control_enabled` is always false.

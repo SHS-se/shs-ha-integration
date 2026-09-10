@@ -330,6 +330,7 @@ async def _configuration_payload(
             ],
         },
         "control_setup": coordinator.control_setup.summary(),
+        "control_agreement": coordinator.control_agreement.status(),
         "diagnostics": {
             "controllers": dict(coordinator.controller.status),
             "migration": options.get("_migration_report"),

@@ -97,6 +97,12 @@ and both target devices produce useful setup reports with control still off.
 
 ## 3. Make settings synchronization and plan authority revision-aware
 
+Delivered: [revision agreement and authority](control-revision-authority.md) and
+[transport contract](../contracts/control/v1/agreement.md), with atomic server
+persistence, durable HA acknowledgement, independent polling and clock-bounded
+execution guards. The v1 publication boundary is ready for the actual command
+producer in step 4 and the adapters in steps 5–6. New controls remain off.
+
 - Add server persistence/API fields for desired, acknowledged and active state.
   Apply related field edits atomically; use expected revision checks to prevent
   stale browser tabs overwriting newer changes.

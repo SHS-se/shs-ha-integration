@@ -709,8 +709,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _renderControlSetup() {
     const setup = this._data.control_setup;
     if (!setup) return "";
+    const agreement = this._data.control_agreement;
+    const agreementStatus = agreement ? `<p>Settings: ${this._escape(agreement.synchronization)} · Desired epoch ${this._escape(agreement.desired_epoch)} · Authority: ${this._escape(agreement.authority)}</p>${agreement.lease ? `<p>Authority expires ${this._escape(agreement.lease.expires_at_utc)}</p>` : ""}${agreement.error ? `<p>Settings exchange: ${this._escape(agreement.error)}</p>` : ""}` : "";
     const names = { battery_dispatch: "Battery dispatch", pool_service: "Customer-operated pool", relay_schedule: "Relay schedule", permission: "Permission control", temperature_target: "Temperature target", adjustable_output: "Adjustable output" };
-    return `<details class="card compact"><summary>Control interface validation</summary><p>Local setup checks do not grant permission or confirm a website plan. Your pool automation owns all Nibe and pump actions.</p>${[...setup.controls, ...setup.targets].map(item => `<article><h3>${this._escape(names[item.contract.name] || item.contract.name)}</h3><p>${item.status === "ready" ? "Validated locally · Control off" : "Setup required · Control off"}${item.binding_revision ? ` · Binding revision ${item.binding_revision}` : ""}</p>${item.errors.length ? `<ul>${item.errors.map(error => `<li>${this._escape(error.message)}</li>`).join("")}</ul>` : ""}</article>`).join("")}</details>`;
+    return `<details class="card compact"><summary>Control interface validation</summary><p>Local setup checks do not grant permission or confirm a website plan. Your pool automation owns all Nibe and pump actions.</p>${agreementStatus}${[...setup.controls, ...setup.targets].map(item => `<article><h3>${this._escape(names[item.contract.name] || item.contract.name)}</h3><p>${item.status === "ready" ? "Validated locally · Control off" : "Setup required · Control off"}${item.binding_revision ? ` · Binding revision ${item.binding_revision}` : ""}</p>${item.errors.length ? `<ul>${item.errors.map(error => `<li>${this._escape(error.message)}</li>`).join("")}</ul>` : ""}</article>`).join("")}</details>`;
   }
 
   _renderDevices() {
