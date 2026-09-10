@@ -394,10 +394,16 @@ class ControlSetup:
             validate_binding_record(key, record)
         self.records = deepcopy(payload['records'])
 
+    def assert_adapter_ownership(self, control_id, contract):
+        for record in getattr(self, 'runtime_records', lambda: {})().values():
+            spec = record['binding']['spec']
+            if spec['control_id'] == control_id and spec['contract'] != contract:
+                raise ValueError('The previously owned adapter must complete handover before changing control method')
+
     def _other_claims(self, inventory, exclude=None):
         claims = dict(self.external_claims(inventory))
         for key, record in getattr(self, 'runtime_records', lambda: {})().items():
-            if key != exclude:
+            if record['binding']['spec']['control_id'] != exclude:
                 claims['runtime:' + key] = reserved_claims(record['binding'], inventory)
         for control_id, record in self.records.items():
             if control_id != exclude:

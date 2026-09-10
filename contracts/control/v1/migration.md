@@ -116,6 +116,20 @@ pool control. Another independently configured generic SHS control that still
 owns these actuators must be explicitly removed/reassigned before commissioning.
 The schema does not reach inside customer automation to discover dependencies.
 
+Applied pool cutover (step 6): HA config-entry version 6 checks the old journal
+before changing options/version. Pending direct pool or typed pool/group/companion
+ownership blocks with `legacy_handover_required`; independently mapped overlapping
+owners block with `legacy_pool_overlap_review_required`. Release them through the
+old installed version's reviewed procedure before upgrading. Do not delete or
+reinterpret the journal. Remove direct band/permission/override fields and the
+old typed pool scheduling mappings after release. Preserve pool volume, water
+observation, historical meter/source lists and explicit room/setpoint mappings.
+The old direct save/execution routes are retired. The new ordered request journal
+is separate; only correlated customer release can discharge its ownership.
+Customer automation internals are not discovered, reserved or changed. Runtime
+and migration tests verify ordered release and single canonical attribution;
+physical meter lineage and customer-interface acceptance remain commissioning.
+
 ## Rollout transaction
 
 Server stores the desired proposal and local binding proposal separately;

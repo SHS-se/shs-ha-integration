@@ -588,7 +588,7 @@ async def websocket_save_device_configuration(
 @websocket_api.websocket_command({
     vol.Required("type"): f"{shs_const.DOMAIN}/controls/setup",
     vol.Required("config_entry"): str,
-    vol.Required("action"): vol.In(["discover", "validate", "save", "review_battery_handover"]),
+    vol.Required("action"): vol.In(["discover", "validate", "save", "review_battery_handover", "review_pool_release"]),
     vol.Optional("setup"): dict,
     vol.Optional("expected_revision"): int,
     vol.Optional("control_id"): str,
@@ -606,9 +606,13 @@ async def websocket_control_setup(hass, connection, msg):
         if msg["action"] == "review_battery_handover":
             result = await entry.runtime_data.battery_controller.async_review_handover(
                 msg.get("control_id"), msg.get("expected_revision"), msg.get("reviewed"))
+        elif msg["action"] == "review_pool_release":
+            result = await entry.runtime_data.pool_controller.async_review_release(
+                msg.get("control_id"), msg.get("expected_revision"), msg.get("reviewed"))
         elif msg["action"] == "discover":
             result = {**discover(setup.inventory()), **setup.summary(),
                       "battery_execution": entry.runtime_data.battery_controller.status,
+                      "pool_execution": entry.runtime_data.pool_controller.status,
                       "desired_controls": (entry.runtime_data.control_agreement.saved["definition"] or {}).get("controls", []),
                       "saved_setups": {key: {"setup": record["spec"], "binding_revision": record["binding_revision"]}
                                        for key, record in setup.records.items()}}

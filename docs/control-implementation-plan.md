@@ -198,6 +198,11 @@ explicit permission; implementing an intent does not enable it.
 
 ## 6. Connect the customer-operated pool service
 
+Delivered: [customer pool execution and cutover](pool-execution.md), with durable
+ordered requests, correlated feedback/release, customer override handling and
+config-entry v6 migration. Simulated receiver and accounting checks pass; local
+permission stays off and installation evidence remains for commissioning.
+
 - Bind the explicit pool control ID and accepted revision to a customer-provided
   HA request/feedback interface. Send complete heat/defer/release requests with
   the agreed objective and authorization expiry; do not derive them from watts.

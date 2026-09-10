@@ -10,23 +10,6 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any
 
-try:  # pragma: no cover - package in HA, flat module in the pure test suite
-    from .const import (
-        OPT_POOL_ENABLED,
-        OPT_POOL_START_TEMPERATURE_ENTITY,
-        OPT_POOL_STOP_TEMPERATURE_ENTITY,
-        OPT_POOL_TEMPERATURE_MAXIMUM,
-        OPT_POOL_TEMPERATURE_MINIMUM,
-    )
-except ImportError:  # pragma: no cover - flat import path
-    from const import (  # type: ignore[no-redef]
-        OPT_POOL_ENABLED,
-        OPT_POOL_START_TEMPERATURE_ENTITY,
-        OPT_POOL_STOP_TEMPERATURE_ENTITY,
-        OPT_POOL_TEMPERATURE_MAXIMUM,
-        OPT_POOL_TEMPERATURE_MINIMUM,
-    )
-
 CONTROL_TYPES = (
     "switch_schedule",
     "variable_power",
@@ -183,42 +166,6 @@ def _offset_errors(mapping: dict[str, Any]) -> list[str]:
         errors.append("maximum offset is required with an offset entity")
     if minimum is not None and maximum is not None and minimum >= maximum:
         errors.append("minimum offset must be below maximum offset")
-    return errors
-
-
-def _band_errors(
-    values: dict[str, Any],
-    *,
-    start_key: str,
-    stop_key: str,
-    minimum_key: str,
-    maximum_key: str,
-    subject: str,
-) -> list[str]:
-    """A hysteresis band is a pair, and it stays inside a reviewed range.
-
-    Both ends are required together because writing one alone inverts or
-    collapses the window the equipment runs to. The range is required with them
-    for the same reason the thermal offset's is: without it the planner could
-    ask for any temperature the register accepts.
-    """
-    start = _text(values, start_key)
-    stop = _text(values, stop_key)
-    if not start and not stop:
-        return []
-    errors: list[str] = []
-    if not start:
-        errors.append(f"a {subject} start temperature entity is required with a stop temperature")
-    if not stop:
-        errors.append(f"a {subject} stop temperature entity is required with a start temperature")
-    minimum = _number(values, minimum_key)
-    maximum = _number(values, maximum_key)
-    if minimum is None:
-        errors.append(f"a minimum {subject} temperature is required with a temperature band")
-    if maximum is None:
-        errors.append(f"a maximum {subject} temperature is required with a temperature band")
-    if minimum is not None and maximum is not None and minimum >= maximum:
-        errors.append(f"the minimum {subject} temperature must be below the maximum")
     return errors
 
 
@@ -483,23 +430,8 @@ def battery_control_errors(options: dict[str, Any]) -> list[str]:
 
 
 def pool_band_errors(options: dict[str, Any]) -> list[str]:
-    """Return what stops the pool's temperature band from being written.
-
-    Plant-level, for the same reason the battery's mapping is: the pool service
-    is built from every device routed to it, and a heater and its circulation
-    pump share one body of water and one pair of registers. One band per store
-    keeps a single writer on those registers.
-    """
-    if not options.get(OPT_POOL_ENABLED):
-        return []
-    return _band_errors(
-        options,
-        start_key=OPT_POOL_START_TEMPERATURE_ENTITY,
-        stop_key=OPT_POOL_STOP_TEMPERATURE_ENTITY,
-        minimum_key=OPT_POOL_TEMPERATURE_MINIMUM,
-        maximum_key=OPT_POOL_TEMPERATURE_MAXIMUM,
-        subject="pool",
-    )
+    """The direct pool band executor has been retired."""
+    return ['Direct pool execution is retired; use the customer request interface'] if options.get('pool_control_enabled') else []
 
 
 def requested_controllable_devices(

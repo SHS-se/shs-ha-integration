@@ -151,7 +151,8 @@ to Node-RED and HA automations.
 The customer provides a dedicated HA script interface with a stable registry
 identity, and a feedback sensor. The script accepts a complete request object;
 SHS must not implement the request as a sequence of private Nibe/pump writes.
-Step 2 validates the interface and step 6 implements transport/acknowledgement.
+Step 2 validates the interface; step 6 now implements journalled request
+transport, correlated acknowledgement, release and customer override handling.
 A configured script's existence is not proof that its service works correctly.
 
 The adapter invokes the script with a single `request` field containing control

@@ -37,10 +37,14 @@ household definition, including removals. `plan_id` is null until HA receives th
 validated plan. `active` is null unless a hardware adapter has explicitly reported
 operation; such a report contains `plan_id`, the complete `accepted` map and
 `observed_at_utc`. Per-control evidence is in `controls[control_id]`, including
-`state`, `settings_acknowledged` and that control's `accepted` tuple. Only an
-`observed` control with acknowledged settings and matching current revisions is
-shown as operating. Whole-household plan acceptance does not imply that every
-adapter has operated. Publication, lease renewal and HTTP success do not
+`state`, `settings_acknowledged`, that control's `accepted` tuple and its own
+`observed_at_utc`. Each report also identifies its `plan_id`. Battery `observed`
+with acknowledged settings is distinct from pool customer feedback. Pool reports
+include `request_acknowledged`, `request_id`, `request_sequence`, `operation`,
+`feedback_reported_at_utc` and `authorization_expires_at_utc`; scheduled or unknown
+feedback is never labelled as observed heating. Each control's own freshness is
+checked, so a battery update cannot refresh stale pool operation. Whole-household
+plan acceptance does not imply that every adapter has operated. Publication, lease renewal and HTTP success do not
 manufacture an operation report.
 
 A sync response includes `schema_version`, `home_id`, `server_time_utc`,

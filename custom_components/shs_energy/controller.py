@@ -14,16 +14,18 @@ from math import isfinite
 from typing import Any
 
 try:
+    from .legacy_pool import assert_pool_handover_complete
     from .control_capabilities import build_command
     from .device_commands import actuator_targets, execution_setup_errors, validate_commands
-    from .device_controls import pool_band_errors, planning_path
+    from .device_controls import planning_path
 except ImportError:  # Pure executor tests, without importing Home Assistant.
+    from legacy_pool import assert_pool_handover_complete
     from control_capabilities import build_command
     from device_commands import actuator_targets, execution_setup_errors, validate_commands
-    from device_controls import pool_band_errors, planning_path
+    from device_controls import planning_path
 
 _LOGGER = logging.getLogger(__name__)
-DEVICES = ("ev", "pool")
+DEVICES = ("ev",)
 CONFIRM_SECONDS = 15
 SOURCE_MAX_AGE_SECONDS = 120
 
@@ -37,22 +39,6 @@ def finite(value: Any) -> float:
     return result
 
 
-def pool_band(heat: tuple[float, float], water: float, on: bool,
-              minimum: float, maximum: float, step: float) -> tuple[float, float]:
-    """Move the installed hysteresis intact; never invent a warmer target."""
-    start, stop = heat
-    width = stop - start
-    if step <= 0 or width <= 0 or width > maximum - minimum:
-        raise ValueError("installed pool hysteresis does not fit the reviewed range")
-    if not minimum <= start < stop <= maximum:
-        raise ValueError("installed pool band is outside the reviewed range")
-    upper = stop if on else min(stop, water - step)
-    upper = min(max(upper, minimum + width), maximum)
-    # Round downward to the actuator grid without changing the width.
-    lower = minimum + int((upper - width - minimum + 1e-8) / step) * step
-    return round(lower, 6), round(lower + width, 6)
-
-
 class ScheduledController:
     """HA adapter supplied by the caller, so execution is behaviour-testable."""
 
@@ -62,7 +48,7 @@ class ScheduledController:
         self.store = store
         self.options = options
         self.records: dict[str, dict] = {}
-        self.status = {device: {"state": "disabled"} for device in (*DEVICES, "battery")}
+        self.status = {device: {"state": "disabled"} for device in (*DEVICES, "battery", "pool")}
         self.listeners = set()
         self.lock = asyncio.Lock()
         self.closed = False
@@ -209,15 +195,6 @@ class ScheduledController:
         await self.save()
         return record
 
-    async def band_commands(self, start_entity, stop_entity, band):
-        start, stop = band
-        # Raising stop first / lowering start first never transiently inverts a band.
-        if start >= self.number(stop_entity):
-            await self.command(stop_entity, stop)
-            await self.command(start_entity, start)
-        else:
-            await self.command(start_entity, start)
-            await self.command(stop_entity, stop)
 
     async def restore(self, device):
         record = self.records.get(device)
@@ -226,6 +203,7 @@ class ScheduledController:
         options, original = record["options"], record["originals"]
         record["restoration_pending"] = True
         await self.save()
+        assert_pool_handover_complete({'records': {device: record}}, options)
         self.restoring = True
         try:
             if device.startswith("device:"):
@@ -253,11 +231,7 @@ class ScheduledController:
             elif device == "battery":
                 raise ValueError("legacy_handover_required: signed battery journal is retained; no legacy actuator writes are permitted")
             elif device == "pool":
-                start = options["pool_start_temperature_entity"]
-                stop = options["pool_stop_temperature_entity"]
-                await self.band_commands(start, stop, (finite(original[start]), finite(original[stop])))
-                if permission := options.get("pool_permission_entity"):
-                    await self.command(permission, original[permission])
+                raise ValueError("legacy_handover_required: direct pool execution is retired")
             else:
                 switch = options["ev_charge_switch_entity"]
                 await self.command(switch, "off")
@@ -312,36 +286,12 @@ class ScheduledController:
         return {"state": "commanded", "requested_current_a": current,
                 "reason": "current and charge switch accepted; delivered power not inferred"}
 
-    async def execute_pool(self, options, slot):
-        errors = pool_band_errors(options)
-        if errors:
-            raise ValueError("; ".join(errors))
-        start = options.get("pool_start_temperature_entity")
-        stop = options.get("pool_stop_temperature_entity")
-        water_entity = options.get("pool_water_temperature_entity")
-        for entity in (start, stop, water_entity):
-            if self.state(entity).attributes.get("unit_of_measurement") != "°C":
-                raise ValueError(f"{entity}: pool control requires Celsius")
-        water = self.number(water_entity, fresh=True)
-        minimum = finite(options["pool_temperature_minimum"])
-        maximum = finite(options["pool_temperature_maximum"])
-        step = max(finite(self.state(e).attributes.get("step", 0.1)) for e in (start, stop))
-        record = await self.capture("pool", options, [start, stop, options.get("pool_permission_entity")])
-        original = record["originals"]
-        on = finite(slot["pool_w"]) > 0
-        band = pool_band((finite(original[start]), finite(original[stop])), water,
-                         on, minimum, maximum, step)
-        await self.band_commands(start, stop, band)
-        if on and (permission := options.get("pool_permission_entity")):
-            await self.command(permission, "on")
-        limited = not on and band[1] >= water
-        return {"state": "limited" if limited else "scheduled",
-                "reason": "reviewed lower bound prevents further deferral" if limited else "band accepted; the local thermostat controls heating",
-                "start_temperature_c": band[0], "stop_temperature_c": band[1],
-                "water_temperature_c": water, "requested_power_w": slot["pool_w"]}
 
     async def execute_device(self, device, options, slot):
         key = device.removeprefix("device:")
+        if any(item.get('key') == key and planning_path(item.get('control_type'), item.get('category')) == 'pool'
+               for item in await self.coordinator.async_cached_device_configuration()):
+            raise ValueError('Pool scheduling requires the customer request interface; direct mappings are retired')
         mapping = options["device_control_mappings"][key]
         models = self.coordinator.optimisation_plan["device_models"]
         validate_commands(slot["device_commands"], models)
@@ -442,7 +392,7 @@ class ScheduledController:
         try:
             saved = await self.store.async_load() or {}
         except Exception as err:
-            for device in (*DEVICES, "battery"):
+            for device in (*DEVICES, "battery", "pool"):
                 self.report(device, "fault", reason=f"cannot load restoration journal: {err}")
             return
         self.records = saved.get("records", {})

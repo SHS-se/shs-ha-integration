@@ -150,3 +150,49 @@ class BatteryCutoverTests(unittest.TestCase):
                 with self.assertRaises(ValueError): merge_options(result, {key: old[key]})
         self.assertIn('commissioning', str(result['_migration_report']['needs_attention']))
         self.assertEqual(migrate_options(result), (result, False))
+
+class PoolCutoverTests(unittest.TestCase):
+    def options(self):
+        return {'pool_enabled': True, 'pool_volume_m3': 55, 'pool_water_temperature_entity': 'sensor.filtered',
+                'pool_control_enabled': True, 'pool_start_temperature_entity': 'number.start',
+                'pool_stop_temperature_entity': 'number.stop', 'pool_permission_entity': 'switch.permission',
+                'pool_temperature_minimum': 20, 'pool_temperature_maximum': 32,
+                'entities_pool_heating': ['heater', 'pump', 'room'],
+                'device_control_mappings': {
+                    'heater': {'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.group'],
+                               'companion_actuator_entity_ids': ['switch.pump'], 'control_enabled': True},
+                    'pump': {'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.pump']},
+                    'room': {'control_type': 'setpoint', 'room_area_id': 'bathroom', 'actuator_entity_ids': ['climate.floor']},
+                }, 'rooms': {'bathroom': {'temperature_entity_id': 'sensor.floor'}}}
+
+    def test_cutover_retires_old_typed_pool_routes_and_companions_preserving_meter_and_room_identity(self):
+        original = self.options(); before = deepcopy(original)
+        result, changed = migrate_options(original)
+        self.assertTrue(changed)
+        self.assertEqual(original, before)
+        self.assertEqual(result['entities_pool_heating'], original['entities_pool_heating'])
+        self.assertEqual(result['device_control_mappings'], {'room': original['device_control_mappings']['room']})
+        self.assertEqual(result['rooms'], original['rooms'])
+        for key in ('pool_enabled', 'pool_volume_m3', 'pool_water_temperature_entity'):
+            self.assertEqual(result[key], original[key])
+        for key in ('pool_control_enabled', 'pool_start_temperature_entity', 'pool_stop_temperature_entity',
+                    'pool_permission_entity', 'pool_temperature_minimum', 'pool_temperature_maximum'):
+            self.assertNotIn(key, result)
+            with self.assertRaises(ValueError): merge_options(result, {key: original[key]})
+        self.assertEqual(migrate_options(result), (result, False))
+
+    def test_independent_shared_owner_requires_review_instead_of_silently_removing_room_mapping(self):
+        options = self.options()
+        options['device_control_mappings']['room']['actuator_entity_ids'].append('switch.pump')
+        with self.assertRaisesRegex(ValueError, 'legacy_pool_overlap_review_required'):
+            migrate_options(options)
+        self.assertTrue(options['device_control_mappings']['heater']['control_enabled'])
+
+    def test_journals_for_band_group_and_companion_cannot_be_discarded_or_reinterpreted(self):
+        from migration import assert_legacy_handover_complete
+        for key in ('pool', 'device:heater', 'device:pump'):
+            options = self.options()
+            journal = {'records': {key: {'options': options, 'originals': {}}}}
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'legacy_handover_required'):
+                assert_legacy_handover_complete(journal, options)
+        assert_legacy_handover_complete({'records': {}}, self.options())

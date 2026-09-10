@@ -91,7 +91,7 @@ OPT_AUTOMATIC_SETUP = "automatic_setup"
 OPT_DISCOVERY_EVIDENCE = "discovery_evidence"
 OPT_CONFIGURATION_REVIEWED_AT = "configuration_reviewed_at"
 OPT_DEVICE_CONTROL_MAPPINGS = "device_control_mappings"
-CONFIG_ENTRY_VERSION = 5
+CONFIG_ENTRY_VERSION = 6
 ROOM_AREA_FIELD = "room_area_id"
 
 # Live optimisation inputs. Forecast entities must expose timestamped values;

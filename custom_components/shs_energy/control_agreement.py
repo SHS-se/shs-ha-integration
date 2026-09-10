@@ -253,6 +253,21 @@ class ControlAgreement:
             raise ValueError('command revision mismatch')
         return deepcopy(next(c for c in self.plan['commands'] if c['control_id'] == control_id))
 
+    def clear_operation(self, control_id):
+        """One adapter must not erase another adapter's independent report."""
+        if self.active:
+            self.active['controls'].pop(control_id, None)
+            if not self.active['controls']:
+                self.active = None
+
+    def report_operation(self, control_id, report):
+        self.guard(control_id, report['accepted'], report['plan_id'])
+        now = self.wall().isoformat().replace('+00:00', 'Z')
+        if not self.active or self.active['plan_id'] != report['plan_id'] or self.active['accepted'] != self.saved['accepted']:
+            self.active = {'plan_id': report['plan_id'], 'accepted': deepcopy(self.saved['accepted']), 'controls': {}}
+        self.active['observed_at_utc'] = now
+        self.active['controls'][control_id] = {**deepcopy(report), 'observed_at_utc': now}
+
     def status(self):
         try:
             wall, mono = self._clock()

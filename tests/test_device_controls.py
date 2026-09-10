@@ -372,42 +372,9 @@ def _pool_options(**extra):
 
 
 class PoolBandTests(unittest.TestCase):
-    """One band per pool, not one per meter that heats it."""
-
-    def test_a_complete_band_has_no_errors(self) -> None:
-        self.assertEqual(pool_band_errors(_pool_options()), [])
-
-    def test_no_band_at_all_is_fine(self) -> None:
-        """The band is optional; an on/off pool schedule still works."""
-        self.assertEqual(pool_band_errors({"pool_enabled": True}), [])
-
-    def test_a_home_without_a_pool_is_never_asked(self) -> None:
-        self.assertEqual(
-            pool_band_errors(_pool_options(pool_enabled=False)), []
-        )
-
-    def test_one_end_alone_is_refused(self) -> None:
-        """Writing a start without a stop inverts the window."""
-        errors = pool_band_errors(_pool_options(pool_stop_temperature_entity=""))
-        self.assertTrue(any("stop temperature entity is required" in e for e in errors))
-
-    def test_a_band_without_bounds_is_refused(self) -> None:
-        errors = pool_band_errors(_pool_options(
-            pool_temperature_minimum=None, pool_temperature_maximum=None,
-        ))
-        self.assertTrue(any("minimum pool temperature is required" in e for e in errors))
-        self.assertTrue(any("maximum pool temperature is required" in e for e in errors))
-
-    def test_inverted_bounds_are_refused(self) -> None:
-        errors = pool_band_errors(_pool_options(
-            pool_temperature_minimum=32.0, pool_temperature_maximum=24.0,
-        ))
-        self.assertTrue(any("must be below the maximum" in e for e in errors))
-
-    def test_a_zero_bound_is_a_bound_not_a_blank(self) -> None:
-        self.assertEqual(
-            pool_band_errors(_pool_options(pool_temperature_minimum=0)), []
-        )
+    def test_direct_pool_control_is_retired(self):
+        self.assertIn('retired', ' '.join(pool_band_errors({'pool_control_enabled': True})))
+        self.assertEqual(pool_band_errors({'pool_control_enabled': False}), [])
 
 
 class PoolDeviceMappingTests(unittest.TestCase):

@@ -371,3 +371,11 @@ class BatteryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
         self.assertFalse(self.controller.records)
         self.assertIn('legacy_handover_required', self.controller.status['reason'])
+
+    async def test_method_change_waits_for_old_customer_pool_release(self):
+        prior = deepcopy(self.setup.records[self.definition['controls'][1]['control_id']])
+        prior['spec']['control_id'] = self.key
+        self.setup.runtime_records = lambda: {'pool:' + self.key: {'binding': prior}}
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [])
+        self.assertIn('previously owned adapter', self.controller.status['reason'])

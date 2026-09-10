@@ -6,8 +6,10 @@ from copy import deepcopy
 from typing import Any
 
 if __package__:
+    from .legacy_pool import pool_mappings, assert_pool_handover_complete
     from .configuration_schema import MAPPING_KEYS, OPTION_KEYS, PERSISTED_KEYS, ROOM_AREA_FIELD
 else:
+    from legacy_pool import pool_mappings, assert_pool_handover_complete
     from configuration_schema import MAPPING_KEYS, OPTION_KEYS, PERSISTED_KEYS, ROOM_AREA_FIELD
 
 ARCHIVE_KEY = "_legacy_configuration_archive"
@@ -50,6 +52,9 @@ def migrate_options(
     not inferred from live states: a missing reviewed limit stays missing.
     No archive, defaults, credentials, or command journal is written here.
     """
+    retired_pool, conflicts, _targets = pool_mappings(options)
+    if conflicts:
+        raise ValueError("legacy_pool_overlap_review_required: " + ", ".join(sorted(conflicts)))
     result = {key: deepcopy(value) for key, value in options.items() if key in PERSISTED_KEYS}
     prior = options.get("_migration_report", {})
     report = {
@@ -59,6 +64,8 @@ def migrate_options(
     report["removed"].update(set(options) - PERSISTED_KEYS)
     if options.get('battery_control_enabled'):
         report['needs_attention'].add('battery_dispatch: prior permission requires new binding and commissioning')
+    if retired_pool or options.get('pool_control_enabled'):
+        report['needs_attention'].add('pool_service: customer request interface and commissioning required')
     archive = options.get(ARCHIVE_KEY, {})
     archive = archive if isinstance(archive, dict) else {}
     for key in ("ev_phase_count", "ev_charge_efficiency"):
@@ -100,6 +107,9 @@ def migrate_options(
     mappings = {}
     for key, raw in raw_mappings.items():
         path = f"device_control_mappings.{key}"
+        if key in retired_pool:
+            report["removed"].add(path)
+            continue
         if not isinstance(raw, dict):
             mappings[key] = {}
             report["needs_attention"].add(path)
@@ -188,3 +198,8 @@ def assert_battery_handover_complete(journal):
         raise ValueError('legacy_handover_required: unreadable controller journal')
     if journal and 'battery' in journal.get('records', {}):
         raise ValueError('legacy_handover_required: resolve the old battery journal before upgrading; signed targets are not ESS limits')
+
+
+def assert_legacy_handover_complete(journal, options):
+    assert_battery_handover_complete(journal)
+    assert_pool_handover_complete(journal, options)

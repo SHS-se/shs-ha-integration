@@ -142,15 +142,15 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
             reason = "Refresh the website choices before enabling control"
         elif not status["actionable"]:
             reason = status["reason"]
+        elif planning_path(device.get("control_type"), device.get("category")) == "pool":
+            reason = "Use the customer pool request interface; operation remains off until commissioning"
         elif system:
             if not (plan or {}).get("capabilities", {}).get(system):
                 reason = "Waiting for a plan for this device"
             elif system == "battery":
                 reason = "Use Control interface validation for the accepted battery adapter; operation remains off until commissioning"
             elif system == "pool":
-                reason = "; ".join(pool_band_errors(options)) or None
-                if not options.get("pool_start_temperature_entity"):
-                    reason = "Set up the pool temperature controls first"
+                reason = "Use the customer pool request interface; operation remains off until commissioning"
             elif not options.get("ev_charge_switch_entity") or device.get("mapping_status") != "ready":
                 reason = "Set up the charging current and start/stop switch first"
         else:

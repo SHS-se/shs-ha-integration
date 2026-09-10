@@ -1,6 +1,7 @@
 """Thin registry/service boundary for local control setup; no actuator writes."""
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from .legacy_pool import assert_pool_handover_complete
 from .control_setup import (describe_inventory, group_claims, identity, configured_targets,
                             reserved_claims, validate_legacy_targets)
 
@@ -52,6 +53,7 @@ def legacy_claims(hass, inventory_values, *, own_entry_id):
         targets = configured_targets(options)
         controller = getattr(getattr(entry, 'runtime_data', None), 'controller', None)
         if controller:
+            assert_pool_handover_complete({'records': controller.records}, options)
             for key, record in controller.records.items():
                 if key == 'battery':
                     raise ValueError('legacy_handover_required: unresolved signed battery ownership')
@@ -68,10 +70,12 @@ def legacy_claims(hass, inventory_values, *, own_entry_id):
                         owned.update(group_claims(entity, inventory_values))
             if owned:
                 claims[f'legacy:{entry.entry_id}:{key}'] = owned
-        runtime = getattr(getattr(entry, 'runtime_data', None), 'battery_controller', None)
-        if runtime and entry.entry_id != own_entry_id:
-            for key, record in runtime.records.items():
-                claims[f'runtime:{entry.entry_id}:{key}'] = reserved_claims(record['binding'], inventory_values)
+        if entry.entry_id != own_entry_id:
+            for adapter in ('battery_controller', 'pool_controller'):
+                runtime = getattr(getattr(entry, 'runtime_data', None), adapter, None)
+                if runtime:
+                    for key, record in runtime.records.items():
+                        claims[f'runtime:{entry.entry_id}:{adapter}:{key}'] = reserved_claims(record['binding'], inventory_values)
         setup = getattr(getattr(entry, 'runtime_data', None), 'control_setup', None)
         # Other config entries share the same physical actuator registry.
         if setup and entry.entry_id != own_entry_id:
@@ -94,8 +98,9 @@ def assert_legacy_reservations(hass, options, previous):
         if setup:
             for control_id, record in setup.records.items():
                 reservations[f'{entry.entry_id}:{control_id}'] = reserved_claims(record, observed)
-        runtime = getattr(getattr(entry, 'runtime_data', None), 'battery_controller', None)
-        if runtime:
-            for key, record in runtime.records.items():
-                reservations[f'runtime:{entry.entry_id}:{key}'] = reserved_claims(record['binding'], observed)
+        for adapter in ('battery_controller', 'pool_controller'):
+            runtime = getattr(getattr(entry, 'runtime_data', None), adapter, None)
+            if runtime:
+                for key, record in runtime.records.items():
+                    reservations[f'runtime:{entry.entry_id}:{adapter}:{key}'] = reserved_claims(record['binding'], observed)
     validate_legacy_targets({"device_control_mappings": {"proposal": {"actuator_entity_ids": sorted(added)}}}, observed, reservations)

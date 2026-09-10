@@ -12,7 +12,7 @@ from unittest.mock import Mock, AsyncMock
 ROOT = Path(__file__).parents[1] / "custom_components/shs_energy"
 sys.path.insert(0, str(ROOT))
 from const import CONFIG_ENTRY_VERSION
-from migration import migrate_options, mapped_entity_ids, assert_battery_handover_complete
+from migration import migrate_options, mapped_entity_ids, assert_legacy_handover_complete
 
 
 def entry_hook():
@@ -25,7 +25,7 @@ def entry_hook():
         "CONFIG_ENTRY_VERSION": CONFIG_ENTRY_VERSION,
         "Store": Mock(return_value=SimpleNamespace(path='unused', key='unused')),
         "VerifiedBindingStore": Mock(return_value=SimpleNamespace(async_load=AsyncMock(return_value=None))),
-        "assert_battery_handover_complete": assert_battery_handover_complete,
+        "assert_legacy_handover_complete": assert_legacy_handover_complete,
         "migrate_options": Mock(wraps=migrate_options),
         "mapped_entity_ids": mapped_entity_ids,
         "entity_area_id": lambda _hass, _entity: None,
@@ -97,3 +97,14 @@ class EntryMigrationHookTests(unittest.IsolatedAsyncioTestCase):
             update.assert_not_called()
             ns['migrate_options'].assert_not_called()
             self.assertEqual(entry.options, {'battery_control_enabled': True})
+
+    async def test_pool_journal_blocks_cutover_before_options_or_version_change(self):
+        ns = entry_hook()
+        ns['VerifiedBindingStore'].return_value.async_load.return_value = {'records': {'pool': {'options': {}, 'originals': {}}}}
+        entry = SimpleNamespace(entry_id='test', version=5, options={'pool_control_enabled': True})
+        update = Mock(); hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=update))
+        with self.assertRaisesRegex(ValueError, 'legacy_handover_required'):
+            await ns['async_migrate_entry'](hass, entry)
+        update.assert_not_called(); ns['migrate_options'].assert_not_called()
+        self.assertEqual(entry.version, 5)
+        self.assertEqual(entry.options, {'pool_control_enabled': True})

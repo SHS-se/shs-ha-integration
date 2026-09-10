@@ -628,9 +628,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _fields(fields, values, scope = "configuration", deviceKey = "") {
     const visible = [], optional = [];
     const linked = {
-      pool_start_temperature_entity: ["pool_stop_temperature_entity", "pool_temperature_minimum", "pool_temperature_maximum"],
       offset_entity_id: ["offset_minimum", "offset_maximum"],
-      battery_authority_entity: ["battery_authority_confirm_entity", "battery_authority_confirm_state"],
     };
     const dependent = new Set(Object.entries(linked).filter(([key]) => this._present(values[key])).flatMap(([, keys]) => keys));
     for (const field of fields) {

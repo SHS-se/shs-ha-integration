@@ -23,6 +23,9 @@ sys.path.insert(0, str(PACKAGE))
 PURE_MODULES = (
     "controller",
     "battery_controller",
+    "pool_controller",
+    "pool_policy",
+    "legacy_pool",
     "battery_policy",
     "control_capabilities",
     "control_setup",

@@ -8,7 +8,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
-from controller import ScheduledController, pool_band
+from controller import ScheduledController
 from configuration_schema import resolve_configuration
 
 
@@ -132,35 +132,26 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.charge'].state, 'off')
 
-    async def test_plan_expiry_restores_pool_without_recapturing_shifted_band(self):
+
+
+
+
+
+
+    async def test_legacy_pool_flags_never_call_direct_hardware(self):
         self.options['pool_control_enabled'] = True
-        self.slot['pool_w'] = 0
         await self.controller.async_start()
-        self.assertAlmostEqual(float(self.states['number.stop'].state), 28.9)
-        self.assertAlmostEqual(float(self.states['number.start'].state), 28.4)
-        self.slot['pool_w'] = 3300
-        await self.controller.async_tick()
-        self.assertEqual(float(self.states['number.start'].state), 29.5)
-        self.coordinator.current_plan_slot = None
-        await self.controller.async_tick()
-        self.assertEqual(self.states['switch.pool'].state, 'off')
-        self.assertFalse(self.controller.records)
-
-    async def test_restart_recovers_journal_before_using_new_mapping(self):
-        self.options['pool_control_enabled'] = True
         self.slot['pool_w'] = 0
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [])
+
+    async def test_legacy_pool_ownership_is_retained_without_direct_restoration(self):
+        record = {'options': deepcopy(self.options), 'originals': {'number.start': '29.5', 'number.stop': '30'}}
+        self.store.saved = {'records': {'pool': record}}
         await self.controller.async_start()
-        self.options['pool_control_enabled'] = False
-        self.options['rooms'] = {'office': {'temperature_entity_id': 'sensor.new'}}
-        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: resolve_configuration(self.options))
-        await other.async_start()
-        self.assertEqual(float(self.states['number.start'].state), 29.5)
-        self.assertEqual(float(self.states['number.stop'].state), 30)
-        self.assertFalse(other.records)
-
-
-
-
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.controller.records['pool']['originals'], record['originals'])
+        self.assertIn('legacy_handover_required', self.controller.status['pool']['reason'])
 
     async def test_legacy_battery_flags_and_forecast_never_write(self):
         self.options['battery_control_enabled'] = True
@@ -183,7 +174,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.slot['ev_target_current_a'] = 19
         await self.controller.async_start()
         self.assertEqual(self.controller.status['ev']['state'], 'fault')
-        self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
+        self.assertEqual(self.controller.status['pool']['state'], 'disabled')
 
     async def test_manual_override_releases_and_does_not_reapply(self):
         self.options['ev_control_enabled'] = True
@@ -231,14 +222,6 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.store.saved['records'])
         self.assertEqual(self.states['number.current'].state, '8.0')
 
-    async def test_stale_water_restores_without_affecting_ev(self):
-        self.options.update(pool_control_enabled=True, ev_control_enabled=True)
-        await self.controller.async_start()
-        self.states['sensor.water'].last_reported -= timedelta(minutes=3)
-        await self.controller.async_tick()
-        self.assertEqual(self.controller.status['pool']['state'], 'fault')
-        self.assertIn('stale', self.controller.status['pool']['reason'])
-        self.assertEqual(self.controller.status['ev']['state'], 'commanded')
 
 
     async def test_disable_reenable_clears_fault_latch(self):
@@ -253,11 +236,6 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['ev']['state'], 'commanded')
 
-    def test_pool_clamp_preserves_width_and_never_invents_maximum_target(self):
-        self.assertEqual(pool_band((29.5, 30), 29, True, 24, 32, .1), (29.5, 30))
-        self.assertEqual(pool_band((29.5, 30), 20, False, 24, 32, .1), (24, 24.5))
-        with self.assertRaises(ValueError):
-            pool_band((20, 30), 29, False, 24, 32, .1)
 
     async def test_vehicle_website_exclusion_restores_without_deleting_setup(self):
         self.options['ev_control_enabled'] = True

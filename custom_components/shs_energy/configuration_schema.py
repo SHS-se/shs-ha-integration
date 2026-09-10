@@ -9,12 +9,14 @@ if __package__:
     from .device_commands import execution_setup_errors
     from . import const as c
     from .configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS
-    from .device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_band_errors
+    from .legacy_pool import pool_mappings
+    from .device_controls import mapping_report, is_room_thermal_control, planning_path, battery_control_errors, pool_band_errors
 else:
     from device_commands import execution_setup_errors
     import const as c
     from configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS
-    from device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_band_errors
+    from legacy_pool import pool_mappings
+    from device_controls import mapping_report, is_room_thermal_control, planning_path, battery_control_errors, pool_band_errors
 
 OPTION_FIELDS = {
     field["key"]: field
@@ -58,7 +60,6 @@ def configuration_defaults(latitude: float, longitude: float) -> dict[str, Any]:
         c.OPT_PLANNING_MODE: c.DEFAULT_PLANNING_MODE,
         c.OPT_AUTOMATIC_SETUP: True,
         c.OPT_EV_CONTROL_ENABLED: False,
-        c.OPT_POOL_CONTROL_ENABLED: False,
         c.OPT_DEVICE_CONTROL_MAPPINGS: {},
         "rooms": {},
         c.OPT_FORECAST_RESOLUTION_MINUTES: c.DEFAULT_FORECAST_RESOLUTION_MINUTES,
@@ -230,8 +231,7 @@ def prepare_options(existing, incoming, read_entity, *, latitude=0.0, longitude=
         else:
             result[key] = value
     current = resolve_configuration(result, latitude, longitude)
-    for low, high in (("battery_min_soc", "battery_max_soc"),
-                      ("pool_temperature_minimum", "pool_temperature_maximum")):
+    for low, high in (("battery_min_soc", "battery_max_soc"),):
         if current.get(low) is not None and current.get(high) is not None and current[low] >= current[high]:
             raise ValueError(f"{OPTION_FIELDS[low]['label']} must be below {OPTION_FIELDS[high]['label']}")
     if current["ev_phase_count"] not in (1, 2, 3):
@@ -240,12 +240,15 @@ def prepare_options(existing, incoming, read_entity, *, latitude=0.0, longitude=
         errors = battery_control_errors(current)
         if errors:
             raise ValueError("Battery control: " + "; ".join(errors))
-    if current["pool_control_enabled"]:
+    if current.get("pool_control_enabled"):
         errors = pool_band_errors(current)
         if errors:
             raise ValueError("Pool control: " + "; ".join(errors))
     if current["ev_control_enabled"] and not current.get("ev_charge_switch_entity"):
         raise ValueError("EV charging start/stop switch is required for control")
+    retired, conflicts, _targets = pool_mappings(current)
+    if retired or conflicts:
+        raise ValueError('Pool scheduling requires the customer request interface; direct pool mappings are retired')
     return result
 
 
@@ -265,6 +268,8 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
             stored[key]["control_enabled"] = False
             return result
     kind = device["control_type"]
+    if planning_path(kind, device.get("category")) == "pool":
+        raise ValueError("Pool scheduling uses the customer request interface; direct mappings are retired")
     if submitted.get("control_type") != kind:
         raise ValueError(f"{device['name']}: configuration belongs to a different control type")
     mapping = {"control_type": kind}

@@ -276,3 +276,19 @@ class AgreementTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.agreement.error)
         await self.agreement.async_poll()
         self.assertEqual(state['received_epoch'], state['epoch'])
+
+    async def test_independent_adapter_reports_keep_their_own_timestamps_and_clear_only_their_control(self):
+        await self.grant()
+        battery, pool = [c['control_id'] for c in self.definition['controls']]
+        def report(key):
+            return dict(plan_id=self.plan['plan_id'], accepted=self.accepted[key], state='observed', settings_acknowledged=True)
+        self.agreement.report_operation(pool, report(pool))
+        stamp = self.agreement.active['controls'][pool]['observed_at_utc']
+        self.advance(30)
+        self.agreement.report_operation(battery, report(battery))
+        self.assertEqual(set(self.agreement.active['controls']), {battery, pool})
+        self.assertEqual(self.agreement.active['controls'][pool]['observed_at_utc'], stamp)
+        self.agreement.clear_operation(battery)
+        self.assertEqual(set(self.agreement.active['controls']), {pool})
+        self.agreement.clear_operation(pool)
+        self.assertIsNone(self.agreement.active)

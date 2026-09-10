@@ -52,6 +52,13 @@ class BatteryController:
         self.status = {'state': state, **details}
         self.report_callback(**self.status)
 
+    def clear_operation(self):
+        keys = set(self.records)
+        keys.update(c['control_id'] for c in (self.agreement.saved['definition'] or {}).get('controls', [])
+                    if c['contract']['name'] == 'battery_dispatch')
+        for key in keys:
+            self.agreement.clear_operation(key)
+
     async def save(self, records=None, overrides=None):
         records = deepcopy(self.records if records is None else records)
         overrides = deepcopy(self.overrides if overrides is None else overrides)
@@ -157,6 +164,7 @@ class BatteryController:
         if self.context is None:
             return  # Journal-authorized handover only; no new dispatch authority.
         key, command, plan_id, scope = self.context
+        self.setup.assert_adapter_ownership(key, {'name': 'battery_dispatch', 'version': 1})
         if self.closed or self.scope() != scope:
             raise ValueError('battery operating configuration changed')
         current = self.agreement.guard(key, command['accepted'], plan_id)
@@ -194,7 +202,7 @@ class BatteryController:
         if changed:
             overrides = {**self.overrides, key: 'External change to ' + ', '.join(changed) + '; reviewed handover required'}
             await self.save(overrides=overrides)
-            self.agreement.active = None
+            self.clear_operation()
             raise ValueError(overrides[key])
         if key in self.overrides:
             raise ValueError(self.overrides[key])
@@ -296,7 +304,7 @@ class BatteryController:
     async def handover(self, key):
         self.context = None
         self.remote_guard = None
-        self.agreement.active = None
+        self.clear_operation()
         if key not in self.records: return
         await self.external_change(key)
         await self.settle_pending(key)
@@ -402,16 +410,15 @@ class BatteryController:
                     measured = self.measurements(binding, after=self.records[key]['last_issued'])
                 except ValueError as err:
                     self.report('awaiting_observation', control_id=key, settings_acknowledged=True, reason=str(err))
-                    self.agreement.active = None
+                    self.clear_operation()
                     return
                 result = operation(command['instruction']['intent'], settings, measured, binding)
                 self.report(**result, control_id=key, settings_acknowledged=True, intent=command['instruction']['intent'],
                             settings=settings, plan_id=plan['plan_id'], accepted=revision(control))
-                self.agreement.active = {'plan_id': plan['plan_id'], 'accepted': deepcopy(self.agreement.saved['accepted']),
-                    'observed_at_utc': self.wall().isoformat().replace('+00:00', 'Z'), 'controls': {key: deepcopy(self.status)}}
+                self.agreement.report_operation(key, self.status)
             except Exception as err:
                 self.context = None
-                self.agreement.active = None
+                self.clear_operation()
                 reason = str(err)
                 if not self.storage_fault:
                     for owned in tuple(self.records):
@@ -424,7 +431,7 @@ class BatteryController:
 
     async def async_stop(self, _event=None):
         self.closed = True
-        self.agreement.active = None
+        self.clear_operation()
         async with self.lock:
             self.context = None
             for key in tuple(self.records):
