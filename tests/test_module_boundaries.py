@@ -25,6 +25,7 @@ PURE_MODULES = (
     "control_capabilities",
     "control_setup",
     "control_agreement",
+    "control_planning",
     "presentation",
     "api_contract",
     "const",

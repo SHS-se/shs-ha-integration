@@ -202,7 +202,7 @@ class AgreementTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_actuator_identity_in_server_advertisement(self):
         wire = json.dumps(self.agreement.advertisements())
-        for forbidden in ('entity_id', 'unique_id', 'platform', 'number.', 'script.'):
+        for forbidden in ('entity_id', 'unique_id', 'number.', 'script.'):
             self.assertNotIn(forbidden, wire)
 
     async def test_deployed_validator_is_the_shared_contract(self):

@@ -136,6 +136,12 @@ pending, active and expired states.
 
 ## 4. Connect the website and planner to the agreed definitions
 
+Delivered: [website settings and accepted planning](control-website-planning.md),
+shared device-detail forms and ordinary HA binding setup, explicit optimizer
+instructions, attributed pool electricity models, and atomic household plan
+publication. Revision conflicts and observed limitations are visible. New
+operation permissions remain off; battery/pool actuator adapters remain steps 5–6.
+
 - Keep the current device table and setup pages. Constrain available methods to
   supported contracts; allow an explicit pending method request before binding.
 - Show separate setup, synchronization, plan and operation status. "Ready" must

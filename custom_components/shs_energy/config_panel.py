@@ -603,6 +603,7 @@ async def websocket_control_setup(hass, connection, msg):
     try:
         if msg["action"] == "discover":
             result = {**discover(setup.inventory()), **setup.summary(),
+                      "desired_controls": (entry.runtime_data.control_agreement.saved["definition"] or {}).get("controls", []),
                       "saved_setups": {key: {"setup": record["spec"], "binding_revision": record["binding_revision"]}
                                        for key, record in setup.records.items()}}
         else:

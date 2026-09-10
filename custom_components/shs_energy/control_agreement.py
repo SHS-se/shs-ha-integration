@@ -84,7 +84,16 @@ class ControlAgreement:
         self.revoke()
 
     def advertisements(self):
-        return [local_advertisement(k, r, self.setup.report(r['spec'])) for k, r in self.setup.records.items()]
+        result = []
+        inventory = self.setup.inventory()
+        for key, record in self.setup.records.items():
+            report = self.setup.report(record['spec'], inventory)
+            item = local_advertisement(key, record, report)
+            item['interface_summary'] = {role: {**{field: inventory[entity].get(field) for field in ('manufacturer', 'model')},
+                                                        'platform': inventory[entity].get('registry', {}).get('platform')}
+                                         for role, entity in report['resolved'].items()}
+            result.append(item)
+        return result
 
     def _clock(self):
         wall, mono = self.wall(), self.monotonic()

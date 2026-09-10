@@ -803,6 +803,9 @@
             },
             "thermal_conversion": {
               "$ref": "#/definitions/estimate"
+            },
+            "thermal_loss_kw_per_c": {
+              "$ref": "#/definitions/estimate"
             }
           },
           "required": [
@@ -1037,7 +1040,7 @@
           "items": {
             "$ref": "#/definitions/command"
           },
-          "minItems": 1
+          "minItems": 0
         }
       },
       "required": [

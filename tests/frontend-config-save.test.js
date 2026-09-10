@@ -240,3 +240,43 @@ test('agreement distinguishes pending settings and expired authority with escape
   assert.match(html, /&lt;offline&gt;/);
   assert.doesNotMatch(html, /Authority expires/);
 });
+
+function composedPanel(name = 'pool_service') {
+  const panel = makePanel();
+  const presets = JSON.parse(readFileSync('custom_components/shs_energy/control_presets.json', 'utf8'));
+  panel._composed = { presets, desired_controls: [{ control_id: 'control-1', contract: { name, version: 1 }, presentation: { name: 'Pool' }, desired: { revision: 3 } }], saved_setups: {},
+    interfaces: Object.entries(presets.contracts[name].roles).map(([role, requirement]) => ({ entity_id: 'sensor.' + role, name: role,
+      registry: { domain: 'sensor', platform: 'test', unique_id: role }, capability: { operation: requirement.operation, unit: requirement.units[0] } })) };
+  panel._composedId = 'control-1'; panel._composedValues = { reviewed: true };
+  for (const i of panel._composed.interfaces) panel._composedValues['role:' + i.registry.unique_id] = i.entity_id;
+  for (const f of presets.contracts[name].fields) panel._composedValues[f.key] = '20';
+  return panel;
+}
+test('ordinary pool setup sends registry bindings and review without hardware or permission writes', async () => {
+  const panel = composedPanel(); let sent;
+  panel._hass = { callWS: async payload => { sent = payload; return { binding_revision: 4 }; } };
+  await panel._saveComposed();
+  assert.equal(sent.action, 'save'); assert.equal(sent.expected_revision, 0);
+  assert.equal(sent.setup.normal_profile.policy, 'customer_automation');
+  assert.deepEqual(Object.keys(sent.setup.roles).sort(), ['feedback', 'request', 'water_temperature']);
+  assert.equal(sent.setup.interface_review.request_contract_version, 1);
+  assert.equal(sent.setup.control_enabled, undefined);
+  assert.match(panel._notice, /Binding saved at revision 4/);
+});
+test('conflicting local save retains the draft and never advances the captured binding revision', async () => {
+  const panel = composedPanel(); const draft = panel._composedSetup();
+  panel._composed.saved_setups['control-1'] = { setup: draft.setup, binding_revision: 2 };
+  panel._composedDirty = true;
+  panel._hass = { callWS: async payload => { assert.equal(payload.expected_revision, 2); throw new Error('binding revision conflict'); } };
+  await panel._saveComposed();
+  assert.equal(panel._composedDirty, true); assert.equal(panel._composed.saved_setups['control-1'].binding_revision, 2);
+  assert.match(panel._composedError, /conflict/);
+});
+test('blank limits cannot silently become zero and composed edits count as unsaved changes', () => {
+  const panel = composedPanel();
+  panel._composedValues.minimum_c = '';
+  assert.throws(() => panel._composedSetup(), /Enter/);
+  panel._onChange({ target: { dataset: { composedField: 'minimum_c' }, type: 'number', value: '22' } });
+  assert.equal(panel._dirty, true);
+  assert.equal(panel._composedValues.minimum_c, '22');
+});

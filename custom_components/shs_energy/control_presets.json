@@ -4,46 +4,260 @@
     "battery_dispatch": {
       "handover": "reviewed_self_consumption",
       "roles": {
-        "mode": {"operation": "select", "units": ["state"], "tokens": ["remote", "ems", "control", "mode"]},
-        "charge_ceiling": {"operation": "set_number", "units": ["W", "kW"], "tokens": ["ess", "charging", "limit"]},
-        "discharge_ceiling": {"operation": "set_number", "units": ["W", "kW"], "tokens": ["ess", "discharging", "limit"]},
-        "authority": {"operation": "switch", "units": ["state"], "tokens": ["remote", "ems", "controlled"]},
-        "authority_confirmation": {"operation": "observe", "units": ["state"], "tokens": ["ems", "work", "mode"]},
-        "battery_power": {"operation": "observe", "units": ["W", "kW"], "tokens": ["battery", "power"]},
-        "soc": {"operation": "observe", "units": ["%"], "tokens": ["battery", "state", "charge"]},
-        "soc_floor": {"operation": "observe", "units": ["%"], "tokens": ["discharge", "cut", "off", "soc"]},
-        "pv_power": {"operation": "observe", "units": ["W", "kW"], "tokens": ["pv", "power"]},
-        "load_power": {"operation": "observe", "units": ["W", "kW"], "tokens": ["load", "power"]},
-        "grid_import_power": {"operation": "observe", "units": ["W", "kW"], "tokens": ["grid", "import", "power"]},
-        "grid_export_power": {"operation": "observe", "units": ["W", "kW"], "tokens": ["grid", "export", "power"]}
-      }
+        "mode": {
+          "operation": "select",
+          "units": [
+            "state"
+          ],
+          "tokens": [
+            "remote",
+            "ems",
+            "control",
+            "mode"
+          ]
+        },
+        "charge_ceiling": {
+          "operation": "set_number",
+          "units": [
+            "W",
+            "kW"
+          ],
+          "tokens": [
+            "ess",
+            "charging",
+            "limit"
+          ]
+        },
+        "discharge_ceiling": {
+          "operation": "set_number",
+          "units": [
+            "W",
+            "kW"
+          ],
+          "tokens": [
+            "ess",
+            "discharging",
+            "limit"
+          ]
+        },
+        "authority": {
+          "operation": "switch",
+          "units": [
+            "state"
+          ],
+          "tokens": [
+            "remote",
+            "ems",
+            "controlled"
+          ]
+        },
+        "authority_confirmation": {
+          "operation": "observe",
+          "units": [
+            "state"
+          ],
+          "tokens": [
+            "ems",
+            "work",
+            "mode"
+          ]
+        },
+        "battery_power": {
+          "operation": "observe",
+          "units": [
+            "W",
+            "kW"
+          ],
+          "tokens": [
+            "battery",
+            "power"
+          ]
+        },
+        "soc": {
+          "operation": "observe",
+          "units": [
+            "%"
+          ],
+          "tokens": [
+            "battery",
+            "state",
+            "charge"
+          ]
+        },
+        "soc_floor": {
+          "operation": "observe",
+          "units": [
+            "%"
+          ],
+          "tokens": [
+            "discharge",
+            "cut",
+            "off",
+            "soc"
+          ]
+        },
+        "pv_power": {
+          "operation": "observe",
+          "units": [
+            "W",
+            "kW"
+          ],
+          "tokens": [
+            "pv",
+            "power"
+          ]
+        },
+        "load_power": {
+          "operation": "observe",
+          "units": [
+            "W",
+            "kW"
+          ],
+          "tokens": [
+            "load",
+            "power"
+          ]
+        },
+        "grid_import_power": {
+          "operation": "observe",
+          "units": [
+            "W",
+            "kW"
+          ],
+          "tokens": [
+            "grid",
+            "import",
+            "power"
+          ]
+        },
+        "grid_export_power": {
+          "operation": "observe",
+          "units": [
+            "W",
+            "kW"
+          ],
+          "tokens": [
+            "grid",
+            "export",
+            "power"
+          ]
+        }
+      },
+      "fields": [
+        {
+          "key": "charge_max_w",
+          "label": "Maximum charge ceiling (W)"
+        },
+        {
+          "key": "discharge_max_w",
+          "label": "Maximum discharge ceiling (W)"
+        },
+        {
+          "key": "normal_charge_w",
+          "label": "Normal charge ceiling (W)"
+        },
+        {
+          "key": "normal_discharge_w",
+          "label": "Normal discharge ceiling (W)"
+        },
+        {
+          "key": "minimum_soc_pct",
+          "label": "Local minimum SOC (%)"
+        },
+        {
+          "key": "maximum_soc_pct",
+          "label": "Local maximum SOC (%)"
+        }
+      ]
     },
     "pool_service": {
       "handover": "release_customer_automation",
       "roles": {
-        "request": {"operation": "request_state", "units": ["state"]},
-        "feedback": {"operation": "observe", "units": ["state"]},
-        "water_temperature": {"operation": "observe", "units": ["°C"]}
-      }
+        "request": {
+          "operation": "request_state",
+          "units": [
+            "state"
+          ]
+        },
+        "feedback": {
+          "operation": "observe",
+          "units": [
+            "state"
+          ]
+        },
+        "water_temperature": {
+          "operation": "observe",
+          "units": [
+            "\u00b0C"
+          ]
+        }
+      },
+      "fields": [
+        {
+          "key": "minimum_c",
+          "label": "Lowest permitted pool band (\u00b0C)"
+        },
+        {
+          "key": "maximum_c",
+          "label": "Highest permitted pool band (\u00b0C)"
+        },
+        {
+          "key": "step_c",
+          "label": "Supported band increment (\u00b0C)"
+        }
+      ]
     },
     "relay_schedule": {
       "handover": "restore_reviewed_profile",
-      "roles": {"output": {"operation": "switch", "units": ["state"]}}
+      "roles": {
+        "output": {
+          "operation": "switch",
+          "units": [
+            "state"
+          ]
+        }
+      }
     },
     "permission": {
       "handover": "restore_reviewed_profile",
-      "roles": {"output": {"operation": "switch", "units": ["state"]}}
+      "roles": {
+        "output": {
+          "operation": "switch",
+          "units": [
+            "state"
+          ]
+        }
+      }
     },
     "temperature_target": {
       "handover": "restore_reviewed_profile",
       "roles": {
-        "output": {"operation": "set_number", "units": ["°C"]},
-        "temperature": {"operation": "observe", "units": ["°C"]}
+        "output": {
+          "operation": "set_number",
+          "units": [
+            "\u00b0C"
+          ]
+        },
+        "temperature": {
+          "operation": "observe",
+          "units": [
+            "\u00b0C"
+          ]
+        }
       }
     },
     "adjustable_output": {
       "handover": "restore_reviewed_profile",
-      "roles": {"output": {"operation": "set_number", "units": ["A", "W", "%"]}}
+      "roles": {
+        "output": {
+          "operation": "set_number",
+          "units": [
+            "A",
+            "W",
+            "%"
+          ]
+        }
+      }
     }
   },
   "sigenergy": {

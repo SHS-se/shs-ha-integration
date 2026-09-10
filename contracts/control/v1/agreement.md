@@ -21,7 +21,10 @@ association, model and inclusion edits are validated together. The server owns
 those revisions. `expected_revision` refers to the home `edit_revision`. Creation
 also requires that revision, so retrying an uncertain create cannot create twins.
 
-Each binding advertisement is exactly `{control_id, contract, local, ready}`.
+Each binding advertisement contains `{control_id, contract, local, ready}` and
+may include `interface_summary`, keyed by semantic role, with only descriptive
+`manufacturer`, `model` and `platform` strings (or null). Metadata changes do not
+invalidate a plan or increment the binding revision.
 `local` is the public semantic projection defined in `schema.json`. It has no entity
 or registry IDs. HA reports its persisted binding revision, and sets `ready` false
 if capability, availability or ownership checks fail. Relay timings and permission
@@ -55,3 +58,23 @@ CAS boundary. Solver snapshots carry `epoch`, accepted tuples and
 solver. Every included control must have one command in the same household plan.
 Presentation-only edits do not invalidate the execution snapshot. All other related
 changes conservatively invalidate the entire household dependency group.
+
+## Step-4 planner publication
+
+The optimizer emits explicit instructions in each planned slot. The current
+binding quarter supplies the v1 plan, bounded by that quarter and forecast expiry.
+Ceilings are allocations, separate from delivery forecasts. An empty command list
+is valid when no composed controls are included; publication requires exactly the
+set of included control IDs.
+
+The service-only `publish_control_optimisation` transaction compares the agreement
+version and fixed-plan generation revision, then writes the agreement publication
+and household optimization row together. The publication and household plan IDs
+must match. No public endpoint can publish commands or enable controls.
+
+Pool `energy_model` may carry reviewed `running_power_w`, `thermal_conversion`
+(effective heat/electricity ratio including auxiliaries), and
+`thermal_loss_kw_per_c` estimates with provenance. All three and attributable meter
+history are required by the pool planner. Live observations are not model ratings.
+Current customer feedback can report limited deferral or unavailable heat for
+replanning; it neither grants authority nor changes desired/model revisions.

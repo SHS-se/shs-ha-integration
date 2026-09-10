@@ -22,6 +22,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from .control_planning import planning_controls, planning_options, pool_meter_models, observations as control_observations
 from .api import (
     ShsApiClient,
     ShsApiError,
@@ -2211,6 +2212,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> dict[str, Any]:
         from .configuration_schema import shared_devices
         devices = shared_devices(devices, options)
+        controls, definition = planning_controls(self.control_agreement)
+        options = planning_options(options, self.control_setup, controls)
         captured = dt_util.utcnow()
         horizon = utc_slots(captured, OPTIMISATION_HORIZON_HOURS)
         horizon_end = horizon[-1] + timedelta(minutes=15)
@@ -2332,6 +2335,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             mapped_power_w=self._mapped_power_w,
             local_tz=dt_util.DEFAULT_TIME_ZONE,
         )
+        pool_models, reserved_pool_keys = pool_meter_models(controls, definition, devices, device_profile_actuals, horizon, dt_util.DEFAULT_TIME_ZONE)
+        legacy_device_models = [m for m in device_models if m['key'] not in reserved_pool_keys]
+        device_models = legacy_device_models + pool_models
         self.optimisation_degraded_devices = degraded_devices
         self._sync_degraded_device_issue()
         modelled_device_keys = tuple(
@@ -2350,7 +2356,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         services, service_samples, ev_battery = self._build_services(
             options,
             horizon,
-            device_models,
+            legacy_device_models,
         )
 
         if self.tariff_catalog is None:
@@ -2495,7 +2501,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         capabilities = {
             "pv": bool(pv_entities),
             "battery": battery is not None,
-            "pool": "pool" in planned_paths and "pool" not in switched_off,
+            "pool": (any(c["contract"]["name"] == "pool_service" and c["desired"]["included"] for c in controls) or "pool" in planned_paths) and "pool" not in switched_off,
             "boiler": "boiler" in planned_paths,
             "ev": "ev" in planned_paths and "ev" not in switched_off,
         }
@@ -2542,6 +2548,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "source_entity_ids": {"water_temperature": pool_entity},
             }
 
+        if pool_state and any(c["contract"]["name"] == "pool_service" for c in controls):
+            pool_state["heating_running"] = None
         if capabilities["pool"] and pool_state is None:
             raise OptimisationInputError("Pool water temperature is not configured")
 
@@ -2691,6 +2699,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._record_forecast_ledger(
                 stored, {start: pv[start] for start in horizon}, captured
             )
+        if definition:
+            snapshot["control_observations"] = control_observations(controls, definition, self.control_setup, self._entity_payload, captured)
         return snapshot
 
     async def _retry_pending_plan_ack(self, stored: dict[str, Any]) -> bool:

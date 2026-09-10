@@ -99,7 +99,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   get _dirty() {
-    return JSON.stringify(this._draft) !== JSON.stringify(this._savedDraft);
+    return !!this._composedDirty || JSON.stringify(this._draft) !== JSON.stringify(this._savedDraft);
   }
 
   get _configurationDirty() { return Object.keys(this._patch(this._generalFields())).length > 0; }
@@ -419,6 +419,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _onChange(event) {
+    if (event.target.dataset.composedField) { this._composedValues[event.target.dataset.composedField] = event.target.type === "checkbox" ? event.target.checked : event.target.value; this._composedDirty = true; return; }
     const element = event.target;
     if (!(element instanceof HTMLInputElement || element instanceof HTMLSelectElement)) {
       return;
@@ -459,7 +460,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (!button) return;
     const action = button.dataset.action;
     if (!action) return;
-    if (action === "download") this._download();
+    if (action === "load-composed") this._loadComposed();
+    else if (action === "edit-composed") { if (this._composedDirty && this._composedId !== button.dataset.controlId) { this._composedError = "Save or reload local interfaces before switching controls."; this._render(); return; } this._composedId = button.dataset.controlId; this._composedDirty = false; this._composedValues = {}; this._render(); }
+    else if (action === "save-composed") this._saveComposed();
+    else if (action === "download") this._download();
     else if (action === "horizon") { this._fullHorizon = !this._fullHorizon; this._render(); }
     else if (action === "slot") { this._selectedSlot = Number(button.dataset.index); this._render(); }
     else if (action === "edit-device") { this._tab = "devices"; this._expanded.add("device:" + button.dataset.deviceKey); this._render(); }
@@ -706,13 +710,82 @@ class ShsEnergyConfigPanel extends HTMLElement {
       </div></details>`;
   }
 
+
+  async _loadComposed() {
+    try {
+      this._composed = await this._hass.callWS({ type: "shs_energy/controls/setup", config_entry: this._entryId, action: "discover" });
+      this._composedId = null; this._composedValues = {}; this._composedDirty = false; this._composedError = "";
+    } catch (error) { this._composedError = error.message || String(error); }
+    this._render();
+  }
+
+  _composedSetup() {
+    const control = this._composed.desired_controls.find(c => c.control_id === this._composedId);
+    if (!control) throw new Error("Select a requested control");
+    const saved = this._composed.saved_setups[control.control_id];
+    const name = control.contract.name, preset = this._composed.presets.contracts[name];
+    const values = this._composedValues;
+    if (values.reviewed !== true) throw new Error("Review local limits, normal settings, and handover before saving");
+    const spec = { control_id: control.control_id, contract: control.contract, handover: preset.handover, roles: {}, limits: {} };
+    for (const role of Object.keys(preset.roles)) {
+      const chosen = values["role:" + role];
+      const registry = chosen !== undefined ? this._composed.interfaces.find(i => i.entity_id === chosen)?.registry : saved?.setup.roles[role];
+      if (!registry) throw new Error("Choose " + role.replaceAll("_", " "));
+      spec.roles[role] = this._clone(registry);
+    }
+    for (const field of preset.fields) {
+      const value = values[field.key] ?? saved?.setup.limits[field.key];
+      if (value === undefined || value === "" || !Number.isFinite(Number(value))) throw new Error("Enter " + field.label);
+      spec.limits[field.key] = Number(value);
+    }
+    if (name === "battery_dispatch") {
+      spec.normal_profile = { mode: this._composed.presets.sigenergy.normal_mode };
+      spec.semantics = { preset: "sigenergy", measurement_charge_positive: true };
+    } else {
+      spec.normal_profile = { policy: "customer_automation" };
+      spec.interface_review = { request_contract_version: 1, expiry_handling_reviewed: true, feedback_correlation_reviewed: true, release_policy_reviewed: true };
+    }
+    return { setup: spec, expected_revision: saved?.binding_revision ?? 0 };
+  }
+
+  async _saveComposed() {
+    try {
+      const proposal = this._composedSetup();
+      const result = await this._hass.callWS({ type: "shs_energy/controls/setup", config_entry: this._entryId, action: "save", ...proposal });
+      this._composed.saved_setups[proposal.setup.control_id] = { setup: proposal.setup, binding_revision: result.binding_revision };
+      this._composedDirty = false; this._composedValues.reviewed = false;
+      this._composedError = ""; this._notice = "Binding saved at revision " + result.binding_revision + ". Awaiting settings agreement; control remains off.";
+    } catch (error) { this._composedError = error.message || String(error); }
+    this._render();
+  }
+
+  _renderComposedEditor() {
+    const error = this._composedError ? `<p role="alert">${this._escape(this._composedError)}</p>` : "";
+    if (!this._composed) return error;
+    const controls = this._composed.desired_controls.filter(c => ["battery_dispatch", "pool_service"].includes(c.contract.name));
+    const control = controls.find(c => c.control_id === this._composedId);
+    const menu = controls.map(c => `<button class="text" data-action="edit-composed" data-control-id="${this._escape(c.control_id)}">${this._escape(c.presentation.name)}</button>`).join("") || "Request a battery or pool control in the website's device settings first.";
+    if (!control) return `<div>${menu}${error}</div>`;
+    const name = control.contract.name, preset = this._composed.presets.contracts[name], saved = this._composed.saved_setups[control.control_id];
+    const values = this._composedValues;
+    return `<section class="card">${menu}<h3>${this._escape(control.presentation.name)} · Local binding</h3><p>Desired revision ${control.desired.revision} · Binding ${saved?.binding_revision ?? "not saved"} · Control off</p>
+      <div class="fields">${Object.entries(preset.roles).map(([role, requirement]) => {
+        const registry = saved?.setup.roles[role];
+        const selected = values["role:" + role] ?? this._composed.interfaces.find(i => registry && i.registry.domain === registry.domain && i.registry.platform === registry.platform && i.registry.unique_id === registry.unique_id)?.entity_id ?? "";
+        const candidates = this._composed.interfaces.filter(i => i.capability?.operation === requirement.operation && requirement.units.includes(i.capability.unit));
+        return `<label>${this._escape(role.replaceAll("_", " "))}<select data-composed-field="role:${this._escape(role)}"><option value="">Choose interface</option>${candidates.map(i => `<option value="${this._escape(i.entity_id)}" ${i.entity_id === selected ? "selected" : ""}>${this._escape([i.name, i.entity_id, i.manufacturer, i.model].filter(Boolean).join(" · "))}</option>`).join("")}</select></label>`;
+      }).join("")}${preset.fields.map(f => `<label>${this._escape(f.label)}<input type="number" step="any" data-composed-field="${this._escape(f.key)}" value="${this._escape(values[f.key] ?? saved?.setup.limits[f.key] ?? "")}" /></label>`).join("")}</div>
+      <p>${name === "battery_dispatch" ? "Normal mode: Maximum Self Consumption. Positive battery power means charging. Review both normal ESS ceilings; do not select the signed inverter adjustment." : "The customer automation owns all Nibe writes and pump actions. Review complete request v1 handling, expiry, correlated feedback and release to the customer's normal policy."}</p>
+      <label><input type="checkbox" data-composed-field="reviewed" ${values.reviewed ? "checked" : ""} />I reviewed the interfaces, local limits, normal settings and handover described above.</label>${error}<button class="primary" data-action="save-composed">Save local binding</button></section>`;
+  }
+
   _renderControlSetup() {
     const setup = this._data.control_setup;
     if (!setup) return "";
     const agreement = this._data.control_agreement;
     const agreementStatus = agreement ? `<p>Settings: ${this._escape(agreement.synchronization)} · Desired epoch ${this._escape(agreement.desired_epoch)} · Authority: ${this._escape(agreement.authority)}</p>${agreement.lease ? `<p>Authority expires ${this._escape(agreement.lease.expires_at_utc)}</p>` : ""}${agreement.error ? `<p>Settings exchange: ${this._escape(agreement.error)}</p>` : ""}` : "";
     const names = { battery_dispatch: "Battery dispatch", pool_service: "Customer-operated pool", relay_schedule: "Relay schedule", permission: "Permission control", temperature_target: "Temperature target", adjustable_output: "Adjustable output" };
-    return `<details class="card compact"><summary>Control interface validation</summary><p>Local setup checks do not grant permission or confirm a website plan. Your pool automation owns all Nibe and pump actions.</p>${agreementStatus}${[...setup.controls, ...setup.targets].map(item => `<article><h3>${this._escape(names[item.contract.name] || item.contract.name)}</h3><p>${item.status === "ready" ? "Validated locally · Control off" : "Setup required · Control off"}${item.binding_revision ? ` · Binding revision ${item.binding_revision}` : ""}</p>${item.errors.length ? `<ul>${item.errors.map(error => `<li>${this._escape(error.message)}</li>`).join("")}</ul>` : ""}</article>`).join("")}</details>`;
+    return `<details class="card compact"><summary>Control interface validation</summary><p>Local setup checks do not grant permission or confirm a website plan. Your pool automation owns all Nibe and pump actions.</p>${agreementStatus}<button class="secondary" data-action="load-composed">${this._composed ? "Reload local interfaces (discards edits)" : "Configure battery / pool interfaces"}</button>${this._renderComposedEditor()}${[...setup.controls, ...setup.targets].map(item => `<article><h3>${this._escape(names[item.contract.name] || item.contract.name)}</h3><p>${item.status === "ready" ? "Validated locally · Control off" : "Setup required · Control off"}${item.binding_revision ? ` · Binding revision ${item.binding_revision}` : ""}</p>${item.errors.length ? `<ul>${item.errors.map(error => `<li>${this._escape(error.message)}</li>`).join("")}</ul>` : ""}</article>`).join("")}</details>`;
   }
 
   _renderDevices() {
