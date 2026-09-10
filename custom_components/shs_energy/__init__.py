@@ -11,6 +11,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse, CoreState
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import (
     async_track_time_change,
@@ -19,7 +20,7 @@ from homeassistant.helpers.event import (
 
 from homeassistant.helpers.storage import Store
 
-from .api import ShsApiClient
+from .api import ShsApiClient, ShsApiError, ShsAuthError
 from .config_panel import async_apply_configuration, async_register_config_panel
 from .const import (
     CONFIGURABLE_CATEGORIES,
@@ -51,7 +52,7 @@ from .configuration import (
 from .battery_controller import BatteryController
 from .pool_controller import PoolController
 from .controller import ScheduledController
-from .control_setup import ControlSetup, VerifiedBindingStore, read_binding_file
+from .control_setup import ControlSetup, VerifiedBindingStore, opaque_id, read_binding_file
 from .control_agreement import ControlAgreement, POLL_SECONDS
 from .control_setup_ha import inventory, legacy_claims
 from .coordinator import ShsStatusCoordinator
@@ -200,13 +201,39 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) 
     return True
 
 
+async def _async_complete_pairing_data(
+    hass: HomeAssistant, entry: ShsEnergyConfigEntry, client: ShsApiClient
+) -> None:
+    """Persist the authenticated home identity omitted by early pairing flows.
+
+    This data upgrade also applies to entries whose options have already been
+    migrated. Once persisted, local startup needs no identity lookup.
+    """
+    if CONF_HOME_ID in entry.data:
+        return
+    try:
+        status = await client.status()
+    except ShsAuthError as err:
+        raise ConfigEntryAuthFailed(str(err)) from err
+    except ShsApiError as err:
+        raise ConfigEntryNotReady(f"Cannot retrieve the paired home identity: {err}") from err
+    try:
+        home_id = opaque_id(status.get(CONF_HOME_ID))
+    except ValueError as err:
+        raise ConfigEntryError("SHS status did not return a valid paired home_id") from err
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_HOME_ID: home_id},
+    )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
-    """Set up the current configuration; migration is owned by the entry hook."""
+    """Complete pairing identity before constructing the control runtime."""
     client = ShsApiClient(
         async_get_clientsession(hass),
         entry.data[CONF_BASE_URL],
         entry.data[CONF_DEVICE_TOKEN],
     )
+    await _async_complete_pairing_data(hass, entry, client)
     coordinator = ShsStatusCoordinator(hass, entry, client)
     entry.runtime_data = coordinator
     controller = ScheduledController(
