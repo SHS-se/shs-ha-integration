@@ -1,0 +1,1551 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:shs:control:v1",
+  "title": "SHS control definition contract v1 (pre-execution)",
+  "oneOf": [
+    {
+      "$ref": "#/definitions/definition"
+    },
+    {
+      "$ref": "#/definitions/plan"
+    },
+    {
+      "$ref": "#/definitions/runtime"
+    },
+    {
+      "$ref": "#/definitions/localBinding"
+    },
+    {
+      "$ref": "#/definitions/migration"
+    },
+    {
+      "$ref": "#/definitions/poolRequest"
+    },
+    {
+      "$ref": "#/definitions/poolFeedback"
+    }
+  ],
+  "definitions": {
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "owner": {
+          "enum": [
+            "website",
+            "ha",
+            "model",
+            "migration"
+          ]
+        },
+        "source": {
+          "enum": [
+            "user",
+            "discovered",
+            "learned",
+            "measured",
+            "migrated"
+          ]
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "owner",
+        "source",
+        "evidence"
+      ]
+    },
+    "estimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "number",
+          "minimum": 0
+        },
+        "provenance": {
+          "$ref": "#/definitions/provenance"
+        }
+      },
+      "required": [
+        "value",
+        "provenance"
+      ]
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "enum": [
+            "battery_dispatch",
+            "pool_service",
+            "relay_schedule",
+            "temperature_target",
+            "adjustable_output",
+            "permission"
+          ]
+        },
+        "version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "desired": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "binding": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "contract": {
+          "$ref": "#/definitions/contract"
+        },
+        "planning_model": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "desired",
+        "binding",
+        "contract",
+        "planning_model"
+      ]
+    },
+    "association": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "battery"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "pool"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "room"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ev"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "hot_water"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "timed_load"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        }
+      ]
+    },
+    "batteryObjective": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "battery_policy"
+        },
+        "allow_grid_charge": {
+          "type": "boolean"
+        },
+        "allow_battery_export": {
+          "type": "boolean"
+        },
+        "reserve_soc_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "export_reserve_soc_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "maximum_soc_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "kind",
+        "allow_grid_charge",
+        "allow_battery_export",
+        "reserve_soc_pct",
+        "export_reserve_soc_pct",
+        "maximum_soc_pct"
+      ]
+    },
+    "poolObjective": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "pool_temperature"
+        },
+        "start_c": {
+          "type": "number"
+        },
+        "stop_c": {
+          "type": "number"
+        },
+        "defer_policy": {
+          "const": "best_effort_local_thermostat"
+        }
+      },
+      "required": [
+        "kind",
+        "start_c",
+        "stop_c",
+        "defer_policy"
+      ]
+    },
+    "objective": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/batteryObjective"
+        },
+        {
+          "$ref": "#/definitions/poolObjective"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "room_comfort"
+            },
+            "minimum_c": {
+              "type": "number"
+            },
+            "maximum_c": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "minimum_c",
+            "maximum_c"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ev_charge"
+            },
+            "target_soc_pct": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "deadline_utc": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "target_soc_pct",
+            "deadline_utc"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "timed_run"
+            },
+            "duration_minutes": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "deadline_utc": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "duration_minutes",
+            "deadline_utc"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "hot_water_service"
+            },
+            "minimum_c": {
+              "type": "number"
+            },
+            "maximum_c": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "minimum_c",
+            "maximum_c"
+          ]
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "role": {
+          "enum": [
+            "electrical_energy",
+            "electrical_power",
+            "temperature",
+            "soc",
+            "status",
+            "thermal_energy"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/definitions/provenance"
+        },
+        "statistic_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accounting": {
+          "enum": [
+            "canonical",
+            "alias",
+            "derived",
+            "observation"
+          ]
+        },
+        "canonical_source_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "derived_from": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "source_id",
+        "role",
+        "provenance",
+        "accounting"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "accounting": {
+                "const": "alias"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "canonical_source_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accounting": {
+                "const": "derived"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "derived_from"
+            ]
+          }
+        }
+      ]
+    },
+    "sourceLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "purpose": {
+          "enum": [
+            "consumption",
+            "storage_flow",
+            "temperature",
+            "soc",
+            "status"
+          ]
+        },
+        "accounting_use": {
+          "enum": [
+            "count",
+            "observe"
+          ]
+        }
+      },
+      "required": [
+        "source_id",
+        "purpose",
+        "accounting_use"
+      ]
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "enum": [
+            "request_state",
+            "set_number",
+            "select",
+            "switch",
+            "observe"
+          ]
+        },
+        "unit": {
+          "enum": [
+            "W",
+            "kW",
+            "\u00b0C",
+            "%",
+            "A",
+            "state",
+            "kWh"
+          ]
+        },
+        "minimum": {
+          "type": "number"
+        },
+        "maximum": {
+          "type": "number"
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "role",
+        "operation",
+        "unit"
+      ]
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "code",
+        "path",
+        "message"
+      ]
+    },
+    "batteryLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "charge_max_w": {
+          "type": "number",
+          "minimum": 0
+        },
+        "discharge_max_w": {
+          "type": "number",
+          "minimum": 0
+        },
+        "normal_charge_w": {
+          "type": "number",
+          "minimum": 0
+        },
+        "normal_discharge_w": {
+          "type": "number",
+          "minimum": 0
+        },
+        "minimum_soc_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "maximum_soc_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "charge_max_w",
+        "discharge_max_w",
+        "normal_charge_w",
+        "normal_discharge_w",
+        "minimum_soc_pct",
+        "maximum_soc_pct"
+      ]
+    },
+    "poolLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimum_c": {
+          "type": "number"
+        },
+        "maximum_c": {
+          "type": "number"
+        },
+        "step_c": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "minimum_c",
+        "maximum_c",
+        "step_c"
+      ]
+    },
+    "local": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/capability"
+          }
+        },
+        "limits": {
+          "anyOf": [
+            {
+              "oneOf": [
+                {
+                  "$ref": "#/definitions/batteryLimits"
+                },
+                {
+                  "$ref": "#/definitions/poolLimits"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "minimum": {
+                      "type": "number"
+                    },
+                    "maximum": {
+                      "type": "number"
+                    },
+                    "unit": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "minimum",
+                    "maximum",
+                    "unit"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "handover": {
+          "enum": [
+            "reviewed_self_consumption",
+            "release_customer_automation",
+            "restore_reviewed_profile"
+          ]
+        },
+        "supported_intents": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "self_consumption",
+              "solar_charge",
+              "charge_pv_first",
+              "charge_grid_first",
+              "discharge_pv_first",
+              "hold"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "setup_gaps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/gap"
+          }
+        }
+      },
+      "required": [
+        "binding_revision",
+        "capabilities",
+        "limits",
+        "handover",
+        "setup_gaps"
+      ]
+    },
+    "desired": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "included": {
+          "type": "boolean"
+        },
+        "association": {
+          "$ref": "#/definitions/association"
+        },
+        "objective": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/objective"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "energy_model": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "load_characteristic": {
+              "enum": [
+                "storage",
+                "fixed",
+                "variable",
+                "thermostatic"
+              ]
+            },
+            "running_power_w": {
+              "$ref": "#/definitions/estimate"
+            },
+            "thermal_conversion": {
+              "$ref": "#/definitions/estimate"
+            }
+          },
+          "required": [
+            "revision",
+            "load_characteristic"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/definitions/provenance"
+        }
+      },
+      "required": [
+        "revision",
+        "included",
+        "association",
+        "objective",
+        "energy_model",
+        "provenance"
+      ]
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "control_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "presentation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "category": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "name",
+            "category"
+          ]
+        },
+        "contract": {
+          "$ref": "#/definitions/contract"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/sourceLink"
+          }
+        },
+        "desired": {
+          "$ref": "#/definitions/desired"
+        },
+        "local": {
+          "$ref": "#/definitions/local"
+        }
+      },
+      "required": [
+        "control_id",
+        "presentation",
+        "contract",
+        "sources",
+        "desired",
+        "local"
+      ]
+    },
+    "definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "definition"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "home_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/source"
+          }
+        },
+        "controls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/control"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "home_id",
+        "sources",
+        "controls"
+      ]
+    },
+    "batteryCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "intent": {
+          "enum": [
+            "self_consumption",
+            "solar_charge",
+            "charge_pv_first",
+            "charge_grid_first",
+            "discharge_pv_first",
+            "hold"
+          ]
+        },
+        "charge_ceiling_w": {
+          "type": "number",
+          "minimum": 0
+        },
+        "discharge_ceiling_w": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "intent",
+        "charge_ceiling_w",
+        "discharge_ceiling_w"
+      ]
+    },
+    "poolCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "enum": [
+            "heat",
+            "defer"
+          ]
+        },
+        "start_c": {
+          "type": "number"
+        },
+        "stop_c": {
+          "type": "number"
+        },
+        "defer_policy": {
+          "const": "best_effort_local_thermostat"
+        }
+      },
+      "required": [
+        "request",
+        "start_c",
+        "stop_c",
+        "defer_policy"
+      ]
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "control_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "accepted": {
+          "$ref": "#/definitions/revision"
+        },
+        "instruction": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/batteryCommand"
+            },
+            {
+              "$ref": "#/definitions/poolCommand"
+            }
+          ]
+        },
+        "forecast": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "electrical_power_w": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "electrical_power_w"
+          ]
+        }
+      },
+      "required": [
+        "control_id",
+        "accepted",
+        "instruction",
+        "forecast"
+      ]
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "plan"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "home_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "plan_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "valid_from_utc": {
+          "type": "string",
+          "minLength": 1
+        },
+        "valid_until_utc": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/command"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "home_id",
+        "plan_id",
+        "valid_from_utc",
+        "valid_until_utc",
+        "commands"
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "runtime"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "home_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "control_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "accepted": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "permission": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "revision",
+            "enabled"
+          ]
+        },
+        "status": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "setup": {
+              "enum": [
+                "ready",
+                "missing",
+                "invalid"
+              ]
+            },
+            "synchronization": {
+              "enum": [
+                "pending",
+                "accepted",
+                "conflict"
+              ]
+            },
+            "plan": {
+              "enum": [
+                "none",
+                "waiting",
+                "active",
+                "expired"
+              ]
+            },
+            "operation": {
+              "enum": [
+                "disabled",
+                "scheduled",
+                "observed_heating",
+                "limited_deferral",
+                "unavailable_heat",
+                "constrained",
+                "overridden",
+                "handover",
+                "handover_failed"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "setup",
+            "synchronization",
+            "plan",
+            "operation",
+            "reason"
+          ]
+        },
+        "lease": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "plan_id": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                },
+                "expires_at_utc": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "plan_id",
+                "expires_at_utc"
+              ]
+            }
+          ]
+        },
+        "observations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "observed_at_utc": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {
+                "type": [
+                  "number",
+                  "string",
+                  "boolean"
+                ]
+              }
+            },
+            "required": [
+              "source_id",
+              "observed_at_utc",
+              "value"
+            ]
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "home_id",
+        "control_id",
+        "accepted",
+        "active",
+        "permission",
+        "status",
+        "lease",
+        "observations"
+      ]
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "domain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unique_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "domain",
+        "platform",
+        "unique_id"
+      ]
+    },
+    "bindingRole": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "registry": {
+          "$ref": "#/definitions/registry"
+        },
+        "last_entity_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/registry"
+          }
+        },
+        "provenance": {
+          "$ref": "#/definitions/provenance"
+        }
+      },
+      "required": [
+        "role",
+        "registry",
+        "provenance"
+      ]
+    },
+    "localBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "local_binding"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "home_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "control_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "binding_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/bindingRole"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "home_id",
+        "control_id",
+        "binding_revision",
+        "roles"
+      ]
+    },
+    "migrationRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "legacy_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "control_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "association": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/association"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "mapped",
+            "needs_setup",
+            "monitor_only"
+          ]
+        },
+        "preserved_statistic_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/gap"
+          }
+        }
+      },
+      "required": [
+        "legacy_key",
+        "control_id",
+        "association",
+        "status",
+        "preserved_statistic_ids",
+        "gaps"
+      ]
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "migration"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "home_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "migration_id": {
+          "const": "control-definitions-v1"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/migrationRow"
+          }
+        },
+        "history_action": {
+          "const": "preserve_keys_and_samples"
+        },
+        "permission_action": {
+          "const": "preserve_disabled_do_not_grant"
+        },
+        "ownership_action": {
+          "const": "release_old_journal_before_reassignment"
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "home_id",
+        "migration_id",
+        "rows",
+        "history_action",
+        "permission_action",
+        "ownership_action"
+      ]
+    },
+    "poolRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "pool_request"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "home_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "control_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "accepted": {
+          "$ref": "#/definitions/revision"
+        },
+        "action": {
+          "enum": [
+            "heat",
+            "defer",
+            "release"
+          ]
+        },
+        "issued_at_utc": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expires_at_utc": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objective": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/poolObjective"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "plan_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "home_id",
+        "control_id",
+        "request_id",
+        "accepted",
+        "action",
+        "issued_at_utc",
+        "expires_at_utc",
+        "objective",
+        "request_sequence",
+        "plan_id"
+      ]
+    },
+    "poolFeedback": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "pool_feedback"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "home_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "control_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "accepted": {
+          "$ref": "#/definitions/revision"
+        },
+        "reported_at_utc": {
+          "type": "string",
+          "minLength": 1
+        },
+        "acknowledgement": {
+          "enum": [
+            "accepted",
+            "rejected",
+            "released",
+            "release_failed"
+          ]
+        },
+        "operation": {
+          "enum": [
+            "scheduled",
+            "observed_heating",
+            "limited_deferral",
+            "unavailable_heat",
+            "unknown",
+            "released"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "plan_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "home_id",
+        "control_id",
+        "request_id",
+        "accepted",
+        "reported_at_utc",
+        "acknowledgement",
+        "operation",
+        "reason",
+        "request_sequence",
+        "plan_id"
+      ]
+    }
+  }
+}

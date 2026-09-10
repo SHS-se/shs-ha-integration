@@ -1,0 +1,1188 @@
+[
+  {
+    "name": "battery-and-customer-pool",
+    "base": "battery-and-customer-pool",
+    "valid": true
+  },
+  {
+    "name": "explicit-intents-forecast-is-not-ceiling",
+    "base": "explicit-intents-forecast-is-not-ceiling",
+    "valid": true,
+    "definition": "battery-and-customer-pool"
+  },
+  {
+    "name": "disabled-runtime",
+    "base": "disabled-runtime",
+    "valid": true,
+    "definition": "battery-and-customer-pool"
+  },
+  {
+    "name": "defer-may-still-heat",
+    "base": "defer-may-still-heat",
+    "valid": true,
+    "definition": "battery-and-customer-pool"
+  },
+  {
+    "name": "customer-pool-local-bindings",
+    "base": "customer-pool-local-bindings",
+    "valid": true,
+    "definition": "battery-and-customer-pool"
+  },
+  {
+    "name": "rename-keeps-registry-identity",
+    "base": "rename-keeps-registry-identity",
+    "valid": true,
+    "definition": "battery-and-customer-pool"
+  },
+  {
+    "name": "migration-preserves-meter-keys",
+    "base": "migration-preserves-meter-keys",
+    "valid": true
+  },
+  {
+    "name": "explicit-room-association",
+    "base": "explicit-room-association",
+    "valid": true
+  },
+  {
+    "name": "explicit-ev-association",
+    "base": "explicit-ev-association",
+    "valid": true
+  },
+  {
+    "name": "explicit-timed_load-association",
+    "base": "explicit-timed_load-association",
+    "valid": true
+  },
+  {
+    "name": "explicit-hot_water-association",
+    "base": "explicit-hot_water-association",
+    "valid": true
+  },
+  {
+    "name": "unsupported-version",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "schema_version"
+        ],
+        "value": 2
+      }
+    ],
+    "error": "schema"
+  },
+  {
+    "name": "raw-server-entity-binding",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "controls",
+          0,
+          "entity_id"
+        ],
+        "value": "number.raw"
+      }
+    ],
+    "error": "schema"
+  },
+  {
+    "name": "live-state-in-config",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "controls",
+          0,
+          "local",
+          "current_soc"
+        ],
+        "value": 40
+      }
+    ],
+    "error": "schema"
+  },
+  {
+    "name": "missing-battery-intent",
+    "base": "explicit-intents-forecast-is-not-ceiling",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "commands",
+          0,
+          "instruction",
+          "intent"
+        ],
+        "remove": true
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "schema"
+  },
+  {
+    "name": "negative-ceiling",
+    "base": "explicit-intents-forecast-is-not-ceiling",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "commands",
+          0,
+          "instruction",
+          "charge_ceiling_w"
+        ],
+        "value": -1
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "schema"
+  },
+  {
+    "name": "boolean-ceiling",
+    "base": "explicit-intents-forecast-is-not-ceiling",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "commands",
+          0,
+          "instruction",
+          "charge_ceiling_w"
+        ],
+        "value": true
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "schema"
+  },
+  {
+    "name": "forbidden-ess-first",
+    "base": "explicit-intents-forecast-is-not-ceiling",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "commands",
+          0,
+          "instruction",
+          "intent"
+        ],
+        "value": "discharge_ess_first"
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "schema"
+  },
+  {
+    "name": "pool-defer-promises-zero-heat",
+    "base": "explicit-intents-forecast-is-not-ceiling",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "commands",
+          1,
+          "instruction",
+          "defer_policy"
+        ],
+        "value": "zero_heat"
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "schema"
+  },
+  {
+    "name": "cross-home-plan",
+    "base": "explicit-intents-forecast-is-not-ceiling",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "home_id"
+        ],
+        "value": "00000000-0000-4000-8000-000000000999"
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "home_scope"
+  },
+  {
+    "name": "unknown-control",
+    "base": "explicit-intents-forecast-is-not-ceiling",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "commands",
+          0,
+          "control_id"
+        ],
+        "value": "00000000-0000-4000-8000-000000000999"
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "unknown_control"
+  },
+  {
+    "name": "stale-binding",
+    "base": "explicit-intents-forecast-is-not-ceiling",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "commands",
+          0,
+          "accepted",
+          "binding"
+        ],
+        "value": 2
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "revision_mismatch"
+  },
+  {
+    "name": "stale-model",
+    "base": "explicit-intents-forecast-is-not-ceiling",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "commands",
+          0,
+          "accepted",
+          "planning_model"
+        ],
+        "value": 2
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "revision_mismatch"
+  },
+  {
+    "name": "category-does-not-select-pool",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "controls",
+          1,
+          "desired",
+          "association",
+          "kind"
+        ],
+        "value": "room"
+      }
+    ],
+    "error": "association_mismatch"
+  },
+  {
+    "name": "target-band-inverted",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "controls",
+          1,
+          "desired",
+          "objective",
+          "start_c"
+        ],
+        "value": 31
+      }
+    ],
+    "error": "invalid_band"
+  },
+  {
+    "name": "target-outside-limits",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "controls",
+          1,
+          "desired",
+          "objective",
+          "stop_c"
+        ],
+        "value": 33
+      }
+    ],
+    "error": "invalid_band"
+  },
+  {
+    "name": "normal-limit-sentinel",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "controls",
+          0,
+          "local",
+          "limits",
+          "normal_charge_w"
+        ],
+        "value": 4294967295
+      }
+    ],
+    "error": "invalid_limits"
+  },
+  {
+    "name": "duplicate-meter-accounting",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "controls",
+          1,
+          "sources"
+        ],
+        "value": [
+          {
+            "source_id": "00000000-0000-4000-8000-000000000012",
+            "purpose": "consumption",
+            "accounting_use": "count"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000013",
+            "purpose": "consumption",
+            "accounting_use": "count"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000014",
+            "purpose": "temperature",
+            "accounting_use": "observe"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000012",
+            "purpose": "consumption",
+            "accounting_use": "count"
+          }
+        ]
+      }
+    ],
+    "error": "duplicate_accounting"
+  },
+  {
+    "name": "alias-counted-again",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "controls",
+          1,
+          "sources"
+        ],
+        "value": [
+          {
+            "source_id": "00000000-0000-4000-8000-000000000012",
+            "purpose": "consumption",
+            "accounting_use": "count"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000013",
+            "purpose": "consumption",
+            "accounting_use": "count"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000014",
+            "purpose": "temperature",
+            "accounting_use": "observe"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000015",
+            "purpose": "consumption",
+            "accounting_use": "count"
+          }
+        ]
+      }
+    ],
+    "error": "noncanonical_accounting"
+  },
+  {
+    "name": "unknown-source",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "controls",
+          1,
+          "sources"
+        ],
+        "value": [
+          {
+            "source_id": "00000000-0000-4000-8000-000000000012",
+            "purpose": "consumption",
+            "accounting_use": "count"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000013",
+            "purpose": "consumption",
+            "accounting_use": "count"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000014",
+            "purpose": "temperature",
+            "accounting_use": "observe"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000999",
+            "purpose": "temperature",
+            "accounting_use": "observe"
+          }
+        ]
+      }
+    ],
+    "error": "unknown_source"
+  },
+  {
+    "name": "duplicate-control-identity",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "controls"
+        ],
+        "value": [
+          {
+            "control_id": "00000000-0000-4000-8000-000000000002",
+            "presentation": {
+              "name": "Battery",
+              "category": "informational"
+            },
+            "contract": {
+              "name": "battery_dispatch",
+              "version": 1
+            },
+            "sources": [
+              {
+                "source_id": "00000000-0000-4000-8000-000000000010",
+                "purpose": "storage_flow",
+                "accounting_use": "observe"
+              },
+              {
+                "source_id": "00000000-0000-4000-8000-000000000011",
+                "purpose": "soc",
+                "accounting_use": "observe"
+              }
+            ],
+            "desired": {
+              "revision": 1,
+              "included": true,
+              "association": {
+                "kind": "battery",
+                "id": "00000000-0000-4000-8000-000000000102"
+              },
+              "objective": {
+                "kind": "battery_policy",
+                "allow_grid_charge": true,
+                "allow_battery_export": false,
+                "reserve_soc_pct": 15,
+                "export_reserve_soc_pct": 30,
+                "maximum_soc_pct": 95
+              },
+              "energy_model": {
+                "revision": 1,
+                "load_characteristic": "storage"
+              },
+              "provenance": {
+                "owner": "website",
+                "source": "user",
+                "evidence": "Synthetic fixture; not an installation binding"
+              }
+            },
+            "local": {
+              "binding_revision": 1,
+              "capabilities": [
+                {
+                  "role": "charge_ceiling",
+                  "operation": "set_number",
+                  "unit": "kW",
+                  "minimum": 0,
+                  "maximum": 8.8,
+                  "step": 0.001
+                },
+                {
+                  "role": "discharge_ceiling",
+                  "operation": "set_number",
+                  "unit": "kW",
+                  "minimum": 0,
+                  "maximum": 9.6,
+                  "step": 0.001
+                },
+                {
+                  "role": "mode",
+                  "operation": "select",
+                  "unit": "state",
+                  "options": [
+                    "self_consumption",
+                    "solar_charge",
+                    "charge_pv_first",
+                    "charge_grid_first",
+                    "discharge_pv_first",
+                    "hold"
+                  ]
+                },
+                {
+                  "role": "authority",
+                  "operation": "switch",
+                  "unit": "state"
+                },
+                {
+                  "role": "authority_confirmation",
+                  "operation": "observe",
+                  "unit": "state"
+                },
+                {
+                  "role": "battery_power",
+                  "operation": "observe",
+                  "unit": "W"
+                },
+                {
+                  "role": "soc",
+                  "operation": "observe",
+                  "unit": "%"
+                },
+                {
+                  "role": "soc_floor",
+                  "operation": "observe",
+                  "unit": "%"
+                },
+                {
+                  "role": "pv_power",
+                  "operation": "observe",
+                  "unit": "W"
+                },
+                {
+                  "role": "load_power",
+                  "operation": "observe",
+                  "unit": "W"
+                },
+                {
+                  "role": "grid_import_power",
+                  "operation": "observe",
+                  "unit": "W"
+                },
+                {
+                  "role": "grid_export_power",
+                  "operation": "observe",
+                  "unit": "W"
+                }
+              ],
+              "limits": {
+                "charge_max_w": 8800,
+                "discharge_max_w": 9600,
+                "normal_charge_w": 8800,
+                "normal_discharge_w": 9600,
+                "minimum_soc_pct": 5,
+                "maximum_soc_pct": 100
+              },
+              "handover": "reviewed_self_consumption",
+              "setup_gaps": [],
+              "supported_intents": [
+                "self_consumption",
+                "solar_charge",
+                "charge_pv_first",
+                "charge_grid_first",
+                "discharge_pv_first",
+                "hold"
+              ]
+            }
+          },
+          {
+            "control_id": "00000000-0000-4000-8000-000000000003",
+            "presentation": {
+              "name": "Pool service",
+              "category": "informational"
+            },
+            "contract": {
+              "name": "pool_service",
+              "version": 1
+            },
+            "sources": [
+              {
+                "source_id": "00000000-0000-4000-8000-000000000012",
+                "purpose": "consumption",
+                "accounting_use": "count"
+              },
+              {
+                "source_id": "00000000-0000-4000-8000-000000000013",
+                "purpose": "consumption",
+                "accounting_use": "count"
+              },
+              {
+                "source_id": "00000000-0000-4000-8000-000000000014",
+                "purpose": "temperature",
+                "accounting_use": "observe"
+              }
+            ],
+            "desired": {
+              "revision": 1,
+              "included": true,
+              "association": {
+                "kind": "pool",
+                "id": "00000000-0000-4000-8000-000000000103"
+              },
+              "objective": {
+                "kind": "pool_temperature",
+                "start_c": 29.5,
+                "stop_c": 30.0,
+                "defer_policy": "best_effort_local_thermostat"
+              },
+              "energy_model": {
+                "revision": 1,
+                "load_characteristic": "thermostatic"
+              },
+              "provenance": {
+                "owner": "website",
+                "source": "user",
+                "evidence": "Synthetic fixture; not an installation binding"
+              }
+            },
+            "local": {
+              "binding_revision": 1,
+              "capabilities": [
+                {
+                  "role": "request",
+                  "operation": "request_state",
+                  "unit": "state",
+                  "options": [
+                    "heat",
+                    "defer",
+                    "release"
+                  ]
+                },
+                {
+                  "role": "feedback",
+                  "operation": "observe",
+                  "unit": "state"
+                },
+                {
+                  "role": "water_temperature",
+                  "operation": "observe",
+                  "unit": "\u00b0C"
+                }
+              ],
+              "limits": {
+                "minimum_c": 20,
+                "maximum_c": 32,
+                "step_c": 0.1
+              },
+              "handover": "release_customer_automation",
+              "setup_gaps": []
+            }
+          },
+          {
+            "control_id": "00000000-0000-4000-8000-000000000002",
+            "presentation": {
+              "name": "Battery",
+              "category": "informational"
+            },
+            "contract": {
+              "name": "battery_dispatch",
+              "version": 1
+            },
+            "sources": [
+              {
+                "source_id": "00000000-0000-4000-8000-000000000010",
+                "purpose": "storage_flow",
+                "accounting_use": "observe"
+              },
+              {
+                "source_id": "00000000-0000-4000-8000-000000000011",
+                "purpose": "soc",
+                "accounting_use": "observe"
+              }
+            ],
+            "desired": {
+              "revision": 1,
+              "included": true,
+              "association": {
+                "kind": "battery",
+                "id": "00000000-0000-4000-8000-000000000102"
+              },
+              "objective": {
+                "kind": "battery_policy",
+                "allow_grid_charge": true,
+                "allow_battery_export": false,
+                "reserve_soc_pct": 15,
+                "export_reserve_soc_pct": 30,
+                "maximum_soc_pct": 95
+              },
+              "energy_model": {
+                "revision": 1,
+                "load_characteristic": "storage"
+              },
+              "provenance": {
+                "owner": "website",
+                "source": "user",
+                "evidence": "Synthetic fixture; not an installation binding"
+              }
+            },
+            "local": {
+              "binding_revision": 1,
+              "capabilities": [
+                {
+                  "role": "charge_ceiling",
+                  "operation": "set_number",
+                  "unit": "kW",
+                  "minimum": 0,
+                  "maximum": 8.8,
+                  "step": 0.001
+                },
+                {
+                  "role": "discharge_ceiling",
+                  "operation": "set_number",
+                  "unit": "kW",
+                  "minimum": 0,
+                  "maximum": 9.6,
+                  "step": 0.001
+                },
+                {
+                  "role": "mode",
+                  "operation": "select",
+                  "unit": "state",
+                  "options": [
+                    "self_consumption",
+                    "solar_charge",
+                    "charge_pv_first",
+                    "charge_grid_first",
+                    "discharge_pv_first",
+                    "hold"
+                  ]
+                },
+                {
+                  "role": "authority",
+                  "operation": "switch",
+                  "unit": "state"
+                },
+                {
+                  "role": "authority_confirmation",
+                  "operation": "observe",
+                  "unit": "state"
+                },
+                {
+                  "role": "battery_power",
+                  "operation": "observe",
+                  "unit": "W"
+                },
+                {
+                  "role": "soc",
+                  "operation": "observe",
+                  "unit": "%"
+                },
+                {
+                  "role": "soc_floor",
+                  "operation": "observe",
+                  "unit": "%"
+                },
+                {
+                  "role": "pv_power",
+                  "operation": "observe",
+                  "unit": "W"
+                },
+                {
+                  "role": "load_power",
+                  "operation": "observe",
+                  "unit": "W"
+                },
+                {
+                  "role": "grid_import_power",
+                  "operation": "observe",
+                  "unit": "W"
+                },
+                {
+                  "role": "grid_export_power",
+                  "operation": "observe",
+                  "unit": "W"
+                }
+              ],
+              "limits": {
+                "charge_max_w": 8800,
+                "discharge_max_w": 9600,
+                "normal_charge_w": 8800,
+                "normal_discharge_w": 9600,
+                "minimum_soc_pct": 5,
+                "maximum_soc_pct": 100
+              },
+              "handover": "reviewed_self_consumption",
+              "setup_gaps": [],
+              "supported_intents": [
+                "self_consumption",
+                "solar_charge",
+                "charge_pv_first",
+                "charge_grid_first",
+                "discharge_pv_first",
+                "hold"
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "error": "duplicate_identity"
+  },
+  {
+    "name": "export-without-permission",
+    "base": "explicit-intents-forecast-is-not-ceiling",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "commands",
+          0,
+          "instruction",
+          "charge_ceiling_w"
+        ],
+        "value": 0
+      },
+      {
+        "path": [
+          "commands",
+          0,
+          "instruction",
+          "discharge_ceiling_w"
+        ],
+        "value": 4000
+      },
+      {
+        "path": [
+          "commands",
+          0,
+          "instruction",
+          "intent"
+        ],
+        "value": "discharge_pv_first"
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "export_not_allowed"
+  },
+  {
+    "name": "pool-target-does-not-match-objective",
+    "base": "explicit-intents-forecast-is-not-ceiling",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "commands",
+          1,
+          "instruction",
+          "stop_c"
+        ],
+        "value": 31
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "objective_mismatch"
+  },
+  {
+    "name": "pool-claims-pump",
+    "base": "customer-pool-local-bindings",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "roles"
+        ],
+        "value": [
+          {
+            "role": "request",
+            "registry": {
+              "domain": "script",
+              "platform": "script",
+              "unique_id": "customer-pool-request"
+            },
+            "last_entity_id": "script.customer_pool_request",
+            "provenance": {
+              "owner": "ha",
+              "source": "user",
+              "evidence": "Synthetic fixture; not an installation binding"
+            }
+          },
+          {
+            "role": "feedback",
+            "registry": {
+              "domain": "sensor",
+              "platform": "template",
+              "unique_id": "customer-pool-feedback"
+            },
+            "provenance": {
+              "owner": "ha",
+              "source": "user",
+              "evidence": "Synthetic fixture; not an installation binding"
+            }
+          },
+          {
+            "role": "water_temperature",
+            "registry": {
+              "domain": "sensor",
+              "platform": "filter",
+              "unique_id": "customer-pool-temperature"
+            },
+            "provenance": {
+              "owner": "ha",
+              "source": "user",
+              "evidence": "Synthetic fixture; not an installation binding"
+            }
+          },
+          {
+            "role": "circulation",
+            "registry": {
+              "domain": "switch",
+              "platform": "esphome",
+              "unique_id": "pump"
+            },
+            "provenance": {
+              "owner": "ha",
+              "source": "discovered",
+              "evidence": "Synthetic fixture; not an installation binding"
+            }
+          }
+        ]
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "customer_boundary"
+  },
+  {
+    "name": "pool-claims-nibe",
+    "base": "customer-pool-local-bindings",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "roles",
+          0,
+          "registry",
+          "unique_id"
+        ],
+        "value": "40688"
+      },
+      {
+        "path": [
+          "roles",
+          0,
+          "registry",
+          "platform"
+        ],
+        "value": "nibe_heatpump"
+      },
+      {
+        "path": [
+          "roles",
+          0,
+          "registry",
+          "domain"
+        ],
+        "value": "number"
+      }
+    ],
+    "definition": "battery-and-customer-pool",
+    "error": "customer_boundary"
+  },
+  {
+    "name": "needs-setup-without-gap",
+    "base": "migration-preserves-meter-keys",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "rows",
+          0,
+          "gaps"
+        ],
+        "value": []
+      }
+    ],
+    "error": "missing_setup_reason"
+  },
+  {
+    "name": "customer-request",
+    "base": "customer-request",
+    "valid": true,
+    "definition": "battery-and-customer-pool"
+  },
+  {
+    "name": "customer-release",
+    "base": "customer-release",
+    "valid": true,
+    "definition": "battery-and-customer-pool"
+  },
+  {
+    "name": "customer-feedback",
+    "base": "customer-feedback",
+    "valid": true,
+    "definition": "battery-and-customer-pool"
+  },
+  {
+    "name": "request-expiry-before-issue",
+    "base": "customer-request",
+    "valid": false,
+    "definition": "battery-and-customer-pool",
+    "edits": [
+      {
+        "path": [
+          "expires_at_utc"
+        ],
+        "value": "2026-09-10T11:59:00Z"
+      }
+    ],
+    "error": "invalid_time"
+  },
+  {
+    "name": "release-with-heat-objective",
+    "base": "customer-release",
+    "valid": false,
+    "definition": "battery-and-customer-pool",
+    "edits": [
+      {
+        "path": [
+          "objective"
+        ],
+        "value": {
+          "kind": "pool_temperature",
+          "start_c": 29.5,
+          "stop_c": 30.0,
+          "defer_policy": "best_effort_local_thermostat"
+        }
+      }
+    ],
+    "error": "objective_mismatch"
+  },
+  {
+    "name": "request-stale-binding",
+    "base": "customer-request",
+    "valid": false,
+    "definition": "battery-and-customer-pool",
+    "edits": [
+      {
+        "path": [
+          "accepted",
+          "binding"
+        ],
+        "value": 2
+      }
+    ],
+    "error": "revision_mismatch"
+  },
+  {
+    "name": "pool-request-to-battery",
+    "base": "customer-request",
+    "valid": false,
+    "definition": "battery-and-customer-pool",
+    "edits": [
+      {
+        "path": [
+          "control_id"
+        ],
+        "value": "00000000-0000-4000-8000-000000000002"
+      }
+    ],
+    "error": "instruction_mismatch"
+  },
+  {
+    "name": "missing-pool-interface",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "definition": "battery-and-customer-pool",
+    "edits": [
+      {
+        "path": [
+          "controls",
+          1,
+          "local",
+          "capabilities"
+        ],
+        "value": []
+      }
+    ],
+    "error": "missing_capability"
+  },
+  {
+    "name": "request-authority-unbounded",
+    "base": "customer-request",
+    "valid": false,
+    "definition": "battery-and-customer-pool",
+    "edits": [
+      {
+        "path": [
+          "expires_at_utc"
+        ],
+        "value": "2026-09-10T12:15:00Z"
+      }
+    ],
+    "error": "invalid_time"
+  },
+  {
+    "name": "pending-objective-and-limits",
+    "base": "pending-objective-and-limits",
+    "valid": true
+  },
+  {
+    "name": "missing-objective-without-setup-gap",
+    "base": "pending-objective-and-limits",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "controls",
+          1,
+          "local",
+          "setup_gaps"
+        ],
+        "value": []
+      }
+    ],
+    "error": "missing_setup_reason"
+  },
+  {
+    "name": "pool-observes-nibe-temperature",
+    "base": "customer-pool-local-bindings",
+    "valid": true,
+    "definition": "battery-and-customer-pool",
+    "edits": [
+      {
+        "path": [
+          "roles",
+          2,
+          "registry",
+          "platform"
+        ],
+        "value": "nibe_heatpump"
+      }
+    ]
+  },
+  {
+    "name": "pool-temperature-cannot-be-actuated",
+    "base": "battery-and-customer-pool",
+    "valid": false,
+    "edits": [
+      {
+        "path": [
+          "controls",
+          1,
+          "local",
+          "capabilities",
+          2,
+          "operation"
+        ],
+        "value": "set_number"
+      }
+    ],
+    "error": "customer_boundary"
+  }
+]

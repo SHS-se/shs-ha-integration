@@ -1,0 +1,1448 @@
+{
+  "battery-and-customer-pool": {
+    "kind": "definition",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "sources": [
+      {
+        "source_id": "00000000-0000-4000-8000-000000000010",
+        "role": "electrical_power",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000011",
+        "role": "soc",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000012",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical",
+        "statistic_id": "sensor.existing_pool_heater_energy"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000013",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical",
+        "statistic_id": "sensor.existing_pool_pump_energy"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000014",
+        "role": "temperature",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000015",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "alias",
+        "statistic_id": "sensor.pool_heater_alias",
+        "canonical_source_id": "00000000-0000-4000-8000-000000000012"
+      }
+    ],
+    "controls": [
+      {
+        "control_id": "00000000-0000-4000-8000-000000000002",
+        "presentation": {
+          "name": "Battery",
+          "category": "informational"
+        },
+        "contract": {
+          "name": "battery_dispatch",
+          "version": 1
+        },
+        "sources": [
+          {
+            "source_id": "00000000-0000-4000-8000-000000000010",
+            "purpose": "storage_flow",
+            "accounting_use": "observe"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000011",
+            "purpose": "soc",
+            "accounting_use": "observe"
+          }
+        ],
+        "desired": {
+          "revision": 1,
+          "included": true,
+          "association": {
+            "kind": "battery",
+            "id": "00000000-0000-4000-8000-000000000102"
+          },
+          "objective": {
+            "kind": "battery_policy",
+            "allow_grid_charge": true,
+            "allow_battery_export": false,
+            "reserve_soc_pct": 15,
+            "export_reserve_soc_pct": 30,
+            "maximum_soc_pct": 95
+          },
+          "energy_model": {
+            "revision": 1,
+            "load_characteristic": "storage"
+          },
+          "provenance": {
+            "owner": "website",
+            "source": "user",
+            "evidence": "Synthetic fixture; not an installation binding"
+          }
+        },
+        "local": {
+          "binding_revision": 1,
+          "capabilities": [
+            {
+              "role": "charge_ceiling",
+              "operation": "set_number",
+              "unit": "kW",
+              "minimum": 0,
+              "maximum": 8.8,
+              "step": 0.001
+            },
+            {
+              "role": "discharge_ceiling",
+              "operation": "set_number",
+              "unit": "kW",
+              "minimum": 0,
+              "maximum": 9.6,
+              "step": 0.001
+            },
+            {
+              "role": "mode",
+              "operation": "select",
+              "unit": "state",
+              "options": [
+                "self_consumption",
+                "solar_charge",
+                "charge_pv_first",
+                "charge_grid_first",
+                "discharge_pv_first",
+                "hold"
+              ]
+            },
+            {
+              "role": "authority",
+              "operation": "switch",
+              "unit": "state"
+            },
+            {
+              "role": "authority_confirmation",
+              "operation": "observe",
+              "unit": "state"
+            },
+            {
+              "role": "battery_power",
+              "operation": "observe",
+              "unit": "W"
+            },
+            {
+              "role": "soc",
+              "operation": "observe",
+              "unit": "%"
+            },
+            {
+              "role": "soc_floor",
+              "operation": "observe",
+              "unit": "%"
+            },
+            {
+              "role": "pv_power",
+              "operation": "observe",
+              "unit": "W"
+            },
+            {
+              "role": "load_power",
+              "operation": "observe",
+              "unit": "W"
+            },
+            {
+              "role": "grid_import_power",
+              "operation": "observe",
+              "unit": "W"
+            },
+            {
+              "role": "grid_export_power",
+              "operation": "observe",
+              "unit": "W"
+            }
+          ],
+          "limits": {
+            "charge_max_w": 8800,
+            "discharge_max_w": 9600,
+            "normal_charge_w": 8800,
+            "normal_discharge_w": 9600,
+            "minimum_soc_pct": 5,
+            "maximum_soc_pct": 100
+          },
+          "handover": "reviewed_self_consumption",
+          "setup_gaps": [],
+          "supported_intents": [
+            "self_consumption",
+            "solar_charge",
+            "charge_pv_first",
+            "charge_grid_first",
+            "discharge_pv_first",
+            "hold"
+          ]
+        }
+      },
+      {
+        "control_id": "00000000-0000-4000-8000-000000000003",
+        "presentation": {
+          "name": "Pool service",
+          "category": "informational"
+        },
+        "contract": {
+          "name": "pool_service",
+          "version": 1
+        },
+        "sources": [
+          {
+            "source_id": "00000000-0000-4000-8000-000000000012",
+            "purpose": "consumption",
+            "accounting_use": "count"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000013",
+            "purpose": "consumption",
+            "accounting_use": "count"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000014",
+            "purpose": "temperature",
+            "accounting_use": "observe"
+          }
+        ],
+        "desired": {
+          "revision": 1,
+          "included": true,
+          "association": {
+            "kind": "pool",
+            "id": "00000000-0000-4000-8000-000000000103"
+          },
+          "objective": {
+            "kind": "pool_temperature",
+            "start_c": 29.5,
+            "stop_c": 30.0,
+            "defer_policy": "best_effort_local_thermostat"
+          },
+          "energy_model": {
+            "revision": 1,
+            "load_characteristic": "thermostatic"
+          },
+          "provenance": {
+            "owner": "website",
+            "source": "user",
+            "evidence": "Synthetic fixture; not an installation binding"
+          }
+        },
+        "local": {
+          "binding_revision": 1,
+          "capabilities": [
+            {
+              "role": "request",
+              "operation": "request_state",
+              "unit": "state",
+              "options": [
+                "heat",
+                "defer",
+                "release"
+              ]
+            },
+            {
+              "role": "feedback",
+              "operation": "observe",
+              "unit": "state"
+            },
+            {
+              "role": "water_temperature",
+              "operation": "observe",
+              "unit": "\u00b0C"
+            }
+          ],
+          "limits": {
+            "minimum_c": 20,
+            "maximum_c": 32,
+            "step_c": 0.1
+          },
+          "handover": "release_customer_automation",
+          "setup_gaps": []
+        }
+      }
+    ]
+  },
+  "explicit-intents-forecast-is-not-ceiling": {
+    "kind": "plan",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "plan_id": "00000000-0000-4000-8000-000000000050",
+    "valid_from_utc": "2026-09-10T12:00:00Z",
+    "valid_until_utc": "2026-09-10T12:15:00Z",
+    "commands": [
+      {
+        "control_id": "00000000-0000-4000-8000-000000000002",
+        "accepted": {
+          "desired": 1,
+          "binding": 1,
+          "contract": {
+            "name": "battery_dispatch",
+            "version": 1
+          },
+          "planning_model": 1
+        },
+        "instruction": {
+          "intent": "charge_pv_first",
+          "charge_ceiling_w": 4000,
+          "discharge_ceiling_w": 0
+        },
+        "forecast": {
+          "electrical_power_w": 2500
+        }
+      },
+      {
+        "control_id": "00000000-0000-4000-8000-000000000003",
+        "accepted": {
+          "desired": 1,
+          "binding": 1,
+          "contract": {
+            "name": "pool_service",
+            "version": 1
+          },
+          "planning_model": 1
+        },
+        "instruction": {
+          "request": "defer",
+          "start_c": 29.5,
+          "stop_c": 30.0,
+          "defer_policy": "best_effort_local_thermostat"
+        },
+        "forecast": {
+          "electrical_power_w": 500
+        }
+      }
+    ]
+  },
+  "disabled-runtime": {
+    "kind": "runtime",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "control_id": "00000000-0000-4000-8000-000000000003",
+    "accepted": {
+      "desired": 1,
+      "binding": 1,
+      "contract": {
+        "name": "pool_service",
+        "version": 1
+      },
+      "planning_model": 1
+    },
+    "active": null,
+    "permission": {
+      "revision": 1,
+      "enabled": false
+    },
+    "status": {
+      "setup": "ready",
+      "synchronization": "accepted",
+      "plan": "none",
+      "operation": "disabled",
+      "reason": "Synthetic example: scheduling off"
+    },
+    "lease": null,
+    "observations": []
+  },
+  "defer-may-still-heat": {
+    "kind": "runtime",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "control_id": "00000000-0000-4000-8000-000000000003",
+    "accepted": {
+      "desired": 1,
+      "binding": 1,
+      "contract": {
+        "name": "pool_service",
+        "version": 1
+      },
+      "planning_model": 1
+    },
+    "active": {
+      "desired": 1,
+      "binding": 1,
+      "contract": {
+        "name": "pool_service",
+        "version": 1
+      },
+      "planning_model": 1
+    },
+    "permission": {
+      "revision": 2,
+      "enabled": true
+    },
+    "status": {
+      "setup": "ready",
+      "synchronization": "accepted",
+      "plan": "active",
+      "operation": "limited_deferral",
+      "reason": "Customer automation reports lower bound prevents deferral"
+    },
+    "lease": {
+      "plan_id": "00000000-0000-4000-8000-000000000050",
+      "expires_at_utc": "2026-09-10T12:02:00Z"
+    },
+    "observations": []
+  },
+  "customer-pool-local-bindings": {
+    "kind": "local_binding",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "control_id": "00000000-0000-4000-8000-000000000003",
+    "binding_revision": 1,
+    "roles": [
+      {
+        "role": "request",
+        "registry": {
+          "domain": "script",
+          "platform": "script",
+          "unique_id": "customer-pool-request"
+        },
+        "last_entity_id": "script.customer_pool_request",
+        "provenance": {
+          "owner": "ha",
+          "source": "user",
+          "evidence": "Synthetic fixture; not an installation binding"
+        }
+      },
+      {
+        "role": "feedback",
+        "registry": {
+          "domain": "sensor",
+          "platform": "template",
+          "unique_id": "customer-pool-feedback"
+        },
+        "provenance": {
+          "owner": "ha",
+          "source": "user",
+          "evidence": "Synthetic fixture; not an installation binding"
+        }
+      },
+      {
+        "role": "water_temperature",
+        "registry": {
+          "domain": "sensor",
+          "platform": "filter",
+          "unique_id": "customer-pool-temperature"
+        },
+        "provenance": {
+          "owner": "ha",
+          "source": "user",
+          "evidence": "Synthetic fixture; not an installation binding"
+        }
+      }
+    ]
+  },
+  "rename-keeps-registry-identity": {
+    "kind": "local_binding",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "control_id": "00000000-0000-4000-8000-000000000003",
+    "binding_revision": 1,
+    "roles": [
+      {
+        "role": "request",
+        "registry": {
+          "domain": "script",
+          "platform": "script",
+          "unique_id": "customer-pool-request"
+        },
+        "last_entity_id": "script.renamed_pool_request",
+        "provenance": {
+          "owner": "ha",
+          "source": "user",
+          "evidence": "Synthetic fixture; not an installation binding"
+        }
+      },
+      {
+        "role": "feedback",
+        "registry": {
+          "domain": "sensor",
+          "platform": "template",
+          "unique_id": "customer-pool-feedback"
+        },
+        "provenance": {
+          "owner": "ha",
+          "source": "user",
+          "evidence": "Synthetic fixture; not an installation binding"
+        }
+      },
+      {
+        "role": "water_temperature",
+        "registry": {
+          "domain": "sensor",
+          "platform": "filter",
+          "unique_id": "customer-pool-temperature"
+        },
+        "provenance": {
+          "owner": "ha",
+          "source": "user",
+          "evidence": "Synthetic fixture; not an installation binding"
+        }
+      }
+    ]
+  },
+  "migration-preserves-meter-keys": {
+    "kind": "migration",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "migration_id": "control-definitions-v1",
+    "rows": [
+      {
+        "legacy_key": "sensor.existing_pool_heater_energy",
+        "control_id": "00000000-0000-4000-8000-000000000003",
+        "association": {
+          "kind": "pool",
+          "id": "00000000-0000-4000-8000-000000000103"
+        },
+        "status": "needs_setup",
+        "preserved_statistic_ids": [
+          "sensor.existing_pool_heater_energy",
+          "sensor.existing_pool_pump_energy"
+        ],
+        "gaps": [
+          {
+            "code": "customer_interface_missing",
+            "path": "roles.request",
+            "message": "Bind the customer automation request interface; do not inherit Nibe or pump actuators"
+          }
+        ]
+      },
+      {
+        "legacy_key": "sensor.room_meter",
+        "control_id": "00000000-0000-4000-8000-000000000004",
+        "association": {
+          "kind": "room",
+          "id": "00000000-0000-4000-8000-000000000104"
+        },
+        "status": "mapped",
+        "preserved_statistic_ids": [
+          "sensor.room_meter"
+        ],
+        "gaps": []
+      },
+      {
+        "legacy_key": "sensor.ev_meter",
+        "control_id": "00000000-0000-4000-8000-000000000005",
+        "association": {
+          "kind": "ev",
+          "id": "00000000-0000-4000-8000-000000000105"
+        },
+        "status": "mapped",
+        "preserved_statistic_ids": [
+          "sensor.ev_meter"
+        ],
+        "gaps": []
+      }
+    ],
+    "history_action": "preserve_keys_and_samples",
+    "permission_action": "preserve_disabled_do_not_grant",
+    "ownership_action": "release_old_journal_before_reassignment"
+  },
+  "explicit-room-association": {
+    "kind": "definition",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "sources": [
+      {
+        "source_id": "00000000-0000-4000-8000-000000000010",
+        "role": "electrical_power",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000011",
+        "role": "soc",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000012",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical",
+        "statistic_id": "sensor.existing_pool_heater_energy"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000013",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical",
+        "statistic_id": "sensor.existing_pool_pump_energy"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000014",
+        "role": "temperature",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000015",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "alias",
+        "statistic_id": "sensor.pool_heater_alias",
+        "canonical_source_id": "00000000-0000-4000-8000-000000000012"
+      }
+    ],
+    "controls": [
+      {
+        "control_id": "00000000-0000-4000-8000-000000000020",
+        "presentation": {
+          "name": "room",
+          "category": "informational"
+        },
+        "contract": {
+          "name": "temperature_target",
+          "version": 1
+        },
+        "sources": [],
+        "desired": {
+          "revision": 1,
+          "included": true,
+          "association": {
+            "kind": "room",
+            "id": "00000000-0000-4000-8000-000000000120"
+          },
+          "objective": {
+            "kind": "room_comfort",
+            "minimum_c": 20,
+            "maximum_c": 22
+          },
+          "energy_model": {
+            "revision": 1,
+            "load_characteristic": "variable"
+          },
+          "provenance": {
+            "owner": "website",
+            "source": "user",
+            "evidence": "Synthetic fixture; not an installation binding"
+          }
+        },
+        "local": {
+          "binding_revision": 1,
+          "capabilities": [],
+          "limits": {
+            "minimum": 0,
+            "maximum": 100,
+            "unit": "state"
+          },
+          "handover": "restore_reviewed_profile",
+          "setup_gaps": [
+            {
+              "code": "binding_required",
+              "path": "local.capabilities",
+              "message": "Bind generic interface before acceptance"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "explicit-ev-association": {
+    "kind": "definition",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "sources": [
+      {
+        "source_id": "00000000-0000-4000-8000-000000000010",
+        "role": "electrical_power",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000011",
+        "role": "soc",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000012",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical",
+        "statistic_id": "sensor.existing_pool_heater_energy"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000013",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical",
+        "statistic_id": "sensor.existing_pool_pump_energy"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000014",
+        "role": "temperature",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000015",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "alias",
+        "statistic_id": "sensor.pool_heater_alias",
+        "canonical_source_id": "00000000-0000-4000-8000-000000000012"
+      }
+    ],
+    "controls": [
+      {
+        "control_id": "00000000-0000-4000-8000-000000000021",
+        "presentation": {
+          "name": "ev",
+          "category": "informational"
+        },
+        "contract": {
+          "name": "adjustable_output",
+          "version": 1
+        },
+        "sources": [],
+        "desired": {
+          "revision": 1,
+          "included": true,
+          "association": {
+            "kind": "ev",
+            "id": "00000000-0000-4000-8000-000000000121"
+          },
+          "objective": {
+            "kind": "ev_charge",
+            "target_soc_pct": 80,
+            "deadline_utc": "2026-09-11T06:00:00Z"
+          },
+          "energy_model": {
+            "revision": 1,
+            "load_characteristic": "variable"
+          },
+          "provenance": {
+            "owner": "website",
+            "source": "user",
+            "evidence": "Synthetic fixture; not an installation binding"
+          }
+        },
+        "local": {
+          "binding_revision": 1,
+          "capabilities": [],
+          "limits": {
+            "minimum": 0,
+            "maximum": 100,
+            "unit": "state"
+          },
+          "handover": "restore_reviewed_profile",
+          "setup_gaps": [
+            {
+              "code": "binding_required",
+              "path": "local.capabilities",
+              "message": "Bind generic interface before acceptance"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "explicit-timed_load-association": {
+    "kind": "definition",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "sources": [
+      {
+        "source_id": "00000000-0000-4000-8000-000000000010",
+        "role": "electrical_power",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000011",
+        "role": "soc",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000012",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical",
+        "statistic_id": "sensor.existing_pool_heater_energy"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000013",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical",
+        "statistic_id": "sensor.existing_pool_pump_energy"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000014",
+        "role": "temperature",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000015",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "alias",
+        "statistic_id": "sensor.pool_heater_alias",
+        "canonical_source_id": "00000000-0000-4000-8000-000000000012"
+      }
+    ],
+    "controls": [
+      {
+        "control_id": "00000000-0000-4000-8000-000000000022",
+        "presentation": {
+          "name": "timed_load",
+          "category": "informational"
+        },
+        "contract": {
+          "name": "relay_schedule",
+          "version": 1
+        },
+        "sources": [],
+        "desired": {
+          "revision": 1,
+          "included": true,
+          "association": {
+            "kind": "timed_load",
+            "id": "00000000-0000-4000-8000-000000000122"
+          },
+          "objective": {
+            "kind": "timed_run",
+            "duration_minutes": 120,
+            "deadline_utc": "2026-09-11T06:00:00Z"
+          },
+          "energy_model": {
+            "revision": 1,
+            "load_characteristic": "variable"
+          },
+          "provenance": {
+            "owner": "website",
+            "source": "user",
+            "evidence": "Synthetic fixture; not an installation binding"
+          }
+        },
+        "local": {
+          "binding_revision": 1,
+          "capabilities": [],
+          "limits": {
+            "minimum": 0,
+            "maximum": 100,
+            "unit": "state"
+          },
+          "handover": "restore_reviewed_profile",
+          "setup_gaps": [
+            {
+              "code": "binding_required",
+              "path": "local.capabilities",
+              "message": "Bind generic interface before acceptance"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "explicit-hot_water-association": {
+    "kind": "definition",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "sources": [
+      {
+        "source_id": "00000000-0000-4000-8000-000000000010",
+        "role": "electrical_power",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000011",
+        "role": "soc",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000012",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical",
+        "statistic_id": "sensor.existing_pool_heater_energy"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000013",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical",
+        "statistic_id": "sensor.existing_pool_pump_energy"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000014",
+        "role": "temperature",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000015",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "alias",
+        "statistic_id": "sensor.pool_heater_alias",
+        "canonical_source_id": "00000000-0000-4000-8000-000000000012"
+      }
+    ],
+    "controls": [
+      {
+        "control_id": "00000000-0000-4000-8000-000000000023",
+        "presentation": {
+          "name": "hot_water",
+          "category": "informational"
+        },
+        "contract": {
+          "name": "permission",
+          "version": 1
+        },
+        "sources": [],
+        "desired": {
+          "revision": 1,
+          "included": true,
+          "association": {
+            "kind": "hot_water",
+            "id": "00000000-0000-4000-8000-000000000123"
+          },
+          "objective": {
+            "kind": "hot_water_service",
+            "minimum_c": 50,
+            "maximum_c": 60
+          },
+          "energy_model": {
+            "revision": 1,
+            "load_characteristic": "variable"
+          },
+          "provenance": {
+            "owner": "website",
+            "source": "user",
+            "evidence": "Synthetic fixture; not an installation binding"
+          }
+        },
+        "local": {
+          "binding_revision": 1,
+          "capabilities": [],
+          "limits": {
+            "minimum": 0,
+            "maximum": 100,
+            "unit": "state"
+          },
+          "handover": "restore_reviewed_profile",
+          "setup_gaps": [
+            {
+              "code": "binding_required",
+              "path": "local.capabilities",
+              "message": "Bind generic interface before acceptance"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "customer-request": {
+    "kind": "pool_request",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "control_id": "00000000-0000-4000-8000-000000000003",
+    "request_id": "00000000-0000-4000-8000-000000000051",
+    "accepted": {
+      "desired": 1,
+      "binding": 1,
+      "contract": {
+        "name": "pool_service",
+        "version": 1
+      },
+      "planning_model": 1
+    },
+    "action": "defer",
+    "issued_at_utc": "2026-09-10T12:00:00Z",
+    "expires_at_utc": "2026-09-10T12:02:00Z",
+    "objective": {
+      "kind": "pool_temperature",
+      "start_c": 29.5,
+      "stop_c": 30.0,
+      "defer_policy": "best_effort_local_thermostat"
+    },
+    "request_sequence": 1,
+    "plan_id": "00000000-0000-4000-8000-000000000050"
+  },
+  "customer-release": {
+    "kind": "pool_request",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "control_id": "00000000-0000-4000-8000-000000000003",
+    "request_id": "00000000-0000-4000-8000-000000000051",
+    "accepted": {
+      "desired": 1,
+      "binding": 1,
+      "contract": {
+        "name": "pool_service",
+        "version": 1
+      },
+      "planning_model": 1
+    },
+    "action": "release",
+    "issued_at_utc": "2026-09-10T12:00:00Z",
+    "expires_at_utc": "2026-09-10T12:02:00Z",
+    "objective": null,
+    "request_sequence": 2,
+    "plan_id": null
+  },
+  "customer-feedback": {
+    "kind": "pool_feedback",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "control_id": "00000000-0000-4000-8000-000000000003",
+    "request_id": "00000000-0000-4000-8000-000000000051",
+    "accepted": {
+      "desired": 1,
+      "binding": 1,
+      "contract": {
+        "name": "pool_service",
+        "version": 1
+      },
+      "planning_model": 1
+    },
+    "reported_at_utc": "2026-09-10T12:00:05Z",
+    "acknowledgement": "accepted",
+    "operation": "limited_deferral",
+    "reason": "Local thermostat still calls at minimum band; observed heating not inferred",
+    "request_sequence": 1,
+    "plan_id": "00000000-0000-4000-8000-000000000050"
+  },
+  "pending-objective-and-limits": {
+    "kind": "definition",
+    "schema_version": 1,
+    "home_id": "00000000-0000-4000-8000-000000000001",
+    "sources": [
+      {
+        "source_id": "00000000-0000-4000-8000-000000000010",
+        "role": "electrical_power",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000011",
+        "role": "soc",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000012",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical",
+        "statistic_id": "sensor.existing_pool_heater_energy"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000013",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical",
+        "statistic_id": "sensor.existing_pool_pump_energy"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000014",
+        "role": "temperature",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "canonical"
+      },
+      {
+        "source_id": "00000000-0000-4000-8000-000000000015",
+        "role": "electrical_energy",
+        "provenance": {
+          "owner": "ha",
+          "source": "discovered",
+          "evidence": "Synthetic fixture; not an installation binding"
+        },
+        "accounting": "alias",
+        "statistic_id": "sensor.pool_heater_alias",
+        "canonical_source_id": "00000000-0000-4000-8000-000000000012"
+      }
+    ],
+    "controls": [
+      {
+        "control_id": "00000000-0000-4000-8000-000000000002",
+        "presentation": {
+          "name": "Battery",
+          "category": "informational"
+        },
+        "contract": {
+          "name": "battery_dispatch",
+          "version": 1
+        },
+        "sources": [
+          {
+            "source_id": "00000000-0000-4000-8000-000000000010",
+            "purpose": "storage_flow",
+            "accounting_use": "observe"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000011",
+            "purpose": "soc",
+            "accounting_use": "observe"
+          }
+        ],
+        "desired": {
+          "revision": 1,
+          "included": true,
+          "association": {
+            "kind": "battery",
+            "id": "00000000-0000-4000-8000-000000000102"
+          },
+          "objective": {
+            "kind": "battery_policy",
+            "allow_grid_charge": true,
+            "allow_battery_export": false,
+            "reserve_soc_pct": 15,
+            "export_reserve_soc_pct": 30,
+            "maximum_soc_pct": 95
+          },
+          "energy_model": {
+            "revision": 1,
+            "load_characteristic": "storage"
+          },
+          "provenance": {
+            "owner": "website",
+            "source": "user",
+            "evidence": "Synthetic fixture; not an installation binding"
+          }
+        },
+        "local": {
+          "binding_revision": 1,
+          "capabilities": [
+            {
+              "role": "charge_ceiling",
+              "operation": "set_number",
+              "unit": "kW",
+              "minimum": 0,
+              "maximum": 8.8,
+              "step": 0.001
+            },
+            {
+              "role": "discharge_ceiling",
+              "operation": "set_number",
+              "unit": "kW",
+              "minimum": 0,
+              "maximum": 9.6,
+              "step": 0.001
+            },
+            {
+              "role": "mode",
+              "operation": "select",
+              "unit": "state",
+              "options": [
+                "self_consumption",
+                "solar_charge",
+                "charge_pv_first",
+                "charge_grid_first",
+                "discharge_pv_first",
+                "hold"
+              ]
+            },
+            {
+              "role": "authority",
+              "operation": "switch",
+              "unit": "state"
+            },
+            {
+              "role": "authority_confirmation",
+              "operation": "observe",
+              "unit": "state"
+            },
+            {
+              "role": "battery_power",
+              "operation": "observe",
+              "unit": "W"
+            },
+            {
+              "role": "soc",
+              "operation": "observe",
+              "unit": "%"
+            },
+            {
+              "role": "soc_floor",
+              "operation": "observe",
+              "unit": "%"
+            },
+            {
+              "role": "pv_power",
+              "operation": "observe",
+              "unit": "W"
+            },
+            {
+              "role": "load_power",
+              "operation": "observe",
+              "unit": "W"
+            },
+            {
+              "role": "grid_import_power",
+              "operation": "observe",
+              "unit": "W"
+            },
+            {
+              "role": "grid_export_power",
+              "operation": "observe",
+              "unit": "W"
+            }
+          ],
+          "limits": {
+            "charge_max_w": 8800,
+            "discharge_max_w": 9600,
+            "normal_charge_w": 8800,
+            "normal_discharge_w": 9600,
+            "minimum_soc_pct": 5,
+            "maximum_soc_pct": 100
+          },
+          "handover": "reviewed_self_consumption",
+          "setup_gaps": [],
+          "supported_intents": [
+            "self_consumption",
+            "solar_charge",
+            "charge_pv_first",
+            "charge_grid_first",
+            "discharge_pv_first",
+            "hold"
+          ]
+        }
+      },
+      {
+        "control_id": "00000000-0000-4000-8000-000000000003",
+        "presentation": {
+          "name": "Pool service",
+          "category": "informational"
+        },
+        "contract": {
+          "name": "pool_service",
+          "version": 1
+        },
+        "sources": [
+          {
+            "source_id": "00000000-0000-4000-8000-000000000012",
+            "purpose": "consumption",
+            "accounting_use": "count"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000013",
+            "purpose": "consumption",
+            "accounting_use": "count"
+          },
+          {
+            "source_id": "00000000-0000-4000-8000-000000000014",
+            "purpose": "temperature",
+            "accounting_use": "observe"
+          }
+        ],
+        "desired": {
+          "revision": 1,
+          "included": true,
+          "association": {
+            "kind": "pool",
+            "id": "00000000-0000-4000-8000-000000000103"
+          },
+          "objective": null,
+          "energy_model": {
+            "revision": 1,
+            "load_characteristic": "thermostatic"
+          },
+          "provenance": {
+            "owner": "website",
+            "source": "user",
+            "evidence": "Synthetic fixture; not an installation binding"
+          }
+        },
+        "local": {
+          "binding_revision": 1,
+          "capabilities": [
+            {
+              "role": "request",
+              "operation": "request_state",
+              "unit": "state",
+              "options": [
+                "heat",
+                "defer",
+                "release"
+              ]
+            },
+            {
+              "role": "feedback",
+              "operation": "observe",
+              "unit": "state"
+            },
+            {
+              "role": "water_temperature",
+              "operation": "observe",
+              "unit": "\u00b0C"
+            }
+          ],
+          "limits": null,
+          "handover": "release_customer_automation",
+          "setup_gaps": [
+            {
+              "code": "review_required",
+              "path": "desired.objective",
+              "message": "Review the pool objective"
+            },
+            {
+              "code": "limits_missing",
+              "path": "local.limits",
+              "message": "Set reviewed limits"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

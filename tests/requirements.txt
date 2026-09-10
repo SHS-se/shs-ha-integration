@@ -1,0 +1,2 @@
+# Development-only JSON Schema conformance checks; not an HA runtime dependency.
+jsonschema==4.23.0

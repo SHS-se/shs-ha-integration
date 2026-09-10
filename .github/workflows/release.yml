@@ -43,6 +43,7 @@ jobs:
 
       - name: Run integration checks
         run: |
+          python -m pip install -r tests/requirements.txt
           python -m unittest discover -s tests -v
           python -m compileall -q custom_components/shs_energy
           node --test tests/frontend-config-save.test.js
