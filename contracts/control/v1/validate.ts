@@ -3,6 +3,8 @@
  */
 import Ajv from "npm:ajv@6.12.6";
 
+import type { Control, ControlDocument } from "./types.ts";
+
 import schema from "./schema.json" with { type: "json" };
 const shape = new Ajv({
   allErrors: true,
@@ -27,7 +29,13 @@ function equal(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
   return Object.keys(a).length === Object.keys(b).length &&
-    Object.keys(a).every((k) => Object.hasOwn(b, k) && equal(a[k], b[k]));
+    Object.keys(a).every((k) =>
+      Object.hasOwn(b, k) &&
+      equal(
+        (a as Record<string, unknown>)[k],
+        (b as Record<string, unknown>)[k],
+      )
+    );
 }
 function utc(value: string): number {
   require(
@@ -36,7 +44,7 @@ function utc(value: string): number {
   );
   return Date.parse(value);
 }
-export function revision(c: any) {
+export function revision(c: Control) {
   return {
     desired: c.desired.revision,
     binding: c.local.binding_revision,
@@ -46,8 +54,10 @@ export function revision(c: any) {
 }
 
 /** Passing this check never grants execution permission. */
-export function validate(document: any, definition?: any): void {
-  require(shape(document), "schema");
+export function validate(input: unknown, context?: unknown): void {
+  require(shape(input), "schema");
+  // The schema establishes these shapes before semantic checks read fields.
+  const document = input as ControlDocument;
   const kind = document.kind;
   if (kind === "definition") {
     unique(document.sources.map((s) => s.source_id));
@@ -57,7 +67,7 @@ export function validate(document: any, definition?: any): void {
       ),
     );
     unique(document.controls.map((c) => c.control_id));
-    const sources = new Map<string, any>(
+    const sources = new Map(
       document.sources.map((s) => [s.source_id, s]),
     );
     for (const source of sources.values()) {
@@ -91,7 +101,7 @@ export function validate(document: any, definition?: any): void {
       );
       unique(local.capabilities.map((cap) => cap.role));
       if (local.setup_gaps.length === 0) {
-        const requiredRoles = {
+        const requiredRoles: Record<string, string[]> = {
           pool_service: ["request", "feedback", "water_temperature"],
           battery_dispatch: [
             "mode",
@@ -107,11 +117,10 @@ export function validate(document: any, definition?: any): void {
             "grid_import_power",
             "grid_export_power",
           ],
-        }[name] ?? [];
+        };
+        const roles = requiredRoles[name] ?? [];
         require(
-          requiredRoles.every((r) =>
-            local.capabilities.some((cap) => cap.role === r)
-          ),
+          roles.every((r) => local.capabilities.some((cap) => cap.role === r)),
           "missing_capability",
         );
       }
@@ -132,7 +141,7 @@ export function validate(document: any, definition?: any): void {
           ),
           "customer_boundary",
         );
-        const operations = {
+        const operations: Record<string, string[]> = {
           request: ["request_state", "state"],
           feedback: ["observe", "state"],
           water_temperature: ["observe", "°C"],
@@ -145,6 +154,8 @@ export function validate(document: any, definition?: any): void {
         );
       }
       if (name === "pool_service" && limits !== null && objective !== null) {
+        require(objective.kind === "pool_temperature", "association_mismatch");
+        require("minimum_c" in limits && "step_c" in limits, "invalid_limits");
         require(
           equal(Object.keys(limits).sort(), [
             "maximum_c",
@@ -159,7 +170,7 @@ export function validate(document: any, definition?: any): void {
             objective.stop_c <= limits.maximum_c,
           "invalid_band",
         );
-        for (const key of ["start_c", "stop_c"]) {
+        for (const key of ["start_c", "stop_c"] as const) {
           const ticks = (objective[key] - limits.minimum_c) / limits.step_c;
           require(Math.abs(ticks - Math.round(ticks)) < 1e-7, "invalid_band");
         }
@@ -167,6 +178,7 @@ export function validate(document: any, definition?: any): void {
         name === "battery_dispatch" && limits !== null && objective !== null
       ) {
         require("charge_max_w" in limits, "invalid_limits");
+        require(objective.kind === "battery_policy", "association_mismatch");
         require(
           0 <= limits.normal_charge_w &&
             limits.normal_charge_w <= limits.charge_max_w &&
@@ -218,10 +230,18 @@ export function validate(document: any, definition?: any): void {
     }
     return;
   }
-  require(definition?.kind === "definition", "definition_required");
-  validate(definition);
+  require(
+    context && typeof context === "object" && "kind" in context &&
+      context.kind === "definition",
+    "definition_required",
+  );
+  validate(context);
+  const definition = context as Extract<
+    ControlDocument,
+    { kind: "definition" }
+  >;
   require(document.home_id === definition.home_id, "home_scope");
-  const controls = new Map<string, any>(
+  const controls = new Map(
     definition.controls.map((c) => [c.control_id, c]),
   );
   const records = kind === "plan" ? document.commands : [document];
@@ -235,9 +255,12 @@ export function validate(document: any, definition?: any): void {
   for (const record of records) {
     const c = controls.get(record.control_id);
     require(c, "unknown_control");
-    if (["pool_request", "pool_feedback"].includes(kind)) {
+    if (
+      "kind" in record &&
+      (record.kind === "pool_request" || record.kind === "pool_feedback")
+    ) {
       require(c.contract.name === "pool_service", "instruction_mismatch");
-      if (kind === "pool_feedback") {
+      if (record.kind === "pool_feedback") {
         utc(record.reported_at_utc); // Historical feedback never grants authority.
         continue;
       }
@@ -262,7 +285,7 @@ export function validate(document: any, definition?: any): void {
       }
       continue;
     }
-    if (kind === "local_binding") {
+    if ("kind" in record && record.kind === "local_binding") {
       require(
         record.binding_revision === c.local.binding_revision,
         "revision_mismatch",
@@ -284,7 +307,7 @@ export function validate(document: any, definition?: any): void {
       }
       continue;
     }
-    if (kind === "runtime") {
+    if ("kind" in record && record.kind === "runtime") {
       // Accepted/active can deliberately lag pending desired settings.
       if (record.lease !== null) utc(record.lease.expires_at_utc);
       require(
@@ -297,12 +320,15 @@ export function validate(document: any, definition?: any): void {
       );
       continue;
     }
+    require(!("kind" in record), "instruction_mismatch");
     require(equal(record.accepted, revision(c)), "revision_mismatch");
     require(c.local.setup_gaps.length === 0 && c.desired.included, "not_ready");
     const instruction = record.instruction, name = c.contract.name;
     const objective = c.desired.objective, limits = c.local.limits;
     if (name === "battery_dispatch") {
       require("intent" in instruction, "instruction_mismatch");
+      require(limits !== null && "charge_max_w" in limits, "invalid_limits");
+      require(objective?.kind === "battery_policy", "association_mismatch");
       const intent = instruction.intent;
       require(
         c.local.supported_intents?.includes(intent),
@@ -330,8 +356,9 @@ export function validate(document: any, definition?: any): void {
       }
     } else if (name === "pool_service") {
       require("request" in instruction, "instruction_mismatch");
+      require(objective?.kind === "pool_temperature", "association_mismatch");
       require(
-        ["start_c", "stop_c", "defer_policy"].every((k) =>
+        (["start_c", "stop_c", "defer_policy"] as const).every((k) =>
           instruction[k] === objective[k]
         ),
         "objective_mismatch",
