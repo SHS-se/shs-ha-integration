@@ -2,8 +2,9 @@
 
 Step 3 adds the control-v1 agreement path in both repositories. It does not enable
 controls or deploy the database/edge function. Step 4 connects the ordinary website
-editors and the optimizer's battery/pool instructions to this path; steps 5–6
-connect hardware adapters to its execution guard. Existing schema-7 statistics,
+editors and the optimizer's battery/pool instructions to this path. Step 5
+connects the [battery adapter](battery-execution.md); step 6 connects the customer's
+pool request interface to its execution guard. Existing schema-7 statistics,
 monitoring and ownership recovery remain on their existing path until the explicit
 migration. They cannot be used to execute a control-v1 plan.
 
@@ -77,6 +78,9 @@ fresh agreement and lease. The default permission provider is off; this step add
 no enablement API. A lease is software authority, not evidence of a hardware action.
 Server active state is an explicit, timestamped HA report, never inferred from plan
 publication, acceptance or lease renewal. Without a report it remains unknown.
+The adapter reports each observed control under `active.controls[control_id]`,
+including its accepted tuple and setting acknowledgement. A battery report cannot
+imply that the pool is operating; the portal checks each control independently.
 
 The 120-second bound is a software guard while HA runs. It does not promise an
 inverter watchdog or completed physical handover. Pool Nibe writes, pump operation,

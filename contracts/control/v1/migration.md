@@ -97,6 +97,16 @@ procedure before replacing software that knows that journal format. Failed or
 pending restoration stays durable and visible. Never discard the journal to
 make migration succeed. The new controller must not execute old plans.
 
+Applied battery cutover (step 5): HA config-entry version 5 reads the legacy
+journal before changing options/version. Any `battery` record, including one
+with empty `originals`, or corrupt journal blocks migration. Complete the old
+installed version's reviewed disable/handover and verify normal plant settings
+before upgrading. Never delete or reinterpret its journal to unblock migration.
+The signed executor is retired. Version 5 removes its fields and old permission;
+previous permission intent becomes a commissioning setup item, while battery
+model, telemetry and history remain intact. The new v1 battery ownership store
+is separate and cannot clear legacy ownership. New controls remain off.
+
 For the pool, remove SHS ownership of direct Nibe bands, Nibe permission groups
 and circulation only through that same reviewed release/cutover procedure. Keep
 the customer's Node-RED/HA automation running as the hardware owner; do not

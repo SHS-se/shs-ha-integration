@@ -383,92 +383,6 @@ def _configuration_sections() -> list[dict[str, Any]]:
             ],
         },
         {
-            "id": "battery_control",
-            "tab": "devices",
-            "title": "Battery control",
-            "description": (
-                "Scheduled battery execution. Filling "
-                "this in does not start control: the switch below does. Enable "
-                "after the response, sign and confirmation behaviour "
-                "have been checked on this installation."
-            ),
-            "toggle": _field(
-                c.OPT_BATTERY_CONTROL_ENABLED,
-                "Execute the battery plan",
-                "toggle",
-                help_text=(
-                    "Switched off, so the battery is planned but never "
-                    "written to, and its own controller keeps deciding."
-                ),
-            ),
-            "fields": [
-                _field(
-                    c.OPT_BATTERY_MODE_ENTITY,
-                    "Control mode",
-                    "entity",
-                    domains=("select", "input_select"),
-                    help_text="The entity that selects charging, discharging or holding.",
-                ),
-                _field(
-                    c.OPT_BATTERY_MODE_CHARGE,
-                    "Mode value meaning charge",
-                    "text",
-                    help_text="Copy the option exactly as the mode entity spells it.",
-                ),
-                _field(c.OPT_BATTERY_MODE_DISCHARGE, "Mode value meaning discharge", "text"),
-                _field(c.OPT_BATTERY_MODE_IDLE, "Mode value meaning hold", "text"),
-                _field(c.OPT_BATTERY_MODE_BASELINE, "Baseline mode", "text", help_text="Restored on disable, expiry, fault and startup. Sigenergy uses Maximum Self Consumption."),
-                _field(c.OPT_BATTERY_MEASUREMENT_CHARGE_POSITIVE, "Measured battery power is positive when charging", "toggle", help_text="The measurement sign is independent of the power command sign."),
-                _field(
-                    c.OPT_BATTERY_POWER_ENTITY,
-                    "Power target",
-                    "entity",
-                    domains=("number", "input_number"),
-                    help_text="The number written to request charge or discharge power.",
-                ),
-                _field(
-                    c.OPT_BATTERY_POWER_UNIT,
-                    "Power target unit",
-                    "select",
-                    choices=tuple((value, value) for value in c.BATTERY_POWER_UNITS),
-                    help_text="What the target above is written in. Inverters commonly take kW where the planner works in W.",
-                ),
-                _field(
-                    c.OPT_BATTERY_DISCHARGE_IS_NEGATIVE,
-                    "Discharge is written as a negative number",
-                    "toggle",
-                    help_text="Settle this by measurement, not assumption; an inverted sign charges when the plan says discharge.",
-                ),
-                _field(
-                    c.OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
-                    "Measured battery power",
-                    "entity",
-                    domains=("sensor",),
-                    help_text="Used to confirm what the battery actually did. A command is not evidence that it happened.",
-                ),
-                _field(
-                    c.OPT_BATTERY_AUTHORITY_ENTITY,
-                    "Remote control switch",
-                    "entity",
-                    domains=("switch", "input_boolean"),
-                    help_text="Optional. The entity that claims remote control from the inverter's own controller.",
-                ),
-                _field(
-                    c.OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY,
-                    "Remote control confirmation",
-                    "entity",
-                    domains=("sensor", "binary_sensor"),
-                    help_text="Required with the switch above: reads back whether remote control was actually granted.",
-                ),
-                _field(
-                    c.OPT_BATTERY_AUTHORITY_CONFIRM_STATE,
-                    "State confirming remote control",
-                    "text",
-                    help_text="The value that entity reports while the planner holds authority.",
-                ),
-            ],
-        },
-        {
             "id": "pool_control",
             "tab": "devices",
             "title": "Pool temperature control",
@@ -515,7 +429,7 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 _field(c.OPT_EV_CHARGE_SWITCH_ENTITY, "EV charging start/stop switch", "entity", domains=("switch", "input_boolean"), help_text="Required for execution. Off slots stop charging without writing a current below the charger's minimum."),
                 _field(c.OPT_POOL_CONTROL_ENABLED, "Control pool heating", "toggle"),
                 _field(c.OPT_POOL_PERMISSION_ENTITY, "Pool accessory permission", "entity", domains=("switch", "input_boolean"), help_text="Optional. Enabled with a heat slot and restored on handover. Off slots lower the temperature band."),
-                *[_field(f"{device}_control_override_entity", f"{label} manual override", "entity", domains=("input_boolean", "binary_sensor", "switch"), help_text="On returns this device to its captured baseline and suspends planned commands.") for device, label in (("battery", "Battery"), ("ev", "EV"), ("pool", "Pool"))],
+                *[_field(f"{device}_control_override_entity", f"{label} manual override", "entity", domains=("input_boolean", "binary_sensor", "switch"), help_text="On returns this device to its captured baseline and suspends planned commands.") for device, label in (("ev", "EV"), ("pool", "Pool"))],
             ],
         },
         {

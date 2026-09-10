@@ -36,7 +36,12 @@ already durably saved locally. `accepted_epoch` acknowledges receipt of the comp
 household definition, including removals. `plan_id` is null until HA receives the
 validated plan. `active` is null unless a hardware adapter has explicitly reported
 operation; such a report contains `plan_id`, the complete `accepted` map and
-`observed_at_utc`. Publication, lease renewal and HTTP success do not manufacture it.
+`observed_at_utc`. Per-control evidence is in `controls[control_id]`, including
+`state`, `settings_acknowledged` and that control's `accepted` tuple. Only an
+`observed` control with acknowledged settings and matching current revisions is
+shown as operating. Whole-household plan acceptance does not imply that every
+adapter has operated. Publication, lease renewal and HTTP success do not
+manufacture an operation report.
 
 A sync response includes `schema_version`, `home_id`, `server_time_utc`,
 `edit_revision`, `epoch`, `definition`, `acknowledged`, `plan`, `lease` and `status`.

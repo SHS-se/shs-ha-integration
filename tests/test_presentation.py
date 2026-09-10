@@ -93,7 +93,7 @@ class PresentationTests(unittest.TestCase):
         battery = views[0]
         self.assertEqual(battery['choice_label'], 'Included')
         self.assertFalse(battery['permission']['enabled'])
-        self.assertIn('required', battery['permission']['reason'])
+        self.assertIn('commissioning', battery['permission']['reason'])
         fields = [f['key'] for f in system_fields('battery')]
         self.assertEqual(len(fields), len(set(fields)))
         self.assertNotIn('battery_control_enabled', fields)

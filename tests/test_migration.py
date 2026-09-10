@@ -131,3 +131,22 @@ class OptionMigrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class BatteryCutoverTests(unittest.TestCase):
+    def test_signed_settings_are_removed_without_deleting_energy_history_or_granting_permission(self):
+        old = {'battery_enabled': True, 'battery_capacity_kwh': 20, 'battery_soc_entity': 'sensor.soc',
+               'battery_control_enabled': True, 'battery_power_entity': 'number.inverter_adjustment',
+               'battery_mode_entity': 'select.mode', 'battery_mode_charge': 'Old charge',
+               'battery_power_unit': 'kW', 'battery_discharge_is_negative': True,
+               'battery_control_override_entity': 'input_boolean.old_override',
+               'entities_battery_charge': ['sensor.battery_energy']}
+        result, changed = migrate_options(old)
+        self.assertTrue(changed)
+        for key in old:
+            if key in ('battery_enabled', 'battery_capacity_kwh', 'battery_soc_entity', 'entities_battery_charge'):
+                self.assertEqual(result[key], old[key])
+            else:
+                self.assertNotIn(key, result)
+                with self.assertRaises(ValueError): merge_options(result, {key: old[key]})
+        self.assertIn('commissioning', str(result['_migration_report']['needs_attention']))
+        self.assertEqual(migrate_options(result), (result, False))

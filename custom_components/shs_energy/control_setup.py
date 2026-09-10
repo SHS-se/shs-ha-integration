@@ -361,6 +361,20 @@ class VerifiedBindingStore:
             raise OSError('binding write did not persist; no acknowledgement was published')
 
 
+def validate_binding_record(key, record):
+    """Validate durable binding identity without requiring an available device."""
+    opaque_id(key)
+    if not isinstance(record, dict) or set(record) != {'binding_revision', 'spec', 'claims', 'capabilities', 'members'} or not isinstance(record['spec'], dict) or record['spec'].get('control_id') != key or type(record['binding_revision']) is not int or record['binding_revision'] < 1:
+        raise ValueError('invalid saved control binding')
+    if not isinstance(record['spec'].get('roles'), dict) or not isinstance(record['claims'], list) or not isinstance(record['capabilities'], list) or not isinstance(record['members'], dict):
+        raise ValueError('invalid saved control reservation')
+    for registry in record['spec']['roles'].values():
+        identity(registry)
+    for claim in record['claims']:
+        if not isinstance(claim, list) or len(claim) != 3 or not all(isinstance(v, str) and v for v in claim):
+            raise ValueError('invalid saved actuator identity')
+
+
 class ControlSetup:
     """Serialize local edits; only publish a saved report after Store completes."""
 
@@ -377,20 +391,14 @@ class ControlSetup:
         if not isinstance(payload, dict) or set(payload) != {'schema_version', 'home_id', 'records'} or payload['schema_version'] != 1 or payload['home_id'] != self.home_id or not isinstance(payload['records'], dict):
             raise ValueError('invalid or foreign-home control binding store')
         for key, record in payload['records'].items():
-            opaque_id(key)
-            if not isinstance(record, dict) or set(record) != {'binding_revision', 'spec', 'claims', 'capabilities', 'members'} or not isinstance(record['spec'], dict) or record['spec'].get('control_id') != key or type(record['binding_revision']) is not int or record['binding_revision'] < 1:
-                raise ValueError('invalid saved control binding')
-            if not isinstance(record['spec'].get('roles'), dict) or not isinstance(record['claims'], list) or not isinstance(record['capabilities'], list) or not isinstance(record['members'], dict):
-                raise ValueError('invalid saved control reservation')
-            for registry in record['spec']['roles'].values():
-                identity(registry)
-            for claim in record['claims']:
-                if not isinstance(claim, list) or len(claim) != 3 or not all(isinstance(v, str) and v for v in claim):
-                    raise ValueError('invalid saved actuator identity')
+            validate_binding_record(key, record)
         self.records = deepcopy(payload['records'])
 
     def _other_claims(self, inventory, exclude=None):
         claims = dict(self.external_claims(inventory))
+        for key, record in getattr(self, 'runtime_records', lambda: {})().items():
+            if key != exclude:
+                claims['runtime:' + key] = reserved_claims(record['binding'], inventory)
         for control_id, record in self.records.items():
             if control_id != exclude:
                 claims[control_id] = reserved_claims(record, inventory)

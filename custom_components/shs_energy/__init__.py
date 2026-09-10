@@ -48,12 +48,13 @@ from .configuration import (
     entity_area_id,
     resolved_options,
 )
+from .battery_controller import BatteryController
 from .controller import ScheduledController
 from .control_setup import ControlSetup, VerifiedBindingStore, read_binding_file
 from .control_agreement import ControlAgreement, POLL_SECONDS
 from .control_setup_ha import inventory, legacy_claims
 from .coordinator import ShsStatusCoordinator
-from .migration import mapped_entity_ids, migrate_options
+from .migration import assert_battery_handover_complete, mapped_entity_ids, migrate_options
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
@@ -181,6 +182,10 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) 
         return False
     if entry.version == CONFIG_ENTRY_VERSION:
         return True
+    legacy_store = Store(hass, 1, f"shs_energy.controller.{entry.entry_id}")
+    legacy = VerifiedBindingStore(legacy_store,
+        lambda: hass.async_add_executor_job(read_binding_file, legacy_store.path), legacy_store.key, lambda: True)
+    assert_battery_handover_complete(await legacy.async_load())
     options = dict(entry.options)
     entity_area_ids = {
         entity_id: area_id
@@ -226,6 +231,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
             agreement_store.key, lambda: hass.state is CoreState.stopping),
         coordinator.control_setup, client.control_agreement,
     )
+    battery_store = Store(hass, 1, f"shs_energy.battery_controller.{entry.entry_id}", atomic_writes=True, private=True)
+    coordinator.battery_controller = BatteryController(
+        hass, coordinator.control_setup, coordinator.control_agreement,
+        VerifiedBindingStore(battery_store, lambda: hass.async_add_executor_job(read_binding_file, battery_store.path),
+                             battery_store.key, lambda: False),
+        lambda: resolved_options(hass, dict(entry.options)),
+        report=lambda **status: controller.report('battery', **status),
+        legacy_ready=lambda: assert_battery_handover_complete(
+            {'records': controller.records if controller.initialized else None}),
+    )
+    coordinator.control_setup.runtime_records = lambda: coordinator.battery_controller.records
     # Recover local ownership before contacting the cloud. A network outage
     # must not prevent restoration of commands left by the previous process.
     await coordinator.async_restore_plan()
@@ -233,8 +249,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     try:
         await coordinator.control_setup.async_load()
         await coordinator.control_agreement.async_load()
+        await coordinator.battery_controller.async_start()
         await coordinator.async_config_entry_first_refresh()
     except BaseException:
+        await coordinator.battery_controller.async_stop()
         await controller.async_stop()
         raise
 
@@ -244,6 +262,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
                 hass, controller.async_tick(), name="shs_energy_controller_update",
             )
 
+    entry.async_on_unload(async_track_time_interval(hass, coordinator.battery_controller.async_tick, timedelta(seconds=5)))
+    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, coordinator.battery_controller.async_stop))
     entry.async_on_unload(coordinator.control_agreement.close)
     entry.async_on_unload(async_track_time_interval(
         hass, coordinator.control_agreement.async_poll, timedelta(seconds=POLL_SECONDS)))
@@ -256,6 +276,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except BaseException:
+        await coordinator.battery_controller.async_stop()
         await controller.async_stop()
         raise
     schedule_controller()
@@ -333,5 +354,6 @@ async def _async_options_updated(
 
 async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
     """Unload a config entry."""
+    await entry.runtime_data.battery_controller.async_stop()
     await entry.runtime_data.controller.async_stop()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

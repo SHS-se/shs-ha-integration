@@ -131,12 +131,12 @@ can restore a plant while HA is down.
 
 ## Implementation and acceptance
 
-The current generic executor still uses one signed power entity, exact-power
-confirmation and zero-target restoration. Replace those mappings, validation,
-configuration labels, command construction, ownership journal and confirmation
-logic before enabling this design. Use the project's one-way configuration and
-plan-schema migrations; do not reinterpret an old signed-target mapping as an
-ESS limit. Documentation-only changes do not implement or commission this path.
+The [step 5 adapter](battery-execution.md) now implements this policy with explicit
+intent and ceilings, separate setting/physical observations, verified durable
+ownership and reviewed normal handover. The signed executor and its configuration
+have been retired through config-entry v5 migration; unresolved legacy ownership
+blocks upgrade. Simulated HA verification does not commission the installation.
+Local operation permission remains off until the bounded commissioning step.
 
 Acceptance should cover:
 

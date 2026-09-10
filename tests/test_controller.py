@@ -158,50 +158,25 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(float(self.states['number.stop'].state), 30)
         self.assertFalse(other.records)
 
-    async def test_battery_reversal_mode_before_power_without_zero_staging(self):
+
+
+
+
+    async def test_legacy_battery_flags_and_forecast_never_write(self):
         self.options['battery_control_enabled'] = True
         await self.controller.async_start()
-        self.calls.clear()
         self.slot.update(battery_charge_w=0, battery_discharge_w=3000)
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('select.mode', 'Discharge'), ('number.battery', -3)])
-        self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
+        self.assertEqual(self.calls, [])
+        self.assertNotIn('battery', self.controller.records)
 
-    async def test_battery_expiry_zero_before_baseline(self):
-        self.options['battery_control_enabled'] = True
+    async def test_legacy_battery_journal_is_retained_without_signed_handover(self):
+        record = {'options': deepcopy(self.options), 'originals': {}, 'last_commands': {}}
+        self.store.saved = {'records': {'battery': record}}
         await self.controller.async_start()
-        self.calls.clear()
-        self.coordinator.current_plan_slot = None
-        await self.controller.async_tick()
-        self.assertEqual(self.calls, [('number.battery', 0), ('select.mode', 'Baseline')])
-
-    async def test_failed_mode_confirmation_never_writes_new_power(self):
-        self.options['battery_control_enabled'] = True
-        await self.controller.async_start()
-        self.calls.clear()
-        original = self.hass.services.async_call
-        async def refuse(domain, service, data, blocking):
-            if data.get('option') == 'Discharge':
-                return
-            await original(domain, service, data, blocking)
-        self.hass.services.async_call = refuse
-        self.slot.update(battery_charge_w=0, battery_discharge_w=3000)
-        await self.controller.async_tick()
-        self.assertNotIn(('number.battery', -3), self.calls)
-        self.assertEqual(self.controller.status['battery']['state'], 'fault')
-        self.assertEqual(self.states['select.mode'].state, 'Baseline')
-
-    async def test_battery_soc_floor_and_authority_loss_restore(self):
-        self.options['battery_control_enabled'] = True
-        await self.controller.async_start()
-        self.states['sensor.authority'].state = 'Local'
-        await self.controller.async_tick()
-        self.assertEqual(self.states['select.mode'].state, 'Baseline')
-        self.assertIn('authority was lost', self.controller.status['battery']['reason'])
-        self.slot.update(battery_charge_w=0, battery_discharge_w=3000)
-        self.states['sensor.battery_soc'].state = '5'
-        await self.controller.async_tick()
-        self.assertIn('SOC protection', self.controller.status['battery']['reason'])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.controller.records['battery'], {**record, 'restoration_pending': True})
+        self.assertIn('legacy_handover_required', self.controller.status['battery']['reason'])
 
     async def test_invalid_current_fault_is_isolated_from_pool(self):
         self.options.update(ev_control_enabled=True, pool_control_enabled=True)
@@ -265,19 +240,6 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('stale', self.controller.status['pool']['reason'])
         self.assertEqual(self.controller.status['ev']['state'], 'commanded')
 
-    async def test_old_matching_power_is_not_confirmation_of_a_new_command(self):
-        self.options['battery_control_enabled'] = True
-        await self.controller.async_start()
-        original = self.hass.services.async_call
-        old_report = self.states['sensor.battery_power'].last_reported
-        async def no_new_measurement(domain, service, data, blocking):
-            await original(domain, service, data, blocking)
-            self.states['sensor.battery_power'].last_reported = old_report
-        self.hass.services.async_call = no_new_measurement
-        self.slot.update(battery_charge_w=3000)
-        await self.controller.async_tick()
-        self.assertEqual(self.controller.status['battery']['state'], 'fault')
-        self.assertIn('did not achieve', self.controller.status['battery']['reason'])
 
     async def test_disable_reenable_clears_fault_latch(self):
         self.options['ev_control_enabled'] = True
@@ -296,19 +258,6 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pool_band((29.5, 30), 20, False, 24, 32, .1), (24, 24.5))
         with self.assertRaises(ValueError):
             pool_band((20, 30), 29, False, 24, 32, .1)
-    async def test_battery_website_exclusion_restores_even_with_cached_plan(self):
-        self.options['battery_control_enabled'] = True
-        await self.controller.async_start()
-        self.assertIn('battery', self.controller.records)
-        self.coordinator.async_cached_planning_configuration.return_value = {'home': {'battery': {'included': False}}}
-        self.calls.clear()
-        await self.controller.async_tick()
-        self.assertEqual(self.states['select.mode'].state, 'Baseline')
-        self.assertNotIn('battery', self.controller.records)
-        self.assertEqual(self.controller.status['battery']['state'], 'disabled')
-        self.calls.clear()
-        await self.controller.async_tick()
-        self.assertEqual(self.calls, [])
 
     async def test_vehicle_website_exclusion_restores_without_deleting_setup(self):
         self.options['ev_control_enabled'] = True

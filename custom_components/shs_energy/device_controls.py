@@ -12,20 +12,6 @@ from typing import Any
 
 try:  # pragma: no cover - package in HA, flat module in the pure test suite
     from .const import (
-        BATTERY_POWER_UNITS,
-        OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY,
-        OPT_BATTERY_AUTHORITY_CONFIRM_STATE,
-        OPT_BATTERY_AUTHORITY_ENTITY,
-        OPT_BATTERY_CONTROL_ENABLED,
-        OPT_BATTERY_ENABLED,
-        OPT_BATTERY_MODE_CHARGE,
-        OPT_BATTERY_MODE_DISCHARGE,
-        OPT_BATTERY_MODE_ENTITY,
-        OPT_BATTERY_MODE_IDLE,
-        OPT_BATTERY_POWER_ENTITY,
-        OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
-        OPT_BATTERY_POWER_UNIT,
-        OPT_BATTERY_SOC_ENTITY,
         OPT_POOL_ENABLED,
         OPT_POOL_START_TEMPERATURE_ENTITY,
         OPT_POOL_STOP_TEMPERATURE_ENTITY,
@@ -34,20 +20,6 @@ try:  # pragma: no cover - package in HA, flat module in the pure test suite
     )
 except ImportError:  # pragma: no cover - flat import path
     from const import (  # type: ignore[no-redef]
-        BATTERY_POWER_UNITS,
-        OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY,
-        OPT_BATTERY_AUTHORITY_CONFIRM_STATE,
-        OPT_BATTERY_AUTHORITY_ENTITY,
-        OPT_BATTERY_CONTROL_ENABLED,
-        OPT_BATTERY_ENABLED,
-        OPT_BATTERY_MODE_CHARGE,
-        OPT_BATTERY_MODE_DISCHARGE,
-        OPT_BATTERY_MODE_ENTITY,
-        OPT_BATTERY_MODE_IDLE,
-        OPT_BATTERY_POWER_ENTITY,
-        OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
-        OPT_BATTERY_POWER_UNIT,
-        OPT_BATTERY_SOC_ENTITY,
         OPT_POOL_ENABLED,
         OPT_POOL_START_TEMPERATURE_ENTITY,
         OPT_POOL_STOP_TEMPERATURE_ENTITY,
@@ -506,69 +478,8 @@ def apply_requested_configuration(
 
 
 def battery_control_errors(options: dict[str, Any]) -> list[str]:
-    """Return what still stops the storage executor from commanding a battery.
-
-    Plant-level rather than a device control type. There is one battery, the
-    planner already models it as a store with its own charge and discharge
-    variables, and giving it a control type would route it through
-    ``planning_path`` as a controllable load as well — subtracting it from base
-    load and scheduling it a second time.
-
-    Every gap is reported in one pass, for the same reason device mappings are:
-    commissioning a battery one rediscovered missing field at a time is how a
-    half-configured executor gets switched on.
-    """
-    if not options.get(OPT_BATTERY_CONTROL_ENABLED):
-        return []
-    errors: list[str] = []
-    if not options.get(OPT_BATTERY_ENABLED):
-        errors.append("this home is not marked as having a house battery")
-    for key, label in (
-        (OPT_BATTERY_MODE_ENTITY, "battery mode entity"),
-        (OPT_BATTERY_POWER_ENTITY, "battery power target entity"),
-        (OPT_BATTERY_POWER_MEASUREMENT_ENTITY, "measured battery power entity"),
-        (OPT_BATTERY_SOC_ENTITY, "battery state of charge entity"),
-    ):
-        if not _text(options, key):
-            errors.append(f"{label} is required")
-    # Naming the modes is what makes a flow reversal expressible at all. A
-    # mapping without them can raise and lower a number that the inverter is
-    # not in a mode to honour.
-    for key, label in (
-        (OPT_BATTERY_MODE_CHARGE, "charge"),
-        (OPT_BATTERY_MODE_DISCHARGE, "discharge"),
-        (OPT_BATTERY_MODE_IDLE, "idle"),
-    ):
-        if not _text(options, key):
-            errors.append(f"the mode value meaning {label} is required")
-    modes = [
-        options.get(key)
-        for key in (
-            OPT_BATTERY_MODE_CHARGE,
-            OPT_BATTERY_MODE_DISCHARGE,
-            OPT_BATTERY_MODE_IDLE,
-        )
-        if _text(options, key)
-    ]
-    if len(modes) != len(set(modes)):
-        errors.append("charge, discharge and idle must be different mode values")
-    unit = options.get(OPT_BATTERY_POWER_UNIT)
-    if unit not in BATTERY_POWER_UNITS:
-        errors.append(
-            "battery power unit must be one of: " + ", ".join(BATTERY_POWER_UNITS)
-        )
-    # The handshake is two halves. Claiming remote control without reading back
-    # whether it was granted leaves the executor unable to tell authority it
-    # never had from authority it has lost.
-    claims = _text(options, OPT_BATTERY_AUTHORITY_ENTITY)
-    confirms = _text(options, OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY)
-    if claims and not confirms:
-        errors.append(
-            "a confirmation entity is required alongside the authority switch"
-        )
-    if confirms and not _text(options, OPT_BATTERY_AUTHORITY_CONFIRM_STATE):
-        errors.append("the state confirming remote control is required")
-    return errors
+    """Old signed-target settings never grant permission to the v1 adapter."""
+    return ["Legacy battery execution is retired; use the accepted battery binding and commissioning permission"] if options.get("battery_control_enabled") else []
 
 
 def pool_band_errors(options: dict[str, Any]) -> list[str]:

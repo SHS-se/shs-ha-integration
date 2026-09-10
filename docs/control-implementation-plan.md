@@ -168,6 +168,10 @@ edits cannot leave a misleading ready badge or execute an older contract.
 
 ## 5. Implement the Sigenergy battery adapter
 
+Delivered: [battery execution and cutover](battery-execution.md), with the shared
+intent policy, journalled HA executor, simulated transition/failure coverage and
+config-entry v5 migration. Local permission remains off pending commissioning.
+
 Replace the existing signed-target executor and configuration with the accepted
 intent-and-limits design. No compatibility path through the inverter adjustment.
 

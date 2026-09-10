@@ -146,7 +146,7 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
             if not (plan or {}).get("capabilities", {}).get(system):
                 reason = "Waiting for a plan for this device"
             elif system == "battery":
-                reason = "; ".join(battery_control_errors({**options, "battery_control_enabled": True})) or None
+                reason = "Use Control interface validation for the accepted battery adapter; operation remains off until commissioning"
             elif system == "pool":
                 reason = "; ".join(pool_band_errors(options)) or None
                 if not options.get("pool_start_temperature_entity"):

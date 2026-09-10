@@ -57,6 +57,8 @@ def migrate_options(
         for kind in ("imported", "removed", "needs_attention")
     }
     report["removed"].update(set(options) - PERSISTED_KEYS)
+    if options.get('battery_control_enabled'):
+        report['needs_attention'].add('battery_dispatch: prior permission requires new binding and commissioning')
     archive = options.get(ARCHIVE_KEY, {})
     archive = archive if isinstance(archive, dict) else {}
     for key in ("ev_phase_count", "ev_charge_efficiency"):
@@ -178,3 +180,11 @@ def migrate_options(
     if any(report.values()):
         result["_migration_report"] = {kind: sorted(names) for kind, names in report.items()}
     return result, result != options
+
+
+def assert_battery_handover_complete(journal):
+    """An old ownership format must be resolved before deleting its settings."""
+    if journal is not None and (not isinstance(journal, dict) or not isinstance(journal.get('records', {}), dict)):
+        raise ValueError('legacy_handover_required: unreadable controller journal')
+    if journal and 'battery' in journal.get('records', {}):
+        raise ValueError('legacy_handover_required: resolve the old battery journal before upgrading; signed targets are not ESS limits')

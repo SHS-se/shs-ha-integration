@@ -59,8 +59,6 @@ def configuration_defaults(latitude: float, longitude: float) -> dict[str, Any]:
         c.OPT_AUTOMATIC_SETUP: True,
         c.OPT_EV_CONTROL_ENABLED: False,
         c.OPT_POOL_CONTROL_ENABLED: False,
-        c.OPT_BATTERY_MODE_BASELINE: "Maximum Self Consumption",
-        c.OPT_BATTERY_MEASUREMENT_CHARGE_POSITIVE: True,
         c.OPT_DEVICE_CONTROL_MAPPINGS: {},
         "rooms": {},
         c.OPT_FORECAST_RESOLUTION_MINUTES: c.DEFAULT_FORECAST_RESOLUTION_MINUTES,
@@ -84,12 +82,6 @@ def configuration_defaults(latitude: float, longitude: float) -> dict[str, Any]:
         c.OPT_BATTERY_EXPORT_ENABLED: False,
         c.OPT_BATTERY_EXPORT_RESERVE_SOC: 0.8,
         c.OPT_BATTERY_EXPORT_MIN_PRICE: 2.5,
-        # Commanding the battery stays off until the response, sign and
-        # confirmation behaviour have been measured on the installation. A
-        # discovered entity is an offer to configure, never an authorisation.
-        c.OPT_BATTERY_CONTROL_ENABLED: False,
-        c.OPT_BATTERY_POWER_UNIT: "W",
-        c.OPT_BATTERY_DISCHARGE_IS_NEGATIVE: True,
         c.OPT_TERMINAL_SOC_MIN: 0.2,
         c.OPT_TERMINAL_ENERGY_VALUE: 1.0,
         # The vehicle's electrical model. Defaults describe the common Swedish
@@ -244,7 +236,7 @@ def prepare_options(existing, incoming, read_entity, *, latitude=0.0, longitude=
             raise ValueError(f"{OPTION_FIELDS[low]['label']} must be below {OPTION_FIELDS[high]['label']}")
     if current["ev_phase_count"] not in (1, 2, 3):
         raise ValueError("Charger phases must be a whole number from 1 to 3")
-    if current["battery_control_enabled"]:
+    if current.get("battery_control_enabled"):
         errors = battery_control_errors(current)
         if errors:
             raise ValueError("Battery control: " + "; ".join(errors))

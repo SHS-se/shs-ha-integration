@@ -355,65 +355,9 @@ def _battery(**extra):
 
 
 class BatteryControlTests(unittest.TestCase):
-    """Plant-level, because there is one battery and it is already a store."""
-
-    def test_a_complete_mapping_has_no_errors(self) -> None:
-        self.assertEqual(battery_control_errors(_battery()), [])
-
-    def test_control_switched_off_asks_for_nothing(self) -> None:
-        """A home that never wants the planner writing must not be nagged."""
-        self.assertEqual(battery_control_errors({"battery_control_enabled": False}), [])
-
-    def test_every_missing_field_is_reported_in_one_pass(self) -> None:
-        errors = battery_control_errors({
-            "battery_enabled": True, "battery_control_enabled": True,
-        })
-        self.assertIn("battery mode entity is required", errors)
-        self.assertIn("battery power target entity is required", errors)
-        self.assertIn("measured battery power entity is required", errors)
-        self.assertIn("battery state of charge entity is required", errors)
-        self.assertIn("the mode value meaning charge is required", errors)
-
-    def test_reusing_one_mode_value_is_refused(self) -> None:
-        """Charge and discharge are separate modes, not one signed request."""
-        errors = battery_control_errors(_battery(battery_mode_discharge="Standby"))
-        self.assertIn(
-            "charge, discharge and idle must be different mode values", errors
-        )
-
-    def test_an_unknown_power_unit_is_refused(self) -> None:
-        self.assertTrue(any(
-            "power unit" in error
-            for error in battery_control_errors(_battery(battery_power_unit="watts"))
-        ))
-
-    def test_claiming_authority_requires_reading_it_back(self) -> None:
-        """Otherwise authority never held cannot be told from authority lost."""
-        errors = battery_control_errors(_battery(
-            battery_authority_entity="switch.remote",
-        ))
-        self.assertIn(
-            "a confirmation entity is required alongside the authority switch",
-            errors,
-        )
-
-    def test_a_confirmation_entity_needs_its_expected_state(self) -> None:
-        errors = battery_control_errors(_battery(
-            battery_authority_entity="switch.remote",
-            battery_authority_confirm_entity="sensor.work_mode",
-        ))
-        self.assertIn("the state confirming remote control is required", errors)
-
-    def test_a_complete_handshake_is_accepted(self) -> None:
-        self.assertEqual(battery_control_errors(_battery(
-            battery_authority_entity="switch.remote",
-            battery_authority_confirm_entity="sensor.work_mode",
-            battery_authority_confirm_state="Remote EMS",
-        )), [])
-
-    def test_control_without_a_battery_is_refused(self) -> None:
-        errors = battery_control_errors(_battery(battery_enabled=False))
-        self.assertIn("this home is not marked as having a house battery", errors)
+    def test_old_signed_configuration_cannot_become_execution_ready(self):
+        self.assertIn('retired', ' '.join(battery_control_errors(_battery())))
+        self.assertEqual(battery_control_errors(_battery(battery_control_enabled=False)), [])
 
 
 def _pool_options(**extra):

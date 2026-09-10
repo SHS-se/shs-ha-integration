@@ -53,6 +53,8 @@ def legacy_claims(hass, inventory_values, *, own_entry_id):
         controller = getattr(getattr(entry, 'runtime_data', None), 'controller', None)
         if controller:
             for key, record in controller.records.items():
+                if key == 'battery':
+                    raise ValueError('legacy_handover_required: unresolved signed battery ownership')
                 if missing := set(record.get('originals', {})) - set(inventory_values):
                     raise ValueError(f'Pending legacy restoration {key} has missing registry entities: {sorted(missing)}')
                 targets.setdefault(key, []).extend(record.get('originals', {}))
@@ -66,6 +68,10 @@ def legacy_claims(hass, inventory_values, *, own_entry_id):
                         owned.update(group_claims(entity, inventory_values))
             if owned:
                 claims[f'legacy:{entry.entry_id}:{key}'] = owned
+        runtime = getattr(getattr(entry, 'runtime_data', None), 'battery_controller', None)
+        if runtime and entry.entry_id != own_entry_id:
+            for key, record in runtime.records.items():
+                claims[f'runtime:{entry.entry_id}:{key}'] = reserved_claims(record['binding'], inventory_values)
         setup = getattr(getattr(entry, 'runtime_data', None), 'control_setup', None)
         # Other config entries share the same physical actuator registry.
         if setup and entry.entry_id != own_entry_id:
@@ -88,4 +94,8 @@ def assert_legacy_reservations(hass, options, previous):
         if setup:
             for control_id, record in setup.records.items():
                 reservations[f'{entry.entry_id}:{control_id}'] = reserved_claims(record, observed)
+        runtime = getattr(getattr(entry, 'runtime_data', None), 'battery_controller', None)
+        if runtime:
+            for key, record in runtime.records.items():
+                reservations[f'runtime:{entry.entry_id}:{key}'] = reserved_claims(record['binding'], observed)
     validate_legacy_targets({"device_control_mappings": {"proposal": {"actuator_entity_ids": sorted(added)}}}, observed, reservations)

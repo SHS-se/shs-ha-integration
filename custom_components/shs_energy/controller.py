@@ -16,14 +16,14 @@ from typing import Any
 try:
     from .control_capabilities import build_command
     from .device_commands import actuator_targets, execution_setup_errors, validate_commands
-    from .device_controls import battery_control_errors, pool_band_errors, planning_path
+    from .device_controls import pool_band_errors, planning_path
 except ImportError:  # Pure executor tests, without importing Home Assistant.
     from control_capabilities import build_command
     from device_commands import actuator_targets, execution_setup_errors, validate_commands
-    from device_controls import battery_control_errors, pool_band_errors, planning_path
+    from device_controls import pool_band_errors, planning_path
 
 _LOGGER = logging.getLogger(__name__)
-DEVICES = ("battery", "ev", "pool")
+DEVICES = ("ev", "pool")
 CONFIRM_SECONDS = 15
 SOURCE_MAX_AGE_SECONDS = 120
 
@@ -62,7 +62,7 @@ class ScheduledController:
         self.store = store
         self.options = options
         self.records: dict[str, dict] = {}
-        self.status = {device: {"state": "disabled"} for device in DEVICES}
+        self.status = {device: {"state": "disabled"} for device in (*DEVICES, "battery")}
         self.listeners = set()
         self.lock = asyncio.Lock()
         self.closed = False
@@ -251,17 +251,7 @@ class ScheduledController:
                     if entity not in record.get("externally_changed", []):
                         await self.command(entity, value)
             elif device == "battery":
-                await self.command(options["battery_power_entity"], 0)
-                await self.command(options["battery_mode_entity"], options["battery_mode_baseline"])
-                await self.confirm(
-                    lambda: self.measurement_after_commands(
-                        options["battery_power_measurement_entity"],
-                        options["battery_mode_entity"], options["battery_power_entity"],
-                    ), "no new battery measurement after baseline restoration",
-                )
-                measured = self.watts(options["battery_power_measurement_entity"])
-                self.report(device, "baseline", measured_power_w=measured,
-                            reason="baseline mode confirmed; power is measured, not inferred")
+                raise ValueError("legacy_handover_required: signed battery journal is retained; no legacy actuator writes are permitted")
             elif device == "pool":
                 start = options["pool_start_temperature_entity"]
                 stop = options["pool_stop_temperature_entity"]
@@ -349,59 +339,6 @@ class ScheduledController:
                 "reason": "reviewed lower bound prevents further deferral" if limited else "band accepted; the local thermostat controls heating",
                 "start_temperature_c": band[0], "stop_temperature_c": band[1],
                 "water_temperature_c": water, "requested_power_w": slot["pool_w"]}
-
-    async def execute_battery(self, options, slot):
-        errors = battery_control_errors(options)
-        if errors:
-            raise ValueError("; ".join(errors))
-        soc = self.fraction(options["battery_soc_entity"])
-        floor = finite(options["battery_min_soc"])
-        if entity := options.get("battery_min_soc_entity"):
-            floor = max(floor, self.fraction(entity))
-        charge, discharge = finite(slot["battery_charge_w"]), finite(slot["battery_discharge_w"])
-        if min(charge, discharge) < 0 or charge and discharge:
-            raise ValueError("invalid simultaneous battery charge and discharge")
-        if charge > finite(options["battery_charge_max_w"]) or discharge > finite(options["battery_discharge_max_w"]):
-            raise ValueError("planned battery power exceeds reviewed rating")
-        if (discharge and soc <= floor) or (charge and soc >= finite(options["battery_max_soc"])):
-            raise ValueError("battery SOC protection blocks the planned request")
-        measured_entity = options["battery_power_measurement_entity"]
-        self.watts(measured_entity)
-        existing = self.records.get("battery")
-        if existing and (confirmation := options.get("battery_authority_confirm_entity")):
-            if self.state(confirmation).state != options["battery_authority_confirm_state"]:
-                raise ValueError("battery remote authority was lost")
-        await self.capture("battery", options, [])
-        if claim := options.get("battery_authority_entity"):
-            await self.command(claim, "on")
-        if entity := options.get("battery_authority_confirm_entity"):
-            await self.confirm(lambda: self.state(entity).state == options["battery_authority_confirm_state"], "battery remote authority was not granted")
-        mode = options["battery_mode_charge" if charge else "battery_mode_discharge" if discharge else "battery_mode_idle"]
-        await self.command(options["battery_mode_entity"], mode)
-        power = charge - discharge
-        if not options.get("battery_discharge_is_negative", False):
-            power = -power
-        if options["battery_power_unit"] == "kW":
-            power /= 1000
-        # Round toward zero, never request more than the planner authorised.
-        target = options["battery_power_entity"]
-        step = finite(self.state(target).attributes.get("step", 1))
-        if step <= 0:
-            raise ValueError("battery target has an invalid step")
-        power = int(power / step + (1e-8 if power >= 0 else -1e-8)) * step
-        await self.command(target, power)
-        expected = abs(power) * (1000 if options["battery_power_unit"] == "kW" else 1)
-        if discharge:
-            expected = -expected
-        if not options.get("battery_measurement_charge_positive", True):
-            expected = -expected
-        await self.confirm(
-            lambda: self.measurement_after_commands(measured_entity, target, options["battery_mode_entity"])
-            and abs(self.watts(measured_entity) - expected) <= max(100, abs(expected)*0.1),
-            "battery did not achieve planned power within 15 seconds",
-        )
-        return {"state": "confirmed", "requested_power_w": charge-discharge,
-                "measured_power_w": self.watts(measured_entity)}
 
     async def execute_device(self, device, options, slot):
         key = device.removeprefix("device:")
@@ -505,17 +442,12 @@ class ScheduledController:
         try:
             saved = await self.store.async_load() or {}
         except Exception as err:
-            for device in DEVICES:
+            for device in (*DEVICES, "battery"):
                 self.report(device, "fault", reason=f"cannot load restoration journal: {err}")
             return
         self.records = saved.get("records", {})
         self.overrides = saved.get("overrides", {})
         options = self.options()
-        if options.get("battery_control_enabled") and not battery_control_errors(options):
-            # A fresh enable also starts from a known baseline, not from a
-            # possibly stranded command belonging to an earlier controller.
-            if "battery" not in self.records:
-                await self.capture("battery", options, [])
         async with self.lock:
             for device in tuple(self.records):
                 try:
