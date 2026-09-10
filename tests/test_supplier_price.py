@@ -272,7 +272,7 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn("await async_register_config_panel(hass)", INIT)
 
     def test_configuration_panel_websockets_require_an_admin(self) -> None:
-        self.assertEqual(CONFIG_PANEL.count("@websocket_api.require_admin"), 6)
+        self.assertEqual(CONFIG_PANEL.count("@websocket_api.require_admin"), 7)
         self.assertNotIn("connection.require_admin", CONFIG_PANEL)
 
 

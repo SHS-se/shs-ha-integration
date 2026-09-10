@@ -14,9 +14,11 @@ from math import isfinite
 from typing import Any
 
 try:
+    from .control_capabilities import build_command
     from .device_commands import actuator_targets, execution_setup_errors, validate_commands
     from .device_controls import battery_control_errors, pool_band_errors, planning_path
 except ImportError:  # Pure executor tests, without importing Home Assistant.
+    from control_capabilities import build_command
     from device_commands import actuator_targets, execution_setup_errors, validate_commands
     from device_controls import battery_control_errors, pool_band_errors, planning_path
 
@@ -153,39 +155,10 @@ class ScheduledController:
     async def command(self, entity, value):
         self.check_authority()
         state = self.state(entity)
-        domain = entity.split(".")[0]
-        if domain in ("number", "input_number"):
-            value = finite(value)
-            low = finite(state.attributes["min"])
-            high = finite(state.attributes["max"])
-            step = finite(state.attributes.get("step", 1))
-            if not low <= value <= high or step <= 0:
-                raise ValueError(f"{entity}: target outside hardware bounds")
-            if abs((value-low)/step - round((value-low)/step)) > 1e-5:
-                raise ValueError(f"{entity}: target is not a supported step")
-            service, data = "set_value", {"value": value}
-            equal = abs(finite(state.state) - value) < 1e-6
-        elif domain == "climate":
-            value = finite(value)
-            low, high = finite(state.attributes["min_temp"]), finite(state.attributes["max_temp"])
-            if state.state != "heat" or self.hass.config.units.temperature_unit != "°C":
-                raise ValueError(f"{entity}: setpoint execution requires an active Celsius heating thermostat")
-            if not low <= value <= high:
-                raise ValueError(f"{entity}: target outside hardware bounds")
-            service, data = "set_temperature", {"temperature": value}
-            equal = abs(finite(state.attributes["temperature"]) - value) < 1e-6
-        elif domain in ("select", "input_select"):
-            if value not in state.attributes.get("options", []):
-                raise ValueError(f"{entity}: unsupported mode {value}")
-            service, data = "select_option", {"option": value}
-            equal = state.state == value
-        elif domain in ("switch", "input_boolean"):
-            if value not in ("on", "off"):
-                raise ValueError(f"{entity}: invalid switch state")
-            service, data = f"turn_{value}", {}
-            equal = state.state == value
-        else:
-            raise ValueError(f"{entity}: unsupported actuator domain")
+        temperature_unit = self.hass.config.units.temperature_unit if entity.startswith("climate.") else "°C"
+        domain, service, data, value, equal = build_command(
+            entity, state.state, state.attributes, value, temperature_unit=temperature_unit,
+        )
         record = self.records.get(getattr(self, "device", ""))
         if record is not None and not self.restoring:
             record.setdefault("last_commands", {})[entity] = value

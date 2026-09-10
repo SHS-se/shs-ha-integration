@@ -71,6 +71,11 @@ entity names.
 
 ## 2. Build shared HA capability discovery and local binding validation
 
+Delivered: [local capability setup](control-capability-setup.md), shared primitive
+checks, registry discovery, Sigenergy proposals, customer pool interface validation
+and durable local binding reservations. New controls remain off and await the
+revision/authority agreement in step 3.
+
 - Extract/reuse existing switch, number, select and climate command validation.
   Represent supported operations, units, bounds, steps and explicit semantic roles.
 - Resolve entities through HA registry identity and discover supported setup

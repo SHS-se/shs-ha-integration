@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "contracts": {
+    "battery_dispatch": {
+      "handover": "reviewed_self_consumption",
+      "roles": {
+        "mode": {"operation": "select", "units": ["state"], "tokens": ["remote", "ems", "control", "mode"]},
+        "charge_ceiling": {"operation": "set_number", "units": ["W", "kW"], "tokens": ["ess", "charging", "limit"]},
+        "discharge_ceiling": {"operation": "set_number", "units": ["W", "kW"], "tokens": ["ess", "discharging", "limit"]},
+        "authority": {"operation": "switch", "units": ["state"], "tokens": ["remote", "ems", "controlled"]},
+        "authority_confirmation": {"operation": "observe", "units": ["state"], "tokens": ["ems", "work", "mode"]},
+        "battery_power": {"operation": "observe", "units": ["W", "kW"], "tokens": ["battery", "power"]},
+        "soc": {"operation": "observe", "units": ["%"], "tokens": ["battery", "state", "charge"]},
+        "soc_floor": {"operation": "observe", "units": ["%"], "tokens": ["discharge", "cut", "off", "soc"]},
+        "pv_power": {"operation": "observe", "units": ["W", "kW"], "tokens": ["pv", "power"]},
+        "load_power": {"operation": "observe", "units": ["W", "kW"], "tokens": ["load", "power"]},
+        "grid_import_power": {"operation": "observe", "units": ["W", "kW"], "tokens": ["grid", "import", "power"]},
+        "grid_export_power": {"operation": "observe", "units": ["W", "kW"], "tokens": ["grid", "export", "power"]}
+      }
+    },
+    "pool_service": {
+      "handover": "release_customer_automation",
+      "roles": {
+        "request": {"operation": "request_state", "units": ["state"]},
+        "feedback": {"operation": "observe", "units": ["state"]},
+        "water_temperature": {"operation": "observe", "units": ["°C"]}
+      }
+    },
+    "relay_schedule": {
+      "handover": "restore_reviewed_profile",
+      "roles": {"output": {"operation": "switch", "units": ["state"]}}
+    },
+    "permission": {
+      "handover": "restore_reviewed_profile",
+      "roles": {"output": {"operation": "switch", "units": ["state"]}}
+    },
+    "temperature_target": {
+      "handover": "restore_reviewed_profile",
+      "roles": {
+        "output": {"operation": "set_number", "units": ["°C"]},
+        "temperature": {"operation": "observe", "units": ["°C"]}
+      }
+    },
+    "adjustable_output": {
+      "handover": "restore_reviewed_profile",
+      "roles": {"output": {"operation": "set_number", "units": ["A", "W", "%"]}}
+    }
+  },
+  "sigenergy": {
+    "manufacturer": "sigenergy",
+    "contract": "battery_dispatch",
+    "authority_confirmation_state": "Remote EMS",
+    "measurement_charge_positive": true,
+    "normal_mode": "Maximum Self Consumption",
+    "modes": {
+      "self_consumption": "Maximum Self Consumption",
+      "solar_charge": "Maximum Self Consumption",
+      "charge_pv_first": "Command Charging (PV First)",
+      "charge_grid_first": "Command Charging (Grid First)",
+      "discharge_pv_first": "Command Discharging (PV First)",
+      "hold": "Standby"
+    }
+  }
+}

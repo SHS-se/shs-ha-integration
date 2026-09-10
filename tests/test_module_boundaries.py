@@ -22,6 +22,8 @@ sys.path.insert(0, str(PACKAGE))
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
     "controller",
+    "control_capabilities",
+    "control_setup",
     "presentation",
     "api_contract",
     "const",
@@ -43,6 +45,7 @@ HOME_ASSISTANT_MODULES = (
     "__init__",
     "config_flow",
     "config_panel",
+    "control_setup_ha",
     "configuration",
     "coordinator",
     "sensor",

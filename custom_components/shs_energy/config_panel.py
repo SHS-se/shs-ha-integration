@@ -31,6 +31,8 @@ from .presentation import complete_device_views, timeline, system_fields, device
 from .configuration_schema import (
     prepare_options, save_device,
 )
+from .control_setup import discover
+from .control_setup_ha import assert_legacy_reservations
 from .device_controls import (
     apply_planner_support,
     is_room_thermal_control,
@@ -327,6 +329,7 @@ async def _configuration_payload(
                 for device in thermal_devices
             ],
         },
+        "control_setup": coordinator.control_setup.summary(),
         "diagnostics": {
             "controllers": dict(coordinator.controller.status),
             "migration": options.get("_migration_report"),
@@ -357,15 +360,20 @@ async def async_apply_configuration(
     """Validate and persist a complete or partial non-device update."""
     if shs_const.OPT_DEVICE_CONTROL_MAPPINGS in incoming:
         raise ValueError("device mappings must be saved from their own card")
+    original = dict(entry.options)
     options = prepare_options(
-        dict(entry.options), incoming, lambda entity: _read_entity(hass, entity),
+        original, incoming, lambda entity: _read_entity(hass, entity),
         latitude=hass.config.latitude, longitude=hass.config.longitude,
     )
     if options.get(shs_const.OPT_PLANNING_MODE) == shs_const.PLANNING_MODE_LIVE:
         options[shs_const.OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(
             timezone.utc
         ).isoformat()
-    hass.config_entries.async_update_entry(entry, options=options)
+    async with entry.runtime_data.control_setup.lock:
+        if dict(entry.options) != original:
+            raise ValueError("Configuration changed; reload before saving")
+        assert_legacy_reservations(hass, options, original)
+        hass.config_entries.async_update_entry(entry, options=options)
     return options
 
 
@@ -401,7 +409,8 @@ async def async_apply_device_mapping(
         command = (entry.runtime_data.current_plan_slot or {}).get("device_commands", {}).get(device_key)
         if not command or command.get("type") == "unavailable":
             raise ValueError("Device control requires an executable schema-7 plan from the website")
-    existing = dict(entry.options)
+    original = dict(entry.options)
+    existing = dict(original)
     if configuration:
         panel = await _configuration_payload(hass, entry, refresh_roles=False)
         view = next((item for item in panel["devices"] if item["key"] == device_key), None)
@@ -417,12 +426,16 @@ async def async_apply_device_mapping(
         area_names=area_name_by_id(hass), entity_area_ids=entity_area_id_by_id(hass),
     )
     mappings = resolved_options(hass, options)[shs_const.OPT_DEVICE_CONTROL_MAPPINGS]
-    report = await entry.runtime_data.async_report_device_mapping(device_key, mappings)
     if options.get(shs_const.OPT_PLANNING_MODE) == shs_const.PLANNING_MODE_LIVE:
         options[shs_const.OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(
             timezone.utc
         ).isoformat()
-    hass.config_entries.async_update_entry(entry, options=options)
+    async with entry.runtime_data.control_setup.lock:
+        if dict(entry.options) != original:
+            raise ValueError("Configuration changed; reload before saving")
+        assert_legacy_reservations(hass, options, original)
+        hass.config_entries.async_update_entry(entry, options=options)
+    report = await entry.runtime_data.async_report_device_mapping(device_key, mappings)
     # The saved mapping's status is already in `report`; the replan only
     # refreshes the plan behind it. Awaiting it here made Save sit for the
     # length of a full statistics sweep before the card could answer.
@@ -571,6 +584,37 @@ async def websocket_save_device_configuration(
 
 
 @websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{shs_const.DOMAIN}/controls/setup",
+    vol.Required("config_entry"): str,
+    vol.Required("action"): vol.In(["discover", "validate", "save"]),
+    vol.Optional("setup"): dict,
+    vol.Optional("expected_revision"): int,
+})
+@websocket_api.async_response
+async def websocket_control_setup(hass, connection, msg):
+    """Inspect/validate/persist local proposals without execution or cloud agreement."""
+    entry = _entry_from_message(hass, msg["config_entry"])
+    if entry is None or _entry_state(entry) != "loaded":
+        connection.send_error(msg["id"], "not_loaded", "Select a loaded SHS integration")
+        return
+    setup = entry.runtime_data.control_setup
+    try:
+        if msg["action"] == "discover":
+            result = {**discover(setup.inventory()), **setup.summary(),
+                      "saved_setups": {key: {"setup": record["spec"], "binding_revision": record["binding_revision"]}
+                                       for key, record in setup.records.items()}}
+        else:
+            if "setup" not in msg:
+                raise ValueError("A complete local setup proposal is required")
+            result = (await setup.async_save(msg["setup"], msg.get("expected_revision"))
+                      if msg["action"] == "save" else setup.report(msg["setup"]))
+        connection.send_result(msg["id"], result)
+    except (ValueError, OSError) as err:
+        connection.send_error(msg["id"], "invalid_control_setup", str(err))
+
+
+@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{shs_const.DOMAIN}/status/get", vol.Required("config_entry"): str})
 @websocket_api.async_response
 async def websocket_get_status(hass, connection, msg):
@@ -634,6 +678,7 @@ async def async_register_config_panel(hass: HomeAssistant) -> None:
         require_admin=True,
         config_panel_domain=shs_const.DOMAIN,
     )
+    websocket_api.async_register_command(hass, websocket_control_setup)
     websocket_api.async_register_command(hass, websocket_get_status)
     websocket_api.async_register_command(hass, websocket_control_permission)
     websocket_api.async_register_command(hass, websocket_get_configuration)

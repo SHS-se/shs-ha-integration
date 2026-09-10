@@ -120,7 +120,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_climate_target_acknowledgement_preserves_heating_mode(self):
         self.hass.config = SimpleNamespace(units=SimpleNamespace(temperature_unit='°C'))
-        self.states['climate.heater'] = State('heat', temperature=20, min_temp=5, max_temp=35, target_temp_step=.5)
+        self.states['climate.heater'] = State('heat', temperature=20, min_temp=5, max_temp=35, target_temp_step=.5, supported_features=1)
         mapping = self.options['device_control_mappings']['heater']
         mapping.update(control_type='setpoint', actuator_entity_ids=['climate.heater'],
                        minimum_temperature_c=18, maximum_temperature_c=24)

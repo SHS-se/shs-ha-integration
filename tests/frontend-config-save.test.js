@@ -216,3 +216,17 @@ test('status shows automatic recovery and delivery failures without claiming rea
   assert.match(html, /Status unconfirmed/);
   assert.doesNotMatch(html, />Ready<\/span>/);
 });
+
+test('control validation reports local readiness with control off and escapes setup errors', () => {
+  const panel = makePanel();
+  panel._data.control_setup = {
+    controls: [{ contract: { name: 'relay_schedule' }, binding_revision: 2, status: 'ready', errors: [] }],
+    targets: [{ contract: { name: 'pool_service' }, status: 'invalid', errors: [{ message: '<script>bad()</script>' }] }],
+  };
+  const html = panel._renderControlSetup();
+  assert.match(html, /Validated locally · Control off/);
+  assert.match(html, /Setup required · Control off/);
+  assert.match(html, /Binding revision 2/);
+  assert.match(html, /Your pool automation owns all Nibe and pump actions/);
+  assert.doesNotMatch(html, /<script>/);
+});

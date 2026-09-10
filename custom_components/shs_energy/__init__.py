@@ -10,7 +10,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
-from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse, CoreState
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import (
     async_track_time_change,
@@ -26,6 +26,7 @@ from .const import (
     CONFIG_ENTRY_VERSION,
     CONF_BASE_URL,
     CONF_DEVICE_TOKEN,
+    CONF_HOME_ID,
     PUSH_TIME_HOUR,
     PUSH_TIME_MINUTE,
     PRICE_REFRESH_SECOND,
@@ -48,6 +49,8 @@ from .configuration import (
     resolved_options,
 )
 from .controller import ScheduledController
+from .control_setup import ControlSetup, VerifiedBindingStore, read_binding_file
+from .control_setup_ha import inventory, legacy_claims
 from .coordinator import ShsStatusCoordinator
 from .migration import mapped_entity_ids, migrate_options
 
@@ -204,11 +207,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         lambda: resolved_options(hass, dict(entry.options)),
     )
     coordinator.controller = controller
+    binding_store = Store(hass, 1, f"shs_energy.control_bindings.{entry.entry_id}",
+                          atomic_writes=True, private=True)
+    coordinator.control_setup = ControlSetup(
+        VerifiedBindingStore(binding_store,
+            lambda: hass.async_add_executor_job(read_binding_file, binding_store.path),
+            binding_store.key, lambda: hass.state is CoreState.stopping),
+        entry.data[CONF_HOME_ID], lambda: inventory(hass),
+        lambda values: legacy_claims(hass, values, own_entry_id=entry.entry_id),
+        lock=hass.data.setdefault("shs_energy_control_setup_lock", asyncio.Lock()),
+    )
     # Recover local ownership before contacting the cloud. A network outage
     # must not prevent restoration of commands left by the previous process.
     await coordinator.async_restore_plan()
     await controller.async_start()
     try:
+        await coordinator.control_setup.async_load()
         await coordinator.async_config_entry_first_refresh()
     except BaseException:
         await controller.async_stop()

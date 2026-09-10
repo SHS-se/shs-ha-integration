@@ -706,6 +706,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
       </div></details>`;
   }
 
+  _renderControlSetup() {
+    const setup = this._data.control_setup;
+    if (!setup) return "";
+    const names = { battery_dispatch: "Battery dispatch", pool_service: "Customer-operated pool", relay_schedule: "Relay schedule", permission: "Permission control", temperature_target: "Temperature target", adjustable_output: "Adjustable output" };
+    return `<details class="card compact"><summary>Control interface validation</summary><p>Local setup checks do not grant permission or confirm a website plan. Your pool automation owns all Nibe and pump actions.</p>${[...setup.controls, ...setup.targets].map(item => `<article><h3>${this._escape(names[item.contract.name] || item.contract.name)}</h3><p>${item.status === "ready" ? "Validated locally · Control off" : "Setup required · Control off"}${item.binding_revision ? ` · Binding revision ${item.binding_revision}` : ""}</p>${item.errors.length ? `<ul>${item.errors.map(error => `<li>${this._escape(error.message)}</li>`).join("")}</ul>` : ""}</article>`).join("")}</details>`;
+  }
+
   _renderDevices() {
     const devices = this._data.devices;
     const filtered = devices.filter(d => (!this._search || `${d.name} ${d.room_name || ""}`.toLowerCase().includes(this._search.toLowerCase())) && (!this._room || d.room_name === this._room) && (!this._category || d.category === this._category));
@@ -714,6 +721,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<div class="page-intro"><h2>Devices in your home</h2><p>Set up each device once. Selecting an entity never gives SHS permission to operate it.</p></div>
       <div class="filters"><input type="text" aria-label="Search devices" placeholder="Search devices" data-filter="search" value="${this._escape(this._search)}">${select("room", "All rooms", [...new Set(devices.map(d => d.room_name || "No room"))], v => v)}${select("category", "All types", [...new Set(devices.map(d => d.category))], v => this._label(v))}</div>
       ${filtered.map(d => this._renderDevice(d)).join("") || '<p>No matching devices.</p>'}
+      ${this._renderControlSetup()}
       <details class="card compact"><summary>Equipment present in this home</summary><p>These choices describe what is installed. Planning participation is chosen on the website.</p>${equipment.map(s => this._renderField(s.toggle, this._draft[s.toggle.key])).join("")}</details>`;
   }
 
