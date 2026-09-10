@@ -183,7 +183,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) 
         for entity_id in mapped_entity_ids(options)
         if (area_id := entity_area_id(hass, entity_id)) is not None
     }
-    migrated_options, _changed = migrate_options(options, entity_area_ids=entity_area_ids)
+    migrated_options, _changed = migrate_options(
+        options, entity_area_ids=entity_area_ids, source_version=entry.version,
+    )
     hass.config_entries.async_update_entry(
         entry, options=migrated_options, version=CONFIG_ENTRY_VERSION, minor_version=1,
     )

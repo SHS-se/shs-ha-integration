@@ -43,6 +43,7 @@ def migrate_options(
     options: dict[str, Any],
     *,
     entity_area_ids: dict[str, str] | None = None,
+    source_version: int | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Import needed values once, remove old representations, and report names.
 
@@ -57,6 +58,26 @@ def migrate_options(
         for kind in ("imported", "removed", "needs_attention")
     }
     report["removed"].update(set(options) - PERSISTED_KEYS)
+    if source_version in (5, 6):
+        # These migrations deleted settings rather than archiving their values.
+        # Retain the removal evidence, but replace instructions for the retired
+        # interface with the actual setup work required by the restored schema.
+        report["needs_attention"].difference_update({
+            "battery_dispatch: prior permission requires new binding and commissioning",
+            "pool_service: customer request interface and commissioning required",
+        })
+        mappings = options.get("device_control_mappings", {})
+        for path in report["removed"]:
+            if path.startswith("device_control_mappings."):
+                source = path.removeprefix("device_control_mappings.")
+                if source in options.get("entities_pool_heating", []) and source not in mappings:
+                    report["needs_attention"].add(path)
+            elif path in OPTION_KEYS and path.startswith(("pool_", "battery_")) and path not in options:
+                report["needs_attention"].add(path)
+        # Permissions from the abandoned interfaces cannot authorize the
+        # restored direct controllers. Entity choices must be reviewed again.
+        result["pool_control_enabled"] = False
+        result["battery_control_enabled"] = False
     archive = options.get(ARCHIVE_KEY, {})
     archive = archive if isinstance(archive, dict) else {}
     for key in ("ev_phase_count", "ev_charge_efficiency"):

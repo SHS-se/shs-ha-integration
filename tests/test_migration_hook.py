@@ -32,6 +32,53 @@ def entry_hook():
 
 
 class EntryMigrationHookTests(unittest.IsolatedAsyncioTestCase):
+    async def test_roll_forward_preserves_setup_and_reports_deleted_pool_mapping(self):
+        for version in (4, 5, 6):
+            with self.subTest(version=version):
+                ns = entry_hook()
+                pool = {"control_type": "switch_schedule", "actuator_entity_ids": ["switch.pool"]}
+                heater = {"control_type": "setpoint", "room_area_id": "office",
+                          "actuator_entity_ids": ["climate.office"]}
+                mappings = {"sensor.office": heater}
+                if version < 6:
+                    mappings["sensor.pool"] = pool
+                options = {
+                    "entities_pool_heating": ["sensor.pool"],
+                    "pool_volume_m3": 55,
+                    "rooms": {"office": {"temperature_entity_id": "sensor.office_temp"}},
+                    "device_control_mappings": mappings,
+                    "pool_control_enabled": True,
+                    "battery_control_enabled": True,
+                }
+                if version == 6:
+                    options["_migration_report"] = {
+                        "removed": ["device_control_mappings.sensor.pool", "pool_start_temperature_entity"],
+                        "needs_attention": ["pool_service: customer request interface and commissioning required"],
+                    }
+                entry = SimpleNamespace(version=version, options=options, data={"device_token": "preserved"})
+                def update(target, **fields):
+                    for key, value in fields.items():
+                        setattr(target, key, value)
+                adapter = Mock(side_effect=update)
+                hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=adapter))
+                self.assertTrue(await ns["async_migrate_entry"](hass, entry))
+                self.assertEqual(entry.version, 7)
+                self.assertEqual(entry.data, {"device_token": "preserved"})
+                self.assertEqual(entry.options["device_control_mappings"], mappings)
+                self.assertEqual(entry.options["rooms"], options["rooms"])
+                self.assertEqual(entry.options["entities_pool_heating"], ["sensor.pool"])
+                self.assertEqual(entry.options["pool_volume_m3"], 55)
+                self.assertEqual(entry.options["pool_control_enabled"], version == 4)
+                self.assertEqual(entry.options["battery_control_enabled"], version == 4)
+                if version == 6:
+                    report = entry.options["_migration_report"]
+                    self.assertIn("device_control_mappings.sensor.pool", report["needs_attention"])
+                    self.assertIn("pool_start_temperature_entity", report["needs_attention"])
+                    self.assertFalse(any("customer request interface" in item for item in report["needs_attention"]))
+                    self.assertNotIn("pool_start_temperature_entity", entry.options)
+                self.assertTrue(await ns["async_migrate_entry"](hass, entry))
+                adapter.assert_called_once()
+
     async def test_upgrade_commits_version_and_options_once(self):
         ns = entry_hook()
         entry = SimpleNamespace(version=1, options={"_legacy_configuration_archive": {"ev_phase_count": 1}}, data={"token": "unchanged"})

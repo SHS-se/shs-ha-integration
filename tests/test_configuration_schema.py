@@ -21,6 +21,19 @@ def save(existing, key, mapping):
 
 
 class CurrentConfigurationTests(unittest.TestCase):
+    def test_pool_switch_can_be_reentered_after_version_six_migration(self):
+        options, _ = migrate_options({"entities_pool_heating": ["sensor.pool"],
+                                     "device_control_mappings": {}}, source_version=6)
+        mapping = {"control_type": "switch_schedule",
+                   "actuator_entity_ids": ["switch.esphome_pool_pump_switch"]}
+        entities = {"switch.esphome_pool_pump_switch": {"state": "off", "attributes": {}}}
+        saved = save_device(options, "sensor.pool", mapping,
+                            {"control_type": "switch_schedule", "category": "pool_heating", "name": "Pool pump"},
+                            entities.get, entity_names={key: key for key in entities},
+                            area_names={}, entity_area_ids={})
+        self.assertEqual(saved["device_control_mappings"]["sensor.pool"], mapping)
+        self.assertFalse(saved["pool_control_enabled"])
+
     def test_patch_does_not_persist_defaults_or_mutate_input(self):
         existing = {'ev_enabled': False, 'device_control_mappings': {'inactive': {
             'control_type': 'variable_power', 'control_entity_id': 'number.current',

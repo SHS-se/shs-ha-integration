@@ -91,7 +91,9 @@ OPT_AUTOMATIC_SETUP = "automatic_setup"
 OPT_DISCOVERY_EVIDENCE = "discovery_evidence"
 OPT_CONFIGURATION_REVIEWED_AT = "configuration_reviewed_at"
 OPT_DEVICE_CONTROL_MAPPINGS = "device_control_mappings"
-CONFIG_ENTRY_VERSION = 4
+# Versions 5/6 shipped the retired control interfaces. Never reuse version 4:
+# installed entries must roll forward through the restored settings schema.
+CONFIG_ENTRY_VERSION = 7
 ROOM_AREA_FIELD = "room_area_id"
 
 # Live optimisation inputs. Forecast entities must expose timestamped values;
