@@ -64,7 +64,8 @@ class AttentionSurfaceTests(unittest.TestCase):
         table = COORDINATOR[COORDINATOR.index("PLANNING_BANNER_BY_REMEDY") :]
         table = table[: table.index("\n}")]
         setting, rest = table.split("REMEDY_WAITING", 1)
-        self.assertIn('"kind": "panel"', setting)
+        self.assertIn('"kind": "diagnostics"', setting)
+        self.assertNotIn('"kind": "panel"', setting)
         self.assertNotIn('"kind": "panel"', rest)
         self.assertEqual(rest.count('{"kind": "none"}'), 2)
 

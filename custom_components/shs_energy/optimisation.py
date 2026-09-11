@@ -68,14 +68,16 @@ class OptimisationInputError(ValueError):
 
     ``remedy`` says which kind of gap it is, because the three want opposite
     things from the reader: fill a field, wait, or report a bug. It defaults to
-    ``REMEDY_SETTING`` so an untagged raise keeps pointing at the panel; tag the
-    raise wherever no setting could possibly answer it.
+    ``REMEDY_SETTING``. ``fix`` identifies precise local field keys or the
+    external settings destination; an untagged error must not invent a local
+    field for the reader to change.
     """
 
-    def __init__(self, *reasons: str, remedy: str = REMEDY_SETTING) -> None:
+    def __init__(self, *reasons: str, remedy: str = REMEDY_SETTING, fix: dict | None = None) -> None:
         super().__init__("; ".join(reasons))
         self.reasons: list[str] = list(reasons)
         self.remedy = remedy
+        self.fix = fix
 
 
 def suggested_load_type(name: str, category: str) -> tuple[str, dict[str, str]]:

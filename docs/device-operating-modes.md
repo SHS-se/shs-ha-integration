@@ -35,9 +35,19 @@ Verification begins only after the previous ownership has been released.
 
 Status lists controller faults, unsupported commands, manual overrides, operating
 limits and incomplete handover verification above the collapsed diagnostics.
-The tab count and every **View status** link use this same list. A link scrolls
-to and focuses its specific warning, with the controller reason, affected plan
-quarter, corrective guidance and the relevant setup or evidence download.
+The Status tab count uses this same list; Energy, Devices and Schedule do not
+repeat general warning cards. Local input issues highlight the precise field
+and explain the problem beside it. **Fix** links open its tab and card and focus
+the input, including optional fields that were hidden. Website issues link to
+the website and do not mark unrelated local fields. Sensor faults identify
+fields mapped to that exact entity. Each status warning retains its controller
+reason, affected plan quarter, corrective guidance and evidence download.
+
+The panel polls status on all tabs. While a user is editing, it updates the
+warning badge and existing field highlights without replacing the input or its
+unsaved text. A renewed subscription clears on the next successful status
+refresh; a price download failure is not treated as proof of missing supplier
+configuration.
 The integration status says **Needs attention** while warnings are present,
 even when planning has a valid plan. Successful subsequent checks clear the
 device warning without removing unrelated issues.

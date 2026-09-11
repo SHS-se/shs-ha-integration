@@ -333,7 +333,7 @@ test('typing records the draft before blur without rebuilding the input', () => 
   assert.equal(renders, 0);
 });
 
-test('polling leaves configuration tabs, drafts and focused editors alone', async () => {
+test('polling refreshes every tab and retains drafts and focused editors', async () => {
   const panel = splitPanel();
   let requests = 0;
   panel._hass = { callWS: async () => { requests++; return panel._data; } };
@@ -342,12 +342,13 @@ test('polling leaves configuration tabs, drafts and focused editors alone', asyn
   panel._draft.pool_volume_m3 = 60;
   await panel._poll();
   panel._draft.pool_volume_m3 = 55;
-  panel.shadowRoot = { activeElement: { tagName: 'INPUT' } };
+  panel.shadowRoot = { activeElement: { tagName: 'INPUT' }, querySelector: () => null, querySelectorAll: () => [] };
   await panel._poll();
-  assert.equal(requests, 0);
+  assert.equal(requests, 4);
+  assert.equal(panel._draft.pool_volume_m3, 55);
   panel.shadowRoot.activeElement = null;
   await panel._poll();
-  assert.equal(requests, 1);
+  assert.equal(requests, 5);
 });
 
 for (const outcome of ['success', 'error']) {
@@ -359,6 +360,7 @@ for (const outcome of ['success', 'error']) {
     panel._hass = { callWS: () => request.promise };
     const polling = panel._poll();
     panel._tab = 'devices';
+    panel.shadowRoot = { activeElement: { tagName: 'INPUT', value: 'unsaved typing' }, querySelector: () => null, querySelectorAll: () => [] };
     if (outcome === 'success') request.resolve({ configuration: { pool_volume_m3: 99 } });
     else request.reject(new Error('offline'));
     await polling;
@@ -575,14 +577,10 @@ const poolFaultPanel = () => {
 
 test('controller warnings share counts, destinations and visible evidence with integration warnings', () => {
   const panel = poolFaultPanel();
-  const links = panel._renderAttentionLinks();
-  assert.match(links, /2 items need attention/);
-  assert.equal((links.match(/data-action="view-status"/g) || []).length, 2);
   const html = panel._renderStatus();
   assert.match(html, /badge warning">Needs attention/);
   assert.doesNotMatch(html, /badge ready">Ready/);
   for (const key of ['controller:pool', 'power']) {
-    assert.ok(links.includes(`data-issue-key="${key}"`));
     assert.ok(html.indexOf(`data-attention-key="${key}"`) < html.indexOf('<details'));
   }
   assert.match(html, /sensor.water is stale/);
@@ -619,7 +617,6 @@ test('a recovered device loses its warning, link and badge without losing other 
   devices[0].execution_status = { state: 'verified', reason: 'Commands logged' };
   panel._mergePanel({ ...panel._data, devices });
   assert.equal(panel._attentionForTab('status').length, 1);
-  assert.doesNotMatch(panel._renderAttentionLinks(), /controller:pool/);
   assert.doesNotMatch(panel._renderAttention(), /sensor.water is stale/);
   panel._data.attention = [];
   assert.equal(panel._attentionForTab('status').length, 0);
@@ -652,4 +649,66 @@ test('every supported fix names a real action; retired tabs create no dead-end b
   assert.match(render({ kind: 'refresh' }), /data-action="retry"/);
   assert.equal(render({ kind: 'panel', tab: 'diagnostics' }), '');
   assert.equal(render({ kind: 'none' }), '');
+});
+
+
+test('website issues never highlight local price or solar fields or offer local navigation', () => {
+  const panel = splitPanel();
+  panel._data.attention = [{ key: 'prices', severity: 'warning', detail: 'Supplier and price area are required',
+    fix: { kind: 'website', url: 'https://example.test/portal/settings/energy-tariffs' } }];
+  panel._data.sections = [{ id: 'prices_forecasts', tab: 'energy', fields: [{ key: 'pv_forecast_latitude', label: 'Solar forecast latitude', kind: 'number' }] }];
+  const html = panel._renderAttention();
+  assert.match(html, /energy-tariffs/);
+  assert.doesNotMatch(html, /Open Energy|Open Devices|edit-field/);
+  assert.equal(panel._fieldProblems('pv_forecast_latitude').length, 0);
+});
+
+test('a field issue shows its hidden optional input, exact message and direct fix destination', () => {
+  const panel = splitPanel();
+  panel._data.devices[0].fields = [{ key: 'power', label: 'Power', kind: 'power' }];
+  panel._draft.device_control_mappings.pool.power = null;
+  panel._data.attention = [{ key: 'power', severity: 'warning', detail: 'Power needed',
+    fix: { kind: 'fields', fields: [{ key: 'power', scope: 'mapping', device_key: 'pool', message: 'Set running watts or select a reliable power sensor.' }] } }];
+  const html = panel._renderDevices();
+  assert.match(html, /data-field-token="mapping:pool:power" class="field field-problem/);
+  assert.match(html, /aria-invalid="true"/);
+  assert.match(html, /Set running watts or select a reliable power sensor/);
+  assert.equal(panel._fieldProblems('pool_volume_m3', 'configuration', 'pool').length, 0);
+  assert.match(panel._renderAttention(), /data-action="edit-field" data-field-token="mapping:pool:power"/);
+  let focused = false, scrolled = false;
+  panel.shadowRoot = { querySelectorAll: () => [{ dataset: { fieldToken: 'mapping:pool:power' },
+    scrollIntoView: () => { scrolled = true; }, querySelector: () => ({ focus: () => { focused = true; } }) }] };
+  panel._openField('mapping:pool:power');
+  assert.equal(panel._tab, 'devices');
+  assert.ok(panel._expanded.has('controls:pool'));
+  assert.ok(panel._added.has('mapping:pool:power'));
+  assert.ok(focused && scrolled);
+});
+
+test('entity faults highlight only fields that reference that exact source', () => {
+  const panel = splitPanel();
+  panel._data.attention = [{ key: 'source', severity: 'warning', detail: 'sensor.water is stale', fix: { kind: 'entity', entity_id: 'sensor.water' } }];
+  assert.equal(panel._fieldProblems('pool_water_temperature_entity', 'configuration', 'pool').length, 1);
+  assert.equal(panel._fieldProblems('pool_volume_m3', 'configuration', 'pool').length, 0);
+  panel._data.attention = [];
+  assert.equal(panel._fieldProblems('pool_water_temperature_entity', 'configuration', 'pool').length, 0);
+});
+
+test('subscription recovery clears the badge during an edit without replacing the input or draft', async () => {
+  const panel = splitPanel();
+  panel._tab = 'devices'; panel._draft.pool_volume_m3 = 61;
+  panel._data.attention = [{ key: 'subscription', severity: 'warning', detail: 'Inactive' }];
+  let renders = 0;
+  panel._render = () => renders++;
+  const input = { tagName: 'INPUT', value: 'sensor.partially_typed' };
+  const badge = { innerHTML: '', classList: { toggle() {} } };
+  panel.shadowRoot = { activeElement: input, querySelector: () => badge, querySelectorAll: () => [] };
+  panel._hass = { callWS: async () => ({ ...panel._data, attention: [], configuration: { pool_volume_m3: 80 } }) };
+  await panel._poll();
+  assert.equal(panel._attentionForTab('status').length, 0);
+  assert.equal(badge.innerHTML, 'Status');
+  assert.equal(panel.shadowRoot.activeElement, input);
+  assert.equal(input.value, 'sensor.partially_typed');
+  assert.equal(panel._draft.pool_volume_m3, 61);
+  assert.equal(renders, 0);
 });

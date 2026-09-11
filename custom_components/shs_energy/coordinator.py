@@ -178,10 +178,10 @@ _LOGGER = logging.getLogger(__name__)
 PLANNING_BANNER_BY_REMEDY: dict[str, tuple[str, str, dict[str, Any]]] = {
     REMEDY_SETTING: (
         "Planning is missing an input it needs",
-        "Check the sources or equipment settings named below. Energy contains "
-        "shared inputs; Devices contains each device's controls and planning "
-        "settings. Planning resumes after these input errors are resolved.",
-        {"kind": "panel", "tabs": ["energy", "devices"]},
+        "Resolve the specific input error below. Only fields identified by the "
+        "input check are highlighted. If no setting is identified, download "
+        "diagnostics for investigation.",
+        {"kind": "diagnostics"},
     ),
     REMEDY_WAITING: (
         "Planning is waiting for data, not for you",
@@ -243,6 +243,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.optimisation_missing_inputs: list[str] = []
         self.optimisation_degraded_devices: list[dict[str, str]] = []
         self.optimisation_missing_remedy: str = REMEDY_SETTING
+        self.optimisation_missing_fix: dict[str, Any] | None = None
         self.optimisation_unplanned_services: list[str] = []
         self._attention: dict[str, dict[str, Any]] = {}
         self.device_control_mapping_gaps: list[str] = []
@@ -588,6 +589,14 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.optimisation_missing_remedy,
             PLANNING_BANNER_BY_REMEDY[REMEDY_DEFECT],
         )
+        if self.optimisation_missing_fix:
+            fix = self.optimisation_missing_fix
+            if fix.get("kind") == "website":
+                detail = "Correct the website settings named below. There is no local Energy or Devices field to change."
+            elif fix.get("kind") == "fields":
+                detail = "Open the highlighted fields below and correct the reported values."
+            elif fix.get("kind") == "none":
+                detail = "No local field needs changing. The integration retries the download automatically; see the reason below."
         self._set_attention(
             ISSUE_OPTIMISATION_CONFIGURATION,
             severity="warning",
@@ -663,9 +672,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             detail=detail,
             items=items,
             fix={"kind": "none"} if status == "warming" else {
-                "kind": "devices", "device_keys": [
-                    device["statistic_id"] for device in self.optimisation_degraded_devices
-                    if device.get("status", "quiet") == status
+                "kind": "fields", "fields": [
+                    {"key": "power", "scope": "mapping", "device_key": device["statistic_id"],
+                     "message": device["reason"] + ". Select a sensor reporting the running load or enter the heater's known watt rating. "
+                     "If a sensor is already selected, allow a normal heating cycle to be recorded so SHS can learn the running power."}
+                    for device in self.optimisation_degraded_devices if device.get("status", "quiet") == status
                 ]},
             placeholders={"devices": "\n".join(f"- {line}" for line in items)},
         )
@@ -677,7 +688,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         a home that is content to let the inverter decide. Planning continues
         either way: an unwritable battery is still modelled as a store.
         """
-        errors = battery_control_errors(options)
+        field_errors = {}
+        errors = battery_control_errors(options, field_errors=field_errors)
         if not included or not errors:
             self._clear_attention(ISSUE_BATTERY_CONTROL)
             return
@@ -690,7 +702,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "command it until the battery control section is complete."
             ),
             items=list(errors),
-            fix={"kind": "device", "system": "battery"},
+            fix={"kind": "fields", "fields": [{"key": key, "message": "; ".join(messages)} for key, messages in field_errors.items()]},
             placeholders={"gaps": "\n".join(f"- {value}" for value in errors)},
         )
 
@@ -700,7 +712,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         One band per pool, however many meters heat it, so this is checked on
         the store rather than on each device mapping.
         """
-        errors = pool_band_errors(options)
+        field_errors = {}
+        errors = pool_band_errors(options, field_errors=field_errors)
         if not included or not options.get("pool_control_enabled") or not options.get("pool_enabled") or not errors:
             self._clear_attention(ISSUE_POOL_CONTROL)
             return
@@ -712,7 +725,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Select both pool start and stop temperature controls before SHS can operate it."
             ),
             items=list(errors),
-            fix={"kind": "device", "system": "pool"},
+            fix={"kind": "fields", "fields": [{"key": key, "message": "; ".join(messages)} for key, messages in field_errors.items()]},
             placeholders={"gaps": "\n".join(f"- {value}" for value in errors)},
         )
 
@@ -762,7 +775,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         area_names = area_name_by_id(self.hass)
         entity_area_ids = entity_area_id_by_id(self.hass)
         self.device_control_mapping_gaps = []
-        device_keys = []
+        field_targets = []
         for device in requested_controllable_devices(configuration):
             report = mapping_report(
                 device.get("control_type"), active_mappings.get(device["key"]),
@@ -775,7 +788,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
             )
             if report["mapping_status"] != "ready":
-                device_keys.append(device["key"])
+                field_targets.extend({"key": key, "scope": "mapping", "device_key": device["key"],
+                                      "message": "; ".join(messages)}
+                                     for key, messages in report.get("field_errors", {}).items())
                 self.device_control_mapping_gaps.append(
                     str(device.get("name") or device["key"])
                 )
@@ -792,7 +807,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "device stays in base load and nothing local is changed."
             ),
             items=list(self.device_control_mapping_gaps),
-            fix={"kind": "devices", "device_keys": device_keys},
+            fix={"kind": "fields", "fields": field_targets},
             placeholders={
                 "devices": "\n".join(
                     f"- {name}" for name in self.device_control_mapping_gaps
@@ -1895,6 +1910,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             labels.get(value, value) for value in missing
         ]
         self.optimisation_missing_remedy = REMEDY_SETTING
+        self.optimisation_missing_fix = {"kind": "fields", "fields": [
+            {"key": (OPT_PREFIX_ENTITIES + "total_consumption" if key == "a whole-home meter or Energy Dashboard grid meter"
+                     else OPT_FORECAST_RESOLUTION_MINUTES if key == "forecast resolution must be 15 minutes" else key),
+             "message": labels.get(key, key + " is required or invalid")} for key in missing
+        ]} if missing else None
         self._sync_optimisation_issue()
         if missing:
             raise OptimisationInputError(
@@ -1902,13 +1922,28 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         return options
 
+    def _supplier_price_catalog(self):
+        price_catalog = self.supplier_prices
+        if price_catalog is None:
+            reason = self.last_price_error or "supplier price download has not completed"
+            raise OptimisationInputError(
+                f"Supplier prices are unavailable: {reason}. This does not establish that supplier settings are missing.",
+                remedy=REMEDY_WAITING, fix={"kind": "none"},
+            )
+        if price_catalog.get("configuration") is None:
+            raise OptimisationInputError(
+                "supplier and price area must be configured on the website",
+                fix={"kind": "website", "path": "/portal/settings/energy-tariffs"},
+            )
+        return price_catalog
+
     def _entity_payload(self, entity_id: str) -> dict[str, Any]:
         state = self.hass.states.get(entity_id)
         if state is None:
-            raise OptimisationInputError(f"{entity_id} does not exist")
+            raise OptimisationInputError(f"{entity_id} does not exist", fix={"kind": "entity", "entity_id": entity_id})
         if state.state in ("unknown", "unavailable"):
             raise OptimisationInputError(
-                f"{entity_id} is {state.state}", remedy=REMEDY_WAITING
+                f"{entity_id} is {state.state}", remedy=REMEDY_WAITING, fix={"kind": "entity", "entity_id": entity_id}
             )
         return {
             "entity_id": entity_id,
@@ -2249,11 +2284,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             and stored.get("home_planning_configuration", {}).get("battery", {}).get("included") is True
             else None
         )
-        price_catalog = self.supplier_prices
-        if not price_catalog or price_catalog.get("configuration") is None:
-            raise OptimisationInputError(
-                "supplier and price area must be configured on the website"
-            )
+        price_catalog = self._supplier_price_catalog()
         prices = supplier_price_forecast(price_catalog)
         import_prices = {
             start: values["import"] for start, values in prices.items()
@@ -2280,7 +2311,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pv_longitude - self.hass.config.longitude
         ) > 0.05:
             raise OptimisationInputError(
-                "PV forecast coordinates do not match the Home Assistant home location"
+                "PV forecast coordinates do not match the Home Assistant home location",
+                fix={"kind": "fields", "fields": [{"key": OPT_PV_FORECAST_LATITUDE}, {"key": OPT_PV_FORECAST_LONGITUDE}]}
             )
         for payload in pv_entities:
             attributes = payload["attributes"]
@@ -2294,7 +2326,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 - pv_longitude
             ) > 0.05):
                 raise OptimisationInputError(
-                    f"{payload['entity_id']} forecast location does not match the configured home"
+                    f"{payload['entity_id']} forecast location does not match the configured home",
+                    fix={"kind": "entity", "entity_id": payload["entity_id"]}
                 )
         if pv_entities:
             require_fresh_source(
@@ -2528,7 +2561,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
 
         if capabilities["pool"] and pool_state is None:
-            raise OptimisationInputError("Pool water temperature is not configured")
+            raise OptimisationInputError("Pool water temperature is not configured", fix={"kind": "fields", "fields": [{"key": OPT_POOL_WATER_TEMPERATURE_ENTITY}]})
 
         snapshot = {
             "schema_version": SNAPSHOT_SCHEMA_VERSION,
@@ -2847,6 +2880,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     err.reasons or [snapshot_error]
                                 )
                                 self.optimisation_missing_remedy = err.remedy
+                                self.optimisation_missing_fix = err.fix
                             self._sync_optimisation_issue()
                             _LOGGER.warning("Optimisation plan skipped: %s", err)
                         except (KeyError, TypeError, ValueError) as err:

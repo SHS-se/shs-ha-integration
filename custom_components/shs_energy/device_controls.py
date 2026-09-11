@@ -201,7 +201,14 @@ def _number(mapping: dict[str, Any], key: str) -> float | None:
     return value if isfinite(value) else None
 
 
-def _offset_errors(mapping: dict[str, Any]) -> list[str]:
+def _field_error(errors, field_errors, message, *keys):
+    errors.append(message)
+    if field_errors is not None:
+        for key in keys:
+            field_errors.setdefault(key, []).append(message)
+
+
+def _offset_errors(mapping: dict[str, Any], field_errors=None) -> list[str]:
     """A bounded offset is only usable when its bounds are actually stated.
 
     An unbounded offset entity is the one lever here that can drive equipment
@@ -214,11 +221,11 @@ def _offset_errors(mapping: dict[str, Any]) -> list[str]:
     maximum = _number(mapping, "offset_maximum")
     errors: list[str] = []
     if minimum is None:
-        errors.append("minimum offset is required with an offset entity")
+        _field_error(errors, field_errors, "minimum offset is required with an offset entity", "offset_minimum")
     if maximum is None:
-        errors.append("maximum offset is required with an offset entity")
+        _field_error(errors, field_errors, "maximum offset is required with an offset entity", "offset_maximum")
     if minimum is not None and maximum is not None and minimum >= maximum:
-        errors.append("minimum offset must be below maximum offset")
+        _field_error(errors, field_errors, "minimum offset must be below maximum offset", "offset_minimum", "offset_maximum")
     return errors
 
 
@@ -228,6 +235,7 @@ def mapping_errors(
     control_type: str,
     *,
     room_control: bool = False,
+    field_errors: dict[str, list[str]] | None = None,
 ) -> list[str]:
     """Return structural mapping errors for one control contract."""
     if control_type not in CONTROL_TYPES:
@@ -237,42 +245,42 @@ def mapping_errors(
 
     errors: list[str] = []
     if mapping.get("companion_actuator_entity_ids"):
-        errors.append("configure combined switching in Home Assistant using one control entity")
+        _field_error(errors, field_errors, "configure combined switching in Home Assistant using one control entity", "companion_actuator_entity_ids")
     actuators = mapping.get("actuator_entity_ids")
     if isinstance(actuators, list) and len(actuators) > 1:
-        errors.append("choose exactly one control entity")
+        _field_error(errors, field_errors, "choose exactly one control entity", "actuator_entity_ids")
     if (control_type == "setpoint" or room_control) and not _text(
         mapping, "temperature_entity_id"
     ):
-        errors.append("room temperature entity is required")
+        _field_error(errors, field_errors, "room temperature entity is required", "temperature_entity_id")
     if control_type == "setpoint":
         if not _entities(mapping, "actuator_entity_ids"):
-            errors.append("one heater or climate actuator is required")
-        errors.extend(_offset_errors(mapping))
+            _field_error(errors, field_errors, "one heater or climate actuator is required", "actuator_entity_ids")
+        errors.extend(_offset_errors(mapping, field_errors))
     elif control_type == "permit_inhibit":
         if not _entities(mapping, "actuator_entity_ids"):
-            errors.append("one permit/inhibit actuator is required")
+            _field_error(errors, field_errors, "one permit/inhibit actuator is required", "actuator_entity_ids")
         if not _positive_number(mapping, "max_inhibit_slots"):
-            errors.append("maximum inhibit slots must be positive")
+            _field_error(errors, field_errors, "maximum inhibit slots must be positive", "max_inhibit_slots")
     elif control_type == "switch_schedule":
         if not _entities(mapping, "actuator_entity_ids"):
-            errors.append("one switch actuator is required")
+            _field_error(errors, field_errors, "one switch actuator is required", "actuator_entity_ids")
     elif control_type == "variable_power":
         if not _text(mapping, "control_entity_id"):
-            errors.append("number control entity is required")
+            _field_error(errors, field_errors, "number control entity is required", "control_entity_id")
         minimum_valid = _non_negative_number(mapping, "minimum_value")
         if not minimum_valid:
-            errors.append("minimum control value must be zero or greater")
+            _field_error(errors, field_errors, "minimum control value must be zero or greater", "minimum_value")
         if not _positive_number(mapping, "maximum_value"):
-            errors.append("maximum control value must be positive")
+            _field_error(errors, field_errors, "maximum control value must be positive", "maximum_value")
         if (
             minimum_valid
             and _positive_number(mapping, "maximum_value")
             and float(mapping["minimum_value"]) >= float(mapping["maximum_value"])
         ):
-            errors.append("minimum control value must be below maximum control value")
+            _field_error(errors, field_errors, "minimum control value must be below maximum control value", "minimum_value", "maximum_value")
     if not _power_source(mapping):
-        errors.append("power must be a power entity or a positive watt value")
+        _field_error(errors, field_errors, "power must be a power entity or a positive watt value", "power")
     return errors
 
 
@@ -287,28 +295,27 @@ def mapping_report(
     room_control: bool = False,
 ) -> dict[str, Any]:
     """Build the privacy-minimised status uploaded to the website."""
-    if requested_control_type not in CONTROL_TYPES or not mapping:
+    if requested_control_type not in CONTROL_TYPES or not mapping or mapping.get("control_type") != requested_control_type:
+        field_errors = {}
+        if requested_control_type in CONTROL_TYPES:
+            mapping_errors({"control_type": requested_control_type}, requested_control_type,
+                           room_control=room_control, field_errors=field_errors)
         return {
+            "field_errors": field_errors,
             "mapping_status": "not_configured",
             "mapped_control_type": None,
             "mapping_error": None,
             "mapping_summary": {},
         }
     mapped_control_type = mapping.get("control_type")
-    if mapped_control_type != requested_control_type:
-        return {
-            "mapping_status": "not_configured",
-            "mapped_control_type": None,
-            "mapping_error": None,
-            "mapping_summary": {},
-        }
     room_control = requested_control_type == "setpoint" or (
         room_control and _text(mapping, "temperature_entity_id")
     )
+    field_errors = {}
     errors = mapping_errors(
         mapping,
         requested_control_type,
-        room_control=room_control,
+        room_control=room_control, field_errors=field_errors,
     )
     active_entity_fields = _ENTITY_FIELDS_BY_CONTROL_TYPE.get(
         requested_control_type, ()
@@ -326,6 +333,11 @@ def mapping_report(
         known_entity_ids
     ):
         errors.append("one or more configured entities no longer exist")
+        for key in (*active_entity_fields, "power"):
+            value = mapping.get(key)
+            for entity_id in value if isinstance(value, list) else [value]:
+                if isinstance(entity_id, str) and "." in entity_id and entity_id not in known_entity_ids:
+                    _field_error([], field_errors, f"{entity_id} no longer exists", key)
     area_id: str | None = None
     if room_control:
         actuators = [
@@ -433,6 +445,7 @@ def mapping_report(
             mapping["power"], mapping["power"]
         )
     return {
+        "field_errors": field_errors,
         "mapping_status": "invalid" if errors else "ready",
         "mapped_control_type": requested_control_type,
         "mapping_error": "; ".join(errors) if errors else None,
@@ -476,14 +489,14 @@ def apply_requested_configuration(
         ready = requested_role == "controllable" and report["mapping_status"] == "ready"
         device["planning_role"] = "controllable" if ready else "base_load"
         device["control_type"] = requested_control if ready else None
-        device.update(report)
+        device.update({key: value for key, value in report.items() if key != "field_errors"})
         reviewed_power = report["mapping_summary"].get("reviewed_power_w")
         if ready and isinstance(reviewed_power, (int, float)):
             device["active_power_w"] = float(reviewed_power)
     return devices
 
 
-def battery_control_errors(options: dict[str, Any]) -> list[str]:
+def battery_control_errors(options: dict[str, Any], *, field_errors: dict[str, list[str]] | None = None) -> list[str]:
     """Return what still stops the storage executor from commanding a battery.
 
     Plant-level rather than a device control type. There is one battery, the
@@ -500,7 +513,7 @@ def battery_control_errors(options: dict[str, Any]) -> list[str]:
         return []
     errors: list[str] = []
     if not options.get(OPT_BATTERY_ENABLED):
-        errors.append("this home is not marked as having a house battery")
+        _field_error(errors, field_errors, "this home is not marked as having a house battery", OPT_BATTERY_ENABLED)
     for key, label in (
         (OPT_BATTERY_MODE_ENTITY, "battery mode entity"),
         (OPT_BATTERY_CHARGE_LIMIT_ENTITY, "charge power limit entity"),
@@ -511,7 +524,7 @@ def battery_control_errors(options: dict[str, Any]) -> list[str]:
         (OPT_BATTERY_SOC_ENTITY, "battery state of charge entity"),
     ):
         if not _text(options, key):
-            errors.append(f"{label} is required")
+            _field_error(errors, field_errors, f"{label} is required", key)
     # Naming the modes is what makes a flow reversal expressible at all. A
     # mapping without them can raise and lower a number that the inverter is
     # not in a mode to honour.
@@ -521,9 +534,9 @@ def battery_control_errors(options: dict[str, Any]) -> list[str]:
         (OPT_BATTERY_MODE_IDLE, "idle"),
     ):
         if not _text(options, key):
-            errors.append(f"the mode value meaning {label} is required")
+            _field_error(errors, field_errors, f"the mode value meaning {label} is required", key)
         elif str(options[key]).startswith("binary_sensor."):
-            errors.append(f"{label} mode must be a selector option, not a direction sensor")
+            _field_error(errors, field_errors, f"{label} mode must be a selector option, not a direction sensor", key)
     modes = [
         options.get(key)
         for key in (
@@ -534,17 +547,17 @@ def battery_control_errors(options: dict[str, Any]) -> list[str]:
         if _text(options, key)
     ]
     if len(modes) != len(set(modes)):
-        errors.append("charge, discharge and idle must be different mode values")
+        _field_error(errors, field_errors, "charge, discharge and idle must be different mode values", OPT_BATTERY_MODE_CHARGE, OPT_BATTERY_MODE_DISCHARGE, OPT_BATTERY_MODE_IDLE)
     if not _text(options, OPT_BATTERY_MODE_BASELINE):
-        errors.append("baseline mode is required")
+        _field_error(errors, field_errors, "baseline mode is required", OPT_BATTERY_MODE_BASELINE)
     if options.get(OPT_BATTERY_CHARGE_LIMIT_ENTITY) and options.get(OPT_BATTERY_CHARGE_LIMIT_ENTITY) == options.get(OPT_BATTERY_DISCHARGE_LIMIT_ENTITY):
-        errors.append("charge and discharge limits must be different entities")
+        _field_error(errors, field_errors, "charge and discharge limits must be different entities", OPT_BATTERY_CHARGE_LIMIT_ENTITY, OPT_BATTERY_DISCHARGE_LIMIT_ENTITY)
     if options.get(OPT_BATTERY_CHARGING_ENTITY) and options.get(OPT_BATTERY_CHARGING_ENTITY) == options.get(OPT_BATTERY_DISCHARGING_ENTITY):
-        errors.append("charging and discharging sensors must be different entities")
+        _field_error(errors, field_errors, "charging and discharging sensors must be different entities", OPT_BATTERY_CHARGING_ENTITY, OPT_BATTERY_DISCHARGING_ENTITY)
     return errors
 
 
-def pool_band_errors(options: dict[str, Any]) -> list[str]:
+def pool_band_errors(options: dict[str, Any], *, field_errors: dict[str, list[str]] | None = None) -> list[str]:
     """Return what stops the pool's temperature band from being written.
 
     Plant-level, for the same reason the battery's mapping is: the pool service
@@ -560,11 +573,11 @@ def pool_band_errors(options: dict[str, Any]) -> list[str]:
         return []
     errors = []
     if not _text(options, OPT_POOL_START_TEMPERATURE_ENTITY):
-        errors.append("a pool start temperature entity is required with a stop temperature")
+        _field_error(errors, field_errors, "a pool start temperature entity is required with a stop temperature", OPT_POOL_START_TEMPERATURE_ENTITY)
     if not _text(options, OPT_POOL_STOP_TEMPERATURE_ENTITY):
-        errors.append("a pool stop temperature entity is required with a start temperature")
+        _field_error(errors, field_errors, "a pool stop temperature entity is required with a start temperature", OPT_POOL_STOP_TEMPERATURE_ENTITY)
     if start and start == stop:
-        errors.append("pool start and stop must use different temperature controls")
+        _field_error(errors, field_errors, "pool start and stop must use different temperature controls", OPT_POOL_START_TEMPERATURE_ENTITY, OPT_POOL_STOP_TEMPERATURE_ENTITY)
     return errors
 
 
