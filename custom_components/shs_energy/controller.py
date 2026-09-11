@@ -102,7 +102,6 @@ class ScheduledController:
         self.verification_commands = []
         self.shadow = {}
         self.verification_observations = {}
-        self.verified = {}
         self.hass = hass
         self.coordinator = coordinator
         self.store = store
@@ -742,17 +741,7 @@ class ScheduledController:
             attempt["observations"] = self.verification_observations
             self.verifying = False
             self.records, self.overrides = owned, overrides
-        signature = deepcopy(attempt)
-        signature.pop("at")
-        for observation in signature["observations"].values():
-            observation.pop("last_reported")
-            observation.pop("last_updated")
-        for command in signature["commands"]:
-            command.pop("at")
-        signature = json.dumps(signature, sort_keys=True, default=str)
-        if self.verified.get(device) != signature:
-            await self.verification.append(attempt)
-            self.verified[device] = signature
+        await self.verification.append(attempt)
         limited = attempt.get("result", {}).get("state") == "limited"
         self.report(device, ("limited" if limited else "verified") if attempt["outcome"] == "verified" else "fault",
                     reason=attempt.get("reason") or attempt.get("handover_reason") or (attempt["result"]["reason"] if limited else "Commands logged; physical response and cross-slot transitions are not tested"),
@@ -858,3 +847,5 @@ class ScheduledController:
                     await self.restore(device)
                 except Exception as err:
                     self.report(device, "fault", reason=f"restoration pending: {err}")
+            if self.verification is not None:
+                await self.verification.flush()

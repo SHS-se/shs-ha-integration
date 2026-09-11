@@ -43,6 +43,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('export', next(c for c in export['coverage'] if c['device'] == 'battery')['missing'])
         await self.controller.async_tick()
         self.assertEqual(len(self.journal.attempts), 2, 'identical attempts in the same quarter are deduplicated')
+        await self.journal.flush()
         restored = VerificationJournal(self.audit_store)
         await restored.load()
         self.assertEqual(restored.attempts, self.journal.attempts)
@@ -197,6 +198,69 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.journal.export()['coverage'][0]['missing'], [])
         self.assertEqual(self.calls, [])
 
+    async def test_telemetry_changes_aggregate_but_command_and_failure_transitions_do_not(self):
+        self.options['device_modes']['$battery'] = 'control_verification'
+        await self.controller.async_start()
+        self.audit_store.async_save = AsyncMock(wraps=self.audit_store.async_save)
+        self.states['sensor.battery_power'].state = '0.1'
+        await self.controller.async_tick()
+        row = self.journal.attempts[0]
+        self.assertEqual(len(self.journal.attempts), 1)
+        self.assertEqual(row['count'], 2)
+        self.assertEqual(row['observations']['sensor.battery_power']['state'], '0')
+        self.assertEqual(row['last_observations']['sensor.battery_power']['state'], '0.1')
+        self.audit_store.async_save.assert_not_awaited()
+        self.assertNotIn('slot', row)
+        self.assertEqual(self.journal.export()['slots'][row['slot_id']], self.slot)
+        self.states['select.mode'].state = 'Charge'
+        await self.controller.async_tick()
+        self.assertEqual(len(self.journal.attempts), 2, 'would_call changed')
+        self.states['sensor.battery_soc'].state = 'unavailable'
+        await self.controller.async_tick()
+        self.assertEqual(self.journal.attempts[-1]['outcome'], 'blocked')
+        self.states['sensor.battery_soc'].state = '50'
+        await self.controller.async_tick()
+        self.assertEqual(self.journal.attempts[-1]['outcome'], 'verified')
+        self.assertEqual(len(self.journal.attempts), 4, 'recovery must not merge across a failure')
+        self.assertEqual(len(self.journal.slots), 1)
+        self.assertEqual(self.calls, [])
+
+    async def test_repeat_checkpoint_and_shutdown_persist_counts(self):
+        from unittest.mock import patch
+        self.options['device_modes']['$battery'] = 'control_verification'
+        await self.controller.async_start()
+        with patch('verification.monotonic', return_value=self.journal.last_saved + 61):
+            await self.controller.async_tick()
+        self.assertEqual(self.audit_store.saved['attempts'][0]['count'], 2)
+        await self.controller.async_tick()
+        self.assertEqual(self.audit_store.saved['attempts'][0]['count'], 2)
+        await self.controller.async_stop()
+        self.assertEqual(self.audit_store.saved['attempts'][0]['count'], 3)
+
+    async def test_existing_journal_is_compacted_once_and_survives_reload(self):
+        self.options['device_modes']['$battery'] = 'control_verification'
+        await self.controller.async_start()
+        original = deepcopy(self.journal.attempts[0])
+        original['slot'] = self.journal.slots[original.pop('slot_id')]
+        original.pop('count')
+        original.pop('last_at')
+        later = deepcopy(original)
+        later['at'] = '2026-09-11T15:00:00+00:00'
+        later['observations']['sensor.battery_power']['state'] = '0.1'
+        self.audit_store.saved = {'attempts': [original, later],
+                                 'configurations': self.journal.configurations, 'discarded_attempts': 7}
+        migrated = VerificationJournal(self.audit_store)
+        await migrated.load()
+        self.assertEqual(len(migrated.attempts), 1)
+        self.assertEqual(migrated.attempts[0]['count'], 2)
+        self.assertEqual(migrated.attempts[0]['last_at'], later['at'])
+        self.assertEqual(migrated.discarded, 7)
+        self.assertEqual(self.audit_store.saved['schema_version'], 2)
+        reloaded = VerificationJournal(self.audit_store)
+        await reloaded.load()
+        self.assertEqual(reloaded.attempts, migrated.attempts)
+        self.assertEqual(reloaded.slots, migrated.slots)
+
 
 class ModeTests(unittest.TestCase):
     def test_old_booleans_cannot_authorize_and_modes_derive_planning(self):
@@ -249,13 +313,17 @@ class JournalRetentionTests(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import patch
         journal = VerificationJournal(fixtures.Store())
         row = {'device': 'pool', 'scope': 'old', 'configuration': {'old': True},
+               'at': '2026-09-11T14:00:00+00:00', 'slot': {'start': 'old'},
                'expected_operations': ['heat', 'defer', 'handover'], 'operations': ['heat'], 'outcome': 'verified'}
-        with patch('verification.MAX_ATTEMPTS', 2):
+        with patch('verification.MAX_GROUPS', 2):
             await journal.append(row)
-            await journal.append({**row, 'scope': 'new', 'configuration': {}, 'operations': ['defer']})
-            await journal.append({**row, 'scope': 'new', 'configuration': {}, 'operations': ['handover']})
+            await journal.append(row)
+            await journal.append(row)
+            await journal.append({**row, 'scope': 'new', 'slot': {'start': 'new'}, 'configuration': {}, 'operations': ['defer']})
+            await journal.append({**row, 'scope': 'new', 'slot': {'start': 'new'}, 'configuration': {}, 'operations': ['handover']})
         export = journal.export()
-        self.assertEqual(export['retention']['discarded_attempts'], 1)
+        self.assertEqual(export['retention']['discarded_attempts'], 3)
         self.assertNotIn('old', export['configurations'])
+        self.assertEqual(list(export['slots'].values()), [{'start': 'new'}])
         self.assertEqual(export['coverage'][0]['missing'], ['heat'])
         self.assertEqual(export['coverage'][0]['covered'], 2)

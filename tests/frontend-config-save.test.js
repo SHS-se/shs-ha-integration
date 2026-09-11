@@ -712,3 +712,32 @@ test('subscription recovery clears the badge during an edit without replacing th
   assert.equal(panel._draft.pool_volume_m3, 61);
   assert.equal(renders, 0);
 });
+
+test('verification download is compact gzip JSON with shared slot references', async () => {
+  const { gunzipSync } = require('node:zlib');
+  const data = { schema_version: 2, slots: { slot: { start: 'now' } }, attempts: [{ slot_id: 'slot', count: 9 }], coverage: [] };
+  let blob;
+  let clicked = false;
+  let revoked;
+  const anchor = { click() { clicked = true; } };
+  const downloadContext = loadPanel({ define() {}, get() {} });
+  Object.assign(downloadContext, {
+    Blob, Response, CompressionStream,
+    URL: { createObjectURL(value) { blob = value; return 'blob:verification'; }, revokeObjectURL(value) { revoked = value; } },
+    document: { createElement(tag) { assert.equal(tag, 'a'); return anchor; } },
+  });
+  const panel = Object.create(downloadContext.Panel.prototype);
+  panel._entryId = 'entry';
+  panel._render = () => {};
+  panel._hass = { callWS: async payload => {
+    assert.equal(payload.type, 'shs_energy/verification/download');
+    return data;
+  } };
+  await panel._downloadVerification();
+  assert.equal(panel._error, undefined);
+  assert.equal(anchor.download, 'shs-control-verification.json.gz');
+  assert.equal(blob.type, 'application/gzip');
+  assert.equal(gunzipSync(Buffer.from(await blob.arrayBuffer())).toString(), JSON.stringify(data));
+  assert.equal(clicked, true);
+  assert.equal(revoked, 'blob:verification');
+});
