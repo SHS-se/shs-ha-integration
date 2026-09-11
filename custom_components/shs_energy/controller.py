@@ -39,6 +39,18 @@ CONFIRM_SECONDS = 15
 SOURCE_MAX_AGE_SECONDS = 120
 
 
+class ControlObservationError(ValueError):
+    """An unusable observation with a concrete inspection destination."""
+    def __init__(self, message, entity, next_step):
+        super().__init__(message)
+        self.details = {"next_step": next_step,
+                        "fix": {"kind": "entity", "entity_id": entity} if entity else {"kind": "device"}}
+
+
+def correction_details(error):
+    return error.details if isinstance(error, ControlObservationError) else {}
+
+
 def finite(value: Any) -> float:
     if isinstance(value, bool):
         raise ValueError("boolean is not a numeric command")
@@ -135,12 +147,21 @@ class ScheduledController:
                 "last_updated": str(getattr(state, "last_updated", None)),
             }
         if state is None or state.state in ("unknown", "unavailable"):
-            raise ValueError(f"{entity or 'required entity'} is unavailable")
+            raise ControlObservationError(
+                f"{entity or 'required entity'} is unavailable", entity,
+                "Check the source entity and its integration for an unavailable reading. "
+                "If the entity was replaced, select its replacement in this device's setup.",
+            )
         if fresh:
             reported = getattr(state, "last_reported", state.last_updated)
             age = (datetime.now(timezone.utc) - reported).total_seconds()
             if not 0 <= age <= SOURCE_MAX_AGE_SECONDS:
-                raise ValueError(f"{entity} is stale")
+                raise ControlObservationError(
+                    f"{entity} is stale (last reported {reported.isoformat()}; maximum age {SOURCE_MAX_AGE_SECONDS} seconds)",
+                    entity,
+                    f"Check that this sensor and its source integration report at least every {SOURCE_MAX_AGE_SECONDS} seconds, "
+                    "including while its value is unchanged.",
+                )
         return state
 
     def number(self, entity, *, fresh=False):
@@ -458,6 +479,9 @@ class ScheduledController:
         limited = not on and band[1] >= water
         return {"state": "limited" if limited else "scheduled",
                 "reason": "temperature control lower limit prevents further deferral" if limited else "band accepted; the local thermostat controls heating",
+                **({"next_step": "Check the Nibe start/stop limits against the current water temperature. "
+                     "The plan requests deferral that these controls cannot enforce; download the evidence for controller/planner review.",
+                    "fix": {"kind": "device"}} if limited else {}),
                 "start_temperature_c": band[0], "stop_temperature_c": band[1],
                 "water_temperature_c": water, "requested_power_w": slot["pool_w"]}
 
@@ -568,6 +592,10 @@ class ScheduledController:
         measured = self.battery_measurement(options)
         requested = finite(slot["battery_charge_w"]) - finite(slot["battery_discharge_w"])
         return {"state": "limited" if abs(measured - requested) > 100 else "confirmed",
+                **({"reason": f"Battery power differs from the plan: requested {requested:g} W, measured {measured:g} W",
+                    "next_step": "Inspect the inverter's operating limits and state of charge, and other automations controlling it. "
+                    "If those do not explain the difference, download diagnostics for controller/planner review.",
+                    "fix": {"kind": "device"}} if abs(measured - requested) > 100 else {}),
                 "operation": operation, "charge_limit_w": charge, "discharge_limit_w": discharge,
                 "requested_power_w": requested, "measured_power_w": measured}
 
@@ -691,17 +719,24 @@ class ScheduledController:
         try:
             result = (await self.execute_device(device, options, slot) if device.startswith("device:")
                       else await getattr(self, f"execute_{device}")(options, slot))
-            if result["state"] == "unsupported":
+            if result["state"] in ("unsupported", "overridden"):
                 raise ValueError(result["reason"])
             operation = operation_name(device, kind, slot, result)
             attempt.update(outcome="verified", operations=[operation], result=result)
+            if result["state"] == "limited":
+                attempt.update({key: result[key] for key in ("next_step", "fix") if key in result})
             try:
                 await self.restore(device)
                 attempt["operations"].append("handover")
             except Exception as err:
                 attempt["handover_reason"] = str(err)
+                attempt["handover_pending"] = True
+                attempt.update(next_step="Review the handover commands and original values in the verification file. "
+                               "Resolve rejected controls before enabling Controlling.", fix={"kind": "device"})
+                attempt.update(correction_details(err))
         except Exception as err:
             attempt["reason"] = str(err)
+            attempt.update(correction_details(err))
         finally:
             attempt["commands"] = self.verification_commands
             attempt["observations"] = self.verification_observations
@@ -718,9 +753,11 @@ class ScheduledController:
         if self.verified.get(device) != signature:
             await self.verification.append(attempt)
             self.verified[device] = signature
-        self.report(device, "verified" if attempt["outcome"] == "verified" else "fault",
-                    reason=attempt.get("reason") or attempt.get("handover_reason") or "Commands logged; physical response and cross-slot transitions are not tested",
-                    plan_id=plan.get("plan_id"), slot_start=slot["start"])
+        limited = attempt.get("result", {}).get("state") == "limited"
+        self.report(device, ("limited" if limited else "verified") if attempt["outcome"] == "verified" else "fault",
+                    reason=attempt.get("reason") or attempt.get("handover_reason") or (attempt["result"]["reason"] if limited else "Commands logged; physical response and cross-slot transitions are not tested"),
+                    plan_id=plan.get("plan_id"), slot_start=slot["start"], retry_automatically=True,
+                    **{key: attempt[key] for key in ("next_step", "fix", "handover_pending") if key in attempt})
 
     async def async_start(self):
         try:
@@ -811,7 +848,7 @@ class ScheduledController:
                         await self.restore(device)
                     except Exception as restore_error:
                         reason += f"; restoration pending: {restore_error}"
-                    self.report(device, "fault", reason=reason)
+                    self.report(device, "fault", reason=reason, **correction_details(err))
 
     async def async_stop(self, _event=None):
         self.closed = True

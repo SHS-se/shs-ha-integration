@@ -168,6 +168,9 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                                  battery_command=battery_command(operation, charge, discharge))
                 await self.controller.async_tick()
                 self.assertIn(self.controller.status['battery']['state'], ('confirmed', 'limited'))
+                if self.controller.status['battery']['state'] == 'limited':
+                    self.assertIn('measured', self.controller.status['battery']['reason'])
+                    self.assertIn('inverter', self.controller.status['battery']['next_step'])
                 self.assertEqual(self.states['select.mode'].state, mode)
                 self.assertEqual(float(self.states['number.charge_limit'].state), charge / 1000)
                 self.assertEqual(float(self.states['number.discharge_limit'].state), discharge / 1000)

@@ -31,6 +31,23 @@ controllers. Leaving controlling first restores settings still owned by SHS;
 that handover can make real service calls and can remain pending on an error.
 Verification begins only after the previous ownership has been released.
 
+## Warnings and correction
+
+Status lists controller faults, unsupported commands, manual overrides, operating
+limits and incomplete handover verification above the collapsed diagnostics.
+The tab count and every **View status** link use this same list. A link scrolls
+to and focuses its specific warning, with the controller reason, affected plan
+quarter, corrective guidance and the relevant setup or evidence download.
+The integration status says **Needs attention** while warnings are present,
+even when planning has a valid plan. Successful subsequent checks clear the
+device warning without removing unrelated issues.
+
+Stale or unavailable observations identify the source entity and offer a Home
+Assistant inspection button. Freshness errors include the last report time and
+the controller's maximum age of 120 seconds; the source must report regularly
+even when its value stays unchanged. Verification retries on each scheduler
+tick. These messages do not bypass freshness checks or enable live control.
+
 ## Shared verification file
 
 Use **Schedule → Control verification → Download control verification**. The

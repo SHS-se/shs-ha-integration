@@ -178,9 +178,10 @@ _LOGGER = logging.getLogger(__name__)
 PLANNING_BANNER_BY_REMEDY: dict[str, tuple[str, str, dict[str, Any]]] = {
     REMEDY_SETTING: (
         "Planning is missing an input it needs",
-        "Every item below is a field on this panel. Planning stays off "
-        "until each one is filled in.",
-        {"kind": "panel", "tab": "energy", "section": None},
+        "Check the sources or equipment settings named below. Energy contains "
+        "shared inputs; Devices contains each device's controls and planning "
+        "settings. Planning resumes after these input errors are resolved.",
+        {"kind": "panel", "tabs": ["energy", "devices"]},
     ),
     REMEDY_WAITING: (
         "Planning is waiting for data, not for you",
@@ -562,10 +563,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             title="The latest plan was refused",
             detail=(
                 "Home Assistant received a plan it will not execute, so no "
-                "planned control is running."
+                "planned control is running. Download diagnostics and report the refusal below; changing device settings will not repair an invalid plan."
             ),
             items=[reason],
-            fix={"kind": "panel", "tab": "diagnostics", "section": None},
+            fix={"kind": "diagnostics"},
             placeholders={"reason": reason},
         )
 
@@ -620,13 +621,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             (
                 ISSUE_DEGRADED_DEVICE,
                 "quiet",
-                "A device is not being planned because its meter is unreliable",
+                "Devices need a running-power value or a measured heating cycle",
                 (
-                    "Planning continues without it and its energy is counted "
-                    "as base load. Nothing on this panel can restore it: the "
-                    "sensor below has to start reporting reliably again in "
-                    "Home Assistant, or be removed from the Energy Dashboard "
-                    "if the equipment is gone."
+                    "These devices remain in base load. In each device's Controls card, "
+                    "check Power: select a sensor that reports the running load or enter "
+                    "its known watt rating. If relying on learned power, allow a normal "
+                    "heating cycle to be recorded. The items below identify the affected devices."
                 ),
             ),
             (
@@ -662,7 +662,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             title=title,
             detail=detail,
             items=items,
-            fix={"kind": "none"},
+            fix={"kind": "none"} if status == "warming" else {
+                "kind": "devices", "device_keys": [
+                    device["statistic_id"] for device in self.optimisation_degraded_devices
+                    if device.get("status", "quiet") == status
+                ]},
             placeholders={"devices": "\n".join(f"- {line}" for line in items)},
         )
 
@@ -686,7 +690,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "command it until the battery control section is complete."
             ),
             items=list(errors),
-            fix={"kind": "panel", "tab": "devices"},
+            fix={"kind": "device", "system": "battery"},
             placeholders={"gaps": "\n".join(f"- {value}" for value in errors)},
         )
 
@@ -705,10 +709,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             severity="warning",
             title="The pool temperature band is incomplete",
             detail=(
-                "Complete the pool temperature limits before SHS can operate it."
+                "Select both pool start and stop temperature controls before SHS can operate it."
             ),
             items=list(errors),
-            fix={"kind": "panel", "tab": "devices"},
+            fix={"kind": "device", "system": "pool"},
             placeholders={"gaps": "\n".join(f"- {value}" for value in errors)},
         )
 
@@ -758,6 +762,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         area_names = area_name_by_id(self.hass)
         entity_area_ids = entity_area_id_by_id(self.hass)
         self.device_control_mapping_gaps = []
+        device_keys = []
         for device in requested_controllable_devices(configuration):
             report = mapping_report(
                 device.get("control_type"), active_mappings.get(device["key"]),
@@ -770,6 +775,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
             )
             if report["mapping_status"] != "ready":
+                device_keys.append(device["key"])
                 self.device_control_mapping_gaps.append(
                     str(device.get("name") or device["key"])
                 )
@@ -786,7 +792,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "device stays in base load and nothing local is changed."
             ),
             items=list(self.device_control_mapping_gaps),
-            fix={"kind": "panel", "tab": "devices", "section": None},
+            fix={"kind": "devices", "device_keys": device_keys},
             placeholders={
                 "devices": "\n".join(
                     f"- {name}" for name in self.device_control_mapping_gaps

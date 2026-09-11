@@ -68,6 +68,46 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.journal.export()['coverage'][0]['observed'])
         self.assertEqual(self.calls, [])
 
+    async def test_pool_stale_warning_carries_inspection_and_clears_on_fresh_data(self):
+        self.options['device_modes']['$pool'] = 'control_verification'
+        self.states['sensor.water'].last_reported = datetime.now(timezone.utc) - timedelta(minutes=3)
+        await self.controller.async_start()
+        status = self.controller.status['pool']
+        self.assertEqual(status['state'], 'fault')
+        self.assertTrue(status['retry_automatically'])
+        self.assertEqual(status['fix'], {'kind': 'entity', 'entity_id': 'sensor.water'})
+        self.assertIn('120 seconds', status['next_step'])
+        self.assertIn(self.states['sensor.water'].last_reported.isoformat(), status['reason'])
+        row = self.journal.export()['attempts'][0]
+        self.assertEqual(row['fix'], status['fix'])
+        self.assertEqual(row['reason'], status['reason'])
+        self.states['sensor.water'].last_reported = datetime.now(timezone.utc)
+        await self.controller.async_tick()
+        self.assertEqual(self.controller.status['pool']['state'], 'verified')
+        self.assertNotIn('fix', self.controller.status['pool'])
+        self.assertEqual(self.calls, [])
+
+    async def test_pool_limited_deferral_remains_visible_in_verification(self):
+        self.options['device_modes']['$pool'] = 'control_verification'
+        self.states['sensor.water'].state = '4'
+        self.slot['pool_w'] = 0
+        await self.controller.async_start()
+        status = self.controller.status['pool']
+        self.assertEqual(status['state'], 'limited')
+        self.assertIn('lower limit', status['reason'])
+        self.assertIn('cannot enforce', status['next_step'])
+        self.assertEqual(self.calls, [])
+
+    async def test_handover_verification_failure_remains_visible_after_successful_plan_commands(self):
+        self.options['device_modes']['$pool'] = 'control_verification'
+        self.controller.restore = AsyncMock(side_effect=ValueError('handover command rejected'))
+        await self.controller.async_start()
+        status = self.controller.status['pool']
+        self.assertTrue(status['handover_pending'])
+        self.assertEqual(status['reason'], 'handover command rejected')
+        self.assertNotIn('handover', self.journal.attempts[0]['operations'])
+        self.assertEqual(self.calls, [])
+
     async def test_slot_expiry_stops_verification_without_restoration_calls(self):
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_start()

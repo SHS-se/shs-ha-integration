@@ -559,6 +559,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (!button) return;
     const action = button.dataset.action;
     if (!action) return;
+    if (action === "view-status") this._openStatus(button.dataset.issueKey);
+    if (action === "inspect-entity") this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: button.dataset.entityId }, bubbles: true, composed: true }));
     if (action === "download") this._download();
     if (action === "verification") this._downloadVerification();
     else if (action === "horizon") { this._fullHorizon = !this._fullHorizon; this._render(); }
@@ -575,7 +577,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
     else if (action === "retry") this._load(false);
     else if (action === "discover") this._discover();
     else if (action === "tab") {
+      if (button.dataset.tab === "status") { this._openStatus(); return; }
       this._tab = button.dataset.tab;
+      if (this._tab === "devices") { this._showExcluded = true; this._search = this._room = this._category = ""; }
       this._render();
     } else if (action === "select-entry") {
       this._selectEntry(button.dataset.entryId);
@@ -718,7 +722,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     try {
       const data = await this._hass.callWS({ type: "shs_energy/config/control", config_entry: this._entryId, device_key: key, mode });
       this._mergePanel(data);
-      this._notice = "Device mode saved. Owned settings are restored when control stops; see Status for progress.";
+      this._notice = "Device mode saved: " + this._label(mode) + ".";
     } catch (error) { this._error = error?.message || String(error); }
     finally { this._savingDeviceKey = ""; this._renderBackground(); }
   }
@@ -916,18 +920,74 @@ class ShsEnergyConfigPanel extends HTMLElement {
       ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._commandText(d, slots[1]))}` : ""}</small></article>`).join("")}`;
   }
 
-  _attention() { return this._data?.attention || []; }
+  _attention() {
+    const items = [...(this._data?.attention || [])];
+    for (const device of this._data?.devices || []) {
+      const status = device.execution_status || {};
+      if (!["fault", "unsupported", "overridden", "limited"].includes(status.state) && !status.handover_pending) continue;
+      const key = "controller:" + (device.permission?.controller_id || device.key);
+      if (items.some(item => item.key === key)) continue;
+      const verification = device.mode === "control_verification";
+      items.push({ key, severity: status.state === "fault" ? "error" : "warning",
+        title: `${device.name}: ${status.handover_pending ? "handover verification incomplete" : verification ? "control verification needs attention" : "device control needs attention"}`,
+        detail: status.reason || "The controller did not provide a reason. Download its evidence and report this missing diagnostic.",
+        next_step: (status.next_step || (status.state === "overridden"
+          ? "Check the manual override and other automations controlling this device. Once it is ready, select Planning and then the desired mode on Schedule to resume."
+          : "Review this device's mapped controls and operating settings. If they match the equipment, download the controller evidence and report the reason above for investigation.")) + (verification && status.retry_automatically ? " Verification retries automatically after the problem is corrected." : ""),
+        fix: status.fix || { kind: "device" }, device_key: device.key,
+        verification, slot_start: status.slot_start, plan_id: status.plan_id,
+      });
+    }
+    if (this._refreshError) items.push({ key: "status_refresh", severity: "error", title: "Current status could not be refreshed",
+      detail: this._refreshError, next_step: "Check the connection to Home Assistant, then retry the status refresh. Displayed states may be stale.", fix: { kind: "refresh" } });
+    return items.sort((a, b) => ({error:0, warning:1, info:2}[a.severity] ?? 2) - ({error:0, warning:1, info:2}[b.severity] ?? 2));
+  }
+
   _attentionForTab(tab) { return tab === "status" ? this._attention().filter(i => i.severity !== "info") : []; }
+
+  _openStatus(key) {
+    this._tab = "status";
+    if (key && !this._attention().some(item => item.key === key)) this._notice = "This warning is no longer reported in the latest status.";
+    this._render();
+    const cards = [...this.shadowRoot.querySelectorAll("[data-attention-key]")];
+    const card = key ? cards.find(node => node.dataset.attentionKey === key) : cards[0];
+    if (card) { card.scrollIntoView({ behavior: "smooth", block: "start" }); card.focus({ preventScroll: true }); }
+  }
+
+  _attentionActions(item) {
+    const fix = item.fix || {};
+    const device = this._data.devices.find(d => d.key === (fix.device_key || item.device_key) || (fix.system && d.system === fix.system));
+    const edit = device ? `<button class="text" data-action="edit-device" data-device-key="${this._escape(device.key)}">Edit ${this._escape(device.name)} setup</button>` : "";
+    const affected = this._sortedDevices().filter(d => fix.device_keys?.includes(d.key)).map(d => `<button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit ${this._escape(d.name)} setup</button>`).join("");
+    let primary = "";
+    if (fix.url) primary = `<a href="${this._escape(fix.url)}" target="_blank" rel="noreferrer">Open website settings</a>`;
+    else if (fix.kind === "entity" && fix.entity_id) primary = `<button class="text" data-action="inspect-entity" data-entity-id="${this._escape(fix.entity_id)}">Inspect source entity</button>`;
+    else if (fix.kind === "diagnostics") primary = `<button class="secondary" data-action="download">Download diagnostics</button>`;
+    else if (fix.kind === "refresh") primary = `<button class="secondary" data-action="retry">Retry status refresh</button>`;
+    else if (!device) primary = TABS.filter(([id]) => id !== "status" && (fix.tabs || [fix.tab]).includes(id)).map(([id, name]) => `<button class="text" data-action="tab" data-tab="${id}">Open ${name}</button>`).join("");
+    const evidence = item.device_key ? `<button class="text" data-action="${item.verification ? "verification" : "download"}">${item.verification ? "Download verification log" : "Download diagnostics"}</button>` : "";
+    return primary + edit + affected + evidence;
+  }
+
   _renderAttention() {
-    return this._attention().map(item => `<article class="attention-item ${this._escape(item.severity)}"><strong>${this._escape(item.title)}</strong><p>${this._escape(item.detail)}</p>${item.items?.length ? `<ul>${item.items.map(i => `<li>${this._escape(i)}</li>`).join("")}</ul>` : ""}
-      ${item.fix?.url ? `<a href="${this._escape(item.fix.url)}" target="_blank" rel="noreferrer">Open website settings</a>` : item.fix?.tab ? `<button class="text" data-action="tab" data-tab="${this._escape(item.fix.tab)}">Open ${this._escape(TABS.find(([id]) => id === item.fix.tab)?.[1] || "settings")}</button>` : ""}</article>`).join("");
+    return this._attention().map(item => `<article class="attention-item ${this._escape(item.severity)}" data-attention-key="${this._escape(item.key)}" tabindex="-1"><strong>${this._escape(item.title)}</strong><p>${this._escape(item.detail)}</p>${item.next_step ? `<p><strong>What to do:</strong> ${this._escape(item.next_step)}</p>` : ""}${item.items?.length ? `<ul>${item.items.map(i => `<li>${this._escape(i)}</li>`).join("")}</ul>` : ""}
+      ${item.slot_start ? `<p class="muted">Plan quarter: ${this._time(item.slot_start)}${item.plan_id ? ` · Plan ${this._escape(item.plan_id)}` : ""}</p>` : ""}
+      ${this._attentionActions(item)}</article>`).join("");
+  }
+
+  _renderAttentionLinks() {
+    const items = this._attention();
+    if (this._tab === "status" || !items.length) return "";
+    const count = items.filter(item => item.severity !== "info").length;
+    return `<div class="alert attention-links ${count ? "warning" : "notice"}"><strong>${count ? `${count} item${count === 1 ? "" : "s"} need${count === 1 ? "s" : ""} attention` : "Learning in progress"}</strong>${items.map(item => `<button class="secondary" data-action="view-status" data-issue-key="${this._escape(item.key)}">${this._escape(item.title)} · View status</button>`).join("")}</div>`;
   }
 
   _renderStatus() {
     const status = this._data.operation, values = this._data.diagnostics, readiness = this._data.readiness;
     const rows = (items) => `<dl>${items.map(([label, value]) => `<div><dt>${this._escape(label)}</dt><dd>${this._escape(value ?? "Not yet")}</dd></div>`).join("")}</dl>`;
-    const controllers = this._data.devices.map(d => [d.name, `${this._label(d.execution_status?.state)}${d.execution_status?.reason ? ': ' + d.execution_status.reason : ''}`]);
-    return `<section class="card"><div class="status-heading"><h2>Integration status</h2>${this._refreshError ? this._statusBadge("unavailable", "Status unconfirmed") : this._statusBadge(status.state, status.label)}</div><p>${this._escape(this._refreshError ? "Current status could not be confirmed. The last received status may be stale." : status.reason)}</p>${status.recovering ? `<p>Requesting a fresh plan automatically…</p>` : status.retry_at && !status.actionable ? `<p>Automatic recovery will retry at ${this._time(status.retry_at)}.</p>` : ""}${values.last_optimisation_error ? `<p role="alert">Latest planning error: ${this._escape(values.last_optimisation_error)}</p>` : ""}${values.last_runtime_error ? `<p role="alert">Website status delivery failed: ${this._escape(values.last_runtime_error)}</p>` : ""}${this._refreshError ? `<p role="alert">Status refresh failed: ${this._escape(this._refreshError)}. These readings may be stale.</p>` : ""}<button class="secondary" data-action="download">Download redacted diagnostics</button></section>
+    const warningCount = this._attentionForTab("status").length;
+    const controllers = this._sortedDevices().map(d => [d.name, `${this._label(d.execution_status?.state)}${d.execution_status?.reason ? ': ' + d.execution_status.reason : ''}`]);
+    return `<section class="card"><div class="status-heading"><h2>Integration status</h2>${warningCount ? this._statusBadge("warning", "Needs attention") : this._statusBadge(status.state, status.label)}</div><p>Planning: ${this._escape(this._refreshError ? "Current status is unconfirmed." : status.reason)}</p>${warningCount ? `<p>${warningCount} item${warningCount === 1 ? "" : "s"} need${warningCount === 1 ? "s" : ""} attention below.</p>` : ""}${status.recovering ? `<p>Requesting a fresh plan automatically…</p>` : status.retry_at && !status.actionable ? `<p>Automatic recovery will retry at ${this._time(status.retry_at)}.</p>` : ""}${values.last_optimisation_error ? `<p role="alert">Latest planning error: ${this._escape(values.last_optimisation_error)}</p>` : ""}${values.last_runtime_error ? `<p role="alert">Website status delivery failed: ${this._escape(values.last_runtime_error)}</p>` : ""}${this._refreshError ? `<p role="alert">Status refresh failed: ${this._escape(this._refreshError)}. These readings may be stale.</p>` : ""}<button class="secondary" data-action="download">Download redacted diagnostics</button></section>
       ${this._attention().length ? `<div class="attention" aria-label="Status details">${this._renderAttention()}</div>` : ""}
       <details class="card diagnostics compact"><summary>Data delivery</summary>${rows([["Latest status delivered to website", this._time(values.last_runtime_report)], ["Latest daily delivery", this._time(values.last_daily_push)], ["Latest daily error", values.last_daily_push_error], ["Latest planning attempt", this._time(readiness.last_plan_attempt)], ["Latest successful exchange", this._time(readiness.last_plan_push)], ["Electrical readings received through", this._time(readiness.actuals_accepted_until)], ["New electrical quarters in latest exchange", readiness.actual_slots_accepted], ["Room readings received through", this._time(values.thermal_slots_accepted_until)], ["New room quarters in latest exchange", values.last_thermal_slots_accepted], ["Website choices received", this._time(this._data.portal.refreshed_at)]])}<p>Zero new quarters does not erase earlier history.</p></details>
       <details class="card diagnostics compact"><summary>Planner</summary>${rows([["Current plan", status.label], ["Plan identifier", status.plan_id], ["Issued", this._time(status.issued_at)], ["Instructions until", this._time(status.binding_until)], ["Valid until", this._time(status.valid_until)], ["Latest exchange error", values.last_optimisation_error], ["Tariff", this._label(values.tariff_status)], ["Subscription", values.subscription_active ? "Active" : "Inactive or unavailable"]])}${readiness.missing_inputs?.length ? `<ul>${readiness.missing_inputs.map(i => `<li>${this._escape(i)}</li>`).join("")}</ul>` : ""}</details>
@@ -1001,8 +1061,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
           ${this._error ? `<div class="alert error"><strong>Could not save or refresh</strong><span>${this._escape(this._error)}</span></div>` : ""}
           ${this._notice ? `<div class="alert notice"><span>${this._escape(this._notice)}</span></div>` : ""}
           ${this._data.portal.error ? `<div class="alert warning"><strong>Website choices could not be refreshed</strong><span>${this._escape(this._data.portal.error)} The last received choices are shown.</span></div>` : ""}
-          ${this._tab === "status" ? "" : this._attention().length ? `<button class="secondary" data-action="tab" data-tab="status">${this._attention().some(i => i.severity !== "info") ? this._attention().filter(i => i.severity !== "info").length + " items need attention" : "Learning in progress"} · View status</button>` : ""}
-          ${this._tab !== "status" && this._data.devices.some(d => d.execution_status?.state === "fault") ? `<div role="alert" class="alert error"><span>Device execution needs attention: ${this._data.devices.filter(d => d.execution_status?.state === "fault").map(d => this._escape(d.name)).join(", ")}</span><button class="secondary" data-action="tab" data-tab="status">View status</button></div>` : ""}
+          ${this._renderAttentionLinks()}
           ${this._renderBody()}
         </section>
         <footer aria-live="polite"><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Website choices define the planning method. Device mode here controls participation and execution.</span></footer>
@@ -1070,7 +1129,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .tabs button.needs-attention { color:var(--warning-color, #ff9800); }
       .tab-badge { display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; margin-left:7px; padding:0 5px; border-radius:9px; background:var(--warning-color, #ff9800); color:#1c1c1c; font-size:11px; font-weight:700; }
       .attention { display:grid; gap:12px; margin-bottom:18px; }
-      .attention-item { margin:0; border:1px solid var(--warning-color, #ff9800); border-left-width:4px; border-radius:12px; padding:14px 16px; background:var(--card-background-color); }
+      .alert.attention-links { flex-direction:column; align-items:stretch; }
+      .attention-links button { text-align:left; }
+      .attention-item { min-width:0; overflow-wrap:anywhere; scroll-margin-top:150px; margin:0; border:1px solid var(--warning-color, #ff9800); border-left-width:4px; border-radius:12px; padding:14px 16px; background:var(--card-background-color); }
+      .attention-item button { max-width:100%; overflow-wrap:anywhere; }
       .attention-item.info { border-color:var(--divider-color, #ddd); }
       .attention-item.warning > strong { color:var(--warning-color, #ff9800); }
       .attention-item.error { border-color:var(--error-color, #db4437); }

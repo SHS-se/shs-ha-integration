@@ -215,7 +215,9 @@ test('status shows automatic recovery and delivery failures without claiming rea
   panel._data.operation = { state: 'ready', label: 'Ready', reason: 'A validated plan is available' };
   panel._refreshError = 'connection lost';
   html = panel._renderStatus();
-  assert.match(html, /Status unconfirmed/);
+  assert.match(html, /Current status is unconfirmed/);
+  assert.match(html, /Retry status refresh/);
+  assert.equal(panel._attentionForTab("status").length, 1);
   assert.doesNotMatch(html, />Ready<\/span>/);
 });
 
@@ -551,4 +553,103 @@ test('removing settings clears their values, hides them and sends null for save'
   panel._removeField('configuration', 'battery_mode_entity');
   assert.equal(panel._draft.battery_mode_charge, null);
   assert.equal(panel._draft.battery_mode_baseline, null);
+});
+
+
+const poolFaultPanel = () => {
+  const panel = makePanel();
+  panel._tab = 'schedule';
+  Object.assign(panel._data, {
+    operation: { state: 'ready', label: 'Ready', reason: 'A validated plan is available' },
+    diagnostics: {}, readiness: {}, portal: {},
+    devices: [{ key: 'sensor.pool', name: 'Pool heater', system: 'pool', mode: 'control_verification',
+      permission: { controller_id: 'pool' }, execution_status: { state: 'fault',
+        reason: 'sensor.water is stale (last reported 2026-09-11T15:00:00+00:00; maximum age 120 seconds)',
+        next_step: 'Check the sensor reporting interval.', retry_automatically: true, fix: { kind: 'entity', entity_id: 'sensor.water' },
+        plan_id: 'plan-123', slot_start: '2026-09-11T15:00:00+00:00' } }],
+    attention: [{ key: 'power', title: 'Running power needed', severity: 'warning', detail: 'Configure Power.',
+      fix: { kind: 'devices', device_keys: ['sensor.pool'] } }],
+  });
+  return panel;
+};
+
+test('controller warnings share counts, destinations and visible evidence with integration warnings', () => {
+  const panel = poolFaultPanel();
+  const links = panel._renderAttentionLinks();
+  assert.match(links, /2 items need attention/);
+  assert.equal((links.match(/data-action="view-status"/g) || []).length, 2);
+  const html = panel._renderStatus();
+  assert.match(html, /badge warning">Needs attention/);
+  assert.doesNotMatch(html, /badge ready">Ready/);
+  for (const key of ['controller:pool', 'power']) {
+    assert.ok(links.includes(`data-issue-key="${key}"`));
+    assert.ok(html.indexOf(`data-attention-key="${key}"`) < html.indexOf('<details'));
+  }
+  assert.match(html, /sensor.water is stale/);
+  assert.match(html, /What to do:/);
+  assert.match(html, /Check the sensor reporting interval/);
+  assert.match(html, /Verification retries automatically/);
+  assert.match(html, /data-action="inspect-entity" data-entity-id="sensor.water"/);
+  assert.match(html, /data-action="edit-device" data-device-key="sensor.pool"/);
+  assert.match(html, /Download verification log/);
+  assert.match(html, /Plan plan-123/);
+  assert.equal(panel._attentionForTab('status').length, 2);
+});
+
+test('View status focuses the named warning instead of leaving it hidden in diagnostics', () => {
+  const panel = poolFaultPanel();
+  let focused, scrolled, renderedTab;
+  panel._render = () => { renderedTab = panel._tab; };
+  panel.shadowRoot = { querySelectorAll: () => ['power', 'controller:pool'].map(key => ({
+    dataset: { attentionKey: key }, focus: () => { focused = key; }, scrollIntoView: () => { scrolled = key; },
+  })) };
+  panel._onClick({ target: { closest: () => ({ dataset: { action: 'view-status', issueKey: 'controller:pool' } }) } });
+  assert.equal(renderedTab, 'status');
+  assert.equal(focused, 'controller:pool');
+  assert.equal(scrolled, 'controller:pool');
+  focused = scrolled = null;
+  panel._openStatus('resolved-issue');
+  assert.equal(focused, null, 'a removed issue must not focus an unrelated warning');
+  assert.match(panel._notice, /no longer reported/);
+});
+
+test('a recovered device loses its warning, link and badge without losing other warnings', () => {
+  const panel = poolFaultPanel();
+  const devices = JSON.parse(JSON.stringify(panel._data.devices));
+  devices[0].execution_status = { state: 'verified', reason: 'Commands logged' };
+  panel._mergePanel({ ...panel._data, devices });
+  assert.equal(panel._attentionForTab('status').length, 1);
+  assert.doesNotMatch(panel._renderAttentionLinks(), /controller:pool/);
+  assert.doesNotMatch(panel._renderAttention(), /sensor.water is stale/);
+  panel._data.attention = [];
+  assert.equal(panel._attentionForTab('status').length, 0);
+  assert.match(panel._renderStatus(), /badge ready">Ready/);
+});
+
+test('unsupported, overridden, limited and pending handovers retain visible reasons and evidence', () => {
+  const panel = poolFaultPanel();
+  panel._data.attention = [];
+  for (const state of ['fault', 'unsupported', 'overridden', 'limited', 'verified']) {
+    panel._data.devices[0].execution_status = { state, reason: `Specific ${state} reason`, handover_pending: state === 'verified' };
+    const html = panel._renderAttention();
+    assert.match(html, new RegExp(`Specific ${state} reason`));
+    assert.match(html, /Download verification log/);
+    assert.equal(panel._attentionForTab('status').length, 1);
+  }
+  panel._data.devices[0].mode = 'controlling';
+  assert.match(panel._renderAttention(), /Download diagnostics/);
+  assert.doesNotMatch(panel._renderAttention(), /Verification retries automatically/);
+});
+
+test('every supported fix names a real action; retired tabs create no dead-end button', () => {
+  const panel = poolFaultPanel();
+  const render = fix => panel._attentionActions({ fix });
+  assert.match(render({ kind: 'device', system: 'pool' }), /edit-device.*sensor.pool/);
+  assert.match(render({ kind: 'devices', device_keys: ['sensor.pool'] }), /Edit Pool heater setup/);
+  assert.match(render({ kind: 'panel', tabs: ['energy', 'devices'] }), /data-tab="energy".*data-tab="devices"/);
+  assert.match(render({ kind: 'website', url: 'https://example.test/settings' }), /href="https:\/\/example.test\/settings"/);
+  assert.match(render({ kind: 'diagnostics' }), /data-action="download"/);
+  assert.match(render({ kind: 'refresh' }), /data-action="retry"/);
+  assert.equal(render({ kind: 'panel', tab: 'diagnostics' }), '');
+  assert.equal(render({ kind: 'none' }), '');
 });
