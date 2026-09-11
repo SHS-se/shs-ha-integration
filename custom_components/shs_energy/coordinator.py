@@ -28,6 +28,7 @@ from .api import (
     ShsAuthError,
     ShsSubscriptionInactiveError,
 )
+from .configuration_values import resolve_battery_quantities
 from .api_contract import ApiContractError, validate_server_contract
 from .const import (
     BACKFILL_MAX_DAYS,
@@ -64,7 +65,6 @@ from .const import (
     OPT_BATTERY_CHARGE_MAX_W,
     OPT_BATTERY_DISCHARGE_MAX_W,
     OPT_BATTERY_MIN_SOC,
-    OPT_BATTERY_MIN_SOC_ENTITY,
     OPT_BATTERY_MAX_SOC,
     OPT_BATTERY_TARGET_SOC,
     OPT_BATTERY_TARGET_IS_HARD,
@@ -119,7 +119,6 @@ from .optimisation import (
     build_base_load_model,
     base_load_source,
     calibration_summary,
-    discharge_cut_off,
     extract_timestamped_forecast,
     normalized_fraction,
     optimisation_plan_due,
@@ -2434,48 +2433,21 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         calibrated = any(
             count >= 20 for count in calibration["sample_count_by_lead_day"]
         )
-        # What the inverter will actually stop at.
-        #
-        # `battery_min_soc` was a figure typed into the panel, and the two drift
-        # the moment either moves: a plan built on 5% while the hardware cuts
-        # off at 20% promises energy the inverter refuses to deliver, and the
-        # controller then spends the evening asking for a discharge that never
-        # arrives. Read the cut-off where the home exposes it. A home that does
-        # not, or a sensor that is briefly unreadable, keeps the typed number —
-        # losing the whole plan over one optional reading would be worse than
-        # planning against the figure the installer entered.
-        configured_min_soc = parse_number(
-            options[OPT_BATTERY_MIN_SOC], OPT_BATTERY_MIN_SOC
-        )
-        cut_off_state = None
-        if battery_entity is not None and options.get(OPT_BATTERY_MIN_SOC_ENTITY):
+        battery_limits = {}
+        if battery_entity is not None:
             try:
-                cut_off_state = self._entity_payload(
-                    options[OPT_BATTERY_MIN_SOC_ENTITY]
-                )["state"]
-            except OptimisationInputError as error:
-                _LOGGER.warning(
-                    "discharge cut-off SOC unreadable (%s); planning against the "
-                    "configured %.0f%% instead",
-                    error,
-                    configured_min_soc * 100,
-                )
-        battery_min_soc = discharge_cut_off(
-            configured_min_soc, cut_off_state, OPT_BATTERY_MIN_SOC_ENTITY
-        )
+                battery_limits = resolve_battery_quantities(options, self._entity_payload)
+            except OptimisationInputError:
+                raise
+            except ValueError as error:
+                raise OptimisationInputError(str(error)) from error
         battery = None if battery_entity is None else {
-            "capacity_kwh": parse_number(
-                options[OPT_BATTERY_CAPACITY_KWH], OPT_BATTERY_CAPACITY_KWH
-            ),
+            "capacity_kwh": battery_limits[OPT_BATTERY_CAPACITY_KWH],
             "soc": battery_soc,
-            "min_soc": battery_min_soc,
+            "min_soc": battery_limits[OPT_BATTERY_MIN_SOC],
             "max_soc": parse_number(options[OPT_BATTERY_MAX_SOC], OPT_BATTERY_MAX_SOC),
-            "charge_max_w": parse_number(
-                options[OPT_BATTERY_CHARGE_MAX_W], OPT_BATTERY_CHARGE_MAX_W
-            ),
-            "discharge_max_w": parse_number(
-                options[OPT_BATTERY_DISCHARGE_MAX_W], OPT_BATTERY_DISCHARGE_MAX_W
-            ),
+            "charge_max_w": battery_limits[OPT_BATTERY_CHARGE_MAX_W],
+            "discharge_max_w": battery_limits[OPT_BATTERY_DISCHARGE_MAX_W],
             "charge_efficiency": parse_number(
                 options[OPT_BATTERY_CHARGE_EFFICIENCY], OPT_BATTERY_CHARGE_EFFICIENCY
             ),

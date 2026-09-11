@@ -12,7 +12,6 @@ import unittest
 sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
 from optimisation import (  # noqa: E402
-    discharge_cut_off,
     OptimisationInputError,
     REMEDY_DEFECT,
     REMEDY_SETTING,
@@ -1093,32 +1092,3 @@ class RemedyClassificationTests(unittest.TestCase):
             validate_plan_contract(None, datetime(2026, 8, 31, tzinfo=timezone.utc))
 
         self.assertEqual(caught.exception.remedy, REMEDY_DEFECT)
-
-
-class DischargeCutOffTests(unittest.TestCase):
-    """The SOC floor to plan against (§8.4).
-
-    A figure typed into the panel and a cut-off enforced by the inverter drift
-    apart the moment either moves, and the plan is the one that gets it wrong:
-    it promises energy the hardware will refuse.
-    """
-
-    def test_reads_the_inverters_own_cut_off(self):
-        self.assertAlmostEqual(discharge_cut_off(0.05, "20", "cut_off"), 0.20)
-
-    def test_accepts_a_fractional_reading_too(self):
-        self.assertAlmostEqual(discharge_cut_off(0.05, "0.2", "cut_off"), 0.20)
-
-    def test_a_home_without_the_sensor_keeps_its_configured_floor(self):
-        self.assertAlmostEqual(discharge_cut_off(0.05, None, "cut_off"), 0.05)
-
-    def test_an_unusable_reading_falls_back_rather_than_failing(self):
-        # Losing a whole plan over one optional reading is worse than planning
-        # against the number the installer entered.
-        for raw in ("", "unknown", "n/a", "180"):
-            with self.subTest(raw=raw):
-                self.assertAlmostEqual(discharge_cut_off(0.05, raw, "cut_off"), 0.05)
-
-    def test_the_real_sigen_reading_is_five_percent(self):
-        # sensor.sigen_plant_discharge_cut_off_soc reports "5.0" with unit %.
-        self.assertAlmostEqual(discharge_cut_off(0.10, "5.0", "cut_off"), 0.05)

@@ -6,11 +6,13 @@ from math import isfinite
 import re
 from typing import Any
 if __package__:
+    from .configuration_values import resolve_quantity
     from .device_commands import execution_setup_errors
     from . import const as c
     from .configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS
     from .device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_band_errors
 else:
+    from configuration_values import resolve_quantity
     from device_commands import execution_setup_errors
     import const as c
     from configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS
@@ -118,6 +120,14 @@ def normalise_field_value(
         if not isinstance(value, bool):
             raise ValueError(f"{context}: {label} must be on or off")
         return value
+
+    if kind == "quantity":
+        scale = field.get("scale") or 1
+        number = resolve_quantity(value, read_entity, unit=field["unit"],
+            minimum=field["minimum"] / scale if "minimum" in field else None,
+            maximum=field["maximum"] / scale if "maximum" in field else None,
+            label=f"{context}: {label}")
+        return value.strip() if isinstance(value, str) and value.strip().startswith("sensor.") else number
 
     if kind == "number":
         if isinstance(value, bool):
@@ -236,7 +246,17 @@ def prepare_options(existing, incoming, read_entity, *, latitude=0.0, longitude=
     current = resolve_configuration(result, latitude, longitude)
     for low, high in (("battery_min_soc", "battery_max_soc"),
                       ("pool_temperature_minimum", "pool_temperature_maximum")):
-        if current.get(low) is not None and current.get(high) is not None and current[low] >= current[high]:
+        if current.get(low) is None or current.get(high) is None:
+            continue
+        lower = current[low]
+        if low == "battery_min_soc":
+            # An unrelated edit (especially disabling control) must remain
+            # possible when an already-selected hardware sensor is offline.
+            if low not in incoming and high not in incoming:
+                continue
+            lower = resolve_quantity(lower, read_entity, unit="%", minimum=0,
+                                     maximum=1, label="Minimum charge")
+        if lower >= current[high]:
             raise ValueError(f"{OPTION_FIELDS[low]['label']} must be below {OPTION_FIELDS[high]['label']}")
     if current["battery_control_enabled"]:
         errors = battery_control_errors(current)

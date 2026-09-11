@@ -14,9 +14,11 @@ from math import isfinite
 from typing import Any
 
 try:
+    from .configuration_values import resolve_battery_quantities
     from .device_commands import actuator_targets, execution_setup_errors, validate_commands
     from .device_controls import battery_control_errors, pool_band_errors, planning_path
 except ImportError:  # Pure executor tests, without importing Home Assistant.
+    from configuration_values import resolve_battery_quantities
     from device_commands import actuator_targets, execution_setup_errors, validate_commands
     from device_controls import battery_control_errors, pool_band_errors, planning_path
 
@@ -382,13 +384,15 @@ class ScheduledController:
         if errors:
             raise ValueError("; ".join(errors))
         soc = self.fraction(options["battery_soc_entity"])
-        floor = finite(options["battery_min_soc"])
-        if entity := options.get("battery_min_soc_entity"):
-            floor = max(floor, self.fraction(entity))
+        def read_quantity(entity):
+            state = self.state(entity)
+            return {"state": state.state, "attributes": state.attributes}
+        limits = resolve_battery_quantities(options, read_quantity)
+        floor = limits["battery_min_soc"]
         charge, discharge = finite(slot["battery_charge_w"]), finite(slot["battery_discharge_w"])
         if min(charge, discharge) < 0 or charge and discharge:
             raise ValueError("invalid simultaneous battery charge and discharge")
-        if charge > finite(options["battery_charge_max_w"]) or discharge > finite(options["battery_discharge_max_w"]):
+        if charge > limits["battery_charge_max_w"] or discharge > limits["battery_discharge_max_w"]:
             raise ValueError("planned battery power exceeds reviewed rating")
         if (discharge and soc <= floor) or (charge and soc >= finite(options["battery_max_soc"])):
             raise ValueError("battery SOC protection blocks the planned request")

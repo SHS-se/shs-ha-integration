@@ -381,7 +381,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       target[key] = Boolean(rawValue);
       return;
     }
-    if (field.kind === "number") {
+    if (field.kind === "number" || (field.kind === "quantity" && String(rawValue).trim() !== "" && Number.isFinite(Number(rawValue)))) {
       if (rawValue === "") {
         delete target[key];
         return;
@@ -602,8 +602,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
       control = `<div class="with-unit"><input type="number" ${common} value="${this._escape(displayed)}" ${field.step !== undefined ? `step="${field.step}"` : ""} ${field.minimum !== undefined ? `min="${field.minimum}"` : ""} ${field.maximum !== undefined ? `max="${field.maximum}"` : ""}><span>${this._escape(field.unit || "")}</span></div>`;
     } else if (field.kind === "time") {
       control = `<input type="time" ${common} value="${this._escape(value || "")}">`;
-    } else if (field.kind === "power") {
-      control = `<div class="with-unit"><input type="text" list="shs-power-list" ${common} value="${this._escape(value ?? "")}" placeholder="Power entity or watts"><span>W</span></div>`;
+    } else if (["quantity", "power"].includes(field.kind)) {
+      const unit = field.unit || "W";
+      const displayed = typeof value === "number" ? value * (field.scale || 1) : (value ?? "");
+      const list = unit === "W" ? "shs-power-list" : unit === "kWh" ? "shs-energy-list" : "shs-percent-list";
+      const placeholder = field.kind === "power" ? "Power entity or watts" : `Search sensor or enter ${unit}`;
+      control = `<div class="with-unit"><input type="text" list="${list}" ${common} value="${this._escape(displayed)}" placeholder="${this._escape(placeholder)}"><span>${this._escape(unit)}</span></div>`;
     } else {
       control = `<input type="text" ${common} ${field.kind === "entity" ? 'list="shs-entity-list"' : ""} value="${this._escape(value || "")}" placeholder="${field.kind === "entity" ? "Search or enter an entity" : ""}">`;
     }
@@ -710,7 +714,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         const required = field.required || dependent.has(field.key);
         const populated = this._present(values[field.key]) && (field.kind !== "toggle" || values[field.key] || this._data.configured_keys?.includes(field.key));
         const inheritedLocation = ["pv_forecast_latitude", "pv_forecast_longitude"].includes(field.key) && !this._data.configured_keys?.includes(field.key);
-        if (required || field.kind === "power" || (populated && !inheritedLocation) || this._added.has(token)) visible.push(this._renderField({ ...field, required }, values[field.key], scope, deviceKey));
+        if (required || ["power", "quantity"].includes(field.kind) || (populated && !inheritedLocation) || this._added.has(token)) visible.push(this._renderField({ ...field, required }, values[field.key], scope, deviceKey));
         else if (!["permit_entity_id", "mode_entity_id", "offset_entity_id", "offset_minimum", "offset_maximum"].includes(field.key)) {
           optional.push(`<button class="text" data-action="add-field" data-token="${this._escape(token)}">Add ${this._escape(field.label.toLowerCase())}</button>`);
         }
@@ -890,7 +894,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const powerEntities = this._data.entities.filter(
       (entity) => entity.domain === "sensor" && ["W", "kW"].includes(entity.unit)
     );
-    return `<datalist id="shs-entity-list">${options(this._data.entities)}</datalist><datalist id="shs-power-list">${options(powerEntities)}</datalist>`;
+    return `<datalist id="shs-entity-list">${options(this._data.entities)}</datalist><datalist id="shs-power-list">${options(powerEntities)}</datalist><datalist id="shs-energy-list">${options(this._data.entities.filter(e => e.domain === "sensor" && ["Wh", "kWh", "MWh"].includes(e.unit)))}</datalist><datalist id="shs-percent-list">${options(this._data.entities.filter(e => e.domain === "sensor" && e.unit === "%"))}</datalist>`;
   }
 
   _render() {

@@ -62,7 +62,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
             'battery_power_entity': 'number.battery', 'battery_power_unit': 'kW',
             'battery_discharge_is_negative': True, 'battery_measurement_charge_positive': True,
             'battery_power_measurement_entity': 'sensor.battery_power', 'battery_soc_entity': 'sensor.battery_soc',
-            'battery_min_soc': .05, 'battery_max_soc': 1, 'battery_charge_max_w': 8800, 'battery_discharge_max_w': 9600,
+            'battery_capacity_kwh': 18.08, 'battery_min_soc': .05, 'battery_max_soc': 1, 'battery_charge_max_w': 8800, 'battery_discharge_max_w': 9600,
             'battery_authority_entity': 'switch.authority', 'battery_authority_confirm_entity': 'sensor.authority', 'battery_authority_confirm_state': 'Remote',
         }
         self.slot = {'start': '2026-09-08T12:00:00+00:00', 'ev_target_current_a': 10,
@@ -97,6 +97,19 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
             if not predicate():
                 raise ValueError(error)
         self.controller.confirm = confirm
+
+    async def test_live_battery_limits_block_requests_before_actuator_writes(self):
+        self.options['battery_min_soc'] = 'sensor.cutoff'
+        self.options['battery_charge_max_w'] = 'sensor.charge_rating'
+        self.states['sensor.cutoff'] = State(60, unit_of_measurement='%')
+        self.states['sensor.charge_rating'] = State(1, unit_of_measurement='kW')
+        discharge = {**self.slot, 'battery_charge_w': 0, 'battery_discharge_w': 1000}
+        with self.assertRaisesRegex(ValueError, 'SOC protection'):
+            await self.controller.execute_battery(self.options, discharge)
+        self.states['sensor.cutoff'] = State(5, unit_of_measurement='%')
+        with self.assertRaisesRegex(ValueError, 'exceeds reviewed rating'):
+            await self.controller.execute_battery(self.options, self.slot)
+        self.assertEqual(self.calls, [])
 
     async def test_all_off_never_writes(self):
         await self.controller.async_start()

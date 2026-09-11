@@ -25,6 +25,7 @@ from .const import (
     OPT_BATTERY_CAPACITY_KWH,
     OPT_BATTERY_CHARGE_MAX_W,
     OPT_BATTERY_DISCHARGE_MAX_W,
+    OPT_BATTERY_MIN_SOC,
     OPT_BATTERY_SOC_ENTITY,
     OPT_DISCOVERY_EVIDENCE,
     OPT_OUTDOOR_TEMPERATURE_ENTITY,
@@ -520,6 +521,7 @@ async def async_discover_configuration(
     battery_capacity_ids = ("sensor.sigen_plant_rated_energy_capacity",)
     charge_limit_ids = ("sensor.sigen_plant_ess_rated_charging_power",)
     discharge_limit_ids = ("sensor.sigen_plant_ess_rated_discharging_power",)
+    cut_off_ids = ("sensor.sigen_plant_discharge_cut_off_soc",)
     plant_limit_ids = ("sensor.sigen_plant_max_active_power",)
     battery_soc = _first_state(
         states,
@@ -532,6 +534,11 @@ async def async_discover_configuration(
         battery_soc,
         exact_ids=battery_soc_ids,
         detail="Live battery state of charge",
+    )
+    record_state(
+        OPT_BATTERY_MIN_SOC,
+        _first_state(states, exact_ids=cut_off_ids, required=("discharge", "cut", "off", "soc"), domain="sensor"),
+        exact_ids=cut_off_ids, detail="Live hardware discharge cut-off",
     )
     equipment_values = (
         (
@@ -586,7 +593,7 @@ async def async_discover_configuration(
         exact = state.entity_id in exact_ids
         record(
             key,
-            round(value, 3),
+            state.entity_id if key in {OPT_BATTERY_CAPACITY_KWH, OPT_BATTERY_CHARGE_MAX_W, OPT_BATTERY_DISCHARGE_MAX_W} else round(value, 3),
             source="equipment_rating_entity",
             confidence="high" if exact else "medium",
             detail=f"Declared by {state.entity_id}",

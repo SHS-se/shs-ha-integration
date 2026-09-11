@@ -93,7 +93,7 @@ OPT_CONFIGURATION_REVIEWED_AT = "configuration_reviewed_at"
 OPT_DEVICE_CONTROL_MAPPINGS = "device_control_mappings"
 # Versions 5/6 shipped the retired control interfaces. Never reuse version 4:
 # installed entries must roll forward through the restored settings schema.
-CONFIG_ENTRY_VERSION = 8
+CONFIG_ENTRY_VERSION = 9
 ROOM_AREA_FIELD = "room_area_id"
 
 # Live optimisation inputs. Forecast entities must expose timestamped values;
@@ -132,9 +132,6 @@ OPT_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
 OPT_BATTERY_CHARGE_MAX_W = "battery_charge_max_w"
 OPT_BATTERY_DISCHARGE_MAX_W = "battery_discharge_max_w"
 OPT_BATTERY_MIN_SOC = "battery_min_soc"
-# The inverter enforces its own discharge cut-off. Reading it beats
-# trusting a number typed beside it, which drifts the moment either moves.
-OPT_BATTERY_MIN_SOC_ENTITY = "battery_min_soc_entity"
 OPT_BATTERY_MAX_SOC = "battery_max_soc"
 OPT_BATTERY_TARGET_SOC = "battery_target_soc"
 OPT_BATTERY_TARGET_IS_HARD = "battery_target_is_hard"

@@ -475,3 +475,33 @@ for (const controlType of ['setpoint', 'switch_schedule', 'permit_inhibit']) {
     assert.equal(panel._draft.device_control_mappings.pool.actuator_entity_ids, undefined);
   });
 }
+
+test('battery quantities autocomplete sensor names and preserve sensor or numeric values', () => {
+  const panel = Object.create(context.Panel.prototype);
+  panel._draft = {};
+  panel._data = { entities: [
+    { entity_id: 'sensor.capacity', name: 'Sigen Plant Rated Energy Capacity', domain: 'sensor', unit: 'kWh' },
+    { entity_id: 'sensor.charge', name: 'Sigen Plant ESS Rated Charging Power', domain: 'sensor', unit: 'kW' },
+    { entity_id: 'sensor.floor', name: 'Sigen Plant Discharge Cut-Off SOC', domain: 'sensor', unit: '%' },
+  ] };
+  for (const [key, unit, scale, entity, literal, stored, list] of [
+    ['battery_capacity_kwh', 'kWh', 1, 'sensor.capacity', '18.08', 18.08, 'shs-energy-list'],
+    ['battery_charge_max_w', 'W', 1, 'sensor.charge', '8800', 8800, 'shs-power-list'],
+    ['battery_min_soc', '%', 100, 'sensor.floor', '0.5', .005, 'shs-percent-list'],
+  ]) {
+    const field = { key, label: key, kind: 'quantity', unit, scale };
+    panel._setField('configuration', key, entity, field);
+    assert.equal(panel._draft[key], entity);
+    assert.match(panel._renderField(field, entity), new RegExp(`list="${list}"`));
+    assert.match(panel._renderField(field, entity), new RegExp(`value="${entity}"`));
+    panel._setField('configuration', key, literal, field);
+    assert.equal(panel._draft[key], stored);
+    assert.match(panel._renderField(field, stored), new RegExp(`value="${literal}"`));
+    panel._setField('configuration', key, '', field);
+    assert.equal(key in panel._draft, false);
+  }
+  const lists = panel._renderDatalist();
+  assert.match(lists, /value="sensor.capacity">Sigen Plant Rated Energy Capacity/);
+  assert.match(lists, /value="sensor.charge">Sigen Plant ESS Rated Charging Power/);
+  assert.match(lists, /value="sensor.floor">Sigen Plant Discharge Cut-Off SOC/);
+});

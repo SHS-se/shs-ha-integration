@@ -50,12 +50,17 @@ def migrate_options(
     No archive, defaults, credentials, or command journal is written here.
     """
     result = {key: deepcopy(value) for key, value in options.items() if key in PERSISTED_KEYS}
+    # Fold the former separate cut-off source into the single quantity field.
+    if options.get("battery_min_soc_entity"):
+        result["battery_min_soc"] = options["battery_min_soc_entity"]
     prior = options.get("_migration_report", {})
     report = {
         kind: set(prior.get(kind, [])) if isinstance(prior, dict) else set()
         for kind in ("imported", "removed", "needs_attention")
     }
     report["removed"].update(set(options) - PERSISTED_KEYS)
+    if options.get("battery_min_soc_entity"):
+        report["imported"].add("battery_min_soc")
     if source_version in (5, 6):
         # These migrations deleted settings rather than archiving their values.
         # Retain the removal evidence, but replace instructions for the retired

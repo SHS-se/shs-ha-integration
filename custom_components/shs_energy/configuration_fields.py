@@ -55,6 +55,8 @@ def _field(
         "help": help_text,
         "required": required,
     }
+    if kind == "quantity" and not help_text:
+        result["help"] = f"Choose a sensor, or enter a fixed value in {unit}. Sensor readings are converted using their reported units."
     if domains:
         result["domains"] = list(domains)
     if choices:
@@ -345,11 +347,10 @@ def _configuration_sections() -> list[dict[str, Any]]:
             ),
             "fields": [
                 _field(c.OPT_BATTERY_SOC_ENTITY, "Battery state of charge", "entity", domains=("sensor",)),
-                _field(c.OPT_BATTERY_CAPACITY_KWH, "Usable capacity", "number", unit="kWh", minimum=0.1, step=0.1),
-                _field(c.OPT_BATTERY_CHARGE_MAX_W, "Maximum charge power", "number", unit="W", minimum=1, step=1),
-                _field(c.OPT_BATTERY_DISCHARGE_MAX_W, "Maximum discharge power", "number", unit="W", minimum=1, step=1),
-                _field(c.OPT_BATTERY_MIN_SOC_ENTITY, "Minimum battery charge sensor", "entity", domains=("sensor", "number")),
-                _field(c.OPT_BATTERY_MIN_SOC, "Minimum charge", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
+                _field(c.OPT_BATTERY_CAPACITY_KWH, "Rated energy capacity", "quantity", unit="kWh", minimum=0.1, step=0.1),
+                _field(c.OPT_BATTERY_CHARGE_MAX_W, "Maximum charge power", "quantity", unit="W", minimum=1, step=1),
+                _field(c.OPT_BATTERY_DISCHARGE_MAX_W, "Maximum discharge power", "quantity", unit="W", minimum=1, step=1),
+                _field(c.OPT_BATTERY_MIN_SOC, "Minimum charge", "quantity", unit="%", minimum=0, maximum=100, step=1, scale=100),
                 _field(c.OPT_BATTERY_MAX_SOC, "Maximum charge", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
                 _field(c.OPT_BATTERY_TARGET_SOC, "Preferred charge at the end of the plan", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
                 _field(c.OPT_BATTERY_TARGET_IS_HARD, "Require the preferred end charge", "toggle"),
