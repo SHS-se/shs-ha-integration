@@ -20,7 +20,7 @@ class OptionMigrationTests(unittest.TestCase):
         self.assertNotIn("ev_phase_count", migrated)
         self.assertEqual(migrated["ev_charge_efficiency"], 0.87)
         self.assertNotIn("ev_phase_voltage", migrated)
-        self.assertFalse(migrated["ev_control_enabled"])
+        self.assertNotIn("ev_control_enabled", migrated)
         self.assertNotIn("_legacy_configuration_archive", migrated)
         self.assertNotIn("_configuration_schema_version", migrated)
         self.assertNotIn("supplier_import_price_entity", migrated)
@@ -48,11 +48,12 @@ class OptionMigrationTests(unittest.TestCase):
         self.assertEqual(migrate_options({}), ({}, False))
 
     def test_manual_authority_fields_are_retired_without_changing_control_permission(self):
-        options = {'battery_control_enabled': True, 'battery_authority_entity': 'switch.remote',
+        options = {'planning_mode': 'live', 'battery_control_enabled': True, 'battery_authority_entity': 'switch.remote',
                    'battery_authority_confirm_entity': 'sensor.work_mode', 'battery_authority_confirm_state': 'Remote EMS'}
         result, changed = migrate_options(options, source_version=10)
         self.assertTrue(changed)
-        self.assertTrue(result['battery_control_enabled'])
+        self.assertEqual(result['device_modes']['$battery'], 'controlling')
+        self.assertNotIn('battery_control_enabled', result)
         self.assertTrue(all(not key.startswith('battery_authority') for key in result))
 
     def test_all_mapping_aliases_import_once_then_disappear(self):

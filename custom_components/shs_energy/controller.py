@@ -10,19 +10,28 @@ import asyncio
 from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 import logging
+import hashlib
+import json
 from math import isfinite
 from typing import Any
+from types import SimpleNamespace
 
 try:
+    from .api_contract import INTEGRATION_VERSION
+    from .operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
+    from .verification import OPERATIONS, operation_name
     from .battery_commands import validate_battery_command
     from .configuration_values import resolve_battery_quantities, resolve_quantity
     from .device_commands import actuator_targets, execution_setup_errors, validate_commands
-    from .device_controls import battery_control_errors, pool_band_errors, planning_path
+    from .device_controls import battery_control_errors, pool_band_errors, mapped_planning_path, planning_path
 except ImportError:  # Pure executor tests, without importing Home Assistant.
+    from api_contract import INTEGRATION_VERSION
+    from operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
+    from verification import OPERATIONS, operation_name
     from battery_commands import validate_battery_command
     from configuration_values import resolve_battery_quantities, resolve_quantity
     from device_commands import actuator_targets, execution_setup_errors, validate_commands
-    from device_controls import battery_control_errors, pool_band_errors, planning_path
+    from device_controls import battery_control_errors, pool_band_errors, mapped_planning_path, planning_path
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -58,7 +67,13 @@ def pool_band(heat: tuple[float, float], water: float, on: bool,
 class ScheduledController:
     """HA adapter supplied by the caller, so execution is behaviour-testable."""
 
-    def __init__(self, hass, coordinator, store, options):
+    def __init__(self, hass, coordinator, store, options, verification=None):
+        self.verification = verification
+        self.verifying = False
+        self.verification_commands = []
+        self.shadow = {}
+        self.verification_observations = {}
+        self.verified = {}
         self.hass = hass
         self.coordinator = coordinator
         self.store = store
@@ -83,6 +98,8 @@ class ScheduledController:
         return lambda: self.listeners.discard(listener)
 
     def report(self, device, state, **details):
+        if self.verifying:
+            return
         value = {"state": state, **details}
         if self.status.get(device) == value:
             return
@@ -92,7 +109,14 @@ class ScheduledController:
             listener()
 
     def state(self, entity, *, fresh=False):
-        state = self.hass.states.get(entity) if entity else None
+        state = (self.shadow.get(entity) if self.verifying else None) or (self.hass.states.get(entity) if entity else None)
+        if self.verifying and entity not in self.shadow:
+            self.verification_observations[entity] = {
+                "state": state.state if state else None,
+                "attributes": dict(state.attributes) if state else {},
+                "last_reported": str(getattr(state, "last_reported", None)),
+                "last_updated": str(getattr(state, "last_updated", None)),
+            }
         if state is None or state.state in ("unknown", "unavailable"):
             raise ValueError(f"{entity or 'required entity'} is unavailable")
         if fresh:
@@ -127,13 +151,13 @@ class ScheduledController:
             if key in options.get("excluded_device_readings", []):
                 return False
             mapping = options.get("device_control_mappings", {}).get(key, {})
-            if self.requested_types.get(key) != mapping.get("control_type") or not mapping.get("control_enabled", False) or device in self.overrides:
+            if self.requested_types.get(key) != mapping.get("control_type") or device_mode(options, device) not in EXECUTING_MODES or device in self.overrides:
                 return False
             override = mapping.get("control_override_entity")
             return not override or self.state(override).state == "off"
         if device not in self.requested_systems:
             return False
-        if not options.get(f"{device}_control_enabled", False):
+        if device_mode(options, device) not in EXECUTING_MODES:
             return False
         if not options.get(f"{device}_enabled", True):
             return False
@@ -157,7 +181,7 @@ class ScheduledController:
     async def command(self, entity, value):
         self.check_authority()
         domain = entity.split(".")[0]
-        state = self.hass.states.get(entity) if getattr(self, "device", None) == "battery" and domain == "number" else self.state(entity)
+        state = ((self.shadow.get(entity) if self.verifying else None) or self.hass.states.get(entity)) if getattr(self, "device", None) == "battery" and domain == "number" else self.state(entity)
         if state is None:
             raise ValueError(f"{entity} is unavailable")
         if domain in ("number", "input_number"):
@@ -195,6 +219,22 @@ class ScheduledController:
             equal = state.state == value
         else:
             raise ValueError(f"{entity}: unsupported actuator domain")
+        if self.verifying:
+            self.verification_commands.append({
+                "at": datetime.now(timezone.utc).isoformat(), "phase": "handover" if self.restoring else "plan",
+                "trigger": "if control stopped now" if self.restoring else "current binding slot",
+                "domain": domain, "service": service, "data": {"entity_id": entity, **data},
+                "value": value, "observed_value": state.state,
+                "would_call": not equal,
+            })
+            attributes = dict(state.attributes)
+            if domain == "climate":
+                attributes["temperature"] = value
+            self.shadow[entity] = SimpleNamespace(state=state.state if domain == "climate" else str(value), attributes=attributes)
+            record = self.records.get(self.device)
+            if record is not None and not self.restoring:
+                record.setdefault("last_commands", {})[entity] = value
+            return
         record = self.records.get(getattr(self, "device", ""))
         if record is not None and not self.restoring:
             record.setdefault("last_commands", {})[entity] = value
@@ -210,7 +250,7 @@ class ScheduledController:
         await self.confirm(lambda: self.matches(entity, value), f"{entity} did not accept {value}")
 
     def matches(self, entity, value):
-        state = self.hass.states.get(entity)
+        state = (self.shadow.get(entity) if self.verifying else None) or self.hass.states.get(entity)
         if state is None or state.state in ("unknown", "unavailable"):
             return False
         if isinstance(value, (int, float)):
@@ -222,6 +262,8 @@ class ScheduledController:
         return state.state == value
 
     async def confirm(self, predicate, error):
+        if self.verifying:
+            return
         deadline = asyncio.get_running_loop().time() + CONFIRM_SECONDS
         while True:
             self.check_authority()
@@ -238,6 +280,8 @@ class ScheduledController:
                    for actuator in actuators if actuator in self.command_times)
 
     async def save(self):
+        if self.verifying:
+            return
         await self.store.async_save({"records": self.records, "overrides": self.overrides})
 
     async def capture(self, device, options, entities):
@@ -261,6 +305,7 @@ class ScheduledController:
             await self.command(stop_entity, stop)
 
     async def restore(self, device):
+        self.device = device
         record = self.records.get(device)
         if record is None:
             return
@@ -272,7 +317,7 @@ class ScheduledController:
             if device.startswith("device:"):
                 changed = set(record.get("externally_changed", []))
                 for entity, expected in record.get("last_commands", {}).items():
-                    if not self.matches(entity, expected) and not self.matches(entity, original[entity]):
+                    if not self.verifying and not self.matches(entity, expected) and not self.matches(entity, original[entity]):
                         changed.add(entity)
                 if changed:
                     record["externally_changed"] = sorted(changed)
@@ -449,7 +494,7 @@ class ScheduledController:
         return int(value / step + 1e-8) * step
 
     async def execute_battery(self, options, slot):
-        errors = battery_control_errors(options)
+        errors = battery_control_errors({**options, "battery_control_enabled": True})
         if errors:
             raise ValueError("; ".join(errors))
         soc = self.fraction(options["battery_soc_entity"])
@@ -502,6 +547,8 @@ class ScheduledController:
             responding = (charge <= 100 or measured > 100 if operation == "grid_charge" else
                           discharge <= 100 or measured < -100 if operation == "export" else True)
             return within and responding
+        if self.verifying:
+            return {"state": "verified", "operation": operation, "physical_confirmation": "not_tested"}
         await self.confirm(delivered_within_ceiling, "battery did not confirm the requested operation and power ceilings within 15 seconds; check inverter control availability")
         measured = self.battery_measurement(options)
         requested = finite(slot["battery_charge_w"]) - finite(slot["battery_discharge_w"])
@@ -527,7 +574,7 @@ class ScheduledController:
         # Every enabled owner reserves its targets, even before it captures a
         # baseline. This refuses both sides of an overlap before either writes.
         for other_key, other in options.get("device_control_mappings", {}).items():
-            if other_key != key and other.get("control_enabled") and set(targets) & set(actuator_targets(other)):
+            if other_key != key and device_mode(options, "device:" + other_key) in EXECUTING_MODES and set(targets) & set(actuator_targets(other)):
                 raise ValueError("another enabled device shares this actuator")
         system_targets = {options.get(field) for field in (
             "battery_charge_limit_entity", "battery_discharge_limit_entity", "battery_mode_entity",
@@ -607,6 +654,59 @@ class ScheduledController:
         await self.save()
         return {"state": "commanded", "reason": "actuator targets acknowledged; delivered heat or power is not inferred"}
 
+    async def verify(self, device, options, slot, plan):
+        if self.verification is None:
+            raise ValueError("verification journal is unavailable")
+        kind = device if device in DEVICES else options["device_control_mappings"][device.removeprefix("device:")]["control_type"]
+        expected = OPERATIONS.get(kind, ())
+        if not expected:
+            raise ValueError("no executable operation catalogue for this device")
+        configuration = json.dumps({"version": INTEGRATION_VERSION, "options": options}, sort_keys=True, default=str)
+        scope = device + ":" + hashlib.sha256(configuration.encode()).hexdigest()[:16]
+        attempt = {"device": device, "scope": scope, "at": datetime.now(timezone.utc).isoformat(),
+                   "mode": "control_verification", "integration_version": INTEGRATION_VERSION, "plan_id": plan.get("plan_id"),
+                   "slot_start": slot["start"], "slot": deepcopy(slot),
+                   "plan_schema_version": plan.get("schema_version"), "plan_issued_at": plan.get("issued_at"),
+                   "configuration": deepcopy(options), "expected_operations": list(expected),
+                   "operations": [], "outcome": "blocked"}
+        owned, overrides = self.records, self.overrides
+        self.records, self.overrides = {}, deepcopy(overrides)
+        self.verifying, self.verification_commands, self.shadow = True, [], {}
+        self.verification_observations = {}
+        try:
+            result = (await self.execute_device(device, options, slot) if device.startswith("device:")
+                      else await getattr(self, f"execute_{device}")(options, slot))
+            if result["state"] == "unsupported":
+                raise ValueError(result["reason"])
+            operation = operation_name(device, kind, slot, result)
+            attempt.update(outcome="verified", operations=[operation], result=result)
+            try:
+                await self.restore(device)
+                attempt["operations"].append("handover")
+            except Exception as err:
+                attempt["handover_reason"] = str(err)
+        except Exception as err:
+            attempt["reason"] = str(err)
+        finally:
+            attempt["commands"] = self.verification_commands
+            attempt["observations"] = self.verification_observations
+            self.verifying = False
+            self.records, self.overrides = owned, overrides
+        signature = deepcopy(attempt)
+        signature.pop("at")
+        for observation in signature["observations"].values():
+            observation.pop("last_reported")
+            observation.pop("last_updated")
+        for command in signature["commands"]:
+            command.pop("at")
+        signature = json.dumps(signature, sort_keys=True, default=str)
+        if self.verified.get(device) != signature:
+            await self.verification.append(attempt)
+            self.verified[device] = signature
+        self.report(device, "verified" if attempt["outcome"] == "verified" else "fault",
+                    reason=attempt.get("reason") or attempt.get("handover_reason") or "Commands logged; physical response and cross-slot transitions are not tested",
+                    plan_id=plan.get("plan_id"), slot_start=slot["start"])
+
     async def async_start(self):
         try:
             saved = await self.store.async_load() or {}
@@ -622,6 +722,13 @@ class ScheduledController:
                     await self.restore(device)
                 except Exception as err:
                     self.report(device, "fault", reason=f"startup restoration: {err}")
+        if self.verification is not None:
+            try:
+                await self.verification.load()
+            except Exception as err:
+                for device in DEVICES:
+                    self.report(device, "fault", reason=f"cannot load verification journal: {err}")
+                return
         self.initialized = True
         await self.async_tick()
 
@@ -634,15 +741,15 @@ class ScheduledController:
             plan = self.coordinator.optimisation_plan or {}
             self.active_options, self.active_slot = deepcopy(options), deepcopy(slot)
             mappings = options.get("device_control_mappings", {})
-            generic = {"device:" + key for key, mapping in mappings.items() if mapping.get("control_enabled")}
+            generic = {"device:" + key for key, mapping in mappings.items() if device_mode(options, "device:" + key) in EXECUTING_MODES}
             generic.update(key for key in self.records if key.startswith("device:"))
-            if generic or any(options.get(d + "_control_enabled") for d in DEVICES) or self.records:
+            if generic or any(device_mode(options, d) in EXECUTING_MODES for d in DEVICES) or self.records:
                 self.requested_types = {}
                 self.requested_systems = set()
                 try:
                     requested = await self.coordinator.async_cached_device_configuration()
                     self.requested_types = {item["key"]: item.get("control_type") for item in requested}
-                    self.requested_systems = {planning_path(item.get("control_type"), item.get("category")) for item in requested if item["key"] not in options.get("excluded_device_readings", [])}
+                    self.requested_systems = {mapped_planning_path(item, mappings.get(item["key"], {}), options.get("pool_water_temperature_entity")) for item in requested if item["key"] not in options.get("excluded_device_readings", [])}
                     choices = await self.coordinator.async_cached_planning_configuration()
                     if choices.get("home", {}).get("battery", {}).get("included") is True:
                         self.requested_systems.add("battery")
@@ -652,7 +759,7 @@ class ScheduledController:
                     # Without current planning ownership, hand back all targets.
                     _LOGGER.error("Cannot read device planning ownership: %s", err)
             for device in tuple(self.overrides):
-                if not mappings.get(device.removeprefix("device:"), {}).get("control_enabled"):
+                if device_mode(options, device) not in EXECUTING_MODES:
                     del self.overrides[device]
                     await self.save()
             for device in (*DEVICES, *sorted(generic)):
@@ -660,7 +767,7 @@ class ScheduledController:
                 key = repr((options, plan.get("plan_id"), slot))
                 try:
                     record = self.records.get(device)
-                    if record and (record.get("restoration_pending") or record["options"] != options or not slot or not self.eligible(device, options)):
+                    if record and (record.get("restoration_pending") or ownership_configuration(record["options"], device) != ownership_configuration(options, device) or not slot or not self.eligible(device, options)):
                         await self.restore(device)
                     if not self.eligible(device, options):
                         self.failed.pop(device, None)
@@ -673,6 +780,11 @@ class ScheduledController:
                         self.report(device, "idle", reason="no binding plan for this device")
                         continue
                     if self.failed.get(device) == key:
+                        continue
+                    if device_mode(options, device) == "control_verification":
+                        # Re-evaluate each scheduler tick; observations can change
+                        # the command inside the same quarter.
+                        await self.verify(device, options, slot, plan)
                         continue
                     result = (await self.execute_device(device, options, slot) if device.startswith("device:")
                               else await getattr(self, f"execute_{device}")(options, slot))

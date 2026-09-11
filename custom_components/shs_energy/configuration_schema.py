@@ -26,7 +26,7 @@ OPTION_FIELDS = {
 # Internal scheduling resolution is fixed, not another editable setting.
 OPTION_KEYS = frozenset(OPTION_FIELDS)
 METADATA_KEYS = frozenset({"configuration_reviewed_at", "discovery_evidence", "_migration_report"})
-PERSISTED_KEYS = OPTION_KEYS | METADATA_KEYS | {"device_control_mappings", "rooms", "automatic_setup", "forecast_resolution_minutes"}
+PERSISTED_KEYS = OPTION_KEYS | METADATA_KEYS | {"device_control_mappings", "rooms", "automatic_setup", "forecast_resolution_minutes", "device_modes"}
 ROOM_AREA_FIELD = c.ROOM_AREA_FIELD
 MAPPING_KEYS = {
     kind: {field["key"] for field in fields} | {"control_type", ROOM_AREA_FIELD}
@@ -217,6 +217,14 @@ def resolve_configuration(options, latitude=0.0, longitude=0.0):
     """Produce a detached runtime view from current records and shared defaults."""
     resolved = configuration_defaults(latitude, longitude)
     resolved.update(deepcopy(options))
+    if __package__:
+        from .operating_modes import device_mode
+    else:
+        from operating_modes import device_mode
+    modes = resolved.get("device_modes", {})
+    resolved["planning_mode"] = "live" if any(mode != "monitoring" for mode in modes.values()) else "disabled"
+    for system in ("battery", "pool", "ev"):
+        resolved[system + "_control_enabled"] = device_mode(resolved, system) == "controlling"
     rooms = resolved["rooms"]
     for mapping in resolved["device_control_mappings"].values():
         room_id = mapping.get(ROOM_AREA_FIELD)
@@ -271,13 +279,6 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
         stored.pop(key, None)
         return result
     validate_mapping_keys(submitted)
-    # Stopping control must work even when an existing target has disappeared.
-    # This exception permits only the stop flag; all setup edits still validate.
-    if submitted.get("control_enabled") is False and key in stored:
-        current = resolve_configuration(existing)["device_control_mappings"][key]
-        if {k: v for k, v in submitted.items() if k != "control_enabled"} == {k: v for k, v in current.items() if k != "control_enabled"}:
-            stored[key]["control_enabled"] = False
-            return result
     kind = device["control_type"]
     if submitted.get("control_type") != kind:
         raise ValueError(f"{device['name']}: configuration belongs to a different control type")
@@ -288,7 +289,7 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
         value = normalise_field_value(read_entity, field, submitted.get(field["key"]), context=device["name"])
         if value is not None or (field["key"] in submitted and submitted[field["key"]] is None):
             mapping[field["key"]] = value
-    if mapping.get("control_enabled"):
+    if resolve_configuration(existing).get("device_modes", {}).get(key) in ("controlling", "control_verification"):
         errors = execution_setup_errors(mapping)
         if errors:
             raise ValueError(f"{device['name']}: " + "; ".join(errors))

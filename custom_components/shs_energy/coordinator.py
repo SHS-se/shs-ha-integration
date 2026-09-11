@@ -806,6 +806,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             OPT_CONFIGURATION_REVIEWED_AT,
             OPT_DEVICE_CONTROL_MAPPINGS,
             "rooms",
+            "device_modes",
         }
         return bool(changed - live_keys)
 
@@ -1855,7 +1856,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             required.append("a whole-home meter or Energy Dashboard grid meter")
         if options.get(OPT_PV_FORECAST_ENTITIES):
             required.extend([OPT_PV_FORECAST_LATITUDE, OPT_PV_FORECAST_LONGITUDE])
-        if options.get(OPT_BATTERY_SOC_ENTITY):
+        if options.get(OPT_BATTERY_SOC_ENTITY) and options.get("device_modes", {}).get("$battery", "monitoring") != "monitoring":
             required.extend([
                 OPT_BATTERY_CAPACITY_KWH,
                 OPT_BATTERY_CHARGE_MAX_W,
@@ -2208,7 +2209,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         devices: list[dict[str, Any]],
     ) -> dict[str, Any]:
         from .configuration_schema import shared_devices
-        devices = shared_devices(devices, options)
+        from .operating_modes import planning_devices
+        devices = planning_devices(shared_devices(devices, options), options)
         captured = dt_util.utcnow()
         horizon = utc_slots(captured, OPTIMISATION_HORIZON_HOURS)
         horizon_end = horizon[-1] + timedelta(minutes=15)
@@ -2237,6 +2239,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._entity_payload(options[OPT_BATTERY_SOC_ENTITY])
             if options.get(OPT_BATTERY_SOC_ENTITY)
             and options.get(OPT_BATTERY_ENABLED, True)
+            and options.get("device_modes", {}).get("$battery", "monitoring") != "monitoring"
+            and stored.get("home_planning_configuration", {}).get("battery", {}).get("included") is True
             else None
         )
         price_catalog = self.supplier_prices
@@ -2475,7 +2479,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # configuration gap, not a house without the equipment. Say so rather
         # than publishing a snapshot that quietly omits the store.
         self.optimisation_unplanned_services = unplanned_services(
-            options,
+            {**options, **{system + "_enabled": options.get(system + "_enabled", True)
+                          and options.get("device_modes", {}).get("$" + system, "monitoring") != "monitoring"
+                          for system in ("pool", "ev")}},
             planned_paths,
             # Read from the persisted exchange, never from an in-memory cache:
             # a cache filled only when a device exchange happens is empty on

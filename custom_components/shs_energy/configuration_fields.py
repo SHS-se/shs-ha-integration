@@ -9,6 +9,8 @@ else:
     from device_controls import is_room_thermal_control
 
 LABELS = {
+    "monitoring": "Monitoring", "planning": "Planning", "control_verification": "Control verification",
+    "controlling": "Controlling", "verified": "Verification logged",
     "switch_schedule": "Turns on and off", "setpoint": "Holds a temperature",
     "permit_inhibit": "Allowed to run", "variable_power": "Runs at a chosen power",
     "current_limit": "Charges at a chosen current", "fixed_full_load": "Runs at full power",
@@ -216,8 +218,6 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
 
 
 EXECUTION_FIELDS = (
-    _field("control_enabled", "Control according to the plan", "toggle",
-           help_text="Enable only after assigning control ownership here and disabling competing automations. Unsupported plans never operate the device."),
     _field("control_override_entity", "Manual override", "entity", domains=("input_boolean", "binary_sensor")),
 )
 for kind in ("setpoint", "switch_schedule", "permit_inhibit"):
@@ -279,21 +279,6 @@ def _configuration_sections() -> list[dict[str, Any]]:
     return [
         {"id": "sharing", "tab": "energy", "title": "Device readings", "fields": [
             _field("excluded_device_readings", "Devices whose individual readings are not shared", "entities", domains=("sensor",))]},
-        {
-            "id": "planning",
-            "tab": "schedule",
-            "title": "Planning",
-            "description": "Monitoring remains active when planning is off. Enabled controllers execute binding plans and restore their baseline when planning stops.",
-            "fields": [
-                _field(
-                    c.OPT_PLANNING_MODE,
-                    "Planning mode",
-                    "select",
-                    choices=((c.PLANNING_MODE_DISABLED, "Off — monitoring only"), (c.PLANNING_MODE_LIVE, "Live planning")),
-                    required=True,
-                )
-            ],
-        },
         {
             "id": "metering",
             "tab": "energy",
@@ -365,19 +350,8 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "tab": "devices",
             "title": "Battery control",
             "description": (
-                "Scheduled battery execution. Filling "
-                "this in does not start control: the switch below does. Enable "
-                "after the response, modes and confirmation behaviour "
-                "have been checked on this installation."
-            ),
-            "toggle": _field(
-                c.OPT_BATTERY_CONTROL_ENABLED,
-                "Execute the battery plan",
-                "toggle",
-                help_text=(
-                    "Switched off, so the battery is planned but never "
-                    "written to, and its own controller keeps deciding."
-                ),
+                "Battery command mappings and limits. Choose the device mode "
+                "after reviewing its setup and verification evidence."
             ),
             "fields": [
                 _field(
@@ -452,9 +426,7 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "title": "EV and pool control",
             "description": "Execute the current binding plan. Each device can be tested independently. Disable restores the settings captured before control; reactive adjustments are not included.",
             "fields": [
-                _field(c.OPT_EV_CONTROL_ENABLED, "Control EV charging", "toggle"),
                 _field(c.OPT_EV_CHARGE_SWITCH_ENTITY, "EV charging start/stop switch", "entity", domains=("switch", "input_boolean"), help_text="Required for execution. Off slots stop charging without writing a current below the charger's minimum."),
-                _field(c.OPT_POOL_CONTROL_ENABLED, "Control pool heating", "toggle"),
                 _field(c.OPT_POOL_PERMISSION_ENTITY, "Pool accessory permission", "entity", domains=("switch", "input_boolean"), help_text="Optional. Enabled with a heat slot and restored on handover. Off slots lower the temperature band."),
                 *[_field(f"{device}_control_override_entity", f"{label} manual override", "entity", domains=("input_boolean", "binary_sensor", "switch"), help_text="On returns this device to its captured baseline and suspends planned commands.") for device, label in (("battery", "Battery"), ("ev", "EV"), ("pool", "Pool"))],
             ],

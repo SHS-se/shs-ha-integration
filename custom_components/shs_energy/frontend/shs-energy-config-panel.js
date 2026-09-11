@@ -502,7 +502,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._draft.excluded_device_readings = [...excluded]; this._render(); return;
     }
     if (element.dataset.permission) {
-      this._control(element.dataset.permission, element.checked); return;
+      this._control(element.dataset.permission, element.value); return;
     }
     if (!element.dataset.fieldKey) return;
     const { key, scope, deviceKey, field } = this._fieldFromElement(element);
@@ -531,6 +531,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const action = button.dataset.action;
     if (!action) return;
     if (action === "download") this._download();
+    if (action === "verification") this._downloadVerification();
     else if (action === "horizon") { this._fullHorizon = !this._fullHorizon; this._render(); }
     else if (action === "slot") { this._selectedSlot = Number(button.dataset.index); this._render(); }
     else if (action === "edit-device") { this._tab = "devices"; this._expanded.add("device:" + button.dataset.deviceKey); this._render(); }
@@ -681,14 +682,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
     } finally { this._polling = false; }
   }
 
-  async _control(key, enabled) {
+  async _control(key, mode) {
     if (this._saving || this._savingDeviceKey) return;
     this._pollRevision = (this._pollRevision || 0) + 1;
     this._savingDeviceKey = key; this._error = ""; this._render();
     try {
-      const data = await this._hass.callWS({ type: "shs_energy/config/control", config_entry: this._entryId, device_key: key, enabled });
+      const data = await this._hass.callWS({ type: "shs_energy/config/control", config_entry: this._entryId, device_key: key, mode });
       this._mergePanel(data);
-      this._notice = enabled ? "Permission saved. SHS may operate this device while the plan is valid." : "Permission removed. Any settings SHS still owns will be restored; progress is shown in Status.";
+      this._notice = "Device mode saved. Owned settings are restored when control stops; see Status for progress.";
     } catch (error) { this._error = error?.message || String(error); }
     finally { this._savingDeviceKey = ""; this._renderBackground(); }
   }
@@ -702,6 +703,17 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._clearDeviceError(key); this._render();
   }
 
+  async _downloadVerification() {
+    try {
+      const data = await this._hass.callWS({ type: "shs_energy/verification/download", config_entry: this._entryId });
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = "shs-control-verification.json"; a.click(); URL.revokeObjectURL(url);
+      this._notice = data.coverage.map(c => `${c.device}: ${c.covered}/${c.total} operations; missing: ${c.missing.join(", ") || "none"}`).join(" · ") || "No verification attempts recorded yet.";
+    } catch (error) { this._error = error?.message || String(error); }
+    this._render();
+  }
+
   _download() {
     // Deliberate allowlist: no options, entity addresses, names, URLs, raw errors or recorder rows.
     const value = { version: 1, frontend_version: FRONTEND_VERSION, exported_at: new Date().toISOString(),
@@ -709,7 +721,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       plan: { state: this._data.operation.state, issued_at: this._data.operation.issued_at,
         binding_until: this._data.operation.binding_until, valid_until: this._data.operation.valid_until },
       devices: this._data.devices.map((d, index) => ({ device: index + 1, included: d.included,
-        control_enabled: d.permission.enabled, state: d.execution_status?.state })),
+        mode: d.mode, state: d.execution_status?.state })),
       delivery: { last_daily_push: this._data.diagnostics.last_daily_push,
         last_plan_push: this._data.readiness.last_plan_push, electrical_history_until: this._data.readiness.actuals_accepted_until,
         thermal_history_until: this._data.diagnostics.thermal_slots_accepted_until },
@@ -779,11 +791,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _choices(device, section) {
     const permission = device.permission;
-    const disabled = Boolean(this._saving || this._savingDeviceKey || (!permission.enabled && (this._refreshError || permission.reason || this._deviceDirty(device.key))));
+    const disabled = Boolean(this._saving || this._savingDeviceKey);
+    const blocked = value => this._refreshError || this._deviceDirty(device.key) ||
+      (value === "control_verification" ? permission.verification_reason : permission.reason);
     return `<div class="choices">
       <div class="choice-row"><span>Include in the plan</span><strong>${this._escape(device.choice_label)} · <a href="${this._escape(this._data.website_url)}" target="_blank" rel="noreferrer">Website</a></strong></div>
-      ${section === "planning" ? "" : `<div class="choice-row"><span>Let SHS operate it</span><label class="switch"><input type="checkbox" aria-label="Let SHS operate ${this._escape(device.name)}" data-permission="${this._escape(device.key)}" ${permission.enabled ? "checked" : ""} ${disabled ? "disabled" : ""}><span></span></label>
-      <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Off leaves the device's own controls in charge."))}</small></div>`}
+      <div class="choice-row"><span>Device mode</span><select aria-label="Mode for ${this._escape(device.name)}" data-permission="${this._escape(device.key)}" ${disabled ? "disabled" : ""}>
+        ${[["monitoring", "Monitoring"], ["planning", "Planning"], ["control_verification", "Control verification"], ["controlling", "Controlling"]].map(([value, label]) => `<option value="${value}" ${device.mode === value ? "selected" : ""} ${blocked(value) && ["control_verification", "controlling"].includes(value) && device.mode !== value ? "disabled" : ""}>${label}</option>`).join("")}</select>
+      <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Monitoring collects readings. Planning adds this device to the plan. Verification logs commands. Controlling executes them."))}</small></div>
     </div>`;
   }
 
@@ -867,9 +882,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
         return `<button class="slot ${active ? "running" : ""} ${slot.binding ? "" : "advisory"}" data-action="slot" data-index="${index}" aria-label="${this._escape(d.name + ', ' + this._time(slot.start) + ', ' + text + (slot.binding ? ', instruction' : ', advice'))}" title="${this._escape(text)}"></button>`;
       }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Instructions" : "Advice only"}</h3><ul>${devices.filter(d => d.included).map(d => `<li>${this._escape(d.name)}: ${this._escape(this._commandText(d, selected))}</li>`).join("")}</ul></div>` : ""}` : `<p>No actionable schedule is available. Details are in Status.</p>`}
       <p>Targets shown here are requests. They do not prove that heat, charging or power was delivered.</p></div>
-      ${this._data.sections.filter(s => s.id === "planning").map(s => this._renderSection(s)).join("")}
+      <div class="card"><h2>Control verification</h2><p>Download one file containing all devices, plan slots, exact service requests and operation coverage. Verification does not test physical response. The file contains local entity IDs and configuration. The latest 20,000 attempts are retained.</p><button class="secondary" data-action="verification">Download control verification</button></div>
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
-      <p class="muted">Planning is chosen on the website. Permission to operate is chosen here. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
+      <p class="muted">Website choices define the planning method. Device mode here controls participation and execution. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
       ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._commandText(d, slots[1]))}` : ""}</small></article>`).join("")}`;
   }
 
@@ -962,7 +977,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
           ${this._tab !== "status" && this._data.devices.some(d => d.execution_status?.state === "fault") ? `<div role="alert" class="alert error"><span>Device execution needs attention: ${this._data.devices.filter(d => d.execution_status?.state === "fault").map(d => this._escape(d.name)).join(", ")}</span><button class="secondary" data-action="tab" data-tab="status">View status</button></div>` : ""}
           ${this._renderBody()}
         </section>
-        <footer aria-live="polite"><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Planning is chosen on the website. Permission to operate is chosen here.</span></footer>
+        <footer aria-live="polite"><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Website choices define the planning method. Device mode here controls participation and execution.</span></footer>
         ${this._renderDatalist()}
       </main>`;
     const fields = [...this.shadowRoot.querySelectorAll("input,select")];

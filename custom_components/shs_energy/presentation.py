@@ -105,18 +105,22 @@ def equipment_present(options, system, devices, configured_keys=()):
 
 def complete_device_views(devices, options, choices, status, plan, controllers, entity_names, area_names, now, configured_keys=()):
     """Augment one inventory with website choice, setup owner and local permission."""
+    if __package__:
+        from .operating_modes import device_mode, system_device_keys
+    else:
+        from operating_modes import device_mode, system_device_keys
     devices = deepcopy(devices)
     for device in devices:
         key = device.get("statistic_id") or device["key"]
         device["name"] = device_name(entity_names.get(key) or device.get("name") or key)
         device["room_name"] = area_names.get(device.get("mapping", {}).get("room_area_id")) or device.get("mapping_summary", {}).get("room_name") or "No room"
+    owners = system_device_keys(devices, options)
     for system in ("ev", "pool"):
         category = {"ev": "ev_charging", "pool": "pool_heating"}[system]
         if not equipment_present(options, system, devices, configured_keys):
             devices = [d for d in devices if d.get("category") != category or planning_path(d.get("control_type"), category) == "room"]
             continue
-        candidates = [d for d in devices if d.get("category") == category and mapped_planning_path(d, d.get("mapping", {}), options.get("pool_water_temperature_entity")) != "room"]
-        candidates.sort(key=lambda d: (d.get("control_type") != "setpoint", d["key"]))
+        candidates = [d for d in devices if owners.get(d["key"]) == system]
         if candidates:
             candidates[0]["system"] = system
         else:
@@ -141,7 +145,6 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         device["choice_label"] = ("Included" if included else "Excluded") + (" · not reviewed" if not device.get("planning_choice_at") else "")
         if not refreshed or (system == "battery" and "battery" not in choices.get("home", {})):
             device["choice_label"] = "Waiting for website choices"
-        enabled = bool(options.get(system + "_control_enabled")) if system else bool(mapping.get("control_enabled"))
         controller_id = system or "device:" + key
         reason = None
         if not included:
@@ -150,18 +153,14 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
             reason = "Share individual readings for this device before enabling control"
         elif not fresh:
             reason = "Refresh the website choices before enabling control"
-        elif not status["actionable"]:
-            reason = status["reason"]
-        elif system:
-            if not (plan or {}).get("capabilities", {}).get(system):
-                reason = "Waiting for a plan for this device"
-            elif system == "battery":
-                reason = "; ".join(battery_control_errors({**options, "battery_control_enabled": True})) or None
-            elif system == "pool":
-                reason = "; ".join(pool_band_errors(options)) or None
-                if not options.get("pool_start_temperature_entity"):
-                    reason = "Set up the pool temperature controls first"
-            elif not options.get("ev_charge_switch_entity") or device.get("mapping_status") != "ready":
+        elif system == "battery":
+            reason = "; ".join(battery_control_errors({**options, "battery_control_enabled": True})) or None
+        elif system == "pool":
+            reason = "; ".join(pool_band_errors(options)) or None
+            if not options.get("pool_start_temperature_entity"):
+                reason = "Set up the pool temperature controls first"
+        elif system == "ev":
+            if not options.get("ev_charge_switch_entity") or device.get("mapping_status") != "ready":
                 reason = "Set up the charging current and start/stop switch first"
         else:
             errors = execution_setup_errors(mapping)
@@ -171,12 +170,22 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
                 reason = "; ".join(errors)
             elif device.get("mapping_status") != "ready":
                 reason = "Complete this device's setup first"
+        verification_reason = reason
+        if reason is None:
+            if not status["actionable"]:
+                reason = status["reason"]
+            elif system:
+                if not (plan or {}).get("capabilities", {}).get(system):
+                    reason = "Waiting for a plan for this device"
             else:
                 commands = [slot.get("device_commands", {}).get(key) for slot in (plan or {}).get("plans", {}).get("priority", {}).get("slots", []) if slot.get("binding") and datetime.fromisoformat(slot["start"]) <= now < datetime.fromisoformat(slot["start"]) + timedelta(minutes=15)]
                 command = next((c for c in commands if c), None)
                 if not command or command.get("type") == "unavailable":
                     reason = command.get("reason") if command else "Waiting for instructions for this device"
-        device["permission"] = {"enabled": enabled, "reason": reason, "controller_id": controller_id}
+        mode = device_mode(options, controller_id)
+        device["mode"] = mode
+        device["included"] = included and mode != "monitoring"
+        device["permission"] = {"enabled": mode == "controlling", "reason": reason, "verification_reason": verification_reason, "controller_id": controller_id}
         device["execution_status"] = controllers.get(controller_id, {"state": "disabled"})
         device["system_fields"] = system_fields(system) if system else []
         device["planning_fields"] = [field for field in device["system_fields"] if field["key"] in PLANNING_FIELDS]

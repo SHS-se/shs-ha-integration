@@ -395,12 +395,6 @@ async def async_apply_device_mapping(
     if device.get("planning_role") != "controllable":
         saved = resolved_options(hass, dict(entry.options)).get("device_control_mappings", {}).get(device_key, {})
         device = {**device, "control_type": saved.get("control_type")}
-        if incoming and incoming.get("control_enabled") and not saved.get("control_enabled"):
-            raise ValueError("Include this device on the website before enabling control")
-    if incoming and incoming.get("control_enabled") and device.get("planning_role") == "controllable":
-        command = (entry.runtime_data.current_plan_slot or {}).get("device_commands", {}).get(device_key)
-        if not command or command.get("type") == "unavailable":
-            raise ValueError("Device control requires an executable schema-7 plan from the website")
     existing = dict(entry.options)
     if configuration:
         panel = await _configuration_payload(hass, entry, refresh_roles=False)
@@ -587,7 +581,7 @@ async def websocket_get_status(hass, connection, msg):
 
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{shs_const.DOMAIN}/config/control", vol.Required("config_entry"): str,
-    vol.Required("device_key"): str, vol.Required("enabled"): bool})
+    vol.Required("device_key"): str, vol.Required("mode"): vol.In(("monitoring", "planning", "control_verification", "controlling"))})
 @websocket_api.async_response
 async def websocket_control_permission(hass, connection, msg):
     entry = _entry_from_message(hass, msg["config_entry"])
@@ -599,20 +593,40 @@ async def websocket_control_permission(hass, connection, msg):
         device = next((d for d in panel["devices"] if d["key"] == msg["device_key"]), None)
         if device is None:
             raise ValueError("This equipment is no longer present")
-        if msg["enabled"] and device["permission"]["reason"]:
-            raise ValueError(device["permission"]["reason"])
-        if system := device.get("system"):
-            await async_apply_configuration(hass, entry, {system + "_control_enabled": msg["enabled"]})
-        else:
-            mapping = dict(panel["configuration"].get("device_control_mappings", {}).get(device["key"], {}))
-            if not mapping:
-                raise ValueError("Set up this device first")
-            mapping["control_enabled"] = msg["enabled"]
-            await async_apply_device_mapping(hass, entry, device["key"], mapping)
+        mode = msg["mode"]
+        reason = device["permission"]["verification_reason" if mode == "control_verification" else "reason"]
+        if mode in ("control_verification", "controlling") and reason:
+            raise ValueError(reason)
+        if mode == "planning" and device.get("planning_role") != "controllable":
+            raise ValueError("Include this device on the website and select its planning method first")
+        key = "$" + device["system"] if device.get("system") else device["key"]
+        options = dict(entry.options)
+        previous_mode = options.get("device_modes", {}).get(key, "monitoring")
+        options["device_modes"] = {**options.get("device_modes", {}), key: mode}
+        options[shs_const.OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(timezone.utc).isoformat()
+        hass.config_entries.async_update_entry(entry, options=options)
         await entry.runtime_data.controller.async_tick()
+        if (previous_mode == "monitoring") != (mode == "monitoring"):
+            entry.async_create_background_task(
+                hass, entry.runtime_data.async_optimisation_push(force_plan=True),
+                name=f"{shs_const.DOMAIN}_replan_after_mode_change",
+            )
         connection.send_result(msg["id"], await _configuration_payload(hass, entry, refresh_roles=False))
     except (ShsApiError, ValueError, TypeError) as err:
         connection.send_error(msg["id"], "control_permission_failed", str(err))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{shs_const.DOMAIN}/verification/download", vol.Required("config_entry"): str})
+@websocket_api.async_response
+async def websocket_download_verification(hass, connection, msg):
+    entry = _entry_from_message(hass, msg["config_entry"])
+    if entry is None or _entry_state(entry) != "loaded":
+        connection.send_error(msg["id"], "not_loaded", "The integration is not loaded")
+        return
+    controller = entry.runtime_data.controller
+    async with controller.lock:
+        connection.send_result(msg["id"], controller.verification.export())
 
 
 async def async_register_config_panel(hass: HomeAssistant) -> None:
@@ -636,6 +650,7 @@ async def async_register_config_panel(hass: HomeAssistant) -> None:
     )
     websocket_api.async_register_command(hass, websocket_get_status)
     websocket_api.async_register_command(hass, websocket_control_permission)
+    websocket_api.async_register_command(hass, websocket_download_verification)
     websocket_api.async_register_command(hass, websocket_get_configuration)
     websocket_api.async_register_command(hass, websocket_discover_configuration)
     websocket_api.async_register_command(hass, websocket_save_configuration)

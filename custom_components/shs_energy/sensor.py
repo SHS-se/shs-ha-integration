@@ -271,7 +271,7 @@ class ShsPlanRequestSensor(ShsBaseSensor):
             "plan_status": (
                 self.coordinator.optimisation_plan or {}
             ).get("status"),
-            "advisory_only": not self.coordinator.entry.options.get(f"{self.device}_control_enabled", False),
+            "advisory_only": self.coordinator.entry.options.get("device_modes", {}).get("$" + self.device) != "controlling",
         }
         if self.device == "ev":
             attributes.update({
@@ -395,7 +395,7 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
                 "current_step_a", current_attributes.get("step")
             ),
             "current_entity": current_entity,
-            "advisory_only": not self.coordinator.entry.options.get("ev_control_enabled", False),
+            "advisory_only": self.coordinator.entry.options.get("device_modes", {}).get("$ev") != "controlling",
         }
 
 

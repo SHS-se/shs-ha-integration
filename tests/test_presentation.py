@@ -109,13 +109,13 @@ class PresentationTests(unittest.TestCase):
 
     def test_exclusion_keeps_setup_and_permission_but_clears_setup_warning(self):
         self.device.update(planning_role='base_load', planning_choice_at=self.now.isoformat(), mapping_error='missing bounds')
-        self.device['mapping']['control_enabled'] = True
+        self.options['device_modes'] = {self.device['key']: 'controlling'}
         view = self.view()[0]
         self.assertTrue(view['permission']['enabled']) # user can still turn it off
         self.assertIn('Include', view['permission']['reason'])
         self.assertIsNone(view['mapping_error'])
         self.assertEqual(view['choice_label'], 'Excluded')
-        self.assertTrue(view['mapping']['control_enabled'])
+        self.assertEqual(view['mode'], 'controlling')
 
     def test_battery_shares_the_same_two_choice_contract_and_requires_setup(self):
         self.options.update(battery_enabled=True, battery_soc_entity='sensor.battery')

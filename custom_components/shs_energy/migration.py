@@ -53,6 +53,14 @@ def migrate_options(
     # Fold the former separate cut-off source into the single quantity field.
     if options.get("battery_min_soc_entity"):
         result["battery_min_soc"] = options["battery_min_soc_entity"]
+    if source_version is not None and source_version < 12:
+        live = options.get("planning_mode") == "live"
+        modes = dict(options.get("device_modes", {}))
+        for system in ("battery", "ev", "pool"):
+            modes.setdefault("$" + system, "controlling" if live and options.get(system + "_control_enabled") and source_version >= 10 else "planning" if live else "monitoring")
+        for key, mapping in options.get("device_control_mappings", {}).items():
+            modes.setdefault(key, "controlling" if live and mapping.get("control_enabled") else "planning" if live else "monitoring")
+        result["device_modes"] = modes
     prior = options.get("_migration_report", {})
     report = {
         kind: set(prior.get(kind, [])) if isinstance(prior, dict) else set()
@@ -71,7 +79,7 @@ def migrate_options(
             report["removed"].add(old)
     if source_version is not None and source_version < 10:
         # The signed actuator contract cannot authorize the separate ceilings.
-        result["battery_control_enabled"] = False
+        result.setdefault("device_modes", {})["$battery"] = "monitoring"
     if source_version in (5, 6):
         # These migrations deleted settings rather than archiving their values.
         # Retain the removal evidence, but replace instructions for the retired
@@ -90,8 +98,8 @@ def migrate_options(
                 report["needs_attention"].add(path)
         # Permissions from the abandoned interfaces cannot authorize the
         # restored direct controllers. Entity choices must be reviewed again.
-        result["pool_control_enabled"] = False
-        result["battery_control_enabled"] = False
+        result.setdefault("device_modes", {})["$pool"] = "monitoring"
+        result.setdefault("device_modes", {})["$battery"] = "monitoring"
     archive = options.get(ARCHIVE_KEY, {})
     archive = archive if isinstance(archive, dict) else {}
     for key in ("ev_charge_efficiency",):

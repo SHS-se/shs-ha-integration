@@ -17,7 +17,8 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.states['number.target'] = State(20, min=5, max=35, step=.5, unit_of_measurement='°C')
         self.options['device_control_mappings']['heater'] = {
             'control_type': 'permit_inhibit', 'actuator_entity_ids': ['switch.heater'],
-            'max_inhibit_slots': 2, 'control_enabled': True}
+            'max_inhibit_slots': 2}
+        self.options['device_modes']['heater'] = 'controlling'
         self.coordinator.optimisation_plan.update(schema_version=7, device_models=[
             {'key': 'heater', 'control_type': 'permit_inhibit'}])
         self.coordinator.async_cached_device_configuration = AsyncMock(return_value=[{'key': 'heater', 'control_type': 'permit_inhibit'}])
@@ -28,7 +29,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.heater'].state, 'off')
         self.assertEqual(self.controller.status['device:heater']['state'], 'commanded')
         self.assertNotIn('measured_power_w', self.controller.status['device:heater'])
-        self.options['device_control_mappings']['heater']['control_enabled'] = False
+        self.options['device_modes']['heater'] = 'planning'
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'on')
         self.assertNotIn('device:heater', self.controller.records)
@@ -59,6 +60,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status['device:heater']['state'], 'idle')
 
     async def test_conflicting_owners_never_capture_or_write(self):
+        self.options['device_modes']['duplicate'] = 'controlling'
         self.options['device_control_mappings']['duplicate'] = deepcopy(self.options['device_control_mappings']['heater'])
         await self.controller.async_start()
         self.assertEqual(self.calls, [])
@@ -109,7 +111,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.slot['device_commands']['heater'] = {'type':'switch_schedule', 'on_seconds':0}
         await self.controller.async_start()
         self.assertEqual(self.states['switch.heater'].state, 'off')
-        mapping['control_enabled'] = False
+        self.options['device_modes']['heater'] = 'planning'
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'off')
         self.assertTrue(self.controller.records['device:heater']['restoration_pending'])
@@ -135,7 +137,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.assertEqual(self.states['climate.heater'].attributes['temperature'],21.5)
         self.assertEqual(self.states['climate.heater'].state,'heat')
-        mapping['control_enabled'] = False
+        self.options['device_modes']['heater'] = 'planning'
         await self.controller.async_tick()
         self.assertEqual(self.states['climate.heater'].attributes['temperature'],20)
 
@@ -164,11 +166,10 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.controller.records)
 
     async def test_stopping_control_does_not_require_a_live_actuator(self):
-        from configuration_schema import save_device
-        existing = {'device_control_mappings': {'heater': {'control_type':'permit_inhibit',
-            'actuator_entity_ids':['switch.missing'], 'max_inhibit_slots':2, 'control_enabled':True}}}
-        draft = {**existing['device_control_mappings']['heater'], 'control_enabled':False}
-        saved = save_device(existing, 'heater', draft, {'control_type':'permit_inhibit', 'name':'Heater'},
-            lambda _entity: None, entity_names={}, area_names={}, entity_area_ids={})
-        self.assertFalse(saved['device_control_mappings']['heater']['control_enabled'])
-        self.assertTrue(existing['device_control_mappings']['heater']['control_enabled'])
+        await self.controller.async_start()
+        del self.states['switch.heater']
+        self.options['device_modes']['heater'] = 'monitoring'
+        await self.controller.async_tick()
+        self.assertFalse(self.controller.eligible('device:heater', self.options))
+        self.assertFalse(self.controller.records)
+        self.assertIn('device:heater', self.controller.overrides)

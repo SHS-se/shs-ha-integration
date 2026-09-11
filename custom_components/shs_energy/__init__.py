@@ -48,6 +48,7 @@ from .configuration import (
     resolved_options,
 )
 from .controller import ScheduledController
+from .verification import VerificationJournal
 from .coordinator import ShsStatusCoordinator
 from .migration import mapped_entity_ids, migrate_options
 
@@ -204,6 +205,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     controller = ScheduledController(
         hass, coordinator, Store(hass, 1, f"shs_energy.controller.{entry.entry_id}"),
         lambda: resolved_options(hass, dict(entry.options)),
+        VerificationJournal(Store(hass, 1, f"shs_energy.verification.{entry.entry_id}")),
     )
     coordinator.controller = controller
     # Recover local ownership before contacting the cloud. A network outage

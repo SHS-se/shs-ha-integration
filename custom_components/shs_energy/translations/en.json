@@ -25,7 +25,6 @@
         "title": "Energy planning",
         "description": "Automatic setup reads the aggregate meters already curated in your Energy Dashboard, then shows what it found before anything is treated as controllable. Promotional examples live only on the website and never enter Home Assistant or customer storage.",
         "data": {
-          "planning_mode": "Planning mode",
           "setup_method": "Configuration method",
           "entities_heating": "Heating (radiators, floor heating, heat pump heating)",
           "entities_hot_water": "Hot water (boiler/water heater)",

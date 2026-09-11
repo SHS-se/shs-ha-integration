@@ -120,9 +120,11 @@ test('laundry editor hides empty alternatives but retains populated fields and r
 test('one permission row serves every device and always permits stopping', () => {
   const panel = makePanel(); panel._data.website_url = 'https://example.test/settings';
   for (const key of ['heater', 'ev', 'pool', '$battery']) {
-    const html = panel._choices({ key, name: key, choice_label: 'Excluded', permission: { enabled: true, reason: 'Excluded on website' } });
-    assert.match(html, /Include in the plan/); assert.match(html, /Let SHS operate it/);
-    assert.match(html, /checked/); assert.doesNotMatch(html, / disabled/);
+    const html = panel._choices({ key, name: key, choice_label: 'Excluded', mode: 'controlling', permission: { enabled: true, reason: 'Excluded on website', verification_reason: 'Excluded on website' } });
+    assert.match(html, /Include in the plan/); assert.match(html, /Device mode/);
+    assert.match(html, /value="controlling" selected/);
+    assert.match(html, /value="monitoring"\s*>/);
+    assert.match(html, /value="control_verification"\s+disabled>/);
   }
 });
 

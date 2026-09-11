@@ -68,8 +68,8 @@ class EntryMigrationHookTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(entry.options["rooms"], options["rooms"])
                 self.assertEqual(entry.options["entities_pool_heating"], ["sensor.pool"])
                 self.assertEqual(entry.options["pool_volume_m3"], 55)
-                self.assertEqual(entry.options["pool_control_enabled"], version == 4)
-                self.assertFalse(entry.options["battery_control_enabled"])
+                self.assertEqual(entry.options["device_modes"]["$pool"], "monitoring")
+                self.assertEqual(entry.options["device_modes"]["$battery"], "monitoring")
                 if version == 6:
                     report = entry.options["_migration_report"]
                     self.assertIn("device_control_mappings.sensor.pool", report["needs_attention"])
@@ -90,8 +90,8 @@ class EntryMigrationHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await ns["async_migrate_entry"](hass, entry))
         self.assertNotIn("ev_phase_count", entry.options)
         self.assertNotIn("ev_phase_voltage", entry.options)
-        self.assertTrue(entry.options["pool_control_enabled"])
-        self.assertFalse(entry.options["battery_control_enabled"])
+        self.assertEqual(entry.options["device_modes"]["$pool"], "monitoring")
+        self.assertEqual(entry.options["device_modes"]["$battery"], "monitoring")
         self.assertEqual(entry.version, CONFIG_ENTRY_VERSION)
 
     async def test_upgrade_commits_version_and_options_once(self):

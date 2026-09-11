@@ -70,7 +70,6 @@ apply_configuration:
       description: Mapping of supported SHS Energy option keys to values.
       required: true
       example:
-        planning_mode: live
         automatic_setup: true
       selector:
         object:
