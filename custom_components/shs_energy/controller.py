@@ -99,8 +99,9 @@ def pool_hardware_band(heat, water, on, start_attributes, stop_attributes):
 class ScheduledController:
     """HA adapter supplied by the caller, so execution is behaviour-testable."""
 
-    def __init__(self, hass, coordinator, store, options, verification=None):
+    def __init__(self, hass, coordinator, store, options, verification=None, *, entity_registry=None):
         self.verification = verification
+        self.entity_registry = entity_registry
         self.verifying = False
         self.verification_commands = []
         self.shadow = {}
@@ -458,6 +459,36 @@ class ScheduledController:
         return {"state": "commanded", "requested_current_a": current,
                 "reason": "current and charge switch accepted; delivered power not inferred"}
 
+    def pool_temperature(self, entity):
+        """Use the filtered temperature, but require reports from its raw source."""
+        selected = entity
+        visited = set()
+        temperature = None
+        while True:
+            if entity in visited:
+                raise ControlObservationError(
+                    f"{selected}: filter source cycle at {entity}", entity,
+                    "Correct the Filter sensor's source so it does not refer back to itself.",
+                )
+            visited.add(entity)
+            state = self.state(entity)
+            if state.attributes.get("unit_of_measurement") != "°C":
+                raise ValueError(f"{entity}: pool control requires Celsius")
+            value = finite(state.state)
+            if entity == selected:
+                temperature = value
+            entry = self.entity_registry.async_get(entity) if self.entity_registry is not None else None
+            if entry is None or entry.platform != "filter":
+                self.state(entity, max_age=POOL_MAX_AGE_SECONDS)
+                return temperature
+            source = state.attributes.get("entity_id")
+            if not isinstance(source, str) or not source.startswith("sensor."):
+                raise ControlObservationError(
+                    f"{entity}: Filter sensor has no valid temperature source", entity,
+                    "Check the source entity configured in this Filter sensor.",
+                )
+            entity = source
+
     async def execute_pool(self, options, slot):
         errors = pool_band_errors(options)
         if errors:
@@ -468,7 +499,7 @@ class ScheduledController:
         for entity in (start, stop, water_entity):
             if self.state(entity).attributes.get("unit_of_measurement") != "°C":
                 raise ValueError(f"{entity}: pool control requires Celsius")
-        water = self.number(water_entity, max_age=POOL_MAX_AGE_SECONDS)
+        water = self.pool_temperature(water_entity)
         record = self.records.get("pool")
         heat = ((finite(record["originals"][start]), finite(record["originals"][stop]))
                 if record else (self.number(start), self.number(stop)))

@@ -18,6 +18,7 @@ from homeassistant.helpers.event import (
 )
 
 from homeassistant.helpers.storage import Store
+from homeassistant.helpers import entity_registry as er
 
 from .api import ShsApiClient
 from .config_panel import async_apply_configuration, async_register_config_panel
@@ -206,6 +207,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         hass, coordinator, Store(hass, 1, f"shs_energy.controller.{entry.entry_id}"),
         lambda: resolved_options(hass, dict(entry.options)),
         VerificationJournal(Store(hass, 1, f"shs_energy.verification.{entry.entry_id}")),
+        entity_registry=er.async_get(hass),
     )
     coordinator.controller = controller
     # Recover local ownership before contacting the cloud. A network outage

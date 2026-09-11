@@ -261,6 +261,94 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reloaded.attempts, migrated.attempts)
         self.assertEqual(reloaded.slots, migrated.slots)
 
+    def configure_pool_filter(self):
+        from types import SimpleNamespace
+        self.options['device_modes']['$pool'] = 'control_verification'
+        self.states['sensor.water'].attributes['entity_id'] = 'sensor.raw_water'
+        self.states['sensor.water'].last_reported -= timedelta(hours=2)
+        self.states['sensor.raw_water'] = fixtures.State(31, unit_of_measurement='°C')
+        self.registry = {'sensor.water': SimpleNamespace(platform='filter')}
+        self.controller.entity_registry = SimpleNamespace(async_get=self.registry.get)
+
+    async def test_filter_uses_smoothed_value_and_logs_raw_freshness(self):
+        self.configure_pool_filter()
+        self.slot['pool_w'] = 0
+        await self.controller.async_start()
+        row = self.journal.attempts[-1]
+        self.assertEqual(row['outcome'], 'verified', row)
+        self.assertEqual(row['result']['water_temperature_c'], 29)
+        self.assertLess(row['result']['stop_temperature_c'], 29)
+        self.assertEqual(set(row['observations']) & {'sensor.water', 'sensor.raw_water'},
+                         {'sensor.water', 'sensor.raw_water'})
+        self.assertEqual(self.calls, [])
+
+    async def test_filter_stale_source_blocks_and_recovers_without_changing_filter(self):
+        self.configure_pool_filter()
+        self.states['sensor.raw_water'].last_reported -= timedelta(minutes=16)
+        await self.controller.async_start()
+        status = self.controller.status['pool']
+        self.assertEqual(status['state'], 'fault')
+        self.assertEqual(status['fix']['entity_id'], 'sensor.raw_water')
+        self.assertIn('sensor.raw_water is stale', status['reason'])
+        self.states['sensor.raw_water'].last_reported = datetime.now(timezone.utc)
+        await self.controller.async_tick()
+        self.assertEqual(self.controller.status['pool']['state'], 'verified')
+
+    async def test_filter_unavailable_entities_cannot_be_hidden(self):
+        self.configure_pool_filter()
+        await self.controller.async_start()
+        for entity in ('sensor.water', 'sensor.raw_water'):
+            with self.subTest(entity=entity):
+                old = self.states[entity].state
+                self.states[entity].state = 'unavailable'
+                await self.controller.async_tick()
+                self.assertEqual(self.controller.status['pool']['state'], 'fault')
+                self.assertEqual(self.controller.status['pool']['fix']['entity_id'], entity)
+                self.states[entity].state = old
+        del self.states['sensor.raw_water']
+        await self.controller.async_tick()
+        self.assertEqual(self.controller.status['pool']['state'], 'fault')
+
+    async def test_only_registered_filters_follow_source_attributes(self):
+        self.configure_pool_filter()
+        self.registry['sensor.water'].platform = 'template'
+        await self.controller.async_start()
+        self.assertIn('sensor.water is stale', self.controller.status['pool']['reason'])
+        self.registry.clear()
+        await self.controller.async_tick()
+        self.assertIn('sensor.water is stale', self.controller.status['pool']['reason'])
+
+    async def test_filter_chains_validate_sources_and_reject_cycles(self):
+        from types import SimpleNamespace
+        self.configure_pool_filter()
+        self.registry['sensor.raw_water'] = SimpleNamespace(platform='filter')
+        self.states['sensor.raw_water'].attributes['entity_id'] = 'sensor.actual_water'
+        self.states['sensor.raw_water'].last_reported -= timedelta(hours=2)
+        self.states['sensor.actual_water'] = fixtures.State(32, unit_of_measurement='°C')
+        await self.controller.async_start()
+        self.assertEqual(self.controller.status['pool']['state'], 'verified')
+        self.states['sensor.raw_water'].attributes['entity_id'] = 'sensor.water'
+        await self.controller.async_tick()
+        self.assertIn('cycle', self.controller.status['pool']['reason'])
+        self.states['sensor.raw_water'].attributes.pop('entity_id')
+        await self.controller.async_tick()
+        self.assertIn('no valid temperature source', self.controller.status['pool']['reason'])
+
+    async def test_live_filter_source_failure_restores_and_recovers_in_same_slot(self):
+        self.configure_pool_filter()
+        self.options['device_modes']['$pool'] = 'controlling'
+        self.slot['pool_w'] = 0
+        await self.controller.async_start()
+        self.assertLess(float(self.states['number.stop'].state), 29)
+        self.states['sensor.raw_water'].last_reported -= timedelta(minutes=16)
+        await self.controller.async_tick()
+        self.assertEqual(self.controller.status['pool']['state'], 'fault')
+        self.assertEqual(float(self.states['number.stop'].state), 30)
+        self.states['sensor.raw_water'].last_reported = datetime.now(timezone.utc)
+        await self.controller.async_tick()
+        self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
+        self.assertLess(float(self.states['number.stop'].state), 29)
+
 
 class ModeTests(unittest.TestCase):
     def test_old_booleans_cannot_authorize_and_modes_derive_planning(self):
