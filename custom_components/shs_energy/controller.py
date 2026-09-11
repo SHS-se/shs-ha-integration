@@ -50,8 +50,15 @@ class ControlObservationError(ValueError):
                         "fix": {"kind": "entity", "entity_id": entity} if entity else {"kind": "device"}}
 
 
+class PlanChangedError(ValueError):
+    """A superseded execution snapshot, with evidence for the exact stop reason."""
+    def __init__(self, code, message, context):
+        super().__init__(f"plan changed or expired during execution: {message}")
+        self.details = {"blocked_reason": code, "blocked_context": context}
+
+
 def correction_details(error):
-    return error.details if isinstance(error, ControlObservationError) else {}
+    return error.details if isinstance(error, (ControlObservationError, PlanChangedError)) else {}
 
 
 def finite(value: Any) -> float:
@@ -118,6 +125,7 @@ class ScheduledController:
         self.restoring = False
         self.active_options = None
         self.active_slot = None
+        self.active_plan_id = None
         self.failed = {}
         self.initialized = False
         self.command_times = {}
@@ -215,7 +223,33 @@ class ScheduledController:
             raise ValueError("configuration changed during execution")
         slot = self.coordinator.current_plan_slot
         if slot != self.active_slot:
-            raise ValueError("plan changed or expired during execution")
+            now = datetime.now(timezone.utc)
+            old_start = self.active_slot["start"]
+            old_end = datetime.fromisoformat(old_start.replace("Z", "+00:00")) + timedelta(minutes=15)
+            current_start = slot["start"] if slot else None
+            status = self.coordinator.operational_status
+            context = {
+                "original_plan_id": self.active_plan_id,
+                "current_plan_id": (self.coordinator.optimisation_plan or {}).get("plan_id"),
+                "original_slot_start": old_start, "original_slot_end": old_end.isoformat(),
+                "current_slot_start": current_start,
+                "original_slot_expired": now >= old_end,
+                "plan_status": {key: status.get(key) for key in ("state", "reason", "actionable")},
+                "changed_slot_fields": sorted(key for key in self.active_slot.keys() | slot.keys()
+                                               if self.active_slot.get(key) != slot.get(key)) if slot else [],
+            }
+            if slot is not None and current_start != old_start:
+                code = "slot_rollover" if now >= old_end else "slot_replaced"
+                message = f"active slot moved from {old_start} to {current_start}"
+            elif slot is not None:
+                code, message = "slot_revised", "instructions for the same slot were revised"
+            elif not status["actionable"]:
+                code, message = "plan_not_actionable", status["reason"]
+            elif now >= old_end:
+                code, message = "slot_expired", "original slot ended and no current binding slot is available"
+            else:
+                code, message = "no_binding_slot", "no current binding slot is available"
+            raise PlanChangedError(code, message, context)
         if not self.eligible(self.device, options):
             raise ValueError("control disabled or manually overridden")
 
@@ -816,6 +850,7 @@ class ScheduledController:
             slot = self.coordinator.current_plan_slot
             plan = self.coordinator.optimisation_plan or {}
             self.active_options, self.active_slot = deepcopy(options), deepcopy(slot)
+            self.active_plan_id = plan.get("plan_id")
             mappings = options.get("device_control_mappings", {})
             generic = {"device:" + key for key, mapping in mappings.items() if device_mode(options, "device:" + key) in EXECUTING_MODES}
             generic.update(key for key in self.records if key.startswith("device:"))

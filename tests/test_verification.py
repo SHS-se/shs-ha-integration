@@ -390,6 +390,46 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event['event'] for event in self.journal.events], ['stop', 'start'])
         self.assertEqual(self.journal.attempts, attempts)
 
+    async def test_revised_slot_reason_and_context_are_exported(self):
+        self.options['device_modes']['$pool'] = 'control_verification'
+        async def revise(options, slot):
+            self.coordinator.current_plan_slot = {**slot, 'pool_w': 0}
+            self.coordinator.optimisation_plan = {**self.coordinator.optimisation_plan, 'plan_id': 'replacement'}
+            self.controller.check_authority()
+        self.controller.execute_pool = revise
+        await self.controller.async_start()
+        row = self.journal.export()['attempts'][0]
+        self.assertEqual(row['outcome'], 'blocked')
+        self.assertEqual(row['blocked_reason'], 'slot_revised')
+        self.assertIn('same slot were revised', row['reason'])
+        self.assertEqual(row['blocked_context']['original_plan_id'], 'test')
+        self.assertEqual(row['blocked_context']['current_plan_id'], 'replacement')
+        self.assertEqual(row['blocked_context']['changed_slot_fields'], ['pool_w'])
+        self.assertEqual(self.calls, [])
+
+    def test_slot_block_classification_distinguishes_rollover_expiry_and_invalid_plan(self):
+        from controller import PlanChangedError
+        now = datetime.now(timezone.utc)
+        for code, age, current, actionable in (
+            ('slot_rollover', 16, {'start': now.isoformat()}, True),
+            ('slot_replaced', 0, {'start': (now + timedelta(minutes=15)).isoformat()}, True),
+            ('slot_expired', 16, None, True),
+            ('no_binding_slot', 0, None, True),
+            ('plan_not_actionable', 0, None, False),
+        ):
+            with self.subTest(code=code):
+                self.controller.active_options = self.controller.options()
+                self.controller.active_slot = {'start': (now - timedelta(minutes=age)).isoformat()}
+                self.controller.active_plan_id = 'original'
+                self.coordinator.current_plan_slot = current
+                self.coordinator.operational_status = {'state': 'ready' if actionable else 'invalid',
+                    'reason': 'ready' if actionable else 'contract rejected', 'actionable': actionable}
+                with self.assertRaises(PlanChangedError) as raised:
+                    self.controller.check_authority()
+                self.assertEqual(raised.exception.details['blocked_reason'], code)
+                if not actionable:
+                    self.assertIn('contract rejected', str(raised.exception))
+
 
 class ModeTests(unittest.TestCase):
     def test_old_booleans_cannot_authorize_and_modes_derive_planning(self):

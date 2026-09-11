@@ -88,6 +88,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
             {"key": "charger", "control_type": "variable_power", "category": "ev_charging"},
             {"key": "pool", "control_type": "switch_schedule", "category": "pool_heating"}])
         self.coordinator.async_cached_planning_configuration = AsyncMock(return_value={"home": {"battery": {"included": True}}})
+        self.coordinator.operational_status = {"state": "ready", "reason": "A validated plan is available", "actionable": True}
         self.calls = []
         self.store = Store()
         async def call(domain, service, data, blocking):
