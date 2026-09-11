@@ -54,7 +54,10 @@ class PresentationTests(unittest.TestCase):
         heater = deepcopy(self.device)
         heater.update(category='pool_heating', fields=[{'key': 'temperature_entity_id', 'label': 'Room temperature'}])
         heater['mapping']['temperature_entity_id'] = 'sensor.water'
-        view = self.view([heater])[0]
+        views = self.view([heater])
+        view = views[0]
+        pool = next(d for d in views if d.get('system') == 'pool')
+        self.assertIn('pool_water_temperature_entity', {f['key'] for f in pool['planning_fields']})
         self.assertEqual(view['planning_system'], 'pool')
         self.assertEqual(view['fields'][0]['label'], 'Pool water temperature')
         self.assertEqual(heater['fields'][0]['label'], 'Room temperature')

@@ -704,10 +704,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const systemFields = this._systemFields(device, section);
     const mappingFields = planning ? [] : device.fields || [];
     const names = { pool: "Pool", ev: "Electric vehicle", battery: "Home battery" };
-    const title = device.system ? names[device.system] : device.name;
+    const title = planning && device.system ? names[device.system] : device.name;
     const members = this._data.devices.filter(d => d.key === device.key || (device.system && d.planning_system === device.system));
-    const description = device.system
-      ? (planning ? "Model properties and planning participation" : "Measurements, actions and operating limits")
+    const description = planning
+      ? "Model properties and planning participation"
       : `${device.room_name || "No room"} · ${this._label(device.category)}`;
     return `<details class="card device-card" data-open-key="${this._escape(id)}" ${edit ? "open" : ""}>
       <summary><div><strong>${this._escape(title)}</strong><small>${this._escape(description)}</small></div>

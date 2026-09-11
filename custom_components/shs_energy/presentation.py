@@ -64,7 +64,7 @@ def timeline(plan, status):
 
 
 PLANNING_FIELDS = {
-    "pool_volume_m3", "ev_charge_efficiency", "ev_kwh_per_km",
+    "pool_water_temperature_entity", "pool_volume_m3", "ev_charge_efficiency", "ev_kwh_per_km",
     "battery_capacity_kwh", "battery_target_soc", "battery_target_is_hard",
     "battery_charge_efficiency", "battery_discharge_efficiency",
     "battery_export_enabled", "battery_export_reserve_soc",
