@@ -8,6 +8,8 @@ import unittest
 sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
 from configuration_schema import prepare_options, resolve_configuration, save_device
 from migration import migrate_options
+from configuration_fields import _control_fields
+from device_commands import execution_setup_errors
 
 ENTITIES = {key: {'state': '20', 'attributes': {}} for key in
             ('sensor.old', 'sensor.new', 'climate.a', 'climate.b', 'number.current')}
@@ -21,6 +23,33 @@ def save(existing, key, mapping):
 
 
 class CurrentConfigurationTests(unittest.TestCase):
+    def test_control_cards_use_one_actuator_and_a_consistent_field_order(self):
+        for kind in ("setpoint", "switch_schedule", "permit_inhibit", "variable_power"):
+            fields = _control_fields({"control_type": kind, "category": "heating"})
+            self.assertEqual(fields[0]["key"], "control_entity_id" if kind == "variable_power" else "actuator_entity_ids")
+            self.assertEqual(fields[1]["key"], "power")
+            self.assertNotIn("companion_actuator_entity_ids", [f["key"] for f in fields])
+            if kind != "variable_power":
+                self.assertEqual(fields[0]["max_items"], 1)
+
+    def test_saving_or_executing_multiple_actuators_is_rejected(self):
+        for kind in ("setpoint", "switch_schedule", "permit_inhibit"):
+            mapping = {"control_type": kind, "actuator_entity_ids": ["climate.a", "climate.b"],
+                       "temperature_entity_id": "sensor.old", "max_inhibit_slots": 2}
+            # Only include public fields for the selected control type.
+            keys = {f["key"] for f in _control_fields({"control_type": kind, "category": "heating"})}
+            mapping = {k: v for k, v in mapping.items() if k in keys or k == "control_type"}
+            with self.assertRaisesRegex(ValueError, "must be one entity"):
+                save_device({}, "heater", mapping, {"control_type": kind, "category": "heating", "name": "Heater"},
+                            ENTITIES.get, entity_names={}, area_names={}, entity_area_ids={})
+            self.assertIn("choose exactly one control entity", execution_setup_errors(mapping))
+
+    def test_companion_actuators_are_not_public_configuration(self):
+        mapping = {"control_type": "setpoint", "actuator_entity_ids": ["climate.a"],
+                   "temperature_entity_id": "sensor.old", "companion_actuator_entity_ids": ["climate.b"]}
+        with self.assertRaisesRegex(ValueError, "unknown device fields"):
+            save({}, "heater", mapping)
+
     def test_pool_switch_can_be_reentered_after_version_six_migration(self):
         options, _ = migrate_options({"entities_pool_heating": ["sensor.pool"],
                                      "device_control_mappings": {}}, source_version=6)

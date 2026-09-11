@@ -42,7 +42,7 @@ def actuator_targets(mapping):
         targets = [mapping['setpoint_entity_id']] if mapping.get('setpoint_entity_id') else mapping.get('actuator_entity_ids', [])
     else:
         targets = mapping.get('actuator_entity_ids', [])
-    return list(dict.fromkeys([*targets, *mapping.get('companion_actuator_entity_ids', [])]))
+    return list(targets)
 
 
 def execution_setup_errors(mapping):
@@ -50,7 +50,9 @@ def execution_setup_errors(mapping):
     if kind not in ('setpoint', 'switch_schedule', 'permit_inhibit'):
         return ['this method is not supported for this device']
     if mapping.get('companion_actuator_entity_ids'):
-        return ['equipment that must run together is not supported yet']
+        return ['configure combined switching in Home Assistant using one control entity']
+    if len(mapping.get('actuator_entity_ids', [])) > 1:
+        return ['choose exactly one control entity']
     if kind == 'permit_inhibit':
         maximum = mapping.get('max_inhibit_slots')
         if not numeric(maximum) or maximum < 1 or maximum != int(maximum):

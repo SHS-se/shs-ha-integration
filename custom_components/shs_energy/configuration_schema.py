@@ -183,6 +183,8 @@ def normalise_field_value(
         values = value if isinstance(value, list) else [value]
         if kind == "entities" and not isinstance(value, list):
             raise ValueError(f"{context}: {label} must be a list of entities")
+        if field.get("max_items") is not None and len(values) > field["max_items"]:
+            raise ValueError(f"{context}: {label} must be one entity")
         normalised = []
         for raw_entity_id in values:
             if not isinstance(raw_entity_id, str) or not raw_entity_id.strip():

@@ -443,3 +443,35 @@ for (const [name, controlType] of [['Pool pump', 'switch_schedule'], ['Pool heat
     assert.equal(panel._deviceDirty('pool', 'controls'), false);
   });
 }
+
+for (const controlType of ['setpoint', 'switch_schedule', 'permit_inhibit']) {
+  test(`${controlType} edits one actuator in the shared card layout`, async () => {
+    const panel = splitPanel();
+    const device = panel._data.devices[0];
+    device.control_type = controlType;
+    device.fields = [
+      { key: 'actuator_entity_ids', label: 'Control entity', kind: 'entities', max_items: 1, required: true },
+      { key: 'power', label: 'Power', kind: 'power' },
+      { key: 'temperature_entity_id', label: 'Room temperature', kind: 'entity' },
+    ];
+    for (const draft of [panel._draft, panel._savedDraft]) draft.device_control_mappings.pool.control_type = controlType;
+    const html = panel._renderDevice(device);
+    assert.match(html, /data-field-key="actuator_entity_ids"[^>]*value="switch.pool"/);
+    assert.doesNotMatch(html, /multi-editor|add-multi|remove-multi|measurements and controls/);
+    assert.equal((html.match(/class="field-grid"/g) || []).length, 1);
+    assert.equal((html.match(/<summary>Add a setting<\/summary>/g) || []).length, 1);
+    assert.ok(html.indexOf('data-field-key="actuator_entity_ids"') < html.indexOf('data-field-key="power"'));
+    const input = Object.assign(new context.HTMLInputElement(), {
+      dataset: { fieldKey: 'actuator_entity_ids', scope: 'mapping', deviceKey: 'pool' },
+      value: 'switch.combined', type: 'text',
+    });
+    panel._onChange({ type: 'input', target: input });
+    let sent;
+    panel._hass = { callWS: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
+    await panel._saveDevice('pool', 'controls');
+    assert.deepEqual(Array.from(sent.mapping.actuator_entity_ids), ['switch.combined']);
+    input.value = '';
+    panel._onChange({ type: 'input', target: input });
+    assert.equal(panel._draft.device_control_mappings.pool.actuator_entity_ids, undefined);
+  });
+}

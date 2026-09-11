@@ -298,8 +298,7 @@ def _suggest_control_entities(
     domains: tuple[str, ...],
     field_tokens: tuple[str, ...],
     units: tuple[str, ...] = (),
-    multiple: bool = False,
-) -> str | list[str] | None:
+) -> str | None:
     """Rank local entities semantically; suggestions always require review."""
     device_tokens = _control_tokens(
         device.get("name"), device.get("statistic_id"), device.get("category")
@@ -323,12 +322,7 @@ def _suggest_control_entities(
         score = overlap * 10 + field_hits * 3 + (2 if unit_hit else 0)
         ranked.append((score, state.entity_id))
     ranked.sort(key=lambda value: (-value[0], len(value[1]), value[1]))
-    if not ranked:
-        return [] if multiple else None
-    if not multiple:
-        return ranked[0][1]
-    best = ranked[0][0]
-    return [entity_id for score, entity_id in ranked if score >= best - 2][:6]
+    return ranked[0][1] if ranked else None
 
 
 def suggest_device_control_mapping(
@@ -341,7 +335,7 @@ def suggest_device_control_mapping(
 
     def set_if_found(key: str, value: Any) -> None:
         if value not in (None, "", []):
-            mapping[key] = value
+            mapping[key] = [value] if key == "actuator_entity_ids" else value
 
     set_if_found("power", _suggest_control_entities(
         hass, device, domains=("sensor",), field_tokens=("power", "effekt"),
@@ -360,13 +354,11 @@ def suggest_device_control_mapping(
         set_if_found("actuator_entity_ids", _suggest_control_entities(
             hass, device, domains=("switch", "climate"),
             field_tokens=("heater", "heating", "aircon", "climate", "värme"),
-            multiple=True,
         ))
     elif control_type in ("switch_schedule", "permit_inhibit"):
         set_if_found("actuator_entity_ids", _suggest_control_entities(
             hass, device, domains=("switch", "input_boolean", "climate"),
             field_tokens=("heater", "heating", "boiler", "pump", "switch", "värme"),
-            multiple=True,
         ))
     elif control_type == "variable_power":
         current_control = device.get("category") == "ev_charging"

@@ -277,22 +277,27 @@ def mapping_errors(
         return ["the saved mapping belongs to a different control type"]
 
     errors: list[str] = []
+    if mapping.get("companion_actuator_entity_ids"):
+        errors.append("configure combined switching in Home Assistant using one control entity")
+    actuators = mapping.get("actuator_entity_ids")
+    if isinstance(actuators, list) and len(actuators) > 1:
+        errors.append("choose exactly one control entity")
     if (control_type == "setpoint" or room_control) and not _text(
         mapping, "temperature_entity_id"
     ):
         errors.append("room temperature entity is required")
     if control_type == "setpoint":
         if not _entities(mapping, "actuator_entity_ids"):
-            errors.append("at least one heater or climate actuator is required")
+            errors.append("one heater or climate actuator is required")
         errors.extend(_offset_errors(mapping))
     elif control_type == "permit_inhibit":
         if not _entities(mapping, "actuator_entity_ids"):
-            errors.append("at least one permit/inhibit actuator is required")
+            errors.append("one permit/inhibit actuator is required")
         if not _positive_number(mapping, "max_inhibit_slots"):
             errors.append("maximum inhibit slots must be positive")
     elif control_type == "switch_schedule":
         if not _entities(mapping, "actuator_entity_ids"):
-            errors.append("at least one switch actuator is required")
+            errors.append("one switch actuator is required")
     elif control_type == "variable_power":
         if not _text(mapping, "control_entity_id"):
             errors.append("number control entity is required")

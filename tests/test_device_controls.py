@@ -32,24 +32,27 @@ class DeviceControlMappingTests(unittest.TestCase):
         report = mapping_report("setpoint", {
             "control_type": "setpoint",
             "temperature_entity_id": "sensor.office_temperature",
-            "actuator_entity_ids": [
-                "switch.office_heater_left",
-                "switch.office_heater_right",
-            ],
-        }, entity_names={
-            "switch.office_heater_left": "Office heater left",
-            "switch.office_heater_right": "Office heater right",
-        }, area_names={"office": "Office"}, entity_area_ids={
-            "switch.office_heater_left": "office",
-            "switch.office_heater_right": "office",
-        })
+            "actuator_entity_ids": ["switch.office_heater"],
+        }, entity_names={"switch.office_heater": "Office heater"},
+            area_names={"office": "Office"},
+            entity_area_ids={"switch.office_heater": "office"})
         self.assertEqual(report["mapping_status"], "ready")
-        self.assertEqual(report["mapping_summary"]["entity_count"], 3)
+        self.assertEqual(report["mapping_summary"]["entity_count"], 2)
         self.assertEqual(report["mapping_summary"]["room_name"], "Office")
-        self.assertEqual(
-            report["mapping_summary"]["controlled_devices"],
-            ["Office heater left", "Office heater right"],
-        )
+        self.assertEqual(report["mapping_summary"]["controlled_devices"], ["Office heater"])
+
+    def test_multiple_actuators_and_companions_are_not_ready(self):
+        for kind in ("setpoint", "switch_schedule", "permit_inhibit"):
+            mapping = {
+                "control_type": kind, "temperature_entity_id": "sensor.office_temperature",
+                "actuator_entity_ids": ["switch.a", "switch.b"], "max_inhibit_slots": 2,
+            }
+            report = mapping_report(kind, mapping)
+            self.assertEqual(report["mapping_status"], "invalid")
+            self.assertIn("exactly one control entity", report["mapping_error"])
+            mapping["actuator_entity_ids"] = ["switch.a"]
+            mapping["companion_actuator_entity_ids"] = ["switch.b"]
+            self.assertIn("combined switching", mapping_report(kind, mapping)["mapping_error"])
 
     def test_setpoint_rejects_actuators_in_different_rooms(self) -> None:
         report = mapping_report("setpoint", {

@@ -391,6 +391,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
       return;
     }
     const value = String(rawValue || "").trim();
+    if (field.kind === "entities" && field.max_items === 1) {
+      if (value) target[key] = [value];
+      else delete target[key];
+      return;
+    }
     if (!value) delete target[key];
     else target[key] = value;
   }
@@ -576,6 +581,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
           )
           .join("")}
       </select>`;
+    } else if (field.kind === "entities" && field.max_items === 1) {
+      control = `<input type="text" list="shs-entity-list" ${common} value="${this._escape((value || []).join(", "))}" placeholder="Search or enter an entity">`;
     } else if (field.kind === "entities") {
       const values = Array.isArray(value) ? value : [];
       control = `<div class="multi-editor">
@@ -688,22 +695,25 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _present(value) { return value !== undefined && value !== null && value !== "" && (!Array.isArray(value) || value.length > 0); }
 
-  _fields(fields, values, scope = "configuration", deviceKey = "") {
+  _fields(fields, values, scope = "configuration", deviceKey = "", additional = []) {
     const visible = [], optional = [];
     const linked = {
       pool_start_temperature_entity: ["pool_stop_temperature_entity", "pool_temperature_minimum", "pool_temperature_maximum"],
       offset_entity_id: ["offset_minimum", "offset_maximum"],
       battery_authority_entity: ["battery_authority_confirm_entity", "battery_authority_confirm_state"],
     };
-    const dependent = new Set(Object.entries(linked).filter(([key]) => this._present(values[key])).flatMap(([, keys]) => keys));
-    for (const field of fields) {
-      const token = `${scope}:${deviceKey}:${field.key}`;
-      const required = field.required || dependent.has(field.key);
-      const populated = this._present(values[field.key]) && (field.kind !== "toggle" || values[field.key] || this._data.configured_keys?.includes(field.key));
-      const inheritedLocation = ["pv_forecast_latitude", "pv_forecast_longitude"].includes(field.key) && !this._data.configured_keys?.includes(field.key);
-      if (required || field.kind === "power" || (populated && !inheritedLocation) || this._added.has(token)) visible.push(this._renderField({ ...field, required }, values[field.key], scope, deviceKey));
-      else if (!["permit_entity_id", "mode_entity_id", "offset_entity_id", "offset_minimum", "offset_maximum", "companion_actuator_entity_ids"].includes(field.key)) {
-        optional.push(`<button class="text" data-action="add-field" data-token="${this._escape(token)}">Add ${this._escape(field.label.toLowerCase())}</button>`);
+    for (const group of [{ fields, values, scope, deviceKey }, ...additional]) {
+      const { fields, values, scope, deviceKey } = group;
+      const dependent = new Set(Object.entries(linked).filter(([key]) => this._present(values[key])).flatMap(([, keys]) => keys));
+      for (const field of fields) {
+        const token = `${scope}:${deviceKey}:${field.key}`;
+        const required = field.required || dependent.has(field.key);
+        const populated = this._present(values[field.key]) && (field.kind !== "toggle" || values[field.key] || this._data.configured_keys?.includes(field.key));
+        const inheritedLocation = ["pv_forecast_latitude", "pv_forecast_longitude"].includes(field.key) && !this._data.configured_keys?.includes(field.key);
+        if (required || field.kind === "power" || (populated && !inheritedLocation) || this._added.has(token)) visible.push(this._renderField({ ...field, required }, values[field.key], scope, deviceKey));
+        else if (!["permit_entity_id", "mode_entity_id", "offset_entity_id", "offset_minimum", "offset_maximum"].includes(field.key)) {
+          optional.push(`<button class="text" data-action="add-field" data-token="${this._escape(token)}">Add ${this._escape(field.label.toLowerCase())}</button>`);
+        }
       }
     }
     return `<div class="field-grid">${visible.join("")}</div>${optional.length ? `<details class="compact" data-open-key="optional:${this._escape(scope + deviceKey + fields[0]?.key)}"><summary>Add a setting</summary>${optional.join("")}</details>` : ""}`;
@@ -774,9 +784,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
         ${planning ? `<p>Connected equipment: ${members.map(d => this._escape(d.name)).join(", ")}</p>` : mappingFields.length ? `<p>${this._escape(device.name)} · ${this._escape(this._label(device.control_type))}</p>` : ""}
         ${!planning && device.mapping_error ? `<p class="inline-warning">${this._escape(device.mapping_error)}</p>` : ""}
         ${this._deviceErrors[device.key] ? `<p role="alert" class="inline-error">${this._escape(this._deviceErrors[device.key])}</p>` : ""}
-        ${this._fields(mappingFields, mapping, "mapping", device.key)}
-        ${!planning && device.system && systemFields.length ? `<h3>${this._escape(title)} measurements and controls</h3>` : ""}
-        ${this._fields(systemFields, this._draft, "configuration", device.key)}
+        ${this._fields(mappingFields, mapping, "mapping", device.key, [
+          { fields: systemFields, values: this._draft, scope: "configuration", deviceKey: device.key },
+        ])}
         ${!planning && Object.keys(device.suggested_mapping || {}).some(k => k !== "control_type" && !this._present(mapping[k])) ? `<button class="text" data-action="use-suggestions" data-device-key="${this._escape(device.key)}">Review suggested setup</button>` : ""}
         ${mappingFields.length || systemFields.length ? `<div class="device-save-row"><span>${dirty ? "Unsaved changes" : "Saved"}</span><button class="text" data-action="cancel-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty ? "" : "disabled"}>Cancel</button><button class="primary" data-action="save-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>Save ${section}</button></div>` : `<p>Choose how this device runs on the website to set it up here.</p>`}
         ${this._choices(device, section)}

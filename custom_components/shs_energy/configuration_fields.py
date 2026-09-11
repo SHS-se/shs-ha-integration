@@ -134,6 +134,16 @@ def _number_control_fields() -> tuple[dict[str, Any], ...]:
     )
 
 
+ACTUATOR_FIELD = {
+    **_field(
+        "actuator_entity_ids", "Control entity", "entities",
+        domains=("switch", "climate", "input_boolean"), required=True,
+        help_text="Choose one entity. To operate multiple devices together, create a single control entity in Home Assistant.",
+    ),
+    "max_items": 1,
+}
+
+
 CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
     "setpoint": (
         TEMPERATURE_FIELD,
@@ -144,21 +154,7 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
             domains=("number", "input_number", "climate"),
             help_text="Use this when one entity contains the current target temperature.",
         ),
-        _field(
-            "actuator_entity_ids",
-            "Heater or thermostat",
-            "entities",
-            domains=("switch", "climate", "input_boolean"),
-            required=True,
-            help_text="Choose the heater or thermostat. Its Home Assistant area identifies the room. Permission to operate it is chosen separately.",
-        ),
-        _field(
-            "companion_actuator_entity_ids",
-            "Equipment that must run together",
-            "entities",
-            domains=("switch", "climate", "input_boolean"),
-            help_text="For coupled equipment such as a circulation pump.",
-        ),
+        ACTUATOR_FIELD,
         POWER_FIELD,
         _field(
             "permit_entity_id",
@@ -197,14 +193,7 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
         ),
     ),
     "permit_inhibit": (
-        _field(
-            "actuator_entity_ids",
-            "Permit/inhibit actuator(s)",
-            "entities",
-            domains=("switch", "input_boolean", "climate"),
-            required=True,
-            help_text="The local thermostat keeps ownership of the duty cycle.",
-        ),
+        ACTUATOR_FIELD,
         POWER_FIELD,
         _field(
             "max_inhibit_slots",
@@ -217,19 +206,7 @@ CONTROL_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
         ),
     ),
     "switch_schedule": (
-        _field(
-            "actuator_entity_ids",
-            "Scheduled switch actuator(s)",
-            "entities",
-            domains=("switch", "input_boolean", "climate"),
-            required=True,
-        ),
-        _field(
-            "companion_actuator_entity_ids",
-            "Equipment that must run together",
-            "entities",
-            domains=("switch", "input_boolean", "climate"),
-        ),
+        ACTUATOR_FIELD,
         POWER_FIELD,
     ),
     "variable_power": _number_control_fields(),
@@ -261,8 +238,9 @@ def _control_fields(device: dict[str, Any]) -> tuple[dict[str, Any], ...]:
         is_room_thermal_control(control_type, str(device.get("category") or ""))
         and control_type != "setpoint"
     ):
-        return (OPTIONAL_TEMPERATURE_FIELD, *fields)
-    return fields
+        fields = (OPTIONAL_TEMPERATURE_FIELD, *fields)
+    primary = {"actuator_entity_ids": 0, "control_entity_id": 0, "power": 1}
+    return tuple(sorted(fields, key=lambda field: primary.get(field["key"], 2)))
 
 
 def section_fields(section: dict[str, Any]) -> list[dict[str, Any]]:
