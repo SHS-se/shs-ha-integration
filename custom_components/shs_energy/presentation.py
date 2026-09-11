@@ -64,7 +64,7 @@ def timeline(plan, status):
 
 
 PLANNING_FIELDS = {
-    "pool_water_temperature_entity", "pool_volume_m3", "ev_charge_efficiency", "ev_kwh_per_km",
+    "pool_volume_m3", "ev_charge_efficiency", "ev_kwh_per_km",
     "battery_capacity_kwh", "battery_target_soc", "battery_target_is_hard",
     "battery_charge_efficiency", "battery_discharge_efficiency",
     "battery_export_enabled", "battery_export_reserve_soc",
@@ -115,8 +115,8 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         if not equipment_present(options, system, devices, configured_keys):
             devices = [d for d in devices if d.get("category") != category or planning_path(d.get("control_type"), category) == "room"]
             continue
-        candidates = [d for d in devices if d.get("category") == category and planning_path(d.get("control_type"), category) != "room"]
-        candidates.sort(key=lambda d: (planning_path(d.get("control_type"), category) != system, d["key"]))
+        candidates = [d for d in devices if d.get("category") == category and mapped_planning_path(d, d.get("mapping", {}), options.get("pool_water_temperature_entity")) != "room"]
+        candidates.sort(key=lambda d: (d.get("control_type") != "setpoint", d["key"]))
         if candidates:
             candidates[0]["system"] = system
         else:
@@ -184,10 +184,8 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
             device, mapping, options.get("pool_water_temperature_entity")
         )
         if device["planning_system"] == "pool" and device.get("control_type") == "setpoint":
-            for field in device.get("fields", []):
-                if field["key"] == "temperature_entity_id":
-                    field["label"] = "Pool water temperature"
-                    field["help"] = "The measured water temperature used for pool heating."
+            # The shared pool sensor has one editor, on the pool Controls card.
+            device["fields"] = [f for f in device.get("fields", []) if f["key"] != "temperature_entity_id"]
 
         device["fields"] = [f for f in device.get("fields", []) if f["key"] != "control_enabled"]
         if not included:

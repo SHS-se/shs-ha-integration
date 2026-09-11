@@ -17,9 +17,9 @@ class OptionMigrationTests(unittest.TestCase):
         before = deepcopy(original)
         migrated, changed = migrate_options(original)
         self.assertTrue(changed)
-        self.assertEqual(migrated["ev_phase_count"], 1)
+        self.assertNotIn("ev_phase_count", migrated)
         self.assertEqual(migrated["ev_charge_efficiency"], 0.87)
-        self.assertEqual(migrated["ev_phase_voltage"], 240)
+        self.assertNotIn("ev_phase_voltage", migrated)
         self.assertFalse(migrated["ev_control_enabled"])
         self.assertNotIn("_legacy_configuration_archive", migrated)
         self.assertNotIn("_configuration_schema_version", migrated)
@@ -39,11 +39,11 @@ class OptionMigrationTests(unittest.TestCase):
             self.assertEqual(repeated["device_control_mappings"], migrated["device_control_mappings"])
         self.assertEqual(original, before)
 
-    def test_current_values_win_including_zero_and_false(self):
+    def test_retired_electrical_values_are_never_restored(self):
         for value in (1, 3, 0, False):
             original = {"ev_phase_count": value, "_legacy_configuration_archive": {"ev_phase_count": 2}}
             migrated, _ = migrate_options(original)
-            self.assertEqual(migrated["ev_phase_count"], value)
+            self.assertNotIn("ev_phase_count", migrated)
             self.assertNotIn("_legacy_configuration_archive", migrated)
         self.assertEqual(migrate_options({}), ({}, False))
 
@@ -74,7 +74,7 @@ class OptionMigrationTests(unittest.TestCase):
         })
         self.assertEqual(migrated["ev_connected_entity"], "binary_sensor.connected")
         self.assertEqual(migrated["ev_soc_entity"], "sensor.soc")
-        self.assertEqual(migrated["ev_phase_count"], 1)
+        self.assertNotIn("ev_phase_count", migrated)
         self.assertEqual(migrated["ev_charge_efficiency"], 0.88)
         self.assertEqual(migrate_options(migrated), (migrated, False))
 
@@ -116,7 +116,7 @@ class OptionMigrationTests(unittest.TestCase):
 
     def test_old_keys_are_rejected_on_save_instead_of_migrated(self):
         current, _ = migrate_options({"ev_phase_count": 1})
-        for key in ("ev_min_current_a", "pool_power_w", "_legacy_configuration_archive", "_migration_report", "device_control_mappings"):
+        for key in ("ev_phase_count", "ev_phase_voltage", "ev_min_current_a", "pool_power_w", "_legacy_configuration_archive", "_migration_report", "device_control_mappings"):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 merge_options(current, {key: 5})
         for mapping in (

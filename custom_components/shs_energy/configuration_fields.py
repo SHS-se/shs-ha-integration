@@ -625,28 +625,6 @@ def _configuration_sections() -> list[dict[str, Any]]:
                     ),
                 ),
                 _field(
-                    c.OPT_EV_PHASE_COUNT,
-                    "Charger phases",
-                    "number",
-                    step=1,
-                    minimum=1,
-                    maximum=3,
-                    help_text=(
-                        "How many phases the charge cable uses. One for a "
-                        "single-phase installation, three for the common Swedish "
-                        "three-phase one."
-                    ),
-                ),
-                _field(
-                    c.OPT_EV_PHASE_VOLTAGE,
-                    "Phase voltage",
-                    "number",
-                    unit="V",
-                    step=1,
-                    minimum=100,
-                    maximum=500,
-                ),
-                _field(
                     c.OPT_EV_CHARGE_EFFICIENCY,
                     "Charging efficiency",
                     "number",

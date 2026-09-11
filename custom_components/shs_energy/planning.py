@@ -21,8 +21,8 @@ from typing import Any, Callable, Optional
 try:  # pragma: no cover - exercised by both import paths
     from .const import (
         EV_CHARGE_EFFICIENCY,
-        EV_PHASE_COUNT,
-        EV_PHASE_VOLTAGE,
+        EU_AC_PHASE_COUNT,
+        EU_AC_PHASE_VOLTAGE,
         OPT_DEVICE_CONTROL_MAPPINGS,
         OPT_EV_CONNECTED_ENTITY,
         OPT_EV_DEPARTURE_ENTITY,
@@ -32,8 +32,6 @@ try:  # pragma: no cover - exercised by both import paths
         OPT_EV_ENABLED,
         OPT_POOL_ENABLED,
         OPT_POOL_WATER_TEMPERATURE_ENTITY,
-        OPT_EV_PHASE_COUNT,
-        OPT_EV_PHASE_VOLTAGE,
         OPT_EV_CHARGE_EFFICIENCY,
         OPT_EV_KWH_PER_KM,
         DEFAULT_EV_KWH_PER_KM,
@@ -56,8 +54,8 @@ except ImportError:  # The test suite imports these helpers as flat modules,
     # without Home Assistant installed, so the package parent does not exist.
     from const import (  # type: ignore[no-redef]
         EV_CHARGE_EFFICIENCY,
-        EV_PHASE_COUNT,
-        EV_PHASE_VOLTAGE,
+        EU_AC_PHASE_COUNT,
+        EU_AC_PHASE_VOLTAGE,
         OPT_DEVICE_CONTROL_MAPPINGS,
         OPT_EV_CONNECTED_ENTITY,
         OPT_EV_DEPARTURE_ENTITY,
@@ -67,8 +65,6 @@ except ImportError:  # The test suite imports these helpers as flat modules,
         OPT_EV_ENABLED,
         OPT_POOL_ENABLED,
         OPT_POOL_WATER_TEMPERATURE_ENTITY,
-        OPT_EV_PHASE_COUNT,
-        OPT_EV_PHASE_VOLTAGE,
         OPT_EV_CHARGE_EFFICIENCY,
         OPT_EV_KWH_PER_KM,
         DEFAULT_EV_KWH_PER_KM,
@@ -282,12 +278,6 @@ def build_services(
                 "priority": 1,
             })
 
-    # The vehicle's electrical model, overridable because a fixed three-phase
-    # assumption silently trebles a single-phase charger's modelled power.
-    phase_count = _positive_option(options, OPT_EV_PHASE_COUNT, EV_PHASE_COUNT)
-    phase_voltage = _positive_option(
-        options, OPT_EV_PHASE_VOLTAGE, EV_PHASE_VOLTAGE
-    )
     charge_efficiency = _positive_option(
         options, OPT_EV_CHARGE_EFFICIENCY, EV_CHARGE_EFFICIENCY
     )
@@ -455,8 +445,8 @@ def build_services(
                 configured_min,
                 configured_max,
                 configured_step,
-                phase_count,
-                phase_voltage,
+                EU_AC_PHASE_COUNT,
+                EU_AC_PHASE_VOLTAGE,
                 label=current_entity,
             )
             services.append({

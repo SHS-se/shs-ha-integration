@@ -31,24 +31,24 @@ test('an open session loads the new panel instead of reusing a previously regist
 
 test('saving retains disabled equipment settings and excludes metadata and mappings', async () => {
   const panel = Object.create(context.Panel.prototype);
-  panel._data = { sections: [{ toggle: { key: 'ev_enabled' }, fields: [{ key: 'ev_phase_count' }] }] };
-  panel._draft = { ev_enabled: false, ev_phase_count: 1, _migration_report: { removed: ['old'] }, device_control_mappings: { car: { power: 1000 } } };
-  panel._savedDraft = { ...panel._draft, ev_enabled: true, ev_phase_count: 3 };
+  panel._data = { sections: [{ toggle: { key: 'ev_enabled' }, fields: [{ key: 'ev_charge_efficiency' }] }] };
+  panel._draft = { ev_enabled: false, ev_charge_efficiency: 0.95, _migration_report: { removed: ['old'] }, device_control_mappings: { car: { power: 1000 } } };
+  panel._savedDraft = { ...panel._draft, ev_enabled: true, ev_charge_efficiency: 0.92 };
   panel._entryId = 'entry';
   panel._render = () => {};
   let sent;
   panel._hass = { callWS: async (payload) => { sent = JSON.parse(JSON.stringify(payload)); } };
   await panel._save();
-  assert.deepEqual(sent.configuration, { ev_enabled: false, ev_phase_count: 1 });
+  assert.deepEqual(sent.configuration, { ev_enabled: false, ev_charge_efficiency: 0.95 });
   assert.equal(panel._draft.device_control_mappings.car.power, 1000);
   assert.equal(panel._error, '');
 });
 
 test('general saves omit unchanged resolved defaults', async () => {
   const panel = Object.create(context.Panel.prototype);
-  panel._data = { sections: [{ fields: [{ key: 'ev_phase_count' }, { key: 'ev_enabled' }] }] };
-  panel._draft = { ev_phase_count: 3, ev_enabled: false };
-  panel._savedDraft = { ev_phase_count: 3, ev_enabled: true };
+  panel._data = { sections: [{ fields: [{ key: 'ev_charge_efficiency' }, { key: 'ev_enabled' }] }] };
+  panel._draft = { ev_charge_efficiency: 0.92, ev_enabled: false };
+  panel._savedDraft = { ev_charge_efficiency: 0.92, ev_enabled: true };
   panel._entryId = 'entry';
   panel._render = () => {};
   let sent;
@@ -224,7 +224,7 @@ const splitPanel = () => {
   const permission = { key: 'pool_permission_entity', kind: 'entity', label: 'Pool permission switch' };
   const mapping = { control_type: 'switch_schedule', actuator_entity_ids: ['switch.pool'] };
   panel._data = { devices: [{ key: 'pool', name: 'Pool pump', system: 'pool', category: 'pool_heating', included: true,
-    mapping_status: 'ready', permission: { enabled: false }, fields: [], system_fields: [permission, temperature, volume], planning_fields: [temperature, volume] },
+    mapping_status: 'ready', permission: { enabled: false }, fields: [], system_fields: [permission, temperature, volume], planning_fields: [volume] },
     { key: 'excluded', name: 'Excluded microwave', included: false, category: 'household', fields: [], permission: { enabled: false } }],
     sections: [], labels: { ready: 'Ready', base_load: 'Excluded', pool_heating: 'Pool' } };
   panel._draft = { pool_permission_entity: 'switch.permit', pool_volume_m3: 55, pool_water_temperature_entity: 'sensor.water', device_control_mappings: { pool: mapping } };
@@ -242,10 +242,10 @@ test('Devices stacks Controls above Planning and excludes equipment until explic
   const [controls, planning] = html.split('<section aria-labelledby="planning-heading">');
   assert.match(controls, /<strong>Pool pump<\/strong>/);
   assert.doesNotMatch(controls, /<strong>Pool<\/strong>/);
-  assert.doesNotMatch(controls, /Pool water temperature/);
+  assert.match(controls, /Pool water temperature/);
   assert.doesNotMatch(controls, /Pool volume/);
   assert.match(planning, /Pool volume/);
-  assert.match(planning, /Pool water temperature/);
+  assert.doesNotMatch(planning, /Pool water temperature/);
   assert.match(planning, /<strong>Pool<\/strong>/);
   assert.doesNotMatch(planning, /Let SHS operate/);
   assert.doesNotMatch(html, /Excluded microwave/);
@@ -264,7 +264,7 @@ test('saving Planning preserves unsaved Controls and sends only planning propert
   let sent;
   panel._hass = { callWS: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
   await panel._saveDevice('pool', 'planning');
-  assert.deepEqual(JSON.parse(JSON.stringify(sent.configuration)), { pool_water_temperature_entity: 'sensor.other', pool_volume_m3: 60 });
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.configuration)), { pool_volume_m3: 60 });
   assert.deepEqual(JSON.parse(JSON.stringify(sent.mapping.actuator_entity_ids)), ['switch.pool']);
   assert.equal(panel._draft.device_control_mappings.pool.actuator_entity_ids[0], 'switch.other');
   assert.equal(panel._draft.pool_water_temperature_entity, 'sensor.other');
@@ -285,4 +285,22 @@ test('saving Controls and cancelling Planning retain edits in the other section'
   panel._cancelDevice('pool', 'planning');
   assert.equal(panel._draft.pool_volume_m3, 55);
   assert.equal(panel._draft.pool_permission_entity, 'switch.third');
+});
+
+test('one pool water selector updates the heater mapping when Controls is saved', async () => {
+  const panel = splitPanel();
+  const device = panel._data.devices.find(d => d.key === 'pool');
+  device.control_type = 'setpoint';
+  for (const draft of [panel._draft, panel._savedDraft]) {
+    draft.device_control_mappings.pool.control_type = 'setpoint';
+    draft.device_control_mappings.pool.temperature_entity_id = 'sensor.water';
+  }
+  panel._draft.pool_water_temperature_entity = 'sensor.new_water';
+  let sent;
+  panel._hass = { callWS: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
+  await panel._saveDevice('pool', 'controls');
+  assert.equal(sent.configuration.pool_water_temperature_entity, 'sensor.new_water');
+  assert.equal(sent.mapping.temperature_entity_id, 'sensor.new_water');
+  assert.equal(panel._draft.device_control_mappings.pool.temperature_entity_id, 'sensor.new_water');
+  assert.equal(panel._deviceDirty('pool', 'controls'), false);
 });

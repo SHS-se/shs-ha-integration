@@ -93,7 +93,7 @@ OPT_CONFIGURATION_REVIEWED_AT = "configuration_reviewed_at"
 OPT_DEVICE_CONTROL_MAPPINGS = "device_control_mappings"
 # Versions 5/6 shipped the retired control interfaces. Never reuse version 4:
 # installed entries must roll forward through the restored settings schema.
-CONFIG_ENTRY_VERSION = 7
+CONFIG_ENTRY_VERSION = 8
 ROOM_AREA_FIELD = "room_area_id"
 
 # Live optimisation inputs. Forecast entities must expose timestamped values;
@@ -209,22 +209,15 @@ OPT_EV_SOC_ENTITY = "ev_soc_entity"
 OPT_EV_TARGET_SOC_ENTITY = "ev_target_soc_entity"
 OPT_EV_DEPARTURE_ENTITY = "ev_departure_entity"
 OPT_EV_ENERGY_REMAINING_ENTITY = "ev_energy_remaining_entity"
-OPT_EV_PHASE_COUNT = "ev_phase_count"
-OPT_EV_PHASE_VOLTAGE = "ev_phase_voltage"
 OPT_EV_CHARGE_EFFICIENCY = "ev_charge_efficiency"
 OPT_EV_KWH_PER_KM = "ev_kwh_per_km"
 
-# Defaults for the vehicle's electrical model, every one of them overridable.
-#
-# These were fixed constants, and a fixed phase count is not a detail: a
-# single-phase 16 A charger delivers 3.7 kW and was modelled at 11 kW, so the
-# planner believed it could fill a car three times faster than the cable can.
-# Nothing surfaced that, because a wrong number produces a confident plan rather
-# than an error. Anything that changes what a plan means has to be reachable
-# from the panel; see OPT_EV_PHASE_COUNT and friends below.
+# Internal European AC planning profile, not customer configuration.
+# This is an estimate for the supported three-phase installation, not a claim
+# that every European charger or vehicle uses three phases. See the catalog design.
+EU_AC_PHASE_COUNT = 3
+EU_AC_PHASE_VOLTAGE = 230.0
 EV_CHARGE_EFFICIENCY = 0.92
-EV_PHASE_COUNT = 3
-EV_PHASE_VOLTAGE = 230.0
 DEFAULT_EV_KWH_PER_KM = 0.16
 
 OPTIMISATION_ACTUAL_BACKFILL_HOURS = 72

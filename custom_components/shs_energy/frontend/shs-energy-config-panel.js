@@ -202,10 +202,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._error = "";
     this._notice = "";
     this._render();
-    const fields = this._systemFields(this._data.devices.find(d => d.key === deviceKey), section);
+    const device = this._data.devices.find(d => d.key === deviceKey);
+    const fields = this._systemFields(device, section);
     const mapping = this._clone(
       (section === "planning" ? this._savedDraft : this._draft)?.[MAPPINGS_KEY]?.[deviceKey] || null
     );
+    if (section !== "planning" && mapping && device.system === "pool" && device.control_type === "setpoint") {
+      mapping.temperature_entity_id = this._draft.pool_water_temperature_entity;
+    }
     try {
       const result = await this._hass.callWS({
         type: "shs_energy/config/save_device",

@@ -92,12 +92,6 @@ def configuration_defaults(latitude: float, longitude: float) -> dict[str, Any]:
         c.OPT_BATTERY_DISCHARGE_IS_NEGATIVE: True,
         c.OPT_TERMINAL_SOC_MIN: 0.2,
         c.OPT_TERMINAL_ENERGY_VALUE: 1.0,
-        # The vehicle's electrical model. Defaults describe the common Swedish
-        # three-phase installation and are wrong for a single-phase charger by
-        # a factor of three, which is why they are options rather than
-        # constants.
-        c.OPT_EV_PHASE_COUNT: c.EV_PHASE_COUNT,
-        c.OPT_EV_PHASE_VOLTAGE: c.EV_PHASE_VOLTAGE,
         c.OPT_EV_CHARGE_EFFICIENCY: c.EV_CHARGE_EFFICIENCY,
         c.OPT_EV_KWH_PER_KM: c.DEFAULT_EV_KWH_PER_KM,
     }
@@ -242,8 +236,6 @@ def prepare_options(existing, incoming, read_entity, *, latitude=0.0, longitude=
                       ("pool_temperature_minimum", "pool_temperature_maximum")):
         if current.get(low) is not None and current.get(high) is not None and current[low] >= current[high]:
             raise ValueError(f"{OPTION_FIELDS[low]['label']} must be below {OPTION_FIELDS[high]['label']}")
-    if current["ev_phase_count"] not in (1, 2, 3):
-        raise ValueError("Charger phases must be a whole number from 1 to 3")
     if current["battery_control_enabled"]:
         errors = battery_control_errors(current)
         if errors:

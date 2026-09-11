@@ -62,7 +62,7 @@ class EntryMigrationHookTests(unittest.IsolatedAsyncioTestCase):
                 adapter = Mock(side_effect=update)
                 hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=adapter))
                 self.assertTrue(await ns["async_migrate_entry"](hass, entry))
-                self.assertEqual(entry.version, 7)
+                self.assertEqual(entry.version, CONFIG_ENTRY_VERSION)
                 self.assertEqual(entry.data, {"device_token": "preserved"})
                 self.assertEqual(entry.options["device_control_mappings"], mappings)
                 self.assertEqual(entry.options["rooms"], options["rooms"])
@@ -79,6 +79,21 @@ class EntryMigrationHookTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(await ns["async_migrate_entry"](hass, entry))
                 adapter.assert_called_once()
 
+    async def test_version_seven_retires_electrical_options_without_changing_controls(self):
+        ns = entry_hook()
+        entry = SimpleNamespace(version=7, options={"ev_phase_count": 1, "ev_phase_voltage": 240,
+            "pool_control_enabled": True, "battery_control_enabled": True})
+        def update(target, **fields):
+            for key, value in fields.items():
+                setattr(target, key, value)
+        hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=Mock(side_effect=update)))
+        self.assertTrue(await ns["async_migrate_entry"](hass, entry))
+        self.assertNotIn("ev_phase_count", entry.options)
+        self.assertNotIn("ev_phase_voltage", entry.options)
+        self.assertTrue(entry.options["pool_control_enabled"])
+        self.assertTrue(entry.options["battery_control_enabled"])
+        self.assertEqual(entry.version, CONFIG_ENTRY_VERSION)
+
     async def test_upgrade_commits_version_and_options_once(self):
         ns = entry_hook()
         entry = SimpleNamespace(version=1, options={"_legacy_configuration_archive": {"ev_phase_count": 1}}, data={"token": "unchanged"})
@@ -89,7 +104,7 @@ class EntryMigrationHookTests(unittest.IsolatedAsyncioTestCase):
         hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=adapter))
         self.assertTrue(await ns["async_migrate_entry"](hass, entry))
         self.assertEqual(entry.version, CONFIG_ENTRY_VERSION)
-        self.assertEqual(entry.options["ev_phase_count"], 1)
+        self.assertNotIn("ev_phase_count", entry.options)
         self.assertNotIn("_legacy_configuration_archive", entry.options)
         self.assertEqual(entry.data, {"token": "unchanged"})
         self.assertTrue(await ns["async_migrate_entry"](hass, entry))

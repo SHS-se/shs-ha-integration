@@ -17,8 +17,6 @@ EV_FIELDS = {
     "ev_target_soc_entity": "target_soc_entity_id",
     "ev_departure_entity": "departure_entity_id",
     "ev_energy_remaining_entity": "energy_remaining_entity_id",
-    "ev_phase_count": "phase_count",
-    "ev_phase_voltage": "voltage",
     "ev_charge_efficiency": "charge_efficiency",
 }
 
@@ -80,13 +78,10 @@ def migrate_options(
         result["battery_control_enabled"] = False
     archive = options.get(ARCHIVE_KEY, {})
     archive = archive if isinstance(archive, dict) else {}
-    for key in ("ev_phase_count", "ev_charge_efficiency"):
+    for key in ("ev_charge_efficiency",):
         if key not in result and key in archive:
             result[key] = deepcopy(archive[key])
             report["imported"].add(key)
-    if "ev_phase_voltage" not in result and "ev_voltage" in options:
-        result["ev_phase_voltage"] = options["ev_voltage"]
-        report["imported"].add("ev_phase_voltage")
 
     raw_mappings = options.get("device_control_mappings", {})
     if not isinstance(raw_mappings, dict):

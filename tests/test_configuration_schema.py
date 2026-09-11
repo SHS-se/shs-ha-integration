@@ -39,12 +39,12 @@ class CurrentConfigurationTests(unittest.TestCase):
             'control_type': 'variable_power', 'control_entity_id': 'number.current',
             'minimum_value': 5, 'maximum_value': 16}}}
         before = deepcopy(existing)
-        saved = prepare_options(existing, {'ev_phase_count': 1}, ENTITIES.get)
-        self.assertEqual(set(saved), set(existing) | {'ev_phase_count'})
+        saved = prepare_options(existing, {'ev_kwh_per_km': 0.18}, ENTITIES.get)
+        self.assertEqual(set(saved), set(existing) | {'ev_kwh_per_km'})
         for _ in range(3):
             saved = json.loads(json.dumps(saved))
             runtime = resolve_configuration(saved, 59, 18)
-            self.assertEqual(runtime['ev_phase_count'], 1)
+            self.assertEqual(runtime['ev_kwh_per_km'], 0.18)
             self.assertFalse(runtime['ev_enabled'])
             self.assertFalse(runtime['ev_control_enabled'])
             self.assertIn('inactive', runtime['device_control_mappings'])
@@ -53,7 +53,7 @@ class CurrentConfigurationTests(unittest.TestCase):
         self.assertEqual(existing, before)
 
     def test_invalid_public_writes_are_rejected(self):
-        for patch in ({'ev_phase_count': 1.5}, {'ev_phase_count': True},
+        for patch in ({'ev_phase_count': 3}, {'ev_phase_voltage': 230},
                       {'ev_charge_efficiency': float('nan')}, {'battery_min_soc': 1},
                       {'ev_soc_entity': 'switch.absent'}, {'ev_soc_entity': ['sensor.old']},
                       {'ev_control_enabled': True}, {'battery_control_enabled': True},

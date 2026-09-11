@@ -54,12 +54,17 @@ class PresentationTests(unittest.TestCase):
         heater = deepcopy(self.device)
         heater.update(category='pool_heating', fields=[{'key': 'temperature_entity_id', 'label': 'Room temperature'}])
         heater['mapping']['temperature_entity_id'] = 'sensor.water'
-        views = self.view([heater])
+        pump = {**deepcopy(heater), 'key': 'sensor.pump', 'statistic_id': 'sensor.pump',
+                'name': 'Pool pump', 'control_type': 'switch_schedule',
+                'mapping': {'control_type': 'switch_schedule'}, 'fields': []}
+        views = self.view([heater, pump])
         view = views[0]
         pool = next(d for d in views if d.get('system') == 'pool')
-        self.assertIn('pool_water_temperature_entity', {f['key'] for f in pool['planning_fields']})
+        self.assertNotIn('pool_water_temperature_entity', {f['key'] for f in pool['planning_fields']})
+        self.assertIn('pool_water_temperature_entity', {f['key'] for f in pool['system_fields']})
+        self.assertEqual(pool['key'], heater['key'])
         self.assertEqual(view['planning_system'], 'pool')
-        self.assertEqual(view['fields'][0]['label'], 'Pool water temperature')
+        self.assertNotIn('temperature_entity_id', {f['key'] for f in view['fields']})
         self.assertEqual(heater['fields'][0]['label'], 'Room temperature')
 
     def test_invalid_cached_ready_plan_never_exposes_timeline(self):

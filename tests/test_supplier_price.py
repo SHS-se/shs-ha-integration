@@ -89,50 +89,13 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn("current_supplier_prices(self.coordinator.supplier_prices)", body)
         self.assertNotIn("supplier_entity_id", body)
 
-    def test_the_ev_electrical_model_is_configurable_again(self) -> None:
-        """Reversing a deliberate retirement, and why.
-
-        These options were removed to stop the panel filling with knobs, which
-        is right for anything a household would have to *tune* (§8.10: a
-        setting the customer revisits is a defect). A charge cable's phase
-        count is not that. It is a fact about the wiring that the software
-        cannot observe, cannot infer, and gets wrong by a factor of three when
-        it assumes: a single-phase 16 A charger delivers 3.7 kW and was planned
-        at 11 kW. A wrong constant does not fail — it produces a confident plan
-        — so nothing ever surfaced it.
-
-        The distinction this test now protects is between an installation fact,
-        which must be correctable without a release, and a preference or a
-        derived value, which must not come back.
-        """
-        sections = FIELDS[
-            FIELDS.index('"id": "ev"') :
-            len(FIELDS)
-        ]
-        for installation_fact in (
-            "OPT_EV_PHASE_COUNT",
-            "OPT_EV_PHASE_VOLTAGE",
-            "OPT_EV_CHARGE_EFFICIENCY",
-            "OPT_EV_KWH_PER_KM",
-        ):
-            with self.subTest(field=installation_fact):
-                self.assertIn(installation_fact, sections)
-        # Still retired: a confirmation flag, a capacity now derived from
-        # energy-remaining over SOC, a departure that is an entity, and a
-        # minimum run nobody holds an opinion about.
-        for retired_field in (
-            "OPT_EV_ELECTRICAL_CONFIRMED",
-            "OPT_EV_BATTERY_KWH",
-            "OPT_EV_MIN_RUN_SLOTS",
-            "OPT_EV_DEFAULT_DEPARTURE",
-        ):
-            with self.subTest(field=retired_field):
-                self.assertNotIn(retired_field, sections)
-        # The constants survive as defaults, which is what makes an existing
-        # installation keep behaving exactly as it did.
-        self.assertIn("EV_PHASE_COUNT = 3", CONSTANTS)
-        self.assertIn("EV_PHASE_VOLTAGE = 230.0", CONSTANTS)
-        self.assertNotIn("OPT_EV_DEFAULT_DEPARTURE", PLANNING)
+    def test_european_ac_estimate_is_internal_and_cannot_return_as_options(self):
+        for retired in ("OPT_EV_PHASE_COUNT", "OPT_EV_PHASE_VOLTAGE"):
+            self.assertNotIn(retired, FIELDS)
+            self.assertNotIn(retired, CONSTANTS)
+            self.assertNotIn(retired, PLANNING)
+        self.assertIn("EU_AC_PHASE_COUNT = 3", CONSTANTS)
+        self.assertIn("EU_AC_PHASE_VOLTAGE = 230.0", CONSTANTS)
 
     def test_mapped_loads_are_automatic_and_ev_departure_is_optional(self) -> None:
         sections = FIELDS[

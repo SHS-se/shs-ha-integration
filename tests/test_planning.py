@@ -302,6 +302,13 @@ class EvServiceTests(unittest.TestCase):
             "voltage_v": 230.0,
         })
 
+    def test_retired_phase_options_cannot_override_internal_ac_profile(self):
+        services, _, _ = self.plan({**self.options, "ev_phase_count": 1, "ev_phase_voltage": 300})
+        control = services[0]["control"]
+        self.assertEqual(control["phase_count"] * control["voltage_v"], 690)
+        self.assertEqual(control["current_step_a"], 1)
+        self.assertEqual(control["max_current_a"], 16)
+
     def test_a_departure_outside_the_horizon_is_refused(self) -> None:
         self.states["sensor.departure"] = {
             "state": (HORIZON[-1] + timedelta(days=2)).isoformat(),
