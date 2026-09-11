@@ -579,7 +579,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     else if (action === "tab") {
       if (button.dataset.tab === "status") { this._openStatus(); return; }
       this._tab = button.dataset.tab;
-      if (this._tab === "devices") { this._showExcluded = true; this._search = this._room = this._category = ""; }
+      if (this._tab === "devices") { this._search = this._room = this._category = ""; }
       this._render();
     } else if (action === "select-entry") {
       this._selectEntry(button.dataset.entryId);
