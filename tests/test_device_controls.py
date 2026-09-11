@@ -391,29 +391,8 @@ class BatteryControlTests(unittest.TestCase):
         self.assertTrue(any("different entities" in error for error in battery_control_errors(
             _battery(battery_discharging_entity="binary_sensor.charging"))))
 
-    def test_claiming_authority_requires_reading_it_back(self) -> None:
-        """Otherwise authority never held cannot be told from authority lost."""
-        errors = battery_control_errors(_battery(
-            battery_authority_entity="switch.remote",
-        ))
-        self.assertIn(
-            "a confirmation entity is required alongside the authority switch",
-            errors,
-        )
-
-    def test_a_confirmation_entity_needs_its_expected_state(self) -> None:
-        errors = battery_control_errors(_battery(
-            battery_authority_entity="switch.remote",
-            battery_authority_confirm_entity="sensor.work_mode",
-        ))
-        self.assertIn("the state confirming remote control is required", errors)
-
-    def test_a_complete_handshake_is_accepted(self) -> None:
-        self.assertEqual(battery_control_errors(_battery(
-            battery_authority_entity="switch.remote",
-            battery_authority_confirm_entity="sensor.work_mode",
-            battery_authority_confirm_state="Remote EMS",
-        )), [])
+    def test_no_manual_authority_fields_are_required(self):
+        self.assertEqual(battery_control_errors(_battery()), [])
 
     def test_control_without_a_battery_is_refused(self) -> None:
         errors = battery_control_errors(_battery(battery_enabled=False))

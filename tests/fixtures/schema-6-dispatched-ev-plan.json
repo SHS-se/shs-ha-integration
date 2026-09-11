@@ -12,7 +12,7 @@
       "boiler": false,
       "ev": true
     },
-    "model_version": "marginal-value-planner-v23",
+    "model_version": "marginal-value-planner-v28",
     "decision_diagnostics_version": 2,
     "plan_id": "eedefc70-b625-42f0-be09-b1e79c0c88d9",
     "snapshot_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
@@ -194,6 +194,12 @@
     "grid": {
       "import_limit_w": 15000,
       "export_limit_w": 15000
+    },
+    "peak_shaping": {
+      "threshold_w": 0,
+      "sek_per_kwh_per_kw": 0.1,
+      "grid_ramp_sek_per_kw": 0.05,
+      "load_start_preference_sek": 0.25
     },
     "device_models": [],
     "services": [

@@ -47,6 +47,14 @@ class OptionMigrationTests(unittest.TestCase):
             self.assertNotIn("_legacy_configuration_archive", migrated)
         self.assertEqual(migrate_options({}), ({}, False))
 
+    def test_manual_authority_fields_are_retired_without_changing_control_permission(self):
+        options = {'battery_control_enabled': True, 'battery_authority_entity': 'switch.remote',
+                   'battery_authority_confirm_entity': 'sensor.work_mode', 'battery_authority_confirm_state': 'Remote EMS'}
+        result, changed = migrate_options(options, source_version=10)
+        self.assertTrue(changed)
+        self.assertTrue(result['battery_control_enabled'])
+        self.assertTrue(all(not key.startswith('battery_authority') for key in result))
+
     def test_all_mapping_aliases_import_once_then_disappear(self):
         options = {"device_control_mappings": {
             "heater": {

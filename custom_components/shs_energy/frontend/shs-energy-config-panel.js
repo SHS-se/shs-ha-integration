@@ -725,7 +725,6 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const linked = {
       pool_start_temperature_entity: ["pool_stop_temperature_entity", "pool_temperature_minimum", "pool_temperature_maximum"],
       offset_entity_id: ["offset_minimum", "offset_maximum"],
-      battery_authority_entity: ["battery_authority_confirm_entity", "battery_authority_confirm_state"],
     };
     for (const group of [{ fields, values, scope, deviceKey }, ...additional]) {
       const { fields, values, scope, deviceKey } = group;

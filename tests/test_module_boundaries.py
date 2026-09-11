@@ -21,6 +21,7 @@ sys.path.insert(0, str(PACKAGE))
 
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
+    "battery_commands",
     "controller",
     "presentation",
     "api_contract",

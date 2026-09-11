@@ -167,3 +167,81 @@ mode semantics, separate non-negative ESS charge/discharge limits, authority,
 physical confirmation and restoration must be established. Integration selection
 would package that knowledge for setup; it would not replace it or establish
 unmeasured behavior.
+
+## Clarification: automatic prerequisites and writable limits
+
+Recorded 11 September 2026 after reviewing the configured battery. These decisions
+supersede the earlier requirement to have the customer manually configure an
+authority handshake and establish restorable register values before control.
+They supersede beta.55 behavior and are implemented by the schema-8 controller
+except for automatic manufacturer prerequisite discovery, which remains deferred.
+
+### Authority is an integration detail, not three customer settings
+
+Do not require a customer to map a remote-control switch, a confirmation sensor
+and a confirming state. Those are Sigenergy interface details. If a supported
+adapter needs them, it should identify and manage them automatically within the
+customer's existing permission for battery operation. The future integration
+selection UI is still deferred; documenting automatic prerequisite handling does
+not authorize building that UI now.
+
+Without automatic handling, attempting an authorized operation and reporting a
+clear control failure is preferable to requiring these three manual fields.
+Distinguish a failed service call, a setting that was not accepted, and accepted
+settings whose physical result does not match the requested operation. Successful
+completion of a Home Assistant service call alone must not be reported as proof
+that the battery followed the plan. Do not turn every manufacturer prerequisite
+into another generic configuration option.
+
+### Prior limit-register contents are not a setup requirement
+
+The charge/discharge limit entities are writable controls. Write the intended
+limits and verify acceptance; report a failure if the operation does not work.
+Do not reject control because the previous register contents are an unset sentinel
+or are outside the range permitted for new commands. Do not ask the customer to
+repair the previous contents just to let SHS replace them.
+
+Continue to validate the commands SHS sends: units, non-negative values, supported
+bounds/step and the battery's rated limits still apply. Removing the pre-read
+barrier does not mean replaying arbitrary old register contents during handover.
+The prior snapshot-and-restore design therefore needs revision as part of the
+controller implementation, rather than merely deleting its sentinel check.
+
+Approved handover policy (confirmed by Phil on 11 September 2026): return to
+**Maximum Self Consumption** and set both ceilings from the configured rated-power
+sources—currently **8.8 kW charge and 9.6 kW discharge**. Resolve the sources again
+at handover; do not depend on previous register contents or add manually entered
+normal limits. The schema-8 controller implements this policy, including restart
+recovery from its saved mapping. These values are user-approved, but this does
+not claim that all operations have been tested on hardware.
+
+If a supported integration exposes a defined reset-to-normal operation, evaluate
+it as adapter-specific behavior rather than assuming it matches this policy.
+
+### Plan-to-controller contract
+
+The approved operating policy is implemented in snapshot/plan schema 8. The contract
+carries the intended operation and both power ceilings; net watts alone cannot
+express the necessary distinctions:
+
+- Normal self-consumption, solar-only charging and house supply without battery
+  export use the established self-consumption behavior, with ceilings expressing
+  which flows are permitted.
+- Grid-assisted charging uses the documented command-charging behavior.
+- Deliberate battery export uses Command Discharging (PV First), only when the
+  plan explicitly permits battery export. ESS First remains excluded.
+- Hold is explicit; a zero net-power value must not implicitly choose between
+  hold and normal operation.
+
+The implementation coordinates planner output, versioned contract validation,
+local execution, restoration and reporting; see [battery execution](battery-control-configuration.md). Source/destination restrictions
+must be enforced during planning and conveyed to the controller; a mode selection
+added after optimization cannot repair a plan that ignored those restrictions.
+
+Outstanding physical observations are engineering validation work, not requests
+for more customer configuration: Standby during surplus PV, Grid First with
+surplus PV, self-consumption with a zero discharge ceiling, transition timing,
+write rejection/read-only operation, and behavior when Home Assistant stops.
+Implement and test the contract with explicit expectations, then verify those
+expectations on the installation before describing every operation as proven.
+Neither register acknowledgment nor unit tests establish those physical behaviors.

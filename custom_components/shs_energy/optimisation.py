@@ -1048,8 +1048,10 @@ def require_fresh_source(
 
 
 if __package__:
+    from .battery_commands import validate_battery_command
     from .device_commands import validate_commands
 else:
+    from battery_commands import validate_battery_command
     from device_commands import validate_commands
 
 
@@ -1266,9 +1268,17 @@ def validate_plan_contract(
         for slot in slots:
             if not isinstance(slot, dict):
                 raise OptimisationInputError(f"{key} scenario has an invalid slot")
-            if plan["schema_version"] == 7:
+            if plan["schema_version"] >= 7:
                 try:
                     validate_commands(slot.get("device_commands"), device_models)
+                except ValueError as err:
+                    raise OptimisationInputError(str(err)) from err
+            if plan["schema_version"] >= 8:
+                try:
+                    if plan.get("capabilities", {}).get("battery"):
+                        validate_battery_command(slot)
+                    elif "battery_command" not in slot or slot["battery_command"] is not None:
+                        raise ValueError("a plan without a battery must have a null battery command")
                 except ValueError as err:
                     raise OptimisationInputError(str(err)) from err
             start = _timestamp(slot.get("start"))

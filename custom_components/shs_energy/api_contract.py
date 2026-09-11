@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 API_VERSION = 1
-SNAPSHOT_SCHEMA_VERSION = 7
-SUPPORTED_SNAPSHOT_SCHEMA_VERSIONS = frozenset({5, 6, 7})
-SUPPORTED_PLAN_SCHEMA_VERSIONS = frozenset({5, 6, 7})
+SNAPSHOT_SCHEMA_VERSION = 8
+SUPPORTED_SNAPSHOT_SCHEMA_VERSIONS = frozenset({5, 6, 7, 8})
+SUPPORTED_PLAN_SCHEMA_VERSIONS = frozenset({5, 6, 7, 8})
 MINIMUM_SNAPSHOT_SCHEMA_VERSION = 5
 MINIMUM_PLAN_SCHEMA_VERSION = 5
 # ReplanFailureRequest.error is capped at this by the contract; a longer report

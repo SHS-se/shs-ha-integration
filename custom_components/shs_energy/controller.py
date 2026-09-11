@@ -8,17 +8,19 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 from math import isfinite
 from typing import Any
 
 try:
-    from .configuration_values import resolve_battery_quantities
+    from .battery_commands import validate_battery_command
+    from .configuration_values import resolve_battery_quantities, resolve_quantity
     from .device_commands import actuator_targets, execution_setup_errors, validate_commands
     from .device_controls import battery_control_errors, pool_band_errors, planning_path
 except ImportError:  # Pure executor tests, without importing Home Assistant.
-    from configuration_values import resolve_battery_quantities
+    from battery_commands import validate_battery_command
+    from configuration_values import resolve_battery_quantities, resolve_quantity
     from device_commands import actuator_targets, execution_setup_errors, validate_commands
     from device_controls import battery_control_errors, pool_band_errors, planning_path
 
@@ -154,8 +156,10 @@ class ScheduledController:
 
     async def command(self, entity, value):
         self.check_authority()
-        state = self.state(entity)
         domain = entity.split(".")[0]
+        state = self.hass.states.get(entity) if getattr(self, "device", None) == "battery" and domain == "number" else self.state(entity)
+        if state is None:
+            raise ValueError(f"{entity} is unavailable")
         if domain in ("number", "input_number"):
             value = finite(value)
             low = finite(state.attributes["min"])
@@ -166,7 +170,10 @@ class ScheduledController:
             if abs((value-low)/step - round((value-low)/step)) > 1e-5:
                 raise ValueError(f"{entity}: target is not a supported step")
             service, data = "set_value", {"value": value}
-            equal = abs(finite(state.state) - value) < 1e-6
+            try:
+                equal = abs(finite(state.state) - value) < 1e-6
+            except (TypeError, ValueError):
+                equal = False
         elif domain == "climate":
             value = finite(value)
             low, high = finite(state.attributes["min_temp"]), finite(state.attributes["max_temp"])
@@ -203,10 +210,15 @@ class ScheduledController:
         await self.confirm(lambda: self.matches(entity, value), f"{entity} did not accept {value}")
 
     def matches(self, entity, value):
-        state = self.state(entity)
+        state = self.hass.states.get(entity)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return False
         if isinstance(value, (int, float)):
             measured = state.attributes["temperature"] if entity.startswith("climate.") else state.state
-            return abs(finite(measured) - value) < 1e-6
+            try:
+                return abs(finite(measured) - value) < 1e-6
+            except (TypeError, ValueError):
+                return False
         return state.state == value
 
     async def confirm(self, predicate, error):
@@ -282,17 +294,21 @@ class ScheduledController:
             elif device == "battery":
                 charge = options.get("battery_charge_limit_entity")
                 discharge = options.get("battery_discharge_limit_entity")
-                if not charge or not discharge or charge not in original or discharge not in original:
-                    raise ValueError("battery restoration requires a recorded pair of non-negative normal limits")
+                normal_w = {direction: resolve_quantity(
+                    options[f"battery_{direction}_max_w"], self.battery_quantity,
+                    unit="W", minimum=0, maximum=100000, label=f"rated battery {direction} power",
+                ) for direction in ("charge", "discharge")}
+                targets = [(entity, self.battery_limit(entity, normal_w[direction]))
+                           for direction, entity in (("charge", charge), ("discharge", discharge))]
                 await self.command(charge, 0)
                 await self.command(discharge, 0)
                 await self.command(options["battery_mode_entity"], options["battery_mode_baseline"])
-                for entity in (charge, discharge):
-                    await self.command(entity, finite(original[entity]))
+                for entity, value in targets:
+                    await self.command(entity, value)
                 await self.confirm(
-                    lambda: self.measurement_after_commands(options["battery_power_measurement_entity"],
+                    lambda: self.battery_within_ceilings(options, normal_w["charge"], normal_w["discharge"],
                         options["battery_mode_entity"], charge, discharge),
-                    "no new battery measurement after baseline restoration",
+                    "no fresh battery response within normal ceilings after baseline restoration",
                 )
                 measured = self.battery_measurement(options)
                 self.report(device, "baseline", measured_power_w=measured,
@@ -401,9 +417,25 @@ class ScheduledController:
             raise ValueError("battery direction observations disagree with measured power")
         return magnitude if observed[0] else -magnitude if observed[1] else 0.0
 
-    def battery_limit(self, entity, watts=None):
-        """Validate a restorable, non-negative ceiling before taking ownership."""
+    def battery_within_ceilings(self, options, charge, discharge, *actuators):
+        measured = self.battery_measurement(options)
+        sources = (options["battery_power_measurement_entity"], options["battery_charging_entity"],
+                   options["battery_discharging_entity"])
+        return (all(self.measurement_after_commands(source, *actuators) for source in sources)
+                and -discharge - 100 <= measured <= charge + 100)
+
+    def battery_quantity(self, entity):
         state = self.state(entity)
+        return {"state": state.state, "attributes": state.attributes}
+
+    def battery_ratings(self, options):
+        return resolve_battery_quantities(options, self.battery_quantity)
+
+    def battery_limit(self, entity, watts):
+        """Validate the outgoing ceiling; the old register value is irrelevant."""
+        state = self.hass.states.get(entity)
+        if state is None:
+            raise ValueError(f"{entity} is unavailable")
         unit = state.attributes.get("unit_of_measurement")
         if not entity.startswith("number.") or unit not in ("W", "kW"):
             raise ValueError(f"{entity} must be a W or kW limit control")
@@ -411,38 +443,37 @@ class ScheduledController:
         step = finite(state.attributes.get("step", 1))
         if low != 0 or high <= 0 or step <= 0:
             raise ValueError(f"{entity} must support non-negative limits including zero")
-        value = finite(state.state) if watts is None else watts / (1000 if unit == "kW" else 1)
+        value = finite(watts) / (1000 if unit == "kW" else 1)
         if not 0 <= value <= high:
-            raise ValueError(f"{entity}: establish a valid normal limit before control; unset limits cannot be restored")
-        if watts is not None:
-            value = int(value / step + 1e-8) * step
-        elif abs(value / step - round(value / step)) > 1e-5:
-            raise ValueError(f"{entity}: normal limit is not on a supported step")
-        return value
+            raise ValueError(f"{entity}: requested ceiling is outside hardware bounds")
+        return int(value / step + 1e-8) * step
 
     async def execute_battery(self, options, slot):
         errors = battery_control_errors(options)
         if errors:
             raise ValueError("; ".join(errors))
         soc = self.fraction(options["battery_soc_entity"])
-        def read_quantity(entity):
-            state = self.state(entity)
-            return {"state": state.state, "attributes": state.attributes}
-        limits = resolve_battery_quantities(options, read_quantity)
-        floor = limits["battery_min_soc"]
-        charge, discharge = finite(slot["battery_charge_w"]), finite(slot["battery_discharge_w"])
-        if min(charge, discharge) < 0 or charge and discharge:
-            raise ValueError("invalid simultaneous battery charge and discharge")
+        limits = self.battery_ratings(options)
+        command = validate_battery_command(slot)
+        operation = command["operation"]
+        charge, discharge = command["charge_limit_w"], command["discharge_limit_w"]
         if charge > limits["battery_charge_max_w"] or discharge > limits["battery_discharge_max_w"]:
-            raise ValueError("planned battery power exceeds reviewed rating")
-        if (discharge and soc <= floor) or (charge and soc >= 1):
+            raise ValueError("planned battery ceiling exceeds the current rated power")
+        if operation != "self_consumption" and ((discharge and soc <= limits["battery_min_soc"]) or (charge and soc >= 1)):
             raise ValueError("battery SOC protection blocks the planned request")
-        measured_entity = options["battery_power_measurement_entity"]
+        if operation == "export":
+            price = slot.get("export_price_sek_per_kwh")
+            if not options.get("battery_export_enabled") or not slot.get("binding") or price is None or finite(price) < finite(options["battery_export_min_price_sek_per_kwh"]):
+                raise ValueError("battery export is not permitted at this price")
+            reserve = finite(options["battery_export_reserve_soc"])
+            end = datetime.fromisoformat(slot["start"].replace("Z", "+00:00")) + timedelta(minutes=15)
+            remaining_hours = min(.25, max(0, (end - datetime.now(timezone.utc)).total_seconds() / 3600))
+            projected = soc - discharge / 1000 * remaining_hours / finite(options["battery_discharge_efficiency"]) / limits["battery_capacity_kwh"]
+            if projected < reserve - 1e-6:
+                raise ValueError("battery export would consume reserved charge")
         self.battery_measurement(options)
         charge_entity = options["battery_charge_limit_entity"]
         discharge_entity = options["battery_discharge_limit_entity"]
-        for entity in (charge_entity, discharge_entity):
-            self.battery_limit(entity)
         targets = [(charge_entity, self.battery_limit(charge_entity, charge)),
                    (discharge_entity, self.battery_limit(discharge_entity, discharge))]
         mode_entity = options["battery_mode_entity"]
@@ -450,16 +481,13 @@ class ScheduledController:
         for key in ("battery_mode_charge", "battery_mode_discharge", "battery_mode_idle", "battery_mode_baseline"):
             if options.get(key) not in supported:
                 raise ValueError(f"{key}: choose a supported option from {mode_entity}")
-        existing = self.records.get("battery")
-        if existing and (confirmation := options.get("battery_authority_confirm_entity")):
-            if self.state(confirmation).state != options["battery_authority_confirm_state"]:
-                raise ValueError("battery remote authority was lost")
-        await self.capture("battery", options, [charge_entity, discharge_entity])
-        if claim := options.get("battery_authority_entity"):
-            await self.command(claim, "on")
-        if entity := options.get("battery_authority_confirm_entity"):
-            await self.confirm(lambda: self.state(entity).state == options["battery_authority_confirm_state"], "battery remote authority was not granted")
-        mode = options["battery_mode_charge" if charge else "battery_mode_discharge" if discharge else "battery_mode_idle"]
+        # Journal the mapping before the first write. Handover uses configured
+        # rated sources, never arbitrary or sentinel pre-existing register values.
+        await self.capture("battery", options, [])
+        mode_key = {"self_consumption": "battery_mode_baseline", "solar_charge": "battery_mode_baseline",
+                    "supply_house": "battery_mode_baseline", "grid_charge": "battery_mode_charge",
+                    "export": "battery_mode_discharge", "hold": "battery_mode_idle"}[operation]
+        mode = options[mode_key]
         # Close both ceilings for a mode transition; do not interrupt an
         # unchanged request on every scheduler tick.
         if self.state(mode_entity).state != mode:
@@ -470,14 +498,16 @@ class ScheduledController:
             await self.command(entity, value)
         def delivered_within_ceiling():
             measured = self.battery_measurement(options)
-            fresh = all(self.measurement_after_commands(source, mode_entity, charge_entity, discharge_entity)
-                        for source in (measured_entity, options["battery_charging_entity"], options["battery_discharging_entity"]))
-            direction = measured >= 0 if charge else measured <= 0 if discharge else measured == 0
-            return fresh and direction and abs(measured) <= max(charge, discharge) + 100
-        await self.confirm(delivered_within_ceiling, "battery did not confirm direction and power ceiling within 15 seconds")
+            within = self.battery_within_ceilings(options, charge, discharge, mode_entity, charge_entity, discharge_entity)
+            responding = (charge <= 100 or measured > 100 if operation == "grid_charge" else
+                          discharge <= 100 or measured < -100 if operation == "export" else True)
+            return within and responding
+        await self.confirm(delivered_within_ceiling, "battery did not confirm the requested operation and power ceilings within 15 seconds; check inverter control availability")
         measured = self.battery_measurement(options)
-        return {"state": "limited" if abs(measured) + 100 < max(charge, discharge) else "confirmed",
-                "requested_power_w": charge-discharge, "measured_power_w": measured}
+        requested = finite(slot["battery_charge_w"]) - finite(slot["battery_discharge_w"])
+        return {"state": "limited" if abs(measured - requested) > 100 else "confirmed",
+                "operation": operation, "charge_limit_w": charge, "discharge_limit_w": discharge,
+                "requested_power_w": requested, "measured_power_w": measured}
 
     async def execute_device(self, device, options, slot):
         key = device.removeprefix("device:")
@@ -500,7 +530,7 @@ class ScheduledController:
             if other_key != key and other.get("control_enabled") and set(targets) & set(actuator_targets(other)):
                 raise ValueError("another enabled device shares this actuator")
         system_targets = {options.get(field) for field in (
-            "battery_charge_limit_entity", "battery_discharge_limit_entity", "battery_mode_entity", "battery_authority_entity",
+            "battery_charge_limit_entity", "battery_discharge_limit_entity", "battery_mode_entity",
             "ev_charge_switch_entity", "pool_start_temperature_entity", "pool_stop_temperature_entity", "pool_permission_entity")}
         if set(targets) & system_targets:
             raise ValueError("actuator is assigned to a system controller")
@@ -636,7 +666,7 @@ class ScheduledController:
                         self.failed.pop(device, None)
                         self.report(device, "overridden" if device in self.overrides else "disabled", reason=self.overrides.get(device, "control disabled, excluded from the plan, or manually overridden"))
                         continue
-                    supported = (plan.get("schema_version") == 7 and device.removeprefix("device:") in slot.get("device_commands", {})
+                    supported = (plan.get("schema_version", 0) >= 7 and device.removeprefix("device:") in slot.get("device_commands", {})
                                  if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device))
                     if not slot or not supported:
                         await self.restore(device)

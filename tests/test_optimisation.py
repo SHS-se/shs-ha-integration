@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from copy import deepcopy
 import json
 from typing import Any
 from pathlib import Path
@@ -872,6 +873,19 @@ class ModelVersionToleranceTests(unittest.TestCase):
         now = datetime.fromisoformat(fixture["validation_time"].replace("Z", "+00:00"))
 
         validate_plan_contract(fixture["plan"], now)
+
+    def test_real_schema8_battery_contract_and_corrupt_commands(self):
+        fixture = json.loads((Path(__file__).parent / 'fixtures/schema-8-battery-plan.json').read_text())
+        now = datetime.fromisoformat(fixture['validation_time'].replace('Z', '+00:00'))
+        validate_plan_contract(fixture['plan'], now)
+        slot = fixture['plan']['plans']['priority']['slots'][0]
+        original = deepcopy(slot['battery_command'])
+        for mutation in (None, {**original, 'allow_battery_export': True},
+                         {**original, 'charge_limit_w': -1}, {**original, 'operation': 'guess'},
+                         {**original, 'schema_version': True}):
+            slot['battery_command'] = mutation
+            with self.assertRaises(OptimisationInputError):
+                validate_plan_contract(fixture['plan'], now)
 
     def test_any_planner_name_is_executable_on_a_known_contract(self) -> None:
         now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)

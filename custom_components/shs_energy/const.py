@@ -93,7 +93,7 @@ OPT_CONFIGURATION_REVIEWED_AT = "configuration_reviewed_at"
 OPT_DEVICE_CONTROL_MAPPINGS = "device_control_mappings"
 # Versions 5/6 shipped the retired control interfaces. Never reuse version 4:
 # installed entries must roll forward through the restored settings schema.
-CONFIG_ENTRY_VERSION = 10
+CONFIG_ENTRY_VERSION = 11
 ROOM_AREA_FIELD = "room_area_id"
 
 # Live optimisation inputs. Forecast entities must expose timestamped values;
@@ -166,9 +166,6 @@ OPT_BATTERY_DISCHARGING_ENTITY = "battery_discharging_entity"
 # Authority is a handshake: one entity claims remote control, another confirms
 # it was granted. Losing the confirmation is a loss of a required control
 # source, not a reason to keep writing.
-OPT_BATTERY_AUTHORITY_ENTITY = "battery_authority_entity"
-OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY = "battery_authority_confirm_entity"
-OPT_BATTERY_AUTHORITY_CONFIRM_STATE = "battery_authority_confirm_state"
 # Confirm from measurement, never from the command that was sent.
 OPT_BATTERY_POWER_MEASUREMENT_ENTITY = "battery_power_measurement_entity"
 

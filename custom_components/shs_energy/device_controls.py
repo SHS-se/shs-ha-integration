@@ -12,9 +12,6 @@ from typing import Any
 
 try:  # pragma: no cover - package in HA, flat module in the pure test suite
     from .const import (
-        OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY,
-        OPT_BATTERY_AUTHORITY_CONFIRM_STATE,
-        OPT_BATTERY_AUTHORITY_ENTITY,
         OPT_BATTERY_CONTROL_ENABLED,
         OPT_BATTERY_ENABLED,
         OPT_BATTERY_MODE_CHARGE,
@@ -36,9 +33,6 @@ try:  # pragma: no cover - package in HA, flat module in the pure test suite
     )
 except ImportError:  # pragma: no cover - flat import path
     from const import (  # type: ignore[no-redef]
-        OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY,
-        OPT_BATTERY_AUTHORITY_CONFIRM_STATE,
-        OPT_BATTERY_AUTHORITY_ENTITY,
         OPT_BATTERY_CONTROL_ENABLED,
         OPT_BATTERY_ENABLED,
         OPT_BATTERY_MODE_CHARGE,
@@ -586,17 +580,6 @@ def battery_control_errors(options: dict[str, Any]) -> list[str]:
         errors.append("charge and discharge limits must be different entities")
     if options.get(OPT_BATTERY_CHARGING_ENTITY) and options.get(OPT_BATTERY_CHARGING_ENTITY) == options.get(OPT_BATTERY_DISCHARGING_ENTITY):
         errors.append("charging and discharging sensors must be different entities")
-    # The handshake is two halves. Claiming remote control without reading back
-    # whether it was granted leaves the executor unable to tell authority it
-    # never had from authority it has lost.
-    claims = _text(options, OPT_BATTERY_AUTHORITY_ENTITY)
-    confirms = _text(options, OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY)
-    if claims and not confirms:
-        errors.append(
-            "a confirmation entity is required alongside the authority switch"
-        )
-    if confirms and not _text(options, OPT_BATTERY_AUTHORITY_CONFIRM_STATE):
-        errors.append("the state confirming remote control is required")
     return errors
 
 
