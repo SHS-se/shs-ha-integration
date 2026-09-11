@@ -216,3 +216,68 @@ test('status shows automatic recovery and delivery failures without claiming rea
   assert.match(html, /Status unconfirmed/);
   assert.doesNotMatch(html, />Ready<\/span>/);
 });
+
+const splitPanel = () => {
+  const panel = Object.create(context.Panel.prototype);
+  const volume = { key: 'pool_volume_m3', kind: 'number', label: 'Pool volume' };
+  const temperature = { key: 'pool_water_temperature_entity', kind: 'entity', label: 'Pool water temperature' };
+  const mapping = { control_type: 'switch_schedule', actuator_entity_ids: ['switch.pool'] };
+  panel._data = { devices: [{ key: 'pool', name: 'Pool pump', system: 'pool', category: 'pool_heating', included: true,
+    mapping_status: 'ready', permission: { enabled: false }, fields: [], system_fields: [temperature, volume], planning_fields: [volume] },
+    { key: 'excluded', name: 'Excluded microwave', included: false, category: 'household', fields: [], permission: { enabled: false } }],
+    sections: [], labels: { ready: 'Ready', base_load: 'Excluded', pool_heating: 'Pool' } };
+  panel._draft = { pool_volume_m3: 55, pool_water_temperature_entity: 'sensor.water', device_control_mappings: { pool: mapping } };
+  panel._savedDraft = JSON.parse(JSON.stringify(panel._draft));
+  panel._expanded = new Set(); panel._added = new Set(); panel._deviceErrors = {};
+  panel._search = ''; panel._room = ''; panel._category = ''; panel._render = () => {};
+  panel._entryId = 'entry';
+  return panel;
+};
+
+test('Devices stacks Controls above Planning and excludes equipment until explicitly shown', () => {
+  const panel = splitPanel();
+  const html = panel._renderDevices();
+  assert.ok(html.indexOf('id="controls-heading"') < html.indexOf('id="planning-heading"'));
+  const [controls, planning] = html.split('<section aria-labelledby="planning-heading">');
+  assert.match(controls, /Pool water temperature/);
+  assert.doesNotMatch(controls, /Pool volume/);
+  assert.match(planning, /Pool volume/);
+  assert.doesNotMatch(planning, /Pool water temperature|Let SHS operate/);
+  assert.doesNotMatch(html, /Excluded microwave/);
+  assert.match(html, /aria-label="Show excluded devices"/);
+  panel._showExcluded = true;
+  assert.match(panel._renderDevices(), /Excluded microwave/);
+  panel._showExcluded = false;
+  assert.doesNotMatch(panel._renderDevices(), /Excluded microwave/);
+});
+
+test('saving Planning preserves unsaved Controls and sends only planning properties', async () => {
+  const panel = splitPanel();
+  panel._draft.pool_volume_m3 = 60;
+  panel._draft.pool_water_temperature_entity = 'sensor.other';
+  panel._draft.device_control_mappings.pool.actuator_entity_ids = ['switch.other'];
+  let sent;
+  panel._hass = { callWS: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
+  await panel._saveDevice('pool', 'planning');
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.configuration)), { pool_volume_m3: 60 });
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.mapping.actuator_entity_ids)), ['switch.pool']);
+  assert.equal(panel._draft.device_control_mappings.pool.actuator_entity_ids[0], 'switch.other');
+  assert.equal(panel._draft.pool_water_temperature_entity, 'sensor.other');
+  assert.equal(panel._deviceDirty('pool', 'planning'), false);
+  assert.equal(panel._deviceDirty('pool', 'controls'), true);
+});
+
+test('saving Controls and cancelling Planning retain edits in the other section', async () => {
+  const panel = splitPanel();
+  panel._draft.pool_volume_m3 = 60;
+  panel._draft.pool_water_temperature_entity = 'sensor.other';
+  let sent;
+  panel._hass = { callWS: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
+  await panel._saveDevice('pool', 'controls');
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.configuration)), { pool_water_temperature_entity: 'sensor.other' });
+  assert.equal(panel._deviceDirty('pool', 'planning'), true);
+  panel._draft.pool_water_temperature_entity = 'sensor.third';
+  panel._cancelDevice('pool', 'planning');
+  assert.equal(panel._draft.pool_volume_m3, 55);
+  assert.equal(panel._draft.pool_water_temperature_entity, 'sensor.third');
+});

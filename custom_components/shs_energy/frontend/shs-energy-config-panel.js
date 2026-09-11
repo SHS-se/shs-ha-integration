@@ -16,6 +16,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._search = "";
     this._room = "";
     this._category = "";
+    this._showExcluded = false;
     this._expanded = new Set();
     this._added = new Set();
     this._fullHorizon = false;
@@ -104,10 +105,15 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   get _configurationDirty() { return Object.keys(this._patch(this._generalFields())).length > 0; }
 
-  _deviceDirty(deviceKey) {
+  _systemFields(device, section) {
+    const planning = new Set((device?.planning_fields || []).map(f => f.key));
+    return (device?.system_fields || []).filter(f => !section || (section === "planning" ? planning.has(f.key) : !planning.has(f.key)));
+  }
+
+  _deviceDirty(deviceKey, section) {
     const device = this._data?.devices?.find(d => d.key === deviceKey);
-    return JSON.stringify(this._draft?.[MAPPINGS_KEY]?.[deviceKey]) !== JSON.stringify(this._savedDraft?.[MAPPINGS_KEY]?.[deviceKey])
-      || Object.keys(this._patch(device?.system_fields || [])).length > 0;
+    return (section !== "planning" && JSON.stringify(this._draft?.[MAPPINGS_KEY]?.[deviceKey]) !== JSON.stringify(this._savedDraft?.[MAPPINGS_KEY]?.[deviceKey]))
+      || Object.keys(this._patch(this._systemFields(device, section))).length > 0;
   }
 
   _entityLabel(entityId) {
@@ -184,9 +190,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
     }
   }
 
-  async _saveDevice(deviceKey) {
+  async _saveDevice(deviceKey, section) {
     if (
-      !this._deviceDirty(deviceKey) ||
+      !this._deviceDirty(deviceKey, section) ||
       this._savingDeviceKey ||
       this._saving ||
       !this._entryId
@@ -196,8 +202,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._error = "";
     this._notice = "";
     this._render();
+    const fields = this._systemFields(this._data.devices.find(d => d.key === deviceKey), section);
     const mapping = this._clone(
-      this._draft?.[MAPPINGS_KEY]?.[deviceKey] || null
+      (section === "planning" ? this._savedDraft : this._draft)?.[MAPPINGS_KEY]?.[deviceKey] || null
     );
     try {
       const result = await this._hass.callWS({
@@ -205,7 +212,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         config_entry: this._entryId,
         device_key: deviceKey,
         mapping,
-        configuration: this._patch(this._data.devices.find(d => d.key === deviceKey)?.system_fields || []),
+        configuration: this._patch(fields),
       });
       const savedMapping = this._clone(
         result.panel?.configuration?.[MAPPINGS_KEY]?.[deviceKey] ?? mapping
@@ -230,20 +237,22 @@ class ShsEnergyConfigPanel extends HTMLElement {
       if (!this._draft[MAPPINGS_KEY]) this._draft[MAPPINGS_KEY] = {};
       if (!this._savedDraft[MAPPINGS_KEY]) this._savedDraft[MAPPINGS_KEY] = {};
       if (savedMapping) {
-        this._draft[MAPPINGS_KEY][deviceKey] = this._clone(savedMapping);
+        if (section !== "planning") this._draft[MAPPINGS_KEY][deviceKey] = this._clone(savedMapping);
         this._savedDraft[MAPPINGS_KEY][deviceKey] = this._clone(savedMapping);
       } else {
-        delete this._draft[MAPPINGS_KEY][deviceKey];
+        if (section !== "planning") delete this._draft[MAPPINGS_KEY][deviceKey];
         delete this._savedDraft[MAPPINGS_KEY][deviceKey];
       }
       const device = this._data.devices.find((item) => item.key === deviceKey);
-      for (const field of device?.system_fields || []) this._savedDraft[field.key] = this._clone(this._draft[field.key]);
+      for (const field of fields) this._savedDraft[field.key] = this._clone(this._draft[field.key]);
       if (device) {
         device.mapping_status = result.mapping_status;
         device.mapping_error = result.mapping_error;
         device.mapping_summary = result.mapping_summary || {};
       }
-      this._notice = mapping
+      this._notice = section === "planning"
+        ? `${device?.name || deviceKey} planning settings saved.`
+        : mapping
         ? `${device?.name || deviceKey} is saved and ${result.mapping_status === "ready" ? "ready" : this._label(result.mapping_status)}.`
         : `${device?.name || deviceKey} setup was removed.`;
     } catch (error) {
@@ -424,7 +433,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       return;
     }
     if (element.dataset.filter) {
-      this["_" + element.dataset.filter] = element.value; this._render(); return;
+      this["_" + element.dataset.filter] = element.type === "checkbox" ? element.checked : element.value; this._render(); return;
     }
     if (element.dataset.share) {
       const excluded = new Set(this._draft.excluded_device_readings || []);
@@ -464,10 +473,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     else if (action === "slot") { this._selectedSlot = Number(button.dataset.index); this._render(); }
     else if (action === "edit-device") { this._tab = "devices"; this._expanded.add("device:" + button.dataset.deviceKey); this._render(); }
     else if (action === "add-field") { this._added.add(button.dataset.token); this._render(); }
-    else if (action === "cancel-device") this._cancelDevice(button.dataset.deviceKey);
+    else if (action === "cancel-device") this._cancelDevice(button.dataset.deviceKey, button.dataset.section);
     else if (action === "back") this._goBack();
     else if (action === "save") this._save();
-    else if (action === "save-device") this._saveDevice(button.dataset.deviceKey);
+    else if (action === "save-device") this._saveDevice(button.dataset.deviceKey, button.dataset.section);
     else if (action === "discard") this._discard();
     else if (action === "refresh") this._load(true);
     else if (action === "retry") this._load(false);
@@ -594,9 +603,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
     finally { this._savingDeviceKey = ""; this._render(); }
   }
 
-  _cancelDevice(key) {
-    if (this._draft[MAPPINGS_KEY]) this._draft[MAPPINGS_KEY][key] = this._clone(this._savedDraft[MAPPINGS_KEY]?.[key]);
-    for (const field of this._data.devices.find(d => d.key === key)?.system_fields || []) {
+  _cancelDevice(key, section) {
+    if (section !== "planning" && this._draft[MAPPINGS_KEY]) this._draft[MAPPINGS_KEY][key] = this._clone(this._savedDraft[MAPPINGS_KEY]?.[key]);
+    for (const field of this._systemFields(this._data.devices.find(d => d.key === key), section)) {
       if (field.key in this._savedDraft) this._draft[field.key] = this._clone(this._savedDraft[field.key]);
       else delete this._draft[field.key];
     }
@@ -676,45 +685,62 @@ class ShsEnergyConfigPanel extends HTMLElement {
       <details class="card compact"><summary>Current readings · ${selected.length} selected sources</summary><div class="table-wrap"><table><thead><tr><th>Source</th><th>Used for</th><th>Reading</th><th>Last update</th><th>Selected in</th></tr></thead><tbody>${selected.map(({ field, entity, id }) => `<tr><td>${this._escape(entity?.name || id)}</td><td>${this._escape(field.label)}</td><td>${this._escape(entity ? `${entity.state} ${entity.unit || ""}` : "Unavailable")}</td><td>${this._time(entity?.last_updated)}</td><td>${this._data.configured_keys?.includes(field.key) ? "SHS configuration" : "HA Energy / discovery"}</td></tr>`).join("")}</tbody></table></div></details>`;
   }
 
-  _choices(device) {
+  _choices(device, section) {
     const permission = device.permission;
     const disabled = Boolean(this._saving || this._savingDeviceKey || (!permission.enabled && (this._refreshError || permission.reason || this._deviceDirty(device.key))));
     return `<div class="choices">
       <div class="choice-row"><span>Include in the plan</span><strong>${this._escape(device.choice_label)} · <a href="${this._escape(this._data.website_url)}" target="_blank" rel="noreferrer">Website</a></strong></div>
-      <div class="choice-row"><span>Let SHS operate it</span><label class="switch"><input type="checkbox" aria-label="Let SHS operate ${this._escape(device.name)}" data-permission="${this._escape(device.key)}" ${permission.enabled ? "checked" : ""} ${disabled ? "disabled" : ""}><span></span></label>
-      <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Off leaves the device's own controls in charge."))}</small></div>
+      ${section === "planning" ? "" : `<div class="choice-row"><span>Let SHS operate it</span><label class="switch"><input type="checkbox" aria-label="Let SHS operate ${this._escape(device.name)}" data-permission="${this._escape(device.key)}" ${permission.enabled ? "checked" : ""} ${disabled ? "disabled" : ""}><span></span></label>
+      <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Off leaves the device's own controls in charge."))}</small></div>`}
     </div>`;
   }
 
-  _renderDevice(device) {
+  _renderDevice(device, section = "controls") {
+    const planning = section === "planning";
     const mapping = this._mapping(device.key) || {};
-    const dirty = this._deviceDirty(device.key);
-    const id = "device:" + device.key;
+    const dirty = this._deviceDirty(device.key, section);
+    const id = section + ":" + device.key;
     const edit = this._expanded.has(id) || dirty;
+    const systemFields = this._systemFields(device, section);
+    const mappingFields = planning ? [] : device.fields || [];
+    const names = { pool: "Pool", ev: "Electric vehicle", battery: "Home battery" };
+    const title = device.system ? names[device.system] : device.name;
+    const members = this._data.devices.filter(d => d.key === device.key || (device.system && d.planning_system === device.system));
+    const description = device.system
+      ? (planning ? "Model properties and planning participation" : "Measurements, actions and operating limits")
+      : `${device.room_name || "No room"} · ${this._label(device.category)}`;
     return `<details class="card device-card" data-open-key="${this._escape(id)}" ${edit ? "open" : ""}>
-      <summary><div><strong>${this._escape(device.name)}</strong><small>${this._escape(device.room_name || "No room")} · ${this._escape(this._label(device.category))}</small></div>
-        ${this._statusBadge(device.included ? device.mapping_status : "base_load")}</summary>
-      <div class="device-body"><p>${this._escape(this._label(device.control_type))}</p>
-        ${device.mapping_error ? `<p class="inline-warning">${this._escape(device.mapping_error)}</p>` : ""}
+      <summary><div><strong>${this._escape(title)}</strong><small>${this._escape(description)}</small></div>
+        ${planning ? `<span class="badge">${device.included ? "Included in planning" : "Excluded"}</span>` : this._statusBadge(device.included ? device.mapping_status : "base_load", device.included && device.mapping_status === "ready" ? "Controls configured" : undefined)}</summary>
+      <div class="device-body">
+        ${planning ? `<p>Connected equipment: ${members.map(d => this._escape(d.name)).join(", ")}</p>` : mappingFields.length ? `<p>${this._escape(device.name)} · ${this._escape(this._label(device.control_type))}</p>` : ""}
+        ${!planning && device.mapping_error ? `<p class="inline-warning">${this._escape(device.mapping_error)}</p>` : ""}
         ${this._deviceErrors[device.key] ? `<p role="alert" class="inline-error">${this._escape(this._deviceErrors[device.key])}</p>` : ""}
-        ${this._fields(device.fields || [], mapping, "mapping", device.key)}
-        ${this._fields(device.system_fields || [], this._draft, "configuration", device.key)}
-        ${Object.keys(device.suggested_mapping || {}).some(k => k !== "control_type" && !this._present(mapping[k])) ? `<button class="text" data-action="use-suggestions" data-device-key="${this._escape(device.key)}">Review suggested setup</button>` : ""}
-        ${device.fields?.length || device.system_fields?.length ? `<div class="device-save-row"><span>${dirty ? "Unsaved setup changes" : "Saved setup"}</span><button class="text" data-action="cancel-device" data-device-key="${this._escape(device.key)}" ${dirty ? "" : "disabled"}>Cancel</button><button class="primary" data-action="save-device" data-device-key="${this._escape(device.key)}" ${dirty && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>Save setup</button></div>` : `<p>Choose how this device runs on the website to set it up here.</p>`}
-        ${this._choices(device)}
-        <small class="muted">${this._escape(device.statistic_id || "Equipment settings")}</small>
+        ${this._fields(mappingFields, mapping, "mapping", device.key)}
+        ${!planning && device.system && systemFields.length ? `<h3>${this._escape(title)} measurements and controls</h3>` : ""}
+        ${this._fields(systemFields, this._draft, "configuration", device.key)}
+        ${!planning && Object.keys(device.suggested_mapping || {}).some(k => k !== "control_type" && !this._present(mapping[k])) ? `<button class="text" data-action="use-suggestions" data-device-key="${this._escape(device.key)}">Review suggested setup</button>` : ""}
+        ${mappingFields.length || systemFields.length ? `<div class="device-save-row"><span>${dirty ? "Unsaved changes" : "Saved"}</span><button class="text" data-action="cancel-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty ? "" : "disabled"}>Cancel</button><button class="primary" data-action="save-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>Save ${section}</button></div>` : `<p>Choose how this device runs on the website to set it up here.</p>`}
+        ${this._choices(device, section)}
+        ${!planning ? `<small class="muted">${this._escape(device.statistic_id || "Equipment settings")}</small>` : ""}
       </div></details>`;
   }
 
   _renderDevices() {
     const devices = this._data.devices;
-    const filtered = devices.filter(d => (!this._search || `${d.name} ${d.room_name || ""}`.toLowerCase().includes(this._search.toLowerCase())) && (!this._room || d.room_name === this._room) && (!this._category || d.category === this._category));
+    const visible = devices.filter(d => this._showExcluded || d.included);
+    const filtered = visible.filter(d => (!this._search || `${d.name} ${d.room_name || ""}`.toLowerCase().includes(this._search.toLowerCase())) && (!this._room || (d.room_name || "No room") === this._room) && (!this._category || d.category === this._category));
     const select = (key, placeholder, values, label) => `<select aria-label="${placeholder}" data-filter="${key}"><option value="">${placeholder}</option>${values.map(v => `<option value="${this._escape(v)}" ${this["_" + key] === v ? "selected" : ""}>${this._escape(label(v))}</option>`).join("")}</select>`;
     const equipment = this._data.sections.filter(s => s.toggle && ["battery_enabled", "pool_enabled", "ev_enabled"].includes(s.toggle.key));
-    return `<div class="page-intro"><h2>Devices in your home</h2><p>Set up each device once. Selecting an entity never gives SHS permission to operate it.</p></div>
-      <div class="filters"><input type="text" aria-label="Search devices" placeholder="Search devices" data-filter="search" value="${this._escape(this._search)}">${select("room", "All rooms", [...new Set(devices.map(d => d.room_name || "No room"))], v => v)}${select("category", "All types", [...new Set(devices.map(d => d.category))], v => this._label(v))}</div>
-      ${filtered.map(d => this._renderDevice(d)).join("") || '<p>No matching devices.</p>'}
-      <details class="card compact"><summary>Equipment present in this home</summary><p>These choices describe what is installed. Planning participation is chosen on the website.</p>${equipment.map(s => this._renderField(s.toggle, this._draft[s.toggle.key])).join("")}</details>`;
+    const excludedCount = devices.filter(d => !d.included).length;
+    return `<div class="page-intro"><h2>Devices in your home</h2><p>Connect your equipment in Controls, then configure its model in Planning.</p>
+      <div class="choice-row"><span>Show excluded devices${excludedCount ? ` (${excludedCount})` : ""}</span><label class="switch"><input type="checkbox" aria-label="Show excluded devices" data-filter="showExcluded" ${this._showExcluded ? "checked" : ""}><span></span></label></div></div>
+      <section aria-labelledby="controls-heading"><h2 id="controls-heading">Controls</h2><p>Measurements, actions, operating limits and permission to operate your equipment.</p>
+      <div class="filters"><input type="text" aria-label="Search devices" placeholder="Search devices" data-filter="search" value="${this._escape(this._search)}">${select("room", "All rooms", [...new Set(visible.map(d => d.room_name || "No room"))], v => v)}${select("category", "All types", [...new Set(visible.map(d => d.category))], v => this._label(v))}</div>
+      ${filtered.map(d => this._renderDevice(d, "controls")).join("") || `<p>No matching devices.${!this._showExcluded && excludedCount ? " Turn on Show excluded devices to see excluded equipment." : ""}</p>`}</section>
+      <section aria-labelledby="planning-heading"><h2 id="planning-heading">Planning</h2><p>Pool, vehicle and home battery properties. Set everyday comfort and charge preferences on the website.</p>
+      ${visible.filter(d => d.system).map(d => this._renderDevice(d, "planning")).join("") || '<p>No included pool, vehicle or home battery.</p>'}
+      <details class="card compact"><summary>Equipment present in this home</summary><p>Choose what is installed. Planning participation is chosen separately on the website.</p>${equipment.map(s => this._renderField({ ...s.toggle, help: "Describes installed equipment; planning participation and control permission are configured separately." }, this._draft[s.toggle.key])).join("")}</details></section>`;
   }
 
   _commandText(device, slot) {

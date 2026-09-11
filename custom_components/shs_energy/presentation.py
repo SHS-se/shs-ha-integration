@@ -5,12 +5,12 @@ import re
 if __package__:
     from .optimisation import validate_plan_contract, OptimisationInputError
     from .configuration_fields import _configuration_sections, _control_fields, LABELS
-    from .device_controls import planning_path, battery_control_errors, pool_band_errors
+    from .device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_band_errors
     from .device_commands import execution_setup_errors
 else:
     from optimisation import validate_plan_contract, OptimisationInputError
     from configuration_fields import _configuration_sections, _control_fields, LABELS
-    from device_controls import planning_path, battery_control_errors, pool_band_errors
+    from device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_band_errors
     from device_commands import execution_setup_errors
 
 
@@ -61,6 +61,16 @@ def timeline(plan, status):
          **{key: slot.get(key) for key in ("battery_charge_w", "battery_discharge_w", "ev_target_current_a", "pool_w")}}
         for slot in plan["plans"]["priority"]["slots"]
     ], "reason": None}
+
+
+PLANNING_FIELDS = {
+    "pool_volume_m3", "ev_charge_efficiency", "ev_kwh_per_km",
+    "battery_capacity_kwh", "battery_target_soc", "battery_target_is_hard",
+    "battery_charge_efficiency", "battery_discharge_efficiency",
+    "battery_export_enabled", "battery_export_reserve_soc",
+    "battery_export_min_price_sek_per_kwh", "terminal_soc_min",
+    "terminal_energy_value_sek_per_kwh",
+}
 
 
 def system_fields(system):
@@ -169,6 +179,16 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         device["permission"] = {"enabled": enabled, "reason": reason, "controller_id": controller_id}
         device["execution_status"] = controllers.get(controller_id, {"state": "disabled"})
         device["system_fields"] = system_fields(system) if system else []
+        device["planning_fields"] = [field for field in device["system_fields"] if field["key"] in PLANNING_FIELDS]
+        device["planning_system"] = mapped_planning_path(
+            device, mapping, options.get("pool_water_temperature_entity")
+        )
+        if device["planning_system"] == "pool" and device.get("control_type") == "setpoint":
+            for field in device.get("fields", []):
+                if field["key"] == "temperature_entity_id":
+                    field["label"] = "Pool water temperature"
+                    field["help"] = "The measured water temperature used for pool heating."
+
         device["fields"] = [f for f in device.get("fields", []) if f["key"] != "control_enabled"]
         if not included:
             device["mapping_error"] = None

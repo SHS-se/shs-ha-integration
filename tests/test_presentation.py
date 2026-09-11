@@ -36,6 +36,29 @@ class PresentationTests(unittest.TestCase):
             operational_status(self.plan, 'live', [], self.now), self.plan, {},
             {'sensor.laundry_energy': 'Laundry floor Energy'}, {'laundry': 'Laundry'}, self.now, **kwargs)
 
+    def test_battery_model_properties_are_separate_from_controls(self):
+        self.options['battery_enabled'] = True
+        self.choices['home']['battery'] = {'included': True}
+        battery = next(d for d in self.view(configured_keys=['battery_enabled']) if d.get('system') == 'battery')
+        planning = {f['key'] for f in battery['planning_fields']}
+        controls = {f['key'] for f in battery['system_fields']} - planning
+        self.assertIn('battery_capacity_kwh', planning)
+        self.assertIn('battery_charge_efficiency', planning)
+        self.assertIn('battery_soc_entity', controls)
+        self.assertIn('battery_charge_max_w', controls)
+        self.assertIn('battery_min_soc', controls)
+        self.assertIn('battery_power_entity', controls)
+
+    def test_pool_water_sensor_is_labelled_as_water_in_controls(self):
+        self.options.update(pool_enabled=True, pool_water_temperature_entity='sensor.water')
+        heater = deepcopy(self.device)
+        heater.update(category='pool_heating', fields=[{'key': 'temperature_entity_id', 'label': 'Room temperature'}])
+        heater['mapping']['temperature_entity_id'] = 'sensor.water'
+        view = self.view([heater])[0]
+        self.assertEqual(view['planning_system'], 'pool')
+        self.assertEqual(view['fields'][0]['label'], 'Pool water temperature')
+        self.assertEqual(heater['fields'][0]['label'], 'Room temperature')
+
     def test_invalid_cached_ready_plan_never_exposes_timeline(self):
         self.plan['plans']['priority']['slots'][0]['device_commands'] = {}
         status = operational_status(self.plan, 'live', [], self.now)
