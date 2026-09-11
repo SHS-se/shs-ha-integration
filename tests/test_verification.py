@@ -71,13 +71,13 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pool_stale_warning_carries_inspection_and_clears_on_fresh_data(self):
         self.options['device_modes']['$pool'] = 'control_verification'
-        self.states['sensor.water'].last_reported = datetime.now(timezone.utc) - timedelta(minutes=3)
+        self.states['sensor.water'].last_reported = datetime.now(timezone.utc) - timedelta(minutes=16)
         await self.controller.async_start()
         status = self.controller.status['pool']
         self.assertEqual(status['state'], 'fault')
         self.assertTrue(status['retry_automatically'])
         self.assertEqual(status['fix'], {'kind': 'entity', 'entity_id': 'sensor.water'})
-        self.assertIn('120 seconds', status['next_step'])
+        self.assertIn('900 seconds', status['next_step'])
         self.assertIn(self.states['sensor.water'].last_reported.isoformat(), status['reason'])
         row = self.journal.export()['attempts'][0]
         self.assertEqual(row['fix'], status['fix'])

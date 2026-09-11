@@ -1034,7 +1034,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         detail: status.reason || "The controller did not provide a reason. Download its evidence and report this missing diagnostic.",
         next_step: (status.next_step || (status.state === "overridden"
           ? "Check the manual override and other automations controlling this device. Once it is ready, select Planning and then the desired mode on Schedule to resume."
-          : "Review this device's mapped controls and operating settings. If they match the equipment, download the controller evidence and report the reason above for investigation.")) + (verification && status.retry_automatically ? " Verification retries automatically after the problem is corrected." : ""),
+          : "Review this device's mapped controls and operating settings. If they match the equipment, download the controller evidence and report the reason above for investigation.")) + (status.retry_automatically ? ` ${verification ? "Verification" : "Control"} retries automatically after the problem is corrected.` : ""),
         fix: status.fix || { kind: "device" }, device_key: device.key,
         verification, slot_start: status.slot_start, plan_id: status.plan_id,
       });

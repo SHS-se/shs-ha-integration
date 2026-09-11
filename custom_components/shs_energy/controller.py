@@ -36,7 +36,10 @@ except ImportError:  # Pure executor tests, without importing Home Assistant.
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
 CONFIRM_SECONDS = 15
-SOURCE_MAX_AGE_SECONDS = 120
+# Battery feedback gates power commands; pool and EV telemetry may report more slowly.
+BATTERY_MAX_AGE_SECONDS = 120
+POOL_MAX_AGE_SECONDS = 15 * 60
+EV_MAX_AGE_SECONDS = 15 * 60
 
 
 class ControlObservationError(ValueError):
@@ -136,7 +139,7 @@ class ScheduledController:
         for listener in tuple(self.listeners):
             listener()
 
-    def state(self, entity, *, fresh=False):
+    def state(self, entity, *, max_age=None):
         state = (self.shadow.get(entity) if self.verifying else None) or (self.hass.states.get(entity) if entity else None)
         if self.verifying and entity not in self.shadow:
             self.verification_observations[entity] = {
@@ -151,30 +154,30 @@ class ScheduledController:
                 "Check the source entity and its integration for an unavailable reading. "
                 "If the entity was replaced, select its replacement in this device's setup.",
             )
-        if fresh:
+        if max_age is not None:
             reported = getattr(state, "last_reported", state.last_updated)
             age = (datetime.now(timezone.utc) - reported).total_seconds()
-            if not 0 <= age <= SOURCE_MAX_AGE_SECONDS:
+            if not 0 <= age <= max_age:
                 raise ControlObservationError(
-                    f"{entity} is stale (last reported {reported.isoformat()}; maximum age {SOURCE_MAX_AGE_SECONDS} seconds)",
+                    f"{entity} is stale (last reported {reported.isoformat()}; maximum age {max_age} seconds)",
                     entity,
-                    f"Check that this sensor and its source integration report at least every {SOURCE_MAX_AGE_SECONDS} seconds, "
+                    f"Check that this sensor and its source integration report at least every {max_age} seconds, "
                     "including while its value is unchanged.",
                 )
         return state
 
-    def number(self, entity, *, fresh=False):
-        return finite(self.state(entity, fresh=fresh).state)
+    def number(self, entity, *, max_age=None):
+        return finite(self.state(entity, max_age=max_age).state)
 
     def watts(self, entity):
-        state = self.state(entity, fresh=True)
+        state = self.state(entity, max_age=BATTERY_MAX_AGE_SECONDS)
         unit = state.attributes.get("unit_of_measurement")
         if unit not in ("W", "kW"):
             raise ValueError(f"{entity} must report W or kW")
         return finite(state.state) * (1000 if unit == "kW" else 1)
 
-    def fraction(self, entity):
-        state = self.state(entity, fresh=True)
+    def fraction(self, entity, *, max_age=None):
+        state = self.state(entity, max_age=max_age)
         value = finite(state.state)
         if state.attributes.get("unit_of_measurement") == "%":
             value /= 100
@@ -311,7 +314,7 @@ class ScheduledController:
             await asyncio.sleep(0.5)
 
     def measurement_after_commands(self, entity, *actuators):
-        state = self.state(entity, fresh=True)
+        state = self.state(entity, max_age=BATTERY_MAX_AGE_SECONDS)
         reported = getattr(state, "last_reported", state.last_updated)
         return all(reported >= self.command_times[actuator]
                    for actuator in actuators if actuator in self.command_times)
@@ -435,10 +438,10 @@ class ScheduledController:
         entity, low, high = self.ev_mapping(options)
         switch = options.get("ev_charge_switch_entity")
         self.state(switch)
-        connected = self.state(options.get("ev_connected_entity"), fresh=True).state
+        connected = self.state(options.get("ev_connected_entity"), max_age=EV_MAX_AGE_SECONDS).state
         if connected not in ("on", "off", "true", "false", "connected", "disconnected"):
             raise ValueError("EV connection state is not a supported boolean")
-        soc = self.fraction(options.get("ev_soc_entity"))
+        soc = self.fraction(options.get("ev_soc_entity"), max_age=EV_MAX_AGE_SECONDS)
         target_soc = self.fraction(options.get("ev_target_soc_entity"))
         current = finite(slot["ev_target_current_a"])
         if current and not low <= current <= high:
@@ -465,7 +468,7 @@ class ScheduledController:
         for entity in (start, stop, water_entity):
             if self.state(entity).attributes.get("unit_of_measurement") != "°C":
                 raise ValueError(f"{entity}: pool control requires Celsius")
-        water = self.number(water_entity, fresh=True)
+        water = self.number(water_entity, max_age=POOL_MAX_AGE_SECONDS)
         record = self.records.get("pool")
         heat = ((finite(record["originals"][start]), finite(record["originals"][stop]))
                 if record else (self.number(start), self.number(stop)))
@@ -491,7 +494,7 @@ class ScheduledController:
             entity = options[key]
             if not entity.startswith("binary_sensor."):
                 raise ValueError(f"{entity} must be a battery direction binary sensor")
-            state = self.state(entity, fresh=True).state
+            state = self.state(entity, max_age=BATTERY_MAX_AGE_SECONDS).state
             if state not in ("on", "off"):
                 raise ValueError(f"{entity} must report on or off")
             observed.append(state == "on")
@@ -535,7 +538,7 @@ class ScheduledController:
         errors = battery_control_errors({**options, "battery_control_enabled": True})
         if errors:
             raise ValueError("; ".join(errors))
-        soc = self.fraction(options["battery_soc_entity"])
+        soc = self.fraction(options["battery_soc_entity"], max_age=BATTERY_MAX_AGE_SECONDS)
         limits = self.battery_ratings(options)
         command = validate_battery_command(slot)
         operation = command["operation"]
@@ -829,15 +832,21 @@ class ScheduledController:
                         continue
                     result = (await self.execute_device(device, options, slot) if device.startswith("device:")
                               else await getattr(self, f"execute_{device}")(options, slot))
+                    self.failed.pop(device, None)
                     self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"))
                 except Exception as err:
-                    self.failed[device] = key
+                    # A new observation can repair this fault without a new plan.
+                    retry = isinstance(err, ControlObservationError)
+                    if retry:
+                        self.failed.pop(device, None)
+                    else:
+                        self.failed[device] = key
                     reason = str(err)
                     try:
                         await self.restore(device)
                     except Exception as restore_error:
                         reason += f"; restoration pending: {restore_error}"
-                    self.report(device, "fault", reason=reason, **correction_details(err))
+                    self.report(device, "fault", reason=reason, retry_automatically=retry, **correction_details(err))
 
     async def async_stop(self, _event=None):
         self.closed = True

@@ -741,3 +741,12 @@ test('verification download is compact gzip JSON with shared slot references', a
   assert.equal(clicked, true);
   assert.equal(revoked, 'blob:verification');
 });
+
+
+test('live sensor faults explain automatic recovery without promising retries for permanent faults', () => {
+  const panel = poolFaultPanel();
+  panel._data.devices[0].mode = 'controlling';
+  assert.match(panel._renderStatus(), /Control retries automatically after the problem is corrected/);
+  panel._data.devices[0].execution_status.retry_automatically = false;
+  assert.doesNotMatch(panel._renderStatus(), /retries automatically/);
+});
