@@ -90,9 +90,51 @@ class CurrentConfigurationTests(unittest.TestCase):
             with self.subTest(patch=patch), self.assertRaises(ValueError):
                 prepare_options({}, patch, ENTITIES.get)
 
+    def test_removed_mapping_power_stays_explicitly_empty(self):
+        mapping = {'control_type': 'setpoint', 'actuator_entity_ids': ['climate.a'],
+                   'temperature_entity_id': 'sensor.old', 'power': None}
+        saved = save({}, 'heater', mapping)
+        self.assertIsNone(saved['device_control_mappings']['heater']['power'])
+        self.assertIsNone(resolve_configuration(saved)['device_control_mappings']['heater']['power'])
+
+    def test_removed_default_stays_empty_after_reload(self):
+        saved = prepare_options({'battery_charge_efficiency': .95},
+                                {'battery_charge_efficiency': None}, ENTITIES.get)
+        for _ in range(3):
+            saved = json.loads(json.dumps(saved))
+            self.assertIsNone(resolve_configuration(saved)['battery_charge_efficiency'])
+        saved = prepare_options(saved, {'battery_charge_efficiency': .92}, ENTITIES.get)
+        self.assertEqual(resolve_configuration(saved)['battery_charge_efficiency'], .92)
+
+    def test_retired_battery_fields_cannot_be_saved_or_restored(self):
+        retired = {'battery_max_soc': .8, 'battery_measurement_charge_positive': False,
+                   'battery_discharge_is_negative': False, 'battery_power_unit': 'W',
+                   'battery_power_entity': 'number.signed'}
+        for key, value in retired.items():
+            with self.assertRaises(ValueError):
+                prepare_options({}, {key: value}, ENTITIES.get)
+        saved, _ = migrate_options({**retired, 'battery_control_enabled': True,
+            'battery_mode_charge': 'binary_sensor.sigen_plant_battery_charging',
+            'battery_mode_discharge': 'binary_sensor.sigen_plant_battery_discharging'}, source_version=9)
+        current = resolve_configuration(saved)
+        self.assertFalse(current['battery_control_enabled'])
+        self.assertFalse(set(retired) & set(current))
+        self.assertEqual(current['battery_charging_entity'], 'binary_sensor.sigen_plant_battery_charging')
+        self.assertEqual(current['battery_discharging_entity'], 'binary_sensor.sigen_plant_battery_discharging')
+        self.assertNotIn('battery_mode_charge', current)
+        self.assertNotIn('battery_mode_discharge', current)
+
+    def test_modes_must_be_options_of_the_selected_entity(self):
+        entities = {'select.ems': {'state': 'Standby', 'attributes': {'options': ['Standby', 'Maximum Self Consumption']}}}
+        saved = prepare_options({}, {'battery_mode_entity': 'select.ems',
+                                      'battery_mode_baseline': 'Maximum Self Consumption'}, entities.get)
+        self.assertEqual(saved['battery_mode_baseline'], 'Maximum Self Consumption')
+        with self.assertRaisesRegex(ValueError, 'choose an option'):
+            prepare_options(saved, {'battery_mode_baseline': 'Maximum Self Consumptoin'}, entities.get)
+
     def test_optional_unset_is_removed(self):
         self.assertEqual(prepare_options({'ev_soc_entity': 'sensor.old'},
-                         {'ev_soc_entity': None}, ENTITIES.get), {})
+                         {'ev_soc_entity': None}, ENTITIES.get), {'ev_soc_entity': None})
 
     def test_shared_room_source_survives_save_reload_and_device_removal(self):
         old = {'device_control_mappings': {key: {'control_type': 'setpoint',

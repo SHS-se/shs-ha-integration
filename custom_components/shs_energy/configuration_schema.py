@@ -61,8 +61,6 @@ def configuration_defaults(latitude: float, longitude: float) -> dict[str, Any]:
         c.OPT_AUTOMATIC_SETUP: True,
         c.OPT_EV_CONTROL_ENABLED: False,
         c.OPT_POOL_CONTROL_ENABLED: False,
-        c.OPT_BATTERY_MODE_BASELINE: "Maximum Self Consumption",
-        c.OPT_BATTERY_MEASUREMENT_CHARGE_POSITIVE: True,
         c.OPT_DEVICE_CONTROL_MAPPINGS: {},
         "rooms": {},
         c.OPT_FORECAST_RESOLUTION_MINUTES: c.DEFAULT_FORECAST_RESOLUTION_MINUTES,
@@ -74,7 +72,6 @@ def configuration_defaults(latitude: float, longitude: float) -> dict[str, Any]:
         c.OPT_POOL_ENABLED: True,
         c.OPT_EV_ENABLED: True,
         c.OPT_BATTERY_MIN_SOC: 0.05,
-        c.OPT_BATTERY_MAX_SOC: 1.0,
         c.OPT_BATTERY_TARGET_SOC: 0.8,
         # A target is a preference by default. Making 80% hard can force a
         # flexible load onto night import while solar is reserved for storage.
@@ -90,8 +87,6 @@ def configuration_defaults(latitude: float, longitude: float) -> dict[str, Any]:
         # confirmation behaviour have been measured on the installation. A
         # discovered entity is an offer to configure, never an authorisation.
         c.OPT_BATTERY_CONTROL_ENABLED: False,
-        c.OPT_BATTERY_POWER_UNIT: "W",
-        c.OPT_BATTERY_DISCHARGE_IS_NEGATIVE: True,
         c.OPT_TERMINAL_SOC_MIN: 0.2,
         c.OPT_TERMINAL_ENERGY_VALUE: 1.0,
         c.OPT_EV_CHARGE_EFFICIENCY: c.EV_CHARGE_EFFICIENCY,
@@ -239,25 +234,22 @@ def prepare_options(existing, incoming, read_entity, *, latitude=0.0, longitude=
     result = merge_options(existing, incoming)
     for key, value in incoming.items():
         value = normalise_field_value(read_entity, OPTION_FIELDS[key], value, context="Configuration")
-        if value is None:
-            result.pop(key, None)
-        else:
-            result[key] = value
+        # A cleared setting remains explicitly empty rather than regaining a default.
+        result[key] = value
     current = resolve_configuration(result, latitude, longitude)
-    for low, high in (("battery_min_soc", "battery_max_soc"),
-                      ("pool_temperature_minimum", "pool_temperature_maximum")):
-        if current.get(low) is None or current.get(high) is None:
-            continue
-        lower = current[low]
-        if low == "battery_min_soc":
-            # An unrelated edit (especially disabling control) must remain
-            # possible when an already-selected hardware sensor is offline.
-            if low not in incoming and high not in incoming:
-                continue
-            lower = resolve_quantity(lower, read_entity, unit="%", minimum=0,
-                                     maximum=1, label="Minimum charge")
-        if lower >= current[high]:
-            raise ValueError(f"{OPTION_FIELDS[low]['label']} must be below {OPTION_FIELDS[high]['label']}")
+    if "battery_min_soc" in incoming and current.get("battery_min_soc") is not None:
+        minimum = resolve_quantity(current["battery_min_soc"], read_entity, unit="%", minimum=0, maximum=1, label="Minimum charge")
+        if minimum >= 1:
+            raise ValueError("Minimum charge must be below 100%")
+    low, high = current.get("pool_temperature_minimum"), current.get("pool_temperature_maximum")
+    if low is not None and high is not None and low >= high:
+        raise ValueError("Pool minimum must be below maximum")
+    mode_keys = [key for key, field in OPTION_FIELDS.items() if field["kind"] == "battery_mode"]
+    if "battery_mode_entity" in incoming or any(key in incoming for key in mode_keys):
+        mode = read_entity(current.get("battery_mode_entity")) if current.get("battery_mode_entity") else None
+        for key in mode_keys:
+            if current.get(key) and (mode is None or current[key] not in mode["attributes"].get("options", [])):
+                raise ValueError(f"{OPTION_FIELDS[key]['label']}: choose an option from the control-mode entity")
     if current["battery_control_enabled"]:
         errors = battery_control_errors(current)
         if errors:
@@ -294,7 +286,7 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
         mapping[ROOM_AREA_FIELD] = stored[key][ROOM_AREA_FIELD]
     for field in _control_fields(device):
         value = normalise_field_value(read_entity, field, submitted.get(field["key"]), context=device["name"])
-        if value is not None:
+        if value is not None or (field["key"] in submitted and submitted[field["key"]] is None):
             mapping[field["key"]] = value
     if mapping.get("control_enabled"):
         errors = execution_setup_errors(mapping)

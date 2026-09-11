@@ -162,8 +162,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _recordSavedFields(configuration) {
     for (const [key, value] of Object.entries(configuration)) {
-      if (value === null) delete this._savedDraft[key];
-      else this._savedDraft[key] = this._clone(value);
+      this._savedDraft[key] = this._clone(value);
     }
   }
 
@@ -400,6 +399,20 @@ class ShsEnergyConfigPanel extends HTMLElement {
     else target[key] = value;
   }
 
+  _removeField(scope, key, deviceKey = "") {
+    const target = scope === "mapping" ? this._mapping(deviceKey, true) : this._draft;
+    target[key] = null;
+    if (scope === "configuration" && key === "battery_mode_entity") {
+      for (const mode of ["charge", "discharge", "idle", "baseline"]) {
+        target[`battery_mode_${mode}`] = null;
+        this._added.delete(`${scope}:${deviceKey}:battery_mode_${mode}`);
+      }
+    }
+    this._added.delete(`${scope}:${deviceKey}:${key}`);
+    this._clearDeviceError(deviceKey);
+    this._render();
+  }
+
   _addMulti(scope, key, value, deviceKey) {
     const entityId = String(value || "").trim();
     if (!entityId) return;
@@ -522,6 +535,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     else if (action === "slot") { this._selectedSlot = Number(button.dataset.index); this._render(); }
     else if (action === "edit-device") { this._tab = "devices"; this._expanded.add("device:" + button.dataset.deviceKey); this._render(); }
     else if (action === "add-field") { this._added.add(button.dataset.token); this._render(); }
+    else if (action === "remove-field") this._removeField(button.dataset.scope, button.dataset.fieldKey, button.dataset.deviceKey);
     else if (action === "cancel-device") this._cancelDevice(button.dataset.deviceKey, button.dataset.section);
     else if (action === "back") this._goBack();
     else if (action === "save") this._save();
@@ -565,12 +579,19 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _renderField(field, value, scope = "configuration", deviceKey = "") {
     const key = this._escape(field.key);
     const label = this._escape(field.label);
-    const help = field.help ? `<div class="field-help">${this._escape(field.help)}</div>` : "";
+    const sensor = typeof value === "string" && value.startsWith("sensor.");
+    const entityUnit = sensor ? (this._hass?.states?.[value]?.attributes?.unit_of_measurement ?? this._data?.entities?.find(e => e.entity_id === value)?.unit ?? "") : null;
+    const helpText = sensor && ["power", "quantity"].includes(field.kind) ? "Uses the selected sensor's reported unit." : field.help;
+    const help = helpText ? `<div class="field-help">${this._escape(helpText)}</div>` : "";
     const required = field.required ? '<span class="required">Required</span>' : "";
     const common = `aria-label="${label}" data-field-key="${key}" data-scope="${this._escape(scope)}" data-device-key="${this._escape(deviceKey)}"`;
     let control = "";
     if (field.kind === "toggle") {
       control = `<label class="switch"><input type="checkbox" ${common} ${value ? "checked" : ""}><span></span></label>`;
+    } else if (field.kind === "battery_mode") {
+      const modeEntity = this._draft?.battery_mode_entity;
+      const options = this._hass?.states?.[modeEntity]?.attributes?.options || [];
+      control = `<select ${common}><option value="">Select a mode…</option>${value && !options.includes(value) ? `<option selected disabled value="${this._escape(value)}">Unavailable option: ${this._escape(value)}</option>` : ""}${options.map(option => `<option value="${this._escape(option)}" ${option === value ? "selected" : ""}>${this._escape(option)}</option>`).join("")}</select>`;
     } else if (field.kind === "select") {
       control = `<select ${common}>
         <option value="">Select…</option>
@@ -607,12 +628,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
       const displayed = typeof value === "number" ? value * (field.scale || 1) : (value ?? "");
       const list = unit === "W" ? "shs-power-list" : unit === "kWh" ? "shs-energy-list" : "shs-percent-list";
       const placeholder = field.kind === "power" ? "Power entity or watts" : `Search sensor or enter ${unit}`;
-      control = `<div class="with-unit"><input type="text" list="${list}" ${common} value="${this._escape(displayed)}" placeholder="${this._escape(placeholder)}"><span>${this._escape(unit)}</span></div>`;
+      control = `<div class="with-unit"><input type="text" list="${list}" ${common} value="${this._escape(displayed)}" placeholder="${this._escape(placeholder)}"><span>${this._escape(sensor ? entityUnit : unit)}</span></div>`;
     } else {
       control = `<input type="text" ${common} ${field.kind === "entity" ? 'list="shs-entity-list"' : ""} value="${this._escape(value || "")}" placeholder="${field.kind === "entity" ? "Search or enter an entity" : ""}">`;
     }
     return `<div class="field ${field.kind === "toggle" ? "toggle-field" : ""}">
-      <div class="field-label"><label>${label}</label>${required}</div>
+      <div class="field-label"><label>${label}</label>${required}${!field.required ? `<button type="button" class="text" data-action="remove-field" data-scope="${this._escape(scope)}" data-device-key="${this._escape(deviceKey)}" data-field-key="${key}" aria-label="Remove ${label}">Remove</button>` : ""}</div>
       ${control}${help}
     </div>`;
   }
@@ -712,10 +733,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
       for (const field of fields) {
         const token = `${scope}:${deviceKey}:${field.key}`;
         const required = field.required || dependent.has(field.key);
-        const populated = this._present(values[field.key]) && (field.kind !== "toggle" || values[field.key] || this._data.configured_keys?.includes(field.key));
+        const populated = this._present(values[field.key]);
         const inheritedLocation = ["pv_forecast_latitude", "pv_forecast_longitude"].includes(field.key) && !this._data.configured_keys?.includes(field.key);
-        if (required || ["power", "quantity"].includes(field.kind) || (populated && !inheritedLocation) || this._added.has(token)) visible.push(this._renderField({ ...field, required }, values[field.key], scope, deviceKey));
-        else if (!["permit_entity_id", "mode_entity_id", "offset_entity_id", "offset_minimum", "offset_maximum"].includes(field.key)) {
+        if (required || (values[field.key] !== null && (["power", "quantity"].includes(field.kind) || (populated && !inheritedLocation))) || this._added.has(token)) visible.push(this._renderField({ ...field, required }, values[field.key], scope, deviceKey));
+        else {
           optional.push(`<button class="text" data-action="add-field" data-token="${this._escape(token)}">Add ${this._escape(field.label.toLowerCase())}</button>`);
         }
       }

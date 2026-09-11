@@ -505,3 +505,48 @@ test('battery quantities autocomplete sensor names and preserve sensor or numeri
   assert.match(lists, /value="sensor.charge">Sigen Plant ESS Rated Charging Power/);
   assert.match(lists, /value="sensor.floor">Sigen Plant Discharge Cut-Off SOC/);
 });
+
+test('sensor quantities display sensor units and literal quantities display input units', () => {
+  const panel = Object.create(context.Panel.prototype);
+  panel._data = { entities: [{ entity_id: 'sensor.rating', unit: 'kW' }] };
+  const field = { key: 'battery_charge_max_w', label: 'Maximum charge power', kind: 'quantity', unit: 'W', help: 'Enter W' };
+  assert.match(panel._renderField(field, 'sensor.rating'), /<span>kW<\/span>/);
+  assert.doesNotMatch(panel._renderField(field, 'sensor.rating'), /Enter W/);
+  assert.match(panel._renderField(field, 8800), /<span>W<\/span>/);
+  assert.doesNotMatch(panel._renderField(field, 'sensor.missing'), /<span>W<\/span>/);
+});
+
+test('battery modes come from actual selector options and keep invalid saved values visible', () => {
+  const panel = Object.create(context.Panel.prototype);
+  panel._draft = { battery_mode_entity: 'select.ems' };
+  panel._hass = { states: { 'select.ems': { attributes: { options: ['Standby', 'Maximum Self Consumption'] } } } };
+  const field = { key: 'battery_mode_baseline', label: 'Baseline mode', kind: 'battery_mode' };
+  const html = panel._renderField(field, 'Maximum Self Consumption');
+  assert.match(html, /<select/);
+  assert.match(html, /value="Maximum Self Consumption" selected/);
+  assert.match(html, /value="Standby"/);
+  assert.match(panel._renderField(field, 'bad mode'), /Unavailable option: bad mode/);
+});
+
+test('removing settings clears their values, hides them and sends null for save', () => {
+  const panel = Object.create(context.Panel.prototype);
+  const field = { key: 'battery_charge_efficiency', kind: 'number', label: 'Charge efficiency', unit: '%', scale: 100 };
+  panel._data = { configured_keys: [field.key] };
+  panel._draft = { [field.key]: .95 };
+  panel._savedDraft = { ...panel._draft };
+  panel._added = new Set([`configuration::${field.key}`]);
+  panel._clearDeviceError = () => {};
+  panel._render = () => {};
+  assert.match(panel._fields([field], panel._draft), /data-action="remove-field"/);
+  panel._removeField('configuration', field.key);
+  assert.equal(panel._draft[field.key], null);
+  assert.deepEqual(JSON.parse(JSON.stringify(panel._patch([field]))), { battery_charge_efficiency: null });
+  assert.doesNotMatch(panel._fields([field], panel._draft), /data-field-key="battery_charge_efficiency"/);
+  assert.match(panel._fields([field], panel._draft), /Add charge efficiency/);
+  panel._draft.battery_mode_entity = 'select.ems';
+  panel._draft.battery_mode_charge = 'Charge';
+  panel._draft.battery_mode_baseline = 'Baseline';
+  panel._removeField('configuration', 'battery_mode_entity');
+  assert.equal(panel._draft.battery_mode_charge, null);
+  assert.equal(panel._draft.battery_mode_baseline, null);
+});

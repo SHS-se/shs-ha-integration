@@ -47,7 +47,9 @@ class PresentationTests(unittest.TestCase):
         self.assertIn('battery_soc_entity', controls)
         self.assertIn('battery_charge_max_w', controls)
         self.assertIn('battery_min_soc', controls)
-        self.assertIn('battery_power_entity', controls)
+        self.assertIn('battery_charge_limit_entity', controls)
+        self.assertIn('battery_discharging_entity', controls)
+        self.assertNotIn('battery_max_soc', controls)
 
     def test_pool_water_sensor_is_labelled_as_water_in_controls(self):
         self.options.update(pool_enabled=True, pool_water_temperature_entity='sensor.water')

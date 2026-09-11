@@ -61,6 +61,17 @@ def migrate_options(
     report["removed"].update(set(options) - PERSISTED_KEYS)
     if options.get("battery_min_soc_entity"):
         report["imported"].add("battery_min_soc")
+    # Relocate direction observations mistakenly entered as writable modes.
+    for direction in ("charge", "discharge"):
+        old = f"battery_mode_{direction}"
+        new = "battery_charging_entity" if direction == "charge" else "battery_discharging_entity"
+        if str(result.get(old, "")).startswith("binary_sensor."):
+            result.setdefault(new, result.pop(old))
+            report["imported"].add(new)
+            report["removed"].add(old)
+    if source_version is not None and source_version < 10:
+        # The signed actuator contract cannot authorize the separate ceilings.
+        result["battery_control_enabled"] = False
     if source_version in (5, 6):
         # These migrations deleted settings rather than archiving their values.
         # Retain the removal evidence, but replace instructions for the retired

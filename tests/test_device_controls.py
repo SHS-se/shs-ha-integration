@@ -347,10 +347,13 @@ def _battery(**extra):
         "battery_control_enabled": True,
         "battery_mode_entity": "select.mode",
         "battery_mode_charge": "Command Charging (PV First)",
-        "battery_mode_discharge": "Command Discharging (ESS First)",
+        "battery_mode_discharge": "Command Discharging (PV First)",
         "battery_mode_idle": "Standby",
-        "battery_power_entity": "number.target",
-        "battery_power_unit": "kW",
+        "battery_charge_limit_entity": "number.charge_limit",
+        "battery_discharge_limit_entity": "number.discharge_limit",
+        "battery_charging_entity": "binary_sensor.charging",
+        "battery_discharging_entity": "binary_sensor.discharging",
+        "battery_mode_baseline": "Maximum Self Consumption",
         "battery_power_measurement_entity": "sensor.battery_power",
         "battery_soc_entity": "sensor.soc",
         **extra,
@@ -372,7 +375,7 @@ class BatteryControlTests(unittest.TestCase):
             "battery_enabled": True, "battery_control_enabled": True,
         })
         self.assertIn("battery mode entity is required", errors)
-        self.assertIn("battery power target entity is required", errors)
+        self.assertIn("charge power limit entity is required", errors)
         self.assertIn("measured battery power entity is required", errors)
         self.assertIn("battery state of charge entity is required", errors)
         self.assertIn("the mode value meaning charge is required", errors)
@@ -384,11 +387,9 @@ class BatteryControlTests(unittest.TestCase):
             "charge, discharge and idle must be different mode values", errors
         )
 
-    def test_an_unknown_power_unit_is_refused(self) -> None:
-        self.assertTrue(any(
-            "power unit" in error
-            for error in battery_control_errors(_battery(battery_power_unit="watts"))
-        ))
+    def test_reusing_one_direction_sensor_is_refused(self):
+        self.assertTrue(any("different entities" in error for error in battery_control_errors(
+            _battery(battery_discharging_entity="binary_sensor.charging"))))
 
     def test_claiming_authority_requires_reading_it_back(self) -> None:
         """Otherwise authority never held cannot be told from authority lost."""

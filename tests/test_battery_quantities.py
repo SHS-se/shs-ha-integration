@@ -64,10 +64,10 @@ class BatteryQuantityTests(unittest.TestCase):
             'state': '18080', 'attributes': {'unit_of_measurement': 'Wh'}}
         self.assertAlmostEqual(self.resolve()['battery_capacity_kwh'], 18.08)
         self.entities[SOURCES['battery_min_soc'][0]]['state'] = '100'
-        with self.assertRaisesRegex(ValueError, 'below Maximum charge'):
+        with self.assertRaisesRegex(ValueError, 'below 100%'):
             self.resolve()
-        with self.assertRaisesRegex(ValueError, 'below Maximum charge'):
-            prepare_options(self.options, {'battery_max_soc': .9}, self.entities.get)
+        with self.assertRaisesRegex(ValueError, 'below 100%'):
+            prepare_options(self.options, {'battery_min_soc': SOURCES['battery_min_soc'][0]}, self.entities.get)
 
     def test_cutoff_migrates_once_into_single_field(self):
         old = {'battery_min_soc': .05, 'battery_min_soc_entity': SOURCES['battery_min_soc'][0]}

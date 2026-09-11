@@ -280,17 +280,23 @@ class ScheduledController:
                     if entity not in record.get("externally_changed", []):
                         await self.command(entity, value)
             elif device == "battery":
-                await self.command(options["battery_power_entity"], 0)
+                charge = options.get("battery_charge_limit_entity")
+                discharge = options.get("battery_discharge_limit_entity")
+                if not charge or not discharge or charge not in original or discharge not in original:
+                    raise ValueError("battery restoration requires a recorded pair of non-negative normal limits")
+                await self.command(charge, 0)
+                await self.command(discharge, 0)
                 await self.command(options["battery_mode_entity"], options["battery_mode_baseline"])
+                for entity in (charge, discharge):
+                    await self.command(entity, finite(original[entity]))
                 await self.confirm(
-                    lambda: self.measurement_after_commands(
-                        options["battery_power_measurement_entity"],
-                        options["battery_mode_entity"], options["battery_power_entity"],
-                    ), "no new battery measurement after baseline restoration",
+                    lambda: self.measurement_after_commands(options["battery_power_measurement_entity"],
+                        options["battery_mode_entity"], charge, discharge),
+                    "no new battery measurement after baseline restoration",
                 )
-                measured = self.watts(options["battery_power_measurement_entity"])
+                measured = self.battery_measurement(options)
                 self.report(device, "baseline", measured_power_w=measured,
-                            reason="baseline mode confirmed; power is measured, not inferred")
+                            reason="baseline mode and normal limits confirmed; power is measured")
             elif device == "pool":
                 start = options["pool_start_temperature_entity"]
                 stop = options["pool_stop_temperature_entity"]
@@ -379,6 +385,41 @@ class ScheduledController:
                 "start_temperature_c": band[0], "stop_temperature_c": band[1],
                 "water_temperature_c": water, "requested_power_w": slot["pool_w"]}
 
+    def battery_measurement(self, options):
+        """Direction comes from explicit observations, magnitude from either power sign."""
+        observed = []
+        for key in ("battery_charging_entity", "battery_discharging_entity"):
+            entity = options[key]
+            if not entity.startswith("binary_sensor."):
+                raise ValueError(f"{entity} must be a battery direction binary sensor")
+            state = self.state(entity, fresh=True).state
+            if state not in ("on", "off"):
+                raise ValueError(f"{entity} must report on or off")
+            observed.append(state == "on")
+        magnitude = abs(self.watts(options["battery_power_measurement_entity"]))
+        if all(observed) or (not any(observed) and magnitude > 100):
+            raise ValueError("battery direction observations disagree with measured power")
+        return magnitude if observed[0] else -magnitude if observed[1] else 0.0
+
+    def battery_limit(self, entity, watts=None):
+        """Validate a restorable, non-negative ceiling before taking ownership."""
+        state = self.state(entity)
+        unit = state.attributes.get("unit_of_measurement")
+        if not entity.startswith("number.") or unit not in ("W", "kW"):
+            raise ValueError(f"{entity} must be a W or kW limit control")
+        low, high = finite(state.attributes["min"]), finite(state.attributes["max"])
+        step = finite(state.attributes.get("step", 1))
+        if low != 0 or high <= 0 or step <= 0:
+            raise ValueError(f"{entity} must support non-negative limits including zero")
+        value = finite(state.state) if watts is None else watts / (1000 if unit == "kW" else 1)
+        if not 0 <= value <= high:
+            raise ValueError(f"{entity}: establish a valid normal limit before control; unset limits cannot be restored")
+        if watts is not None:
+            value = int(value / step + 1e-8) * step
+        elif abs(value / step - round(value / step)) > 1e-5:
+            raise ValueError(f"{entity}: normal limit is not on a supported step")
+        return value
+
     async def execute_battery(self, options, slot):
         errors = battery_control_errors(options)
         if errors:
@@ -394,45 +435,49 @@ class ScheduledController:
             raise ValueError("invalid simultaneous battery charge and discharge")
         if charge > limits["battery_charge_max_w"] or discharge > limits["battery_discharge_max_w"]:
             raise ValueError("planned battery power exceeds reviewed rating")
-        if (discharge and soc <= floor) or (charge and soc >= finite(options["battery_max_soc"])):
+        if (discharge and soc <= floor) or (charge and soc >= 1):
             raise ValueError("battery SOC protection blocks the planned request")
         measured_entity = options["battery_power_measurement_entity"]
-        self.watts(measured_entity)
+        self.battery_measurement(options)
+        charge_entity = options["battery_charge_limit_entity"]
+        discharge_entity = options["battery_discharge_limit_entity"]
+        for entity in (charge_entity, discharge_entity):
+            self.battery_limit(entity)
+        targets = [(charge_entity, self.battery_limit(charge_entity, charge)),
+                   (discharge_entity, self.battery_limit(discharge_entity, discharge))]
+        mode_entity = options["battery_mode_entity"]
+        supported = self.state(mode_entity).attributes.get("options", [])
+        for key in ("battery_mode_charge", "battery_mode_discharge", "battery_mode_idle", "battery_mode_baseline"):
+            if options.get(key) not in supported:
+                raise ValueError(f"{key}: choose a supported option from {mode_entity}")
         existing = self.records.get("battery")
         if existing and (confirmation := options.get("battery_authority_confirm_entity")):
             if self.state(confirmation).state != options["battery_authority_confirm_state"]:
                 raise ValueError("battery remote authority was lost")
-        await self.capture("battery", options, [])
+        await self.capture("battery", options, [charge_entity, discharge_entity])
         if claim := options.get("battery_authority_entity"):
             await self.command(claim, "on")
         if entity := options.get("battery_authority_confirm_entity"):
             await self.confirm(lambda: self.state(entity).state == options["battery_authority_confirm_state"], "battery remote authority was not granted")
         mode = options["battery_mode_charge" if charge else "battery_mode_discharge" if discharge else "battery_mode_idle"]
-        await self.command(options["battery_mode_entity"], mode)
-        power = charge - discharge
-        if not options.get("battery_discharge_is_negative", False):
-            power = -power
-        if options["battery_power_unit"] == "kW":
-            power /= 1000
-        # Round toward zero, never request more than the planner authorised.
-        target = options["battery_power_entity"]
-        step = finite(self.state(target).attributes.get("step", 1))
-        if step <= 0:
-            raise ValueError("battery target has an invalid step")
-        power = int(power / step + (1e-8 if power >= 0 else -1e-8)) * step
-        await self.command(target, power)
-        expected = abs(power) * (1000 if options["battery_power_unit"] == "kW" else 1)
-        if discharge:
-            expected = -expected
-        if not options.get("battery_measurement_charge_positive", True):
-            expected = -expected
-        await self.confirm(
-            lambda: self.measurement_after_commands(measured_entity, target, options["battery_mode_entity"])
-            and abs(self.watts(measured_entity) - expected) <= max(100, abs(expected)*0.1),
-            "battery did not achieve planned power within 15 seconds",
-        )
-        return {"state": "confirmed", "requested_power_w": charge-discharge,
-                "measured_power_w": self.watts(measured_entity)}
+        # Close both ceilings for a mode transition; do not interrupt an
+        # unchanged request on every scheduler tick.
+        if self.state(mode_entity).state != mode:
+            for entity, _ in targets:
+                await self.command(entity, 0)
+        await self.command(mode_entity, mode)
+        for entity, value in sorted(targets, key=lambda target: target[1]):
+            await self.command(entity, value)
+        def delivered_within_ceiling():
+            measured = self.battery_measurement(options)
+            fresh = all(self.measurement_after_commands(source, mode_entity, charge_entity, discharge_entity)
+                        for source in (measured_entity, options["battery_charging_entity"], options["battery_discharging_entity"]))
+            direction = measured >= 0 if charge else measured <= 0 if discharge else measured == 0
+            return fresh and direction and abs(measured) <= max(charge, discharge) + 100
+        await self.confirm(delivered_within_ceiling, "battery did not confirm direction and power ceiling within 15 seconds")
+        measured = self.battery_measurement(options)
+        return {"state": "limited" if abs(measured) + 100 < max(charge, discharge) else "confirmed",
+                "requested_power_w": charge-discharge, "measured_power_w": measured}
 
     async def execute_device(self, device, options, slot):
         key = device.removeprefix("device:")
@@ -455,7 +500,7 @@ class ScheduledController:
             if other_key != key and other.get("control_enabled") and set(targets) & set(actuator_targets(other)):
                 raise ValueError("another enabled device shares this actuator")
         system_targets = {options.get(field) for field in (
-            "battery_power_entity", "battery_mode_entity", "battery_authority_entity",
+            "battery_charge_limit_entity", "battery_discharge_limit_entity", "battery_mode_entity", "battery_authority_entity",
             "ev_charge_switch_entity", "pool_start_temperature_entity", "pool_stop_temperature_entity", "pool_permission_entity")}
         if set(targets) & system_targets:
             raise ValueError("actuator is assigned to a system controller")
@@ -541,12 +586,6 @@ class ScheduledController:
             return
         self.records = saved.get("records", {})
         self.overrides = saved.get("overrides", {})
-        options = self.options()
-        if options.get("battery_control_enabled") and not battery_control_errors(options):
-            # A fresh enable also starts from a known baseline, not from a
-            # possibly stranded command belonging to an earlier controller.
-            if "battery" not in self.records:
-                await self.capture("battery", options, [])
         async with self.lock:
             for device in tuple(self.records):
                 try:

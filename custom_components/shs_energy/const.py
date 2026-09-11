@@ -93,7 +93,7 @@ OPT_CONFIGURATION_REVIEWED_AT = "configuration_reviewed_at"
 OPT_DEVICE_CONTROL_MAPPINGS = "device_control_mappings"
 # Versions 5/6 shipped the retired control interfaces. Never reuse version 4:
 # installed entries must roll forward through the restored settings schema.
-CONFIG_ENTRY_VERSION = 9
+CONFIG_ENTRY_VERSION = 10
 ROOM_AREA_FIELD = "room_area_id"
 
 # Live optimisation inputs. Forecast entities must expose timestamped values;
@@ -132,7 +132,6 @@ OPT_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
 OPT_BATTERY_CHARGE_MAX_W = "battery_charge_max_w"
 OPT_BATTERY_DISCHARGE_MAX_W = "battery_discharge_max_w"
 OPT_BATTERY_MIN_SOC = "battery_min_soc"
-OPT_BATTERY_MAX_SOC = "battery_max_soc"
 OPT_BATTERY_TARGET_SOC = "battery_target_soc"
 OPT_BATTERY_TARGET_IS_HARD = "battery_target_is_hard"
 OPT_BATTERY_CHARGE_EFFICIENCY = "battery_charge_efficiency"
@@ -158,12 +157,12 @@ OPT_BATTERY_MODE_ENTITY = "battery_mode_entity"
 OPT_BATTERY_MODE_CHARGE = "battery_mode_charge"
 OPT_BATTERY_MODE_DISCHARGE = "battery_mode_discharge"
 OPT_BATTERY_MODE_IDLE = "battery_mode_idle"
-OPT_BATTERY_POWER_ENTITY = "battery_power_entity"
-# Sigenergy writes kW where the planner speaks W, and publishes both a signed
-# power sensor and an inverted copy. Both are per-installation facts that must
-# be settled by measurement at commissioning, not assumed.
-OPT_BATTERY_POWER_UNIT = "battery_power_unit"
-OPT_BATTERY_DISCHARGE_IS_NEGATIVE = "battery_discharge_is_negative"
+# Commands are separate non-negative ceilings; direction observations do not
+# determine the sign of an actuator command.
+OPT_BATTERY_CHARGE_LIMIT_ENTITY = "battery_charge_limit_entity"
+OPT_BATTERY_DISCHARGE_LIMIT_ENTITY = "battery_discharge_limit_entity"
+OPT_BATTERY_CHARGING_ENTITY = "battery_charging_entity"
+OPT_BATTERY_DISCHARGING_ENTITY = "battery_discharging_entity"
 # Authority is a handshake: one entity claims remote control, another confirms
 # it was granted. Losing the confirmation is a loss of a required control
 # source, not a reason to keep writing.
@@ -173,7 +172,6 @@ OPT_BATTERY_AUTHORITY_CONFIRM_STATE = "battery_authority_confirm_state"
 # Confirm from measurement, never from the command that was sent.
 OPT_BATTERY_POWER_MEASUREMENT_ENTITY = "battery_power_measurement_entity"
 
-BATTERY_POWER_UNITS = ("W", "kW")
 OPT_GRID_IMPORT_LIMIT_W = "grid_import_limit_w"
 OPT_GRID_EXPORT_LIMIT_W = "grid_export_limit_w"
 OPT_TERMINAL_SOC_MIN = "terminal_soc_min"
@@ -302,4 +300,3 @@ OPT_POOL_CONTROL_ENABLED = "pool_control_enabled"
 OPT_EV_CHARGE_SWITCH_ENTITY = "ev_charge_switch_entity"
 OPT_POOL_PERMISSION_ENTITY = "pool_permission_entity"
 OPT_BATTERY_MODE_BASELINE = "battery_mode_baseline"
-OPT_BATTERY_MEASUREMENT_CHARGE_POSITIVE = "battery_measurement_charge_positive"

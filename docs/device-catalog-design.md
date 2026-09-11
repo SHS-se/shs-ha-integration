@@ -71,3 +71,99 @@ Catalog selection/discovery, profile identity, installation variants, supported
 integrations and behavior for unsupported equipment remain undecided. No catalog
 schema, automatic device probing, DC controller or speculative compatibility layer
 is authorized by this document.
+
+## Proposal: select the controlling integration
+
+Recorded 11 September 2026. **Discussion only; do not implement integration
+selection yet.** Phil proposes selecting which installed integration controls the
+battery, EV, heat pump or other equipment, instead of assembling its controller
+from individual entity selectors, sign toggles and free-text mode names. This
+extends the catalog requirements above; it is not approval for a catalog schema
+or a new control implementation.
+
+### Why the current Sigenergy configuration is error-prone
+
+Phil identifies two measurements of the same battery flow:
+
+- `sensor.sigen_plant_battery_power`: positive charging, negative discharging.
+- `sensor.sigen_plant_battery_power_inverted`: the opposite sign convention.
+
+A customer can choose either legitimate sensor and then accidentally configure
+the sign toggle for the other. The application should understand the selected
+source's semantics through a supported adapter, rather than ask the customer to
+reconstruct them. These are **measurements**, not writable power commands.
+Knowing a measurement's sign does not establish the sign or meaning of an actuator.
+
+`binary_sensor.sigen_plant_battery_charging` and
+`binary_sensor.sigen_plant_battery_discharging` report direction explicitly and
+are candidates for adapter-managed observations. They are not options that can be
+written to `select.sigen_plant_remote_ems_control_mode`. Nor should they be assumed
+to be independent physical evidence: the adapter investigation must establish
+whether they are derived from the same power reading, their thresholds and update
+timing, and what inconsistent or unavailable states mean.
+
+The mode selector has a related problem. Selecting its entity does not explain
+what each option does. A free-text baseline such as `Maximum Self Consumption`
+can be mistyped or cease to match the installed integration's options. A dropdown
+populated from the select would prevent typing errors, but would still leave the
+customer to interpret manufacturer-specific behavior.
+
+The proposed adapter would map application intents to known supported mode
+options and command entities, and validate that mapping against the installed
+interface. Displayed option names alone are not a universal semantic contract.
+Use stable option identifiers if the integration exposes them; otherwise maintain
+and validate the exact options for the supported interface. An unknown mode or
+changed option set requires an explicit unsupported/setup state, not a guessed
+replacement or a concealed default string.
+
+### What the selection would identify
+
+The likely choice is an **installed integration instance and the equipment it
+controls**, not just a manufacturer name. A home can have multiple installations
+of one integration, multiple devices within it, or separate sources for telemetry
+and commands. Vehicle-side and charger-side EV control must remain distinct.
+
+Discovery could use integration/device registry associations and integration-owned
+entity identities instead of literal installation-specific entity names. The
+adapter would resolve those identities to current entity IDs and expose a readable
+summary of its selected sensors, actuators, units, modes and capabilities. Exact
+identity and rediscovery rules remain design work; selecting an integration does
+not by itself prove that a particular make/model or firmware supports every action.
+
+Customer preferences such as planning participation and export permission remain
+separate from equipment semantics. Selecting a supported integration must not
+itself authorize live control. Internal profile details do not justify restoring
+customer phase-count or voltage settings.
+
+### Pros and cons
+
+| Benefit | Cost or limitation |
+| --- | --- |
+| Fewer selections and fewer combinations that look valid but command the wrong behavior. | Each supported integration needs an adapter, tests and ongoing maintenance. |
+| Units, measurement direction and mode meanings can be verified once for a supported interface. | Integration, firmware and model changes can invalidate those assumptions; compatibility must be explicit. |
+| A concrete supported-equipment list makes capabilities and support expectations clearer. | Initial coverage is narrower than a generic entity form; unsupported equipment needs an honest product state. |
+| Discovery can survive user-renamed entities through registry identity. | Multiple devices, duplicate integration instances and replacement/reinstalled equipment still require disambiguation. |
+| One adapter can coordinate mode selection, limits, authority and restoration. | An adapter defect can affect every installation using it, so representative commissioning and regression coverage matter more. |
+| Customers configure intent rather than technical sign conventions. | Automation can obscure its choices unless the resolved bindings and reasons for unavailable actions remain inspectable. |
+| Equipment-specific controls can represent actual capabilities instead of pretending every device accepts signed watts. | The planner/executor contract may need explicit intents and capability limits; a selector alone does not fix that mismatch. |
+
+### Assessment and questions before implementation
+
+This is a promising direction for equipment we explicitly support. It moves
+complexity out of customer setup into maintained, testable device knowledge; it
+does not eliminate that complexity. A thin adapter per supported interface is a
+more concrete starting point for discussion than a universal catalog of every
+make and model.
+
+Before implementing, decide the boundary between integration adapters and model
+variants, how separate telemetry/control integrations compose, how a customer
+chooses among multiple devices, and how unsupported interfaces are presented.
+Also decide which installation-specific choices genuinely remain editable and
+which are facts supplied by the adapter. Do not introduce a generic advanced
+mapping fallback by assumption.
+
+The existing battery-control notes still govern the Sigenergy investigation:
+mode semantics, separate non-negative ESS charge/discharge limits, authority,
+physical confirmation and restoration must be established. Integration selection
+would package that knowledge for setup; it would not replace it or establish
+unmeasured behavior.

@@ -126,7 +126,7 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         battery = choices.get("home", {}).get("battery", {})
         devices.append({"key": "$battery", "name": "House battery", "category": "battery", "system": "battery",
                         "planning_role": "controllable" if battery.get("included") else "base_load",
-                        "planning_choice_at": battery.get("choice_at"), "mapping": {}, "fields": [], "mapping_status": "ready"})
+                        "planning_choice_at": battery.get("choice_at"), "mapping": {}, "fields": [], "mapping_status": "not_configured" if battery_control_errors({**options, "battery_control_enabled": True}) else "ready"})
     refreshed = choices.get("refreshed_at")
     try:
         fresh = now - datetime.fromisoformat(refreshed) < timedelta(minutes=30)

@@ -46,6 +46,6 @@ def resolve_battery_quantities(options, read_entity):
     for key, (unit, minimum, maximum) in BATTERY_QUANTITIES.items():
         result[key] = resolve_quantity(options[key], read_entity, unit=unit,
                                        minimum=minimum, maximum=maximum, label=key)
-    if result["battery_min_soc"] >= float(options["battery_max_soc"]):
-        raise ValueError("Minimum charge must be below Maximum charge")
+    if result["battery_min_soc"] >= 1:
+        raise ValueError("Minimum charge must be below 100%")
     return result

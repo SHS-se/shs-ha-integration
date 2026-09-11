@@ -351,7 +351,6 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 _field(c.OPT_BATTERY_CHARGE_MAX_W, "Maximum charge power", "quantity", unit="W", minimum=1, step=1),
                 _field(c.OPT_BATTERY_DISCHARGE_MAX_W, "Maximum discharge power", "quantity", unit="W", minimum=1, step=1),
                 _field(c.OPT_BATTERY_MIN_SOC, "Minimum charge", "quantity", unit="%", minimum=0, maximum=100, step=1, scale=100),
-                _field(c.OPT_BATTERY_MAX_SOC, "Maximum charge", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
                 _field(c.OPT_BATTERY_TARGET_SOC, "Preferred charge at the end of the plan", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
                 _field(c.OPT_BATTERY_TARGET_IS_HARD, "Require the preferred end charge", "toggle"),
                 _field(c.OPT_BATTERY_CHARGE_EFFICIENCY, "Charge efficiency", "number", unit="%", minimum=1, maximum=100, step=1, scale=100),
@@ -368,7 +367,7 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "description": (
                 "Scheduled battery execution. Filling "
                 "this in does not start control: the switch below does. Enable "
-                "after the response, sign and confirmation behaviour "
+                "after the response, modes and confirmation behaviour "
                 "have been checked on this installation."
             ),
             "toggle": _field(
@@ -390,34 +389,17 @@ def _configuration_sections() -> list[dict[str, Any]]:
                 ),
                 _field(
                     c.OPT_BATTERY_MODE_CHARGE,
-                    "Mode value meaning charge",
-                    "text",
-                    help_text="Copy the option exactly as the mode entity spells it.",
+                    "Charging mode",
+                    "battery_mode",
+                    help_text="Choose an option reported by the selected control-mode entity.",
                 ),
-                _field(c.OPT_BATTERY_MODE_DISCHARGE, "Mode value meaning discharge", "text"),
-                _field(c.OPT_BATTERY_MODE_IDLE, "Mode value meaning hold", "text"),
-                _field(c.OPT_BATTERY_MODE_BASELINE, "Baseline mode", "text", help_text="Restored on disable, expiry, fault and startup. Sigenergy uses Maximum Self Consumption."),
-                _field(c.OPT_BATTERY_MEASUREMENT_CHARGE_POSITIVE, "Measured battery power is positive when charging", "toggle", help_text="The measurement sign is independent of the power command sign."),
-                _field(
-                    c.OPT_BATTERY_POWER_ENTITY,
-                    "Power target",
-                    "entity",
-                    domains=("number", "input_number"),
-                    help_text="The number written to request charge or discharge power.",
-                ),
-                _field(
-                    c.OPT_BATTERY_POWER_UNIT,
-                    "Power target unit",
-                    "select",
-                    choices=tuple((value, value) for value in c.BATTERY_POWER_UNITS),
-                    help_text="What the target above is written in. Inverters commonly take kW where the planner works in W.",
-                ),
-                _field(
-                    c.OPT_BATTERY_DISCHARGE_IS_NEGATIVE,
-                    "Discharge is written as a negative number",
-                    "toggle",
-                    help_text="Settle this by measurement, not assumption; an inverted sign charges when the plan says discharge.",
-                ),
+                _field(c.OPT_BATTERY_MODE_DISCHARGE, "Discharging mode", "battery_mode"),
+                _field(c.OPT_BATTERY_MODE_IDLE, "Hold mode", "battery_mode"),
+                _field(c.OPT_BATTERY_MODE_BASELINE, "Baseline mode", "battery_mode", help_text="Restored on disable, expiry, fault and startup. Sigenergy uses Maximum Self Consumption."),
+                _field(c.OPT_BATTERY_CHARGE_LIMIT_ENTITY, "Charge power limit", "entity", domains=("number",), help_text="Non-negative charge ceiling. Units come from the selected entity."),
+                _field(c.OPT_BATTERY_DISCHARGE_LIMIT_ENTITY, "Discharge power limit", "entity", domains=("number",), help_text="Non-negative discharge ceiling. Units come from the selected entity."),
+                _field(c.OPT_BATTERY_CHARGING_ENTITY, "Battery charging sensor", "entity", domains=("binary_sensor",), help_text="Reports on when the battery is charging."),
+                _field(c.OPT_BATTERY_DISCHARGING_ENTITY, "Battery discharging sensor", "entity", domains=("binary_sensor",), help_text="Reports on when the battery is discharging."),
                 _field(
                     c.OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
                     "Measured battery power",

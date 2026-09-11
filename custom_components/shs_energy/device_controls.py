@@ -12,7 +12,6 @@ from typing import Any
 
 try:  # pragma: no cover - package in HA, flat module in the pure test suite
     from .const import (
-        BATTERY_POWER_UNITS,
         OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY,
         OPT_BATTERY_AUTHORITY_CONFIRM_STATE,
         OPT_BATTERY_AUTHORITY_ENTITY,
@@ -22,9 +21,12 @@ try:  # pragma: no cover - package in HA, flat module in the pure test suite
         OPT_BATTERY_MODE_DISCHARGE,
         OPT_BATTERY_MODE_ENTITY,
         OPT_BATTERY_MODE_IDLE,
-        OPT_BATTERY_POWER_ENTITY,
+        OPT_BATTERY_CHARGE_LIMIT_ENTITY,
+        OPT_BATTERY_DISCHARGE_LIMIT_ENTITY,
+        OPT_BATTERY_CHARGING_ENTITY,
+        OPT_BATTERY_DISCHARGING_ENTITY,
+        OPT_BATTERY_MODE_BASELINE,
         OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
-        OPT_BATTERY_POWER_UNIT,
         OPT_BATTERY_SOC_ENTITY,
         OPT_POOL_ENABLED,
         OPT_POOL_START_TEMPERATURE_ENTITY,
@@ -34,7 +36,6 @@ try:  # pragma: no cover - package in HA, flat module in the pure test suite
     )
 except ImportError:  # pragma: no cover - flat import path
     from const import (  # type: ignore[no-redef]
-        BATTERY_POWER_UNITS,
         OPT_BATTERY_AUTHORITY_CONFIRM_ENTITY,
         OPT_BATTERY_AUTHORITY_CONFIRM_STATE,
         OPT_BATTERY_AUTHORITY_ENTITY,
@@ -44,9 +45,12 @@ except ImportError:  # pragma: no cover - flat import path
         OPT_BATTERY_MODE_DISCHARGE,
         OPT_BATTERY_MODE_ENTITY,
         OPT_BATTERY_MODE_IDLE,
-        OPT_BATTERY_POWER_ENTITY,
+        OPT_BATTERY_CHARGE_LIMIT_ENTITY,
+        OPT_BATTERY_DISCHARGE_LIMIT_ENTITY,
+        OPT_BATTERY_CHARGING_ENTITY,
+        OPT_BATTERY_DISCHARGING_ENTITY,
+        OPT_BATTERY_MODE_BASELINE,
         OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
-        OPT_BATTERY_POWER_UNIT,
         OPT_BATTERY_SOC_ENTITY,
         OPT_POOL_ENABLED,
         OPT_POOL_START_TEMPERATURE_ENTITY,
@@ -544,7 +548,10 @@ def battery_control_errors(options: dict[str, Any]) -> list[str]:
         errors.append("this home is not marked as having a house battery")
     for key, label in (
         (OPT_BATTERY_MODE_ENTITY, "battery mode entity"),
-        (OPT_BATTERY_POWER_ENTITY, "battery power target entity"),
+        (OPT_BATTERY_CHARGE_LIMIT_ENTITY, "charge power limit entity"),
+        (OPT_BATTERY_DISCHARGE_LIMIT_ENTITY, "discharge power limit entity"),
+        (OPT_BATTERY_CHARGING_ENTITY, "battery charging sensor"),
+        (OPT_BATTERY_DISCHARGING_ENTITY, "battery discharging sensor"),
         (OPT_BATTERY_POWER_MEASUREMENT_ENTITY, "measured battery power entity"),
         (OPT_BATTERY_SOC_ENTITY, "battery state of charge entity"),
     ):
@@ -560,6 +567,8 @@ def battery_control_errors(options: dict[str, Any]) -> list[str]:
     ):
         if not _text(options, key):
             errors.append(f"the mode value meaning {label} is required")
+        elif str(options[key]).startswith("binary_sensor."):
+            errors.append(f"{label} mode must be a selector option, not a direction sensor")
     modes = [
         options.get(key)
         for key in (
@@ -571,11 +580,12 @@ def battery_control_errors(options: dict[str, Any]) -> list[str]:
     ]
     if len(modes) != len(set(modes)):
         errors.append("charge, discharge and idle must be different mode values")
-    unit = options.get(OPT_BATTERY_POWER_UNIT)
-    if unit not in BATTERY_POWER_UNITS:
-        errors.append(
-            "battery power unit must be one of: " + ", ".join(BATTERY_POWER_UNITS)
-        )
+    if not _text(options, OPT_BATTERY_MODE_BASELINE):
+        errors.append("baseline mode is required")
+    if options.get(OPT_BATTERY_CHARGE_LIMIT_ENTITY) and options.get(OPT_BATTERY_CHARGE_LIMIT_ENTITY) == options.get(OPT_BATTERY_DISCHARGE_LIMIT_ENTITY):
+        errors.append("charge and discharge limits must be different entities")
+    if options.get(OPT_BATTERY_CHARGING_ENTITY) and options.get(OPT_BATTERY_CHARGING_ENTITY) == options.get(OPT_BATTERY_DISCHARGING_ENTITY):
+        errors.append("charging and discharging sensors must be different entities")
     # The handshake is two halves. Claiming remote control without reading back
     # whether it was granted leaves the executor unable to tell authority it
     # never had from authority it has lost.
