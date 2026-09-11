@@ -304,3 +304,113 @@ test('one pool water selector updates the heater mapping when Controls is saved'
   assert.equal(panel._draft.device_control_mappings.pool.temperature_entity_id, 'sensor.new_water');
   assert.equal(panel._deviceDirty('pool', 'controls'), false);
 });
+
+context.document = { hidden: false };
+context.HTMLInputElement = class {};
+context.HTMLSelectElement = class {};
+const deferred = () => {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+};
+
+test('typing records the draft before blur without rebuilding the input', () => {
+  const panel = splitPanel();
+  panel._data.sections = [{ fields: panel._data.devices[0].system_fields }];
+  let renders = 0;
+  panel._render = () => renders++;
+  const input = Object.assign(new context.HTMLInputElement(), {
+    dataset: { fieldKey: 'pool_volume_m3', scope: 'configuration', deviceKey: 'pool' },
+    value: '62', type: 'number',
+  });
+  panel._onChange({ type: 'input', target: input });
+  assert.equal(panel._draft.pool_volume_m3, 62);
+  assert.equal(panel._deviceDirty('pool', 'planning'), true);
+  assert.equal(renders, 0);
+});
+
+test('polling leaves configuration tabs, drafts and focused editors alone', async () => {
+  const panel = splitPanel();
+  let requests = 0;
+  panel._hass = { callWS: async () => { requests++; return panel._data; } };
+  for (const tab of ['energy', 'devices']) { panel._tab = tab; await panel._poll(); }
+  panel._tab = 'schedule';
+  panel._draft.pool_volume_m3 = 60;
+  await panel._poll();
+  panel._draft.pool_volume_m3 = 55;
+  panel.shadowRoot = { activeElement: { tagName: 'INPUT' } };
+  await panel._poll();
+  assert.equal(requests, 0);
+  panel.shadowRoot.activeElement = null;
+  await panel._poll();
+  assert.equal(requests, 1);
+});
+
+for (const outcome of ['success', 'error']) {
+  test(`in-flight poll ${outcome} cannot rebuild a newly opened editor`, async () => {
+    const panel = splitPanel(); panel._tab = 'status';
+    const request = deferred();
+    let renders = 0;
+    panel._render = () => renders++;
+    panel._hass = { callWS: () => request.promise };
+    const polling = panel._poll();
+    panel._tab = 'devices';
+    if (outcome === 'success') request.resolve({ configuration: { pool_volume_m3: 99 } });
+    else request.reject(new Error('offline'));
+    await polling;
+    assert.equal(renders, 0);
+    assert.equal(panel._draft.pool_volume_m3, 55);
+    assert.equal(panel._polling, false);
+  });
+}
+
+test('general save acknowledges only submitted values, retaining subsequent edits', async () => {
+  const panel = makePanel(); panel._entryId = 'entry';
+  panel._data.sections = [{ fields: [{ key: 'weather' }] }];
+  panel._savedDraft.weather = 'weather.old'; panel._draft.weather = 'weather.sent';
+  const request = deferred(); panel._hass = { callWS: () => request.promise };
+  const saving = panel._save();
+  panel._draft.weather = 'weather.newer';
+  request.resolve({}); await saving;
+  assert.equal(panel._savedDraft.weather, 'weather.sent');
+  assert.equal(panel._draft.weather, 'weather.newer');
+  assert.equal(panel._configurationDirty, true);
+});
+
+test('device save retains newer field and mapping edits while acknowledging the submitted snapshot', async () => {
+  const panel = splitPanel();
+  panel._draft.pool_permission_entity = 'switch.sent';
+  panel._draft.device_control_mappings.pool.actuator_entity_ids = ['switch.sent'];
+  const request = deferred(); panel._hass = { callWS: () => request.promise };
+  const saving = panel._saveDevice('pool', 'controls');
+  panel._draft.pool_permission_entity = 'switch.newer';
+  panel._draft.device_control_mappings.pool.actuator_entity_ids = ['switch.newer'];
+  request.resolve({ mapping_status: 'ready' }); await saving;
+  assert.equal(panel._savedDraft.pool_permission_entity, 'switch.sent');
+  assert.equal(panel._draft.pool_permission_entity, 'switch.newer');
+  assert.equal(panel._savedDraft.device_control_mappings.pool.actuator_entity_ids[0], 'switch.sent');
+  assert.equal(panel._draft.device_control_mappings.pool.actuator_entity_ids[0], 'switch.newer');
+  assert.equal(panel._deviceDirty('pool', 'controls'), true);
+});
+
+test('a poll started before a save cannot restore the old saved configuration', async () => {
+  const panel = splitPanel(); panel._tab = 'status';
+  const request = deferred();
+  panel._hass = { callWS: message => message.type.endsWith('/get') ? request.promise : Promise.resolve({ mapping_status: 'ready' }) };
+  const polling = panel._poll();
+  panel._draft.pool_volume_m3 = 60;
+  await panel._saveDevice('pool', 'planning');
+  request.resolve({ configuration: { pool_volume_m3: 55 } }); await polling;
+  assert.equal(panel._draft.pool_volume_m3, 60);
+  assert.equal(panel._savedDraft.pool_volume_m3, 60);
+});
+
+test('async completion does not replace a focused uncommitted entity search', () => {
+  const panel = makePanel();
+  let renders = 0;
+  panel._render = () => renders++;
+  panel.shadowRoot = { activeElement: { tagName: 'INPUT', value: 'sensor.part' }, querySelectorAll: () => [], querySelector: () => null };
+  panel._renderBackground();
+  assert.equal(renders, 0);
+  assert.equal(panel.shadowRoot.activeElement.value, 'sensor.part');
+});

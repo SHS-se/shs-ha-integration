@@ -30,7 +30,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._entryId = new URLSearchParams(window.location.search).get("config_entry");
     this._boundClick = (event) => this._onClick(event);
     this._boundChange = (event) => this._onChange(event);
-    this._boundInput = (event) => { if (event.target.dataset.filter) this._onChange(event); };
+    this._boundInput = (event) => this._onChange(event);
     this._boundBeforeUnload = (event) => {
       if (!this._dirty) return;
       event.preventDefault();
@@ -156,8 +156,42 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._error = error?.message || String(error);
     } finally {
       this._loading = false;
-      this._render();
+      this._renderBackground();
     }
+  }
+
+  _recordSavedFields(configuration) {
+    for (const [key, value] of Object.entries(configuration)) {
+      if (value === null) delete this._savedDraft[key];
+      else this._savedDraft[key] = this._clone(value);
+    }
+  }
+
+  _editing() {
+    const active = this.shadowRoot?.activeElement;
+    return active?.tagName === "INPUT" || active?.tagName === "SELECT";
+  }
+
+  _renderBackground() {
+    // Async completions must not replace an editor mid-keystroke (including
+    // incomplete numbers and entity searches that have not been added yet).
+    if (this._editing()) this._updateSaveState();
+    else this._render();
+  }
+
+  _updateSaveState() {
+    if (!this.shadowRoot) return;
+    for (const button of this.shadowRoot.querySelectorAll("button[data-action]")) {
+      const { action, deviceKey, section } = button.dataset;
+      if (action === "save") button.disabled = !this._configurationDirty || this._saving || Boolean(this._savingDeviceKey);
+      else if (action === "discard") button.disabled = !this._dirty;
+      else if (action === "save-device" || action === "cancel-device") {
+        button.disabled = !this._deviceDirty(deviceKey, section) || (action === "save-device" && (this._saving || Boolean(this._savingDeviceKey)));
+        button.closest(".device-save-row").querySelector("span").textContent = this._deviceDirty(deviceKey, section) ? "Unsaved changes" : "Saved";
+      }
+    }
+    const status = this.shadowRoot.querySelector("footer span");
+    if (status) status.textContent = this._dirty ? "Unsaved changes" : "All changes saved";
   }
 
   async _save() {
@@ -165,11 +199,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
       !this._configurationDirty || this._saving || this._savingDeviceKey ||
       !this._entryId
     ) return;
+    this._pollRevision = (this._pollRevision || 0) + 1;
     this._saving = true;
     this._error = "";
     this._notice = "";
     this._render();
-    const configuration = this._patch(this._generalFields());
+    const configuration = this._clone(this._patch(this._generalFields()));
     try {
       await this._hass.callWS({
         type: "shs_energy/config/save",
@@ -177,7 +212,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         configuration,
       });
       const savedMappings = this._clone(this._savedDraft?.[MAPPINGS_KEY] || {});
-      for (const key of Object.keys(configuration)) this._savedDraft[key] = this._clone(this._draft[key]);
+      this._recordSavedFields(configuration);
       this._savedDraft[MAPPINGS_KEY] = savedMappings;
       this._discovery = null;
       this._notice =
@@ -186,7 +221,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._error = error?.message || String(error);
     } finally {
       this._saving = false;
-      this._render();
+      this._renderBackground();
     }
   }
 
@@ -197,6 +232,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._saving ||
       !this._entryId
     ) return;
+    this._pollRevision = (this._pollRevision || 0) + 1;
     this._savingDeviceKey = deviceKey;
     this._clearDeviceError(deviceKey);
     this._error = "";
@@ -204,6 +240,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._render();
     const device = this._data.devices.find(d => d.key === deviceKey);
     const fields = this._systemFields(device, section);
+    const submittedMapping = this._clone(this._draft[MAPPINGS_KEY]?.[deviceKey]);
+    const configuration = this._clone(this._patch(fields));
     const mapping = this._clone(
       (section === "planning" ? this._savedDraft : this._draft)?.[MAPPINGS_KEY]?.[deviceKey] || null
     );
@@ -216,7 +254,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         config_entry: this._entryId,
         device_key: deviceKey,
         mapping,
-        configuration: this._patch(fields),
+        configuration,
       });
       const savedMapping = this._clone(
         result.panel?.configuration?.[MAPPINGS_KEY]?.[deviceKey] ?? mapping
@@ -241,14 +279,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
       if (!this._draft[MAPPINGS_KEY]) this._draft[MAPPINGS_KEY] = {};
       if (!this._savedDraft[MAPPINGS_KEY]) this._savedDraft[MAPPINGS_KEY] = {};
       if (savedMapping) {
-        if (section !== "planning") this._draft[MAPPINGS_KEY][deviceKey] = this._clone(savedMapping);
+        if (section !== "planning" && JSON.stringify(this._draft[MAPPINGS_KEY][deviceKey]) === JSON.stringify(submittedMapping)) this._draft[MAPPINGS_KEY][deviceKey] = this._clone(savedMapping);
         this._savedDraft[MAPPINGS_KEY][deviceKey] = this._clone(savedMapping);
       } else {
-        if (section !== "planning") delete this._draft[MAPPINGS_KEY][deviceKey];
+        if (section !== "planning" && JSON.stringify(this._draft[MAPPINGS_KEY][deviceKey]) === JSON.stringify(submittedMapping)) delete this._draft[MAPPINGS_KEY][deviceKey];
         delete this._savedDraft[MAPPINGS_KEY][deviceKey];
       }
       const device = this._data.devices.find((item) => item.key === deviceKey);
-      for (const field of fields) this._savedDraft[field.key] = this._clone(this._draft[field.key]);
+      this._recordSavedFields(configuration);
       if (device) {
         device.mapping_status = result.mapping_status;
         device.mapping_error = result.mapping_error;
@@ -263,7 +301,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._deviceErrors[deviceKey] = error?.message || String(error);
     } finally {
       this._savingDeviceKey = "";
-      this._render();
+      this._renderBackground();
     }
   }
 
@@ -291,7 +329,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._error = error?.message || String(error);
     } finally {
       this._loading = false;
-      this._render();
+      this._renderBackground();
     }
   }
 
@@ -439,6 +477,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (element.dataset.filter) {
       this["_" + element.dataset.filter] = element.type === "checkbox" ? element.checked : element.value; this._render(); return;
     }
+    if (event.type === "input" && (element.type === "checkbox" || element instanceof HTMLSelectElement)) return;
     if (element.dataset.share) {
       const excluded = new Set(this._draft.excluded_device_readings || []);
       if (element.checked) excluded.delete(element.dataset.share); else excluded.add(element.dataset.share);
@@ -464,7 +503,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
       }
     }
     this._notice = "";
-    this._render();
+    if (event.type === "input") this._updateSaveState();
+    else this._render();
   }
 
   _onClick(event) {
@@ -588,23 +628,37 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._data = data;
   }
 
+  _canPoll() {
+    return this._entryId && !this._loading && !this._saving && !this._savingDeviceKey
+      && !document.hidden && !this._dirty && !this._editing()
+      && (this._tab === "schedule" || this._tab === "status");
+  }
+
   async _poll() {
-    if (!this._entryId || this._loading || this._saving || this._savingDeviceKey || document.hidden) return;
+    if (this._polling || !this._canPoll()) return;
+    this._polling = true;
+    const revision = this._pollRevision;
+    const entryId = this._entryId;
     try {
-      const data = await this._hass.callWS({ type: "shs_energy/config/get", config_entry: this._entryId, refresh_roles: false });
+      const data = await this._hass.callWS({ type: "shs_energy/config/get", config_entry: entryId, refresh_roles: false });
+      if (!this._canPoll() || revision !== this._pollRevision || entryId !== this._entryId) return;
       this._mergePanel(data); this._refreshError = ""; this._render();
-    } catch (error) { this._refreshError = error?.message || String(error); this._render(); }
+    } catch (error) {
+      if (!this._canPoll() || revision !== this._pollRevision || entryId !== this._entryId) return;
+      this._refreshError = error?.message || String(error); this._render();
+    } finally { this._polling = false; }
   }
 
   async _control(key, enabled) {
     if (this._saving || this._savingDeviceKey) return;
+    this._pollRevision = (this._pollRevision || 0) + 1;
     this._savingDeviceKey = key; this._error = ""; this._render();
     try {
       const data = await this._hass.callWS({ type: "shs_energy/config/control", config_entry: this._entryId, device_key: key, enabled });
       this._mergePanel(data);
       this._notice = enabled ? "Permission saved. SHS may operate this device while the plan is valid." : "Permission removed. Any settings SHS still owns will be restored; progress is shown in Status.";
     } catch (error) { this._error = error?.message || String(error); }
-    finally { this._savingDeviceKey = ""; this._render(); }
+    finally { this._savingDeviceKey = ""; this._renderBackground(); }
   }
 
   _cancelDevice(key, section) {
