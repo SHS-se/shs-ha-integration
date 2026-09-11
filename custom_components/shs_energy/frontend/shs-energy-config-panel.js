@@ -789,16 +789,16 @@ class ShsEnergyConfigPanel extends HTMLElement {
       <details class="card compact"><summary>Current readings · ${selected.length} selected sources</summary><div class="table-wrap"><table><thead><tr><th>Source</th><th>Used for</th><th>Reading</th><th>Last update</th><th>Selected in</th></tr></thead><tbody>${selected.map(({ field, entity, id }) => `<tr><td>${this._escape(entity?.name || id)}</td><td>${this._escape(field.label)}</td><td>${this._escape(entity ? `${entity.state} ${entity.unit || ""}` : "Unavailable")}</td><td>${this._time(entity?.last_updated)}</td><td>${this._data.configured_keys?.includes(field.key) ? "SHS configuration" : "HA Energy / discovery"}</td></tr>`).join("")}</tbody></table></div></details>`;
   }
 
-  _choices(device, section) {
+  _choices(device, section = "schedule") {
     const permission = device.permission;
     const disabled = Boolean(this._saving || this._savingDeviceKey);
     const blocked = value => this._refreshError || this._deviceDirty(device.key) ||
       (value === "control_verification" ? permission.verification_reason : permission.reason);
     return `<div class="choices">
       <div class="choice-row"><span>Include in the plan</span><strong>${this._escape(device.choice_label)} · <a href="${this._escape(this._data.website_url)}" target="_blank" rel="noreferrer">Website</a></strong></div>
-      <div class="choice-row"><span>Device mode</span><select aria-label="Mode for ${this._escape(device.name)}" data-permission="${this._escape(device.key)}" ${disabled ? "disabled" : ""}>
+      ${section === "schedule" ? `<div class="choice-row"><span>Device mode</span><select aria-label="Mode for ${this._escape(device.name)}" data-permission="${this._escape(device.key)}" ${disabled ? "disabled" : ""}>
         ${[["monitoring", "Monitoring"], ["planning", "Planning"], ["control_verification", "Control verification"], ["controlling", "Controlling"]].map(([value, label]) => `<option value="${value}" ${device.mode === value ? "selected" : ""} ${blocked(value) && ["control_verification", "controlling"].includes(value) && device.mode !== value ? "disabled" : ""}>${label}</option>`).join("")}</select>
-      <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Monitoring collects readings. Planning adds this device to the plan. Verification logs commands. Controlling executes them."))}</small></div>
+      <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Monitoring collects readings. Planning adds this device to the plan. Verification logs commands. Controlling executes them."))}</small></div>` : ""}
     </div>`;
   }
 

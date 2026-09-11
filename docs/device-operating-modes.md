@@ -1,6 +1,6 @@
 # Device operating modes and control verification
 
-Each equipment card has one mode selector on Devices and Schedule:
+Each equipment card has one mode selector on Schedule. Devices contains setup fields only:
 
 | Mode | Collect readings | Include in optimisation | Record proposed commands | Call actuators |
 | --- | --- | --- | --- | --- |
