@@ -782,7 +782,7 @@ class ScheduledController:
                     plan_id=plan.get("plan_id"), slot_start=slot["start"], retry_automatically=True,
                     **{key: attempt[key] for key in ("next_step", "fix", "handover_pending") if key in attempt})
 
-    async def async_start(self):
+    async def async_start(self, *, reason="integration_load"):
         try:
             saved = await self.store.async_load() or {}
         except Exception as err:
@@ -800,6 +800,7 @@ class ScheduledController:
         if self.verification is not None:
             try:
                 await self.verification.load()
+                await self.verification.lifecycle("start", INTEGRATION_VERSION, reason)
             except Exception as err:
                 for device in DEVICES:
                     self.report(device, "fault", reason=f"cannot load verification journal: {err}")
@@ -880,6 +881,8 @@ class ScheduledController:
                     self.report(device, "fault", reason=reason, retry_automatically=retry, **correction_details(err))
 
     async def async_stop(self, _event=None):
+        if self.closed:
+            return
         self.closed = True
         async with self.lock:
             for device in tuple(self.records):
@@ -887,5 +890,8 @@ class ScheduledController:
                     await self.restore(device)
                 except Exception as err:
                     self.report(device, "fault", reason=f"restoration pending: {err}")
-            if self.verification is not None:
-                await self.verification.flush()
+            if self.verification is not None and self.initialized:
+                await self.verification.lifecycle(
+                    "stop", INTEGRATION_VERSION,
+                    _event.event_type if _event is not None else "integration_unload_or_setup_stop",
+                )

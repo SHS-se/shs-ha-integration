@@ -213,7 +213,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     # Recover local ownership before contacting the cloud. A network outage
     # must not prevent restoration of commands left by the previous process.
     await coordinator.async_restore_plan()
-    await controller.async_start()
+    await controller.async_start(reason="integration_load" if hass.is_running else "homeassistant_startup")
     try:
         await coordinator.async_config_entry_first_refresh()
     except BaseException:

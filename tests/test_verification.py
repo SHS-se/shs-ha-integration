@@ -349,6 +349,47 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
         self.assertLess(float(self.states['number.stop'].state), 29)
 
+    async def test_lifecycle_events_link_attempts_and_distinguish_restart_from_reload(self):
+        self.options['device_modes']['$pool'] = 'control_verification'
+        await self.controller.async_start(reason='homeassistant_startup')
+        start = self.journal.export()['lifecycle_events'][0]
+        self.assertEqual(start['reason'], 'homeassistant_startup')
+        self.assertEqual(start['event'], 'start')
+        self.assertEqual(self.journal.attempts[0]['session_id'], start['session_id'])
+        self.assertEqual(self.journal.attempts[0]['integration_version'], start['integration_version'])
+        from types import SimpleNamespace
+        await self.controller.async_stop(SimpleNamespace(event_type="homeassistant_stop"))
+        await self.controller.async_stop()
+        self.assertEqual(len(self.journal.events), 2)
+        self.assertEqual(self.journal.events[-1]['reason'], 'homeassistant_stop')
+        restored = VerificationJournal(self.audit_store)
+        await restored.load()
+        await restored.lifecycle('start', start['integration_version'], 'integration_load')
+        self.assertFalse(restored.events[-1]['previous_session_missing_stop'])
+        self.assertNotEqual(restored.session_id, start['session_id'])
+        # Identical checks after a restart must form a separate session group.
+        row = deepcopy(self.journal.attempts[0])
+        row['configuration'] = self.journal.configurations[row['scope']]
+        row['slot'] = self.journal.slots[row.pop('slot_id')]
+        await restored.append(row)
+        self.assertEqual(len(restored.attempts), 2)
+        self.assertEqual(restored.attempts[-1]['session_id'], restored.session_id)
+        interrupted = VerificationJournal(self.audit_store)
+        await interrupted.load()
+        await interrupted.lifecycle('start', start['integration_version'], 'integration_load')
+        self.assertTrue(interrupted.events[-1]['previous_session_missing_stop'])
+
+    async def test_lifecycle_retention_does_not_remove_control_evidence(self):
+        from unittest.mock import patch
+        self.options['device_modes']['$pool'] = 'control_verification'
+        await self.controller.async_start()
+        attempts = deepcopy(self.journal.attempts)
+        with patch('verification.MAX_LIFECYCLE_EVENTS', 2):
+            await self.journal.lifecycle('stop', 'test', 'integration_unload_or_setup_stop')
+            await self.journal.lifecycle('start', 'test', 'integration_load')
+        self.assertEqual([event['event'] for event in self.journal.events], ['stop', 'start'])
+        self.assertEqual(self.journal.attempts, attempts)
+
 
 class ModeTests(unittest.TestCase):
     def test_old_booleans_cannot_authorize_and_modes_derive_planning(self):
