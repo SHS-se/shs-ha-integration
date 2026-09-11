@@ -112,7 +112,8 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.slot['start'] = '2026-09-08T12:15:00+00:00'
         await self.controller.async_tick()
         self.assertEqual(len(self.journal.attempts), 2)
-        self.options['pool_temperature_minimum'] = 25
+        self.states['switch.other_pool'] = fixtures.State('off')
+        self.options['pool_permission_entity'] = 'switch.other_pool'
         await self.controller.async_tick()
         self.assertEqual(len(self.journal.export()['coverage']), 2)
 

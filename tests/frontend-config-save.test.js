@@ -112,9 +112,9 @@ test('laundry editor hides empty alternatives but retains populated fields and r
   const html = panel._fields([{ key: 'temperature', label: 'Room temperature', kind: 'entity', required: true },
     { key: 'permit_entity_id', label: 'Heating permission', kind: 'entity' },
     { key: 'offset_entity_id', label: 'Offset', kind: 'entity' },
-    { key: 'pool_temperature_minimum', label: 'Lowest temperature', kind: 'number' }], { temperature: 'sensor.room', pool_start_temperature_entity: 'number.start' });
+    { key: 'pool_stop_temperature_entity', label: 'Stop heating at', kind: 'entity' }], { temperature: 'sensor.room', pool_start_temperature_entity: 'number.start' });
   assert.match(html, /sensor.room/); assert.doesNotMatch(html, /Heating permission|data-field-key="offset_entity_id"/);
-  assert.match(html, /data-field-key="pool_temperature_minimum"/); assert.match(html, /aria-label="Room temperature"/);
+  assert.match(html, /data-field-key="pool_stop_temperature_entity"/); assert.match(html, /aria-label="Room temperature"/);
 });
 
 test('one permission row serves every device and always permits stopping', () => {

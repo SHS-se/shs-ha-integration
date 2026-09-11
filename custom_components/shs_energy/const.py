@@ -93,7 +93,7 @@ OPT_CONFIGURATION_REVIEWED_AT = "configuration_reviewed_at"
 OPT_DEVICE_CONTROL_MAPPINGS = "device_control_mappings"
 # Versions 5/6 shipped the retired control interfaces. Never reuse version 4:
 # installed entries must roll forward through the restored settings schema.
-CONFIG_ENTRY_VERSION = 12
+CONFIG_ENTRY_VERSION = 13
 ROOM_AREA_FIELD = "room_area_id"
 
 # Live optimisation inputs. Forecast entities must expose timestamped values;
@@ -193,8 +193,6 @@ OPT_POOL_VOLUME_M3 = "pool_volume_m3"
 # disagree about the same window, and left two writers for one actuator.
 OPT_POOL_START_TEMPERATURE_ENTITY = "pool_start_temperature_entity"
 OPT_POOL_STOP_TEMPERATURE_ENTITY = "pool_stop_temperature_entity"
-OPT_POOL_TEMPERATURE_MINIMUM = "pool_temperature_minimum"
-OPT_POOL_TEMPERATURE_MAXIMUM = "pool_temperature_maximum"
 
 OPT_EV_CONNECTED_ENTITY = "ev_connected_entity"
 OPT_EV_SOC_ENTITY = "ev_soc_entity"

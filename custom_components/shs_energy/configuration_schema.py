@@ -249,9 +249,6 @@ def prepare_options(existing, incoming, read_entity, *, latitude=0.0, longitude=
         minimum = resolve_quantity(current["battery_min_soc"], read_entity, unit="%", minimum=0, maximum=1, label="Minimum charge")
         if minimum >= 1:
             raise ValueError("Minimum charge must be below 100%")
-    low, high = current.get("pool_temperature_minimum"), current.get("pool_temperature_maximum")
-    if low is not None and high is not None and low >= high:
-        raise ValueError("Pool minimum must be below maximum")
     mode_keys = [key for key, field in OPTION_FIELDS.items() if field["kind"] == "battery_mode"]
     if "battery_mode_entity" in incoming or any(key in incoming for key in mode_keys):
         mode = read_entity(current.get("battery_mode_entity")) if current.get("battery_mode_entity") else None

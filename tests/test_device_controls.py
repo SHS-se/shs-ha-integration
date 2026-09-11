@@ -404,8 +404,6 @@ def _pool_options(**extra):
         "pool_enabled": True,
         "pool_start_temperature_entity": "number.pool_start",
         "pool_stop_temperature_entity": "number.pool_stop",
-        "pool_temperature_minimum": 24.0,
-        "pool_temperature_maximum": 32.0,
         **extra,
     }
 
@@ -430,23 +428,12 @@ class PoolBandTests(unittest.TestCase):
         errors = pool_band_errors(_pool_options(pool_stop_temperature_entity=""))
         self.assertTrue(any("stop temperature entity is required" in e for e in errors))
 
-    def test_a_band_without_bounds_is_refused(self) -> None:
-        errors = pool_band_errors(_pool_options(
-            pool_temperature_minimum=None, pool_temperature_maximum=None,
-        ))
-        self.assertTrue(any("minimum pool temperature is required" in e for e in errors))
-        self.assertTrue(any("maximum pool temperature is required" in e for e in errors))
+    def test_no_separate_temperature_bounds_are_required(self) -> None:
+        self.assertEqual(pool_band_errors(_pool_options()), [])
 
-    def test_inverted_bounds_are_refused(self) -> None:
-        errors = pool_band_errors(_pool_options(
-            pool_temperature_minimum=32.0, pool_temperature_maximum=24.0,
-        ))
-        self.assertTrue(any("must be below the maximum" in e for e in errors))
-
-    def test_a_zero_bound_is_a_bound_not_a_blank(self) -> None:
-        self.assertEqual(
-            pool_band_errors(_pool_options(pool_temperature_minimum=0)), []
-        )
+    def test_start_and_stop_cannot_share_one_control(self) -> None:
+        errors = pool_band_errors(_pool_options(pool_stop_temperature_entity="number.pool_start"))
+        self.assertTrue(any("different temperature controls" in error for error in errors))
 
 
 class PoolDeviceMappingTests(unittest.TestCase):

@@ -39,6 +39,22 @@ class OptionMigrationTests(unittest.TestCase):
             self.assertEqual(repeated["device_control_mappings"], migrated["device_control_mappings"])
         self.assertEqual(original, before)
 
+    def test_pool_bounds_are_retired_without_changing_controls_or_mode(self):
+        options = {
+            "pool_temperature_minimum": 24, "pool_temperature_maximum": 32,
+            "pool_start_temperature_entity": "number.nibe_start",
+            "pool_stop_temperature_entity": "number.nibe_stop",
+            "device_modes": {"$pool": "control_verification"},
+        }
+        migrated, changed = migrate_options(options, source_version=12)
+        self.assertTrue(changed)
+        self.assertNotIn("pool_temperature_minimum", migrated)
+        self.assertNotIn("pool_temperature_maximum", migrated)
+        self.assertEqual(migrated["pool_start_temperature_entity"], "number.nibe_start")
+        self.assertEqual(migrated["pool_stop_temperature_entity"], "number.nibe_stop")
+        self.assertEqual(migrated["device_modes"], options["device_modes"])
+        self.assertEqual(migrate_options(migrated, source_version=13), (migrated, False))
+
     def test_retired_electrical_values_are_never_restored(self):
         for value in (1, 3, 0, False):
             original = {"ev_phase_count": value, "_legacy_configuration_archive": {"ev_phase_count": 2}}

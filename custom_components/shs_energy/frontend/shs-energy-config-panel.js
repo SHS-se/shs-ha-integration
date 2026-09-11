@@ -525,6 +525,35 @@ class ShsEnergyConfigPanel extends HTMLElement {
     else this._render();
   }
 
+  _openDevice(key) {
+    const device = this._data.devices.find(d => d.key === key);
+    if (!device) return;
+    this._tab = "devices";
+    this._search = this._room = this._category = "";
+    if (!device.included) this._showExcluded = true;
+    const cardKey = "controls:" + key;
+    this._expanded.add(cardKey);
+    this._render();
+    const card = [...this.shadowRoot.querySelectorAll("details[data-open-key]")]
+      .find(node => node.dataset.openKey === cardKey);
+    if (card) {
+      card.open = true;
+      this._expanded.add(cardKey);
+      card.scrollIntoView({ behavior: "smooth", block: "start" });
+      card.querySelector("summary").focus({ preventScroll: true });
+    }
+  }
+
+  _deviceTitle(device, section) {
+    const names = { pool: "Pool", ev: "Electric vehicle", battery: "Home battery" };
+    return section === "planning" && device.system ? names[device.system] : device.name;
+  }
+
+  _sortedDevices(section = "controls") {
+    return [...this._data.devices].sort((a, b) =>
+      this._deviceTitle(a, section).localeCompare(this._deviceTitle(b, section), this._hass?.locale?.language, { sensitivity: "base", numeric: true }) || a.key.localeCompare(b.key));
+  }
+
   _onClick(event) {
     const button = event.target.closest("button");
     if (!button) return;
@@ -534,7 +563,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (action === "verification") this._downloadVerification();
     else if (action === "horizon") { this._fullHorizon = !this._fullHorizon; this._render(); }
     else if (action === "slot") { this._selectedSlot = Number(button.dataset.index); this._render(); }
-    else if (action === "edit-device") { this._tab = "devices"; this._expanded.add("device:" + button.dataset.deviceKey); this._render(); }
+    else if (action === "edit-device") this._openDevice(button.dataset.deviceKey);
     else if (action === "add-field") { this._added.add(button.dataset.token); this._render(); }
     else if (action === "remove-field") this._removeField(button.dataset.scope, button.dataset.fieldKey, button.dataset.deviceKey);
     else if (action === "cancel-device") this._cancelDevice(button.dataset.deviceKey, button.dataset.section);
@@ -735,7 +764,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _fields(fields, values, scope = "configuration", deviceKey = "", additional = []) {
     const visible = [], optional = [];
     const linked = {
-      pool_start_temperature_entity: ["pool_stop_temperature_entity", "pool_temperature_minimum", "pool_temperature_maximum"],
+      pool_start_temperature_entity: ["pool_stop_temperature_entity"],
       offset_entity_id: ["offset_minimum", "offset_maximum"],
     };
     for (const group of [{ fields, values, scope, deviceKey }, ...additional]) {
@@ -810,8 +839,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const edit = this._expanded.has(id) || dirty;
     const systemFields = this._systemFields(device, section);
     const mappingFields = planning ? [] : device.fields || [];
-    const names = { pool: "Pool", ev: "Electric vehicle", battery: "Home battery" };
-    const title = planning && device.system ? names[device.system] : device.name;
+    const title = this._deviceTitle(device, section);
     const members = this._data.devices.filter(d => d.key === device.key || (device.system && d.planning_system === device.system));
     const description = planning
       ? "Model properties and planning participation"
@@ -834,7 +862,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _renderDevices() {
-    const devices = this._data.devices;
+    const devices = this._sortedDevices();
     const visible = devices.filter(d => this._showExcluded || d.included);
     const filtered = visible.filter(d => (!this._search || `${d.name} ${d.room_name || ""}`.toLowerCase().includes(this._search.toLowerCase())) && (!this._room || (d.room_name || "No room") === this._room) && (!this._category || d.category === this._category));
     const select = (key, placeholder, values, label) => `<select aria-label="${placeholder}" data-filter="${key}"><option value="">${placeholder}</option>${values.map(v => `<option value="${this._escape(v)}" ${this["_" + key] === v ? "selected" : ""}>${this._escape(label(v))}</option>`).join("")}</select>`;
@@ -846,7 +874,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       <div class="filters"><input type="text" aria-label="Search devices" placeholder="Search devices" data-filter="search" value="${this._escape(this._search)}">${select("room", "All rooms", [...new Set(visible.map(d => d.room_name || "No room"))], v => v)}${select("category", "All types", [...new Set(visible.map(d => d.category))], v => this._label(v))}</div>
       ${filtered.map(d => this._renderDevice(d, "controls")).join("") || `<p>No matching devices.${!this._showExcluded && excludedCount ? " Turn on Show excluded devices to see excluded equipment." : ""}</p>`}</section>
       <section aria-labelledby="planning-heading"><h2 id="planning-heading">Planning</h2><p>Pool, vehicle and home battery properties. Set everyday comfort and charge preferences on the website.</p>
-      ${visible.filter(d => d.system).map(d => this._renderDevice(d, "planning")).join("") || '<p>No included pool, vehicle or home battery.</p>'}
+      ${this._sortedDevices("planning").filter(d => d.system && (this._showExcluded || d.included)).map(d => this._renderDevice(d, "planning")).join("") || '<p>No included pool, vehicle or home battery.</p>'}
       <details class="card compact"><summary>Equipment present in this home</summary><p>Choose what is installed. Planning participation is chosen separately on the website.</p>${equipment.map(s => this._renderField({ ...s.toggle, help: "Describes installed equipment; planning participation and control permission are configured separately." }, this._draft[s.toggle.key])).join("")}</details></section>`;
   }
 
@@ -869,7 +897,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const now = Date.parse(status.now);
     const available = (this._refreshError ? [] : this._data.timeline?.slots || []).filter(slot => Date.parse(slot.start) + 900000 > now);
     const slots = this._fullHorizon ? available : available.filter(slot => Date.parse(slot.start) < now + 86400000);
-    const devices = this._data.devices;
+    const devices = this._sortedDevices();
     const start = Date.parse(slots[0]?.start), end = Date.parse(slots.at(-1)?.start) + 900000;
     const position = (now - start) / (end - start) * 100;
     const selected = slots[this._selectedSlot];
@@ -1097,7 +1125,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .chip button { border:0; width:20px; height:20px; border-radius:50%; padding:0; color:var(--secondary-text-color); background:transparent; font-size:17px; line-height:1; }
       .add-row { display:flex; gap:8px; }
       .add-row input { flex:1; }
-      .device-card { padding:0; overflow:hidden; }
+      .device-card { padding:0; overflow:hidden; scroll-margin-top:150px; }
       .device-card summary { list-style:none; padding:18px 22px; display:flex; justify-content:space-between; align-items:center; gap:16px; cursor:pointer; }
       .device-card summary::-webkit-details-marker { display:none; }
       .device-card summary > div:first-child { display:flex; flex-direction:column; min-width:0; }

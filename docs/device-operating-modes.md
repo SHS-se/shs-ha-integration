@@ -80,7 +80,7 @@ relay timing, or exclusive ownership against external automations. In particular
 - Battery verification cannot prove that the inverter accepts remote writes or
   actually charges/discharges within the requested ceilings.
 - Pool verification cannot prove water flow, heat delivery, or the thermostat's
-  behaviour after a shifted band. Reviewed bounds can prevent full deferral.
+  behaviour after a shifted band. The temperature controls' lower limits can prevent full deferral.
 - Freshness checks still apply, including battery direction observations. A
   derived binary sensor that only reports on changes can become stale.
 - Restart, disable, expiry and mapping-change handovers rely on a running HA
@@ -90,3 +90,14 @@ relay timing, or exclusive ownership against external automations. In particular
 Review a representative file against its plan before selecting controlling,
 then commission physical response and handover on the installation. Keep the
 local equipment's safety protections active.
+
+## Pool temperature setup
+
+Select the Nibe start and stop temperature entities and the water-temperature
+reading. There are no separate coldest/warmest band settings in SHS. The Nibe's
+current start/stop values define the normal heating band. During deferral SHS
+lowers that band, preserving its width and respecting both entities' reported
+minimum, maximum and step. Both targets are validated before either is written.
+Heating requests and handover restore the captured normal band; SHS never
+invents a warmer target. Config-entry migration 13 removes the retired duplicate
+bounds while retaining the selected controls and operating modes.

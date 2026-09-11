@@ -387,14 +387,14 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "id": "pool_control",
             "tab": "devices",
             "title": "Pool temperature control",
-            "description": "The pool temperature limits and the controls used to keep within them.",
+            "description": "The pool temperature controls supply the normal heating band and their writable limits.",
             "fields": [
                 _field(
                     c.OPT_POOL_START_TEMPERATURE_ENTITY,
                     "Start heating below",
                     "entity",
                     domains=("number", "input_number"),
-                    help_text="Optional. For a pool held in a temperature band rather than switched on and off; the controller moves the band and the heat pump still picks when to run. One band per pool, however many meters heat it.",
+                    help_text="Required for pool execution and verification. The current start/stop settings define the normal heating band. SHS lowers that band to defer heating within the limits reported by these controls.",
                 ),
                 _field(
                     c.OPT_POOL_STOP_TEMPERATURE_ENTITY,
@@ -402,21 +402,6 @@ def _configuration_sections() -> list[dict[str, Any]]:
                     "entity",
                     domains=("number", "input_number"),
                     help_text="Required with the entity above: writing one end alone inverts or collapses the band.",
-                ),
-                _field(
-                    c.OPT_POOL_TEMPERATURE_MINIMUM,
-                    "Coldest the band may be set to",
-                    "number",
-                    unit="°C",
-                    step=0.1,
-                    help_text="Both bounds are required with a temperature band. Requests are clamped here, never beyond.",
-                ),
-                _field(
-                    c.OPT_POOL_TEMPERATURE_MAXIMUM,
-                    "Warmest the band may be set to",
-                    "number",
-                    unit="°C",
-                    step=0.1,
                 ),
             ],
         },

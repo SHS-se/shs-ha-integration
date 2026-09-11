@@ -8,7 +8,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
-from controller import ScheduledController, pool_band
+from controller import ScheduledController, pool_band, pool_hardware_band
 from configuration_schema import resolve_configuration
 
 
@@ -66,7 +66,6 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
             'device_control_mappings': {'charger': {'control_entity_id': 'number.current', 'control_type': 'variable_power', 'minimum_value': 5, 'maximum_value': 16}},
             'pool_start_temperature_entity': 'number.start', 'pool_stop_temperature_entity': 'number.stop',
             'pool_water_temperature_entity': 'sensor.water', 'pool_permission_entity': 'switch.pool',
-            'pool_temperature_minimum': 24, 'pool_temperature_maximum': 32,
             'battery_mode_entity': 'select.mode', 'battery_mode_charge': 'Charge',
             'battery_mode_discharge': 'Discharge', 'battery_mode_idle': 'Hold', 'battery_mode_baseline': 'Baseline',
             'battery_charge_limit_entity': 'number.charge_limit', 'battery_discharge_limit_entity': 'number.discharge_limit',
@@ -436,6 +435,23 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['$ev'] = 'controlling'
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['ev']['state'], 'commanded')
+
+    def test_pool_uses_nibe_control_limits_and_half_degree_steps(self):
+        start = {'min': 5, 'max': 79.5, 'step': .5}
+        stop = {'min': 5.5, 'max': 80, 'step': .5}
+        self.assertEqual(pool_hardware_band((29.5, 30), 25.61, True, start, stop), (29.5, 30))
+        self.assertEqual(pool_hardware_band((29.5, 30), 25.61, False, start, stop), (24.5, 25))
+        self.assertEqual(pool_hardware_band((29.5, 30), 3, False, start, stop), (5, 5.5))
+        with self.assertRaisesRegex(ValueError, 'bounds or step'):
+            pool_hardware_band((29.5, 30), 25, False, start, {**stop, 'step': 0})
+
+    async def test_pool_validates_both_registers_before_ownership_or_writes(self):
+        self.options['device_modes']['$pool'] = 'controlling'
+        self.states['number.stop'].attributes['step'] = .3
+        await self.controller.async_start()
+        self.assertEqual(self.calls, [])
+        self.assertFalse(self.controller.records)
+        self.assertEqual(self.controller.status['pool']['state'], 'fault')
 
     def test_pool_clamp_preserves_width_and_never_invents_maximum_target(self):
         self.assertEqual(pool_band((29.5, 30), 29, True, 24, 32, .1), (29.5, 30))

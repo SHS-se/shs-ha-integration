@@ -54,14 +54,31 @@ def pool_band(heat: tuple[float, float], water: float, on: bool,
     start, stop = heat
     width = stop - start
     if step <= 0 or width <= 0 or width > maximum - minimum:
-        raise ValueError("installed pool hysteresis does not fit the reviewed range")
+        raise ValueError("installed pool hysteresis does not fit the control limits")
     if not minimum <= start < stop <= maximum:
-        raise ValueError("installed pool band is outside the reviewed range")
+        raise ValueError("installed pool band is outside the control limits")
     upper = stop if on else min(stop, water - step)
     upper = min(max(upper, minimum + width), maximum)
     # Round downward to the actuator grid without changing the width.
     lower = minimum + int((upper - width - minimum + 1e-8) / step) * step
     return round(lower, 6), round(lower + width, 6)
+
+
+def pool_hardware_band(heat, water, on, start_attributes, stop_attributes):
+    """Use both registers' advertised bounds and steps, preserving hysteresis."""
+    width = finite(heat[1]) - finite(heat[0])
+    limits = [(finite(attrs["min"]), finite(attrs["max"]), finite(attrs["step"]))
+              for attrs in (start_attributes, stop_attributes)]
+    if any(low >= high or step <= 0 for low, high, step in limits):
+        raise ValueError("invalid pool temperature control bounds or step")
+    minimum = max(limits[0][0], limits[1][0] - width)
+    maximum = min(limits[1][1], limits[0][1] + width)
+    band = pool_band(heat, water, on, minimum, maximum, max(row[2] for row in limits))
+    # Validate both writes before sending either half of a temperature band.
+    for value, (low, high, step) in zip(band, limits):
+        if not low <= value <= high or abs((value - low) / step - round((value - low) / step)) > 1e-5:
+            raise ValueError("pool temperature band does not fit both controls' bounds and steps")
+    return band
 
 
 class ScheduledController:
@@ -429,20 +446,18 @@ class ScheduledController:
             if self.state(entity).attributes.get("unit_of_measurement") != "°C":
                 raise ValueError(f"{entity}: pool control requires Celsius")
         water = self.number(water_entity, fresh=True)
-        minimum = finite(options["pool_temperature_minimum"])
-        maximum = finite(options["pool_temperature_maximum"])
-        step = max(finite(self.state(e).attributes.get("step", 0.1)) for e in (start, stop))
-        record = await self.capture("pool", options, [start, stop, options.get("pool_permission_entity")])
-        original = record["originals"]
+        record = self.records.get("pool")
+        heat = ((finite(record["originals"][start]), finite(record["originals"][stop]))
+                if record else (self.number(start), self.number(stop)))
         on = finite(slot["pool_w"]) > 0
-        band = pool_band((finite(original[start]), finite(original[stop])), water,
-                         on, minimum, maximum, step)
+        band = pool_hardware_band(heat, water, on, self.state(start).attributes, self.state(stop).attributes)
+        await self.capture("pool", options, [start, stop, options.get("pool_permission_entity")])
         await self.band_commands(start, stop, band)
         if on and (permission := options.get("pool_permission_entity")):
             await self.command(permission, "on")
         limited = not on and band[1] >= water
         return {"state": "limited" if limited else "scheduled",
-                "reason": "reviewed lower bound prevents further deferral" if limited else "band accepted; the local thermostat controls heating",
+                "reason": "temperature control lower limit prevents further deferral" if limited else "band accepted; the local thermostat controls heating",
                 "start_temperature_c": band[0], "stop_temperature_c": band[1],
                 "water_temperature_c": water, "requested_power_w": slot["pool_w"]}
 
