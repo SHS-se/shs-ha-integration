@@ -41,11 +41,11 @@ from math import isfinite
 from typing import Any
 
 try:  # pragma: no cover - exercised by both import paths
-    from .device_controls import is_room_thermal_control
+    from .device_controls import mapped_planning_path
     from .optimisation import quarter_start
 except ImportError:  # The test suite imports these helpers as flat modules,
     # without Home Assistant installed, so the package parent does not exist.
-    from device_controls import is_room_thermal_control  # type: ignore[no-redef]
+    from device_controls import mapped_planning_path  # type: ignore[no-redef]
     from optimisation import quarter_start  # type: ignore[no-redef]
 
 SLOT = timedelta(minutes=15)
@@ -332,6 +332,8 @@ def build_thermal_slots(
 def thermal_zone_inputs(
     devices: Sequence[dict[str, Any]],
     mappings: dict[str, Any],
+    *,
+    pool_water_entity: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Group website-selected thermal devices into Home Assistant rooms.
 
@@ -346,7 +348,8 @@ def thermal_zone_inputs(
     inputs: dict[str, dict[str, Any]] = {}
     for device in devices:
         control_type = device.get("control_type")
-        if not is_room_thermal_control(control_type, device.get("category")):
+        if mapped_planning_path(device, mappings.get(str(device["key"])) or {},
+                                pool_water_entity) != "room":
             continue
         if device.get("planning_role") != "controllable":
             continue

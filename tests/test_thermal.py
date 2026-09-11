@@ -216,6 +216,15 @@ class ZoneInputTests(unittest.TestCase):
         device.update(overrides)
         return device
 
+    def test_pool_water_is_not_trained_as_room_air(self) -> None:
+        devices = [self._device(category="pool_heating")]
+        mappings = {"kitchen": {
+            "control_type": "setpoint", "temperature_entity_id": "sensor.water",
+            "actuator_entity_ids": ["climate.pool"],
+        }}
+        self.assertEqual(thermal_zone_inputs(devices, mappings, pool_water_entity="sensor.water"), {})
+        self.assertTrue(thermal_zone_inputs(devices, mappings, pool_water_entity="sensor.other"))
+
     def test_reads_a_matching_setpoint_mapping(self) -> None:
         mappings = {
             "kitchen": {

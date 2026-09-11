@@ -127,6 +127,20 @@ def planning_path(control_type: str | None, category: str | None) -> str | None:
     return None
 
 
+def mapped_planning_path(
+    device: dict[str, Any], mapping: dict[str, Any], pool_water_entity: str | None,
+) -> str | None:
+    """Resolve pool water heating by its sensor, not its room or meter name."""
+    if (
+        device.get("category") == "pool_heating"
+        and device.get("control_type") == "setpoint"
+        and pool_water_entity
+        and mapping.get("temperature_entity_id") == pool_water_entity
+    ):
+        return "pool"
+    return planning_path(device.get("control_type"), device.get("category"))
+
+
 def apply_planner_support(
     report: dict[str, Any],
     control_type: str | None,

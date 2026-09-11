@@ -102,6 +102,28 @@ class PoolServiceTests(unittest.TestCase):
         for service in services:
             self.assertNotIn("min_run_slots", service)
 
+    def test_pool_water_setpoint_and_pump_have_separate_running_power(self) -> None:
+        heater = device("water-heater", "pool_heating", "setpoint", watts=1156)
+        pump = device("pump", "pool_heating", "switch_schedule", watts=764)
+        floor = self.pool_room
+        mappings = {
+            **self.mappings,
+            "water-heater": {"control_type": "setpoint", "temperature_entity_id": "sensor.pool_water"},
+            "pump": {"control_type": "switch_schedule", "actuator_entity_ids": ["switch.pump"]},
+        }
+        services, _, _ = build_services(
+            {"pool_water_temperature_entity": "sensor.pool_water", "device_control_mappings": mappings},
+            HORIZON, [heater, pump, floor], read_entity=lambda _: None, local_tz=timezone.utc,
+        )
+        self.assertEqual(services[0]["control"]["power_w"], 1920)
+        # A different temperature is a room, even with exactly the same category.
+        mappings["water-heater"]["temperature_entity_id"] = "sensor.room_air"
+        services, _, _ = build_services(
+            {"pool_water_temperature_entity": "sensor.pool_water", "device_control_mappings": mappings},
+            HORIZON, [heater, pump, floor], read_entity=lambda _: None, local_tz=timezone.utc,
+        )
+        self.assertEqual(services[0]["control"]["power_w"], 764)
+
     def test_a_setpoint_heater_in_the_pool_category_does_not_break_the_plan(
         self,
     ) -> None:
@@ -347,6 +369,27 @@ def complete_history(*keys: str, kwh: float = 0.25) -> list[dict[str, object]]:
 
 
 class DeviceModelTests(unittest.TestCase):
+    def test_pool_membership_is_exported_from_sensor_mapping_with_little_history(self):
+        devices = [inventory_device(key, "controllable", kind) for key, kind in
+                   [("pump", "switch_schedule"), ("heater", "setpoint"), ("floor", "setpoint")]]
+        for item in devices:
+            item["category"] = "pool_heating"
+        mappings = {"heater": {"temperature_entity_id": "sensor.water"},
+                    "floor": {"temperature_entity_id": "sensor.floor"}}
+        actuals = [{"start": start.isoformat(), "device_energy_kwh":
+                    {"pump": .191, "heater": .289, "floor": .2}} for start in HORIZON[:4]]
+        models, degraded = build_device_models(
+            devices, actuals, HORIZON, mappings, mapped_power_w=lambda _: None,
+            local_tz=timezone.utc, pool_water_entity="sensor.water",
+        )
+        self.assertEqual(degraded, [])
+        by_key = {model["key"]: model for model in models}
+        self.assertEqual(by_key["pump"]["planning_service"], "pool")
+        self.assertEqual(by_key["heater"]["planning_service"], "pool")
+        self.assertNotIn("planning_service", by_key["floor"])
+        self.assertEqual(by_key["pump"]["active_power_w"], 764)
+        self.assertEqual(by_key["heater"]["active_power_w"], 1156)
+
     def build(self, devices, actuals, mappings=None, watts=None):
         models, _degraded = build_device_models(
             devices,

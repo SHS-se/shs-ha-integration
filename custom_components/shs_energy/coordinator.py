@@ -1344,7 +1344,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Build complete quarter-hour thermal observations for every zone."""
         from .configuration_schema import shared_devices
         zones = thermal_zone_inputs(
-            shared_devices(devices, options), options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
+            shared_devices(devices, options), options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
+            pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
         )
         if not zones or start >= end:
             return []
@@ -2331,6 +2332,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             control_mappings,
             mapped_power_w=self._mapped_power_w,
             local_tz=dt_util.DEFAULT_TIME_ZONE,
+            pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
         )
         self.optimisation_degraded_devices = degraded_devices
         self._sync_degraded_device_issue()
@@ -2485,7 +2487,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Derived from the same routing the services were built from, so a
         # capability can never claim a service the snapshot does not carry.
         planned_paths = {
-            planning_path(model["control_type"], model["category"])
+            model.get("planning_service") or planning_path(model["control_type"], model["category"])
             for model in device_models
         }
         # A store the customer switched off leaves the routed paths too, or the
@@ -2538,6 +2540,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "heating_running": pool_heating_running(
                     device_models, control_mappings,
                     lambda entity: getattr(self.hass.states.get(entity), "state", None),
+                    pool_water_entity=pool_entity,
                 ),
                 "source_entity_ids": {"water_temperature": pool_entity},
             }

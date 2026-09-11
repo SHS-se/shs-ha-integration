@@ -41,7 +41,7 @@ try:  # pragma: no cover - exercised by both import paths
     from .const import (
         OPTIMISATION_PROFILE_DAYS,
     )
-    from .device_controls import CONTROL_TYPES, planning_path
+    from .device_controls import CONTROL_TYPES, planning_path, mapped_planning_path
     from .optimisation import (
         OptimisationInputError,
         REMEDY_DEFECT,
@@ -79,6 +79,7 @@ except ImportError:  # The test suite imports these helpers as flat modules,
     from device_controls import (  # type: ignore[no-redef]
         CONTROL_TYPES,
         planning_path,
+        mapped_planning_path,
     )
     from optimisation import (  # type: ignore[no-redef]
         OptimisationInputError,
@@ -125,12 +126,14 @@ def pool_heating_running(
     models: list[dict[str, Any]],
     mappings: dict[str, Any],
     entity_state: Callable[[str], Any],
+    *,
+    pool_water_entity: str | None = None,
 ) -> bool | None:
     """Whether the mapped heating switches are already enabled, never inferred from watts."""
     entities: set[str] = set()
     for model in models:
-        if model.get("planning_role") != "controllable" or planning_path(
-            model["control_type"], model["category"]
+        if model.get("planning_role") != "controllable" or mapped_planning_path(
+            model, mappings.get(model["key"]) or {}, pool_water_entity
         ) != "pool":
             continue
         mapping = mappings.get(model["key"], {})
@@ -181,7 +184,8 @@ def build_services(
             return []
         pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for model in device_models:
-            if planning_path(model["control_type"], model["category"]) != path:
+            if mapped_planning_path(model, raw_mappings.get(str(model["key"])) or {},
+                                    options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY)) != path:
                 continue
             control_type = model["control_type"]
             mapping = raw_mappings.get(str(model["key"]))
@@ -625,6 +629,7 @@ def build_device_models(
     *,
     mapped_power_w: PowerReader,
     local_tz: tzinfo,
+    pool_water_entity: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Build control models independently of historical profile readiness.
 
@@ -685,7 +690,7 @@ def build_device_models(
         }
         if planning_role == "base_load":
             continue
-        path = planning_path(control_type, device["category"])
+        path = mapped_planning_path(device, mapping, pool_water_entity)
         if path != "ev" and (active_power_w is None or active_power_w <= 0):
             degraded.append(_degraded_device(
                 device, "needs configured running power or a measured heating cycle",
@@ -712,6 +717,7 @@ def build_device_models(
             "planning_role": "controllable",
             "control_type": control_type,
             "forecast_w_by_slot": forecast_w,
+            **({"planning_service": "pool"} if path == "pool" else {}),
         })
     if device_gaps:
         raise OptimisationInputError(*device_gaps, remedy=REMEDY_DEFECT)
