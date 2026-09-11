@@ -701,7 +701,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       const required = field.required || dependent.has(field.key);
       const populated = this._present(values[field.key]) && (field.kind !== "toggle" || values[field.key] || this._data.configured_keys?.includes(field.key));
       const inheritedLocation = ["pv_forecast_latitude", "pv_forecast_longitude"].includes(field.key) && !this._data.configured_keys?.includes(field.key);
-      if (required || (populated && !inheritedLocation) || this._added.has(token)) visible.push(this._renderField({ ...field, required }, values[field.key], scope, deviceKey));
+      if (required || field.kind === "power" || (populated && !inheritedLocation) || this._added.has(token)) visible.push(this._renderField({ ...field, required }, values[field.key], scope, deviceKey));
       else if (!["permit_entity_id", "mode_entity_id", "offset_entity_id", "offset_minimum", "offset_maximum", "companion_actuator_entity_ids"].includes(field.key)) {
         optional.push(`<button class="text" data-action="add-field" data-token="${this._escape(token)}">Add ${this._escape(field.label.toLowerCase())}</button>`);
       }

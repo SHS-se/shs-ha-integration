@@ -414,3 +414,32 @@ test('async completion does not replace a focused uncommitted entity search', ()
   assert.equal(renders, 0);
   assert.equal(panel.shadowRoot.activeElement.value, 'sensor.part');
 });
+
+for (const [name, controlType] of [['Pool pump', 'switch_schedule'], ['Pool heater', 'setpoint']]) {
+  test(`${name} exposes an empty optional Power field in Controls and saves its sensor`, async () => {
+    const panel = splitPanel();
+    const device = panel._data.devices[0];
+    Object.assign(device, { name, control_type: controlType, fields: [
+      { key: 'actuator_entity_ids', label: 'Actuators', kind: 'entities', required: true },
+      { key: 'power', label: 'Power', kind: 'power', help: 'Choose a power sensor, or enter reviewed watts directly.' },
+    ] });
+    for (const draft of [panel._draft, panel._savedDraft]) draft.device_control_mappings.pool.control_type = controlType;
+    const [controls, planning] = panel._renderDevices().split('<section aria-labelledby="planning-heading">');
+    assert.match(controls, /data-field-key="power" data-scope="mapping" data-device-key="pool" value=""/);
+    assert.match(controls, /Power entity or watts/);
+    assert.doesNotMatch(controls, /Add power/);
+    assert.doesNotMatch(planning, /data-field-key="power"/);
+    const input = Object.assign(new context.HTMLInputElement(), {
+      dataset: { fieldKey: 'power', scope: 'mapping', deviceKey: 'pool' },
+      value: 'sensor.pool_power', type: 'text',
+    });
+    panel._onChange({ type: 'input', target: input });
+    assert.equal(panel._deviceDirty('pool', 'controls'), true);
+    let sent;
+    panel._hass = { callWS: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
+    await panel._saveDevice('pool', 'controls');
+    assert.equal(sent.mapping.power, 'sensor.pool_power');
+    assert.equal(panel._savedDraft.device_control_mappings.pool.power, 'sensor.pool_power');
+    assert.equal(panel._deviceDirty('pool', 'controls'), false);
+  });
+}
