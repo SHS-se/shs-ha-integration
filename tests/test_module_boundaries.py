@@ -29,6 +29,7 @@ PURE_MODULES = (
     "device_controls",
     "device_commands",
     "migration",
+    "network_traffic",
     "configuration_schema",
     "configuration_values",
     "configuration_fields",
@@ -47,6 +48,7 @@ HOME_ASSISTANT_MODULES = (
     "config_panel",
     "configuration",
     "coordinator",
+    "diagnostics",
     "sensor",
 )
 

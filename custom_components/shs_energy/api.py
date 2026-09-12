@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from time import monotonic
 from typing import Any
 from urllib.parse import urlencode
 from uuid import uuid4
 
 import aiohttp
+
+from .network_traffic import NetworkTraffic
 
 from .api_contract import (
     API_VERSION,
@@ -66,6 +69,7 @@ class ShsApiClient:
         self._session = session
         self._base_url = base_url.rstrip("/")
         self._device_token = device_token
+        self.traffic = NetworkTraffic()
 
     async def _request(
         self,
@@ -85,6 +89,10 @@ class ShsApiClient:
                 raise ShsAuthError("no device token configured")
             headers["Authorization"] = f"Bearer {self._device_token}"
 
+        started = monotonic()
+        status: int | None = None
+        response_bytes: int | None = None
+        failed = True
         try:
             async with self._session.request(
                 method,
@@ -93,6 +101,9 @@ class ShsApiClient:
                 headers=headers,
                 timeout=REQUEST_TIMEOUT,
             ) as resp:
+                status = resp.status
+                # aiohttp caches this decompressed body; json() reuses it.
+                response_bytes = len(await resp.read())
                 try:
                     decoded: Any = await resp.json()
                     payload = decoded if isinstance(decoded, dict) else {}
@@ -167,6 +178,7 @@ class ShsApiClient:
                         code="invalid_response_envelope",
                         request_id=response_request_id,
                     )
+                failed = False
                 return payload["data"]
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise ShsApiError(
@@ -175,6 +187,9 @@ class ShsApiClient:
                 request_id=request_id,
                 retryable=True,
             ) from err
+        finally:
+            self.traffic.record(method, path, json_body, status, response_bytes,
+                                failed, (monotonic() - started) * 1000)
 
     async def pair(
         self, pairing_code: str, device_name: str
