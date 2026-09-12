@@ -87,7 +87,6 @@ from .const import (
     OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS,
     PRICE_BACKFILL_CHUNK_DAYS,
     PRICE_BACKFILL_MAX_DAYS,
-    STATUS_POLL_INTERVAL_HOURS,
     STORAGE_KEY_TEMPLATE,
     SUPPLIER_BACKFILL_MAX_DAYS,
     STORAGE_VERSION,
@@ -215,7 +214,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass,
             _LOGGER,
             name=f"{DOMAIN}_status",
-            update_interval=timedelta(hours=STATUS_POLL_INTERVAL_HOURS),
+            update_interval=None,
         )
         self.entry = entry
         self.client = client
@@ -233,6 +232,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_calculation_error: str | None = None
         self.latest_calculation: dict[str, Any] | None = None
         self.optimisation_plan: dict[str, Any] | None = None
+        self._plan_configuration_changed = False
         self.last_optimisation_push: str | None = None
         self.last_optimisation_attempt: str | None = None
         self._answered_replan_request_id: str | None = None
@@ -254,11 +254,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.tariff_components: dict[str, dict[str, str]] = {}
         self._push_lock = asyncio.Lock()
         self._runtime_lock = asyncio.Lock()
-        self._recovery_attempts = 0
-        self._recovery_retry_at: datetime | None = None
         self._recovering = False
         self.last_runtime_report: str | None = None
         self.last_runtime_error: str | None = None
+        self.last_connection_success: str | None = None
+        self.last_connection_error: str | None = None
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, STORAGE_KEY_TEMPLATE.format(entry_id=entry.entry_id)
         )
@@ -267,10 +267,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             status = await self.client.status()
             validate_server_contract(status)
-        except ShsAuthError as err:
-            raise UpdateFailed(f"device token rejected: {err}") from err
         except (ShsApiError, ApiContractError) as err:
-            raise UpdateFailed(str(err)) from err
+            self.last_connection_error = str(err)
+            if self.data is None:
+                raise UpdateFailed(str(err)) from err
+            _LOGGER.warning("Cloud status refresh failed; retaining cached data: %s", err)
+            return self.data
+
+        self.last_connection_success = dt_util.utcnow().isoformat()
+        self.last_connection_error = None
 
         active = bool(status.get("subscription_active"))
         self._sync_subscription_issue(active)
@@ -289,15 +294,14 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             catalog = await self.client.tariff()
             validate_tariff_catalog(catalog)
         except ShsSubscriptionInactiveError:
-            self.tariff_catalog = None
-            self.tariff_components = {}
+            # A refused request reports connection/account trouble, not loss
+            # of the last accepted tariff series.
             self.tariff_status = "subscription_inactive"
             self.last_tariff_error = "subscription_inactive"
             self._sync_subscription_issue(False)
         except (ShsApiError, TariffError) as err:
-            self.tariff_catalog = None
-            self.tariff_components = {}
-            self.tariff_status = "error"
+            if self.tariff_catalog is None:
+                self.tariff_status = "error"
             self.last_tariff_error = str(err)
             _LOGGER.warning("Tariff catalogue refresh failed: %s", err)
         else:
@@ -320,11 +324,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             prices = await self.client.prices()
             validate_supplier_prices(prices)
         except ShsSubscriptionInactiveError:
-            self.supplier_prices = None
             self.last_price_error = "subscription_inactive"
             self._sync_subscription_issue(False)
         except (ShsApiError, SupplierPriceError) as err:
-            self.supplier_prices = None
             self.last_price_error = str(err)
             _LOGGER.warning("Supplier price refresh failed: %s", err)
         else:
@@ -429,8 +431,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     async def async_price_refresh(self, _now: datetime | None = None) -> None:
-        """Refresh server prices on native Swedish market-quarter boundaries."""
-        await self.async_request_refresh()
+        """Advance price sensors using the series already cached locally."""
+        self.async_update_listeners()
 
     async def async_restore_plan(self) -> None:
         """Restore durable state before entities/controllers expose readiness.
@@ -440,6 +442,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         stored = await self._store.async_load() or {}
         self.optimisation_plan = stored.get("optimisation_plan")
+        self._plan_configuration_changed = stored.get("plan_configuration_changed", False)
         self.last_optimisation_push = stored.get("last_optimisation_push")
         self.last_optimisation_attempt = stored.get("last_optimisation_attempt")
 
@@ -471,57 +474,30 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.async_update_listeners()
 
     async def async_replan_poll(self, _now: datetime | None = None) -> None:
-        """Report readiness each minute and repair lost/unusable plans.
-
-        Recovery is independent of a website request and of heartbeat delivery.
-        Only one recovery runs at a time; failures back off to five minutes.
-        """
-        status = await self.async_report_runtime()
-        requested = status.get("pending_replan_request_id")
-        if requested == self._answered_replan_request_id:
-            requested = None
-        mode = resolved_options(self.hass, dict(self.entry.options))[OPT_PLANNING_MODE]
-        if mode != PLANNING_MODE_LIVE:
-            if requested:
-                await self._report_replan_failure(
-                    requested, "planning is turned off for this home in Home Assistant",
-                )
-                self._answered_replan_request_id = requested
-            return
+        """Exchange once per local 15-minute interval, independent of execution."""
         if self._push_lock.locked() or self._recovering:
             return
-        now = dt_util.utcnow()
-        if self.operational_status["actionable"]:
-            self._recovery_attempts = 0
-            self._recovery_retry_at = None
-            if not requested:
-                return
-        elif not requested and self._recovery_retry_at and now < self._recovery_retry_at:
-            return
         self._recovering = True
-        self._recovery_retry_at = None
         try:
-            await self.async_report_runtime()
+            await self.async_request_refresh()
+            status = await self.async_report_runtime()
+            requested = status.get("pending_replan_request_id")
+            if requested == self._answered_replan_request_id:
+                requested = None
+            mode = resolved_options(self.hass, dict(self.entry.options))[OPT_PLANNING_MODE]
+            if mode != PLANNING_MODE_LIVE and requested:
+                await self._report_replan_failure(requested, "planning is turned off for this home in Home Assistant")
+                self._answered_replan_request_id = requested
+                requested = None
             await self.async_optimisation_push(
-                force_plan=True, replan_request_id=requested
+                force_plan=bool(requested), replan_request_id=requested
             )
             if requested:
                 if self.last_optimisation_error is not None:
                     await self._report_replan_failure(requested, self.last_optimisation_error)
                 self._answered_replan_request_id = requested
-        except Exception as err:
-            self.last_optimisation_error = f"Automatic plan recovery failed: {err}"
-            raise
         finally:
             self._recovering = False
-            if self.operational_status["actionable"]:
-                self._recovery_attempts = 0
-                self._recovery_retry_at = None
-            else:
-                self._recovery_attempts = min(self._recovery_attempts + 1, 4)
-                self._recovery_retry_at = dt_util.utcnow() + timedelta(
-                    minutes=min(2 ** (self._recovery_attempts - 1), 5),
-                )
             await self.async_report_runtime()
 
     async def _report_replan_failure(self, request_id: str, detail: str) -> None:
@@ -1058,8 +1034,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             configuration = self._record_device_exchange(stored, devices, result)
             configuration_changed = configuration != previous or previous_home != stored.get("home_planning_configuration")
             if configuration_changed:
-                self.optimisation_plan = None
-                stored.pop("optimisation_plan", None)
+                self._plan_configuration_changed = stored["plan_configuration_changed"] = True
                 # The first exchange discovers the new website request. Report
                 # its status immediately in a second device-only exchange so a
                 # previously saved matching mapping becomes Ready in one click.
@@ -1145,8 +1120,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result = operational_status(self.optimisation_plan,
             resolved_options(self.hass, dict(self.entry.options))[OPT_PLANNING_MODE],
             self.optimisation_missing_inputs, datetime.now(timezone.utc))
+        if self._plan_configuration_changed:
+            result.update(state="not_configured", label="Configuration changed",
+                reason="Device configuration changed; cached plan retained but requires replacement", actionable=False)
         result["recovering"] = self._recovering
-        result["retry_at"] = self._recovery_retry_at.isoformat() if self._recovery_retry_at else None
+        result["retry_at"] = None
         return result
 
     async def async_cached_exchange_status(self) -> dict[str, Any]:
@@ -3016,6 +2994,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 }
             elif result.get("plan") and not configuration_changed:
                 self.last_optimisation_error = None
+                self._plan_configuration_changed = stored["plan_configuration_changed"] = False
                 self.optimisation_plan = result["plan"]
                 stored["optimisation_plan"] = self.optimisation_plan
                 self._sync_plan_refused_issue(None)
@@ -3028,8 +3007,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # The returned plan was built from the preceding website
                 # request. Never expose it after a role/control change; the
                 # next exchange replans using the new effective base split.
-                self.optimisation_plan = None
-                stored.pop("optimisation_plan", None)
+                self._plan_configuration_changed = stored["plan_configuration_changed"] = True
                 self.last_optimisation_error = "device configuration changed; replan pending"
                 if returned_plan:
                     stored["optimisation_pending_plan_ack"] = {
@@ -3065,7 +3043,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for slot in slots:
             start = datetime.fromisoformat(slot["start"])
             if start <= now < start + timedelta(minutes=15):
-                return slot if slot.get("binding") is True else None
+                return slot
         return None
 
     @property

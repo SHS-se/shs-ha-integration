@@ -86,6 +86,11 @@ class ShsBaseSensor(CoordinatorEntity[ShsStatusCoordinator], SensorEntity):
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
+    @property
+    def available(self) -> bool:
+        """A failed refresh does not erase a previously received value."""
+        return self.coordinator.data is not None
+
     def __init__(self, coordinator: ShsStatusCoordinator) -> None:
         super().__init__(coordinator)
         entry = coordinator.entry
@@ -114,6 +119,8 @@ class ShsSubscriptionSensor(ShsBaseSensor):
         data = self.coordinator.data or {}
         return {
             "expires_at": data.get("subscription_expires_at"),
+            "last_connection_success": self.coordinator.last_connection_success,
+            "last_connection_error": self.coordinator.last_connection_error,
             "customer": data.get("customer_name"),
             "home_id": data.get("home_id") or self.coordinator.entry.data.get(
                 CONF_HOME_ID

@@ -28,7 +28,7 @@ def operational_status(plan, mode, missing, now):
               **{key: (plan or {}).get(key) for key in ("issued_at", "binding_until", "valid_until")}}
     if mode == "disabled":
         result.update(state="disabled", reason="Monitoring continues while planning is off")
-    elif missing:
+    elif missing and not plan:
         result.update(state="not_configured", reason="Complete the required planning inputs")
     elif plan:
         try:
@@ -42,7 +42,7 @@ def operational_status(plan, mode, missing, now):
             elif plan["status"] != "ready":
                 result.update(state=plan["status"], reason=LABELS[plan["status"]])
             elif now >= datetime.fromisoformat(plan["binding_until"]):
-                result.update(state="advisory_only", reason="Future estimates are advice only")
+                result.update(state="ready", reason="Executing cached schedule using estimated prices", actionable=True)
             else:
                 result.update(state="ready", reason="A validated plan is available", actionable=True)
         except (OptimisationInputError, KeyError, TypeError, ValueError) as err:

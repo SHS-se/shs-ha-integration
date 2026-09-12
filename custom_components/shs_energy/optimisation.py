@@ -179,26 +179,11 @@ def optimisation_plan_due(
     force: bool = False,
     retry_after_error: bool = False,
 ) -> bool:
-    """Request a plan once per quarter, and immediately after a failure.
+    """Request a new schedule when the local exchange reaches another quarter.
 
-    The snapshot is built only when a plan is due, so this interval is also how
-    stale the stored snapshot gets — and the server refuses to plan against a
-    snapshot older than fifteen minutes. Refreshing every 45 minutes therefore
-    left the stored snapshot unusable for two thirds of its life, which is what
-    made "replan now" fail with `captured_at must describe a fresh snapshot`
-    more often than it worked.
-
-    Replanning every quarter also matches how the plan is meant to be read
-    (ENERGY_OPTIMISATION_ARCHITECTURE.md §8.7): only the first slot is ever a
-    commitment and everything beyond it is a value estimate, so rebuilding on
-    the same cadence the slots are settled on is the natural interval rather
-    than a compromise.
-
-    The comparison is on quarter boundaries because that is the only clock this
-    is ever asked on. Pushes fire a fixed few seconds past each quarter while
-    `issued_at` carries whatever second the server stamped, so comparing exact
-    instants made the decision a coin flip: a plan issued at :51 past was not
-    due at a push at :22 and the quarter was skipped entirely.
+    The caller runs at startup and on a relative 15-minute interval. Comparing
+    quarter buckets tolerates the server's generation time without skipping an
+    exchange. A missed request never invalidates the cached schedule.
     """
     if now.tzinfo is None:
         raise OptimisationInputError(

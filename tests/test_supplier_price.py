@@ -197,8 +197,8 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn(
             "await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)", helper
         )
-        self.assertIn("OPTIMISATION_STARTUP_RETRY_SECONDS", helper)
-        self.assertIn("optimisation_input_gap_is_transient()", helper)
+        self.assertIn("await coordinator.async_replan_poll()", helper)
+        self.assertNotIn("for attempt", helper)
         self.assertIn(
             "_async_delayed_startup_optimisation_push(coordinator)", INIT
         )

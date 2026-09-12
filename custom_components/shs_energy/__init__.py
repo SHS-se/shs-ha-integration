@@ -30,12 +30,9 @@ from .const import (
     PUSH_TIME_HOUR,
     PUSH_TIME_MINUTE,
     PRICE_REFRESH_SECOND,
-    OPTIMISATION_PUSH_SECOND,
     OPTIMISATION_STARTUP_DELAY_SECONDS,
-    OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS,
-    OPTIMISATION_STARTUP_RETRY_SECONDS,
     PRICE_BACKFILL_MAX_DAYS,
-    REPLAN_POLL_INTERVAL_MINUTES,
+    PLAN_EXCHANGE_INTERVAL_MINUTES,
     OPT_AUTOMATIC_SETUP,
     OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_DISCOVERY_EVIDENCE,
@@ -65,23 +62,9 @@ SERVICE_BACKFILL_PRICES = "backfill_prices"
 async def _async_delayed_startup_optimisation_push(
     coordinator: ShsStatusCoordinator,
 ) -> None:
-    """Wait for state-providing integrations, retrying only startup gaps."""
+    """Give entity providers time to start, then exchange once."""
     await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)
-    attempts = 1 + max(
-        0,
-        (
-            OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS
-            - OPTIMISATION_STARTUP_DELAY_SECONDS
-        )
-        // OPTIMISATION_STARTUP_RETRY_SECONDS,
-    )
-    for attempt in range(attempts):
-        await coordinator.async_optimisation_push(force_plan=True)
-        await coordinator.async_report_runtime()
-        if not coordinator.optimisation_input_gap_is_transient():
-            return
-        if attempt + 1 < attempts:
-            await asyncio.sleep(OPTIMISATION_STARTUP_RETRY_SECONDS)
+    await coordinator.async_replan_poll()
 
 
 def _entry_for_call(hass: HomeAssistant, call: ServiceCall) -> ConfigEntry:
@@ -251,9 +234,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     entry.async_create_background_task(
         hass, coordinator.async_scheduled_push(), name="shs_energy_startup_push"
     )
-    # The public market and supplier terms are native quarter-hour series. Keep
-    # total-price sensors aligned even when the integration was loaded between
-    # quarter boundaries.
+    # Advance cached price values on market quarters without a network request.
     entry.async_on_unload(
         async_track_time_change(
             hass,
@@ -262,30 +243,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
             second=PRICE_REFRESH_SECOND,
         )
     )
-    # Quarter-hour exchange. Recorder samples are aggregated locally; the
-    # website receives one completed 15-minute row, never per-second history.
+    # Relative to this integration's startup, not shared wall-clock quarters.
     entry.async_on_unload(
-        async_track_time_change(
-            hass,
-            coordinator.async_optimisation_push,
-            minute=[0, 15, 30, 45],
-            second=OPTIMISATION_PUSH_SECOND,
+        async_track_time_interval(
+            hass, coordinator.async_replan_poll,
+            timedelta(minutes=PLAN_EXCHANGE_INTERVAL_MINUTES),
         )
     )
     entry.async_create_background_task(
         hass,
         _async_delayed_startup_optimisation_push(coordinator),
         name="shs_energy_startup_optimisation_push",
-    )
-    # A replan asked for on the website. Its own poll rather than the quarter's
-    # exchange, because a person is waiting on it: the quarter would answer it
-    # too, up to fifteen minutes later.
-    entry.async_on_unload(
-        async_track_time_interval(
-            hass,
-            coordinator.async_replan_poll,
-            timedelta(minutes=REPLAN_POLL_INTERVAL_MINUTES),
-        )
     )
 
     # React to changed local meter and device-control mappings.

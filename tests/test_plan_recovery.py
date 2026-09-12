@@ -39,14 +39,13 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.c.hass = None
         self.c._runtime_lock = asyncio.Lock()
         self.c._push_lock = asyncio.Lock()
-        self.c._recovery_retry_at = None
-        self.c._recovery_attempts = 0
         self.c._recovering = False
         self.c._answered_replan_request_id = None
         self.c.last_optimisation_error = None
         self.c.client = SimpleNamespace(report_runtime=AsyncMock(return_value={}))
         self.c.async_update_listeners = lambda: None
         self.c.async_optimisation_push = AsyncMock()
+        self.c.async_request_refresh = AsyncMock()
         self.c._report_replan_failure = AsyncMock()
         self.set_status(False)
 
@@ -55,66 +54,47 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             'state': 'ready' if ready else 'unavailable', 'reason': 'test',
             'binding_until': None, 'valid_until': None, 'actionable': ready, 'retry_at': None}
 
-    async def test_missing_plan_recovers_without_website_request(self):
-        async def recover(**kwargs): self.set_status(True)
-        self.c.async_optimisation_push.side_effect = recover
-        await self.c.async_replan_poll()
-        self.c.async_optimisation_push.assert_awaited_once_with(force_plan=True, replan_request_id=None)
-        reports = [c.args[0] for c in self.c.client.report_runtime.await_args_list]
-        self.assertEqual([r['state'] for r in reports], ['unavailable', 'unavailable', 'ready'])
-        self.assertEqual([r['recovering'] for r in reports], [False, True, False])
-        self.assertIsNone(self.c._recovery_retry_at)
-
-    async def test_failed_recovery_backs_off_and_eventually_succeeds(self):
-        for delay in (1, 2, 4, 5, 5):
-            await self.c.async_replan_poll()
-            self.assertEqual(self.c._recovery_retry_at, self.now + timedelta(minutes=delay))
-            count = self.c.async_optimisation_push.await_count
-            await self.c.async_replan_poll()
-            self.assertEqual(self.c.async_optimisation_push.await_count, count)
-            self.now = self.c._recovery_retry_at
-        self.c.async_optimisation_push.side_effect = lambda **kw: self.set_status(True)
-        await self.c.async_replan_poll()
-        self.assertEqual(self.c._recovery_attempts, 0)
-        self.assertIsNone(self.c._recovery_retry_at)
-
-    async def test_report_outage_does_not_prevent_recovery(self):
-        self.c.client.report_runtime.side_effect = ValueError('offline')
-        await self.c.async_replan_poll()
-        self.c.async_optimisation_push.assert_awaited_once()
-        self.assertEqual(self.c.last_runtime_error, 'offline')
-
-    async def test_healthy_and_disabled_planning_do_not_replan(self):
+    async def test_each_interval_exchanges_even_with_a_healthy_cached_plan(self):
         self.set_status(True)
         await self.c.async_replan_poll()
-        self.set_status(False)
-        self.c.entry.options['planning_mode'] = 'disabled'
-        await self.c.async_replan_poll()
-        self.c.async_optimisation_push.assert_not_awaited()
-        self.assertEqual(self.c.client.report_runtime.await_count, 2)
+        self.c.async_request_refresh.assert_awaited_once()
+        self.c.async_optimisation_push.assert_awaited_once_with(force_plan=False, replan_request_id=None)
+        self.assertFalse(self.c._recovering)
+        self.assertFalse(self.c.client.report_runtime.await_args.args[0]['recovering'])
 
-    async def test_inflight_exchange_does_not_queue_duplicate_recovery(self):
+    async def test_outage_retains_the_plan_and_waits_for_the_next_interval(self):
+        plan = {'plan_id': 'cached'}
+        self.c.optimisation_plan = plan
+        self.c.client.report_runtime.side_effect = ValueError('offline')
+        self.c.async_optimisation_push.side_effect = RuntimeError('offline')
+        with self.assertRaises(RuntimeError):
+            await self.c.async_replan_poll()
+        self.assertIs(self.c.optimisation_plan, plan)
+        self.assertEqual(self.c.async_optimisation_push.await_count, 1)
+        self.assertFalse(self.c._recovering)
+        self.assertEqual(self.c.last_runtime_error, 'offline')
+
+    async def test_inflight_exchange_does_not_queue_duplicate_requests(self):
         async with self.c._push_lock:
             await self.c.async_replan_poll()
-        self.c.async_optimisation_push.assert_not_awaited()
         self.c._recovering = True
         await self.c.async_replan_poll()
         self.c.async_optimisation_push.assert_not_awaited()
+        self.c.client.report_runtime.assert_not_awaited()
 
-    async def test_new_user_request_bypasses_backoff_and_is_answered_once(self):
-        self.c._recovery_retry_at = self.now + timedelta(minutes=5)
+    async def test_explicit_request_is_attached_only_once(self):
         self.c.client.report_runtime.return_value = {'pending_replan_request_id': 'request'}
         await self.c.async_replan_poll()
         self.c.async_optimisation_push.assert_awaited_once_with(force_plan=True, replan_request_id='request')
         await self.c.async_replan_poll()
-        self.assertEqual(self.c.async_optimisation_push.await_count, 1)
+        self.c.async_optimisation_push.assert_awaited_with(force_plan=False, replan_request_id=None)
 
-    async def test_exception_still_reports_retry_and_releases_recovery(self):
-        self.c.async_optimisation_push.side_effect = RuntimeError('unexpected')
-        with self.assertRaises(RuntimeError): await self.c.async_replan_poll()
-        self.assertFalse(self.c._recovering)
-        self.assertIsNotNone(self.c._recovery_retry_at)
-        self.assertEqual(self.c.client.report_runtime.await_count, 3)
+    async def test_disabled_planning_reports_request_failure_but_still_exchanges_measurements(self):
+        self.c.entry.options['planning_mode'] = 'disabled'
+        self.c.client.report_runtime.return_value = {'pending_replan_request_id': 'request'}
+        await self.c.async_replan_poll()
+        self.c._report_replan_failure.assert_awaited_once()
+        self.c.async_optimisation_push.assert_awaited_once_with(force_plan=False, replan_request_id=None)
 
     async def test_restart_restores_saved_plan_but_expired_or_invalid_never_execute(self):
         plan = json.loads((Path(__file__).parent / 'fixtures/schema-7-device-plan.json').read_text())['plan']

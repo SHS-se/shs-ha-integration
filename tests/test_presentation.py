@@ -78,13 +78,15 @@ class PresentationTests(unittest.TestCase):
 
     def test_expired_disabled_and_missing_inputs_are_not_ready(self):
         for mode, missing, now, expected in (
-            ('disabled', [], self.now, 'disabled'), ('live', ['source'], self.now, 'not_configured'),
+            ('disabled', [], self.now, 'disabled'),
             ('live', [], datetime.fromisoformat(self.plan['valid_until']), 'expired')):
             with self.subTest(expected=expected):
                 status = operational_status(self.plan, mode, missing, now)
                 self.assertEqual(status['state'], expected)
                 self.assertEqual(timeline(self.plan, status)['slots'], [])
         self.assertEqual(operational_status(self.plan, 'live', [], self.now)['state'], 'ready')
+        self.assertTrue(operational_status(self.plan, 'live', ['source offline'], self.now)['actionable'])
+        self.assertEqual(operational_status(None, 'live', ['source'], self.now)['state'], 'not_configured')
 
     def test_live_names_change_without_any_identity_or_mapping_changes(self):
         before = deepcopy(self.device)

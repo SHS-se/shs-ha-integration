@@ -70,13 +70,13 @@ class ReplanContractTests(unittest.TestCase):
 class ReplanWiringTests(unittest.TestCase):
     """Home Assistant is not installed in CI, so this tier is read as text."""
 
-    def test_a_request_is_picked_up_on_its_own_poll(self) -> None:
-        # The hourly status poll also refreshes the tariff catalogue and
-        # supplier prices, so it is the wrong loop to shorten for this.
-        self.assertIn("REPLAN_POLL_INTERVAL_MINUTES", CONST)
+    def test_a_request_is_picked_up_on_the_relative_exchange_interval(self) -> None:
+        # Cloud exchange runs on one local interval; market-quarter callbacks
+        # only advance local prices and commands.
+        self.assertIn("PLAN_EXCHANGE_INTERVAL_MINUTES", CONST)
         self.assertIn("coordinator.async_replan_poll", INIT)
         self.assertIn(
-            "timedelta(minutes=REPLAN_POLL_INTERVAL_MINUTES)", INIT
+            "timedelta(minutes=PLAN_EXCHANGE_INTERVAL_MINUTES)", INIT
         )
 
     def test_the_request_travels_with_the_snapshot_that_answers_it(self) -> None:
@@ -94,7 +94,7 @@ class ReplanWiringTests(unittest.TestCase):
             COORDINATOR.index("async def async_replan_poll") :
             COORDINATOR.index("async def _prepared_device_inventory")
         ]
-        self.assertIn("force_plan=True, replan_request_id=requested", poll)
+        self.assertIn("force_plan=bool(requested), replan_request_id=requested", poll)
         self.assertIn("if self.last_optimisation_error is not None", poll)
         self.assertIn("_report_replan_failure", poll)
         # Planning switched off is not a fault and will never resolve itself,

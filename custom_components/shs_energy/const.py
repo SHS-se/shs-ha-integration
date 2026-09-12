@@ -231,9 +231,7 @@ PRICE_BACKFILL_MAX_DAYS = 120
 # chunk sized to exactly fill the cap would fail twice a year.
 PRICE_BACKFILL_CHUNK_DAYS = 28
 OPTIMISATION_HORIZON_HOURS = 72
-OPTIMISATION_PUSH_SECOND = 20
 OPTIMISATION_STARTUP_DELAY_SECONDS = 60
-OPTIMISATION_STARTUP_RETRY_SECONDS = 15
 OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS = 120
 ISSUE_OPTIMISATION_CONFIGURATION = "optimisation_configuration"
 ISSUE_OPTIMISATION_PLAN_REFUSED = "optimisation_plan_refused"
@@ -255,13 +253,8 @@ ISSUE_POOL_CONTROL = "pool_control"
 STORAGE_VERSION = 1
 STORAGE_KEY_TEMPLATE = "shs_energy.{entry_id}"
 
-STATUS_POLL_INTERVAL_HOURS = 1
-# How soon a replan asked for on the website is picked up. The status endpoint
-# is one small read, so this can be far shorter than the hourly poll that also
-# refreshes the tariff catalogue and supplier prices. A house that never hears
-# the request is not stranded: the server settles it from the ordinary
-# quarter-hour push, so this only decides how long the person waits.
-REPLAN_POLL_INTERVAL_MINUTES = 1
+# A local interval avoids synchronising every installation on market quarters.
+PLAN_EXCHANGE_INTERVAL_MINUTES = 15
 PRICE_REFRESH_SECOND = 5
 PUSH_TIME_HOUR = 0
 PUSH_TIME_MINUTE = 20
