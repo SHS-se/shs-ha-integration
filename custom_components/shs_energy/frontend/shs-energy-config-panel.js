@@ -936,8 +936,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
       (value === "control_verification" ? permission.verification_reason : permission.reason);
     return `<div class="choices">
       <div class="choice-row"><span>Include in the plan</span><strong>${this._escape(device.choice_label)} · <a href="${this._escape(this._data.website_url)}" target="_blank" rel="noreferrer">Website</a></strong></div>
-      ${section === "schedule" ? `<div class="choice-row"><span>Device mode</span><select aria-label="Mode for ${this._escape(device.name)}" data-permission="${this._escape(device.key)}" ${disabled ? "disabled" : ""}>
-        ${[["monitoring", "Monitoring"], ["planning", "Planning"], ["control_verification", "Control verification"], ["controlling", "Controlling"]].map(([value, label]) => `<option value="${value}" ${device.mode === value ? "selected" : ""} ${blocked(value) && ["control_verification", "controlling"].includes(value) && device.mode !== value ? "disabled" : ""}>${label}</option>`).join("")}</select>
+      ${section === "schedule" ? `<div class="choice-row"><span>Device mode</span><select data-mode="${this._escape(device.mode)}" aria-label="Mode for ${this._escape(device.name)}" data-permission="${this._escape(device.key)}" ${disabled ? "disabled" : ""}>
+        ${[["monitoring", "Monitoring"], ["planning", "Planning"], ["control_verification", "Control verification"], ["controlling", "Controlling"]].map(([value, label]) => `<option data-mode="${value}" value="${value}" ${device.mode === value ? "selected" : ""} ${blocked(value) && ["control_verification", "controlling"].includes(value) && device.mode !== value ? "disabled" : ""}>${label}</option>`).join("")}</select>
       <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Monitoring collects readings. Planning adds this device to the plan. Verification logs commands. Controlling executes them."))}</small></div>` : ""}
     </div>`;
   }
@@ -1268,6 +1268,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .required { color:var(--error-color); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
       .field-help { margin-top:7px; color:var(--secondary-text-color); font-size:12px; line-height:1.4; }
       input[type=text], input[type=number], input[type=time], select { width:100%; min-height:48px; padding:10px 12px; border:1px solid var(--divider-color); border-radius:10px; color:var(--primary-text-color); background:var(--secondary-background-color); outline:none; }
+      [data-mode="monitoring"] { color:${this._hass?.themes?.darkMode ? "#90caf9" : "#1565c0"}; }
+      [data-mode="planning"] { color:${this._hass?.themes?.darkMode ? "#ce93d8" : "#7b1fa2"}; }
+      [data-mode="control_verification"] { color:${this._hass?.themes?.darkMode ? "#ffcc80" : "#925400"}; }
+      [data-mode="controlling"] { color:${this._hass?.themes?.darkMode ? "#a5d6a7" : "#2e7d32"}; }
+      option[data-mode] { background:var(--secondary-background-color); }
+      option[data-mode]:disabled { color:var(--disabled-text-color); }
       input:focus, select:focus { border-color:var(--primary-color); box-shadow:0 0 0 1px var(--primary-color); }
       .with-unit { display:flex; align-items:center; border:1px solid var(--divider-color); border-radius:10px; background:var(--secondary-background-color); }
       .with-unit:focus-within { border-color:var(--primary-color); box-shadow:0 0 0 1px var(--primary-color); }
