@@ -30,6 +30,7 @@ PURE_MODULES = (
     "device_commands",
     "migration",
     "network_traffic",
+    "controller_metrics",
     "configuration_schema",
     "configuration_values",
     "configuration_fields",

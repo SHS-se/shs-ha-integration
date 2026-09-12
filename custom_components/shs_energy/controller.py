@@ -15,11 +15,13 @@ import json
 from math import isfinite
 from typing import Any
 from types import SimpleNamespace
+from time import perf_counter
 
 try:
     from .api_contract import INTEGRATION_VERSION
     from .operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
     from .verification import OPERATIONS, operation_name
+    from .controller_metrics import ControllerMetrics, fingerprint, record_time
     from .battery_commands import validate_battery_command
     from .configuration_values import resolve_battery_quantities, resolve_quantity
     from .device_commands import actuator_targets, execution_setup_errors, validate_commands
@@ -28,6 +30,7 @@ except ImportError:  # Pure executor tests, without importing Home Assistant.
     from api_contract import INTEGRATION_VERSION
     from operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
     from verification import OPERATIONS, operation_name
+    from controller_metrics import ControllerMetrics, fingerprint, record_time
     from battery_commands import validate_battery_command
     from configuration_values import resolve_battery_quantities, resolve_quantity
     from device_commands import actuator_targets, execution_setup_errors, validate_commands
@@ -132,6 +135,7 @@ class ScheduledController:
         self.overrides = {}
         self.requested_types = {}
         self.requested_systems = set()
+        self.metrics = ControllerMetrics(INTEGRATION_VERSION)
 
     def add_listener(self, listener):
         self.listeners.add(listener)
@@ -148,8 +152,13 @@ class ScheduledController:
         for listener in tuple(self.listeners):
             listener()
 
+    def observed_state(self, entity):
+        state = self.hass.states.get(entity) if entity else None
+        self.metrics.observe(entity, state)
+        return state
+
     def state(self, entity, *, max_age=None):
-        state = (self.shadow.get(entity) if self.verifying else None) or (self.hass.states.get(entity) if entity else None)
+        state = (self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)
         if self.verifying and entity not in self.shadow:
             self.verification_observations[entity] = {
                 "state": state.state if state else None,
@@ -256,7 +265,7 @@ class ScheduledController:
     async def command(self, entity, value):
         self.check_authority()
         domain = entity.split(".")[0]
-        state = ((self.shadow.get(entity) if self.verifying else None) or self.hass.states.get(entity)) if getattr(self, "device", None) == "battery" and domain == "number" else self.state(entity)
+        state = ((self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)) if getattr(self, "device", None) == "battery" and domain == "number" else self.state(entity)
         if state is None:
             raise ValueError(f"{entity} is unavailable")
         if domain in ("number", "input_number"):
@@ -325,7 +334,7 @@ class ScheduledController:
         await self.confirm(lambda: self.matches(entity, value), f"{entity} did not accept {value}")
 
     def matches(self, entity, value):
-        state = (self.shadow.get(entity) if self.verifying else None) or self.hass.states.get(entity)
+        state = (self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)
         if state is None or state.state in ("unknown", "unavailable"):
             return False
         if isinstance(value, (int, float)):
@@ -584,7 +593,7 @@ class ScheduledController:
 
     def battery_limit(self, entity, watts):
         """Validate the outgoing ceiling; the old register value is irrelevant."""
-        state = self.hass.states.get(entity)
+        state = self.observed_state(entity)
         if state is None:
             raise ValueError(f"{entity} is unavailable")
         unit = state.attributes.get("unit_of_measurement")
@@ -840,11 +849,21 @@ class ScheduledController:
                     self.report(device, "fault", reason=f"cannot load verification journal: {err}")
                 return
         self.initialized = True
-        await self.async_tick()
+        await self.async_tick(trigger="startup")
 
-    async def async_tick(self, _now=None):
-        if self.closed or not self.initialized or self.lock.locked():
+    async def async_tick(self, _now=None, *, trigger="manual"):
+        skipped = ("inactive" if self.closed or not self.initialized else
+                   "busy" if self.lock.locked() else None)
+        totals = self.metrics.trigger(trigger, skipped)
+        if skipped:
             return
+        started = perf_counter()
+        try:
+            await self._async_tick()
+        finally:
+            record_time(totals, started)
+
+    async def _async_tick(self):
         async with self.lock:
             options = self.options()
             slot = self.coordinator.current_plan_slot
@@ -873,9 +892,22 @@ class ScheduledController:
                 if device_mode(options, device) not in EXECUTING_MODES:
                     del self.overrides[device]
                     await self.save()
+            # Hash shared inputs once, excluding unused future-plan slots.
+            metrics_context = fingerprint({
+                "options": options, "slot": slot,
+                "plan": {name: plan.get(name) for name in
+                         ("plan_id", "schema_version", "capabilities", "device_models")},
+                "requested_types": self.requested_types,
+                "requested_systems": sorted(self.requested_systems, key=str),
+            }).hex()
             for device in (*DEVICES, *sorted(generic)):
                 self.device = device
                 key = repr((options, plan.get("plan_id"), slot))
+                self.metrics.begin_device(device, {
+                    "mode": device_mode(options, device), "shared": metrics_context,
+                    "override": self.overrides.get(device),
+                    "ownership": self.records.get(device), "failed": self.failed.get(device),
+                })
                 try:
                     record = self.records.get(device)
                     if record and (record.get("restoration_pending") or ownership_configuration(record["options"], device) != ownership_configuration(options, device) or not slot or not self.eligible(device, options)):
@@ -914,6 +946,8 @@ class ScheduledController:
                     except Exception as restore_error:
                         reason += f"; restoration pending: {restore_error}"
                     self.report(device, "fault", reason=reason, retry_automatically=retry, **correction_details(err))
+                finally:
+                    self.metrics.end_device()
 
     async def async_stop(self, _event=None):
         if self.closed:

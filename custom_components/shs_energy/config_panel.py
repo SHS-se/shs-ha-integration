@@ -626,7 +626,10 @@ async def websocket_download_verification(hass, connection, msg):
         return
     controller = entry.runtime_data.controller
     async with controller.lock:
-        connection.send_result(msg["id"], controller.verification.export())
+        connection.send_result(msg["id"], {
+            **controller.verification.export(),
+            "controller_metrics": controller.metrics.snapshot(),
+        })
 
 
 async def async_register_config_panel(hass: HomeAssistant) -> None:

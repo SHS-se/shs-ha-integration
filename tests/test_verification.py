@@ -58,6 +58,40 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, expected)
         self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
 
+    async def test_metrics_measure_real_inputs_without_changing_verification(self):
+        self.options['device_modes'] = {'$battery': 'control_verification', '$pool': 'control_verification'}
+        await self.controller.async_start()
+        await self.controller.async_tick(trigger='timer')
+        self.states['sensor.battery_soc'].last_reported = datetime.now(timezone.utc)
+        await self.controller.async_tick(trigger='timer')
+        self.states['sensor.battery_soc'].state = '51'
+        await self.controller.async_tick(trigger='slot_boundary')
+        async with self.controller.lock:
+            await self.controller.async_tick(trigger='timer')
+        report = self.controller.metrics.snapshot()
+        self.assertEqual(report['triggers']['startup']['completed'], 1)
+        self.assertEqual(report['triggers']['timer']['requested'], 3)
+        self.assertEqual(report['triggers']['timer']['completed'], 2)
+        self.assertEqual(report['triggers']['timer']['skipped_busy'], 1)
+        battery = report['devices']['battery']
+        self.assertEqual(battery['completed'], 4)
+        self.assertEqual(battery['unchanged_inputs'], 2)
+        self.assertEqual(battery['unchanged_inputs_new_reports'], 1)
+        self.assertEqual(battery['changed_inputs'], 1)
+        self.assertEqual(report['devices']['pool']['unchanged_inputs'], 3)
+        self.assertEqual(self.calls, [])
+        self.assertFalse(self.controller.records)
+
+    async def test_metrics_complete_when_sensor_is_unavailable(self):
+        self.options['device_modes']['$battery'] = 'control_verification'
+        self.states['sensor.battery_soc'].state = 'unavailable'
+        await self.controller.async_start()
+        await self.controller.async_tick(trigger='timer')
+        self.assertEqual(self.controller.status['battery']['state'], 'fault')
+        self.assertEqual(self.controller.metrics.snapshot()['devices']['battery']['completed'], 2)
+        self.assertIsNone(self.controller.metrics.active)
+        self.assertEqual(self.calls, [])
+
     async def test_stale_sources_and_invalid_modes_are_logged_as_blocked(self):
         self.options['device_modes']['$battery'] = 'control_verification'
         self.states['binary_sensor.charging'].last_reported = datetime.now(timezone.utc) - timedelta(minutes=3)

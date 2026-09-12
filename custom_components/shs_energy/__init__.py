@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+from functools import partial
 from typing import Any
 
 import voluptuous as vol
@@ -204,14 +205,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         raise
 
     def schedule_controller() -> None:
-        if not controller.closed and controller.initialized and not controller.lock.locked():
+        if not controller.closed and controller.initialized:
+            if controller.lock.locked():
+                controller.metrics.trigger("coordinator_update", "busy")
+                return
             entry.async_create_background_task(
-                hass, controller.async_tick(), name="shs_energy_controller_update",
+                hass, controller.async_tick(trigger="coordinator_update"), name="shs_energy_controller_update",
             )
 
     entry.async_on_unload(coordinator.async_add_listener(schedule_controller))
-    entry.async_on_unload(async_track_time_interval(hass, controller.async_tick, timedelta(seconds=5)))
-    entry.async_on_unload(async_track_time_change(hass, controller.async_tick, minute=[0, 15, 30, 45], second=0))
+    entry.async_on_unload(async_track_time_interval(hass, partial(controller.async_tick, trigger="timer"), timedelta(seconds=5)))
+    entry.async_on_unload(async_track_time_change(hass, partial(controller.async_tick, trigger="slot_boundary"), minute=[0, 15, 30, 45], second=0))
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, controller.async_stop))
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
