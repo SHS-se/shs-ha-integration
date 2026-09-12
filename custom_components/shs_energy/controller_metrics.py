@@ -31,9 +31,16 @@ class ControllerMetrics:
         self.devices = {}
         self.previous = {}
         self.active = None
+        self.scheduling = {"notifications": 0, "queued_while_busy": 0,
+                           "coalesced_notifications": 0, "state_change_events": 0,
+                           "state_report_events": 0, "registry_events": 0,
+                           "device_dispatches": 0, "dispatch_latency_ms": 0.0,
+                           "max_dispatch_latency_ms": 0.0}
 
     def trigger(self, source, skipped=None):
-        if source not in {"startup", "timer", "slot_boundary", "coordinator_update", "manual"}:
+        if source not in {"startup", "timer", "slot_boundary", "coordinator_update", "manual",
+                          "state_change", "state_report", "freshness_deadline", "device_deadline",
+                          "restoration_retry", "plan_expiry", "coalesced", "configuration_update"}:
             source = "manual"
         totals = self.triggers.setdefault(source, {
             "requested": 0, "skipped_busy": 0, "skipped_inactive": 0, **timing(),
@@ -93,4 +100,6 @@ class ControllerMetrics:
             "timing_basis": "Elapsed wall time including awaits and measurement overhead; not CPU time",
             "input_basis": "Plan/configuration/ownership context and first real state/attribute reads per device evaluation; report timestamps counted separately. Unchanged inputs do not imply a safe-to-skip evaluation: time-based protections still apply. No complete sensor event stream is recorded.",
             "triggers": deepcopy(self.triggers), "devices": deepcopy(self.devices),
+            "scheduling": deepcopy(self.scheduling),
+            "latency_basis": "Earliest queued notification received locally to affected device evaluation; not hardware sampling latency",
         }

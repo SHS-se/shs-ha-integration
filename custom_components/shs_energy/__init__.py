@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
-from functools import partial
 from typing import Any
 
 import voluptuous as vol
@@ -22,6 +21,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers import entity_registry as er
 
 from .api import ShsApiClient
+from .controller_events import attach_controller_events
 from .config_panel import async_apply_configuration, async_register_config_panel
 from .const import (
     CONFIGURABLE_CATEGORIES,
@@ -194,6 +194,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         entity_registry=er.async_get(hass),
     )
     coordinator.controller = controller
+    scheduler = attach_controller_events(hass, entry, controller)
     # Recover local ownership before contacting the cloud. A network outage
     # must not prevent restoration of commands left by the previous process.
     await coordinator.async_restore_plan()
@@ -204,25 +205,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         await controller.async_stop()
         raise
 
-    def schedule_controller() -> None:
-        if not controller.closed and controller.initialized:
-            if controller.lock.locked():
-                controller.metrics.trigger("coordinator_update", "busy")
-                return
-            entry.async_create_background_task(
-                hass, controller.async_tick(trigger="coordinator_update"), name="shs_energy_controller_update",
-            )
-
-    entry.async_on_unload(coordinator.async_add_listener(schedule_controller))
-    entry.async_on_unload(async_track_time_interval(hass, partial(controller.async_tick, trigger="timer"), timedelta(seconds=5)))
-    entry.async_on_unload(async_track_time_change(hass, partial(controller.async_tick, trigger="slot_boundary"), minute=[0, 15, 30, 45], second=0))
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, controller.async_stop))
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except BaseException:
         await controller.async_stop()
         raise
-    schedule_controller()
+    scheduler.coordinator_updated()
 
     # Nightly push shortly after midnight; also catch up on startup in case
     # HA was down at the scheduled time.

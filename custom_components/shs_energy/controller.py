@@ -60,6 +60,10 @@ class PlanChangedError(ValueError):
         self.details = {"blocked_reason": code, "blocked_context": context}
 
 
+class ControlDeadlineError(ValueError):
+    """The next eligible transition already has an explicit wake-up deadline."""
+
+
 def correction_details(error):
     return error.details if isinstance(error, (ControlObservationError, PlanChangedError)) else {}
 
@@ -136,6 +140,8 @@ class ScheduledController:
         self.requested_types = {}
         self.requested_systems = set()
         self.metrics = ControllerMetrics(INTEGRATION_VERSION)
+        self.scheduler = None
+        self.observation_changed = asyncio.Event()
 
     def add_listener(self, listener):
         self.listeners.add(listener)
@@ -152,13 +158,15 @@ class ScheduledController:
         for listener in tuple(self.listeners):
             listener()
 
-    def observed_state(self, entity):
+    def observed_state(self, entity, *, max_age=None):
         state = self.hass.states.get(entity) if entity else None
         self.metrics.observe(entity, state)
+        if self.scheduler is not None:
+            self.scheduler.observe(self.device, entity, state, max_age)
         return state
 
     def state(self, entity, *, max_age=None):
-        state = (self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)
+        state = (self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity, max_age=max_age)
         if self.verifying and entity not in self.shadow:
             self.verification_observations[entity] = {
                 "state": state.state if state else None,
@@ -350,12 +358,22 @@ class ScheduledController:
             return
         deadline = asyncio.get_running_loop().time() + CONFIRM_SECONDS
         while True:
+            self.observation_changed.clear()
             self.check_authority()
             if predicate():
                 return
-            if asyncio.get_running_loop().time() >= deadline:
-                raise ValueError(error)
-            await asyncio.sleep(0.5)
+            try:
+                await asyncio.wait_for(self.observation_changed.wait(),
+                                       timeout=max(0, deadline - asyncio.get_running_loop().time()))
+            except TimeoutError:
+                self.check_authority()
+                if predicate():
+                    return
+                raise ValueError(error) from None
+
+    def device_deadline(self, name, when):
+        if self.scheduler is not None and not self.verifying:
+            self.scheduler.device_deadline(self.device, name, when)
 
     def measurement_after_commands(self, entity, *actuators):
         state = self.state(entity, max_age=BATTERY_MAX_AGE_SECONDS)
@@ -416,7 +434,9 @@ class ScheduledController:
                         if at and last != value and entity not in record.get("externally_changed", []):
                             minimum = mapping["minimum_on_seconds" if last == "on" else "minimum_off_seconds"]
                             if (now - datetime.fromisoformat(at)).total_seconds() < minimum:
-                                raise ValueError("restoration waiting for minimum relay run time")
+                                self.device_deadline("minimum_run:" + entity,
+                                                     datetime.fromisoformat(at) + timedelta(seconds=minimum))
+                                raise ControlDeadlineError("restoration waiting for minimum relay run time")
                 for entity, value in original.items():
                     if entity not in record.get("externally_changed", []):
                         await self.command(entity, value)
@@ -457,6 +477,14 @@ class ScheduledController:
                 await self.command(switch, original[switch])
             del self.records[device]
             await self.save()
+        except Exception as err:
+            # A failed service may recover without any entity event. Retain the
+            # previous retry interval only while real handover remains pending.
+            if not isinstance(err, (ControlObservationError, ControlDeadlineError)):
+                self.device_deadline("restoration_retry", datetime.now(timezone.utc) + timedelta(seconds=5))
+            else:
+                self.device_deadline("restoration_retry", None)
+            raise
         finally:
             self.restoring = False
 
@@ -750,7 +778,8 @@ class ScheduledController:
                             raise ValueError("cannot establish the actuator's current run time")
                         minimum = mapping["minimum_on_seconds" if state.state == "on" else "minimum_off_seconds"]
                         if (now - at).total_seconds() < minimum:
-                            raise ValueError("initial switch transition violates the reviewed minimum run time")
+                            self.device_deadline("minimum_run:" + entity, at + timedelta(seconds=minimum))
+                            raise ControlDeadlineError("initial switch transition violates the reviewed minimum run time")
             if record and kind == "switch_schedule":
                 for entity, value in values.items():
                     previous = record.get("last_commands", {}).get(entity)
@@ -758,14 +787,19 @@ class ScheduledController:
                     if changed_at and previous != value:
                         minimum = mapping["minimum_on_seconds" if previous == "on" else "minimum_off_seconds"]
                         if (now - datetime.fromisoformat(changed_at)).total_seconds() < minimum:
-                            raise ValueError("planned switch transition violates the reviewed minimum run time")
+                            self.device_deadline("minimum_run:" + entity,
+                                                 datetime.fromisoformat(changed_at) + timedelta(seconds=minimum))
+                            raise ControlDeadlineError("planned switch transition violates the reviewed minimum run time")
         record = await self.capture(device, options, targets)
         now = datetime.now(timezone.utc).isoformat()
         if kind == "permit_inhibit":
             if command["permitted"]:
                 record.pop("inhibited_since", None)
+                self.device_deadline("maximum_inhibit", None)
             else:
                 record.setdefault("inhibited_since", now)
+                self.device_deadline("maximum_inhibit", datetime.fromisoformat(record["inhibited_since"])
+                                     + timedelta(seconds=mapping["max_inhibit_slots"] * 900))
         for entity, value in values.items():
             if record.get("last_commands", {}).get(entity) != value:
                 record.setdefault("transition_times", {})[entity] = now
@@ -850,20 +884,24 @@ class ScheduledController:
                 return
         self.initialized = True
         await self.async_tick(trigger="startup")
+        if self.scheduler is not None:
+            self.scheduler.plan_deadlines()
 
-    async def async_tick(self, _now=None, *, trigger="manual"):
+    async def async_tick(self, _now=None, *, trigger="manual", devices=None):
         skipped = ("inactive" if self.closed or not self.initialized else
                    "busy" if self.lock.locked() else None)
         totals = self.metrics.trigger(trigger, skipped)
         if skipped:
+            if skipped == "busy" and self.scheduler is not None:
+                self.scheduler.request(trigger, devices)
             return
         started = perf_counter()
         try:
-            await self._async_tick()
+            await self._async_tick(devices)
         finally:
             record_time(totals, started)
 
-    async def _async_tick(self):
+    async def _async_tick(self, devices=None):
         async with self.lock:
             options = self.options()
             slot = self.coordinator.current_plan_slot
@@ -873,6 +911,9 @@ class ScheduledController:
             mappings = options.get("device_control_mappings", {})
             generic = {"device:" + key for key, mapping in mappings.items() if device_mode(options, "device:" + key) in EXECUTING_MODES}
             generic.update(key for key in self.records if key.startswith("device:"))
+            if self.scheduler is not None:
+                self.scheduler.retain_devices(set(DEVICES) | generic)
+            previous_authority = (self.requested_types, self.requested_systems)
             if generic or any(device_mode(options, d) in EXECUTING_MODES for d in DEVICES) or self.records:
                 self.requested_types = {}
                 self.requested_systems = set()
@@ -888,6 +929,10 @@ class ScheduledController:
                     self.requested_systems = set()
                     # Without current planning ownership, hand back all targets.
                     _LOGGER.error("Cannot read device planning ownership: %s", err)
+            if previous_authority != (self.requested_types, self.requested_systems):
+                # A shared ownership change or cache failure affects all owners,
+                # even if it was discovered during one device's sensor event.
+                devices = None
             for device in tuple(self.overrides):
                 if device_mode(options, device) not in EXECUTING_MODES:
                     del self.overrides[device]
@@ -901,7 +946,11 @@ class ScheduledController:
                 "requested_systems": sorted(self.requested_systems, key=str),
             }).hex()
             for device in (*DEVICES, *sorted(generic)):
+                if devices is not None and device not in devices:
+                    continue
                 self.device = device
+                if self.scheduler is not None:
+                    self.scheduler.begin_device(device)
                 key = repr((options, plan.get("plan_id"), slot))
                 self.metrics.begin_device(device, {
                     "mode": device_mode(options, device), "shared": metrics_context,
@@ -948,19 +997,28 @@ class ScheduledController:
                     self.report(device, "fault", reason=reason, retry_automatically=retry, **correction_details(err))
                 finally:
                     self.metrics.end_device()
+                    if self.scheduler is not None:
+                        self.scheduler.end_device(device)
 
     async def async_stop(self, _event=None):
         if self.closed:
             return
         self.closed = True
-        async with self.lock:
-            for device in tuple(self.records):
-                try:
-                    await self.restore(device)
-                except Exception as err:
-                    self.report(device, "fault", reason=f"restoration pending: {err}")
-            if self.verification is not None and self.initialized:
-                await self.verification.lifecycle(
-                    "stop", INTEGRATION_VERSION,
-                    _event.event_type if _event is not None else "integration_unload_or_setup_stop",
-                )
+        self.observation_changed.set()
+        if self.scheduler is not None:
+            self.scheduler.pause()
+        try:
+            async with self.lock:
+                for device in tuple(self.records):
+                    try:
+                        await self.restore(device)
+                    except Exception as err:
+                        self.report(device, "fault", reason=f"restoration pending: {err}")
+                if self.verification is not None and self.initialized:
+                    await self.verification.lifecycle(
+                        "stop", INTEGRATION_VERSION,
+                        _event.event_type if _event is not None else "integration_unload_or_setup_stop",
+                    )
+        finally:
+            if self.scheduler is not None:
+                self.scheduler.close()

@@ -31,6 +31,7 @@ PURE_MODULES = (
     "migration",
     "network_traffic",
     "controller_metrics",
+    "controller_scheduler",
     "configuration_schema",
     "configuration_values",
     "configuration_fields",
@@ -51,6 +52,7 @@ HOME_ASSISTANT_MODULES = (
     "coordinator",
     "diagnostics",
     "sensor",
+    "controller_events",
 )
 
 
