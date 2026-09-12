@@ -132,6 +132,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   async _load(refreshRoles) {
     if (!this._hass || this._loading) return;
+    if (refreshRoles && !this._data) {
+      // Paint the local configuration before waiting for website requests or
+      // the planning lock. Reuse polling's editor and stale-response guards.
+      await this._load(false);
+      if (this._data && !this._data.requires_entry_selection) await this._poll(true);
+      return;
+    }
     this._loading = true;
     this._error = "";
     this._render();
@@ -792,13 +799,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
       && !document.hidden;
   }
 
-  async _poll() {
+  async _poll(refreshRoles = false) {
     if (this._polling || !this._canPoll()) return;
     this._polling = true;
     const revision = this._pollRevision;
     const entryId = this._entryId;
     try {
-      const data = await this._hass.callWS({ type: "shs_energy/config/get", config_entry: entryId, refresh_roles: false });
+      const data = await this._hass.callWS({ type: "shs_energy/config/get", config_entry: entryId, refresh_roles: refreshRoles });
       if (!this._canPoll() || revision !== this._pollRevision || entryId !== this._entryId) return;
       if (this._editing() || this._dirty) this._data = { ...data, configuration: this._data.configuration };
       else this._mergePanel(data);

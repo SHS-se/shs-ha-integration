@@ -318,6 +318,62 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 
+for (const outcome of ['success', 'error']) {
+  test(`opening renders local configuration before website refresh ${outcome}`, async () => {
+    const panel = makePanel();
+    const local = { ...panel._data, entry: { entry_id: 'entry' }, configuration: { volume: 55 } };
+    panel._data = panel._draft = panel._savedDraft = undefined;
+    const website = deferred();
+    const started = deferred();
+    let renders = 0;
+    panel._render = () => { if (panel._data) renders++; };
+    panel._updateAttentionUI = () => {};
+    const requests = [];
+    panel._hass = { callWS: message => {
+      requests.push(message.refresh_roles);
+      if (!message.refresh_roles) return Promise.resolve(local);
+      assert.equal(panel._loading, false);
+      assert.equal(panel._draft.volume, 55);
+      assert.ok(renders > 0, 'local configuration renders while website request is pending');
+      started.resolve();
+      return website.promise;
+    } };
+    const opening = panel._load(true);
+    await started.promise;
+    panel._draft.volume = 60;
+    const before = renders;
+    if (outcome === 'success') website.resolve({ ...local, configuration: { volume: 70 } });
+    else website.reject(new Error('Website unavailable'));
+    await opening;
+    assert.deepEqual(requests, [false, true]);
+    assert.equal(panel._draft.volume, 60);
+    assert.equal(renders, before, 'background completion must not rebuild an edited form');
+    assert.equal(panel._refreshError, outcome === 'error' ? 'Website unavailable' : '');
+    assert.equal(panel._polling, false);
+  });
+}
+
+test('opening waits for entry selection before refreshing website choices', async () => {
+  const panel = makePanel(); panel._data = undefined;
+  const requests = [];
+  panel._hass = { callWS: async message => {
+    requests.push(message.refresh_roles);
+    return { requires_entry_selection: true, entries: [] };
+  } };
+  await panel._load(true);
+  assert.deepEqual(requests, [false]);
+});
+
+test('explicit website refresh still requests fresh choices', async () => {
+  const panel = makePanel();
+  panel._data.entry = { entry_id: 'entry' };
+  panel._data.configuration = panel._draft;
+  const requests = [];
+  panel._hass = { callWS: async message => { requests.push(message.refresh_roles); return panel._data; } };
+  await panel._load(true);
+  assert.deepEqual(requests, [true]);
+});
+
 test('typing records the draft before blur without rebuilding the input', () => {
   const panel = splitPanel();
   panel._data.sections = [{ fields: panel._data.devices[0].system_fields }];

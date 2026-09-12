@@ -1014,7 +1014,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return configuration
 
     async def async_refresh_device_configuration(self) -> list[dict[str, Any]]:
-        """Force-fetch website requests when the user opens Configure.
+        """Refresh website choices after Configure opens or on explicit refresh.
 
         Opening a configuration screen must not wait on the planning pipeline:
         that reads ten days of five-minute statistics for every device before
