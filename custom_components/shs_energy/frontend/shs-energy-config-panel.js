@@ -1268,10 +1268,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .required { color:var(--error-color); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
       .field-help { margin-top:7px; color:var(--secondary-text-color); font-size:12px; line-height:1.4; }
       input[type=text], input[type=number], input[type=time], select { width:100%; min-height:48px; padding:10px 12px; border:1px solid var(--divider-color); border-radius:10px; color:var(--primary-text-color); background:var(--secondary-background-color); outline:none; }
-      [data-mode="monitoring"] { color:${this._hass?.themes?.darkMode ? "#90caf9" : "#1565c0"}; }
-      [data-mode="planning"] { color:${this._hass?.themes?.darkMode ? "#ce93d8" : "#7b1fa2"}; }
-      [data-mode="control_verification"] { color:${this._hass?.themes?.darkMode ? "#ffcc80" : "#925400"}; }
-      [data-mode="controlling"] { color:${this._hass?.themes?.darkMode ? "#a5d6a7" : "#2e7d32"}; }
+      /* SHS Silver/Slate, Sky/Nordic Blue, Amber, and Sage/Forest.
+         Amber and Forest are darkened for readable text on light surfaces. */
+      [data-mode="monitoring"] { color:${this._hass?.themes?.darkMode ? "#a2aec0" : "#4a5568"}; }
+      [data-mode="planning"] { color:${this._hass?.themes?.darkMode ? "#a8cfe8" : "#2c5f8d"}; }
+      [data-mode="control_verification"] { color:${this._hass?.themes?.darkMode ? "#f6c573" : "#855e20"}; }
+      [data-mode="controlling"] { color:${this._hass?.themes?.darkMode ? "#9dc4ad" : "#416853"}; }
       option[data-mode] { background:var(--secondary-background-color); }
       option[data-mode]:disabled { color:var(--disabled-text-color); }
       input:focus, select:focus { border-color:var(--primary-color); box-shadow:0 0 0 1px var(--primary-color); }
