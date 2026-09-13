@@ -1,5 +1,6 @@
 """Exercise the event scheduler with real controllers and a virtual timer clock."""
 import asyncio
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -310,11 +311,11 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         entered, release = asyncio.Event(), asyncio.Event()
         append = self.journal.append
 
-        async def delayed(attempt):
+        async def delayed(attempt, **kwargs):
             if not entered.is_set():
                 entered.set()
                 await release.wait()
-            await append(attempt)
+            return await append(attempt, **kwargs)
 
         self.journal.append = delayed
         self.event('sensor.water')
@@ -540,3 +541,19 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.controller.records)
         self.assertEqual(self.controller.status['battery']['state'], 'disabled')
         self.assertEqual(self.controller.status['pool']['state'], 'disabled')
+
+    async def test_observation_timer_samples_passive_devices_without_evaluating_controls(self):
+        self.now = self.now.replace(minute=2)
+        self.slot['start'] = self.now.isoformat()
+        for state in self.states.values():
+            state.last_reported = state.last_updated = self.now
+        await self.controller.async_start()
+        before = deepcopy(self.controller.metrics.snapshot()['devices'])
+        count = len(self.journal.samples)
+        self.advance(60)
+        await self.scheduler.sample_task
+        self.assertEqual(len(self.journal.samples), count + 1)
+        self.assertEqual(self.controller.metrics.snapshot()['devices'], before)
+        self.assertIn((None, 'observations'), self.scheduler.deadlines)
+        self.scheduler.close()
+        self.assertNotIn((None, 'observations'), self.scheduler.deadlines)

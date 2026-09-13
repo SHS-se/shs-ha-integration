@@ -32,6 +32,7 @@ PURE_MODULES = (
     "network_traffic",
     "controller_metrics",
     "controller_diagnostics",
+    "controller_observations",
     "controller_scheduler",
     "configuration_schema",
     "configuration_values",

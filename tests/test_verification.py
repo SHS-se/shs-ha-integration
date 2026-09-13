@@ -293,7 +293,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(migrated.attempts[0]['count'], 2)
         self.assertEqual(migrated.attempts[0]['last_at'], later['at'])
         self.assertEqual(migrated.discarded, 7)
-        self.assertEqual(self.audit_store.saved['schema_version'], 3)
+        self.assertEqual(self.audit_store.saved['schema_version'], 4)
         reloaded = VerificationJournal(self.audit_store)
         await reloaded.load()
         self.assertEqual(reloaded.attempts, migrated.attempts)

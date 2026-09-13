@@ -36,12 +36,13 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.controller.async_tick = AsyncMock(side_effect=AssertionError('download cannot run controller'))
         report = controller_diagnostics(self.controller, panel)
         rows = {row['key']: row for row in report['current']['devices']}
-        self.assertEqual(len(rows), 25)  # 24 - excluded + unmapped + local charger mapping
+        self.assertEqual(len(rows), 24)  # 24 - excluded + unmapped; mapping-only entries are separate
         self.assertNotIn('sensor.load_4', rows)
         self.assertEqual({row['mode'] for row in rows.values()}, set(modes))
         self.assertEqual(rows['sensor.load_0']['mode'], 'monitoring')
         self.assertIsNone(rows['sensor.load_0']['last_evaluated_at'])
-        self.assertIsNone(rows['sensor.load_0']['execution_status'])
+        self.assertEqual(rows['sensor.load_0']['execution_status']['state'], 'monitoring')
+        self.assertEqual(report['current']['unassigned_mappings'][0]['key'], 'charger')
         self.assertEqual(report['current']['observations']['sensor.load_5']['state'], '500')
         self.assertEqual(report['current']['plan']['plan_id'], 'test')
         self.assertEqual(report['evaluations'], [])
@@ -161,4 +162,40 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         await upgraded.load()
         self.assertEqual(upgraded.evaluations, [])
         self.assertEqual(upgraded.attempts, saved['attempts'])
-        self.assertEqual(self.audit_store.saved['schema_version'], 3)
+        self.assertEqual(self.audit_store.saved['schema_version'], 4)
+
+    async def test_verification_links_survive_grouping_and_sessions_have_separate_coverage(self):
+        self.options['device_modes']['$pool'] = 'control_verification'
+        await self.controller.async_start()
+        await self.controller.async_tick()
+        await self.controller.async_tick()
+        attempts = {row['group_id']: row for row in self.journal.attempts}
+        evaluations = [row for row in self.journal.evaluations if row['device'] == 'pool']
+        self.assertTrue(any(row['count'] > 1 for row in evaluations))
+        for row in evaluations:
+            self.assertIn(row['verification_group_id'], attempts)
+            self.assertEqual(attempts[row['verification_group_id']]['device'], 'pool')
+        first_session = self.journal.session_id
+        await self.journal.lifecycle('start', 'test', 'test restart')
+        self.slot['pool_w'] = 0
+        await self.controller.async_tick()
+        panel = self.panel([{'key': 'pool', 'system': 'pool', 'name': 'Pool'}])
+        report = controller_diagnostics(self.controller, panel)
+        self.assertNotEqual(report['current_session']['session_id'], first_session)
+        self.assertEqual(report['current_session']['verification_checks'], 1)
+        self.assertEqual(report['historical_summary']['verification_checks'], 3)
+        coverage = report['current_session']['coverage'][0]
+        self.assertIn('defer', coverage['observed'])
+        self.assertNotIn('heat', coverage['observed'])
+        self.assertTrue(all(row['verification_link_status'] == 'retained' for row in report['evaluations']))
+        self.options['pool_enabled'] = False
+        report = controller_diagnostics(self.controller, self.panel([{'key': 'pool', 'system': 'pool'}]))
+        self.assertEqual(report['current_session']['current_configuration_coverage'], [])
+
+    async def test_passive_runtime_reason_names_the_mode(self):
+        self.options['device_modes']['$ev'] = 'planning'
+        await self.controller.async_start()
+        status = self.controller.status['ev']
+        self.assertEqual(status['state'], 'planning')
+        self.assertIn('Planning only', status['reason'])
+        self.assertNotIn('overridden', status['reason'])

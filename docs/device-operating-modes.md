@@ -66,13 +66,19 @@ JSON file. It includes every configured device in Monitoring, Planning, Control
 verification or Controlling, except explicit `excluded_device_readings` entries.
 A device being outside optimisation does not exclude it from diagnostics.
 
-The schema-3 export separates three kinds of evidence:
+The schema-4 export separates current state, decisions and sampled measurements:
 
 - `current`: all non-excluded devices and their modes, configuration/mappings,
   observed entity state and report timestamps, the accepted plan and active slot,
   planning/readiness status, ownership/restoration state and faults. Devices with
   no retained controller evaluation have a null `last_evaluated_at`; passive
   devices are not evaluated or actuated merely to produce the download.
+  `unassigned_mappings` lists local mapping keys absent from the current inventory;
+  these are not counted as extra physical devices. Shared entities identify alias
+  candidates, not proven identity. `mapping_readiness`, `planning_support`,
+  `execution_eligibility` and `last_controller_result` distinguish separate facts.
+  `ready_devices` counts mapping completeness only. Observation references come
+  from declared entity fields and meter IDs, not dotted metadata keys.
 - `evaluations`: actual controller evaluations, with mode, trigger, plan/slot,
   observations, outcome, ownership before/after, failure latch and exact real
   service attempts. Commands distinguish `called`, transport acceptance or
@@ -82,21 +88,55 @@ The schema-3 export separates three kinds of evidence:
   and its operation coverage. Hypothetical handover remains labelled separately;
   neither simulated commands nor successful register readback prove delivered
   energy. A runtime evaluation in Verification can record real release before
-  simulation, but its simulated commands appear only in `attempts`.
+  simulation, but its simulated commands appear only in `attempts`. Each group has
+  a stable `group_id`; new runtime verification evaluations reference their
+  `verification_group_id`. `verification_link_status` distinguishes retained,
+  evicted and older unlinked evidence.
+- `samples` and `sample_contexts`: read-only observations about once a minute for
+  every non-excluded inventory device, including passive devices. Contexts retain
+  identity, mode and configuration; samples reference the active slot. These are
+  independent of control evaluations. Available mapped instantaneous power is
+  separate from cumulative energy-counter intervals. Unmapped devices still have
+  their energy readings and interval evidence; suggested controls do not become
+  authoritative power measurements.
+- `current_session` and `historical_summary`: separate counts and verification
+  coverage, including `current_configuration_coverage` for the current session.
+  Historical coverage does not commission a new configuration.
 
 The persistent local journal remains
 `.storage/shs_energy.verification.<config_entry_id>` and is never uploaded to the
-website. Existing verification history rolls forward to schema 3 without inventing
-past live evaluations. The latest 2,000 groups of each kind and 500 lifecycle events
-are retained. Repeated equivalent checks carry counts and first/latest observations;
+website. Existing verification history rolls forward to schema 4 without inventing
+past live evaluations, measurements or links. The latest 2,000 groups of each kind,
+720 observation samples (about 12 hours) and 500 lifecycle events are retained.
+Repeated equivalent checks carry counts and first/latest observations;
 plan slots and configuration scopes are shared. New groups persist immediately;
-repeat counts checkpoint at most once a minute and on clean shutdown.
+repeat counts checkpoint at most once a minute and on clean shutdown. Samples
+persist at each sampling interval. Retention counters expose discarded history.
+
+Household `average_w` values estimate energy use between sample boundaries from
+configured energy meters, using their reported units and counter metadata. Source
+reporting times and ages remain available: sample-boundary estimates are not exact
+instantaneous power. Missing/stale sources, unsupported units, counter resets,
+unchanged reports, new sessions/configurations and sampling gaps over two minutes
+produce explicit gaps. A counter's own source interval and average remain visible;
+if its duration differs from the sample interval by more than five seconds, it is
+not used in the household interval sum. Sources from before the active slot cannot
+be compared with that slot's forecast. This prevents delayed reports becoming
+false one-minute power spikes. Every configured source in a household category must be
+usable before summing it. A fixed configured power rating is not a measurement.
+Planned comparisons require the same plan and slot at both interval boundaries.
+Household forecasts may include hypothetical Planning/Verification devices, so a
+measured difference alone does not establish a controller fault. Actual power
+attribution still depends on correct metering and reviewed device mappings.
 
 This is bounded diagnostic evidence, not a complete sensor history or a durable
 record of every in-flight command across an abrupt crash. Runtime evaluation
 records are appended when the evaluation ends; the existing restoration journal
 still owns persistence before control writes. A diagnostic recording error is
 visible in `current.recording_error` and does not trigger live-device restoration.
+Sampling failures separately expose `current.sampling_error` and
+`failed_samples_this_session`. Sampling waits for the controller lock; timestamps
+show any delay, and long gaps are not interpolated.
 
 Current device rows and per-device retained evidence omit explicit exclusions.
 The whole-home plan, current configuration and historical configuration scopes

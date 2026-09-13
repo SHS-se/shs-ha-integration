@@ -85,10 +85,21 @@ def system_fields(system):
     return result
 
 
+def execution_view(mode, status):
+    """Mode eligibility and the last controller outcome are different facts."""
+    if mode in {"monitoring", "planning"} and (not status or status.get("state") not in {"fault", "overridden"}):
+        return {"state": mode, "reason": "Observing only; no SHS commands" if mode == "monitoring" else
+                "Planning only; no SHS commands or command verification"}
+    return deepcopy(status) if status else {"state": "idle", "reason": "No controller evaluation recorded"}
+
+
 def device_readiness(devices):
     """Count included equipment, using the same rows the customer sees."""
     included = [device for device in devices if device.get("included")]
     return {
+        "definition": "ready_devices counts mapping completeness only; it does not establish executable planning or control readiness.",
+        "planning_supported_devices": sum(d.get("planning_support", {}).get("state") == "available" for d in included),
+        "execution_eligible_devices": sum(d.get("execution_eligibility", {}).get("eligible", False) for d in devices),
         "requested_devices": len(included),
         "ready_devices": sum(device.get("mapping_status") == "ready" for device in included),
         "device_mapping_gaps": [device["name"] for device in included if device.get("mapping_status") != "ready"],
@@ -136,6 +147,8 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         fresh = now - datetime.fromisoformat(refreshed) < timedelta(minutes=30)
     except (TypeError, ValueError):
         fresh = False
+    active = next((slot for slot in (plan or {}).get("plans", {}).get("priority", {}).get("slots", [])
+                   if datetime.fromisoformat(slot["start"]) <= now < datetime.fromisoformat(slot["start"]) + timedelta(minutes=15)), None) if status["actionable"] else None
     for device in devices:
         key = device["key"]
         mapping = device.get("mapping", {})
@@ -186,7 +199,23 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         device["mode"] = mode
         device["included"] = included and mode != "monitoring"
         device["permission"] = {"enabled": mode == "controlling", "reason": reason, "verification_reason": verification_reason, "controller_id": controller_id}
-        device["execution_status"] = controllers.get(controller_id, {"state": "disabled"})
+        device["last_controller_result"] = deepcopy(controllers.get(controller_id))
+        device["execution_status"] = execution_view(mode, controllers.get(controller_id))
+        device["optimisation_included"] = device["included"]
+        device["mapping_readiness"] = {"state": device.get("mapping_status"), "reason": device.get("mapping_error")}
+        command = (active or {}).get("device_commands", {}).get(key)
+        if not status["actionable"]:
+            planning_reason = status["reason"]
+        elif system:
+            planning_reason = None if active and (plan or {}).get("capabilities", {}).get(system) else "Waiting for a plan for this device"
+        else:
+            planning_reason = command.get("reason") if command and command.get("type") == "unavailable" else None if command else "Waiting for instructions for this device"
+        device["planning_support"] = {"state": "available" if planning_reason is None else "unavailable",
+                                      "reason": planning_reason, "path": system or "device_commands"}
+        device["execution_reason"] = planning_reason
+        device["execution_eligibility"] = {"eligible": mode in {"controlling", "control_verification"} and reason is None,
+            "writes_permitted_by_mode": mode == "controlling", "verification_permitted_by_mode": mode == "control_verification",
+            "reason": "Inactive by operating mode" if mode in {"monitoring", "planning"} else reason}
         device["system_fields"] = system_fields(system) if system else []
         device["planning_fields"] = [field for field in device["system_fields"] if field["key"] in PLANNING_FIELDS]
         device["planning_system"] = mapped_planning_path(

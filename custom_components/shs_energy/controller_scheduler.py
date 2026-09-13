@@ -19,6 +19,7 @@ class ControllerScheduler:
         self.reasons = set()
         self.dispatched = {}
         self.task = None
+        self.sample_task = None
         self.paused = False
         self.closed = False
         controller.scheduler = self
@@ -194,6 +195,19 @@ class ControllerScheduler:
             # The controller's contract validator owns invalid-plan reporting.
             pass
 
+    def sample_deadline(self):
+        # This timer only samples observations; it never requests a control tick.
+        async def sample():
+            try:
+                await self.controller.async_sample_diagnostics()
+            finally:
+                self.sample_deadline()
+
+        def due():
+            self.sample_task = self.spawn(sample())
+
+        self._schedule((None, "observations"), self.now() + timedelta(seconds=60), due)
+
     def coordinator_updated(self):
         self.plan_deadlines()
         self.request("coordinator_update")
@@ -208,6 +222,8 @@ class ControllerScheduler:
     def close(self):
         self.pause()
         self.closed = True
+        if self.sample_task is not None and not self.sample_task.done():
+            self.sample_task.cancel()
         for unsubscribe in self.watchers.values():
             unsubscribe()
         self.watchers.clear()

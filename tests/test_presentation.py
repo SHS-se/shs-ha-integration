@@ -17,7 +17,8 @@ class PresentationTests(unittest.TestCase):
             {"name": "Heater", "included": True, "mapping_status": "invalid"},
             {"name": "Excluded heater", "included": False, "mapping_status": "ready"},
         ]
-        self.assertEqual(device_readiness(devices), {
+        readiness = device_readiness(devices)
+        self.assertEqual({key: readiness[key] for key in ("requested_devices", "ready_devices", "device_mapping_gaps")}, {
             "requested_devices": 2, "ready_devices": 1, "device_mapping_gaps": ["Heater"],
         })
 
@@ -184,3 +185,38 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(stored['optimisation_device_configuration']['pool']['planning_choice_at'], self.now.isoformat())
         self.assertEqual(fake.optimisation_degraded_devices, [])
         self.assertEqual(calls, {'battery': False, 'pool': False})
+
+    def test_pool_planning_support_uses_the_system_path(self):
+        self.options.update(pool_enabled=True, pool_water_temperature_entity='sensor.water',
+                            device_modes={'$pool': 'control_verification'})
+        self.device.update(key='thermostat', category='pool_heating', execution_reason='No executable planning model for this device')
+        self.device['mapping']['temperature_entity_id'] = 'sensor.water'
+        self.plan['capabilities']['pool'] = True
+        for slot in self.plan['plans']['priority']['slots']:
+            slot['device_commands'][self.device['key']] = {'type': 'unavailable', 'reason': 'No executable planning model for this device'}
+        pool = next(d for d in self.view() if d.get('system') == 'pool')
+        self.assertIsNone(pool['execution_reason'])
+        self.assertEqual(pool['planning_support'], {'state': 'available', 'reason': None, 'path': 'pool'})
+        self.assertFalse(pool['execution_eligibility']['writes_permitted_by_mode'])
+
+    def test_mapping_readiness_does_not_imply_executable_or_mode_eligibility(self):
+        self.options['device_modes'] = {self.device['key']: 'planning'}
+        device = self.view()[0]
+        self.assertEqual(device['mapping_readiness']['state'], 'ready')
+        self.assertFalse(device['execution_eligibility']['eligible'])
+        self.assertEqual(device['execution_status']['state'], 'planning')
+        readiness = device_readiness([device])
+        self.assertEqual(readiness['ready_devices'], 1)
+        self.assertEqual(readiness['execution_eligible_devices'], 0)
+
+    def test_diagnostic_device_view_survives_invalid_plan_timestamps(self):
+        self.plan['plans']['priority']['slots'][0]['start'] = 'invalid'
+        device = self.view()[0]
+        self.assertEqual(device['planning_support']['state'], 'unavailable')
+        self.assertFalse(device['execution_eligibility']['eligible'])
+
+    def test_passive_mode_does_not_display_old_verification_as_current_work(self):
+        from presentation import execution_view
+        status = {'state': 'verified', 'reason': 'Commands logged'}
+        self.assertEqual(execution_view('planning', status)['state'], 'planning')
+        self.assertEqual(status['state'], 'verified')

@@ -160,6 +160,8 @@ class ScheduledController:
         self.diagnostic_evaluation = None
         self.diagnostics_error = None
         self.diagnostics_failed_evaluations = 0
+        self.diagnostics_sampling_error = None
+        self.diagnostics_failed_samples = 0
 
     def add_listener(self, listener):
         self.listeners.add(listener)
@@ -937,7 +939,9 @@ class ScheduledController:
             attempt["observations"] = self.verification_observations
             self.verifying = False
             self.records, self.overrides = owned, overrides
-        await self.verification.append(attempt)
+        group_id = await self.verification.append(attempt)
+        if self.diagnostic_evaluation is not None:
+            self.diagnostic_evaluation["verification_group_id"] = group_id
         limited = attempt.get("result", {}).get("state") == "limited"
         self.report(device, ("limited" if limited else "verified") if attempt["outcome"] == "verified" else "fault",
                     reason=attempt.get("reason") or attempt.get("handover_reason") or (attempt["result"]["reason"] if limited else "Commands logged; physical response and cross-slot transitions are not tested"),
@@ -970,6 +974,64 @@ class ScheduledController:
             self.diagnostics_error = str(err)
             self.diagnostics_failed_evaluations += 1
             _LOGGER.warning("Cannot record controller diagnostics: %s", err)
+
+    async def async_sample_diagnostics(self):
+        """Observe every inventory device without running any actuator logic."""
+        if self.closed or not self.initialized or self.verification is None:
+            return
+        if __package__:
+            from .controller_observations import diagnostic_inventory
+            from .presentation import equipment_present
+            from .operating_modes import system_device_keys
+        else:
+            from controller_observations import diagnostic_inventory
+            from presentation import equipment_present
+            from operating_modes import system_device_keys
+        try:
+            async with self.lock:
+                if self.closed:
+                    return
+                choices = await self.coordinator.async_cached_planning_configuration()
+                options = self.options()
+                devices = deepcopy(choices.get("devices", []))
+                # System owners use the same identity selection as the panel.
+                for system in DEVICES:
+                    if equipment_present(options, system, devices):
+                        if system not in system_device_keys(devices, options).values():
+                            devices.append({"key": "$" + system, "system": system, "name": system})
+                rows, _unassigned = diagnostic_inventory(devices, [], options)
+                await self.verification.sample(options, rows, self.hass.states.get,
+                    at=datetime.now(timezone.utc), version=INTEGRATION_VERSION,
+                    slot=self.coordinator.current_plan_slot,
+                    plan_id=(self.coordinator.optimisation_plan or {}).get("plan_id"))
+                self.diagnostics_sampling_error = None
+        except Exception as err:
+            self.diagnostics_sampling_error = str(err)
+            self.diagnostics_failed_samples += 1
+            _LOGGER.warning("Cannot sample controller observations: %s", err)
+
+    def ineligible_status(self, device, options):
+        mode = device_mode(options, device)
+        if device in self.overrides:
+            return {"state": "overridden", "reason": self.overrides[device]}
+        if mode not in EXECUTING_MODES:
+            return {"state": mode, "reason": "Observing only; no SHS commands" if mode == "monitoring" else
+                    "Planning only; no SHS commands or command verification"}
+        if device.startswith("device:"):
+            key = device.removeprefix("device:")
+            if key in options.get("excluded_device_readings", []):
+                reason = "Device readings are explicitly excluded"
+            elif self.requested_types.get(key) != options.get("device_control_mappings", {}).get(key, {}).get("control_type"):
+                reason = "Device mapping does not match the requested control method"
+            else:
+                return {"state": "overridden", "reason": "Configured manual override is active"}
+        elif device not in self.requested_systems:
+            reason = "Device is not included in the household plan"
+        elif not options.get(device + "_enabled", True):
+            reason = "Device is disabled in SHS configuration"
+        else:
+            return {"state": "overridden", "reason": "Configured manual override is active"}
+        return {"state": "disabled", "reason": reason}
 
     async def async_start(self, *, reason="integration_load"):
         try:
@@ -1004,9 +1066,11 @@ class ScheduledController:
                 self.report(device, "fault", reason=f"cannot load verification journal: {journal_error}")
             return
         self.initialized = True
+        await self.async_sample_diagnostics()
         await self.async_tick(trigger="startup")
         if self.scheduler is not None:
             self.scheduler.plan_deadlines()
+            self.scheduler.sample_deadline()
 
     async def async_tick(self, _now=None, *, trigger="manual", devices=None):
         skipped = ("inactive" if self.closed or not self.initialized else
@@ -1086,7 +1150,7 @@ class ScheduledController:
                         await self.restore(device)
                     if not self.eligible(device, options):
                         self.failed.pop(device, None)
-                        self.report(device, "overridden" if device in self.overrides else "disabled", reason=self.overrides.get(device, "control disabled, excluded from the plan, or manually overridden"))
+                        self.report(device, **self.ineligible_status(device, options))
                         continue
                     supported = (plan.get("schema_version", 0) >= 7 and device.removeprefix("device:") in slot.get("device_commands", {})
                                  if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device))
