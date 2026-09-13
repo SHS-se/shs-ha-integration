@@ -83,6 +83,180 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
     def evaluations(self, device):
         return self.controller.metrics.snapshot()['devices'][device]['completed']
 
+    async def start_live_pool(self):
+        self.options['device_modes'] = {'$pool': 'controlling'}
+        self.slot['start'] = self.now.isoformat()
+        self.slot['pool_w'] = 0
+        await self.controller.async_start()
+        self.calls.clear()
+
+    async def test_short_pool_temperature_gaps_do_not_restore_or_reapply(self):
+        await self.start_live_pool()
+        band = (self.states['number.start'].state, self.states['number.stop'].state)
+        for seconds in (5, 6):
+            self.states['sensor.water'].state = 'unavailable'
+            self.event('sensor.water')
+            await self.drain()
+            self.assertEqual(self.controller.status['pool']['state'], 'limited')
+            self.assertIn(('pool', 'temperature_gap'), self.scheduler.deadlines)
+            self.advance(seconds)
+            self.states['sensor.water'].state = '29'
+            self.event('sensor.water')
+            await self.drain()
+            self.assertNotIn(('pool', 'temperature_gap'), self.scheduler.deadlines)
+            self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
+        self.assertEqual(self.calls, [])
+        self.assertEqual(band, (self.states['number.start'].state, self.states['number.stop'].state))
+
+    async def test_pool_gap_deadline_is_not_renewed_and_restores_without_reports(self):
+        await self.start_live_pool()
+        self.states['sensor.water'].state = 'unavailable'
+        self.event('sensor.water')
+        await self.drain()
+        deadline = self.scheduler.deadlines[('pool', 'temperature_gap')][0]
+        self.advance(6)
+        self.event('sensor.water')
+        await self.drain()
+        self.assertEqual(self.scheduler.deadlines[('pool', 'temperature_gap')][0], deadline)
+        self.advance(9)
+        await self.drain()
+        self.assertEqual(self.states['number.start'].state, '29.5')
+        self.assertEqual(self.states['number.stop'].state, '30.0')
+        self.assertNotIn('pool', self.controller.records)
+        count = len(self.calls)
+        self.event('sensor.water')
+        await self.drain()
+        self.assertEqual(len(self.calls), count)
+        self.assertNotIn(('pool', 'temperature_gap'), self.scheduler.deadlines)
+
+    async def test_pool_gap_respects_freshness_slot_and_plan_expiry(self):
+        for bound in ('freshness', 'slot', 'plan'):
+            with self.subTest(bound=bound):
+                fixtures.ControllerTests.setUp(self)
+                self.options['device_modes'] = {'$pool': 'controlling'}
+                for state in self.states.values():
+                    state.last_reported = self.now
+                self.slot['start'] = (self.now - timedelta(seconds=895) if bound == 'slot' else self.now).isoformat()
+                self.slot['pool_w'] = 0
+                self.coordinator.optimisation_plan['valid_until'] = (self.now + timedelta(seconds=5 if bound == 'plan' else 900)).isoformat()
+                if bound == 'freshness':
+                    self.states['sensor.water'].last_reported = self.now - timedelta(seconds=895)
+                self.scheduler.close()
+                self.scheduler = ControllerScheduler(self.controller, self.subscribe, self.at, asyncio.create_task, now=lambda: self.now)
+                self.addCleanup(self.scheduler.close)
+                await self.controller.async_start()
+                self.calls.clear()
+                self.states['sensor.water'].state = 'unavailable'
+                self.event('sensor.water')
+                await self.drain()
+                self.assertEqual(self.scheduler.deadlines[('pool', 'temperature_gap')][0], self.now + timedelta(seconds=5))
+                self.advance(5)
+                await self.drain()
+                self.assertNotIn('pool', self.controller.records)
+
+    async def test_pool_gap_does_not_cover_changed_request_or_missing_actuator(self):
+        await self.start_live_pool()
+        self.states['sensor.water'].state = 'unavailable'
+        self.event('sensor.water')
+        await self.drain()
+        self.slot['pool_w'] = 3300
+        await self.controller.async_tick()
+        self.assertNotIn('pool', self.controller.records)
+        self.assertEqual(self.controller.status['pool']['state'], 'fault')
+        self.assertNotIn(('pool', 'temperature_gap'), self.scheduler.deadlines)
+        self.states['sensor.water'].state = '29'
+        self.event('sensor.water')
+        await self.drain()
+        self.states['number.start'].state = 'unavailable'
+        self.event('number.start')
+        await self.drain()
+        self.assertTrue(self.controller.records['pool']['restoration_pending'])
+        self.assertNotIn(('pool', 'temperature_gap'), self.scheduler.deadlines)
+
+    async def test_pool_gap_does_not_cover_bad_units(self):
+        await self.start_live_pool()
+        self.states['sensor.water'].attributes['unit_of_measurement'] = '°F'
+        self.event('sensor.water')
+        await self.drain()
+        self.assertNotIn('pool', self.controller.records)
+        self.assertNotIn(('pool', 'temperature_gap'), self.scheduler.deadlines)
+
+    async def test_filter_gap_retains_raw_dependency_and_rejects_source_change(self):
+        self.controller.entity_registry = SimpleNamespace(async_get=lambda entity:
+            SimpleNamespace(platform='filter') if entity == 'sensor.water' else None)
+        self.states['sensor.water'].attributes['entity_id'] = 'sensor.raw'
+        self.states['sensor.raw'] = fixtures.State(29, unit_of_measurement='°C')
+        self.states['sensor.raw'].last_reported = self.now
+        await self.start_live_pool()
+        self.states['sensor.water'].state = 'unavailable'
+        self.event('sensor.water')
+        await self.drain()
+        self.assertIn('sensor.raw', self.subscriptions)
+        self.assertEqual(self.calls, [])
+        self.states['sensor.raw'].attributes['unit_of_measurement'] = '°F'
+        self.event('sensor.raw')
+        await self.drain()
+        self.assertNotIn('pool', self.controller.records)
+
+    async def test_pool_gap_ends_when_control_is_disabled(self):
+        await self.start_live_pool()
+        self.states['sensor.water'].state = 'unavailable'
+        self.event('sensor.water')
+        await self.drain()
+        self.options['device_modes']['$pool'] = 'planning'
+        await self.controller.async_tick()
+        self.assertNotIn('pool', self.controller.records)
+        self.assertNotIn(('pool', 'temperature_gap'), self.scheduler.deadlines)
+
+    async def test_partial_write_cannot_enter_temperature_gap(self):
+        from controller import ControlObservationError
+        await self.start_live_pool()
+        original = self.hass.services.async_call
+        failed = False
+
+        async def fail_after_write(domain, name, data, blocking):
+            nonlocal failed
+            await original(domain, name, data, blocking)
+            if not failed:
+                failed = True
+                self.states['sensor.water'].state = 'unavailable'
+                raise ControlObservationError('temperature lost during write', 'sensor.water', 'check source', unavailable=True)
+
+        self.hass.services.async_call = fail_after_write
+        self.states['sensor.water'].state = '28'
+        self.event('sensor.water')
+        await self.drain()
+        self.assertTrue(failed)
+        self.assertNotIn('pool', self.controller.records)
+        self.assertNotIn(('pool', 'temperature_gap'), self.scheduler.deadlines)
+        self.assertEqual(self.states['number.start'].state, '29.5')
+
+    async def test_stale_raw_source_cannot_hide_behind_missing_filter(self):
+        self.controller.entity_registry = SimpleNamespace(async_get=lambda entity:
+            SimpleNamespace(platform='filter') if entity == 'sensor.water' else None)
+        self.states['sensor.water'].attributes['entity_id'] = 'sensor.raw'
+        self.states['sensor.raw'] = fixtures.State(29, unit_of_measurement='°C')
+        self.states['sensor.raw'].last_reported = self.now
+        await self.start_live_pool()
+        self.states['sensor.water'].state = 'unavailable'
+        self.states['sensor.raw'].last_reported = self.now - timedelta(seconds=901)
+        self.event('sensor.water')
+        await self.drain()
+        self.assertNotIn('pool', self.controller.records)
+        self.assertNotIn(('pool', 'temperature_gap'), self.scheduler.deadlines)
+
+    async def test_verification_cannot_seed_a_live_pool_gap(self):
+        self.options['device_modes'] = {'$pool': 'control_verification'}
+        self.slot['start'] = self.now.isoformat()
+        await self.controller.async_start()
+        self.assertIsNone(self.controller.pool_observation)
+        self.options['device_modes']['$pool'] = 'controlling'
+        self.states['sensor.water'].state = 'unavailable'
+        self.event('sensor.water')
+        await self.drain()
+        self.assertNotIn(('pool', 'temperature_gap'), self.scheduler.deadlines)
+        self.assertEqual(self.calls, [])
+
     async def test_quiet_controller_has_no_five_second_sweep_and_changes_are_scoped(self):
         await self.controller.async_start()
         self.advance(5)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 import logging
 import hashlib
@@ -43,14 +44,28 @@ CONFIRM_SECONDS = 15
 BATTERY_MAX_AGE_SECONDS = 120
 POOL_MAX_AGE_SECONDS = 15 * 60
 EV_MAX_AGE_SECONDS = 15 * 60
+POOL_GAP_SECONDS = 15
 
 
 class ControlObservationError(ValueError):
     """An unusable observation with a concrete inspection destination."""
-    def __init__(self, message, entity, next_step):
+    def __init__(self, message, entity, next_step, *, unavailable=False):
         super().__init__(message)
+        self.entity = entity
+        self.unavailable = unavailable
         self.details = {"next_step": next_step,
                         "fix": {"kind": "entity", "entity_id": entity} if entity else {"kind": "device"}}
+
+
+@dataclass
+class PoolObservation:
+    """Evidence for holding an already accepted band, never a cached command input."""
+    configuration: dict
+    slot_start: str
+    heating: bool
+    sources: dict[str, str | None]
+    fresh_until: datetime
+    gap_until: datetime | None = None
 
 
 class PlanChangedError(ValueError):
@@ -142,6 +157,8 @@ class ScheduledController:
         self.metrics = ControllerMetrics(INTEGRATION_VERSION)
         self.scheduler = None
         self.observation_changed = asyncio.Event()
+        self.pool_observation: PoolObservation | None = None
+        self.write_attempted = False
 
     def add_listener(self, listener):
         self.listeners.add(listener)
@@ -179,6 +196,7 @@ class ScheduledController:
                 f"{entity or 'required entity'} is unavailable", entity,
                 "Check the source entity and its integration for an unavailable reading. "
                 "If the entity was replaced, select its replacement in this device's setup.",
+                unavailable=True,
             )
         if max_age is not None:
             reported = getattr(state, "last_reported", state.last_updated)
@@ -333,6 +351,7 @@ class ScheduledController:
             await self.save()
         self.check_authority()
         if not equal:
+            self.write_attempted = True
             self.command_times[entity] = datetime.now(timezone.utc)
             await asyncio.wait_for(
                 self.hass.services.async_call(
@@ -408,6 +427,9 @@ class ScheduledController:
 
     async def restore(self, device):
         self.device = device
+        if device == "pool" and not self.verifying:
+            self.pool_observation = None
+            self.device_deadline("temperature_gap", None)
         record = self.records.get(device)
         if record is None:
             return
@@ -534,6 +556,7 @@ class ScheduledController:
         """Use the filtered temperature, but require reports from its raw source."""
         selected = entity
         visited = set()
+        sources = {}
         temperature = None
         while True:
             if entity in visited:
@@ -550,14 +573,16 @@ class ScheduledController:
                 temperature = value
             entry = self.entity_registry.async_get(entity) if self.entity_registry is not None else None
             if entry is None or entry.platform != "filter":
-                self.state(entity, max_age=POOL_MAX_AGE_SECONDS)
-                return temperature
+                raw = self.state(entity, max_age=POOL_MAX_AGE_SECONDS)
+                sources[entity] = None
+                return temperature, sources, raw.last_reported + timedelta(seconds=POOL_MAX_AGE_SECONDS)
             source = state.attributes.get("entity_id")
             if not isinstance(source, str) or not source.startswith("sensor."):
                 raise ControlObservationError(
                     f"{entity}: Filter sensor has no valid temperature source", entity,
                     "Check the source entity configured in this Filter sensor.",
                 )
+            sources[entity] = source
             entity = source
 
     async def execute_pool(self, options, slot):
@@ -567,10 +592,10 @@ class ScheduledController:
         start = options.get("pool_start_temperature_entity")
         stop = options.get("pool_stop_temperature_entity")
         water_entity = options.get("pool_water_temperature_entity")
-        for entity in (start, stop, water_entity):
+        for entity in (start, stop):
             if self.state(entity).attributes.get("unit_of_measurement") != "°C":
                 raise ValueError(f"{entity}: pool control requires Celsius")
-        water = self.pool_temperature(water_entity)
+        water, sources, fresh_until = self.pool_temperature(water_entity)
         record = self.records.get("pool")
         heat = ((finite(record["originals"][start]), finite(record["originals"][stop]))
                 if record else (self.number(start), self.number(stop)))
@@ -580,6 +605,10 @@ class ScheduledController:
         await self.band_commands(start, stop, band)
         if on and (permission := options.get("pool_permission_entity")):
             await self.command(permission, "on")
+        if not self.verifying:
+            self.pool_observation = PoolObservation(
+                ownership_configuration(options, "pool"), slot["start"], on, sources, fresh_until)
+            self.device_deadline("temperature_gap", None)
         limited = not on and band[1] >= water
         return {"state": "limited" if limited else "scheduled",
                 "reason": "temperature control lower limit prevents further deferral" if limited else "band accepted; the local thermostat controls heating",
@@ -588,6 +617,57 @@ class ScheduledController:
                     "fix": {"kind": "device"}} if limited else {}),
                 "start_temperature_c": band[0], "stop_temperature_c": band[1],
                 "water_temperature_c": water, "requested_power_w": slot["pool_w"]}
+
+    def hold_pool_gap(self, error, options, slot, plan):
+        """Suspend writes briefly for a missing temperature under unchanged authority."""
+        evidence = self.pool_observation
+        record = self.records.get("pool")
+        if (self.verifying or self.scheduler is None or self.write_attempted
+                or not isinstance(error, ControlObservationError) or not error.unavailable
+                or evidence is None or error.entity not in evidence.sources
+                or not record or record.get("restoration_pending") or not slot
+                or device_mode(options, "pool") != "controlling"
+                or evidence.configuration != ownership_configuration(options, "pool")
+                or evidence.slot_start != slot["start"]
+                or evidence.heating != (finite(slot["pool_w"]) > 0)):
+            return None
+        try:
+            self.check_authority()
+        except ValueError:
+            return None
+        now = datetime.now(timezone.utc)
+        # Available chain members must still be valid and have the same source.
+        # Read all members so recovery and source edits remain scheduler dependencies.
+        for entity, source in evidence.sources.items():
+            state = self.observed_state(entity)
+            if state is None or state.state in ("unknown", "unavailable"):
+                continue
+            if state.attributes.get("unit_of_measurement") != "°C":
+                return None
+            try:
+                finite(state.state)
+            except (ValueError, TypeError):
+                return None
+            entry = self.entity_registry.async_get(entity) if self.entity_registry is not None else None
+            actual_source = state.attributes.get("entity_id") if entry and entry.platform == "filter" else None
+            if actual_source != source:
+                return None
+            if source is None and not 0 <= (now - state.last_reported).total_seconds() < POOL_MAX_AGE_SECONDS:
+                return None
+        if not all(self.matches(entity, value) for entity, value in record.get("last_commands", {}).items()):
+            return None
+        try:
+            expiry = datetime.fromisoformat(plan["valid_until"].replace("Z", "+00:00"))
+            slot_end = datetime.fromisoformat(slot["start"].replace("Z", "+00:00")) + timedelta(minutes=15)
+        except (KeyError, ValueError, TypeError):
+            return None
+        deadline = min(evidence.gap_until or now + timedelta(seconds=POOL_GAP_SECONDS),
+                       evidence.fresh_until, slot_end, expiry)
+        if deadline <= now:
+            return None
+        evidence.gap_until = deadline
+        self.device_deadline("temperature_gap", deadline)
+        return deadline
 
     def battery_measurement(self, options):
         """Direction comes from explicit observations, magnitude from either power sign."""
@@ -949,6 +1029,7 @@ class ScheduledController:
                 if devices is not None and device not in devices:
                     continue
                 self.device = device
+                self.write_attempted = False
                 if self.scheduler is not None:
                     self.scheduler.begin_device(device)
                 key = repr((options, plan.get("plan_id"), slot))
@@ -983,6 +1064,12 @@ class ScheduledController:
                     self.failed.pop(device, None)
                     self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"))
                 except Exception as err:
+                    if device == "pool" and (deadline := self.hold_pool_gap(err, options, slot, plan)):
+                        self.failed.pop(device, None)
+                        self.report(device, "limited", reason="water temperature unavailable; accepted band held without writes",
+                                    temperature_gap_until=deadline.isoformat(), retry_automatically=True,
+                                    **correction_details(err))
+                        continue
                     # A new observation can repair this fault without a new plan.
                     retry = isinstance(err, ControlObservationError)
                     if retry:
