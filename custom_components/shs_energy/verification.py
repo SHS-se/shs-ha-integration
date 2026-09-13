@@ -1,4 +1,4 @@
-"""One bounded, persistent verification journal for every local controller."""
+"""Bounded controller evidence, with simulated and real evaluations separate."""
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
@@ -42,8 +42,9 @@ def operation_name(device, kind, slot, result):
 def _signature(record):
     """Compare decisions, not telemetry that changes without affecting commands."""
     signature = {key: value for key, value in record.items() if key not in (
-        "at", "last_at", "count", "observations", "last_observations")}
-    signature["commands"] = [{key: value for key, value in command.items() if key != "at"}
+        "at", "last_at", "count", "observations", "last_observations",
+        "final_observations", "last_final_observations", "completed_at")}
+    signature["commands"] = [{key: value for key, value in command.items() if key not in ("at", "completed_at")}
                              for command in record.get("commands", [])]
     # Pool temperature is supporting evidence; actual setpoints, limited state,
     # reasons and command values still distinguish decisions.
@@ -52,12 +53,31 @@ def _signature(record):
     return signature
 
 
+def observation(state):
+    return {"state": state.state if state else None,
+            "attributes": dict(state.attributes) if state else {},
+            "last_reported": str(getattr(state, "last_reported", None)),
+            "last_updated": str(getattr(state, "last_updated", None))}
+
+
+def evaluation_record(device, mode, options, slot, plan, version, expected=()):
+    configuration = json.dumps({"version": version, "options": options}, sort_keys=True, default=str)
+    return {"device": device, "scope": device + ":" + hashlib.sha256(configuration.encode()).hexdigest()[:16],
+            "at": datetime.now(timezone.utc).isoformat(), "mode": mode,
+            "integration_version": version, "plan_id": plan.get("plan_id"),
+            "slot_start": slot.get("start") if slot else None, "slot": deepcopy(slot),
+            "plan_schema_version": plan.get("schema_version"), "plan_issued_at": plan.get("issued_at"),
+            "configuration": deepcopy(options), "expected_operations": list(expected),
+            "operations": [], "outcome": "blocked", "commands": [], "observations": {}}
+
+
 class VerificationJournal:
     def __init__(self, store):
         self.store = store
         self.events = []
         self.session_id = None
         self.attempts = []
+        self.evaluations = []
         self.configurations = {}
         self.slots = {}
         self.discarded = 0
@@ -69,20 +89,22 @@ class VerificationJournal:
         if saved is None:
             return
         version = saved.get("schema_version", 1)
-        if version not in (1, 2):
+        if version not in (1, 2, 3):
             raise ValueError(f"Unsupported verification journal schema: {version}")
         self.events = saved.get("lifecycle_events", [])
         self.discarded = saved.get("discarded_attempts", 0)
+        self.evaluations = saved["evaluations"] if version == 3 else []
         if version == 1:
             # One-time roll-forward: compact existing evidence on upgrade.
             for attempt in saved["attempts"]:
                 self._record({**attempt, "configuration": saved["configurations"][attempt["scope"]]})
-            self.dirty = True
-            await self.flush()
         else:
             self.attempts = saved["attempts"]
             self.configurations = saved["configurations"]
             self.slots = saved["slots"]
+        if version < 3:
+            self.dirty = True
+            await self.flush()
 
     async def lifecycle(self, event, version, reason):
         previous = (self.events, self.session_id, self.dirty)
@@ -100,7 +122,7 @@ class VerificationJournal:
             self.events, self.session_id, self.dirty = previous
             raise
 
-    def _record(self, attempt):
+    def _record(self, attempt, *, runtime=False):
         record = deepcopy(attempt)
         if self.session_id is not None:
             record["session_id"] = self.session_id
@@ -108,46 +130,52 @@ class VerificationJournal:
         slot = record.pop("slot")
         slot_id = hashlib.sha256(json.dumps(slot, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         record.update(slot_id=slot_id, count=1, last_at=record["at"])
-        previous_index = next((i for i in range(len(self.attempts) - 1, -1, -1)
-                               if self.attempts[i]["device"] == record["device"]), None)
-        previous = self.attempts[previous_index] if previous_index is not None else None
+        collection = self.evaluations if runtime else self.attempts
+        previous_index = next((i for i in range(len(collection) - 1, -1, -1)
+                               if collection[i]["device"] == record["device"]), None)
+        previous = collection[previous_index] if previous_index is not None else None
         repeated = previous is not None and _signature(previous) == _signature(record)
-        attempts = list(self.attempts)
+        attempts = list(collection)
         if repeated:
             attempts[previous_index] = {**previous, "count": previous["count"] + 1,
                                        "last_at": record["at"],
-                                       "last_observations": record.get("observations", {})}
+                                       "last_observations": record.get("observations", {}),
+                                       "last_final_observations": record.get("final_observations", {})}
         else:
             attempts.append(record)
         removed = attempts[:-MAX_GROUPS]
         attempts = attempts[-MAX_GROUPS:]
-        scopes = {row["scope"] for row in attempts}
-        slot_ids = {row["slot_id"] for row in attempts}
+        retained = attempts + (self.attempts if runtime else self.evaluations)
+        scopes = {row["scope"] for row in retained}
+        slot_ids = {row["slot_id"] for row in retained}
         self.configurations = {key: value for key, value in self.configurations.items() if key in scopes}
         self.configurations[record["scope"]] = configuration
         self.slots = {key: value for key, value in self.slots.items() if key in slot_ids}
         self.slots[slot_id] = slot
-        self.attempts = attempts
+        if runtime:
+            self.evaluations = attempts
+        else:
+            self.attempts = attempts
         self.discarded += sum(row["count"] for row in removed)
         self.dirty = True
         return repeated
 
-    async def append(self, attempt):
-        previous = (self.attempts, self.configurations, self.slots, self.discarded, self.dirty)
-        repeated = self._record(attempt)
+    async def append(self, attempt, *, runtime=False):
+        previous = (self.attempts, self.evaluations, self.configurations, self.slots, self.discarded, self.dirty)
+        repeated = self._record(attempt, runtime=runtime)
         try:
             # New decisions/failures are durable immediately. Repeated checks
             # checkpoint at most once a minute, and flush on clean shutdown.
             if not repeated or monotonic() - self.last_saved >= SAVE_INTERVAL_SECONDS:
                 await self.flush()
         except Exception:
-            self.attempts, self.configurations, self.slots, self.discarded, self.dirty = previous
+            self.attempts, self.evaluations, self.configurations, self.slots, self.discarded, self.dirty = previous
             raise
 
     async def flush(self):
         if not self.dirty:
             return
-        await self.store.async_save({"schema_version": 2, "attempts": self.attempts,
+        await self.store.async_save({"schema_version": 3, "attempts": self.attempts, "evaluations": self.evaluations,
                                     "configurations": self.configurations, "slots": self.slots,
                                     "lifecycle_events": self.events,
                                     "discarded_attempts": self.discarded})
@@ -168,10 +196,13 @@ class VerificationJournal:
             item["missing"] = sorted(set(item["expected"]) - set(item["observed"]))
             item["covered"] = len(item["observed"])
             item["total"] = len(item["expected"])
-        return {"schema_version": 2, "exported_at": datetime.now(timezone.utc).isoformat(),
+        return {"schema_version": 3, "exported_at": datetime.now(timezone.utc).isoformat(),
                 "lifecycle_events": deepcopy(self.events),
-                "retention": {"max_lifecycle_events": MAX_LIFECYCLE_EVENTS, "max_groups": MAX_GROUPS, "discarded_attempts": self.discarded},
+                "retention": {"max_lifecycle_events": MAX_LIFECYCLE_EVENTS, "max_groups": MAX_GROUPS,
+                              "max_runtime_groups": MAX_GROUPS, "discarded_attempts": self.discarded},
                 "coverage_definition": "Successful command-generation branches for each configuration. Includes simulated handover. Does not prove physical response, all numeric values, failure paths or transitions between slots.",
                 "configurations": deepcopy(self.configurations), "slots": deepcopy(self.slots),
-                "aggregation_definition": "Consecutive equivalent decisions per device, scoped to configuration and plan slot. at/observations/commands describe the first check; last_at describes the latest check, with last_observations present for repeated checks; count is the number of represented checks. Physical response is not tested.",
-                "coverage": list(coverage.values()), "attempts": deepcopy(self.attempts)}
+                "aggregation_definition": "Consecutive equivalent decisions per device, scoped to configuration and plan slot. at/observations/commands describe the first check; final_observations contains its last actual reads. last_at, last_observations and last_final_observations describe repeated checks; count is the number of represented checks. Verification never proves physical response; runtime results retain the controller's device-specific evidence.",
+                "runtime_definition": "Observed controller evaluations, including real service attempts and handover. Transport acceptance and setting readback do not by themselves prove physical delivery. No evaluations are invented for passive devices or periods before recording began. Simulation commands appear only in attempts; a runtime evaluation can include real release commands before verification.",
+                "coverage": list(coverage.values()), "attempts": deepcopy(self.attempts),
+                "evaluations": deepcopy(self.evaluations)}

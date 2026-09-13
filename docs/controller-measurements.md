@@ -2,7 +2,7 @@
 
 Keep devices in **Control verification** while collecting the baseline. Install
 the beta and let it run across several battery and pool slots, then download
-either Home Assistant integration diagnostics or the control verification file.
+either Home Assistant integration diagnostics or the controller diagnostics download.
 Both contain `controller_metrics`; HA diagnostics also contain the existing
 `network_traffic` counters. Collection sends no additional requests to the website.
 

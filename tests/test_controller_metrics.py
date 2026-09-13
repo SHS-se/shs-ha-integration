@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from controller_metrics import ControllerMetrics
@@ -63,12 +63,17 @@ class MetricsTests(unittest.TestCase):
 
 class ExportTests(unittest.IsolatedAsyncioTestCase):
     async def test_diagnostics_and_verification_include_session_metrics(self):
-        import asyncio
+        import test_controller as fixtures
+        from controller_diagnostics import controller_diagnostics
+        from verification import VerificationJournal
         root = Path(__file__).parents[1] / 'custom_components' / 'shs_energy'
         meter = ControllerMetrics('test')
         meter.trigger('timer', 'busy')
-        controller = SimpleNamespace(metrics=meter, lock=asyncio.Lock(),
-                                     verification=SimpleNamespace(export=lambda: {'attempts': []}))
+        fixture = fixtures.ControllerTests()
+        fixture.setUp()
+        controller = fixture.controller
+        controller.metrics = meter
+        controller.verification = VerificationJournal(fixtures.Store())
         entry = SimpleNamespace(runtime_data=SimpleNamespace(controller=controller,
             client=SimpleNamespace(traffic=SimpleNamespace(snapshot=lambda: {'requests': 0}))))
 
@@ -90,7 +95,14 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         results = []
         download = load_function('config_panel.py', 'websocket_download_verification', {
             '_entry_from_message': lambda *args: entry, '_entry_state': lambda entry: 'loaded',
+            'controller_diagnostics': controller_diagnostics,
+            '_configuration_payload': AsyncMock(return_value={
+                'devices': [{'key': 'sensor.monitor', 'mode': 'monitoring'}],
+                'meter_inventory': [], 'configuration': fixture.options,
+                'operation': fixture.coordinator.operational_status, 'readiness': {},
+            }),
         })
         await download(None, SimpleNamespace(send_result=lambda _, value: results.append(value)), {'id': 1, 'config_entry': 'test'})
         self.assertEqual(results[0]['attempts'], [])
         self.assertEqual(results[0]['controller_metrics']['triggers'], report['controller_metrics']['triggers'])
+        self.assertEqual(results[0]['current']['devices'][0]['mode'], 'monitoring')

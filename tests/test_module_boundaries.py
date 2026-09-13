@@ -31,6 +31,7 @@ PURE_MODULES = (
     "migration",
     "network_traffic",
     "controller_metrics",
+    "controller_diagnostics",
     "controller_scheduler",
     "configuration_schema",
     "configuration_values",

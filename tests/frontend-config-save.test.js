@@ -769,9 +769,9 @@ test('subscription recovery clears the badge during an edit without replacing th
   assert.equal(renders, 0);
 });
 
-test('verification download is compact gzip JSON with shared slot references', async () => {
+test('all-mode controller diagnostics download is compact gzip JSON with shared slot references', async () => {
   const { gunzipSync } = require('node:zlib');
-  const data = { schema_version: 2, slots: { slot: { start: 'now' } }, attempts: [{ slot_id: 'slot', count: 9 }], coverage: [] };
+  const data = { schema_version: 3, current: { devices: [{ mode: 'monitoring' }, { mode: 'planning' }] }, evaluations: [], slots: { slot: { start: 'now' } }, attempts: [{ slot_id: 'slot', count: 9 }], coverage: [] };
   let blob;
   let clicked = false;
   let revoked;
@@ -791,7 +791,8 @@ test('verification download is compact gzip JSON with shared slot references', a
   } };
   await panel._downloadVerification();
   assert.equal(panel._error, undefined);
-  assert.equal(anchor.download, 'shs-control-verification.json.gz');
+  assert.equal(anchor.download, 'shs-controller-diagnostics.json.gz');
+  assert.match(panel._notice, /2 devices.*0 runtime groups.*1 verification groups/);
   assert.equal(blob.type, 'application/gzip');
   assert.equal(gunzipSync(Buffer.from(await blob.arrayBuffer())).toString(), JSON.stringify(data));
   assert.equal(clicked, true);

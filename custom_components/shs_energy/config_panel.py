@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant
 from . import const as shs_const
 from .api import ShsApiError
 from .api_contract import INTEGRATION_VERSION
+from .controller_diagnostics import controller_diagnostics
 from .configuration import (
     area_name_by_id,
     async_discover_configuration,
@@ -626,10 +627,8 @@ async def websocket_download_verification(hass, connection, msg):
         return
     controller = entry.runtime_data.controller
     async with controller.lock:
-        connection.send_result(msg["id"], {
-            **controller.verification.export(),
-            "controller_metrics": controller.metrics.snapshot(),
-        })
+        panel = await _configuration_payload(hass, entry, refresh_roles=False)
+        connection.send_result(msg["id"], controller_diagnostics(controller, panel))
 
 
 async def async_register_config_panel(hass: HomeAssistant) -> None:

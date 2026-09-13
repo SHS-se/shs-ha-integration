@@ -11,8 +11,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 import logging
-import hashlib
-import json
 from math import isfinite
 from typing import Any
 from types import SimpleNamespace
@@ -21,7 +19,7 @@ from time import perf_counter
 try:
     from .api_contract import INTEGRATION_VERSION
     from .operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
-    from .verification import OPERATIONS, operation_name
+    from .verification import OPERATIONS, operation_name, evaluation_record, observation
     from .controller_metrics import ControllerMetrics, fingerprint, record_time
     from .battery_commands import validate_battery_command
     from .configuration_values import resolve_battery_quantities, resolve_quantity
@@ -30,7 +28,7 @@ try:
 except ImportError:  # Pure executor tests, without importing Home Assistant.
     from api_contract import INTEGRATION_VERSION
     from operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
-    from verification import OPERATIONS, operation_name
+    from verification import OPERATIONS, operation_name, evaluation_record, observation
     from controller_metrics import ControllerMetrics, fingerprint, record_time
     from battery_commands import validate_battery_command
     from configuration_values import resolve_battery_quantities, resolve_quantity
@@ -159,6 +157,9 @@ class ScheduledController:
         self.observation_changed = asyncio.Event()
         self.pool_observation: PoolObservation | None = None
         self.write_attempted = False
+        self.diagnostic_evaluation = None
+        self.diagnostics_error = None
+        self.diagnostics_failed_evaluations = 0
 
     def add_listener(self, listener):
         self.listeners.add(listener)
@@ -177,6 +178,10 @@ class ScheduledController:
 
     def observed_state(self, entity, *, max_age=None):
         state = self.hass.states.get(entity) if entity else None
+        if self.diagnostic_evaluation is not None and not self.verifying and entity:
+            value = observation(state)
+            self.diagnostic_evaluation["observations"].setdefault(entity, value)
+            self.diagnostic_evaluation.setdefault("final_observations", {})[entity] = value
         self.metrics.observe(entity, state)
         if self.scheduler is not None:
             self.scheduler.observe(self.device, entity, state, max_age)
@@ -185,12 +190,7 @@ class ScheduledController:
     def state(self, entity, *, max_age=None):
         state = (self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity, max_age=max_age)
         if self.verifying and entity not in self.shadow:
-            self.verification_observations[entity] = {
-                "state": state.state if state else None,
-                "attributes": dict(state.attributes) if state else {},
-                "last_reported": str(getattr(state, "last_reported", None)),
-                "last_updated": str(getattr(state, "last_updated", None)),
-            }
+            self.verification_observations[entity] = observation(state)
         if state is None or state.state in ("unknown", "unavailable"):
             raise ControlObservationError(
                 f"{entity or 'required entity'} is unavailable", entity,
@@ -329,14 +329,13 @@ class ScheduledController:
             equal = state.state == value
         else:
             raise ValueError(f"{entity}: unsupported actuator domain")
+        command = {"at": datetime.now(timezone.utc).isoformat(), "phase": "handover" if self.restoring else "plan",
+                   "domain": domain, "service": service, "data": {"entity_id": entity, **data},
+                   "value": value, "observed_value": state.state}
         if self.verifying:
-            self.verification_commands.append({
-                "at": datetime.now(timezone.utc).isoformat(), "phase": "handover" if self.restoring else "plan",
+            self.verification_commands.append({**command,
                 "trigger": "if control stopped now" if self.restoring else "current binding slot",
-                "domain": domain, "service": service, "data": {"entity_id": entity, **data},
-                "value": value, "observed_value": state.state,
-                "would_call": not equal,
-            })
+                "would_call": not equal})
             attributes = dict(state.attributes)
             if domain == "climate":
                 attributes["temperature"] = value
@@ -345,20 +344,33 @@ class ScheduledController:
             if record is not None and not self.restoring:
                 record.setdefault("last_commands", {})[entity] = value
             return
-        record = self.records.get(getattr(self, "device", ""))
-        if record is not None and not self.restoring:
-            record.setdefault("last_commands", {})[entity] = value
-            await self.save()
-        self.check_authority()
-        if not equal:
-            self.write_attempted = True
-            self.command_times[entity] = datetime.now(timezone.utc)
-            await asyncio.wait_for(
-                self.hass.services.async_call(
-                    domain, service, {"entity_id": entity, **data}, blocking=True,
-                ), timeout=CONFIRM_SECONDS,
-            )
-        await self.confirm(lambda: self.matches(entity, value), f"{entity} did not accept {value}")
+        command.update(called=False, transport="not_sent", settings_confirmation="not_checked")
+        if self.diagnostic_evaluation is not None:
+            self.diagnostic_evaluation["commands"].append(command)
+        try:
+            record = self.records.get(getattr(self, "device", ""))
+            if record is not None and not self.restoring:
+                record.setdefault("last_commands", {})[entity] = value
+                await self.save()
+            self.check_authority()
+            if not equal:
+                self.write_attempted = True
+                self.command_times[entity] = datetime.now(timezone.utc)
+                command.update(called=True, transport="ambiguous")
+                await asyncio.wait_for(
+                    self.hass.services.async_call(
+                        domain, service, {"entity_id": entity, **data}, blocking=True,
+                    ), timeout=CONFIRM_SECONDS,
+                )
+                command["transport"] = "accepted"
+            command["settings_confirmation"] = "unresolved"
+            await self.confirm(lambda: self.matches(entity, value), f"{entity} did not accept {value}")
+            command["settings_confirmation"] = "confirmed"
+        except (Exception, asyncio.CancelledError) as err:
+            command["error"] = str(err) or type(err).__name__
+            raise
+        finally:
+            command["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     def matches(self, entity, value):
         state = (self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)
@@ -894,14 +906,7 @@ class ScheduledController:
         expected = OPERATIONS.get(kind, ())
         if not expected:
             raise ValueError("no executable operation catalogue for this device")
-        configuration = json.dumps({"version": INTEGRATION_VERSION, "options": options}, sort_keys=True, default=str)
-        scope = device + ":" + hashlib.sha256(configuration.encode()).hexdigest()[:16]
-        attempt = {"device": device, "scope": scope, "at": datetime.now(timezone.utc).isoformat(),
-                   "mode": "control_verification", "integration_version": INTEGRATION_VERSION, "plan_id": plan.get("plan_id"),
-                   "slot_start": slot["start"], "slot": deepcopy(slot),
-                   "plan_schema_version": plan.get("schema_version"), "plan_issued_at": plan.get("issued_at"),
-                   "configuration": deepcopy(options), "expected_operations": list(expected),
-                   "operations": [], "outcome": "blocked"}
+        attempt = evaluation_record(device, "control_verification", options, slot, plan, INTEGRATION_VERSION, expected)
         owned, overrides = self.records, self.overrides
         self.records, self.overrides = {}, deepcopy(overrides)
         self.verifying, self.verification_commands, self.shadow = True, [], {}
@@ -939,6 +944,33 @@ class ScheduledController:
                     plan_id=plan.get("plan_id"), slot_start=slot["start"], retry_automatically=True,
                     **{key: attempt[key] for key in ("next_step", "fix", "handover_pending") if key in attempt})
 
+    def begin_diagnostic_evaluation(self, device, options, slot, plan, trigger):
+        if self.verification is None:
+            return
+        self.diagnostic_evaluation = evaluation_record(
+            device, device_mode(options, device), options, slot, plan, INTEGRATION_VERSION)
+        self.diagnostic_evaluation.update(trigger=trigger, evidence_kind="runtime",
+            ownership_before=deepcopy(self.records.get(device)),
+            status_before=deepcopy(self.status.get(device)))
+
+    async def finish_diagnostic_evaluation(self):
+        attempt, self.diagnostic_evaluation = self.diagnostic_evaluation, None
+        if attempt is None:
+            return
+        device = attempt["device"]
+        attempt.update(completed_at=datetime.now(timezone.utc).isoformat(),
+            outcome="evaluated", result=deepcopy(self.status.get(device, {})),
+            ownership_after=deepcopy(self.records.get(device)),
+            override=self.overrides.get(device), failure_latched=device in self.failed)
+        try:
+            await self.verification.append(attempt, runtime=True)
+            self.diagnostics_error = None
+        except Exception as err:
+            # Diagnostic storage failure must not trigger actuator restoration.
+            self.diagnostics_error = str(err)
+            self.diagnostics_failed_evaluations += 1
+            _LOGGER.warning("Cannot record controller diagnostics: %s", err)
+
     async def async_start(self, *, reason="integration_load"):
         try:
             saved = await self.store.async_load() or {}
@@ -948,20 +980,29 @@ class ScheduledController:
             return
         self.records = saved.get("records", {})
         self.overrides = saved.get("overrides", {})
-        async with self.lock:
-            for device in tuple(self.records):
-                try:
-                    await self.restore(device)
-                except Exception as err:
-                    self.report(device, "fault", reason=f"startup restoration: {err}")
+        journal_error = None
         if self.verification is not None:
             try:
                 await self.verification.load()
                 await self.verification.lifecycle("start", INTEGRATION_VERSION, reason)
             except Exception as err:
-                for device in DEVICES:
-                    self.report(device, "fault", reason=f"cannot load verification journal: {err}")
-                return
+                journal_error = str(err)
+                self.diagnostics_error = journal_error
+        async with self.lock:
+            for device in tuple(self.records):
+                if journal_error is None:
+                    self.begin_diagnostic_evaluation(device, self.options(), self.coordinator.current_plan_slot,
+                        self.coordinator.optimisation_plan or {}, "startup_handover")
+                try:
+                    await self.restore(device)
+                except Exception as err:
+                    self.report(device, "fault", reason=f"startup restoration: {err}")
+                finally:
+                    await self.finish_diagnostic_evaluation()
+        if journal_error is not None:
+            for device in DEVICES:
+                self.report(device, "fault", reason=f"cannot load verification journal: {journal_error}")
+            return
         self.initialized = True
         await self.async_tick(trigger="startup")
         if self.scheduler is not None:
@@ -977,11 +1018,11 @@ class ScheduledController:
             return
         started = perf_counter()
         try:
-            await self._async_tick(devices)
+            await self._async_tick(devices, trigger=trigger)
         finally:
             record_time(totals, started)
 
-    async def _async_tick(self, devices=None):
+    async def _async_tick(self, devices=None, *, trigger="manual"):
         async with self.lock:
             options = self.options()
             slot = self.coordinator.current_plan_slot
@@ -1038,6 +1079,7 @@ class ScheduledController:
                     "override": self.overrides.get(device),
                     "ownership": self.records.get(device), "failed": self.failed.get(device),
                 })
+                self.begin_diagnostic_evaluation(device, options, slot, plan, trigger)
                 try:
                     record = self.records.get(device)
                     if record and (record.get("restoration_pending") or ownership_configuration(record["options"], device) != ownership_configuration(options, device) or not slot or not self.eligible(device, options)):
@@ -1086,6 +1128,7 @@ class ScheduledController:
                     self.metrics.end_device()
                     if self.scheduler is not None:
                         self.scheduler.end_device(device)
+                    await self.finish_diagnostic_evaluation()
 
     async def async_stop(self, _event=None):
         if self.closed:
@@ -1097,10 +1140,14 @@ class ScheduledController:
         try:
             async with self.lock:
                 for device in tuple(self.records):
+                    self.begin_diagnostic_evaluation(device, self.options(), self.coordinator.current_plan_slot,
+                        self.coordinator.optimisation_plan or {}, "shutdown_handover")
                     try:
                         await self.restore(device)
                     except Exception as err:
                         self.report(device, "fault", reason=f"restoration pending: {err}")
+                    finally:
+                        await self.finish_diagnostic_evaluation()
                 if self.verification is not None and self.initialized:
                     await self.verification.lifecycle(
                         "stop", INTEGRATION_VERSION,

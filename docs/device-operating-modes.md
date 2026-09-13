@@ -58,35 +58,51 @@ the controller's maximum age of 120 seconds; the source must report regularly
 even when its value stays unchanged. Verification retries on each scheduler
 tick. These messages do not bypass freshness checks or enable live control.
 
-## Shared verification file
+## Controller diagnostics download
 
-Use **Schedule → Control verification → Download control verification**. The
-admin-only download contains all devices in the integration entry in one JSON
-file. Its persistent HA storage journal is
-`.storage/shs_energy.verification.<config_entry_id>`. It is separate from the
-restoration journal and is never uploaded to the website.
+Use **Schedule → Controller diagnostics → Download controller diagnostics**.
+The admin-only download is `shs-controller-diagnostics.json.gz`, a gzip-compressed
+JSON file. It includes every configured device in Monitoring, Planning, Control
+verification or Controlling, except explicit `excluded_device_readings` entries.
+A device being outside optimisation does not exclude it from diagnostics.
 
-Each attempt contains:
+The schema-3 export separates three kinds of evidence:
 
-- UTC attempt and command timestamps, plan ID, issue time, schema, and slot start.
-- The full plan slot for comparison with the controller requests.
-- Exact Home Assistant domain, service, entity and value, including no-op targets
-  marked `would_call: false`.
-- Observations used during validation, their report times, and refusal reasons.
-- A configuration scope with the integration version; full options are stored
-  once per scope in `configurations`.
-- Separate `plan` and hypothetical `handover` command phases. Handover means
-  “if control stopped now”, not a scheduled action at that timestamp.
+- `current`: all non-excluded devices and their modes, configuration/mappings,
+  observed entity state and report timestamps, the accepted plan and active slot,
+  planning/readiness status, ownership/restoration state and faults. Devices with
+  no retained controller evaluation have a null `last_evaluated_at`; passive
+  devices are not evaluated or actuated merely to produce the download.
+- `evaluations`: actual controller evaluations, with mode, trigger, plan/slot,
+  observations, outcome, ownership before/after, failure latch and exact real
+  service attempts. Commands distinguish `called`, transport acceptance or
+  ambiguity, and setting readback. Real startup/shutdown and mode-exit handover
+  commands have `phase: handover`, even when the newly selected mode is passive.
+- `attempts` and `coverage`: simulated Control verification command generation
+  and its operation coverage. Hypothetical handover remains labelled separately;
+  neither simulated commands nor successful register readback prove delivered
+  energy. A runtime evaluation in Verification can record real release before
+  simulation, but its simulated commands appear only in `attempts`.
 
-Verification invokes the real execution methods and intercepts service calls
-after command validation. A private in-memory actuator view lets later commands
-see earlier proposed values without changing Home Assistant. It never saves a
-restoration record or reports physical confirmation. Identical attempts within
-the same plan slot are deduplicated; changed decisions and subsequent slots are
-recorded. The newest 20,000 attempts are retained, with a discarded-attempt count.
-Download periodically if you need to retain a longer commissioning history.
-The file contains local entity IDs and configuration and should be shared as a
-commissioning artifact, not as redacted diagnostics.
+The persistent local journal remains
+`.storage/shs_energy.verification.<config_entry_id>` and is never uploaded to the
+website. Existing verification history rolls forward to schema 3 without inventing
+past live evaluations. The latest 2,000 groups of each kind and 500 lifecycle events
+are retained. Repeated equivalent checks carry counts and first/latest observations;
+plan slots and configuration scopes are shared. New groups persist immediately;
+repeat counts checkpoint at most once a minute and on clean shutdown.
+
+This is bounded diagnostic evidence, not a complete sensor history or a durable
+record of every in-flight command across an abrupt crash. Runtime evaluation
+records are appended when the evaluation ends; the existing restoration journal
+still owns persistence before control writes. A diagnostic recording error is
+visible in `current.recording_error` and does not trigger live-device restoration.
+
+Current device rows and per-device retained evidence omit explicit exclusions.
+The whole-home plan, current configuration and historical configuration scopes
+retain shared context, including references to excluded equipment where relevant.
+The download contains local entity IDs and configuration and is not redacted.
+Download periodically to preserve a longer analysis history.
 
 ## Coverage and limits
 
