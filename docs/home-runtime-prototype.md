@@ -1,5 +1,11 @@
 # Household runtime and restart journal prototype
 
+Review update: the [14 September architecture review and battery release gates](controller-architecture-review.md)
+compares this prototype with the target and proposes its live host/mixed-mode
+boundary. Its four reproduced runtime defects are now fixed in
+[the recovery follow-up](runtime-recovery-fixes.md). Live effect ports and native
+battery commissioning remain outstanding; battery control has not been enabled.
+
 The next implementation stage after the offline battery compiler now has a pure,
 executable command protocol and checkpoint format. It exercises the architecture
 in [shared-entity reconciliation](../../smart-home-solutions-t-by/docs/energy-optimisation/control-reconciliation.md)
@@ -50,13 +56,13 @@ Each physical actuator group declares its complete control surface and conservat
 maximum import/export envelope. A `Request` names a complete target, revision,
 absolute expiry and native guards that must hold for every write and final adoption.
 An adapter `Proposed` transition names the current generation, request revision,
-observation revision and adapter revision. Its absolute assignment steps each
+observation revision, adapter revision and the current transition-job token. Its absolute assignment steps each
 declare the complete preceding control state, additional native guards, possible
 electrical effects, confirmation timeout, latest-effect delay and explicit
 identical-repeat evidence. Partial control surfaces and invalid transitions fail
 validation. Native measurements and electrical observations remain separate.
 
-`home_runtime_checkpoint.py` owns the closed version-3 JSON codec and conservative
+`home_runtime_checkpoint.py` owns the closed version-4 JSON codec and conservative
 restore. Unknown fields, incompatible versions, nonfinite values, invalid counters
 and inconsistent attempt/sequence identities are rejected. There is no legacy
 checkpoint migration. The replay script simulates ordered durable writes in memory;
@@ -68,7 +74,12 @@ it does not implement an on-disk journal worker.
   send. Dispatch rechecks current authority, generation, request expiry, native
   guards, observed controls, freshness and the shared resource envelope.
 - There is at most one active sequence and one unsent preparation per group.
-  Superseding software work retains commands that may still affect the device.
+  Superseding or advancing a sequence cancels obsolete unsent retries atomically.
+  Commands that may still affect the device retain their uncertainty.
+- Transition workers return the token from `NeedTransition` in `Proposed` or
+  `TransitionFailed`. Lost work times out and retries with capped pacing; an
+  unsupported result remains visible until relevant inputs change. Late replies
+  cannot complete newer work. Restart preserves token identity and retry pacing.
 - Transport acceptance is not physical confirmation. `not_sent` releases only
   the named attempt. Ambiguous attempts retain their possible effects until fresh
   observation after the adapter's latest-effect bound; the deadline alone is
@@ -100,6 +111,14 @@ protection. It is not phase modelling, delivered-energy accounting, or credit fo
 an unconfirmed reduction elsewhere. Shared physical equipment must belong to one
 group, or have a future explicit shared constraint; falsely declaring independence
 would invalidate this calculation.
+
+A configured `ReliefRule` can admit an exact single-assignment reduction while
+already overloaded. The rule names full before/after controls, native guards,
+observed/transient/settled envelopes and evidence. Both admission and dispatch
+require fresh evidence, no unresolved issued effects in that group, no directional
+worsening and improvement in a violated direction. No numeric-register heuristic
+is used. Reservations are unchanged until physical confirmation. These aggregate
+rules do not establish per-phase or native supply behaviour.
 
 ## Requirements for the future effect ports
 
@@ -156,8 +175,10 @@ The design used immutable whole-home snapshots rather than a mutable event-sourc
 runtime: this keeps one ownership boundary and makes crash cuts directly replayable,
 at the cost of copying and whole-checkpoint writes. Independent Codex review found
 missing request guard enforcement and a rollback path that dropped authority;
-both were corrected and regression-tested. Claude review was deferred with the
-user's agreement because of allowance limits.
+both were corrected and regression-tested. Claude review was deferred at implementation time because of allowance limits.
+The subsequent Opus Max/Codex architecture review linked above has now completed;
+its four runtime findings are fixed. Follow-up validation passes 583 Python tests
+(including 18 new recovery regressions) and 58 frontend tests.
 
 ## Remaining implementation work
 
@@ -165,8 +186,8 @@ The [actual energy ledger](energy-ledger.md) is now implemented inside the same
 household checkpoint, with gross directional counters, explicit epochs, bounded
 watermark queries and replay/restart tests. It remains separate from reservations.
 
-1. Expand the compiler's remaining-time/state coverage into a deployable economic
-   contract. [Exact-condition policy acceptance and synthetic request binding](policy-binding.md)
+1. Turn the backend's now-implemented diagnostic time/state coverage into a
+   deployable economic acceptance contract and HA reader. [Exact-condition policy acceptance and synthetic request binding](policy-binding.md)
    are now implemented, including current C evaluation, C/F reconciliation and
    stale-dispatch fencing. This prototype deliberately cannot turn the current
    compiler's single exact anchor into a quarter-long execution lease.

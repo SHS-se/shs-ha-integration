@@ -1,5 +1,10 @@
 # Actual energy ledger
 
+Review update: the expired-policy retention defect from the
+[architecture review](controller-architecture-review.md) is fixed. The
+[recovery follow-up](runtime-recovery-fixes.md) adds per-stream settlement and
+atomic capacity maintenance independent of policy execution lifetime.
+
 The household runtime now records measured gross electrical energy in its own
 immutable ledger, saved atomically with command and reservation state. This
 completes the ledger implementation following the command/restart prototype.
@@ -39,7 +44,7 @@ command, change a reservation or release physical headroom. Native state remains
 in the observation model. Queries do not mutate, consume or reset actuals, so a
 new plan or repeated query cannot replenish an energy allowance.
 
-Checkpoint schema **3** includes the ledger and its source high-water marks.
+Checkpoint schema **4** includes the ledger and its source high-water marks.
 Earlier prototype schemas are rejected; this offline prototype has no compatibility migration.
 `ledger: null` explicitly means that accounting is not configured, and meter
 events are then rejected. Restore preserves the ledger unchanged while requiring
@@ -119,10 +124,19 @@ Each stream retains up to the configured number of intervals (default 128, maxim
 256), plus an anchor; there are at most 64 streams. The whole checkpoint's 1 MB
 limit also applies. `LedgerPruned(before_ms)` archives complete intervals only,
 preserving lifetime lower/upper totals, first-anchor time, archived interval count
-and the latest source revision/epoch. Capacity exhaustion rejects a new sample
-atomically; after an explicit prune, that sample can be retried against the same
-counter anchor. There is no silent eviction. The policy owner now blocks pruning past its accepted watermark;
-replacement must reconcile and advance that watermark before older history can be removed.
+and the latest source revision/epoch. Runtime `MeterObserved` validates the new
+sample first and, at capacity, archives one oldest complete interval before
+appending it. Policy settlement and ledger maintenance are one immutable update
+and checkpoint. The low-level `record_sample` API still requires explicit pruning.
+
+Each accepted policy retains its original watermark plus a settled prefix and
+cursor per stream. Before pruning, each prefix absorbs only the interval through
+that stream's new retained physical counter anchor. Replacement combines the
+prefix with its retained tail exactly once. An absent or slow stream keeps its own
+cursor; its unobserved tail is never permanently settled as zero or uncertainty.
+Partial-origin intervals and epoch gaps retain their conservative energy bounds,
+time coverage and provenance. No successful recompile is needed to keep metering.
+Queries without a settled prefix still reject starts before retained history.
 
 An event lost before its checkpoint can be replayed against the old durable anchor;
 an event already checkpointed is a duplicate. Both paths yield the same total.
@@ -152,7 +166,11 @@ unknown coverage, pruning, corrupt checkpoints and both persistence crash cuts.
 An exhaustive small trajectory test checks partial bounds against independent
 actual subinterval flows. Independent Codex review also checked those bounds and
 identified revision/archive validation improvements that are now included. Claude
-review remains deferred with the user's agreement.
+review was deferred at implementation time; the subsequent Opus Max/Codex review
+linked above has completed. Its settlement/retention finding is fixed; follow-up
+regressions cover 260 intervals through policy expiry, crash replay at compaction,
+asynchronous streams, missing anchors, reset gaps and partial cuts against an
+unpruned oracle. The complete integration suite now passes 583 Python tests.
 
 A local Python 3.13 probe with 64 streams and 32 retained samples per stream used a
 336,053-byte checkpoint. Across 200 reducer calls after 20 warmups, meter-event
@@ -161,7 +179,8 @@ slowest-HA-host benchmark, and excludes storage, queues and physical response.
 
 [Exact-condition policy acceptance and request binding](policy-binding.md) now
 validate and reconcile these watermarks while keeping actuals separate from expected
-costs. Broader compiler time/state coverage is needed next for deployable execution.
+costs. Backend diagnostic time/state coverage now exists; a production acceptance
+profile and HA consumer are still needed for deployable execution.
 Live source/journal/transport ports and battery adapter commissioning follow.
 Thermal models remain deferred as significant work; device order stays battery,
 pool, then car. Household-specific configuration remains separate from this model.

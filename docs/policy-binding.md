@@ -1,5 +1,11 @@
 # Exact-condition battery policy binding
 
+Review update: backend time/state coverage is now implemented for diagnostics,
+but this reader still accepts exact anchors only. The [14 September architecture review and battery release gates](controller-architecture-review.md)
+records the production profile, mixed-mode and live-port requirements, plus the
+expired-policy retention defect, now fixed by the
+[recovery follow-up](runtime-recovery-fixes.md). Do not lengthen this prototype's lease.
+
 The offline battery compiler now has a real HA-side reader and a tested path from
 its economic decision to the household runtime's request/journal protocol. The
 reader consumes output from the existing `compileBatteryPolicy` implementation;
@@ -116,14 +122,16 @@ accepted revision, subject to its existing freshness and expiry checks.
 
 The source compiler watermark is only a timestamp. Acceptance also requires the
 actual ledger identity, mapping and revision; none is inferred from that timestamp.
-On replacement, the previous accepted watermark is queried before mutation.
+On replacement, the previous policy's settled per-stream prefixes and retained
+tails are reconciled from its original watermark before mutation.
 The source watermark, gross bounds and coverage of this reconciliation are saved
 with the new policy. The ledger itself is never reset. Those mWh are not subtracted
-from SEK costs or added to a new allowance. Pruning past the accepted watermark is
-blocked until replacement advances it; already reconciled summaries remain durable
-after older intervals are archived.
+from SEK costs or added to a new allowance. Pruning and automatic capacity
+maintenance settle each stream only through a retained physical counter anchor,
+atomically with the ledger. Policy expiry no longer pins the history buffer; the
+original watermark and measured/uncertain actuals remain available for replacement.
 
-Checkpoint schema **3** includes policy, context and ledger atomically. Older
+Checkpoint schema **4** includes policy, context and ledger atomically. Older
 prototype schemas are rejected without a compatibility path. Active checkpoint
 validation ties the selection, target, native guards, request expiry, context and
 watermark together. Restore keeps actuals and ambiguous issued effects, invalidates
@@ -152,10 +160,13 @@ one millisecond later while retaining the issued effect's reservation.
 Validation: 565 Python tests, including 17 policy tests, and 58 frontend tests passed;
 integration compilation and regenerated-provider fixture checks passed. Tests cover
 forged costs and physical responses, changed conditions, all passive modes, stale
-journal acknowledgement, invalid bindings, replacement actuals, retention pinning,
+journal acknowledgement, invalid bindings, replacement actuals, retention,
 restart and corrupt checkpoints. Independent Codex review identified the initial
 current-response validation gap and dynamic-ID bug; both are fixed and tested.
-Claude review remains deferred with the user's agreement.
+Claude review was deferred at implementation time; the subsequent Opus Max/Codex
+review linked above is complete. Its four runtime defects are fixed; follow-up
+validation passes 583 Python and 58 frontend tests. Integration and native
+commissioning remain outstanding.
 
 A local Python 3.13 probe ran 200 iterations on the 6,741-byte negative-price fixture.
 Reader p99 was 0.25 ms and acceptance p99 0.12 ms; the accepted checkpoint was 9,897
@@ -164,8 +175,9 @@ on the slowest supported HA host or production latency guarantees.
 
 ## Next required work
 
-Expand the compiler's remaining-time/state coverage and define a deployable C/F
-contract with validated error evidence. This is now a prerequisite to meaningful
+The backend now has diagnostic remaining-time/state coverage. Define its
+deployable C/F acceptance profile, native response and validated error evidence,
+and implement the corresponding HA consumer. This is now a prerequisite to meaningful
 live execution, not something that adapter wiring can bypass. Commission native
 battery response and transition contracts, then connect the journal, observation,
 timer and transport ports through verification and rollout gates. Device order

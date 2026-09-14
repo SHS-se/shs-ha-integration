@@ -1,5 +1,16 @@
 # House-battery implementation scope
 
+**Progress update, 14 September:** the scorer, captured accounting audit, bounded
+battery suffix compiler, diagnostic time/state coverage, pure runtime/checkpoint,
+gross actuals ledger and exact-anchor HA binding now exist. They remain offline
+prototypes except for the separately shipped battery command-v2 intent change.
+See the [14 September architecture review and battery release gates](controller-architecture-review.md) for verified
+completed recovery fixes, the proposed mixed-mode contract and the current **no-go** decision
+on enabling the replacement battery controller. Thermal modelling, direct user
+controls and notifications may remain deferred; battery deployment and mixed modes
+are required scope. The estimates below are the original planning baseline, not
+a fresh estimate of remaining work.
+
 Assessment: 14 September 2026. This maps the current working-tree target documents
 and the battery boundary review to implementation work. It is a scope estimate,
 not a new executable contract, a delivery promise, or authority to enable hardware.
@@ -54,12 +65,12 @@ Sizes are relative implementation/review effort, not line counts.
 
 | Package | Current gap and required work | Main implementation surfaces | Size |
 |---|---|---|---|
-| 1. Battery response and intent contract | Replace forecast-equal ceilings with native capture, independently permitted house supply, deliberate replenishment, hold and authorised export. Establish hardware-realizable source/destination meanings, capability revisions, purposeful limits and state/coverage guards. Separate requested replenishment from aggregate ceiling; reject unsupported minimum-charge-plus-extra-solar requests. | Provider battery command/types; HA validator and battery adapter; OpenAPI and generated fixtures | Large |
+| 1. Battery response and intent contract | Command v2 already supplies native solar capture at rated charging power with zero discharge. Complete independently permitted capture/house supply, zero-forecast opportunities, deliberate replenishment, hold and authorised export under the new policy. Establish hardware-realizable source/destination meanings, capability revisions, purposeful limits and state/coverage guards. Separate requested replenishment from aggregate ceiling; reject unsupported minimum-charge-plus-extra-solar requests. | Provider battery command/types; HA validator and battery adapter; OpenAPI and generated fixtures | Large |
 | 2. Final household scorer and future economics | Price the final materialised household consistently, including battery interactions with EV, pool, boiler/room demand and shared constraints. Reoptimise affected future actions; audit losses, wear, terminal/reserve value, shaping and cost ownership. Existing auction/marginal diagnostics cannot substitute for future consequences. Resolve the current degradation parameter's wear versus terminal/risk roles. | `energy-optimisation.ts`, `dispatch-plan.ts`, household scoring/value-curve modules | Very large |
-| 3. Bounded executable policy compiler | Compile complete alternatives, feasible reference cells, current-segment cost and future deltas, applicability, supported states and approximation evidence. Include worthwhile grid and zero-forecast choices. Bound work/wire size; measure held-out ranking error and compilation cost. No production compiler exists yet. | New backend policy compiler and response model; staged worker/ingest integration | Very large |
+| 3. Bounded executable policy compiler | Compile complete alternatives, feasible reference cells, current-segment cost and future deltas, applicability, supported states and approximation evidence. Include worthwhile grid and zero-forecast choices. Bound work/wire size; measure held-out ranking error and compilation cost. The bounded exact compiler and diagnostic time/state coverage now exist; an executable production profile and consumer still do not. | New backend policy compiler and response model; staged worker/ingest integration | Very large |
 | 4. Intermittent PV and headroom | Model correlated subquarter PV/load paths, native routing, clipping, gross cycling and resulting future state. Compare useful early drawdown with retention, including peak/trough paths with equal net quarter energy. Reuse PV forecasts/calibration but add and validate the fluctuation model. No fixed SOC or daily-yield trigger. | Response/scenario model, scorer/compiler, replay fixtures | Large / experimental |
 | 5. Local household decision runtime | Decode/index accepted policy once. Use one short synchronous reducer for decisions, observations, constraints and reservations; queue asynchronous group effects. Compare supported complete alternatives, react to load steps and partial-relief cases, and coalesce replans. Replace the shared execution lock without introducing an independent battery optimiser. | HA controller/scheduler/events/coordinator; new policy/runtime owner | Very large |
-| 6. Actual-energy and uncertainty ledger | Track gross charge/discharge, usable state, meter epochs/quality, pending physical effects and conditional reservations once across events, replans and restarts. Advance time-based state/deadlines even without changed sensor values. Diagnostic samples are not yet a durable decision ledger. | HA observations, accounting/reducer and persistent state | Large |
+| 6. Actual-energy and uncertainty ledger | Track gross charge/discharge, usable state, meter epochs/quality, pending physical effects and conditional reservations once across events, replans and restarts. Advance time-based state/deadlines even without changed sensor values. The pure gross-counter ledger, atomic checkpoint and per-stream settlement independent of expired policies are implemented; live source and durable-storage ports remain open. | HA observations, accounting/reducer and persistent state | Large |
 | 7. Battery transitions, confirmation and recovery | Implement commissioned mode/limit transitions, whole-home supply-gap checks, decreases/increases ordering, safe repeatability and ambiguous/late-effect handling. Correct external drift while Controlling with bounded retries. Distinguish normal native regulation/full SOC/forecast drift from actual response faults. Confirmation must follow intent, not exact forecast watts. | HA battery actuator group, controller command/confirmation logic and scheduler | Large |
 | 8. Modes, continuation and handover | Specify mixed-mode hypothetical versus real effects; Verification cannot fund live battery decisions. Fence mode exit, reconcile release, preserve retry pacing and absolute validity, adopt unchanged requests after routine restart, and retain durable issued-operation evidence. Keep approved handover for genuine release/expiry. No added outage reserve or change to the read-only cutoff. | HA lifecycle, reducer/journal, mode/configuration boundary | Large |
 | 9. Transport, fixed plans, compact UI and audit | Version execution semantics across provider, worker, API, HA and portal; validate capabilities and reject unsupported replacement. Decide fixed-interval migration without reinterpreting old commands. Carry policy/intent/model/response identity and replay evidence. Replace forecast-as-imperative labels with concise intent; preserve simulated/live and measured/applied distinctions in diagnostics. | API/contracts, ingest/worker, fixed-plan/replay readers, presentation and portal | Medium–large |
@@ -85,8 +96,9 @@ until they migrate: account for their real pending effects and actual load witho
 claiming policy authority over actions the new runtime cannot control. This is a
 shared prerequisite, not a reason to silently broaden the battery-only release.
 
-Detailed mixed-mode, retry and response semantics remain engineering specification
-work. Model fidelity and compiler cost are evidence gaps that can change the
+The linked architecture review now proposes the battery-first mixed-mode and
+authority lifecycle contract. Production retry, response, relief and evidence
+profiles still need implementation-level specification and validation. Model fidelity and compiler cost are evidence gaps that can change the
 implementation size. Native Maximum Self Consumption or PV-first mode names do
 not establish complete behaviour under backup functions, grid limits or EMS loss.
 

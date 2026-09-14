@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "initial": {
-    "schema_version": 3,
+    "schema_version": 4,
     "state": {
       "frame": null,
       "groups": [
@@ -32,11 +32,13 @@
               "import_w": 2000,
               "type": "Envelope"
             },
-            "type": "GroupSpec"
+            "type": "GroupSpec",
+            "relief_rules": []
           },
           "status": "inactive",
           "type": "Group",
-          "waiting_for": null
+          "transition_work": null,
+          "next_transition": 1
         }
       ],
       "last_time_ms": 0,
@@ -93,7 +95,8 @@
         "dispatch_window_ms": 10,
         "retry_base_ms": 30,
         "retry_max_ms": 120,
-        "type": "Limits"
+        "type": "Limits",
+        "transition_timeout_ms": 1000
       },
       "resume_after_ms": 0,
       "revision": 0,

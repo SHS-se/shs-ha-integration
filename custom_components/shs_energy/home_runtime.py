@@ -8,11 +8,19 @@ from typing import Literal, Optional, Union
 if __package__:
     from .battery_policy import BatteryPolicy, canonical_json, parse_problem, rank_policy
     from .runtime_json import read_runtime_json
-    from .energy_ledger import EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, actuals_since, record_sample, prune_ledger
+    from .energy_ledger import (
+        EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, SettledActuals,
+        actuals_since, record_actuals, prune_ledger, start_settlement,
+        settle_and_prune, reconciled_actuals, validate_settlement,
+    )
 else:
     from battery_policy import BatteryPolicy, canonical_json, parse_problem, rank_policy
     from runtime_json import read_runtime_json
-    from energy_ledger import EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, actuals_since, record_sample, prune_ledger
+    from energy_ledger import (
+        EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, SettledActuals,
+        actuals_since, record_actuals, prune_ledger, start_settlement,
+        settle_and_prune, reconciled_actuals, validate_settlement,
+    )
 
 Value = Union[str, float, int]
 Controls = tuple[tuple[str, Value], ...]
@@ -97,11 +105,14 @@ class Step:
     latest_effect_delay_ms: int
     repeat_identical: bool
     evidence: str
+    relief_id: Optional[str] = None
 
     def __post_init__(self):
         _pairs(self.before)
         _pairs(((self.key, self.value),))
         _identity(self.evidence)
+        if self.relief_id is not None:
+            _identity(self.relief_id)
         _integer(self.confirmation_timeout_ms, 1)
         _integer(self.latest_effect_delay_ms)
         if self.confirmation_timeout_ms <= 0 or self.latest_effect_delay_ms < 0 or len(self.native_guards) > 32:
@@ -115,11 +126,37 @@ class Step:
 
 
 @dataclass(frozen=True)
+class ReliefRule:
+    """Commissioned aggregate-only transition, never inferred from register order."""
+    id: str
+    before: Controls
+    after: Controls
+    observed: Envelope
+    during: Envelope
+    settled: Envelope
+    native_guards: tuple[Guard, ...]
+    evidence: str
+
+    def __post_init__(self):
+        _identity(self.id)
+        _identity(self.evidence)
+        _pairs(self.before)
+        _pairs(self.after)
+        if (set(dict(self.before)) != set(dict(self.after))
+                or sum(dict(self.after)[k] != v for k, v in self.before) != 1
+                or not _within(self.during, self.observed)
+                or not _within(self.settled, self.during)
+                or self.settled == self.observed or len(self.native_guards) > 32):
+            raise ValueError("relief needs one assignment and non-worsening proven envelopes")
+
+
+@dataclass(frozen=True)
 class GroupSpec:
     id: str
     adapter_revision: str
     control_keys: tuple[str, ...]
     maximum: Envelope
+    relief_rules: tuple[ReliefRule, ...] = ()
 
     def __post_init__(self):
         _identity(self.id)
@@ -128,6 +165,11 @@ class GroupSpec:
             raise ValueError("group needs unique bounded control keys")
         for key in self.control_keys:
             _identity(key)
+        if len(self.relief_rules) > 32 or len({r.id for r in self.relief_rules}) != len(self.relief_rules):
+            raise ValueError("relief rules need bounded unique identities")
+        for rule in self.relief_rules:
+            if set(dict(rule.before)) != set(self.control_keys) or not _within(rule.observed, self.maximum):
+                raise ValueError("relief rule exceeds group scope")
 
 
 @dataclass(frozen=True)
@@ -135,12 +177,15 @@ class Limits:
     dispatch_window_ms: int
     retry_base_ms: int
     retry_max_ms: int
+    transition_timeout_ms: int = 1000
 
     def __post_init__(self):
-        for value in (self.dispatch_window_ms, self.retry_base_ms, self.retry_max_ms):
+        for value in (self.dispatch_window_ms, self.retry_base_ms, self.retry_max_ms, self.transition_timeout_ms):
             _integer(value, 1)
         if not 0 < self.dispatch_window_ms <= 60000 or not 0 < self.retry_base_ms <= self.retry_max_ms <= 3600000:
             raise ValueError("invalid dispatch/retry limits")
+        if self.transition_timeout_ms > 60000:
+            raise ValueError("transition timeout exceeds supported bound")
 
 
 @dataclass(frozen=True)
@@ -229,6 +274,52 @@ class Attempt:
 
 
 @dataclass(frozen=True)
+class TransitionKey:
+    generation: int
+    request_id: str
+    request_revision: int
+    purpose: Purpose
+    observed_revision: int
+
+    def __post_init__(self):
+        _identity(self.request_id)
+        for value in (self.generation, self.request_revision, self.observed_revision):
+            _integer(value)
+        if self.purpose not in ("optimisation", "release"):
+            raise ValueError("invalid transition purpose")
+
+
+@dataclass(frozen=True)
+class TransitionJob:
+    key: TransitionKey
+    token: int
+    attempt: int
+    deadline_ms: int
+
+    def __post_init__(self):
+        for value in (self.token, self.attempt, self.deadline_ms):
+            _integer(value, 1)
+        if self.attempt > 32:
+            raise ValueError("invalid transition retry count")
+
+
+@dataclass(frozen=True)
+class TransitionFailure:
+    key: TransitionKey
+    attempt: int
+    retry_at_ms: Optional[int]
+    reason: str
+
+    def __post_init__(self):
+        _integer(self.attempt, 1)
+        _identity(self.reason)
+        if self.attempt > 32:
+            raise ValueError("invalid transition retry count")
+        if self.retry_at_ms is not None:
+            _integer(self.retry_at_ms)
+
+
+@dataclass(frozen=True)
 class Group:
     spec: GroupSpec
     mode: Mode = "monitoring"
@@ -245,7 +336,8 @@ class Group:
     consecutive_attempts: int = 0
     next_attempt: int = 1
     owned: bool = False
-    waiting_for: Optional[str] = None
+    transition_work: Optional[Union[TransitionJob, TransitionFailure]] = None
+    next_transition: int = 1
     status: str = "inactive"
     journal_fault: bool = False
 
@@ -253,6 +345,7 @@ class Group:
         for value in (self.mode_revision, self.generation, self.retry_not_before_ms, self.consecutive_attempts):
             _integer(value)
         _integer(self.next_attempt, 1)
+        _integer(self.next_transition, 1)
         _integer(self.observation_revision, -1)
         if self.mode not in ("monitoring", "planning", "control_verification", "controlling"):
             raise ValueError("invalid group mode")
@@ -306,6 +399,7 @@ class PolicySession:
     reconciled_from: Optional[ActualsWatermark]
     reconciled_actuals: tuple[StreamActuals, ...]
     status: Literal["active", "diagnostic_only", "outside_coverage", "awaiting_context"]
+    settled_actuals: tuple[SettledActuals, ...]
 
     def __post_init__(self):
         _integer(self.revision)
@@ -397,6 +491,15 @@ class Proposed:
     observed_revision: int
     adapter_revision: str
     steps: tuple[Step, ...]
+    token: int
+
+
+@dataclass(frozen=True)
+class TransitionFailed:
+    group_id: str
+    token: int
+    outcome: Literal["retryable", "unsupported"]
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -422,7 +525,7 @@ class Tick:
     pass
 
 
-Event = Union[PolicyContextChanged, PolicyOffered, MeterObserved, LedgerPruned, Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable, JournalFailed, TransportResult, Tick]
+Event = Union[PolicyContextChanged, PolicyOffered, MeterObserved, LedgerPruned, Observed, FrameObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, Tick]
 
 
 @dataclass(frozen=True)
@@ -457,6 +560,8 @@ class NeedTransition:
     request: Request
     observation: Observation
     adapter_revision: str
+    token: int
+    deadline_ms: int
 
 
 @dataclass(frozen=True)
@@ -507,7 +612,8 @@ def _request(group, now):
 
 def _supersede(group):
     # In-process preparations have not been dispatched; sent/ambiguous attempts stay.
-    return replace(group, generation=group.generation + 1, plan=None, waiting_for=None,
+    retry = group.transition_work if isinstance(group.transition_work, TransitionFailure) and group.transition_work.retry_at_ms is not None else None
+    return replace(group, generation=group.generation + 1, plan=None, transition_work=retry,
                    attempts=tuple(a for a in group.attempts if a.stage != "prepared"))
 
 
@@ -539,7 +645,16 @@ def _compatible(attempt, step):
     return (attempt.step.repeat_identical and step.repeat_identical and attempt.step.key == step.key
             and attempt.step.value == step.value and _same(attempt.step.after, step.after)
             and attempt.step.native_guards == step.native_guards and attempt.step.evidence == step.evidence
-            and attempt.step.possible == step.possible)
+            and attempt.step.possible == step.possible and attempt.step.relief_id == step.relief_id)
+
+
+def preparation_matches(plan, attempt):
+    """The sole structural invariant for an unsent sequence preparation."""
+    return (plan is not None and attempt.generation == plan.generation
+            and attempt.step_index == plan.index and plan.index < len(plan.steps)
+            and attempt.step == plan.steps[plan.index]
+            and (attempt.request_id, attempt.request_revision, attempt.purpose) ==
+                (plan.request_id, plan.request_revision, plan.purpose))
 
 
 def _settle(group, now):
@@ -562,7 +677,39 @@ def _settle(group, now):
             if attempt.stage in ("sent", "accepted") and now >= attempt.confirmation_deadline_ms:
                 attempt = replace(attempt, stage="ambiguous")
             remaining.append(attempt)
-    return replace(group, attempts=tuple(remaining), plan=plan)
+    # A retry is unsent software work. Advancing or invalidating its sequence
+    # must cancel it in the same state update; issued effects remain independent.
+    remaining = tuple(a for a in remaining if a.stage != "prepared" or preparation_matches(plan, a))
+    return replace(group, attempts=remaining, plan=plan)
+
+
+def _relief_rule(group, step):
+    if step.relief_id is None:
+        return None
+    rule = next((r for r in group.spec.relief_rules if r.id == step.relief_id), None)
+    if (rule is None or not _same(rule.before, step.before) or not _same(rule.after, step.after)
+            or rule.during != step.possible or rule.native_guards != step.native_guards
+            or rule.evidence != step.evidence):
+        raise ValueError("step does not match its commissioned relief rule")
+    return rule
+
+
+def _admissible(state, group, step, now):
+    if _room(state, group, step.possible, now):
+        return True
+    rule = _relief_rule(group, step)
+    if (rule is None or not _fresh(state.frame, now) or not _fresh(group.observation, now)
+            or any(a.stage != "prepared" for a in group.attempts)
+            or not _same(group.observation.controls, rule.before)
+            or group.observation.envelope != rule.observed
+            or not _guards(rule.native_guards, group.observation)):
+        return False
+    # The configured proof covers the complete transient; no generic register
+    # decrease or unconfirmed supply earns headroom. Freshness is never bypassed.
+    imported = state.frame.external.import_w + sum(reservation(g, now).import_w for g in state.groups)
+    exported = state.frame.external.export_w + sum(reservation(g, now).export_w for g in state.groups)
+    return ((imported > state.frame.limits.import_w and rule.settled.import_w < rule.observed.import_w)
+            or (exported > state.frame.limits.export_w and rule.settled.export_w < rule.observed.export_w))
 
 
 def _validate_target(group, request):
@@ -579,6 +726,7 @@ def _validate_proposal(group, event, request, purpose):
             raise ValueError("step guards must describe the complete preceding control surface")
         if not _within(step.possible, group.spec.maximum):
             raise ValueError("step effects exceed the declared group maximum")
+        _relief_rule(group, step)
         previous = step.after
     if not _same(previous, request.target):
         raise ValueError("transition does not reach the current request")
@@ -586,11 +734,42 @@ def _validate_proposal(group, event, request, purpose):
 
 
 
-def _need_transition(group, request, purpose, effects):
-    key = f"{group.generation}:{request.id}:{request.revision}:{purpose}:{group.observation.revision}"
-    if group.waiting_for != key:
-        effects.append(NeedTransition(group.spec.id, group.generation, purpose, request, group.observation, group.spec.adapter_revision))
-    return replace(group, waiting_for=key, status="needs_transition")
+def _transition_key(group, request, purpose):
+    return TransitionKey(group.generation, request.id, request.revision, purpose, group.observation.revision)
+
+
+def _transition_failure(job, now, limits, reason, *, unsupported=False):
+    delay = min(limits.retry_max_ms, limits.retry_base_ms * 2 ** min(job.attempt - 1, 20))
+    return TransitionFailure(job.key, job.attempt, None if unsupported else now + delay, reason)
+
+
+def resumed_transition_work(group, now, limits):
+    work = group.transition_work
+    if isinstance(work, TransitionJob):
+        return _transition_failure(work, max(now, work.deadline_ms), limits, "transition_interrupted")
+    return work
+
+
+def _need_transition(group, request, purpose, now, limits, effects):
+    key = _transition_key(group, request, purpose)
+    work = group.transition_work
+    if isinstance(work, TransitionJob) and work.key == key:
+        if now < work.deadline_ms:
+            return replace(group, status="needs_transition")
+        work = _transition_failure(work, work.deadline_ms, limits, "transition_timeout")
+        effects.append(Report(group.spec.id, "transition_timeout"))
+    if isinstance(work, TransitionFailure):
+        if work.retry_at_ms is None and work.key == key:
+            return replace(group, transition_work=work, status="transition_unsupported")
+        if work.retry_at_ms is not None and now < work.retry_at_ms:
+            return replace(group, transition_work=work, status="transition_retry_wait")
+    attempt = min(work.attempt + 1, 32) if isinstance(work, TransitionFailure) else 1
+    job = TransitionJob(key, group.next_transition, attempt, min(now + limits.transition_timeout_ms,
+                        request.valid_until_ms, group.observation.valid_until_ms))
+    effects.append(NeedTransition(group.spec.id, group.generation, purpose, request,
+                                 group.observation, group.spec.adapter_revision, job.token, job.deadline_ms))
+    return replace(group, transition_work=job, next_transition=group.next_transition + 1,
+                   status="needs_transition")
 
 
 def _policy_context_matches(state, compiled, now):
@@ -644,7 +823,7 @@ def _accept_policy(state, event, now):
     if event.watermark.ledger_revision != state.ledger.revision:
         raise ValueError("meter evidence changed since the exact compilation anchor")
     actuals_since(state.ledger, event.watermark, now)
-    reconciliation = actuals_since(state.ledger, state.policy.watermark, now) if state.policy else ()
+    reconciliation = reconciled_actuals(state.ledger, state.policy.watermark, state.policy.settled_actuals, now) if state.policy else ()
     if group.attempts:
         raise ValueError("pending physical effects are outside this compiler's coverage")
     _validate_policy_bindings(group, event.compiled, event.bindings)
@@ -659,13 +838,19 @@ def _accept_policy(state, event, now):
     request_id = f"policy:{event.revision}"
     session = PolicySession(event.revision, event.compiled, event.watermark, event.bindings,
                             context.revision, selected, request_id, state.policy.watermark if state.policy else None, reconciliation,
-                            "active" if group.mode == "controlling" else "diagnostic_only")
+                            "active" if group.mode == "controlling" else "diagnostic_only", start_settlement(state.ledger, event.watermark))
     if group.mode == "controlling":
         guards = tuple(Guard(key, value, value) for key, value in summary.expected_measurements)
         request = Request(request_id, event.revision, summary.anchor_ms + 1, binding.target, guards)
         group = replace(_supersede(group), desired=request)
         state = _put(state, group)
     return replace(state, policy=session)
+
+
+def validate_policy_settlement(state):
+    validate_settlement(state.ledger, state.policy.watermark, state.policy.settled_actuals)
+    if any(prefix.through_ms > state.last_time_ms for prefix in state.policy.settled_actuals):
+        raise ValueError("settlement exceeds checkpoint time")
 
 
 def _fence_policy(state, now, effects):
@@ -706,7 +891,7 @@ def _drive(state, now, durable_revision, effects):
             state = _put(state, group)
             continue
         if not _guards(request.native_guards, group.observation):
-            group = replace(group, plan=None, waiting_for=None,
+            group = replace(group, plan=None, transition_work=None,
                             attempts=tuple(a for a in group.attempts if a.stage != "prepared"),
                             status="native_guard_blocked")
             effects.append(Observe(group.spec.id))
@@ -715,7 +900,7 @@ def _drive(state, now, durable_revision, effects):
         if _same(group.observation.controls, request.target):
             # Prepared work can be cancelled in-process. Issued work cannot be erased
             # just because the desired setting currently happens to be visible.
-            group = replace(group, plan=None, waiting_for=None,
+            group = replace(group, plan=None, transition_work=None,
                             attempts=tuple(a for a in group.attempts if a.stage != "prepared"))
             if group.attempts:
                 group = replace(group, status="reconciling")
@@ -726,16 +911,16 @@ def _drive(state, now, durable_revision, effects):
             state = _put(state, group)
             continue
         if group.plan and group.plan.index == len(group.plan.steps):
-            group = replace(group, plan=None, waiting_for=None)
+            group = replace(group, plan=None, transition_work=None)
         prepared = next((a for a in group.attempts if a.stage == "prepared"), None)
         if prepared is not None:
             step = prepared.step
             valid = (prepared.generation == group.generation and now < prepared.send_by_ms
                      and _same(group.observation.controls, step.before) and _guards(step.native_guards, group.observation)
-                     and _room(_put(state, group), group, step.possible, now))
+                     and _admissible(_put(state, group), group, step, now))
             if not valid:
-                group = replace(group, attempts=tuple(a for a in group.attempts if a.id != prepared.id), plan=None, waiting_for=None, status="reconciling")
-                group = _need_transition(group, request, purpose, effects)
+                group = replace(group, attempts=tuple(a for a in group.attempts if a.id != prepared.id), plan=None, transition_work=None, status="reconciling")
+                group = _need_transition(group, request, purpose, now, state.limits, effects)
             elif durable_revision == prepared.prepared_revision:
                 attempt = replace(prepared, stage="sent", confirmation_deadline_ms=now + step.confirmation_timeout_ms)
                 group = replace(group, attempts=tuple(attempt if a.id == prepared.id else a for a in group.attempts), owned=True, status="executing", journal_fault=False)
@@ -749,20 +934,20 @@ def _drive(state, now, durable_revision, effects):
             state = _put(state, group)
             continue
         if group.plan is None:
-            group = _need_transition(group, request, purpose, effects)
+            group = _need_transition(group, request, purpose, now, state.limits, effects)
             state = _put(state, group)
             continue
         step = group.plan.steps[group.plan.index]
         if not _same(group.observation.controls, step.before) or not _guards(step.native_guards, group.observation):
-            group = replace(group, plan=None, waiting_for=None, status="reconciling")
-            group = _need_transition(group, request, purpose, effects)
+            group = replace(group, plan=None, transition_work=None, status="reconciling")
+            group = _need_transition(group, request, purpose, now, state.limits, effects)
         elif group.attempts and not all(a.stage == "ambiguous" and _compatible(a, step) for a in group.attempts):
             group = replace(group, status="reconciling")
             effects.append(Observe(group.spec.id))
         elif len(group.attempts) >= 64:
             group = replace(group, status="attempt_limit")
             effects.append(Observe(group.spec.id))
-        elif not _room(_put(state, group), group, step.possible, now):
+        elif not _admissible(_put(state, group), group, step, now):
             group = replace(group, status="physical_scope_blocked")
         else:
             send_by = min(now + state.limits.dispatch_window_ms, request.valid_until_ms,
@@ -783,7 +968,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
     """Process one validated domain event; performs no I/O and never reads a clock."""
     if type(now_ms) is not int or now_ms < 0:
         raise ValueError("now_ms must be an absolute nonnegative integer")
-    if not isinstance(event, (PolicyContextChanged, PolicyOffered, MeterObserved, LedgerPruned, Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable, JournalFailed, TransportResult, Tick)):
+    if not isinstance(event, (PolicyContextChanged, PolicyOffered, MeterObserved, LedgerPruned, Observed, FrameObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, Tick)):
         raise ValueError("unsupported runtime event")
     previous = state
     rollback = now_ms < state.last_time_ms
@@ -809,16 +994,22 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
         if state.ledger is None:
             raise ValueError("energy ledger is not configured")
         if isinstance(event, MeterObserved):
-            ledger, outcome = record_sample(state.ledger, event.sample, now_ms)
-            state = replace(state, ledger=ledger)
+            policy = state.policy
+            ledger, settled, outcome = record_actuals(state.ledger, event.sample, now_ms,
+                origin=policy.watermark if policy else None, settled=policy.settled_actuals if policy else ())
+            state = replace(state, ledger=ledger,
+                            policy=replace(policy, settled_actuals=settled) if policy else None)
             effects.append(Report(event.sample.stream_id, outcome))
         else:
             _integer(event.before_ms)
             if event.before_ms > now_ms:
                 raise ValueError("future ledger retention cut")
-            if state.policy and event.before_ms > state.policy.watermark.at_ms:
-                raise ValueError("retention cut would invalidate the accepted policy watermark")
-            state = replace(state, ledger=prune_ledger(state.ledger, event.before_ms))
+            if state.policy:
+                ledger, settled = settle_and_prune(state.ledger, state.policy.watermark,
+                                                   state.policy.settled_actuals, event.before_ms)
+                state = replace(state, ledger=ledger, policy=replace(state.policy, settled_actuals=settled))
+            else:
+                state = replace(state, ledger=prune_ledger(state.ledger, event.before_ms))
     elif isinstance(event, FrameObserved):
         if event.frame.at_ms > now_ms or (not rollback and event.frame.at_ms < state.resume_after_ms):
             raise ValueError("future physical frame")
@@ -868,11 +1059,26 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                     group = replace(_supersede(group), desired=event.request)
         elif isinstance(event, Proposed):
             request, purpose = _request(group, now_ms)
-            valid = (request is not None and event.generation == group.generation and event.request_id == request.id
+            job = group.transition_work
+            valid = (isinstance(job, TransitionJob) and type(event.token) is int and event.token == job.token
+                     and now_ms < job.deadline_ms and request is not None
+                     and job.key == _transition_key(group, request, purpose)
+                     and event.generation == group.generation and event.request_id == request.id
                      and event.request_revision == request.revision and _fresh(group.observation, now_ms)
                      and event.observed_revision == group.observation.revision and event.adapter_revision == group.spec.adapter_revision)
             if valid and group.plan is None:
-                group = replace(group, plan=_validate_proposal(group, event, request, purpose), waiting_for=None)
+                group = replace(group, plan=_validate_proposal(group, event, request, purpose), transition_work=None)
+        elif isinstance(event, TransitionFailed):
+            _integer(event.token, 1)
+            _identity(event.reason)
+            if event.outcome not in ("retryable", "unsupported"):
+                raise ValueError("invalid transition failure outcome")
+            job = group.transition_work
+            if isinstance(job, TransitionJob) and job.token == event.token and now_ms < job.deadline_ms:
+                work = _transition_failure(job, now_ms, state.limits, event.reason,
+                                           unsupported=event.outcome == "unsupported")
+                group = replace(group, transition_work=work)
+                effects.append(Report(group.spec.id, event.reason))
         elif isinstance(event, TransportResult):
             _identity(event.evidence)
             if event.outcome not in ("not_sent", "accepted", "ambiguous"):
@@ -896,6 +1102,10 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
         request, _ = _request(group, now_ms)
         if request:
             deadlines.extend([request.valid_until_ms, group.retry_not_before_ms])
+        if request and isinstance(group.transition_work, TransitionJob):
+            deadlines.append(group.transition_work.deadline_ms)
+        if request and isinstance(group.transition_work, TransitionFailure) and group.transition_work.retry_at_ms is not None:
+            deadlines.append(group.transition_work.retry_at_ms)
         if group.observation:
             deadlines.append(group.observation.valid_until_ms)
         for attempt in group.attempts:

@@ -84,7 +84,7 @@ class Harness:
         group = self.group(key)
         request = group.desired if group.mode == "controlling" and group.desired and self.now < group.desired.valid_until_ms else group.release
         steps = steps or synthetic_steps(group.observation.controls, request.target)
-        return self.event(Proposed(key, group.generation, request.id, request.revision, group.observation.revision, "fake-v1", steps))
+        return self.event(Proposed(key, group.generation, request.id, request.revision, group.observation.revision, "fake-v1", steps, getattr(group.transition_work, "token", group.next_transition)))
 
     def durable(self, key="battery"):
         prepared = next(a for a in self.group(key).attempts if a.stage == "prepared")

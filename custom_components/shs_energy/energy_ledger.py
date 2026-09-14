@@ -193,8 +193,7 @@ def create_ledger(identity: str, mapping_revision: str, specs: tuple[MeterSpec, 
     return EnergyLedger(identity, mapping_revision, 0, tuple(MeterStream(spec) for spec in specs), max_intervals)
 
 
-def record_sample(ledger: EnergyLedger, sample: CounterSample, now_ms: int) -> tuple[EnergyLedger, str]:
-    """Append once, or report duplicate/stale evidence without changing actuals."""
+def _sample_admission(ledger, sample, now_ms):
     _integer(now_ms)
     stream = next((s for s in ledger.streams if s.spec.stream_id == sample.stream_id), None)
     if stream is None:
@@ -202,27 +201,44 @@ def record_sample(ledger: EnergyLedger, sample: CounterSample, now_ms: int) -> t
     if stream.samples:
         previous = stream.samples[-1]
         if sample.revision < previous.revision:
-            return ledger, "stale_meter_sample"
+            return stream, "stale_meter_sample"
         if sample.revision == previous.revision:
             if sample != previous:
                 raise ValueError("conflicting meter sample at the same revision")
-            return ledger, "duplicate_meter_sample"
+            return stream, "duplicate_meter_sample"
         _validate_pair(stream.spec, previous, sample)
     elif sample.epoch_reason is None:
         raise ValueError("first anchor requires epoch provenance")
     if sample.at_ms > now_ms:
         raise ValueError("future meter sample")
+    return stream, "meter_recorded"
+
+
+def record_sample(ledger: EnergyLedger, sample: CounterSample, now_ms: int) -> tuple[EnergyLedger, str]:
+    """Standalone append; capacity maintenance is explicit for this low-level API."""
+    stream, outcome = _sample_admission(ledger, sample, now_ms)
+    if outcome != "meter_recorded":
+        return ledger, outcome
+    return _append_sample(ledger, stream, sample), outcome
+
+
+def _append_sample(ledger, stream, sample):
     updated = replace(stream, samples=(*stream.samples, sample),
                       started_at_ms=sample.at_ms if stream.started_at_ms is None else stream.started_at_ms)
     return replace(ledger, revision=ledger.revision + 1,
-                   streams=tuple(updated if s.spec.stream_id == sample.stream_id else s for s in ledger.streams)), "meter_recorded"
+                   streams=tuple(updated if s.spec.stream_id == sample.stream_id else s for s in ledger.streams))
 
 
-def prune_ledger(ledger: EnergyLedger, before_ms: int) -> EnergyLedger:
+def prune_ledger(ledger: EnergyLedger, before_ms: int, *, stream_id: Optional[str] = None) -> EnergyLedger:
     """Archive only complete segments; preserve counter anchors and lifetime bounds."""
     _integer(before_ms)
+    if stream_id is not None and stream_id not in {s.spec.stream_id for s in ledger.streams}:
+        raise ValueError("unknown retention stream")
     streams = []
     for stream in ledger.streams:
+        if stream_id is not None and stream.spec.stream_id != stream_id:
+            streams.append(stream)
+            continue
         remove = 0
         archived = stream.archived
         for left, right in zip(stream.samples, stream.samples[1:]):
@@ -279,39 +295,121 @@ def actuals_since(ledger: EnergyLedger, watermark: ActualsWatermark, until_ms: i
     _integer(until_ms, watermark.at_ms)
     if (watermark.ledger_id, watermark.mapping_revision) != (ledger.id, ledger.mapping_revision) or watermark.ledger_revision > ledger.revision:
         raise ValueError("foreign or future actuals watermark")
-    result = []
-    for stream in ledger.streams:
-        start = watermark.at_ms
-        samples = stream.samples
-        if samples and stream.started_at_ms < samples[0].at_ms and start < samples[0].at_ms:
-            raise ValueError("actuals watermark precedes retained history")
-        energy, measured, uncertain, reasons = ZERO, 0, 0, set()
+    return tuple(_stream_actuals(stream, watermark.at_ms, until_ms) for stream in ledger.streams)
 
-        def unknown(left, right, reason):
-            nonlocal energy, uncertain
-            duration = max(0, min(until_ms, right) - max(start, left))
-            if duration:
-                energy = energy.plus(EnergyBounds(0, _maximum(stream.spec, duration)))
-                uncertain += duration
-                reasons.add(reason)
 
-        if not samples:
-            unknown(start, until_ms, "no_meter_anchor")
+def _stream_actuals(stream, start, until_ms):
+    samples = stream.samples
+    if samples and stream.started_at_ms < samples[0].at_ms and start < samples[0].at_ms:
+        raise ValueError("actuals watermark precedes retained history")
+    energy, measured, uncertain, reasons = ZERO, 0, 0, set()
+
+    def unknown(left, right, reason):
+        nonlocal energy, uncertain
+        duration = max(0, min(until_ms, right) - max(start, left))
+        if duration:
+            energy = energy.plus(EnergyBounds(0, _maximum(stream.spec, duration)))
+            uncertain += duration
+            reasons.add(reason)
+
+    if not samples:
+        unknown(start, until_ms, "no_meter_anchor")
+    else:
+        unknown(start, samples[0].at_ms, "before_first_anchor")
+        for left, right in zip(samples, samples[1:]):
+            a, b = max(start, left.at_ms), min(until_ms, right.at_ms)
+            if a >= b:
+                continue
+            energy = energy.plus(_segment(stream.spec, left, right, a, b))
+            if left.epoch != right.epoch:
+                uncertain += b - a
+                reasons.add("epoch_gap")
+            elif a != left.at_ms or b != right.at_ms:
+                uncertain += b - a
+                reasons.add("partial_counter_interval")
+            else:
+                measured += b - a
+        unknown(samples[-1].at_ms, until_ms, "awaiting_meter_sample")
+    return StreamActuals(stream.spec, energy, measured, uncertain, tuple(sorted(reasons)))
+
+
+@dataclass(frozen=True)
+class SettledActuals:
+    through_ms: int
+    actuals: StreamActuals
+
+    def __post_init__(self):
+        _integer(self.through_ms)
+
+
+def _plus_actuals(left, right):
+    if left.spec != right.spec:
+        raise ValueError("cannot combine different measured streams")
+    return StreamActuals(left.spec, left.energy.plus(right.energy),
+                         left.counter_measured_ms + right.counter_measured_ms,
+                         left.uncertain_ms + right.uncertain_ms,
+                         tuple(sorted(set(left.reasons) | set(right.reasons))))
+
+
+def start_settlement(ledger: EnergyLedger, origin: ActualsWatermark) -> tuple[SettledActuals, ...]:
+    actuals_since(ledger, origin, origin.at_ms)
+    return tuple(SettledActuals(origin.at_ms, StreamActuals(s.spec, ZERO, 0, 0, ())) for s in ledger.streams)
+
+
+def validate_settlement(ledger, origin, settled):
+    if ((origin.ledger_id, origin.mapping_revision) != (ledger.id, ledger.mapping_revision)
+            or origin.ledger_revision > ledger.revision or len(settled) != len(ledger.streams)):
+        raise ValueError("settlement ledger identity or cardinality differs")
+    for stream, prefix in zip(ledger.streams, settled):
+        actual = prefix.actuals
+        if (actual.spec != stream.spec or prefix.through_ms < origin.at_ms
+                or actual.counter_measured_ms + actual.uncertain_ms != prefix.through_ms - origin.at_ms):
+            raise ValueError("settlement scope or duration differs")
+        if prefix.through_ms == origin.at_ms and (actual.energy != ZERO or actual.reasons):
+            raise ValueError("empty settlement must contain no actuals")
+        if prefix.through_ms > origin.at_ms and (not stream.samples or prefix.through_ms != stream.samples[0].at_ms):
+            raise ValueError("settlement must end at the retained physical counter anchor")
+        _stream_actuals(stream, prefix.through_ms, prefix.through_ms)
+
+
+def reconciled_actuals(ledger, origin, settled, until_ms) -> tuple[StreamActuals, ...]:
+    validate_settlement(ledger, origin, settled)
+    _integer(until_ms, origin.at_ms)
+    if any(prefix.through_ms > until_ms for prefix in settled):
+        raise ValueError("query precedes settled accounting")
+    return tuple(_plus_actuals(prefix.actuals, _stream_actuals(stream, prefix.through_ms, until_ms))
+                 for stream, prefix in zip(ledger.streams, settled))
+
+
+def settle_and_prune(ledger, origin, settled, before_ms, *, stream_id=None):
+    validate_settlement(ledger, origin, settled)
+    pruned = prune_ledger(ledger, before_ms, stream_id=stream_id)
+    prefixes = []
+    for old, new, prefix in zip(ledger.streams, pruned.streams, settled):
+        if len(new.samples) < len(old.samples) and new.samples[0].at_ms > prefix.through_ms:
+            through = new.samples[0].at_ms
+            prefix = SettledActuals(through, _plus_actuals(
+                prefix.actuals, _stream_actuals(old, prefix.through_ms, through)))
+        prefixes.append(prefix)
+    result = tuple(prefixes)
+    validate_settlement(pruned, origin, result)
+    return pruned, result
+
+
+def record_actuals(ledger, sample, now_ms, *, origin=None, settled=()):
+    """Validate, settle capacity pressure and append as one immutable transaction."""
+    stream, outcome = _sample_admission(ledger, sample, now_ms)
+    if origin is not None:
+        validate_settlement(ledger, origin, settled)
+    elif settled:
+        raise ValueError("settlement requires an origin watermark")
+    if outcome != "meter_recorded":
+        return ledger, settled, outcome
+    if len(stream.samples) == ledger.max_intervals + 1:
+        cut = stream.samples[1].at_ms
+        if origin is None:
+            ledger = prune_ledger(ledger, cut, stream_id=sample.stream_id)
         else:
-            unknown(start, samples[0].at_ms, "before_first_anchor")
-            for left, right in zip(samples, samples[1:]):
-                a, b = max(start, left.at_ms), min(until_ms, right.at_ms)
-                if a >= b:
-                    continue
-                energy = energy.plus(_segment(stream.spec, left, right, a, b))
-                if left.epoch != right.epoch:
-                    uncertain += b - a
-                    reasons.add("epoch_gap")
-                elif a != left.at_ms or b != right.at_ms:
-                    uncertain += b - a
-                    reasons.add("partial_counter_interval")
-                else:
-                    measured += b - a
-            unknown(samples[-1].at_ms, until_ms, "awaiting_meter_sample")
-        result.append(StreamActuals(stream.spec, energy, measured, uncertain, tuple(sorted(reasons))))
-    return tuple(result)
+            ledger, settled = settle_and_prune(ledger, origin, settled, cut, stream_id=sample.stream_id)
+        stream = next(s for s in ledger.streams if s.spec.stream_id == sample.stream_id)
+    return _append_sample(ledger, stream, sample), settled, outcome

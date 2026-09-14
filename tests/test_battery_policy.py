@@ -79,7 +79,7 @@ class Harness:
         step = Step(key, value, self.group.observation.controls, (), Envelope(dict(target)["charge_w"], dict(target)["discharge_w"]),
                     10, 20, True, "synthetic-fixture-response")
         self.event(Proposed("battery", self.group.generation, self.group.desired.id, self.group.desired.revision,
-                            self.group.observation_revision, self.group.spec.adapter_revision, (step,)))
+                            self.group.observation_revision, self.group.spec.adapter_revision, (step,), self.group.transition_work.token))
         return self.group.attempts[0].prepared_revision
 
 
@@ -279,8 +279,9 @@ class BatteryPolicyTests(unittest.TestCase):
         h.compiled = read_battery_policy(json.dumps(value).encode())
         h.now = h.compiled.summary.anchor_ms
         h.event(MeterObserved(CounterSample("charge", "physical-register", 0, 1, h.now, 1200000)))
-        with self.assertRaises(ValueError):
-            h.event(LedgerPruned(h.now))
+        h.event(LedgerPruned(h.now))
+        self.assertEqual(h.state.policy.watermark, old_watermark)
+        self.assertEqual(h.state.policy.settled_actuals[0].actuals.energy, EnergyBounds(200000, 200000))
         h.event(FrameObserved(replace(h.state.frame, revision=1, at_ms=h.now, valid_until_ms=h.now + 10000)))
         h.event(Observed("battery", replace(h.group.observation, revision=1, at_ms=h.now, valid_until_ms=h.now + 10000)))
         h.context(1); h.offer(2)

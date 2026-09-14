@@ -1,4 +1,4 @@
-"""Closed version-3 JSON for the offline runtime and conservative crash restoration."""
+"""Closed version-4 JSON for the offline runtime and conservative crash restoration."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -24,6 +24,7 @@ def _check_state(state):
         runtime._validate_policy_bindings(state.groups[0], session.compiled, session.bindings)
         if state.ledger is None or session.watermark.ledger_id != state.ledger.id or session.watermark.mapping_revision != state.ledger.mapping_revision:
             raise ValueError("policy ledger identity differs from checkpoint")
+        runtime.validate_policy_settlement(state)
         if session.watermark.at_ms != session.compiled.summary.anchor_ms or session.watermark.ledger_revision > state.ledger.revision:
             raise ValueError("policy watermark is inconsistent")
         if session.reconciled_from is None:
@@ -52,6 +53,15 @@ def _check_state(state):
                     or state.ledger.revision != session.watermark.ledger_revision):
                 raise ValueError("active policy/request/context checkpoint mismatch")
     for group in state.groups:
+        work = group.transition_work
+        if isinstance(work, runtime.TransitionJob):
+            if work.token >= group.next_transition or work.key.generation != group.generation:
+                raise ValueError("transition job identity disagrees with checkpoint")
+        if work is not None and (work.key.generation > group.generation
+                                 or work.key.observed_revision > group.observation_revision):
+            raise ValueError("transition work exceeds its observation/generation watermark")
+        if group.plan is not None and work is not None:
+            raise ValueError("transition work cannot coexist with an accepted sequence")
         if group.observation and group.observation.revision != group.observation_revision:
             raise ValueError("observation watermark disagrees")
         if group.observation and (set(dict(group.observation.controls)) != set(group.spec.control_keys)
@@ -72,6 +82,7 @@ def _check_state(state):
                     or attempt.observed_revision > group.observation_revision
                     or attempt.latest_effect_ms != attempt.send_by_ms + attempt.step.latest_effect_delay_ms):
                 raise ValueError("checkpoint contains an impossible preparation")
+            runtime._relief_rule(group, attempt.step)
             if not runtime._within(attempt.step.possible, group.spec.maximum):
                 raise ValueError("attempt exceeds its declared scope")
         if group.plan and group.plan.generation != group.generation:
@@ -82,6 +93,7 @@ def _check_state(state):
             if request is None or (request.id, request.revision) != (plan.request_id, plan.request_revision):
                 raise ValueError("sequence does not name its request")
             for index, step in enumerate(plan.steps):
+                runtime._relief_rule(group, step)
                 if (step.key not in group.spec.control_keys or set(dict(step.before)) != set(group.spec.control_keys)
                         or not runtime._within(step.possible, group.spec.maximum)
                         or (index and not runtime._same(plan.steps[index - 1].after, step.before))):
@@ -89,18 +101,14 @@ def _check_state(state):
             if not runtime._same(plan.steps[-1].after, request.target):
                 raise ValueError("sequence does not reach request")
         for attempt in group.attempts:
-            if attempt.stage == "prepared" and (group.plan is None or attempt.generation != group.plan.generation
-                    or attempt.step_index != group.plan.index or group.plan.index >= len(group.plan.steps)
-                    or attempt.step != group.plan.steps[group.plan.index]
-                    or (attempt.request_id, attempt.request_revision, attempt.purpose) !=
-                       (group.plan.request_id, group.plan.request_revision, group.plan.purpose)):
+            if attempt.stage == "prepared" and not runtime.preparation_matches(group.plan, attempt):
                 raise ValueError("preparation has no matching sequence")
     return state
 
 
 def encode_checkpoint(state: runtime.HomeState) -> bytes:
     _check_state(state)
-    data = json.dumps({"schema_version": 3, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    data = json.dumps({"schema_version": 4, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > MAX_BYTES:
         raise ValueError("checkpoint exceeds byte limit")
     return data
@@ -108,7 +116,7 @@ def encode_checkpoint(state: runtime.HomeState) -> bytes:
 
 def decode_checkpoint(data: bytes) -> runtime.HomeState:
     value = read_runtime_json(data)
-    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 3:
+    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 4:
         raise ValueError("unsupported checkpoint version/fields")
     return _check_state(_decode(value["state"], runtime.HomeState))
 
@@ -121,7 +129,8 @@ def restore_checkpoint(data: bytes, now_ms: int):
     after = max(old.last_time_ms, now_ms)
     groups = tuple(replace(group, authority_confirmed=False, observation=None, plan=None,
                            attempts=tuple(replace(a, stage="ambiguous") for a in group.attempts),
-                           owned=group.owned or bool(group.attempts), waiting_for=None, status="resuming")
+                           owned=group.owned or bool(group.attempts),
+                           transition_work=runtime.resumed_transition_work(group, after, old.limits), status="resuming")
                    for group in old.groups)
     state = replace(old, revision=old.revision + 1, last_time_ms=after, resume_after_ms=after, groups=groups, frame=None)
     state = replace(state, policy_context=None,
