@@ -953,3 +953,46 @@ test('selected command detail shows mode and actuator limits with one shared ren
   panel._data.timeline.slots[0].command_previews['device:a'] = { fields: [{ label: 'Target', value: 22, unit: '°C' }] };
   assert.match(panel._renderSchedule(), /Living heater: No instruction<span class="command-detail muted"> \| Target: 22 °C/);
 });
+
+test('schedule colours follow requested actions independently of device mode and forecast power', () => {
+  const panel = makePanel();
+  panel._data.timeline = { capabilities: { battery: true, pool: true, ev: true } };
+  for (const mode of ['monitoring', 'planning', 'control_verification', 'controlling']) {
+    for (const [operation, action] of [['solar_charge', 'charging'], ['grid_charge', 'charging'],
+      ['supply_house', 'discharging'], ['export', 'discharging'], ['self_consumption', 'general'], ['hold', 'idle']]) {
+      assert.equal(panel._scheduleCommand({ system: 'battery', mode }, {
+        battery_charge_w: 0, battery_discharge_w: 0,
+        battery_command: { schema_version: 2, operation, charge_limit_w: 8800, discharge_limit_w: 9600 },
+      }).action, action);
+    }
+  }
+  assert.equal(panel._scheduleCommand({ system: 'pool' }, { pool_w: 1952 }).action, 'heating');
+  assert.equal(panel._scheduleCommand({ system: 'ev' }, { ev_target_current_a: 10 }).action, 'charging');
+  const slot = { commands: { device: { type: 'switch_schedule', on_seconds: 900 } } };
+  for (const [category, action] of [['heating', 'heating'], ['cooling', 'cooling'], ['pool_pump', 'general']]) {
+    assert.equal(panel._scheduleCommand({ key: 'device', category }, slot).action, action);
+  }
+  slot.commands.device = { type: 'permit_inhibit', permitted: true };
+  assert.equal(panel._scheduleCommand({ key: 'device', category: 'hot_water' }, slot).action, 'heating');
+  slot.commands.device.permitted = false;
+  assert.equal(panel._scheduleCommand({ key: 'device', category: 'hot_water' }, slot).action, 'idle');
+  slot.commands.device = { type: 'unavailable', reason: 'No supported instruction' };
+  assert.equal(panel._scheduleCommand({ key: 'device', category: 'heating' }, slot).action, 'idle');
+});
+
+test('schedule action legend shares palette colours with slots and retains price hatching', () => {
+  const panel = scheduleFilterPanel();
+  panel._data.timeline.slots[0].commands.a = { type: 'switch_schedule', on_seconds: 900 };
+  panel._data.timeline.slots[0].binding = false;
+  const html = panel._renderSchedule();
+  assert.match(html, /aria-label="Requested action colours"/);
+  assert.match(html, /data-schedule-action="heating" aria-label="Living heater, .*Heating · On/);
+  assert.match(html, /class="slot running advisory"/);
+  assert.match(html, /Striped: estimated prices/);
+  const css = panel._styles();
+  for (const [action, colour] of [['heating', '#f5a38a'], ['cooling', '#a8cfe8'], ['charging', '#9dc4ad'],
+    ['discharging', '#f6c573'], ['general', '#4a90c5']]) {
+    assert.ok(css.includes(`[data-schedule-action="${action}"] { --schedule-action-colour:${colour}; }`));
+  }
+  assert.match(css, /\.slot\.advisory \{ background-image:repeating-linear-gradient/);
+});

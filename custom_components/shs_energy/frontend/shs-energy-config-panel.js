@@ -1,5 +1,13 @@
 const TABS = [["energy", "Energy"], ["devices", "Devices"], ["schedule", "Schedule"], ["status", "Status"]];
 const DEVICE_MODES = [["monitoring", "Monitoring"], ["planning", "Planning"], ["control_verification", "Control verification"], ["controlling", "Controlling"]];
+const SCHEDULE_ACTIONS = {
+  heating: { label: "Heating", colour: "#f5a38a" },
+  cooling: { label: "Cooling", colour: "#a8cfe8" },
+  charging: { label: "Charging", colour: "#9dc4ad" },
+  discharging: { label: "Discharging", colour: "#f6c573" },
+  general: { label: "On / automatic", colour: "#4a90c5" },
+  idle: { label: "Idle / no request", colour: "var(--secondary-background-color)" },
+};
 const MAPPINGS_KEY = "device_control_mappings";
 const FRONTEND_VERSION = new URL(import.meta.url).searchParams.get("v");
 const PANEL_ELEMENT = `shs-energy-config-panel-${FRONTEND_VERSION.replaceAll(".", "-")}`;
@@ -1021,7 +1029,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _scheduleCommand(device, slot) {
-    const result = (text, active = false) => ({ text, active });
+    const deviceAction = { heating: "heating", cooling: "cooling", hot_water: "heating", pool_heating: "heating", ev_charging: "charging" }[device.category] || "general";
+    const result = (text, active = false, action = deviceAction) => ({ text, active, action: active ? action : "idle" });
     if (device.system && !this._data.timeline?.capabilities?.[device.system]) return result("No instruction");
     if (device.system === "battery") {
       const command = slot.battery_command;
@@ -1036,10 +1045,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
         hold: "Preserve battery",
       };
       return result(labels[command.operation] || "No supported instruction",
-        Boolean(labels[command.operation]) && command.operation !== "hold");
+        Boolean(labels[command.operation]) && command.operation !== "hold",
+        { solar_charge: "charging", grid_charge: "charging", supply_house: "discharging", export: "discharging" }[command.operation] || "general");
     }
-    if (device.system === "ev") return slot.ev_target_current_a > 0 ? result(`Charge ${slot.ev_target_current_a} A`, true) : result("Charging off");
-    if (device.system === "pool") return slot.pool_w > 0 ? result(`Heat · ${slot.pool_w} W planned`, true) : result("No heating requested");
+    if (device.system === "ev") return slot.ev_target_current_a > 0 ? result(`Charge ${slot.ev_target_current_a} A`, true, "charging") : result("Charging off");
+    if (device.system === "pool") return slot.pool_w > 0 ? result(`Heat · ${slot.pool_w} W planned`, true, "heating") : result("No heating requested");
     const command = slot.commands?.[device.key];
     if (!command) return result("No instruction");
     if (command.type === "setpoint") return result(`Hold ${command.target_c} °C`, true);
@@ -1047,6 +1057,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (command.type === "permit_inhibit") return result(command.permitted ? "Allowed to run" : "Paused", command.permitted);
     if (command.type === "variable_power") return result(`${command.value} ${command.unit}`, command.value > 0);
     return result(command.reason || "No supported instruction");
+  }
+
+  _scheduleLegend() {
+    return `<div class="schedule-legend" aria-label="Requested action colours"><span class="muted">Requested action:</span>${Object.entries(SCHEDULE_ACTIONS).map(([action, { label }]) => `<span><i class="action-swatch" data-schedule-action="${action}" aria-hidden="true"></i>${label}</span>`).join("")}</div>`;
   }
 
   _scheduleCommandDetail(device, slot) {
@@ -1075,10 +1089,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const selected = slots[this._selectedSlot];
     return `${this._renderScheduleFilters(allDevices)}<div class="card"><div class="status-heading"><h2>Your schedule</h2>${this._refreshError ? this._statusBadge("unavailable", "Status unconfirmed") : this._statusBadge(status.state, status.label)}</div>
       <p>${this._escape(this._refreshError ? "Current status could not be confirmed. The last received status may be stale." : status.reason)}</p>${status.plan_id ? `<p>Plan <code title="${this._escape(status.plan_id)}">${this._escape(status.plan_id.slice(0, 8))}</code> · Issued ${this._time(status.issued_at)}</p>` : ""}
-      ${slots.length && scheduledDevices.length ? `<button class="text" data-action="horizon">${this._fullHorizon ? "Show next 24 hours" : "Show full available plan"}</button><p class="muted">Colour: target or permission requested · Solid: published prices · Striped: estimated prices · Red line: now. Select a quarter to inspect its requests.</p><div class="timeline-scroll"><div class="timeline"><div class="timeline-times"><span>${this._time(slots[0].start)}</span><span>${this._time(end)}</span></div>
+      ${slots.length && scheduledDevices.length ? `<button class="text" data-action="horizon">${this._fullHorizon ? "Show next 24 hours" : "Show full available plan"}</button>${this._scheduleLegend()}<p class="muted">Solid: published prices · Striped: estimated prices · Red line: now. Select a quarter to inspect its requests.</p><div class="timeline-scroll"><div class="timeline"><div class="timeline-times"><span>${this._time(slots[0].start)}</span><span>${this._time(end)}</span></div>
       ${scheduledDevices.map(d => `<div class="timeline-row"><strong>${this._escape(d.name)}</strong><div class="timeline-track">${slots.map((slot, index) => {
-        const { text, active } = this._scheduleCommand(d, slot);
-        return `<button class="slot ${active ? "running" : ""} ${slot.binding ? "" : "advisory"}" data-action="slot" data-index="${index}" aria-label="${this._escape(d.name + ', ' + this._time(slot.start) + ', ' + text + (slot.binding ? ', published prices' : ', estimated prices'))}" title="${this._escape(text)}"></button>`;
+        const { text, active, action } = this._scheduleCommand(d, slot);
+        const description = `${SCHEDULE_ACTIONS[action].label} · ${text}`;
+        return `<button class="slot ${active ? "running" : ""} ${slot.binding ? "" : "advisory"}" data-action="slot" data-index="${index}" data-schedule-action="${action}" aria-label="${this._escape(d.name + ', ' + this._time(slot.start) + ', ' + description + (slot.binding ? ', published prices' : ', estimated prices'))}" title="${this._escape(description)}"></button>`;
       }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Published prices" : "Estimated prices"}</h3><ul>${scheduledDevices.map(d => `<li>${this._escape(d.name)}: ${this._escape(this._scheduleCommand(d, selected).text)}${this._scheduleCommandDetail(d, selected)}</li>`).join("")}</ul></div>` : ""}` : `<p>${slots.length ? "No included devices match these filters." : "No actionable schedule is available. Details are in Status."}</p>`}
       <p>Targets shown here are requests. They do not prove that heat, charging or power was delivered.</p></div>
       <div class="card"><h2>Controller diagnostics</h2><p>Download every non-excluded device in Monitoring, Planning, Control verification or Controlling, with its current mode, configuration, readings, plan and controller status. Retained runtime evaluations and real service calls are separate from simulated verification commands and coverage. Verification does not prove physical response. The file contains local entity IDs and configuration. Observations are sampled about once a minute in every mode, with up to 720 samples retained. Energy-counter differences are labelled as interval averages, with missing or stale readings identified. Current-session checks and coverage are summarised separately from older evidence. Repeated checks are grouped; up to 2,000 groups of each kind are retained. Downloads are gzip-compressed JSON.</p><button class="secondary" data-action="verification">Download controller diagnostics</button></div>
@@ -1268,8 +1283,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .timeline-row { display:grid; grid-template-columns:160px 1fr; gap:12px; padding:10px 0; align-items:center; }
       .timeline-track { display:flex; height:30px; position:relative; background:var(--secondary-background-color); }
       .slot { flex:1; min-width:2px; padding:0; border:0; border-right:1px solid var(--card-background-color); background:transparent; }
-      .slot.running { background:var(--primary-color); }
-      .slot.advisory { opacity:.35; background-image:repeating-linear-gradient(45deg,transparent,transparent 2px,#fff5 2px,#fff5 4px); }
+      ${Object.entries(SCHEDULE_ACTIONS).map(([action, { colour }]) => `[data-schedule-action="${action}"] { --schedule-action-colour:${colour}; }`).join("\n")}
+      .slot.running { background-color:var(--schedule-action-colour); }
+      .slot.advisory { background-image:repeating-linear-gradient(45deg,transparent,transparent 2px,#4a556855 2px,#4a556855 4px); }
+      .schedule-legend { display:flex; flex-wrap:wrap; gap:8px 16px; margin:12px 0; font-size:13px; }
+      .schedule-legend > span { display:inline-flex; align-items:center; gap:6px; }
+      .action-swatch { width:12px; height:12px; border-radius:3px; background:var(--schedule-action-colour); border:1px solid var(--divider-color); }
       .now-line { position:absolute; height:100%; width:2px; background:var(--error-color); pointer-events:none; }
       .timeline-times { display:flex; justify-content:space-between; margin-left:172px; color:var(--secondary-text-color); font-size:12px; }
       .status-heading { display:flex; justify-content:space-between; gap:18px; align-items:center; }
