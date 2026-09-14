@@ -7,7 +7,7 @@ FIELDS = {"schema_version", "operation", "charge_limit_w", "discharge_limit_w", 
 
 def validate_battery_command(slot):
     command = slot.get("battery_command")
-    if not isinstance(command, dict) or set(command) != FIELDS or type(command.get("schema_version")) is not int or command["schema_version"] != 1:
+    if not isinstance(command, dict) or set(command) != FIELDS or type(command.get("schema_version")) is not int or command["schema_version"] != 2:
         raise ValueError("a versioned battery operation with both power ceilings is required")
     operation = command["operation"]
     if not isinstance(operation, str) or operation not in OPERATIONS:
@@ -36,6 +36,6 @@ def validate_battery_command(slot):
         raise ValueError("simultaneous battery charge and discharge is invalid")
     if flows[0] > charge + .01 or flows[1] > discharge + .01:
         raise ValueError("battery forecast exceeds its commanded ceilings")
-    if operation != "self_consumption" and (abs(flows[0] - charge) > .01 or abs(flows[1] - discharge) > .01):
+    if operation not in ("self_consumption", "solar_charge") and (abs(flows[0] - charge) > .01 or abs(flows[1] - discharge) > .01):
         raise ValueError("battery allocation and operation ceilings disagree")
     return command

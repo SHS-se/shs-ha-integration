@@ -13,7 +13,7 @@ from configuration_schema import resolve_configuration
 
 
 def battery_command(operation, charge, discharge):
-    return {'schema_version': 1, 'operation': operation,
+    return {'schema_version': 2, 'operation': operation,
             'charge_limit_w': charge, 'discharge_limit_w': discharge,
             'allow_grid_charge': operation == 'grid_charge',
             'allow_battery_export': operation == 'export'}
@@ -175,6 +175,39 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.states['select.mode'].state, mode)
                 self.assertEqual(float(self.states['number.charge_limit'].state), charge / 1000)
                 self.assertEqual(float(self.states['number.discharge_limit'].state), discharge / 1000)
+
+    async def test_native_solar_capture_confirms_available_surplus_not_forecast(self):
+        original = self.hass.services.async_call
+        self.slot.update(battery_charge_w=523.94,
+                         battery_command=battery_command('solar_charge', 8800, 0))
+        await self.controller.async_start()
+        self.options['device_modes']['$battery'] = 'controlling'
+        for soc, actual_w in ((50, 3000), (50, 0), (100, 0)):
+            with self.subTest(soc=soc, actual_w=actual_w):
+                self.states['sensor.battery_soc'] = State(soc, unit_of_measurement='%')
+                def observe():
+                    self.states['sensor.battery_power'] = State(actual_w / 1000, unit_of_measurement='kW')
+                    self.states['binary_sensor.charging'] = State('on' if actual_w else 'off')
+                    self.states['binary_sensor.discharging'] = State('off')
+                async def native_response(domain, service, data, blocking):
+                    await original(domain, service, data, blocking)
+                    observe()
+                self.hass.services.async_call = native_response
+                observe()
+                await self.controller.async_tick()
+                result = self.controller.status['battery']
+                self.assertEqual(result['state'], 'confirmed', result)
+                self.assertEqual(result['measured_power_w'], actual_w)
+                self.assertEqual(result['forecast_power_w'], 523.94)
+                self.assertEqual(self.states['select.mode'].state, 'Baseline')
+                self.assertEqual(float(self.states['number.charge_limit'].state), 8.8)
+                self.assertEqual(float(self.states['number.discharge_limit'].state), 0)
+
+    async def test_old_battery_command_version_is_rejected_before_writes(self):
+        self.slot['battery_command']['schema_version'] = 1
+        with self.assertRaisesRegex(ValueError, 'versioned battery operation'):
+            await self.controller.execute_battery(self.options, self.slot)
+        self.assertEqual(self.calls, [])
 
     async def test_handover_uses_current_rated_sensor_values_after_restart(self):
         self.options['device_modes']['$battery'] = 'controlling'

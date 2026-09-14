@@ -741,7 +741,7 @@ class ScheduledController:
         charge, discharge = command["charge_limit_w"], command["discharge_limit_w"]
         if charge > limits["battery_charge_max_w"] or discharge > limits["battery_discharge_max_w"]:
             raise ValueError("planned battery ceiling exceeds the current rated power")
-        if operation != "self_consumption" and ((discharge and soc <= limits["battery_min_soc"]) or (charge and soc >= 1)):
+        if operation not in ("self_consumption", "solar_charge") and ((discharge and soc <= limits["battery_min_soc"]) or (charge and soc >= 1)):
             raise ValueError("battery SOC protection blocks the planned request")
         if operation == "export":
             price = slot.get("export_price_sek_per_kwh")
@@ -789,13 +789,15 @@ class ScheduledController:
         await self.confirm(delivered_within_ceiling, "battery did not confirm the requested operation and power ceilings within 15 seconds; check inverter control availability")
         measured = self.battery_measurement(options)
         requested = finite(slot["battery_charge_w"]) - finite(slot["battery_discharge_w"])
-        return {"state": "limited" if abs(measured - requested) > 100 else "confirmed",
+        # Native regulation follows available surplus/demand, not forecast watts.
+        limited = operation in ("grid_charge", "export") and abs(measured - requested) > 100
+        return {"state": "limited" if limited else "confirmed",
                 **({"reason": f"Battery power differs from the plan: requested {requested:g} W, measured {measured:g} W",
                     "next_step": "Inspect the inverter's operating limits and state of charge, and other automations controlling it. "
                     "If those do not explain the difference, download diagnostics for controller/planner review.",
-                    "fix": {"kind": "device"}} if abs(measured - requested) > 100 else {}),
+                    "fix": {"kind": "device"}} if limited else {}),
                 "operation": operation, "charge_limit_w": charge, "discharge_limit_w": discharge,
-                "requested_power_w": requested, "measured_power_w": measured}
+                "forecast_power_w": requested, "measured_power_w": measured}
 
     async def execute_device(self, device, options, slot):
         key = device.removeprefix("device:")

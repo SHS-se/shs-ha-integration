@@ -882,7 +882,7 @@ class ModelVersionToleranceTests(unittest.TestCase):
         original = deepcopy(slot['battery_command'])
         for mutation in (None, {**original, 'allow_battery_export': True},
                          {**original, 'charge_limit_w': -1}, {**original, 'operation': 'guess'},
-                         {**original, 'schema_version': True}):
+                         {**original, 'schema_version': True}, {**original, 'schema_version': 1}):
             slot['battery_command'] = mutation
             with self.assertRaises(OptimisationInputError):
                 validate_plan_contract(fixture['plan'], now)

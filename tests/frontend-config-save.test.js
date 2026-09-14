@@ -817,7 +817,7 @@ test('schedule uses the same system instruction for its colour and detail', () =
   assert.equal(panel._scheduleCommand(pool, slot).active, true);
   assert.equal(panel._scheduleCommand(pool, { ...slot, pool_w: 0 }).active, false);
   assert.equal(panel._scheduleCommand({ key: 'pool-heater' }, slot).active, false);
-  assert.equal(panel._scheduleCommand({ system: 'battery' }, { battery_discharge_w: 1000 }).active, true);
+  assert.equal(panel._scheduleCommand({ system: 'battery' }, { battery_command: { schema_version: 2, operation: 'supply_house', discharge_limit_w: 1000 } }).active, true);
   assert.equal(panel._scheduleCommand({ system: 'ev' }, { ev_target_current_a: 0 }).active, false);
   assert.equal(panel._scheduleCommand({ key: 'variable' }, { commands: { variable: { type: 'variable_power', value: 0, unit: 'W' } } }).active, false);
   panel._data.timeline.capabilities.pool = false;
@@ -845,4 +845,24 @@ test('schedule keeps a compact plan ID without duplicated plan details', () => {
   assert.match(html, /class="slot running advisory"/);
   assert.match(html, /Pool heater: Heat · 1952 W planned/);
   assert.doesNotMatch(html, /Advice only|future advice|Instructions until/);
+});
+
+
+test('battery schedule describes source permission and intent instead of forecast watts', () => {
+  const panel = makePanel();
+  panel._data.timeline = { capabilities: { battery: true } };
+  const device = { system: 'battery' };
+  const command = { schema_version: 2, operation: 'solar_charge', charge_limit_w: 8800, discharge_limit_w: 0 };
+  const slot = { battery_charge_w: 523.94, battery_discharge_w: 0, battery_command: command };
+  assert.equal(panel._scheduleCommand(device, slot).text, 'Capture solar surplus · preserve battery');
+  command.operation = 'grid_charge';
+  command.charge_limit_w = 523.94;
+  assert.equal(panel._scheduleCommand(device, slot).text, 'Charge up to 524 W · grid allowed');
+  command.operation = 'supply_house';
+  command.discharge_limit_w = 2712;
+  assert.equal(panel._scheduleCommand(device, slot).text, 'Supply house up to 2712 W');
+  command.operation = 'hold';
+  assert.equal(panel._scheduleCommand(device, slot).active, false);
+  delete slot.battery_command;
+  assert.equal(panel._scheduleCommand(device, slot).text, 'No supported instruction');
 });

@@ -28,14 +28,14 @@ It is not implemented by this change.
 
 Snapshot/plan schema 8 adds `battery_command` to every slot: null without a battery,
 otherwise an operation, both non-negative ceilings in W, and explicit grid-charge
-and battery-export permissions. The command object has its own version (1).
+and battery-export permissions. The command object has its own version (2; see [rollout](battery-intent-v2.md#rollout)).
 Charge/discharge forecasts remain separate from the executable operation. A
 watt-only battery request cannot operate this controller.
 
 | Operation | Configured mode | Charge ceiling | Discharge ceiling |
 | --- | --- | --- | --- |
 | `self_consumption` | Baseline | Rated charge power | Rated discharge power |
-| `solar_charge` | Baseline | Planned charging | 0 |
+| `solar_charge` | Baseline | Rated charge power | 0 |
 | `grid_charge` | Charging | Planned charging | 0 |
 | `supply_house` | Baseline | 0 | Planned house supply |
 | `export` | Discharging | 0 | Planned total discharge |
@@ -52,7 +52,7 @@ use energy below the export reserve, down to the physical cutoff. The controller
 rechecks current rated powers, SOC, and export permission/price/reserve before
 writing. Contradictory permissions, ceilings or forecast allocations are rejected.
 Locked schema-8 quarters must retain their explicit commands; an older locked
-plan without those commands must be rescinded rather than guessed.
+plan without version-2 commands must be rescinded rather than guessed.
 
 A mode transition closes both ceilings before changing mode. Repeated identical
 requests do not cycle the controls. Outgoing limits are rounded down onto the
@@ -64,7 +64,8 @@ The controller verifies each setting and waits for fresh power/direction reports
 after writes. A forced charge/export request over the 100 W measurement tolerance
 must show the requested direction. Wrong direction, exceeded ceilings or absent
 forced response produce a fault. Autonomous self-consumption/solar/house-supply
-may legitimately deliver less than the forecast; this is reported as limited.
+may legitimately differ from the forecast; confirmation checks the permitted
+ceilings instead. Solar capture can stop normally when the battery is full.
 
 ## Approved handover
 

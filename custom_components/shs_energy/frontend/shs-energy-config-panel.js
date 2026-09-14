@@ -993,7 +993,21 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _scheduleCommand(device, slot) {
     const result = (text, active = false) => ({ text, active });
     if (device.system && !this._data.timeline?.capabilities?.[device.system]) return result("No instruction");
-    if (device.system === "battery") return slot.battery_charge_w > 0 ? result(`Charge ${slot.battery_charge_w} W`, true) : slot.battery_discharge_w > 0 ? result(`Discharge ${slot.battery_discharge_w} W`, true) : result("Hold");
+    if (device.system === "battery") {
+      const command = slot.battery_command;
+      if (!command || command.schema_version !== 2) return result("No supported instruction");
+      const watts = value => `${Math.round(value)} W`;
+      const labels = {
+        self_consumption: "Solar capture and house supply",
+        solar_charge: "Capture solar surplus · preserve battery",
+        grid_charge: `Charge up to ${watts(command.charge_limit_w)} · grid allowed`,
+        supply_house: `Supply house up to ${watts(command.discharge_limit_w)}`,
+        export: `Discharge up to ${watts(command.discharge_limit_w)} · export allowed`,
+        hold: "Preserve battery",
+      };
+      return result(labels[command.operation] || "No supported instruction",
+        Boolean(labels[command.operation]) && command.operation !== "hold");
+    }
     if (device.system === "ev") return slot.ev_target_current_a > 0 ? result(`Charge ${slot.ev_target_current_a} A`, true) : result("Charging off");
     if (device.system === "pool") return slot.pool_w > 0 ? result(`Heat · ${slot.pool_w} W planned`, true) : result("No heating requested");
     const command = slot.commands?.[device.key];

@@ -58,6 +58,7 @@ def timeline(plan, status):
     return {"capabilities": deepcopy(plan.get("capabilities", {})), "slots": [
         {"start": slot["start"], "binding": slot["binding"],
          "commands": deepcopy(slot.get("device_commands", {})),
+         "battery_command": deepcopy(slot.get("battery_command")),
          **{key: slot.get(key) for key in ("battery_charge_w", "battery_discharge_w", "ev_target_current_a", "pool_w")}}
         for slot in plan["plans"]["priority"]["slots"]
     ], "reason": None}

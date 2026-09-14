@@ -10,6 +10,15 @@ from planning import unplanned_services
 
 
 class PresentationTests(unittest.TestCase):
+    def test_timeline_preserves_battery_intent_separately_from_forecast(self):
+        fixture = json.loads((Path(__file__).parent / 'fixtures/schema-8-battery-plan.json').read_text())
+        plan = fixture['plan']
+        result = timeline(plan, {'state': 'ready'})
+        source = plan['plans']['priority']['slots'][0]
+        self.assertEqual(result['slots'][0]['battery_command'], source['battery_command'])
+        result['slots'][0]['battery_command']['charge_limit_w'] = -1
+        self.assertNotEqual(source['battery_command']['charge_limit_w'], -1)
+
     def test_readiness_counts_only_included_equipment_including_home_battery(self):
         devices = [
             {"name": "Fridge", "included": False, "mapping_status": "not_configured"},
