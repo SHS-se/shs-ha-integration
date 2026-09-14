@@ -22,7 +22,7 @@ sys.path.insert(0, str(PACKAGE))
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
     "battery_commands", "operating_modes", "verification",
-    "home_runtime", "home_runtime_checkpoint", "energy_ledger",
+    "home_runtime", "home_runtime_checkpoint", "energy_ledger", "runtime_json", "battery_policy",
     "controller",
     "presentation",
     "api_contract",

@@ -1,0 +1,306 @@
+{
+  "status": "compiled",
+  "compiler_version": "offline-battery-policy-v1",
+  "scorer_version": "offline-household-v1",
+  "identity": {
+    "case_id": "fixed-tail-reversal",
+    "intent_revision": "synthetic-v1",
+    "model_revision": "ideal-battery-v1",
+    "actuals_watermark": "2026-09-14T08:00:00.000Z",
+    "provenance": "synthetic"
+  },
+  "reference_id": "hold",
+  "coverage": {
+    "kind": "exact_problem_anchor",
+    "problem": {
+      "schema_version": 1,
+      "identity": {
+        "case_id": "fixed-tail-reversal",
+        "intent_revision": "synthetic-v1",
+        "model_revision": "ideal-battery-v1",
+        "actuals_watermark": "2026-09-14T08:00:00.000Z",
+        "provenance": "synthetic"
+      },
+      "intervals": [
+        {
+          "start": "2026-09-14T08:00:00.000Z",
+          "end": "2026-09-14T08:15:00.000Z"
+        },
+        {
+          "start": "2026-09-14T08:15:00.000Z",
+          "end": "2026-09-14T08:30:00.000Z"
+        },
+        {
+          "start": "2026-09-14T08:30:00.000Z",
+          "end": "2026-09-14T08:45:00.000Z"
+        }
+      ],
+      "plant": {
+        "grid": {
+          "import_limit_w": 4000,
+          "export_limit_w": 4000
+        },
+        "pv_w": [
+          0,
+          0,
+          0
+        ],
+        "residual_loads": [
+          {
+            "id": "external-demand",
+            "power_w": [
+              1000,
+              1000,
+              1000
+            ]
+          }
+        ],
+        "thermal_stores": [],
+        "equipment": [
+          {
+            "id": "battery",
+            "model_id": "ideal-battery",
+            "available": [
+              true,
+              true,
+              true
+            ],
+            "kind": "battery",
+            "state_kwh": {
+              "initial": 0.25,
+              "min": 0,
+              "max": 0.25,
+              "provenance": "synthetic analytical example"
+            },
+            "charge_max_w": 1000,
+            "discharge_max_w": 1000,
+            "charge_efficiency": 1,
+            "discharge_efficiency": 1,
+            "wear_sek_per_kwh": 0,
+            "grid_charge_allowed": [
+              false,
+              false,
+              false
+            ],
+            "export_allowed": [
+              false,
+              false,
+              false
+            ]
+          }
+        ]
+      },
+      "economics": {
+        "tariff": "energy_only",
+        "import_sek_per_kwh": [
+          2,
+          10,
+          1
+        ],
+        "export_sek_per_kwh": [
+          0,
+          0,
+          0
+        ],
+        "shaping_sek_per_kwh_per_kw": 0,
+        "ramp_sek_per_kw": 0,
+        "initial_import_w": null,
+        "services": [],
+        "completed_event_ids": [],
+        "terminal": []
+      }
+    },
+    "segment_end": "2026-09-14T08:15:00.000Z",
+    "current_interval_count": 1,
+    "response_model": "explicit_imposed_power",
+    "interpolation": "unsupported",
+    "optimality": "optimal_in_declared_graph",
+    "approximation_error_bound_sek": null
+  },
+  "search_domain": {
+    "energy_levels_kwh": [
+      0,
+      0.25
+    ],
+    "pv_curtailment_fractions": [
+      0,
+      1
+    ],
+    "includes_minimum_export_limit_curtailment": true,
+    "retained_per_level": 4
+  },
+  "alternatives": [
+    {
+      "id": "discharge",
+      "candidate": {
+        "id": "discharge",
+        "pv_curtail_w": [
+          0,
+          0,
+          0
+        ],
+        "actions": {
+          "battery": [
+            {
+              "kind": "battery",
+              "charge_w": 0,
+              "discharge_w": 1000,
+              "solar_charge_w": 0,
+              "export_w": 0
+            },
+            {
+              "kind": "battery",
+              "charge_w": 0,
+              "discharge_w": 0,
+              "solar_charge_w": 0,
+              "export_w": 0
+            },
+            {
+              "kind": "battery",
+              "charge_w": 0,
+              "discharge_w": 0,
+              "solar_charge_w": 0,
+              "export_w": 0
+            }
+          ]
+        }
+      },
+      "full": {
+        "import_sek": 2.75,
+        "export_sek": 0,
+        "wear_sek": 0,
+        "starts_sek": 0,
+        "shaping_sek": 0,
+        "ramp_sek": 0,
+        "service_sek": 0,
+        "terminal_sek": 0,
+        "billable_sek": 2.75,
+        "total_sek": 2.75
+      },
+      "current": {
+        "import_sek": 0,
+        "export_sek": 0,
+        "wear_sek": 0,
+        "starts_sek": 0,
+        "shaping_sek": 0,
+        "ramp_sek": 0,
+        "service_sek": 0,
+        "terminal_sek": 0,
+        "billable_sek": 0,
+        "total_sek": 0
+      },
+      "future_delta": {
+        "import_sek": 2.5,
+        "export_sek": 0,
+        "wear_sek": 0,
+        "starts_sek": 0,
+        "shaping_sek": 0,
+        "ramp_sek": 0,
+        "service_sek": 0,
+        "terminal_sek": 0,
+        "billable_sek": 2.5,
+        "total_sek": 2.5
+      },
+      "total_delta_sek": 2,
+      "search": {
+        "scorer_calls": 6,
+        "interval_evaluations": 14,
+        "dominated_prefixes": 0,
+        "pruned_prefixes": 0,
+        "feasible_extensions": 2,
+        "exhaustive_in_declared_graph": true
+      }
+    },
+    {
+      "id": "hold",
+      "candidate": {
+        "id": "hold",
+        "pv_curtail_w": [
+          0,
+          0,
+          0
+        ],
+        "actions": {
+          "battery": [
+            {
+              "kind": "battery",
+              "charge_w": 0,
+              "discharge_w": 0,
+              "solar_charge_w": 0,
+              "export_w": 0
+            },
+            {
+              "kind": "battery",
+              "charge_w": 0,
+              "discharge_w": 1000,
+              "solar_charge_w": 0,
+              "export_w": 0
+            },
+            {
+              "kind": "battery",
+              "charge_w": 0,
+              "discharge_w": 0,
+              "solar_charge_w": 0,
+              "export_w": 0
+            }
+          ]
+        }
+      },
+      "full": {
+        "import_sek": 0.75,
+        "export_sek": 0,
+        "wear_sek": 0,
+        "starts_sek": 0,
+        "shaping_sek": 0,
+        "ramp_sek": 0,
+        "service_sek": 0,
+        "terminal_sek": 0,
+        "billable_sek": 0.75,
+        "total_sek": 0.75
+      },
+      "current": {
+        "import_sek": 0.5,
+        "export_sek": 0,
+        "wear_sek": 0,
+        "starts_sek": 0,
+        "shaping_sek": 0,
+        "ramp_sek": 0,
+        "service_sek": 0,
+        "terminal_sek": 0,
+        "billable_sek": 0.5,
+        "total_sek": 0.5
+      },
+      "future_delta": {
+        "import_sek": 0,
+        "export_sek": 0,
+        "wear_sek": 0,
+        "starts_sek": 0,
+        "shaping_sek": 0,
+        "ramp_sek": 0,
+        "service_sek": 0,
+        "terminal_sek": 0,
+        "billable_sek": 0,
+        "total_sek": 0
+      },
+      "total_delta_sek": 0,
+      "search": {
+        "scorer_calls": 8,
+        "interval_evaluations": 20,
+        "dominated_prefixes": 0,
+        "pruned_prefixes": 0,
+        "feasible_extensions": 5,
+        "exhaustive_in_declared_graph": true
+      }
+    }
+  ],
+  "omitted": [],
+  "ranking": [
+    "hold",
+    "discharge"
+  ],
+  "work": {
+    "interval_evaluations_upper_bound": 476,
+    "interval_evaluations": 34,
+    "scorer_calls": 14
+  }
+}

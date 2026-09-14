@@ -56,7 +56,7 @@ electrical effects, confirmation timeout, latest-effect delay and explicit
 identical-repeat evidence. Partial control surfaces and invalid transitions fail
 validation. Native measurements and electrical observations remain separate.
 
-`home_runtime_checkpoint.py` owns the closed version-2 JSON codec and conservative
+`home_runtime_checkpoint.py` owns the closed version-3 JSON codec and conservative
 restore. Unknown fields, incompatible versions, nonfinite values, invalid counters
 and inconsistent attempt/sequence identities are rejected. There is no legacy
 checkpoint migration. The replay script simulates ordered durable writes in memory;
@@ -165,9 +165,11 @@ The [actual energy ledger](energy-ledger.md) is now implemented inside the same
 household checkpoint, with gross directional counters, explicit epochs, bounded
 watermark queries and replay/restart tests. It remains separate from reservations.
 
-1. Bind accepted household policy and current economics to runtime requests, with
-   the specified contract validation, expiry and shared allocation rules. The
-   offline battery compiler is not yet an executable runtime wire contract.
+1. Expand the compiler's remaining-time/state coverage into a deployable economic
+   contract. [Exact-condition policy acceptance and synthetic request binding](policy-binding.md)
+   are now implemented, including current C evaluation, C/F reconciliation and
+   stale-dispatch fencing. This prototype deliberately cannot turn the current
+   compiler's single exact anchor into a quarter-long execution lease.
 2. Commission the battery adapter's transition, repeat, ordering, readback and
    latest-effect contracts, including approved Maximum Self Consumption handover
    with fresh rated limits. Then implement journal, event, timer and transport

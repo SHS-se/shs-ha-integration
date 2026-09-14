@@ -266,6 +266,13 @@ class StreamActuals:
     uncertain_ms: int
     reasons: tuple[str, ...]
 
+    def __post_init__(self):
+        _integer(self.counter_measured_ms)
+        _integer(self.uncertain_ms)
+        allowed = {"no_meter_anchor", "before_first_anchor", "epoch_gap", "partial_counter_interval", "awaiting_meter_sample"}
+        if type(self.reasons) is not tuple or len(self.reasons) > 5 or not set(self.reasons) <= allowed or tuple(sorted(set(self.reasons))) != self.reasons:
+            raise ValueError("invalid actuals coverage reasons")
+
 
 def actuals_since(ledger: EnergyLedger, watermark: ActualsWatermark, until_ms: int) -> tuple[StreamActuals, ...]:
     """Read bounded actuals by physical stream; never allocate, net or prorate them."""

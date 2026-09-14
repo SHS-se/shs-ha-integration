@@ -3,8 +3,8 @@
 The household runtime now records measured gross electrical energy in its own
 immutable ledger, saved atomically with command and reservation state. This
 completes the ledger implementation following the command/restart prototype.
-It is still offline: no live meter subscriptions, policy acceptance or journal
-worker have been connected.
+It is still offline: no live meter subscriptions or journal worker have been connected.
+[Exact-condition policy acceptance](policy-binding.md) now consumes its watermarks.
 
 ## Usage and ownership
 
@@ -39,8 +39,8 @@ command, change a reservation or release physical headroom. Native state remains
 in the observation model. Queries do not mutate, consume or reset actuals, so a
 new plan or repeated query cannot replenish an energy allowance.
 
-Checkpoint schema **2** includes the ledger and its source high-water marks.
-Schema 1 is rejected; this offline prototype has no compatibility migration.
+Checkpoint schema **3** includes the ledger and its source high-water marks.
+Earlier prototype schemas are rejected; this offline prototype has no compatibility migration.
 `ledger: null` explicitly means that accounting is not configured, and meter
 events are then rejected. Restore preserves the ledger unchanged while requiring
 fresh control observations and authority under the existing restart protocol.
@@ -121,8 +121,8 @@ limit also applies. `LedgerPruned(before_ms)` archives complete intervals only,
 preserving lifetime lower/upper totals, first-anchor time, archived interval count
 and the latest source revision/epoch. Capacity exhaustion rejects a new sample
 atomically; after an explicit prune, that sample can be retried against the same
-counter anchor. There is no silent eviction. The future policy owner must retain
-history needed by accepted watermarks or explicitly reject unsupported reconciliation.
+counter anchor. There is no silent eviction. The policy owner now blocks pruning past its accepted watermark;
+replacement must reconcile and advance that watermark before older history can be removed.
 
 An event lost before its checkpoint can be replayed against the old durable anchor;
 an event already checkpointed is a duplicate. Both paths yield the same total.
@@ -159,9 +159,9 @@ A local Python 3.13 probe with 64 streams and 32 retained samples per stream use
 processing measured p95 1.89 ms, p99 2.07 ms, maximum 3.07 ms. This is not the required
 slowest-HA-host benchmark, and excludes storage, queues and physical response.
 
-The next step is binding accepted policy and current economics to runtime requests,
-including real policy watermark validation and reconciliation. This ledger supplies
-the measured evidence; it does not yet implement policy adoption or cost settlement.
+[Exact-condition policy acceptance and request binding](policy-binding.md) now
+validate and reconcile these watermarks while keeping actuals separate from expected
+costs. Broader compiler time/state coverage is needed next for deployable execution.
 Live source/journal/transport ports and battery adapter commissioning follow.
 Thermal models remain deferred as significant work; device order stays battery,
 pool, then car. Household-specific configuration remains separate from this model.

@@ -1,97 +1,15 @@
-"""Closed version-2 JSON for the offline runtime and conservative crash restoration."""
+"""Closed version-3 JSON for the offline runtime and conservative crash restoration."""
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass, replace
-from functools import lru_cache
+from dataclasses import replace
 import json
-from math import isfinite
-import types
-from typing import get_args, get_origin, get_type_hints, Literal, Union
 
 if __package__:
     from . import home_runtime as runtime
+    from .runtime_json import MAX_BYTES, encode_value as _encode, decode_value as _decode, read_runtime_json
 else:
     import home_runtime as runtime
-
-MAX_BYTES = 1_000_000
-
-
-def _encode(value):
-    if is_dataclass(value):
-        return {"type": type(value).__name__, **{field.name: _encode(getattr(value, field.name)) for field in fields(value)}}
-    if isinstance(value, tuple):
-        return [_encode(item) for item in value]
-    return value
-
-
-@lru_cache(maxsize=64)
-def _hints(cls):
-    return get_type_hints(cls)
-
-
-def _decode(value, expected):
-    origin, args = get_origin(expected), get_args(expected)
-    if origin in (Union, types.UnionType):
-        candidates = [kind for kind in args if is_dataclass(kind) and isinstance(value, dict) and value.get("type") == kind.__name__]
-        if candidates:
-            return _decode(value, candidates[0])
-        for kind in args:
-            if not is_dataclass(kind):
-                try:
-                    return _decode(value, kind)
-                except ValueError:
-                    pass
-        raise ValueError("unsupported tagged value or union member")
-    if origin is Literal:
-        if value not in args or not any(type(value) is type(item) for item in args):
-            raise ValueError("unsupported literal")
-        return value
-    if expected is type(None):
-        if value is not None:
-            raise ValueError("expected null")
-        return None
-    if origin is tuple:
-        if type(value) is not list or len(value) > 4096:
-            raise ValueError("expected a bounded array")
-        if len(args) == 2 and args[1] is Ellipsis:
-            return tuple(_decode(item, args[0]) for item in value)
-        if len(value) != len(args):
-            raise ValueError("tuple length differs")
-        return tuple(_decode(item, kind) for item, kind in zip(value, args))
-    if is_dataclass(expected):
-        names = {field.name for field in fields(expected)}
-        if type(value) is not dict or set(value) != names | {"type"} or value["type"] != expected.__name__:
-            raise ValueError("unknown/missing fields or incompatible record type")
-        annotations = _hints(expected)
-        return expected(**{name: _decode(value[name], annotations[name]) for name in names})
-    if expected is int:
-        if type(value) is not int or abs(value) > 2 ** 53:
-            raise ValueError("expected bounded integer")
-    elif expected is float:
-        if type(value) not in (int, float) or not isfinite(value):
-            raise ValueError("expected finite number")
-    elif expected in (str, bool):
-        if type(value) is not expected or (expected is str and len(value) > 1024):
-            raise ValueError("invalid scalar")
-    else:
-        raise ValueError("unsupported domain type")
-    return value
-
-
-def _unique(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON key")
-        result[key] = value
-    return result
-
-
-def read_runtime_json(data):
-    """Read bounded JSON without duplicate keys or nonfinite constants."""
-    if not isinstance(data, (str, bytes)) or len(data if isinstance(data, bytes) else data.encode()) > MAX_BYTES:
-        raise ValueError("runtime JSON exceeds byte limit")
-    return json.loads(data, object_pairs_hook=_unique, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(f"nonfinite JSON: {value}")))
+    from runtime_json import MAX_BYTES, encode_value as _encode, decode_value as _decode, read_runtime_json
 
 
 def _check_state(state):
@@ -99,6 +17,40 @@ def _check_state(state):
         raise ValueError("resume fence exceeds journal time")
     if state.ledger and any(stream.samples and stream.samples[-1].at_ms > state.last_time_ms for stream in state.ledger.streams):
         raise ValueError("meter evidence exceeds checkpoint time")
+    if state.policy:
+        session = state.policy
+        if len(state.groups) != 1 or state.groups[0].spec.id != session.compiled.summary.group_id:
+            raise ValueError("policy group scope differs from checkpoint")
+        runtime._validate_policy_bindings(state.groups[0], session.compiled, session.bindings)
+        if state.ledger is None or session.watermark.ledger_id != state.ledger.id or session.watermark.mapping_revision != state.ledger.mapping_revision:
+            raise ValueError("policy ledger identity differs from checkpoint")
+        if session.watermark.at_ms != session.compiled.summary.anchor_ms or session.watermark.ledger_revision > state.ledger.revision:
+            raise ValueError("policy watermark is inconsistent")
+        if session.reconciled_from is None:
+            if session.reconciled_actuals:
+                raise ValueError("actuals reconciliation has no source watermark")
+        else:
+            start = session.reconciled_from
+            if ((start.ledger_id, start.mapping_revision) != (state.ledger.id, state.ledger.mapping_revision)
+                    or start.at_ms > session.watermark.at_ms or start.ledger_revision > session.watermark.ledger_revision
+                    or tuple(a.spec for a in session.reconciled_actuals) != tuple(s.spec for s in state.ledger.streams)
+                    or any(a.counter_measured_ms + a.uncertain_ms != session.watermark.at_ms - start.at_ms for a in session.reconciled_actuals)):
+                raise ValueError("actuals reconciliation scope differs from its watermarks")
+        group = state.groups[0]
+        if group.desired and group.desired.id == session.request_id and session.status != "active":
+            raise ValueError("inactive policy retains an executable request")
+        if session.status == "active":
+            context = state.policy_context
+            target = next(b.target for b in session.bindings if b.alternative_id == session.selected_id)
+            guards = tuple(runtime.Guard(key, value, value) for key, value in session.compiled.summary.expected_measurements)
+            if (context is None or context.revision != session.context_revision or context.watermark != session.watermark
+                    or not runtime._policy_context_matches(state, session.compiled, state.last_time_ms)
+                    or group.mode != "controlling" or group.desired is None
+                    or group.desired.id != session.request_id or group.desired.revision != session.revision
+                    or not runtime._same(group.desired.target, target) or group.desired.native_guards != guards
+                    or group.desired.valid_until_ms != session.compiled.summary.anchor_ms + 1
+                    or state.ledger.revision != session.watermark.ledger_revision):
+                raise ValueError("active policy/request/context checkpoint mismatch")
     for group in state.groups:
         if group.observation and group.observation.revision != group.observation_revision:
             raise ValueError("observation watermark disagrees")
@@ -148,7 +100,7 @@ def _check_state(state):
 
 def encode_checkpoint(state: runtime.HomeState) -> bytes:
     _check_state(state)
-    data = json.dumps({"schema_version": 2, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    data = json.dumps({"schema_version": 3, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > MAX_BYTES:
         raise ValueError("checkpoint exceeds byte limit")
     return data
@@ -156,7 +108,7 @@ def encode_checkpoint(state: runtime.HomeState) -> bytes:
 
 def decode_checkpoint(data: bytes) -> runtime.HomeState:
     value = read_runtime_json(data)
-    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 2:
+    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 3:
         raise ValueError("unsupported checkpoint version/fields")
     return _check_state(_decode(value["state"], runtime.HomeState))
 
@@ -172,6 +124,11 @@ def restore_checkpoint(data: bytes, now_ms: int):
                            owned=group.owned or bool(group.attempts), waiting_for=None, status="resuming")
                    for group in old.groups)
     state = replace(old, revision=old.revision + 1, last_time_ms=after, resume_after_ms=after, groups=groups, frame=None)
+    state = replace(state, policy_context=None,
+                    policy=replace(state.policy, status="awaiting_context") if state.policy else None,
+                    groups=tuple(replace(runtime._supersede(g), desired=None)
+                                 if state.policy and g.desired and g.desired.id == state.policy.request_id else g
+                                 for g in state.groups))
     effects = (runtime.Persist(state), *(runtime.ConfirmAuthority(g.spec.id) for g in groups),
                *(runtime.Observe(g.spec.id) for g in groups))
     return state, effects

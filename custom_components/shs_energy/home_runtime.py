@@ -6,9 +6,13 @@ from math import isfinite
 from typing import Literal, Optional, Union
 
 if __package__:
-    from .energy_ledger import EnergyLedger, CounterSample, record_sample, prune_ledger
+    from .battery_policy import BatteryPolicy, canonical_json, parse_problem, rank_policy
+    from .runtime_json import read_runtime_json
+    from .energy_ledger import EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, actuals_since, record_sample, prune_ledger
 else:
-    from energy_ledger import EnergyLedger, CounterSample, record_sample, prune_ledger
+    from battery_policy import BatteryPolicy, canonical_json, parse_problem, rank_policy
+    from runtime_json import read_runtime_json
+    from energy_ledger import EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, actuals_since, record_sample, prune_ledger
 
 Value = Union[str, float, int]
 Controls = tuple[tuple[str, Value], ...]
@@ -261,6 +265,58 @@ class Group:
 
 
 @dataclass(frozen=True)
+class PolicyContext:
+    revision: int
+    problem_json: str
+    mode_revision: int
+    observation_revision: int
+    frame_revision: int
+    watermark: ActualsWatermark
+
+    def __post_init__(self):
+        for value in (self.revision, self.mode_revision, self.observation_revision, self.frame_revision):
+            _integer(value)
+        if self.problem_json != canonical_json(parse_problem(read_runtime_json(self.problem_json))):
+            raise ValueError("policy context must contain canonical supported problem data")
+
+
+@dataclass(frozen=True)
+class PolicyBinding:
+    alternative_id: str
+    adapter_revision: str
+    response_evidence: str
+    current_path_json: str
+    target: Controls
+
+    def __post_init__(self):
+        for value in (self.alternative_id, self.adapter_revision, self.response_evidence):
+            _identity(value)
+        _pairs(self.target)
+
+
+@dataclass(frozen=True)
+class PolicySession:
+    revision: int
+    compiled: BatteryPolicy
+    watermark: ActualsWatermark
+    bindings: tuple[PolicyBinding, ...]
+    context_revision: int
+    selected_id: str
+    request_id: str
+    reconciled_from: Optional[ActualsWatermark]
+    reconciled_actuals: tuple[StreamActuals, ...]
+    status: Literal["active", "diagnostic_only", "outside_coverage", "awaiting_context"]
+
+    def __post_init__(self):
+        _integer(self.revision)
+        _integer(self.context_revision)
+        _identity(self.selected_id)
+        _identity(self.request_id)
+        if self.selected_id not in {a.id for a in self.compiled.summary.alternatives}:
+            raise ValueError("selection is not in the accepted policy")
+
+
+@dataclass(frozen=True)
 class HomeState:
     revision: int
     last_time_ms: int
@@ -269,6 +325,8 @@ class HomeState:
     frame: Optional[Frame] = None
     resume_after_ms: int = 0
     ledger: Optional[EnergyLedger] = None
+    policy_context: Optional[PolicyContext] = None
+    policy: Optional[PolicySession] = None
 
     def __post_init__(self):
         for value in (self.revision, self.last_time_ms, self.resume_after_ms):
@@ -280,6 +338,20 @@ class HomeState:
 
 
 # Events are immutable evidence, not executable callbacks.
+@dataclass(frozen=True)
+class PolicyContextChanged:
+    context: PolicyContext
+
+
+@dataclass(frozen=True)
+class PolicyOffered:
+    revision: int
+    compiled: BatteryPolicy
+    watermark: ActualsWatermark
+    bindings: tuple[PolicyBinding, ...]
+    deadband_sek: float = 0.0
+
+
 @dataclass(frozen=True)
 class MeterObserved:
     sample: CounterSample
@@ -350,7 +422,7 @@ class Tick:
     pass
 
 
-Event = Union[MeterObserved, LedgerPruned, Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable, JournalFailed, TransportResult, Tick]
+Event = Union[PolicyContextChanged, PolicyOffered, MeterObserved, LedgerPruned, Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable, JournalFailed, TransportResult, Tick]
 
 
 @dataclass(frozen=True)
@@ -521,6 +593,98 @@ def _need_transition(group, request, purpose, effects):
     return replace(group, waiting_for=key, status="needs_transition")
 
 
+def _policy_context_matches(state, compiled, now):
+    summary, context = compiled.summary, state.policy_context
+    if (context is None or now != summary.anchor_ms or state.last_time_ms > now
+            or context.problem_json != summary.problem_json or len(state.groups) != 1):
+        return False
+    group = state.groups[0]
+    observation, frame = group.observation, state.frame
+    return (group.spec.id == summary.group_id and group.authority_confirmed
+            and group.mode_revision == context.mode_revision
+            and _fresh(observation, now) and observation.revision == context.observation_revision
+            and _fresh(frame, now) and frame.revision == context.frame_revision
+            and frame.external == Envelope(summary.external_import_w, summary.external_export_w)
+            and frame.limits == Envelope(summary.grid_import_limit_w, summary.grid_export_limit_w)
+            and all(dict(observation.measurements).get(key) == value for key, value in summary.expected_measurements))
+
+
+def _validate_policy_bindings(group, compiled, bindings):
+    summary = compiled.summary
+    if group.spec.adapter_revision != "synthetic-imposed-power-v1":
+        raise ValueError("native response has not been commissioned for this policy version")
+    if len(bindings) != len(summary.alternatives) or len({b.alternative_id for b in bindings}) != len(bindings):
+        raise ValueError("every alternative needs exactly one local response binding")
+    for binding in bindings:
+        alternative = next((a for a in summary.alternatives if a.id == binding.alternative_id), None)
+        if (alternative is None or binding.adapter_revision != group.spec.adapter_revision
+                or binding.current_path_json != alternative.current_path_json):
+            raise ValueError("response binding does not match the compiled alternative")
+        path = read_runtime_json(alternative.current_path_json)
+        target = {key: value for key, value in path["actions"][0].items() if key != "kind"}
+        target["pv_curtail_w"] = path["pv_curtail_w"][0]
+        # Only this explicit synthetic imposed-flow surface is supported. This
+        # does not translate physical watts to native mode/ceiling commands.
+        if dict(binding.target) != target or set(target) != set(group.spec.control_keys) or target["pv_curtail_w"] != 0:
+            raise ValueError("unsupported synthetic response target")
+        possible = Envelope(target["charge_w"], target["discharge_w"])
+        if not _within(possible, group.spec.maximum):
+            raise ValueError("bound target exceeds declared group capability")
+
+
+def _accept_policy(state, event, now):
+    _integer(event.revision)
+    if state.policy and event.revision <= state.policy.revision:
+        raise ValueError("stale policy revision")
+    if not _policy_context_matches(state, event.compiled, now):
+        raise ValueError("outside exact policy coverage")
+    context, summary, group = state.policy_context, event.compiled.summary, state.groups[0]
+    if state.ledger is None or event.watermark != context.watermark or event.watermark.at_ms != summary.anchor_ms:
+        raise ValueError("policy needs the matching real actuals watermark")
+    if event.watermark.ledger_revision != state.ledger.revision:
+        raise ValueError("meter evidence changed since the exact compilation anchor")
+    actuals_since(state.ledger, event.watermark, now)
+    reconciliation = actuals_since(state.ledger, state.policy.watermark, now) if state.policy else ()
+    if group.attempts:
+        raise ValueError("pending physical effects are outside this compiler's coverage")
+    _validate_policy_bindings(group, event.compiled, event.bindings)
+    for binding in event.bindings:
+        target = dict(binding.target)
+        if not _room(state, group, Envelope(target["charge_w"], target["discharge_w"]), now):
+            raise ValueError("an alternative lacks current physical headroom")
+    current_target = group.desired.target if group.desired and now < group.desired.valid_until_ms else group.observation.controls
+    current_ids = sorted(b.alternative_id for b in event.bindings if _same(b.target, current_target))
+    selected, _ = rank_policy(event.compiled, current_ids[0] if current_ids else None, event.deadband_sek)
+    binding = next(b for b in event.bindings if b.alternative_id == selected)
+    request_id = f"policy:{event.revision}"
+    session = PolicySession(event.revision, event.compiled, event.watermark, event.bindings,
+                            context.revision, selected, request_id, state.policy.watermark if state.policy else None, reconciliation,
+                            "active" if group.mode == "controlling" else "diagnostic_only")
+    if group.mode == "controlling":
+        guards = tuple(Guard(key, value, value) for key, value in summary.expected_measurements)
+        request = Request(request_id, event.revision, summary.anchor_ms + 1, binding.target, guards)
+        group = replace(_supersede(group), desired=request)
+        state = _put(state, group)
+    return replace(state, policy=session)
+
+
+def _fence_policy(state, now, effects):
+    session = state.policy
+    if session is None or session.status != "active":
+        return state
+    context = state.policy_context
+    valid = (context is not None and context.revision == session.context_revision
+             and _policy_context_matches(state, session.compiled, now)
+             and state.ledger is not None and state.ledger.revision == session.watermark.ledger_revision)
+    if valid:
+        return state
+    for group in state.groups:
+        if group.desired and group.desired.id == session.request_id:
+            state = _put(state, replace(_supersede(group), desired=None))
+    effects.append(Report("home", "policy_needs_recompile"))
+    return replace(state, policy=replace(session, status="outside_coverage"))
+
+
 def _drive(state, now, durable_revision, effects):
     for original in state.groups:
         group = _settle(original, now)
@@ -619,7 +783,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
     """Process one validated domain event; performs no I/O and never reads a clock."""
     if type(now_ms) is not int or now_ms < 0:
         raise ValueError("now_ms must be an absolute nonnegative integer")
-    if not isinstance(event, (MeterObserved, LedgerPruned, Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable, JournalFailed, TransportResult, Tick)):
+    if not isinstance(event, (PolicyContextChanged, PolicyOffered, MeterObserved, LedgerPruned, Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable, JournalFailed, TransportResult, Tick)):
         raise ValueError("unsupported runtime event")
     previous = state
     rollback = now_ms < state.last_time_ms
@@ -630,7 +794,18 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
         state = replace(state, frame=None, resume_after_ms=state.last_time_ms, groups=tuple(
             replace(_supersede(group), observation=None) for group in state.groups))
         effects.extend((Report("home", "clock_rollback"), WakeAt(state.last_time_ms)))
-    if isinstance(event, (MeterObserved, LedgerPruned)):
+    if isinstance(event, PolicyContextChanged):
+        context = event.context
+        if state.policy_context and context.revision == state.policy_context.revision and context != state.policy_context:
+            raise ValueError("conflicting policy context revision")
+        if state.policy_context is None or context.revision > state.policy_context.revision:
+            state = replace(state, policy_context=context)
+    elif isinstance(event, PolicyOffered):
+        try:
+            state = _accept_policy(state, event, now_ms)
+        except ValueError as error:
+            effects.append(Report("home", "policy_rejected: " + str(error)))
+    elif isinstance(event, (MeterObserved, LedgerPruned)):
         if state.ledger is None:
             raise ValueError("energy ledger is not configured")
         if isinstance(event, MeterObserved):
@@ -641,6 +816,8 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
             _integer(event.before_ms)
             if event.before_ms > now_ms:
                 raise ValueError("future ledger retention cut")
+            if state.policy and event.before_ms > state.policy.watermark.at_ms:
+                raise ValueError("retention cut would invalidate the accepted policy watermark")
             state = replace(state, ledger=prune_ledger(state.ledger, event.before_ms))
     elif isinstance(event, FrameObserved):
         if event.frame.at_ms > now_ms or (not rollback and event.frame.at_ms < state.resume_after_ms):
@@ -679,6 +856,8 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 group = replace(group, mode=event.mode, mode_revision=event.revision, authority_confirmed=True, release=event.approved_release,
                                 desired=None if changed else group.desired)
         elif isinstance(event, Requested):
+            if state.policy and state.policy.status == "active":
+                raise ValueError("direct request cannot overwrite an active policy decision")
             if event.mode_revision != group.mode_revision or not group.authority_confirmed:
                 effects.append(Report(group.spec.id, "stale_request_authority"))
             else:
@@ -705,6 +884,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 elif not (attempt.stage == "ambiguous" and event.outcome == "accepted"):
                     group = replace(group, attempts=tuple(replace(a, stage=event.outcome) if a.id == attempt.id else a for a in group.attempts))
         state = _put(state, group)
+    state = _fence_policy(state, now_ms, effects)
     if not rollback:
         state = _drive(state, now_ms, event.revision if isinstance(event, JournalDurable) else None, effects)
     changed = state != previous
