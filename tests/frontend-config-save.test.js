@@ -807,3 +807,45 @@ test('live sensor faults explain automatic recovery without promising retries fo
   panel._data.devices[0].execution_status.retry_automatically = false;
   assert.doesNotMatch(panel._renderStatus(), /retries automatically/);
 });
+
+test('schedule uses the same system instruction for its colour and detail', () => {
+  const panel = makePanel();
+  panel._data.timeline = { capabilities: { pool: true, battery: true, ev: true } };
+  const pool = { key: 'pool-heater', system: 'pool' };
+  const slot = { pool_w: 1952, commands: { 'pool-heater': { type: 'unavailable', reason: 'No executable planning model for this device' } } };
+  assert.equal(panel._scheduleCommand(pool, slot).text, 'Heat · 1952 W planned');
+  assert.equal(panel._scheduleCommand(pool, slot).active, true);
+  assert.equal(panel._scheduleCommand(pool, { ...slot, pool_w: 0 }).active, false);
+  assert.equal(panel._scheduleCommand({ key: 'pool-heater' }, slot).active, false);
+  assert.equal(panel._scheduleCommand({ system: 'battery' }, { battery_discharge_w: 1000 }).active, true);
+  assert.equal(panel._scheduleCommand({ system: 'ev' }, { ev_target_current_a: 0 }).active, false);
+  assert.equal(panel._scheduleCommand({ key: 'variable' }, { commands: { variable: { type: 'variable_power', value: 0, unit: 'W' } } }).active, false);
+  panel._data.timeline.capabilities.pool = false;
+  assert.equal(panel._scheduleCommand(pool, slot).active, false);
+});
+
+test('schedule shows a comparable plan ID and distinguishes price coverage from expiry', () => {
+  const panel = makePanel();
+  panel._data.operation = {
+    plan_id: '88eaa262-2201-431f-9c5e-3fe83c5b16d1', state: 'ready', label: 'Ready', reason: 'A validated plan is available',
+    now: '2026-09-14T10:15:00Z', issued_at: '2026-09-14T06:33:08Z',
+    binding_until: '2026-09-14T22:00:00Z', valid_until: '2026-09-17T06:30:00Z',
+  };
+  panel._data.portal = {};
+  panel._data.timeline = { capabilities: { pool: true }, slots: [{
+    start: '2026-09-14T10:15:00Z', binding: false, pool_w: 1952,
+    commands: { pool: { type: 'unavailable', reason: 'No executable planning model for this device' } },
+  }] };
+  panel._sortedDevices = () => [{ key: 'pool', name: 'Pool heater', system: 'pool', included: true }];
+  panel._choices = () => ''; panel._deviceFieldButtons = () => '';
+  panel._selectedSlot = 0;
+  const html = panel._renderSchedule();
+  assert.match(html, /title="88eaa262-2201-431f-9c5e-3fe83c5b16d1">88eaa262<\/code>/);
+  assert.match(html, /Full plan ID: <code>88eaa262-2201-431f-9c5e-3fe83c5b16d1<\/code>/);
+  assert.match(html, /Published prices until/);
+  assert.match(html, /Plan valid until/);
+  assert.match(html, /every 15 minutes/);
+  assert.match(html, /class="slot running advisory"/);
+  assert.match(html, /Pool heater: Heat · 1952 W planned/);
+  assert.doesNotMatch(html, /Advice only|future advice|Instructions until/);
+});
