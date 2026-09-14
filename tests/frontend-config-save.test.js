@@ -824,7 +824,7 @@ test('schedule uses the same system instruction for its colour and detail', () =
   assert.equal(panel._scheduleCommand(pool, slot).active, false);
 });
 
-test('schedule shows a comparable plan ID and distinguishes price coverage from expiry', () => {
+test('schedule keeps a compact plan ID without duplicated plan details', () => {
   const panel = makePanel();
   panel._data.operation = {
     plan_id: '88eaa262-2201-431f-9c5e-3fe83c5b16d1', state: 'ready', label: 'Ready', reason: 'A validated plan is available',
@@ -841,10 +841,7 @@ test('schedule shows a comparable plan ID and distinguishes price coverage from 
   panel._selectedSlot = 0;
   const html = panel._renderSchedule();
   assert.match(html, /title="88eaa262-2201-431f-9c5e-3fe83c5b16d1">88eaa262<\/code>/);
-  assert.match(html, /Full plan ID: <code>88eaa262-2201-431f-9c5e-3fe83c5b16d1<\/code>/);
-  assert.match(html, /Published prices until/);
-  assert.match(html, /Plan valid until/);
-  assert.match(html, /every 15 minutes/);
+  assert.doesNotMatch(html, /Plan details|Full plan ID|Published prices until|Plan valid until|every 15 minutes/);
   assert.match(html, /class="slot running advisory"/);
   assert.match(html, /Pool heater: Heat · 1952 W planned/);
   assert.doesNotMatch(html, /Advice only|future advice|Instructions until/);
