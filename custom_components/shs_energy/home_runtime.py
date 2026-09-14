@@ -1,0 +1,701 @@
+"""Pure, offline command reconciliation protocol; not connected to live controls."""
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from math import isfinite
+from typing import Literal, Optional, Union
+
+Value = Union[str, float, int]
+Controls = tuple[tuple[str, Value], ...]
+Measurements = tuple[tuple[str, float], ...]
+Mode = Literal["monitoring", "planning", "control_verification", "controlling"]
+Purpose = Literal["optimisation", "release"]
+
+
+def _number(value, label, *, positive=False):
+    if type(value) not in (float, int) or not isfinite(value) or value < 0 or (positive and value == 0):
+        raise ValueError(f"{label} must be finite and {'positive' if positive else 'nonnegative'}")
+
+
+def _integer(value, minimum=0):
+    if type(value) is not int or not minimum <= value <= 2 ** 53:
+        raise ValueError("counter/time must be a bounded integer")
+
+
+def _identity(value):
+    if type(value) is not str or not 0 < len(value) <= 128:
+        raise ValueError("identity must be a nonempty string of at most 128 characters")
+
+
+def _pairs(values):
+    if type(values) is not tuple or len(values) > 32 or len({v[0] for v in values}) != len(values):
+        raise ValueError("at most 32 uniquely named values are supported")
+    for key, value in values:
+        _identity(key)
+        if type(value) is str:
+            _identity(value)
+        elif type(value) not in (int, float) or not isfinite(value):
+            raise ValueError("control/measurement values must be strings or finite numbers")
+
+
+@dataclass(frozen=True)
+class Envelope:
+    import_w: float
+    export_w: float
+
+    def __post_init__(self):
+        _number(self.import_w, "import envelope")
+        _number(self.export_w, "export envelope")
+
+
+@dataclass(frozen=True)
+class Guard:
+    key: str
+    minimum: float
+    maximum: float
+
+    def __post_init__(self):
+        _identity(self.key)
+        if any(type(v) not in (int, float) or not isfinite(v) for v in (self.minimum, self.maximum)) or self.minimum > self.maximum:
+            raise ValueError("native guard needs ordered finite bounds")
+
+
+@dataclass(frozen=True)
+class Request:
+    id: str
+    revision: int
+    valid_until_ms: int
+    target: Controls
+    native_guards: tuple[Guard, ...]
+
+    def __post_init__(self):
+        _identity(self.id)
+        _pairs(self.target)
+        _integer(self.revision)
+        _integer(self.valid_until_ms, 1)
+        if self.revision < 0 or self.valid_until_ms <= 0 or len(self.native_guards) > 32:
+            raise ValueError("invalid request bounds")
+
+
+@dataclass(frozen=True)
+class Step:
+    key: str
+    value: Value
+    before: Controls
+    native_guards: tuple[Guard, ...]
+    possible: Envelope
+    confirmation_timeout_ms: int
+    latest_effect_delay_ms: int
+    repeat_identical: bool
+    evidence: str
+
+    def __post_init__(self):
+        _pairs(self.before)
+        _pairs(((self.key, self.value),))
+        _identity(self.evidence)
+        _integer(self.confirmation_timeout_ms, 1)
+        _integer(self.latest_effect_delay_ms)
+        if self.confirmation_timeout_ms <= 0 or self.latest_effect_delay_ms < 0 or len(self.native_guards) > 32:
+            raise ValueError("invalid step timing or guards")
+        if type(self.repeat_identical) is not bool:
+            raise ValueError("repeatability must be explicit")
+
+    @property
+    def after(self):
+        return tuple((key, self.value if key == self.key else value) for key, value in self.before)
+
+
+@dataclass(frozen=True)
+class GroupSpec:
+    id: str
+    adapter_revision: str
+    control_keys: tuple[str, ...]
+    maximum: Envelope
+
+    def __post_init__(self):
+        _identity(self.id)
+        _identity(self.adapter_revision)
+        if not 0 < len(self.control_keys) <= 32 or len(set(self.control_keys)) != len(self.control_keys):
+            raise ValueError("group needs unique bounded control keys")
+        for key in self.control_keys:
+            _identity(key)
+
+
+@dataclass(frozen=True)
+class Limits:
+    dispatch_window_ms: int
+    retry_base_ms: int
+    retry_max_ms: int
+
+    def __post_init__(self):
+        for value in (self.dispatch_window_ms, self.retry_base_ms, self.retry_max_ms):
+            _integer(value, 1)
+        if not 0 < self.dispatch_window_ms <= 60000 or not 0 < self.retry_base_ms <= self.retry_max_ms <= 3600000:
+            raise ValueError("invalid dispatch/retry limits")
+
+
+@dataclass(frozen=True)
+class Observation:
+    revision: int
+    at_ms: int
+    valid_until_ms: int
+    controls: Controls
+    measurements: Measurements
+    envelope: Envelope
+
+    def __post_init__(self):
+        _pairs(self.controls)
+        _pairs(self.measurements)
+        for _, value in self.measurements:
+            if type(value) not in (int, float):
+                raise ValueError("native measurements must be numeric")
+        for value in (self.revision, self.at_ms, self.valid_until_ms):
+            _integer(value)
+        if self.revision < 0 or not 0 <= self.at_ms < self.valid_until_ms:
+            raise ValueError("observation needs valid revision and absolute freshness")
+
+
+@dataclass(frozen=True)
+class Frame:
+    revision: int
+    at_ms: int
+    valid_until_ms: int
+    external: Envelope
+    limits: Envelope
+
+    def __post_init__(self):
+        for value in (self.revision, self.at_ms, self.valid_until_ms):
+            _integer(value)
+        if self.revision < 0 or not 0 <= self.at_ms < self.valid_until_ms:
+            raise ValueError("invalid physical frame")
+
+
+@dataclass(frozen=True)
+class Plan:
+    generation: int
+    request_id: str
+    request_revision: int
+    purpose: Purpose
+    steps: tuple[Step, ...]
+    index: int = 0
+
+    def __post_init__(self):
+        _identity(self.request_id)
+        for value in (self.generation, self.request_revision, self.index):
+            _integer(value)
+        if self.purpose not in ("optimisation", "release"):
+            raise ValueError("invalid sequence purpose")
+        if not 0 < len(self.steps) <= 8 or not 0 <= self.index <= len(self.steps):
+            raise ValueError("invalid transition length/index")
+
+
+@dataclass(frozen=True)
+class Attempt:
+    id: str
+    prepared_revision: int
+    generation: int
+    request_id: str
+    request_revision: int
+    purpose: Purpose
+    step_index: int
+    step: Step
+    observed_revision: int
+    prepared_at_ms: int
+    send_by_ms: int
+    confirmation_deadline_ms: int
+    latest_effect_ms: int
+    stage: Literal["prepared", "sent", "accepted", "ambiguous"]
+
+    def __post_init__(self):
+        _identity(self.id)
+        _identity(self.request_id)
+        for value in (self.prepared_revision, self.generation, self.request_revision, self.step_index,
+                      self.observed_revision, self.prepared_at_ms, self.send_by_ms,
+                      self.confirmation_deadline_ms, self.latest_effect_ms):
+            _integer(value)
+        if self.step_index >= 8 or self.purpose not in ("optimisation", "release") or self.stage not in ("prepared", "sent", "accepted", "ambiguous"):
+            raise ValueError("invalid attempt identity/stage")
+        if not 0 <= self.prepared_at_ms < self.send_by_ms <= self.latest_effect_ms or self.confirmation_deadline_ms < self.prepared_at_ms:
+            raise ValueError("invalid attempt deadlines")
+
+
+@dataclass(frozen=True)
+class Group:
+    spec: GroupSpec
+    mode: Mode = "monitoring"
+    mode_revision: int = 0
+    authority_confirmed: bool = False
+    desired: Optional[Request] = None
+    release: Optional[Request] = None
+    observation: Optional[Observation] = None
+    observation_revision: int = -1
+    generation: int = 0
+    plan: Optional[Plan] = None
+    attempts: tuple[Attempt, ...] = ()
+    retry_not_before_ms: int = 0
+    consecutive_attempts: int = 0
+    next_attempt: int = 1
+    owned: bool = False
+    waiting_for: Optional[str] = None
+    status: str = "inactive"
+    journal_fault: bool = False
+
+    def __post_init__(self):
+        for value in (self.mode_revision, self.generation, self.retry_not_before_ms, self.consecutive_attempts):
+            _integer(value)
+        _integer(self.next_attempt, 1)
+        _integer(self.observation_revision, -1)
+        if self.mode not in ("monitoring", "planning", "control_verification", "controlling"):
+            raise ValueError("invalid group mode")
+        if len(self.attempts) > 64 or len({a.id for a in self.attempts}) != len(self.attempts):
+            raise ValueError("unresolved attempt inventory exceeds its bound")
+        if sum(a.stage == "prepared" for a in self.attempts) > 1:
+            raise ValueError("only one preparation per group is allowed")
+        if min(self.mode_revision, self.generation, self.retry_not_before_ms, self.consecutive_attempts) < 0 or self.next_attempt < 1:
+            raise ValueError("invalid group counters")
+
+
+@dataclass(frozen=True)
+class HomeState:
+    revision: int
+    last_time_ms: int
+    limits: Limits
+    groups: tuple[Group, ...]
+    frame: Optional[Frame] = None
+    resume_after_ms: int = 0
+
+    def __post_init__(self):
+        for value in (self.revision, self.last_time_ms, self.resume_after_ms):
+            _integer(value)
+        if not 0 < len(self.groups) <= 32 or len({g.spec.id for g in self.groups}) != len(self.groups):
+            raise ValueError("home needs 1..32 unique groups")
+        if self.revision < 0 or self.last_time_ms < 0:
+            raise ValueError("invalid home revision/time")
+
+
+# Events are immutable evidence, not executable callbacks.
+@dataclass(frozen=True)
+class Observed:
+    group_id: str
+    observation: Observation
+
+
+@dataclass(frozen=True)
+class FrameObserved:
+    frame: Frame
+
+
+@dataclass(frozen=True)
+class AuthorityChanged:
+    group_id: str
+    mode: Mode
+    revision: int
+    approved_release: Optional[Request]
+
+
+@dataclass(frozen=True)
+class Requested:
+    group_id: str
+    mode_revision: int
+    request: Request
+
+
+@dataclass(frozen=True)
+class Proposed:
+    group_id: str
+    generation: int
+    request_id: str
+    request_revision: int
+    observed_revision: int
+    adapter_revision: str
+    steps: tuple[Step, ...]
+
+
+@dataclass(frozen=True)
+class JournalDurable:
+    revision: int
+
+
+@dataclass(frozen=True)
+class JournalFailed:
+    revision: int
+
+
+@dataclass(frozen=True)
+class TransportResult:
+    group_id: str
+    attempt_id: str
+    outcome: Literal["not_sent", "accepted", "ambiguous"]
+    evidence: str
+
+
+@dataclass(frozen=True)
+class Tick:
+    pass
+
+
+Event = Union[Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable, JournalFailed, TransportResult, Tick]
+
+
+@dataclass(frozen=True)
+class Persist:
+    state: HomeState
+
+
+@dataclass(frozen=True)
+class Send:
+    group_id: str
+    attempt_id: str
+    key: str
+    value: Value
+    send_by_ms: int
+
+
+@dataclass(frozen=True)
+class Observe:
+    group_id: str
+
+
+@dataclass(frozen=True)
+class ConfirmAuthority:
+    group_id: str
+
+
+@dataclass(frozen=True)
+class NeedTransition:
+    group_id: str
+    generation: int
+    purpose: Purpose
+    request: Request
+    observation: Observation
+    adapter_revision: str
+
+
+@dataclass(frozen=True)
+class WakeAt:
+    at_ms: int
+
+
+@dataclass(frozen=True)
+class Report:
+    group_id: str
+    reason: str
+
+
+Effect = Union[Persist, Send, Observe, ConfirmAuthority, NeedTransition, WakeAt, Report]
+
+
+def create_home(specs: tuple[GroupSpec, ...], limits: Limits) -> HomeState:
+    return HomeState(0, 0, limits, tuple(Group(spec) for spec in specs))
+
+
+def _fresh(observation, now):
+    return observation is not None and observation.at_ms <= now < observation.valid_until_ms
+
+
+def _guards(guards, observation):
+    measurements = dict(observation.measurements)
+    return all(g.key in measurements and g.minimum <= measurements[g.key] <= g.maximum for g in guards)
+
+
+def _same(left, right):
+    return dict(left) == dict(right)
+
+
+def _put(state, group):
+    return replace(state, groups=tuple(group if g.spec.id == group.spec.id else g for g in state.groups))
+
+
+def _request(group, now):
+    if not group.authority_confirmed:
+        return None, None
+    if group.mode == "controlling" and group.desired is not None and now < group.desired.valid_until_ms:
+        return group.desired, "optimisation"
+    if group.owned or group.attempts:
+        if group.release is not None and now < group.release.valid_until_ms:
+            return group.release, "release"
+    return None, None
+
+
+def _supersede(group):
+    # In-process preparations have not been dispatched; sent/ambiguous attempts stay.
+    return replace(group, generation=group.generation + 1, plan=None, waiting_for=None,
+                   attempts=tuple(a for a in group.attempts if a.stage != "prepared"))
+
+
+def reservation(group: Group, now_ms: int) -> Envelope:
+    """Union within a group; independent group reservations are summed by the owner."""
+    current = group.observation.envelope if _fresh(group.observation, now_ms) else group.spec.maximum
+    envelopes = [current, *(a.step.possible for a in group.attempts)]
+    return Envelope(max(e.import_w for e in envelopes), max(e.export_w for e in envelopes))
+
+
+def _within(candidate, maximum):
+    return candidate.import_w <= maximum.import_w and candidate.export_w <= maximum.export_w
+
+
+def _room(state, group, extra, now):
+    if not _fresh(state.frame, now):
+        return False
+    imported, exported = state.frame.external.import_w, state.frame.external.export_w
+    for item in state.groups:
+        bound = reservation(item, now)
+        if item.spec.id == group.spec.id:
+            bound = Envelope(max(bound.import_w, extra.import_w), max(bound.export_w, extra.export_w))
+        imported += bound.import_w
+        exported += bound.export_w
+    return imported <= state.frame.limits.import_w and exported <= state.frame.limits.export_w
+
+
+def _compatible(attempt, step):
+    return (attempt.step.repeat_identical and step.repeat_identical and attempt.step.key == step.key
+            and attempt.step.value == step.value and _same(attempt.step.after, step.after)
+            and attempt.step.native_guards == step.native_guards and attempt.step.evidence == step.evidence
+            and attempt.step.possible == step.possible)
+
+
+def _settle(group, now):
+    observation = group.observation
+    remaining = []
+    plan = group.plan
+    for attempt in group.attempts:
+        # A fresh sample after the adapter's last possible effect settles old effects,
+        # whether the setting matches current intent or represents external drift.
+        settled = (attempt.stage != "prepared" and _fresh(observation, now)
+                   and observation.at_ms >= attempt.latest_effect_ms
+                   and observation.revision > attempt.observed_revision)
+        if settled:
+            if plan is not None and attempt.generation == plan.generation and attempt.step_index == plan.index:
+                if _same(observation.controls, attempt.step.after) and _guards(attempt.step.native_guards, observation):
+                    plan = replace(plan, index=plan.index + 1)
+                else:
+                    plan = None
+        else:
+            if attempt.stage in ("sent", "accepted") and now >= attempt.confirmation_deadline_ms:
+                attempt = replace(attempt, stage="ambiguous")
+            remaining.append(attempt)
+    return replace(group, attempts=tuple(remaining), plan=plan)
+
+
+def _validate_target(group, request):
+    if set(dict(request.target)) != set(group.spec.control_keys):
+        raise ValueError("request must name the complete supported control surface")
+
+
+def _validate_proposal(group, event, request, purpose):
+    if not 0 < len(event.steps) <= 8:
+        raise ValueError("proposal must have 1..8 steps")
+    previous = group.observation.controls
+    for step in event.steps:
+        if step.key not in group.spec.control_keys or not _same(step.before, previous):
+            raise ValueError("step guards must describe the complete preceding control surface")
+        if not _within(step.possible, group.spec.maximum):
+            raise ValueError("step effects exceed the declared group maximum")
+        previous = step.after
+    if not _same(previous, request.target):
+        raise ValueError("transition does not reach the current request")
+    return Plan(group.generation, request.id, request.revision, purpose, event.steps)
+
+
+
+def _need_transition(group, request, purpose, effects):
+    key = f"{group.generation}:{request.id}:{request.revision}:{purpose}:{group.observation.revision}"
+    if group.waiting_for != key:
+        effects.append(NeedTransition(group.spec.id, group.generation, purpose, request, group.observation, group.spec.adapter_revision))
+    return replace(group, waiting_for=key, status="needs_transition")
+
+
+def _drive(state, now, durable_revision, effects):
+    for original in state.groups:
+        group = _settle(original, now)
+        request, purpose = _request(group, now)
+        if not group.authority_confirmed:
+            effects.append(ConfirmAuthority(group.spec.id))
+        if request is None:
+            group = replace(_supersede(group), status="release_required" if group.owned else "inactive") if group.plan else replace(group, status="release_required" if group.owned else "inactive")
+            if group.attempts or group.owned:
+                effects.append(Observe(group.spec.id))
+            state = _put(state, group)
+            continue
+        if group.plan and (group.plan.generation != group.generation or group.plan.request_id != request.id
+                           or group.plan.request_revision != request.revision or group.plan.purpose != purpose):
+            group = _supersede(group)
+        if not _fresh(group.observation, now) or not _fresh(state.frame, now):
+            group = replace(group, status="awaiting_observation")
+            effects.append(Observe(group.spec.id))
+            state = _put(state, group)
+            continue
+        if not _guards(request.native_guards, group.observation):
+            group = replace(group, plan=None, waiting_for=None,
+                            attempts=tuple(a for a in group.attempts if a.stage != "prepared"),
+                            status="native_guard_blocked")
+            effects.append(Observe(group.spec.id))
+            state = _put(state, group)
+            continue
+        if _same(group.observation.controls, request.target):
+            # Prepared work can be cancelled in-process. Issued work cannot be erased
+            # just because the desired setting currently happens to be visible.
+            group = replace(group, plan=None, waiting_for=None,
+                            attempts=tuple(a for a in group.attempts if a.stage != "prepared"))
+            if group.attempts:
+                group = replace(group, status="reconciling")
+                effects.append(Observe(group.spec.id))
+            else:
+                group = replace(group, status="adopted" if purpose == "optimisation" else "released",
+                                owned=purpose == "optimisation", consecutive_attempts=0)
+            state = _put(state, group)
+            continue
+        if group.plan and group.plan.index == len(group.plan.steps):
+            group = replace(group, plan=None, waiting_for=None)
+        prepared = next((a for a in group.attempts if a.stage == "prepared"), None)
+        if prepared is not None:
+            step = prepared.step
+            valid = (prepared.generation == group.generation and now < prepared.send_by_ms
+                     and _same(group.observation.controls, step.before) and _guards(step.native_guards, group.observation)
+                     and _room(_put(state, group), group, step.possible, now))
+            if not valid:
+                group = replace(group, attempts=tuple(a for a in group.attempts if a.id != prepared.id), plan=None, waiting_for=None, status="reconciling")
+                group = _need_transition(group, request, purpose, effects)
+            elif durable_revision == prepared.prepared_revision:
+                attempt = replace(prepared, stage="sent", confirmation_deadline_ms=now + step.confirmation_timeout_ms)
+                group = replace(group, attempts=tuple(attempt if a.id == prepared.id else a for a in group.attempts), owned=True, status="executing", journal_fault=False)
+                effects.append(Send(group.spec.id, attempt.id, step.key, step.value, attempt.send_by_ms))
+            else:
+                group = replace(group, status="journal_fault" if group.journal_fault else "awaiting_durability")
+            state = _put(state, group)
+            continue
+        if now < group.retry_not_before_ms:
+            group = replace(group, status="retry_wait")
+            state = _put(state, group)
+            continue
+        if group.plan is None:
+            group = _need_transition(group, request, purpose, effects)
+            state = _put(state, group)
+            continue
+        step = group.plan.steps[group.plan.index]
+        if not _same(group.observation.controls, step.before) or not _guards(step.native_guards, group.observation):
+            group = replace(group, plan=None, waiting_for=None, status="reconciling")
+            group = _need_transition(group, request, purpose, effects)
+        elif group.attempts and not all(a.stage == "ambiguous" and _compatible(a, step) for a in group.attempts):
+            group = replace(group, status="reconciling")
+            effects.append(Observe(group.spec.id))
+        elif len(group.attempts) >= 64:
+            group = replace(group, status="attempt_limit")
+            effects.append(Observe(group.spec.id))
+        elif not _room(_put(state, group), group, step.possible, now):
+            group = replace(group, status="physical_scope_blocked")
+        else:
+            send_by = min(now + state.limits.dispatch_window_ms, request.valid_until_ms,
+                          group.observation.valid_until_ms, state.frame.valid_until_ms)
+            count = min(group.consecutive_attempts + 1, 32)
+            delay = min(state.limits.retry_max_ms, state.limits.retry_base_ms * 2 ** min(count - 1, 20))
+            attempt = Attempt(f"{group.spec.id}:{group.next_attempt}", state.revision + 1, group.generation,
+                              request.id, request.revision, purpose, group.plan.index, step,
+                              group.observation.revision, now, send_by, now + step.confirmation_timeout_ms,
+                              send_by + step.latest_effect_delay_ms, "prepared")
+            group = replace(group, attempts=(*group.attempts, attempt), next_attempt=group.next_attempt + 1,
+                            retry_not_before_ms=now + delay, consecutive_attempts=count, status="awaiting_durability")
+        state = _put(state, group)
+    return state
+
+
+def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState, tuple[Effect, ...]]:
+    """Process one validated domain event; performs no I/O and never reads a clock."""
+    if type(now_ms) is not int or now_ms < 0:
+        raise ValueError("now_ms must be an absolute nonnegative integer")
+    if not isinstance(event, (Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable, JournalFailed, TransportResult, Tick)):
+        raise ValueError("unsupported runtime event")
+    previous = state
+    rollback = now_ms < state.last_time_ms
+    effects = []
+    if rollback:
+        # Clock changes cannot erase authority withdrawal or transport evidence.
+        # Discard freshness and unsent plans; resume only from new observations.
+        state = replace(state, frame=None, resume_after_ms=state.last_time_ms, groups=tuple(
+            replace(_supersede(group), observation=None) for group in state.groups))
+        effects.extend((Report("home", "clock_rollback"), WakeAt(state.last_time_ms)))
+    if isinstance(event, FrameObserved):
+        if event.frame.at_ms > now_ms or (not rollback and event.frame.at_ms < state.resume_after_ms):
+            raise ValueError("future physical frame")
+        if state.frame is None or event.frame.revision > state.frame.revision:
+            state = replace(state, frame=None if rollback else event.frame)
+    elif isinstance(event, (JournalDurable, JournalFailed)):
+        if type(event.revision) is not int or not 0 <= event.revision <= state.revision:
+            raise ValueError("invalid journal revision")
+        if isinstance(event, JournalFailed):
+            for group in state.groups:
+                if any(a.stage == "prepared" and a.prepared_revision == event.revision for a in group.attempts):
+                    state = _put(state, replace(group, journal_fault=True))
+    elif not isinstance(event, Tick):
+        group = next((g for g in state.groups if g.spec.id == event.group_id), None)
+        if group is None:
+            raise ValueError("unknown actuator group")
+        if isinstance(event, Observed):
+            observation = event.observation
+            if observation.at_ms > now_ms or (not rollback and observation.at_ms < state.resume_after_ms) or set(dict(observation.controls)) != set(group.spec.control_keys) or not _within(observation.envelope, group.spec.maximum):
+                raise ValueError("observation exceeds its declared group scope")
+            if observation.revision > group.observation_revision:
+                if group.observation and observation.at_ms < group.observation.at_ms:
+                    raise ValueError("observation time regressed")
+                group = replace(group, observation=None if rollback else observation, observation_revision=observation.revision)
+        elif isinstance(event, AuthorityChanged):
+            if event.mode not in ("monitoring", "planning", "control_verification", "controlling") or type(event.revision) is not int or event.revision < 0:
+                raise ValueError("invalid operating authority")
+            if event.approved_release:
+                _validate_target(group, event.approved_release)
+            if event.revision == group.mode_revision and group.authority_confirmed and (event.mode != group.mode or event.approved_release != group.release):
+                raise ValueError("conflicting authority at the same revision")
+            if event.revision >= group.mode_revision:
+                changed = event.mode != group.mode or event.revision != group.mode_revision
+                group = _supersede(group) if changed else group
+                group = replace(group, mode=event.mode, mode_revision=event.revision, authority_confirmed=True, release=event.approved_release,
+                                desired=None if changed else group.desired)
+        elif isinstance(event, Requested):
+            if event.mode_revision != group.mode_revision or not group.authority_confirmed:
+                effects.append(Report(group.spec.id, "stale_request_authority"))
+            else:
+                _validate_target(group, event.request)
+                if group.desired and event.request.revision == group.desired.revision and event.request != group.desired:
+                    raise ValueError("conflicting request at the same revision")
+                if group.desired is None or event.request.revision > group.desired.revision:
+                    group = replace(_supersede(group), desired=event.request)
+        elif isinstance(event, Proposed):
+            request, purpose = _request(group, now_ms)
+            valid = (request is not None and event.generation == group.generation and event.request_id == request.id
+                     and event.request_revision == request.revision and _fresh(group.observation, now_ms)
+                     and event.observed_revision == group.observation.revision and event.adapter_revision == group.spec.adapter_revision)
+            if valid and group.plan is None:
+                group = replace(group, plan=_validate_proposal(group, event, request, purpose), waiting_for=None)
+        elif isinstance(event, TransportResult):
+            _identity(event.evidence)
+            if event.outcome not in ("not_sent", "accepted", "ambiguous"):
+                raise ValueError("unsupported transport evidence")
+            attempt = next((a for a in group.attempts if a.id == event.attempt_id), None)
+            if attempt is not None and attempt.stage != "prepared":
+                if event.outcome == "not_sent":
+                    group = replace(group, attempts=tuple(a for a in group.attempts if a.id != attempt.id))
+                elif not (attempt.stage == "ambiguous" and event.outcome == "accepted"):
+                    group = replace(group, attempts=tuple(replace(a, stage=event.outcome) if a.id == attempt.id else a for a in group.attempts))
+        state = _put(state, group)
+    if not rollback:
+        state = _drive(state, now_ms, event.revision if isinstance(event, JournalDurable) else None, effects)
+    changed = state != previous
+    state = replace(state, revision=previous.revision + int(changed), last_time_ms=max(previous.last_time_ms, now_ms))
+    if changed:
+        effects.insert(0, Persist(state))
+    deadlines = []
+    for group in state.groups:
+        request, _ = _request(group, now_ms)
+        if request:
+            deadlines.extend([request.valid_until_ms, group.retry_not_before_ms])
+        if group.observation:
+            deadlines.append(group.observation.valid_until_ms)
+        for attempt in group.attempts:
+            deadlines.extend([attempt.send_by_ms, attempt.confirmation_deadline_ms, attempt.latest_effect_ms])
+    if state.frame:
+        deadlines.append(state.frame.valid_until_ms)
+    future = [deadline for deadline in deadlines if deadline > now_ms]
+    if future:
+        effects.append(WakeAt(min(future)))
+    # Coalesce identical requests within this decision; the host also coalesces work.
+    return state, tuple(dict.fromkeys(effects))

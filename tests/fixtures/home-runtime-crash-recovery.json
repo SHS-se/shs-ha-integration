@@ -1,0 +1,287 @@
+{
+  "schema_version": 1,
+  "initial": {
+    "schema_version": 1,
+    "state": {
+      "frame": null,
+      "groups": [
+        {
+          "attempts": [],
+          "authority_confirmed": false,
+          "consecutive_attempts": 0,
+          "desired": null,
+          "generation": 0,
+          "journal_fault": false,
+          "mode": "monitoring",
+          "mode_revision": 0,
+          "next_attempt": 1,
+          "observation": null,
+          "observation_revision": -1,
+          "owned": false,
+          "plan": null,
+          "release": null,
+          "retry_not_before_ms": 0,
+          "spec": {
+            "adapter_revision": "synthetic-v1",
+            "control_keys": [
+              "limit_w"
+            ],
+            "id": "battery",
+            "maximum": {
+              "export_w": 0,
+              "import_w": 2000,
+              "type": "Envelope"
+            },
+            "type": "GroupSpec"
+          },
+          "status": "inactive",
+          "type": "Group",
+          "waiting_for": null
+        }
+      ],
+      "last_time_ms": 0,
+      "limits": {
+        "dispatch_window_ms": 10,
+        "retry_base_ms": 30,
+        "retry_max_ms": 120,
+        "type": "Limits"
+      },
+      "resume_after_ms": 0,
+      "revision": 0,
+      "type": "HomeState"
+    }
+  },
+  "records": [
+    {
+      "at_ms": 1000,
+      "event": {
+        "type": "FrameObserved",
+        "frame": {
+          "type": "Frame",
+          "revision": 1,
+          "at_ms": 1000,
+          "valid_until_ms": 10000,
+          "external": {
+            "type": "Envelope",
+            "import_w": 500,
+            "export_w": 0
+          },
+          "limits": {
+            "type": "Envelope",
+            "import_w": 4000,
+            "export_w": 4000
+          }
+        }
+      }
+    },
+    {
+      "at_ms": 1000,
+      "event": {
+        "type": "Observed",
+        "group_id": "battery",
+        "observation": {
+          "type": "Observation",
+          "revision": 0,
+          "at_ms": 1000,
+          "valid_until_ms": 10000,
+          "controls": [
+            [
+              "limit_w",
+              0
+            ]
+          ],
+          "measurements": [],
+          "envelope": {
+            "type": "Envelope",
+            "import_w": 0,
+            "export_w": 0
+          }
+        }
+      }
+    },
+    {
+      "at_ms": 1000,
+      "event": {
+        "type": "AuthorityChanged",
+        "group_id": "battery",
+        "mode": "controlling",
+        "revision": 1,
+        "approved_release": {
+          "type": "Request",
+          "id": "release",
+          "revision": 1,
+          "valid_until_ms": 10000,
+          "target": [
+            [
+              "limit_w",
+              0
+            ]
+          ],
+          "native_guards": []
+        }
+      }
+    },
+    {
+      "at_ms": 1000,
+      "event": {
+        "type": "Requested",
+        "group_id": "battery",
+        "mode_revision": 1,
+        "request": {
+          "type": "Request",
+          "id": "charge",
+          "revision": 1,
+          "valid_until_ms": 10000,
+          "target": [
+            [
+              "limit_w",
+              1000
+            ]
+          ],
+          "native_guards": []
+        }
+      }
+    },
+    {
+      "at_ms": 1000,
+      "event": {
+        "type": "Proposed",
+        "group_id": "battery",
+        "generation": 2,
+        "request_id": "charge",
+        "request_revision": 1,
+        "observed_revision": 0,
+        "adapter_revision": "synthetic-v1",
+        "steps": [
+          {
+            "type": "Step",
+            "key": "limit_w",
+            "value": 1000,
+            "before": [
+              [
+                "limit_w",
+                0
+              ]
+            ],
+            "native_guards": [],
+            "possible": {
+              "type": "Envelope",
+              "import_w": 1000,
+              "export_w": 0
+            },
+            "confirmation_timeout_ms": 20,
+            "latest_effect_delay_ms": 100,
+            "repeat_identical": true,
+            "evidence": "synthetic-absolute-latest-effect-v1"
+          }
+        ]
+      }
+    },
+    {
+      "at_ms": 1001,
+      "action": "durable"
+    },
+    {
+      "at_ms": 1002,
+      "action": "restart"
+    },
+    {
+      "at_ms": 1002,
+      "event": {
+        "type": "FrameObserved",
+        "frame": {
+          "type": "Frame",
+          "revision": 2,
+          "at_ms": 1002,
+          "valid_until_ms": 10000,
+          "external": {
+            "type": "Envelope",
+            "import_w": 500,
+            "export_w": 0
+          },
+          "limits": {
+            "type": "Envelope",
+            "import_w": 4000,
+            "export_w": 4000
+          }
+        }
+      }
+    },
+    {
+      "at_ms": 1002,
+      "event": {
+        "type": "AuthorityChanged",
+        "group_id": "battery",
+        "mode": "controlling",
+        "revision": 1,
+        "approved_release": {
+          "type": "Request",
+          "id": "release",
+          "revision": 1,
+          "valid_until_ms": 10000,
+          "target": [
+            [
+              "limit_w",
+              0
+            ]
+          ],
+          "native_guards": []
+        }
+      }
+    },
+    {
+      "at_ms": 1003,
+      "event": {
+        "type": "Observed",
+        "group_id": "battery",
+        "observation": {
+          "type": "Observation",
+          "revision": 1,
+          "at_ms": 1003,
+          "valid_until_ms": 10000,
+          "controls": [
+            [
+              "limit_w",
+              1000
+            ]
+          ],
+          "measurements": [],
+          "envelope": {
+            "type": "Envelope",
+            "import_w": 1000,
+            "export_w": 0
+          }
+        }
+      }
+    },
+    {
+      "at_ms": 1110,
+      "event": {
+        "type": "Observed",
+        "group_id": "battery",
+        "observation": {
+          "type": "Observation",
+          "revision": 2,
+          "at_ms": 1110,
+          "valid_until_ms": 10000,
+          "controls": [
+            [
+              "limit_w",
+              1000
+            ]
+          ],
+          "measurements": [],
+          "envelope": {
+            "type": "Envelope",
+            "import_w": 1000,
+            "export_w": 0
+          }
+        }
+      }
+    },
+    {
+      "at_ms": 1111,
+      "action": "durable"
+    }
+  ]
+}
