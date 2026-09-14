@@ -294,7 +294,7 @@ class HomeRuntimeTests(unittest.TestCase):
         encoded = encode_checkpoint(h.state)
         self.assertEqual(decode_checkpoint(encoded), h.state)
         for modify in (
-            lambda v: v.update(schema_version=2),
+            lambda v: v.update(schema_version=1),
             lambda v: v['state'].update(unknown=1),
             lambda v: v['state'].update(revision=True),
             lambda v: v['state']['groups'][0].update(mode='manual_hold'),
@@ -398,6 +398,20 @@ class HomeRuntimeTests(unittest.TestCase):
         self.assertEqual(trace["rows"][-1]["groups"][0]["status"], "adopted")
         final = decode_checkpoint(json.dumps(trace["final_checkpoint"]).encode())
         self.assertEqual(final.groups[0].attempts, ())
+
+    def test_meter_actuals_never_confirm_commands_or_release_reservations(self):
+        from energy_ledger import create_ledger, MeterSpec, CounterSample, EnergyBounds
+        from home_runtime import MeterObserved
+        h = Harness(); h.request(target=controls("hold", 1000, 0)); h.propose(); h.durable()
+        ledger = create_ledger("actuals", "v1", (MeterSpec("charge", "battery", "AC", "charge", None),))
+        h.state = replace(h.state, ledger=ledger)
+        original = h.group().attempts
+        h.event(MeterObserved(CounterSample("charge", "physical:charge", 0, 0, h.now, 0, "initial")))
+        h.event(MeterObserved(CounterSample("charge", "physical:charge", 0, 1, h.now + 1, 100)), h.now + 1)
+        self.assertEqual(h.group().attempts, original)
+        self.assertEqual(reservation(h.group(), h.now), Envelope(1000, 0))
+        self.assertEqual(h.state.ledger.streams[0].lifetime, EnergyBounds(100, 100))
+        self.assertFalse(any(isinstance(e, Send) for e in h.effects))
 
 
 if __name__ == "__main__":

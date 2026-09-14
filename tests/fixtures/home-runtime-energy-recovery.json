@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "initial": {
+    "schema_version": 2,
+    "state": {
+      "frame": null,
+      "groups": [
+        {
+          "attempts": [],
+          "authority_confirmed": false,
+          "consecutive_attempts": 0,
+          "desired": null,
+          "generation": 0,
+          "journal_fault": false,
+          "mode": "monitoring",
+          "mode_revision": 0,
+          "next_attempt": 1,
+          "observation": null,
+          "observation_revision": -1,
+          "owned": false,
+          "plan": null,
+          "release": null,
+          "retry_not_before_ms": 0,
+          "spec": {
+            "adapter_revision": "synthetic-v1",
+            "control_keys": [
+              "mode"
+            ],
+            "id": "battery",
+            "maximum": {
+              "export_w": 2000,
+              "import_w": 2000,
+              "type": "Envelope"
+            },
+            "type": "GroupSpec"
+          },
+          "status": "inactive",
+          "type": "Group",
+          "waiting_for": null
+        }
+      ],
+      "last_time_ms": 0,
+      "ledger": {
+        "id": "actuals-fixture",
+        "mapping_revision": "synthetic-v1",
+        "max_intervals": 128,
+        "revision": 0,
+        "streams": [
+          {
+            "archived": {
+              "lower_mwh": 0,
+              "type": "EnergyBounds",
+              "upper_mwh": 0
+            },
+            "archived_intervals": 0,
+            "samples": [],
+            "spec": {
+              "boundary_id": "battery-AC",
+              "device_id": "battery",
+              "direction": "charge",
+              "maximum_power_w": 2000,
+              "power_bound_evidence": "synthetic-rated-bound",
+              "stream_id": "charge",
+              "type": "MeterSpec"
+            },
+            "started_at_ms": null,
+            "type": "MeterStream"
+          },
+          {
+            "archived": {
+              "lower_mwh": 0,
+              "type": "EnergyBounds",
+              "upper_mwh": 0
+            },
+            "archived_intervals": 0,
+            "samples": [],
+            "spec": {
+              "boundary_id": "battery-AC",
+              "device_id": "battery",
+              "direction": "discharge",
+              "maximum_power_w": 2000,
+              "power_bound_evidence": "synthetic-rated-bound",
+              "stream_id": "discharge",
+              "type": "MeterSpec"
+            },
+            "started_at_ms": null,
+            "type": "MeterStream"
+          }
+        ],
+        "type": "EnergyLedger"
+      },
+      "limits": {
+        "dispatch_window_ms": 10,
+        "retry_base_ms": 30,
+        "retry_max_ms": 120,
+        "type": "Limits"
+      },
+      "resume_after_ms": 0,
+      "revision": 0,
+      "type": "HomeState"
+    }
+  },
+  "records": [
+    {
+      "at_ms": 1000,
+      "event": {
+        "type": "MeterObserved",
+        "sample": {
+          "type": "CounterSample",
+          "stream_id": "charge",
+          "source_id": "battery-register:charge",
+          "epoch": 0,
+          "revision": 0,
+          "at_ms": 1000,
+          "total_mwh": 5000000,
+          "epoch_reason": "initial binding"
+        }
+      }
+    },
+    {
+      "at_ms": 1000,
+      "event": {
+        "type": "MeterObserved",
+        "sample": {
+          "type": "CounterSample",
+          "stream_id": "discharge",
+          "source_id": "battery-register:discharge",
+          "epoch": 0,
+          "revision": 0,
+          "at_ms": 1000,
+          "total_mwh": 4000000,
+          "epoch_reason": "initial binding"
+        }
+      }
+    },
+    {
+      "at_ms": 3601000,
+      "event": {
+        "type": "MeterObserved",
+        "sample": {
+          "type": "CounterSample",
+          "stream_id": "charge",
+          "source_id": "battery-register:charge",
+          "epoch": 0,
+          "revision": 1,
+          "at_ms": 3601000,
+          "total_mwh": 5600000,
+          "epoch_reason": null
+        }
+      }
+    },
+    {
+      "at_ms": 3601000,
+      "event": {
+        "type": "MeterObserved",
+        "sample": {
+          "type": "CounterSample",
+          "stream_id": "discharge",
+          "source_id": "battery-register:discharge",
+          "epoch": 0,
+          "revision": 1,
+          "at_ms": 3601000,
+          "total_mwh": 4400000,
+          "epoch_reason": null
+        }
+      }
+    },
+    {
+      "at_ms": 3601000,
+      "action": "durable"
+    },
+    {
+      "at_ms": 7201000,
+      "event": {
+        "type": "MeterObserved",
+        "sample": {
+          "type": "CounterSample",
+          "stream_id": "charge",
+          "source_id": "battery-register:charge",
+          "epoch": 0,
+          "revision": 2,
+          "at_ms": 7201000,
+          "total_mwh": 5700000,
+          "epoch_reason": null
+        }
+      }
+    },
+    {
+      "at_ms": 7201001,
+      "action": "restart"
+    },
+    {
+      "at_ms": 7201001,
+      "event": {
+        "type": "MeterObserved",
+        "sample": {
+          "type": "CounterSample",
+          "stream_id": "charge",
+          "source_id": "battery-register:charge",
+          "epoch": 0,
+          "revision": 2,
+          "at_ms": 7201000,
+          "total_mwh": 5700000,
+          "epoch_reason": null
+        }
+      }
+    },
+    {
+      "at_ms": 7201001,
+      "event": {
+        "type": "MeterObserved",
+        "sample": {
+          "type": "CounterSample",
+          "stream_id": "discharge",
+          "source_id": "battery-register:discharge",
+          "epoch": 1,
+          "revision": 2,
+          "at_ms": 7201000,
+          "total_mwh": 1000000,
+          "epoch_reason": "counter reset"
+        }
+      }
+    },
+    {
+      "at_ms": 7201001,
+      "action": "durable"
+    }
+  ]
+}

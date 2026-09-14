@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "initial": {
-    "schema_version": 1,
+    "schema_version": 2,
     "state": {
       "frame": null,
       "groups": [
@@ -48,7 +48,8 @@
       },
       "resume_after_ms": 0,
       "revision": 0,
-      "type": "HomeState"
+      "type": "HomeState",
+      "ledger": null
     }
   },
   "records": [

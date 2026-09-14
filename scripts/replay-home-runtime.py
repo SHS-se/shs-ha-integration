@@ -56,6 +56,14 @@ def replay(value):
                         "reservation_w": {"import": reservation(g, state.last_time_ms).import_w,
                                           "export": reservation(g, state.last_time_ms).export_w}}
                        for g in state.groups],
+            "actuals": None if state.ledger is None else [
+                {"stream_id": stream.spec.stream_id, "boundary_id": stream.spec.boundary_id,
+                 "direction": stream.spec.direction, "started_at_ms": stream.started_at_ms,
+                 "retained_from_ms": stream.samples[0].at_ms if stream.samples else None,
+                 "through_ms": stream.samples[-1].at_ms if stream.samples else None,
+                 "since_first_anchor_mwh": None if not stream.samples else {
+                     "lower": stream.lifetime.lower_mwh, "upper": stream.lifetime.upper_mwh}}
+                for stream in state.ledger.streams],
         })
     return {"schema_version": 1, "rows": rows, "final_checkpoint": json.loads(encode_checkpoint(state))}
 

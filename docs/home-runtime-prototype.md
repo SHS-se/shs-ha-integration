@@ -56,7 +56,7 @@ electrical effects, confirmation timeout, latest-effect delay and explicit
 identical-repeat evidence. Partial control surfaces and invalid transitions fail
 validation. Native measurements and electrical observations remain separate.
 
-`home_runtime_checkpoint.py` owns the closed version-1 JSON codec and conservative
+`home_runtime_checkpoint.py` owns the closed version-2 JSON codec and conservative
 restore. Unknown fields, incompatible versions, nonfinite values, invalid counters
 and inconsistent attempt/sequence identities are rejected. There is no legacy
 checkpoint migration. The replay script simulates ordered durable writes in memory;
@@ -161,17 +161,18 @@ user's agreement because of allowance limits.
 
 ## Remaining implementation work
 
-1. Implement the actual gross delivered-energy ledger, including meter epochs,
-   interval identity, loss boundaries and exactly-once accounting across replay
-   and restart. Reservation envelopes in this prototype do not satisfy that work.
-2. Bind accepted household policy and current economics to runtime requests, with
+The [actual energy ledger](energy-ledger.md) is now implemented inside the same
+household checkpoint, with gross directional counters, explicit epochs, bounded
+watermark queries and replay/restart tests. It remains separate from reservations.
+
+1. Bind accepted household policy and current economics to runtime requests, with
    the specified contract validation, expiry and shared allocation rules. The
    offline battery compiler is not yet an executable runtime wire contract.
-3. Commission the battery adapter's transition, repeat, ordering, readback and
+2. Commission the battery adapter's transition, repeat, ordering, readback and
    latest-effect contracts, including approved Maximum Self Consumption handover
    with fresh rated limits. Then implement journal, event, timer and transport
    ports and connect them through tested verification and rollout stages.
-4. Extend equipment support in the agreed order: battery, pool, then car. Generic
+3. Extend equipment support in the agreed order: battery, pool, then car. Generic
    protocol ownership can be reused; every supported group still needs its own
    validated device capabilities and transition evidence.
 

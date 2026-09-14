@@ -5,6 +5,11 @@ from dataclasses import dataclass, replace
 from math import isfinite
 from typing import Literal, Optional, Union
 
+if __package__:
+    from .energy_ledger import EnergyLedger, CounterSample, record_sample, prune_ledger
+else:
+    from energy_ledger import EnergyLedger, CounterSample, record_sample, prune_ledger
+
 Value = Union[str, float, int]
 Controls = tuple[tuple[str, Value], ...]
 Measurements = tuple[tuple[str, float], ...]
@@ -263,6 +268,7 @@ class HomeState:
     groups: tuple[Group, ...]
     frame: Optional[Frame] = None
     resume_after_ms: int = 0
+    ledger: Optional[EnergyLedger] = None
 
     def __post_init__(self):
         for value in (self.revision, self.last_time_ms, self.resume_after_ms):
@@ -274,6 +280,16 @@ class HomeState:
 
 
 # Events are immutable evidence, not executable callbacks.
+@dataclass(frozen=True)
+class MeterObserved:
+    sample: CounterSample
+
+
+@dataclass(frozen=True)
+class LedgerPruned:
+    before_ms: int
+
+
 @dataclass(frozen=True)
 class Observed:
     group_id: str
@@ -334,7 +350,7 @@ class Tick:
     pass
 
 
-Event = Union[Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable, JournalFailed, TransportResult, Tick]
+Event = Union[MeterObserved, LedgerPruned, Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable, JournalFailed, TransportResult, Tick]
 
 
 @dataclass(frozen=True)
@@ -385,8 +401,8 @@ class Report:
 Effect = Union[Persist, Send, Observe, ConfirmAuthority, NeedTransition, WakeAt, Report]
 
 
-def create_home(specs: tuple[GroupSpec, ...], limits: Limits) -> HomeState:
-    return HomeState(0, 0, limits, tuple(Group(spec) for spec in specs))
+def create_home(specs: tuple[GroupSpec, ...], limits: Limits, *, ledger: Optional[EnergyLedger] = None) -> HomeState:
+    return HomeState(0, 0, limits, tuple(Group(spec) for spec in specs), ledger=ledger)
 
 
 def _fresh(observation, now):
@@ -603,7 +619,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
     """Process one validated domain event; performs no I/O and never reads a clock."""
     if type(now_ms) is not int or now_ms < 0:
         raise ValueError("now_ms must be an absolute nonnegative integer")
-    if not isinstance(event, (Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable, JournalFailed, TransportResult, Tick)):
+    if not isinstance(event, (MeterObserved, LedgerPruned, Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable, JournalFailed, TransportResult, Tick)):
         raise ValueError("unsupported runtime event")
     previous = state
     rollback = now_ms < state.last_time_ms
@@ -614,7 +630,19 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
         state = replace(state, frame=None, resume_after_ms=state.last_time_ms, groups=tuple(
             replace(_supersede(group), observation=None) for group in state.groups))
         effects.extend((Report("home", "clock_rollback"), WakeAt(state.last_time_ms)))
-    if isinstance(event, FrameObserved):
+    if isinstance(event, (MeterObserved, LedgerPruned)):
+        if state.ledger is None:
+            raise ValueError("energy ledger is not configured")
+        if isinstance(event, MeterObserved):
+            ledger, outcome = record_sample(state.ledger, event.sample, now_ms)
+            state = replace(state, ledger=ledger)
+            effects.append(Report(event.sample.stream_id, outcome))
+        else:
+            _integer(event.before_ms)
+            if event.before_ms > now_ms:
+                raise ValueError("future ledger retention cut")
+            state = replace(state, ledger=prune_ledger(state.ledger, event.before_ms))
+    elif isinstance(event, FrameObserved):
         if event.frame.at_ms > now_ms or (not rollback and event.frame.at_ms < state.resume_after_ms):
             raise ValueError("future physical frame")
         if state.frame is None or event.frame.revision > state.frame.revision:

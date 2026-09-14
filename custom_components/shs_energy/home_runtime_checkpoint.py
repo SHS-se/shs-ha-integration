@@ -1,4 +1,4 @@
-"""Closed version-1 JSON for the offline runtime and conservative crash restoration."""
+"""Closed version-2 JSON for the offline runtime and conservative crash restoration."""
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass, replace
@@ -97,6 +97,8 @@ def read_runtime_json(data):
 def _check_state(state):
     if state.resume_after_ms > state.last_time_ms:
         raise ValueError("resume fence exceeds journal time")
+    if state.ledger and any(stream.samples and stream.samples[-1].at_ms > state.last_time_ms for stream in state.ledger.streams):
+        raise ValueError("meter evidence exceeds checkpoint time")
     for group in state.groups:
         if group.observation and group.observation.revision != group.observation_revision:
             raise ValueError("observation watermark disagrees")
@@ -146,7 +148,7 @@ def _check_state(state):
 
 def encode_checkpoint(state: runtime.HomeState) -> bytes:
     _check_state(state)
-    data = json.dumps({"schema_version": 1, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    data = json.dumps({"schema_version": 2, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > MAX_BYTES:
         raise ValueError("checkpoint exceeds byte limit")
     return data
@@ -154,7 +156,7 @@ def encode_checkpoint(state: runtime.HomeState) -> bytes:
 
 def decode_checkpoint(data: bytes) -> runtime.HomeState:
     value = read_runtime_json(data)
-    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 1:
+    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 2:
         raise ValueError("unsupported checkpoint version/fields")
     return _check_state(_decode(value["state"], runtime.HomeState))
 
