@@ -1,4 +1,5 @@
 const TABS = [["energy", "Energy"], ["devices", "Devices"], ["schedule", "Schedule"], ["status", "Status"]];
+const DEVICE_MODES = [["monitoring", "Monitoring"], ["planning", "Planning"], ["control_verification", "Control verification"], ["controlling", "Controlling"]];
 const MAPPINGS_KEY = "device_control_mappings";
 const FRONTEND_VERSION = new URL(import.meta.url).searchParams.get("v");
 const PANEL_ELEMENT = `shs-energy-config-panel-${FRONTEND_VERSION.replaceAll(".", "-")}`;
@@ -16,6 +17,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._search = "";
     this._room = "";
     this._category = "";
+    this._scheduleSearch = this._scheduleRoom = this._scheduleCategory = this._scheduleMode = "";
     this._showExcluded = false;
     this._expanded = new Set();
     this._added = new Set();
@@ -572,6 +574,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (action === "download") this._download();
     if (action === "verification") this._downloadVerification();
     else if (action === "horizon") { this._fullHorizon = !this._fullHorizon; this._render(); }
+    else if (action === "schedule-mode") { this._scheduleMode = button.dataset.mode; this._render(); }
+    else if (action === "clear-schedule-filters") {
+      this._scheduleSearch = this._scheduleRoom = this._scheduleCategory = this._scheduleMode = "";
+      this._render();
+    }
     else if (action === "slot") { this._selectedSlot = Number(button.dataset.index); this._render(); }
     else if (action === "edit-device") this._openDevice(button.dataset.deviceKey);
     else if (action === "add-field") { this._added.add(button.dataset.token); this._render(); }
@@ -937,7 +944,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<div class="choices">
       <div class="choice-row"><span>Include in the plan</span><strong>${this._escape(device.choice_label)} · <a href="${this._escape(this._data.website_url)}" target="_blank" rel="noreferrer">Website</a></strong></div>
       ${section === "schedule" ? `<div class="choice-row"><span>Device mode</span><select data-mode="${this._escape(device.mode)}" aria-label="Mode for ${this._escape(device.name)}" data-permission="${this._escape(device.key)}" ${disabled ? "disabled" : ""}>
-        ${[["monitoring", "Monitoring"], ["planning", "Planning"], ["control_verification", "Control verification"], ["controlling", "Controlling"]].map(([value, label]) => `<option data-mode="${value}" value="${value}" ${device.mode === value ? "selected" : ""} ${blocked(value) && ["control_verification", "controlling"].includes(value) && device.mode !== value ? "disabled" : ""}>${label}</option>`).join("")}</select>
+        ${DEVICE_MODES.map(([value, label]) => `<option data-mode="${value}" value="${value}" ${device.mode === value ? "selected" : ""} ${blocked(value) && ["control_verification", "controlling"].includes(value) && device.mode !== value ? "disabled" : ""}>${label}</option>`).join("")}</select>
       <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Monitoring collects readings. Planning adds this device to the plan. Verification logs commands. Controlling executes them."))}</small></div>` : ""}
     </div>`;
   }
@@ -973,17 +980,40 @@ class ShsEnergyConfigPanel extends HTMLElement {
       </div></details>`;
   }
 
+  _deviceFilterKey(key, schedule) {
+    return "_" + (schedule ? `schedule${key[0].toUpperCase()}${key.slice(1)}` : key);
+  }
+
+  _filterDevices(devices, schedule = false) {
+    const value = key => this[this._deviceFilterKey(key, schedule)] || "";
+    return devices.filter(d => (!value("search") || `${d.name} ${d.room_name || ""}`.toLowerCase().includes(value("search").trim().toLowerCase()))
+      && (!value("room") || (d.room_name || "No room") === value("room"))
+      && (!value("category") || d.category === value("category"))
+      && (!schedule || !this._scheduleMode || d.mode === this._scheduleMode));
+  }
+
+  _renderDeviceFilters(devices, schedule = false) {
+    const key = name => this._deviceFilterKey(name, schedule);
+    const select = (name, placeholder, values, label) => `<select aria-label="${placeholder}" data-filter="${key(name).slice(1)}"><option value="">${placeholder}</option>${values.map(v => `<option value="${this._escape(v)}" ${this[key(name)] === v ? "selected" : ""}>${this._escape(label(v))}</option>`).join("")}</select>`;
+    return `<div class="filters"><input type="text" aria-label="Search devices" placeholder="Search devices" data-filter="${key("search").slice(1)}" value="${this._escape(this[key("search")] || "")}">${select("room", "All rooms", [...new Set(devices.map(d => d.room_name || "No room"))], v => v)}${select("category", "All types", [...new Set(devices.map(d => d.category).filter(Boolean))], v => this._label(v))}</div>`;
+  }
+
+  _renderScheduleFilters(devices) {
+    const active = this._scheduleMode || this._scheduleSearch || this._scheduleRoom || this._scheduleCategory;
+    return `<div class="schedule-filters">${this._renderDeviceFilters(devices, true)}
+      <div class="mode-filters" role="group" aria-label="Filter by device mode">${[["", "All modes"], ...DEVICE_MODES].map(([mode, label]) => `<button type="button" class="${(this._scheduleMode || "") === mode ? "primary" : "secondary"} small" data-action="schedule-mode" data-mode="${mode}" aria-pressed="${(this._scheduleMode || "") === mode}">${label}</button>`).join("")}${active ? '<button type="button" class="text small" data-action="clear-schedule-filters">Clear filters</button>' : ""}</div></div>`;
+  }
+
   _renderDevices() {
     const devices = this._sortedDevices();
     const visible = devices.filter(d => this._showExcluded || d.included);
-    const filtered = visible.filter(d => (!this._search || `${d.name} ${d.room_name || ""}`.toLowerCase().includes(this._search.toLowerCase())) && (!this._room || (d.room_name || "No room") === this._room) && (!this._category || d.category === this._category));
-    const select = (key, placeholder, values, label) => `<select aria-label="${placeholder}" data-filter="${key}"><option value="">${placeholder}</option>${values.map(v => `<option value="${this._escape(v)}" ${this["_" + key] === v ? "selected" : ""}>${this._escape(label(v))}</option>`).join("")}</select>`;
+    const filtered = this._filterDevices(visible);
     const equipment = this._data.sections.filter(s => s.toggle && ["battery_enabled", "pool_enabled", "ev_enabled"].includes(s.toggle.key));
     const excludedCount = devices.filter(d => !d.included).length;
     return `<div class="page-intro"><h2>Devices in your home</h2><p>Connect your equipment in Controls, then configure its model in Planning.</p>
       <div class="choice-row"><span>Show excluded devices${excludedCount ? ` (${excludedCount})` : ""}</span><label class="switch"><input type="checkbox" aria-label="Show excluded devices" data-filter="showExcluded" ${this._showExcluded ? "checked" : ""}><span></span></label></div></div>
       <section aria-labelledby="controls-heading"><h2 id="controls-heading">Controls</h2><p>Measurements, actions, operating limits and permission to operate your equipment.</p>
-      <div class="filters"><input type="text" aria-label="Search devices" placeholder="Search devices" data-filter="search" value="${this._escape(this._search)}">${select("room", "All rooms", [...new Set(visible.map(d => d.room_name || "No room"))], v => v)}${select("category", "All types", [...new Set(visible.map(d => d.category))], v => this._label(v))}</div>
+      ${this._renderDeviceFilters(visible)}
       ${filtered.map(d => this._renderDevice(d, "controls")).join("") || `<p>No matching devices.${!this._showExcluded && excludedCount ? " Turn on Show excluded devices to see excluded equipment." : ""}</p>`}</section>
       <section aria-labelledby="planning-heading"><h2 id="planning-heading">Planning</h2><p>Pool, vehicle and home battery properties. Set everyday comfort and charge preferences on the website.</p>
       ${this._sortedDevices("planning").filter(d => d.system && (this._showExcluded || d.included)).map(d => this._renderDevice(d, "planning")).join("") || '<p>No included pool, vehicle or home battery.</p>'}
@@ -1024,21 +1054,24 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const now = Date.parse(status.now);
     const available = (this._refreshError ? [] : this._data.timeline?.slots || []).filter(slot => Date.parse(slot.start) + 900000 > now);
     const slots = this._fullHorizon ? available : available.filter(slot => Date.parse(slot.start) < now + 86400000);
-    const devices = this._sortedDevices();
+    const allDevices = this._sortedDevices();
+    const devices = this._filterDevices(allDevices, true);
+    const scheduledDevices = devices.filter(d => d.included);
     const start = Date.parse(slots[0]?.start), end = Date.parse(slots.at(-1)?.start) + 900000;
     const position = (now - start) / (end - start) * 100;
     const selected = slots[this._selectedSlot];
-    return `<div class="card"><div class="status-heading"><h2>Your schedule</h2>${this._refreshError ? this._statusBadge("unavailable", "Status unconfirmed") : this._statusBadge(status.state, status.label)}</div>
+    return `${this._renderScheduleFilters(allDevices)}<div class="card"><div class="status-heading"><h2>Your schedule</h2>${this._refreshError ? this._statusBadge("unavailable", "Status unconfirmed") : this._statusBadge(status.state, status.label)}</div>
       <p>${this._escape(this._refreshError ? "Current status could not be confirmed. The last received status may be stale." : status.reason)}</p>${status.plan_id ? `<p>Plan <code title="${this._escape(status.plan_id)}">${this._escape(status.plan_id.slice(0, 8))}</code> · Issued ${this._time(status.issued_at)}</p>` : ""}
-      ${slots.length ? `<button class="text" data-action="horizon">${this._fullHorizon ? "Show next 24 hours" : "Show full available plan"}</button><p class="muted">Colour: target or permission requested · Solid: published prices · Striped: estimated prices · Red line: now. Select a quarter to inspect its requests.</p><div class="timeline-scroll"><div class="timeline"><div class="timeline-times"><span>${this._time(slots[0].start)}</span><span>${this._time(end)}</span></div>
-      ${devices.filter(d => d.included).map(d => `<div class="timeline-row"><strong>${this._escape(d.name)}</strong><div class="timeline-track">${slots.map((slot, index) => {
+      ${slots.length && scheduledDevices.length ? `<button class="text" data-action="horizon">${this._fullHorizon ? "Show next 24 hours" : "Show full available plan"}</button><p class="muted">Colour: target or permission requested · Solid: published prices · Striped: estimated prices · Red line: now. Select a quarter to inspect its requests.</p><div class="timeline-scroll"><div class="timeline"><div class="timeline-times"><span>${this._time(slots[0].start)}</span><span>${this._time(end)}</span></div>
+      ${scheduledDevices.map(d => `<div class="timeline-row"><strong>${this._escape(d.name)}</strong><div class="timeline-track">${slots.map((slot, index) => {
         const { text, active } = this._scheduleCommand(d, slot);
         return `<button class="slot ${active ? "running" : ""} ${slot.binding ? "" : "advisory"}" data-action="slot" data-index="${index}" aria-label="${this._escape(d.name + ', ' + this._time(slot.start) + ', ' + text + (slot.binding ? ', published prices' : ', estimated prices'))}" title="${this._escape(text)}"></button>`;
-      }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Published prices" : "Estimated prices"}</h3><ul>${devices.filter(d => d.included).map(d => `<li>${this._escape(d.name)}: ${this._escape(this._scheduleCommand(d, selected).text)}</li>`).join("")}</ul></div>` : ""}` : `<p>No actionable schedule is available. Details are in Status.</p>`}
+      }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Published prices" : "Estimated prices"}</h3><ul>${scheduledDevices.map(d => `<li>${this._escape(d.name)}: ${this._escape(this._scheduleCommand(d, selected).text)}</li>`).join("")}</ul></div>` : ""}` : `<p>${slots.length ? "No included devices match these filters." : "No actionable schedule is available. Details are in Status."}</p>`}
       <p>Targets shown here are requests. They do not prove that heat, charging or power was delivered.</p></div>
       <div class="card"><h2>Controller diagnostics</h2><p>Download every non-excluded device in Monitoring, Planning, Control verification or Controlling, with its current mode, configuration, readings, plan and controller status. Retained runtime evaluations and real service calls are separate from simulated verification commands and coverage. Verification does not prove physical response. The file contains local entity IDs and configuration. Observations are sampled about once a minute in every mode, with up to 720 samples retained. Energy-counter differences are labelled as interval averages, with missing or stale readings identified. Current-session checks and coverage are summarised separately from older evidence. Repeated checks are grouped; up to 2,000 groups of each kind are retained. Downloads are gzip-compressed JSON.</p><button class="secondary" data-action="verification">Download controller diagnostics</button></div>
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
       <p class="muted">Website choices define the planning method. Device mode here controls participation and execution. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
+      ${!devices.length ? '<p role="status">No devices match these filters.</p>' : ""}
       ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}<div class="device-field-issues">${this._deviceFieldButtons(d)}</div>${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._scheduleCommand(d, slots[1]).text)}` : ""}</small></article>`).join("")}`;
   }
 
@@ -1144,6 +1177,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const focusKey = active?.dataset.fieldKey;
     const focusDevice = active?.dataset.deviceKey;
     const focusFilter = active?.dataset.filter;
+    const focusMode = active?.dataset.action === "schedule-mode" ? active.dataset.mode : null;
     const selection = active && "selectionStart" in active ? active.selectionStart : null;
     for (const node of this.shadowRoot.querySelectorAll("details[data-open-key]")) {
       if (node.open) this._expanded.add(node.dataset.openKey); else this._expanded.delete(node.dataset.openKey);
@@ -1185,6 +1219,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       </main>`;
     const fields = [...this.shadowRoot.querySelectorAll("input,select")];
     const target = fields.find(el => focusFilter ? el.dataset.filter === focusFilter : focusKey && el.dataset.fieldKey === focusKey && el.dataset.deviceKey === focusDevice);
+    if (focusMode !== null) this.shadowRoot.querySelector(`[data-action="schedule-mode"][data-mode="${focusMode}"]`)?.focus();
     if (target) { target.focus(); if (selection !== null && target.type === "text") target.setSelectionRange(selection, selection); }
   }
 
@@ -1207,6 +1242,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .choices { border-top:1px solid var(--divider-color); border-bottom:1px solid var(--divider-color); margin:14px 0; padding:8px 0; }
       .filters { display:flex; gap:12px; margin:18px 0; flex-wrap:wrap; }
       .filters > * { flex:1; min-width:150px; }
+      .schedule-filters { margin-bottom:18px; }
+      .schedule-filters .filters { margin-bottom:10px; }
+      .mode-filters { display:flex; gap:8px; flex-wrap:wrap; }
       .compact summary { cursor:pointer; font-weight:600; padding:8px 0; }
       .compact summary span { display:block; font-size:13px; font-weight:400; color:var(--secondary-text-color); margin-top:6px; }
       .source-list { display:grid; gap:8px; margin:15px 0; }

@@ -866,3 +866,69 @@ test('battery schedule describes source permission and intent instead of forecas
   delete slot.battery_command;
   assert.equal(panel._scheduleCommand(device, slot).text, 'No supported instruction');
 });
+
+const scheduleFilterPanel = () => {
+  const panel = makePanel();
+  panel._data.operation = { state: 'ready', label: 'Ready', reason: 'Plan available', now: '2026-09-14T10:15:00Z' };
+  panel._data.portal = {};
+  panel._data.devices = [
+    { key: 'a', name: 'Living heater', room_name: 'Living room', category: 'heating', mode: 'controlling', included: true },
+    { key: 'b', name: 'Bedroom heater', room_name: 'Bedroom', category: 'heating', mode: 'planning', included: true },
+    { key: 'c', name: 'Test charger', category: 'ev_charging', mode: 'control_verification', included: true },
+    { key: 'd', name: 'Observed meter', category: 'household', mode: 'monitoring', included: false },
+  ];
+  panel._data.timeline = { slots: [{ start: '2026-09-14T10:15:00Z', binding: true, commands: {} }] };
+  panel._choices = () => ''; panel._deviceFieldButtons = () => '';
+  panel._selectedSlot = 0;
+  return panel;
+};
+
+test('schedule combines search, room, category and mode across timeline, details and cards', () => {
+  const panel = scheduleFilterPanel();
+  panel._scheduleSearch = ' HEATER ';
+  panel._scheduleRoom = 'Living room';
+  panel._scheduleCategory = 'heating';
+  panel._scheduleMode = 'controlling';
+  const html = panel._renderSchedule();
+  assert.match(html, /<strong>Living heater<\/strong>/);
+  assert.match(html, /<li>Living heater:/);
+  assert.match(html, /<h2>Living heater<\/h2>/);
+  assert.doesNotMatch(html, /Bedroom heater|Test charger|Observed meter/);
+  assert.match(html, /data-mode="controlling" aria-pressed="true"/);
+  assert.match(html, /data-filter="scheduleRoom"/);
+  assert.match(html, /data-filter="scheduleCategory"/);
+  assert.match(html, /Clear filters/);
+});
+
+test('schedule quick mode filters include excluded monitoring devices and clear without changing modes', () => {
+  const panel = scheduleFilterPanel();
+  const before = JSON.stringify(panel._data.devices);
+  for (const [mode, name] of [['monitoring', 'Observed meter'], ['planning', 'Bedroom heater'],
+    ['control_verification', 'Test charger'], ['controlling', 'Living heater']]) {
+    panel._onClick({ target: { closest: () => ({ dataset: { action: 'schedule-mode', mode } }) } });
+    assert.equal(panel._filterDevices(panel._data.devices, true).length, 1);
+    assert.match(panel._renderSchedule(), new RegExp(`<h2>${name}</h2>`));
+  }
+  panel._scheduleSearch = 'not found';
+  assert.match(panel._renderSchedule(), /No devices match these filters/);
+  assert.doesNotMatch(panel._renderSchedule(), /class="timeline-row"/);
+  panel._onClick({ target: { closest: () => ({ dataset: { action: 'clear-schedule-filters' } }) } });
+  assert.equal(panel._filterDevices(panel._data.devices, true).length, 4);
+  assert.equal(JSON.stringify(panel._data.devices), before);
+  const html = panel._renderSchedule();
+  assert.match(html, /data-mode="" aria-pressed="true"/);
+  assert.match(html, /<h2>Observed meter<\/h2>/);
+  assert.doesNotMatch(html, /<strong>Observed meter<\/strong>/);
+});
+
+test('shared device filters keep Schedule and Devices selections independent', () => {
+  const panel = scheduleFilterPanel();
+  panel._search = 'Bedroom';
+  panel._scheduleMode = 'controlling';
+  assert.equal(panel._filterDevices(panel._data.devices)[0].key, 'b');
+  assert.equal(panel._filterDevices(panel._data.devices, true)[0].key, 'a');
+  panel._scheduleRoom = 'No room'; panel._scheduleMode = '';
+  assert.equal(panel._filterDevices(panel._data.devices, true).length, 2);
+  assert.match(panel._renderDeviceFilters(panel._data.devices), /data-filter="search" value="Bedroom"/);
+  assert.match(panel._renderDeviceFilters(panel._data.devices, true), /value="No room" selected/);
+});
