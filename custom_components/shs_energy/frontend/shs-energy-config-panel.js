@@ -1029,7 +1029,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       const watts = value => `${Math.round(value)} W`;
       const labels = {
         self_consumption: "Solar capture and house supply",
-        solar_charge: "Capture solar surplus · preserve battery",
+        solar_charge: "Capture surplus · preserve",
         grid_charge: `Charge up to ${watts(command.charge_limit_w)} · grid allowed`,
         supply_house: `Supply house up to ${watts(command.discharge_limit_w)}`,
         export: `Discharge up to ${watts(command.discharge_limit_w)} · export allowed`,
@@ -1052,14 +1052,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _scheduleCommandDetail(device, slot) {
     const preview = slot.command_previews?.[device.system || `device:${device.key}`];
     if (!preview) return "";
-    if (preview.error) return `<small class="command-detail muted">Command preview unavailable: ${this._escape(preview.error)}</small>`;
+    if (preview.error) return `<span class="command-detail muted"> | Command preview unavailable: ${this._escape(preview.error)}</span>`;
     const fields = (preview.fields || []).map(field => {
       const value = typeof field.value === "number" ? Number(field.value.toFixed(6)) : field.value;
       return `${field.label}: ${value}${field.unit ? ` ${field.unit}` : ""}`;
     });
     if (!fields.length) return "";
-    const label = preview.basis === "current_readings" ? "With current readings" : "Intended";
-    return `<small class="command-detail muted">${this._escape(label + " · " + fields.join(" · "))}</small>`;
+    const note = preview.basis === "current_readings" ? ' title="Calculated from current readings; recalculated at execution"' : "";
+    return `<span class="command-detail muted"${note}> | ${this._escape(fields.join(" · "))}</span>`;
   }
 
   _renderSchedule() {
@@ -1262,7 +1262,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .compact summary span { display:block; font-size:13px; font-weight:400; color:var(--secondary-text-color); margin-top:6px; }
       .source-list { display:grid; gap:8px; margin:15px 0; }
       .source-list small { color:var(--secondary-text-color); }
-      .command-detail { display:block; margin:3px 0 8px; overflow-wrap:anywhere; }
+      .command-detail { overflow-wrap:anywhere; }
       .timeline-scroll { overflow-x:auto; }
       .timeline { min-width:720px; }
       .timeline-row { display:grid; grid-template-columns:160px 1fr; gap:12px; padding:10px 0; align-items:center; }

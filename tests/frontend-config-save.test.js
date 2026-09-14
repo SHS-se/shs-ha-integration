@@ -854,7 +854,7 @@ test('battery schedule describes source permission and intent instead of forecas
   const device = { system: 'battery' };
   const command = { schema_version: 2, operation: 'solar_charge', charge_limit_w: 8800, discharge_limit_w: 0 };
   const slot = { battery_charge_w: 523.94, battery_discharge_w: 0, battery_command: command };
-  assert.equal(panel._scheduleCommand(device, slot).text, 'Capture solar surplus · preserve battery');
+  assert.equal(panel._scheduleCommand(device, slot).text, 'Capture surplus · preserve');
   command.operation = 'grid_charge';
   command.charge_limit_w = 523.94;
   assert.equal(panel._scheduleCommand(device, slot).text, 'Charge up to 524 W · grid allowed');
@@ -941,13 +941,15 @@ test('selected command detail shows mode and actuator limits with one shared ren
     { label: 'Discharge limit', value: 0, unit: 'kW' },
   ] }, 'device:heater': { fields: [{ label: 'Target', value: 21.5000000001, unit: '°C' }] },
   pool: { basis: 'current_readings', fields: [{ label: 'Start', value: 29.5, unit: '°C' }] } } };
-  assert.match(panel._scheduleCommandDetail({ system: 'battery' }, slot), /Intended · Mode: Maximum Self Consumption · Charge limit: 8.8 kW · Discharge limit: 0 kW/);
+  assert.match(panel._scheduleCommandDetail({ system: 'battery' }, slot), /\| Mode: Maximum Self Consumption · Charge limit: 8.8 kW · Discharge limit: 0 kW/);
   assert.match(panel._scheduleCommandDetail({ key: 'heater' }, slot), /Target: 21.5 °C/);
-  assert.match(panel._scheduleCommandDetail({ system: 'pool' }, slot), /With current readings · Start: 29.5 °C/);
+  assert.match(panel._scheduleCommandDetail({ system: 'pool' }, slot), /\| Start: 29.5 °C/);
+  assert.match(panel._scheduleCommandDetail({ system: 'pool' }, slot), /title="Calculated from current readings; recalculated at execution"/);
+  assert.doesNotMatch(panel._scheduleCommandDetail({ system: 'battery' }, slot), /<small|<br|Intended/);
   slot.command_previews.battery = { error: 'Missing <mode>' };
   assert.match(panel._scheduleCommandDetail({ system: 'battery' }, slot), /Command preview unavailable: Missing &lt;mode&gt;/);
   assert.equal(panel._scheduleCommandDetail({ key: 'missing' }, slot), '');
   panel._data.timeline.slots[0].command_previews = slot.command_previews;
   panel._data.timeline.slots[0].command_previews['device:a'] = { fields: [{ label: 'Target', value: 22, unit: '°C' }] };
-  assert.match(panel._renderSchedule(), /Living heater: No instruction<small class="command-detail muted">Intended · Target: 22 °C/);
+  assert.match(panel._renderSchedule(), /Living heater: No instruction<span class="command-detail muted"> \| Target: 22 °C/);
 });
