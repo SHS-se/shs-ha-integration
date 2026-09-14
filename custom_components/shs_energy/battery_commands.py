@@ -1,6 +1,12 @@
 """Validate explicit battery intent at the planner and executor boundary."""
 from math import isfinite
 
+BATTERY_MODE_KEYS = {
+    "self_consumption": "battery_mode_baseline", "solar_charge": "battery_mode_baseline",
+    "supply_house": "battery_mode_baseline", "grid_charge": "battery_mode_charge",
+    "export": "battery_mode_discharge", "hold": "battery_mode_idle",
+}
+
 OPERATIONS = {"self_consumption", "solar_charge", "grid_charge", "supply_house", "export", "hold"}
 FIELDS = {"schema_version", "operation", "charge_limit_w", "discharge_limit_w", "allow_grid_charge", "allow_battery_export"}
 

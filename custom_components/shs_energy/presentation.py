@@ -51,7 +51,7 @@ def operational_status(plan, mode, missing, now):
     return result
 
 
-def timeline(plan, status):
+def timeline(plan, status, *, command_preview=None):
     """Never expose an invalid/expired schedule as actionable instructions."""
     if status["state"] not in {"ready", "advisory_only"}:
         return {"capabilities": {}, "slots": [], "reason": status["reason"]}
@@ -59,6 +59,7 @@ def timeline(plan, status):
         {"start": slot["start"], "binding": slot["binding"],
          "commands": deepcopy(slot.get("device_commands", {})),
          "battery_command": deepcopy(slot.get("battery_command")),
+         "command_previews": command_preview(slot) if command_preview is not None else {},
          **{key: slot.get(key) for key in ("battery_charge_w", "battery_discharge_w", "ev_target_current_a", "pool_w")}}
         for slot in plan["plans"]["priority"]["slots"]
     ], "reason": None}

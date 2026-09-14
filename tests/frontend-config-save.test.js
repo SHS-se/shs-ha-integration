@@ -932,3 +932,22 @@ test('shared device filters keep Schedule and Devices selections independent', (
   assert.match(panel._renderDeviceFilters(panel._data.devices), /data-filter="search" value="Bedroom"/);
   assert.match(panel._renderDeviceFilters(panel._data.devices, true), /value="No room" selected/);
 });
+
+test('selected command detail shows mode and actuator limits with one shared renderer', () => {
+  const panel = scheduleFilterPanel();
+  const slot = { command_previews: { battery: { fields: [
+    { label: 'Mode', value: 'Maximum Self Consumption' },
+    { label: 'Charge limit', value: 8.8, unit: 'kW' },
+    { label: 'Discharge limit', value: 0, unit: 'kW' },
+  ] }, 'device:heater': { fields: [{ label: 'Target', value: 21.5000000001, unit: '°C' }] },
+  pool: { basis: 'current_readings', fields: [{ label: 'Start', value: 29.5, unit: '°C' }] } } };
+  assert.match(panel._scheduleCommandDetail({ system: 'battery' }, slot), /Intended · Mode: Maximum Self Consumption · Charge limit: 8.8 kW · Discharge limit: 0 kW/);
+  assert.match(panel._scheduleCommandDetail({ key: 'heater' }, slot), /Target: 21.5 °C/);
+  assert.match(panel._scheduleCommandDetail({ system: 'pool' }, slot), /With current readings · Start: 29.5 °C/);
+  slot.command_previews.battery = { error: 'Missing <mode>' };
+  assert.match(panel._scheduleCommandDetail({ system: 'battery' }, slot), /Command preview unavailable: Missing &lt;mode&gt;/);
+  assert.equal(panel._scheduleCommandDetail({ key: 'missing' }, slot), '');
+  panel._data.timeline.slots[0].command_previews = slot.command_previews;
+  panel._data.timeline.slots[0].command_previews['device:a'] = { fields: [{ label: 'Target', value: 22, unit: '°C' }] };
+  assert.match(panel._renderSchedule(), /Living heater: No instruction<small class="command-detail muted">Intended · Target: 22 °C/);
+});

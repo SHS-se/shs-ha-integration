@@ -21,7 +21,7 @@ try:
     from .operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
     from .verification import OPERATIONS, operation_name, evaluation_record, observation
     from .controller_metrics import ControllerMetrics, fingerprint, record_time
-    from .battery_commands import validate_battery_command
+    from .battery_commands import validate_battery_command, BATTERY_MODE_KEYS
     from .configuration_values import resolve_battery_quantities, resolve_quantity
     from .device_commands import actuator_targets, execution_setup_errors, validate_commands
     from .device_controls import battery_control_errors, pool_band_errors, mapped_planning_path, planning_path
@@ -30,7 +30,7 @@ except ImportError:  # Pure executor tests, without importing Home Assistant.
     from operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
     from verification import OPERATIONS, operation_name, evaluation_record, observation
     from controller_metrics import ControllerMetrics, fingerprint, record_time
-    from battery_commands import validate_battery_command
+    from battery_commands import validate_battery_command, BATTERY_MODE_KEYS
     from configuration_values import resolve_battery_quantities, resolve_quantity
     from device_commands import actuator_targets, execution_setup_errors, validate_commands
     from device_controls import battery_control_errors, pool_band_errors, mapped_planning_path, planning_path
@@ -123,6 +123,43 @@ def pool_hardware_band(heat, water, on, start_attributes, stop_attributes):
     return band
 
 
+def checked_state(state, entity, max_age=None):
+    if state is None or state.state in ("unknown", "unavailable"):
+        raise ControlObservationError(
+            f"{entity or 'required entity'} is unavailable", entity,
+            "Check the source entity and its integration for an unavailable reading. "
+            "If the entity was replaced, select its replacement in this device's setup.",
+            unavailable=True,
+        )
+    if max_age is not None:
+        reported = getattr(state, "last_reported", state.last_updated)
+        age = (datetime.now(timezone.utc) - reported).total_seconds()
+        if not 0 <= age <= max_age:
+            raise ControlObservationError(
+                f"{entity} is stale (last reported {reported.isoformat()}; maximum age {max_age} seconds)",
+                entity,
+                f"Check that this sensor and its source integration report at least every {max_age} seconds, "
+                "including while its value is unchanged.",
+            )
+    return state
+
+
+def battery_limit_value(entity, watts, state):
+    if state is None:
+        raise ValueError(f"{entity} is unavailable")
+    unit = state.attributes.get("unit_of_measurement")
+    if not entity.startswith("number.") or unit not in ("W", "kW"):
+        raise ValueError(f"{entity} must be a W or kW limit control")
+    low, high = finite(state.attributes["min"]), finite(state.attributes["max"])
+    step = finite(state.attributes.get("step", 1))
+    if low != 0 or high <= 0 or step <= 0:
+        raise ValueError(f"{entity} must support non-negative limits including zero")
+    value = finite(watts) / (1000 if unit == "kW" else 1)
+    if not 0 <= value <= high:
+        raise ValueError(f"{entity}: requested ceiling is outside hardware bounds")
+    return int(value / step + 1e-8) * step
+
+
 class ScheduledController:
     """HA adapter supplied by the caller, so execution is behaviour-testable."""
 
@@ -193,24 +230,7 @@ class ScheduledController:
         state = (self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity, max_age=max_age)
         if self.verifying and entity not in self.shadow:
             self.verification_observations[entity] = observation(state)
-        if state is None or state.state in ("unknown", "unavailable"):
-            raise ControlObservationError(
-                f"{entity or 'required entity'} is unavailable", entity,
-                "Check the source entity and its integration for an unavailable reading. "
-                "If the entity was replaced, select its replacement in this device's setup.",
-                unavailable=True,
-            )
-        if max_age is not None:
-            reported = getattr(state, "last_reported", state.last_updated)
-            age = (datetime.now(timezone.utc) - reported).total_seconds()
-            if not 0 <= age <= max_age:
-                raise ControlObservationError(
-                    f"{entity} is stale (last reported {reported.isoformat()}; maximum age {max_age} seconds)",
-                    entity,
-                    f"Check that this sensor and its source integration report at least every {max_age} seconds, "
-                    "including while its value is unchanged.",
-                )
-        return state
+        return checked_state(state, entity, max_age)
 
     def number(self, entity, *, max_age=None):
         return finite(self.state(entity, max_age=max_age).state)
@@ -566,8 +586,9 @@ class ScheduledController:
         return {"state": "commanded", "requested_current_a": current,
                 "reason": "current and charge switch accepted; delivered power not inferred"}
 
-    def pool_temperature(self, entity):
+    def pool_temperature(self, entity, *, read_state=None):
         """Use the filtered temperature, but require reports from its raw source."""
+        reader = read_state or self.state
         selected = entity
         visited = set()
         sources = {}
@@ -579,7 +600,7 @@ class ScheduledController:
                     "Correct the Filter sensor's source so it does not refer back to itself.",
                 )
             visited.add(entity)
-            state = self.state(entity)
+            state = reader(entity)
             if state.attributes.get("unit_of_measurement") != "°C":
                 raise ValueError(f"{entity}: pool control requires Celsius")
             value = finite(state.state)
@@ -587,7 +608,7 @@ class ScheduledController:
                 temperature = value
             entry = self.entity_registry.async_get(entity) if self.entity_registry is not None else None
             if entry is None or entry.platform != "filter":
-                raw = self.state(entity, max_age=POOL_MAX_AGE_SECONDS)
+                raw = reader(entity, max_age=POOL_MAX_AGE_SECONDS)
                 sources[entity] = None
                 return temperature, sources, raw.last_reported + timedelta(seconds=POOL_MAX_AGE_SECONDS)
             source = state.attributes.get("entity_id")
@@ -599,7 +620,8 @@ class ScheduledController:
             sources[entity] = source
             entity = source
 
-    async def execute_pool(self, options, slot):
+    def pool_request(self, options, slot, *, read_state=None):
+        reader = read_state or self.state
         errors = pool_band_errors(options)
         if errors:
             raise ValueError("; ".join(errors))
@@ -607,14 +629,18 @@ class ScheduledController:
         stop = options.get("pool_stop_temperature_entity")
         water_entity = options.get("pool_water_temperature_entity")
         for entity in (start, stop):
-            if self.state(entity).attributes.get("unit_of_measurement") != "°C":
+            if reader(entity).attributes.get("unit_of_measurement") != "°C":
                 raise ValueError(f"{entity}: pool control requires Celsius")
-        water, sources, fresh_until = self.pool_temperature(water_entity)
+        water, sources, fresh_until = self.pool_temperature(water_entity, read_state=reader)
         record = self.records.get("pool")
         heat = ((finite(record["originals"][start]), finite(record["originals"][stop]))
-                if record else (self.number(start), self.number(stop)))
+                if record else (finite(reader(start).state), finite(reader(stop).state)))
         on = finite(slot["pool_w"]) > 0
-        band = pool_hardware_band(heat, water, on, self.state(start).attributes, self.state(stop).attributes)
+        band = pool_hardware_band(heat, water, on, reader(start).attributes, reader(stop).attributes)
+        return start, stop, water, sources, fresh_until, band, on
+
+    async def execute_pool(self, options, slot):
+        start, stop, water, sources, fresh_until, band, on = self.pool_request(options, slot)
         await self.capture("pool", options, [start, stop, options.get("pool_permission_entity")])
         await self.band_commands(start, stop, band)
         if on and (permission := options.get("pool_permission_entity")):
@@ -715,20 +741,49 @@ class ScheduledController:
 
     def battery_limit(self, entity, watts):
         """Validate the outgoing ceiling; the old register value is irrelevant."""
-        state = self.observed_state(entity)
-        if state is None:
-            raise ValueError(f"{entity} is unavailable")
-        unit = state.attributes.get("unit_of_measurement")
-        if not entity.startswith("number.") or unit not in ("W", "kW"):
-            raise ValueError(f"{entity} must be a W or kW limit control")
-        low, high = finite(state.attributes["min"]), finite(state.attributes["max"])
-        step = finite(state.attributes.get("step", 1))
-        if low != 0 or high <= 0 or step <= 0:
-            raise ValueError(f"{entity} must support non-negative limits including zero")
-        value = finite(watts) / (1000 if unit == "kW" else 1)
-        if not 0 <= value <= high:
-            raise ValueError(f"{entity}: requested ceiling is outside hardware bounds")
-        return int(value / step + 1e-8) * step
+        return battery_limit_value(entity, watts, self.observed_state(entity))
+
+    def preview_state(self, entity, *, max_age=None):
+        """Read real HA state without scheduling observations or changing journals."""
+        state = self.hass.states.get(entity) if entity else None
+        return checked_state(state, entity, max_age)
+
+    def preview_commands(self, slot):
+        """Describe intended targets without writes, simulation, or authority changes.
+
+        Pool bands depend on current water/readbacks; future execution recalculates
+        them. Other adapters can publish the same fields/basis/error shape here.
+        """
+        options = self.options()
+        previews = {}
+        if slot.get("battery_command"):
+            try:
+                command = validate_battery_command(slot)
+                mode = options[BATTERY_MODE_KEYS[command["operation"]]]
+                mode_entity = options["battery_mode_entity"]
+                if mode not in self.preview_state(mode_entity).attributes.get("options", []):
+                    raise ValueError("Choose a supported battery mode in device setup")
+                fields = [{"label": "Mode", "value": mode}]
+                for direction in ("charge", "discharge"):
+                    entity = options[f"battery_{direction}_limit_entity"]
+                    state = self.hass.states.get(entity)
+                    value = battery_limit_value(entity, command[f"{direction}_limit_w"], state)
+                    fields.append({"label": f"{direction.capitalize()} limit", "value": value,
+                                   "unit": state.attributes["unit_of_measurement"]})
+                previews["battery"] = {"fields": fields}
+            except (KeyError, TypeError, ValueError) as err:
+                previews["battery"] = {"error": str(err)}
+        if slot.get("pool_w") is not None and options.get("pool_enabled"):
+            try:
+                _, _, _, _, _, band, on = self.pool_request(options, slot, read_state=self.preview_state)
+                fields = [{"label": "Start", "value": band[0], "unit": "°C"},
+                          {"label": "Stop", "value": band[1], "unit": "°C"}]
+                if on and options.get("pool_permission_entity"):
+                    fields.append({"label": "Permission", "value": "On"})
+                previews["pool"] = {"fields": fields, "basis": "current_readings"}
+            except (KeyError, TypeError, ValueError) as err:
+                previews["pool"] = {"error": str(err)}
+        return previews
 
     async def execute_battery(self, options, slot):
         errors = battery_control_errors({**options, "battery_control_enabled": True})
@@ -766,9 +821,7 @@ class ScheduledController:
         # Journal the mapping before the first write. Handover uses configured
         # rated sources, never arbitrary or sentinel pre-existing register values.
         await self.capture("battery", options, [])
-        mode_key = {"self_consumption": "battery_mode_baseline", "solar_charge": "battery_mode_baseline",
-                    "supply_house": "battery_mode_baseline", "grid_charge": "battery_mode_charge",
-                    "export": "battery_mode_discharge", "hold": "battery_mode_idle"}[operation]
+        mode_key = BATTERY_MODE_KEYS[operation]
         mode = options[mode_key]
         # Close both ceilings for a mode transition; do not interrupt an
         # unchanged request on every scheduler tick.

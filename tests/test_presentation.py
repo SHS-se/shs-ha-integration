@@ -19,6 +19,14 @@ class PresentationTests(unittest.TestCase):
         result['slots'][0]['battery_command']['charge_limit_w'] = -1
         self.assertNotEqual(source['battery_command']['charge_limit_w'], -1)
 
+    def test_timeline_includes_each_slots_read_only_command_preview(self):
+        preview = lambda slot: {'device:heater': {'fields': [{'label': 'Target', 'value': slot['start']}]}}
+        result = timeline(self.plan, {'state': 'ready'}, command_preview=preview)
+        for slot in result['slots']:
+            self.assertEqual(slot['command_previews']['device:heater']['fields'][0]['value'], slot['start'])
+        self.assertEqual(timeline(self.plan, {'state': 'invalid', 'reason': 'bad'},
+                                 command_preview=lambda slot: self.fail('invalid plan previewed'))['slots'], [])
+
     def test_readiness_counts_only_included_equipment_including_home_battery(self):
         devices = [
             {"name": "Fridge", "included": False, "mapping_status": "not_configured"},

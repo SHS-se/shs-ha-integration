@@ -203,6 +203,39 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(float(self.states['number.charge_limit'].state), 8.8)
                 self.assertEqual(float(self.states['number.discharge_limit'].state), 0)
 
+    async def test_command_previews_match_targets_without_execution_or_observation_effects(self):
+        self.states['number.charge_limit'].attributes['step'] = .01
+        self.slot.update(battery_charge_w=523.94,
+                         battery_command=battery_command('grid_charge', 523.94, 0))
+        self.controller.observed_state = lambda *a, **kw: self.fail('preview must not schedule observations')
+        preview = self.controller.preview_commands(self.slot)
+        self.assertEqual(preview['battery']['fields'], [
+            {'label': 'Mode', 'value': 'Charge'},
+            {'label': 'Charge limit', 'value': .52, 'unit': 'kW'},
+            {'label': 'Discharge limit', 'value': 0, 'unit': 'kW'},
+        ])
+        self.assertEqual(preview['pool']['basis'], 'current_readings')
+        self.assertEqual(self.calls, [])
+        self.assertIsNone(self.store.saved)
+        self.assertEqual(self.controller.records, {})
+        self.assertEqual(self.controller.verification_commands, [])
+        del self.controller.observed_state
+        self.options['device_modes'].update({'$battery': 'controlling', '$pool': 'controlling'})
+        await self.controller.async_start()
+        self.assertEqual(float(self.states['number.charge_limit'].state), preview['battery']['fields'][1]['value'])
+        for entity, field in zip(('number.start', 'number.stop'), preview['pool']['fields']):
+            self.assertEqual(float(self.states[entity].state), field['value'])
+
+    async def test_preview_uses_real_readings_and_reports_missing_mapping(self):
+        self.controller.verifying = True
+        self.controller.shadow['number.charge_limit'] = State(1, min=0, max=1, step=1, unit_of_measurement='kW')
+        preview = self.controller.preview_commands(self.slot)
+        self.assertEqual(preview['battery']['fields'][1]['value'], 2)
+        self.assertEqual(self.controller.verification_observations, {})
+        del self.options['battery_mode_charge']
+        self.assertIn('error', self.controller.preview_commands(self.slot)['battery'])
+        self.assertEqual(self.calls, [])
+
     async def test_old_battery_command_version_is_rejected_before_writes(self):
         self.slot['battery_command']['schema_version'] = 1
         with self.assertRaisesRegex(ValueError, 'versioned battery operation'):

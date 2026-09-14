@@ -1049,6 +1049,19 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return result(command.reason || "No supported instruction");
   }
 
+  _scheduleCommandDetail(device, slot) {
+    const preview = slot.command_previews?.[device.system || `device:${device.key}`];
+    if (!preview) return "";
+    if (preview.error) return `<small class="command-detail muted">Command preview unavailable: ${this._escape(preview.error)}</small>`;
+    const fields = (preview.fields || []).map(field => {
+      const value = typeof field.value === "number" ? Number(field.value.toFixed(6)) : field.value;
+      return `${field.label}: ${value}${field.unit ? ` ${field.unit}` : ""}`;
+    });
+    if (!fields.length) return "";
+    const label = preview.basis === "current_readings" ? "With current readings" : "Intended";
+    return `<small class="command-detail muted">${this._escape(label + " · " + fields.join(" · "))}</small>`;
+  }
+
   _renderSchedule() {
     const status = this._data.operation;
     const now = Date.parse(status.now);
@@ -1066,7 +1079,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       ${scheduledDevices.map(d => `<div class="timeline-row"><strong>${this._escape(d.name)}</strong><div class="timeline-track">${slots.map((slot, index) => {
         const { text, active } = this._scheduleCommand(d, slot);
         return `<button class="slot ${active ? "running" : ""} ${slot.binding ? "" : "advisory"}" data-action="slot" data-index="${index}" aria-label="${this._escape(d.name + ', ' + this._time(slot.start) + ', ' + text + (slot.binding ? ', published prices' : ', estimated prices'))}" title="${this._escape(text)}"></button>`;
-      }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Published prices" : "Estimated prices"}</h3><ul>${scheduledDevices.map(d => `<li>${this._escape(d.name)}: ${this._escape(this._scheduleCommand(d, selected).text)}</li>`).join("")}</ul></div>` : ""}` : `<p>${slots.length ? "No included devices match these filters." : "No actionable schedule is available. Details are in Status."}</p>`}
+      }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Published prices" : "Estimated prices"}</h3><ul>${scheduledDevices.map(d => `<li>${this._escape(d.name)}: ${this._escape(this._scheduleCommand(d, selected).text)}${this._scheduleCommandDetail(d, selected)}</li>`).join("")}</ul></div>` : ""}` : `<p>${slots.length ? "No included devices match these filters." : "No actionable schedule is available. Details are in Status."}</p>`}
       <p>Targets shown here are requests. They do not prove that heat, charging or power was delivered.</p></div>
       <div class="card"><h2>Controller diagnostics</h2><p>Download every non-excluded device in Monitoring, Planning, Control verification or Controlling, with its current mode, configuration, readings, plan and controller status. Retained runtime evaluations and real service calls are separate from simulated verification commands and coverage. Verification does not prove physical response. The file contains local entity IDs and configuration. Observations are sampled about once a minute in every mode, with up to 720 samples retained. Energy-counter differences are labelled as interval averages, with missing or stale readings identified. Current-session checks and coverage are summarised separately from older evidence. Repeated checks are grouped; up to 2,000 groups of each kind are retained. Downloads are gzip-compressed JSON.</p><button class="secondary" data-action="verification">Download controller diagnostics</button></div>
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
@@ -1249,6 +1262,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .compact summary span { display:block; font-size:13px; font-weight:400; color:var(--secondary-text-color); margin-top:6px; }
       .source-list { display:grid; gap:8px; margin:15px 0; }
       .source-list small { color:var(--secondary-text-color); }
+      .command-detail { display:block; margin:3px 0 8px; overflow-wrap:anywhere; }
       .timeline-scroll { overflow-x:auto; }
       .timeline { min-width:720px; }
       .timeline-row { display:grid; grid-template-columns:160px 1fr; gap:12px; padding:10px 0; align-items:center; }
