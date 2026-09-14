@@ -91,6 +91,32 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.calls.clear()
 
+    async def test_live_plan_replacement_queues_reconciliation_without_handover(self):
+        self.options['device_modes'] = {'$battery': 'controlling'}
+        self.slot['start'] = self.now.isoformat()
+        self.slot.update(battery_charge_w=0, battery_discharge_w=0,
+                         battery_command=fixtures.battery_command('hold', 0, 0))
+        await self.controller.async_start()
+        self.calls.clear()
+        execute = self.controller.execute_battery
+        replaced = False
+
+        async def revise(options, slot):
+            nonlocal replaced
+            if not replaced:
+                replaced = True
+                self.coordinator.current_plan_slot = {**deepcopy(slot), 'base_w': 1234}
+                self.controller.check_authority()
+            return await execute(options, slot)
+
+        self.controller.execute_battery = revise
+        await self.controller.async_tick()
+        await self.drain()
+        self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
+        self.assertEqual(self.calls, [])
+        self.assertIn('plan_replaced', self.controller.metrics.triggers)
+        self.assertIn('battery', self.controller.records)
+
     async def test_short_pool_temperature_gaps_do_not_restore_or_reapply(self):
         await self.start_live_pool()
         band = (self.states['number.start'].state, self.states['number.stop'].state)

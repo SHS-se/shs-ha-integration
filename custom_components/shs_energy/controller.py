@@ -1170,6 +1170,19 @@ class ScheduledController:
                     self.failed.pop(device, None)
                     self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"))
                 except Exception as err:
+                    if (isinstance(err, PlanChangedError)
+                            and self.coordinator.current_plan_slot is not None
+                            and self.coordinator.operational_status["actionable"]
+                            and self.options() == options and self.eligible(device, options)):
+                        # Replacement is not loss of ownership. Stop the stale
+                        # sequence; the next evaluation reads actual settings
+                        # and completes the new command from that state.
+                        self.failed.pop(device, None)
+                        self.report(device, "pending", reason=str(err), retry_automatically=True,
+                                    **correction_details(err))
+                        if self.scheduler is not None:
+                            self.scheduler.request("plan_replaced")
+                        continue
                     if device == "pool" and (deadline := self.hold_pool_gap(err, options, slot, plan)):
                         self.failed.pop(device, None)
                         self.report(device, "limited", reason="water temperature unavailable; accepted band held without writes",

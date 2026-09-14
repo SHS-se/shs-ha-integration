@@ -555,5 +555,78 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('ev', self.controller.records)
 
 
+    async def test_replacement_reconciles_partial_write_without_baseline(self):
+        self.options['device_modes'] = {'$battery': 'controlling'}
+        self.slot.update(battery_charge_w=0, battery_discharge_w=0,
+                         battery_command=battery_command('hold', 0, 0))
+        await self.controller.async_start()
+        self.calls.clear()
+        original = self.hass.services.async_call
+        replaced = False
+
+        async def replace_during_write(domain, service, data, blocking):
+            nonlocal replaced
+            await original(domain, service, data, blocking)
+            if not replaced:
+                replaced = True
+                self.coordinator.current_plan_slot = {
+                    **deepcopy(self.slot), 'base_w': 1234,
+                    'battery_charge_w': 3000,
+                    'battery_command': battery_command('grid_charge', 3000, 0),
+                }
+
+        self.slot.update(battery_charge_w=2000,
+                         battery_command=battery_command('grid_charge', 2000, 0))
+        self.hass.services.async_call = replace_during_write
+        await self.controller.async_tick()
+        self.assertEqual(self.controller.status['battery']['state'], 'pending')
+        self.assertIn('battery', self.controller.records)
+        self.assertNotIn('battery', self.controller.failed)
+        await self.controller.async_tick()
+        self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
+        self.assertEqual(float(self.states['number.charge_limit'].state), 3)
+        self.assertNotIn(('select.mode', 'Baseline'), self.calls)
+
+    async def test_metadata_revision_and_rollover_keep_hold(self):
+        for rollover in (False, True):
+            with self.subTest(rollover=rollover):
+                self.setUp()
+                self.options['device_modes'] = {'$battery': 'controlling'}
+                self.slot.update(battery_charge_w=0, battery_discharge_w=0,
+                                 battery_command=battery_command('hold', 0, 0))
+                await self.controller.async_start()
+                self.calls.clear()
+                execute = self.controller.execute_battery
+
+                async def replace(options, slot):
+                    replacement = {**deepcopy(slot), 'base_w': 1234}
+                    if rollover:
+                        replacement['start'] = (datetime.fromisoformat(slot['start']) + timedelta(minutes=15)).isoformat()
+                    self.coordinator.current_plan_slot = replacement
+                    self.controller.check_authority()
+
+                self.controller.execute_battery = replace
+                await self.controller.async_tick()
+                self.controller.execute_battery = execute
+                await self.controller.async_tick()
+                self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
+                self.assertEqual(self.calls, [])
+
+    async def test_lost_plan_still_restores_baseline(self):
+        self.options['device_modes'] = {'$battery': 'controlling'}
+        await self.controller.async_start()
+        self.calls.clear()
+
+        async def lose(options, slot):
+            self.coordinator.current_plan_slot = None
+            self.coordinator.operational_status['actionable'] = False
+            self.controller.check_authority()
+
+        self.controller.execute_battery = lose
+        await self.controller.async_tick()
+        self.assertIn(('select.mode', 'Baseline'), self.calls)
+        self.assertNotIn('battery', self.controller.records)
+
+
 if __name__ == '__main__':
     unittest.main()

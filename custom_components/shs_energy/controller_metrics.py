@@ -38,7 +38,7 @@ class ControllerMetrics:
                            "max_dispatch_latency_ms": 0.0}
 
     def trigger(self, source, skipped=None):
-        if source not in {"startup", "timer", "slot_boundary", "coordinator_update", "manual",
+        if source not in {"startup", "timer", "slot_boundary", "coordinator_update", "plan_replaced", "manual",
                           "state_change", "state_report", "freshness_deadline", "device_deadline",
                           "restoration_retry", "plan_expiry", "coalesced", "configuration_update"}:
             source = "manual"
