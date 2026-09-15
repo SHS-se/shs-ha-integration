@@ -181,32 +181,42 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(float(self.states['number.charge_limit'].state), charge / 1000)
                 self.assertEqual(float(self.states['number.discharge_limit'].state), discharge / 1000)
 
-    async def test_native_solar_capture_confirms_available_surplus_not_forecast(self):
+    async def test_native_regulation_confirms_actual_flow_within_permission(self):
         original = self.hass.services.async_call
-        self.slot.update(battery_charge_w=523.94,
-                         battery_command=battery_command('solar_charge', 8800, 0))
         await self.controller.async_start()
         self.options['device_modes']['$battery'] = 'controlling'
-        for soc, actual_w in ((50, 3000), (50, 0), (100, 0)):
-            with self.subTest(soc=soc, actual_w=actual_w):
-                self.states['sensor.battery_soc'] = State(soc, unit_of_measurement='%')
-                def observe():
-                    self.states['sensor.battery_power'] = State(actual_w / 1000, unit_of_measurement='kW')
-                    self.states['binary_sensor.charging'] = State('on' if actual_w else 'off')
-                    self.states['binary_sensor.discharging'] = State('off')
-                async def native_response(domain, service, data, blocking):
-                    await original(domain, service, data, blocking)
+        for operation, forecast, charge, discharge, observations in (
+            ('solar_charge', 523.94, 8800, 0, ((50, 3000), (50, 0), (100, 0))),
+            # Captured 17:30 prediction was 405.60 W. Native regulation may
+            # supply more actual demand, or stop as demand falls / PV rises.
+            ('supply_house', -405.6, 0, 9600, ((50.4, -1236), (50, -200), (50, 0))),
+            # A deliberately partial permission is still enforced exactly.
+            ('supply_house', -405.6, 0, 405.6, ((50, -405),)),
+        ):
+            self.slot.update(battery_charge_w=max(0, forecast),
+                             battery_discharge_w=max(0, -forecast),
+                             battery_command=battery_command(operation, charge, discharge))
+            for soc, actual_w in observations:
+                with self.subTest(operation=operation, soc=soc, actual_w=actual_w):
+                    self.states['sensor.battery_soc'] = State(soc, unit_of_measurement='%')
+                    def observe():
+                        self.states['sensor.battery_power'] = State(actual_w / 1000, unit_of_measurement='kW')
+                        self.states['binary_sensor.charging'] = State('on' if actual_w > 0 else 'off')
+                        self.states['binary_sensor.discharging'] = State('on' if actual_w < 0 else 'off')
+                    async def native_response(domain, service, data, blocking):
+                        await original(domain, service, data, blocking)
+                        observe()
+                    self.hass.services.async_call = native_response
                     observe()
-                self.hass.services.async_call = native_response
-                observe()
-                await self.controller.async_tick()
-                result = self.controller.status['battery']
-                self.assertEqual(result['state'], 'confirmed', result)
-                self.assertEqual(result['measured_power_w'], actual_w)
-                self.assertEqual(result['forecast_power_w'], 523.94)
-                self.assertEqual(self.states['select.mode'].state, 'Baseline')
-                self.assertEqual(float(self.states['number.charge_limit'].state), 8.8)
-                self.assertEqual(float(self.states['number.discharge_limit'].state), 0)
+                    await self.controller.async_tick()
+                    result = self.controller.status['battery']
+                    self.assertEqual(result['state'], 'confirmed', result)
+                    self.assertEqual(result['measured_power_w'], actual_w)
+                    self.assertEqual(result['forecast_power_w'], forecast)
+                    self.assertEqual(self.states['select.mode'].state, 'Baseline')
+                    # Controller still rounds down to the native 1 W quantum.
+                    self.assertEqual(float(self.states['number.charge_limit'].state), int(charge) / 1000)
+                    self.assertEqual(float(self.states['number.discharge_limit'].state), int(discharge) / 1000)
 
     async def test_command_previews_match_targets_without_execution_or_observation_effects(self):
         self.states['number.charge_limit'].attributes['step'] = .01

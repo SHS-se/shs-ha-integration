@@ -12,7 +12,7 @@
       "boiler": false,
       "ev": false
     },
-    "model_version": "marginal-value-planner-v34",
+    "model_version": "marginal-value-planner-v35",
     "decision_diagnostics_version": 2,
     "plan_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
     "snapshot_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
@@ -2440,7 +2440,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -2571,7 +2571,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -2702,7 +2702,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -2833,7 +2833,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -2964,7 +2964,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -3095,7 +3095,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -3226,7 +3226,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -4462,7 +4462,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -4593,7 +4593,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -4724,7 +4724,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -4855,7 +4855,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -4986,7 +4986,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -5117,7 +5117,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -5248,7 +5248,7 @@
               "schema_version": 2,
               "operation": "supply_house",
               "charge_limit_w": 0,
-              "discharge_limit_w": 2800,
+              "discharge_limit_w": 9600,
               "allow_grid_charge": false,
               "allow_battery_export": false
             },
@@ -6510,7 +6510,7 @@
         "boiler": false,
         "ev": false
       },
-      "model_version": "marginal-value-planner-v34",
+      "model_version": "marginal-value-planner-v35",
       "decision_diagnostics_version": 2,
       "plan_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
       "snapshot_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
@@ -8238,7 +8238,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 2800,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -8335,7 +8335,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -8432,7 +8432,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -8529,7 +8529,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -8626,7 +8626,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -8723,7 +8723,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -8820,7 +8820,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -8917,7 +8917,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -9652,7 +9652,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 2800,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -9749,7 +9749,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -9846,7 +9846,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -9943,7 +9943,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -10040,7 +10040,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -10137,7 +10137,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -10234,7 +10234,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },
@@ -10331,7 +10331,7 @@
                 "schema_version": 2,
                 "operation": "supply_house",
                 "charge_limit_w": 0,
-                "discharge_limit_w": 1960,
+                "discharge_limit_w": 9600,
                 "allow_grid_charge": false,
                 "allow_battery_export": false
               },

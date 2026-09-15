@@ -248,3 +248,21 @@ ranking regret under comparable search effort. Repeated wrong rankings caused by
 the fixed-suffix family require architecture reconsideration, not an SOC patch.
 Native response/readback commissioning and final-writer exclusion remain separate
 release gates; pure scoring tests cannot establish physical delivery.
+
+## Implemented discharge-following correction
+
+Planner v35 and its coordinated HA validator update correct the 17:30 discharge
+case independently of the full policy cutover. If discharge covers the complete
+final forecast residual, `supply_house` permits rated native discharge; a
+partial allocation keeps its selected ceiling. The recorded 405.60 W prediction
+therefore no longer imposes a 405.60 W limit on actual house demand. Forecast
+flows, SOC and costs retain their original values. See the
+[basic intent contract](battery-intent-v2.md) for rollout and physical guards.
+
+This is a bounded control correction, not implementation of the C/F/J comparison
+above. Unexpected consumption may use energy valuable later. Physical cutoff is
+not an economic reserve, and partial slots remain forecast-capped. A proposed
+fixed-future minimum-SOC guard was rejected: this capture's plan eventually
+reaches the floor on September 18, so that guard would prohibit any extra
+September 15 discharge even when a cheaper overnight refill repairs the future.
+The full actual-state economic policy remains outstanding.

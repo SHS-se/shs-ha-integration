@@ -42,6 +42,8 @@ def validate_battery_command(slot):
         raise ValueError("simultaneous battery charge and discharge is invalid")
     if flows[0] > charge + .01 or flows[1] > discharge + .01:
         raise ValueError("battery forecast exceeds its commanded ceilings")
-    if operation not in ("self_consumption", "solar_charge") and (abs(flows[0] - charge) > .01 or abs(flows[1] - discharge) > .01):
+    # Native regulation follows actual surplus/deficit within the server's
+    # permission. Forecast watts need not equal that permission's ceiling.
+    if operation not in ("self_consumption", "solar_charge", "supply_house") and (abs(flows[0] - charge) > .01 or abs(flows[1] - discharge) > .01):
         raise ValueError("battery allocation and operation ceilings disagree")
     return command
