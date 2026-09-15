@@ -194,6 +194,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         entity_registry=er.async_get(hass),
     )
     coordinator.controller = controller
+    entry.async_on_unload(coordinator.battery_policy_exchange.close)
+    entry.async_on_unload(hass.bus.async_listen_once(
+        EVENT_HOMEASSISTANT_STOP, lambda _event: coordinator.battery_policy_exchange.close()))
     scheduler = attach_controller_events(hass, entry, controller)
     # Recover local ownership before contacting the cloud. A network outage
     # must not prevent restoration of commands left by the previous process.
@@ -212,6 +215,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         await controller.async_stop()
         raise
     scheduler.coordinator_updated()
+    entry.async_on_unload(async_track_time_interval(
+        hass, coordinator.async_battery_policy_refresh, timedelta(minutes=1)))
+    entry.async_create_background_task(hass, coordinator.async_battery_policy_refresh(),
+        name="shs_energy_battery_policy_delivery")
 
     # Nightly push shortly after midnight; also catch up on startup in case
     # HA was down at the scheduled time.
@@ -271,5 +278,6 @@ async def _async_options_updated(
 
 async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
     """Unload a config entry."""
+    entry.runtime_data.battery_policy_exchange.close()
     await entry.runtime_data.controller.async_stop()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

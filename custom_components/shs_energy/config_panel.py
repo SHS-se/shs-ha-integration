@@ -228,6 +228,8 @@ async def _configuration_payload(
     devices = complete_device_views(devices, options, choices, operation, plan,
         coordinator.controller.status, entity_names, area_names, datetime.now(timezone.utc), entry.options.keys())
     for device in devices:
+        if device.get("system") == "battery":
+            device["policy_delivery"] = coordinator.battery_policy_exchange.snapshot()
         mapping = device.get("mapping", {})
         source_ids = [mapping.get("temperature_entity_id"), mapping.get("power")]
         if device.get("system"):

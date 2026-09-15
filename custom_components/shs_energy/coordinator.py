@@ -22,6 +22,9 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from .battery_policy_exchange import BatteryPolicyExchange
+from .operating_modes import device_mode, operating_mode_identity
+
 from .api import (
     ShsApiClient,
     ShsApiError,
@@ -254,6 +257,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.tariff_components: dict[str, dict[str, str]] = {}
         self._push_lock = asyncio.Lock()
         self._runtime_lock = asyncio.Lock()
+        self._battery_native_context = None
+        self._policy_delivery_store = Store(hass, 1, f"shs_energy.battery_policy_delivery.{entry.entry_id}")
+        self.battery_policy_exchange = BatteryPolicyExchange(
+            client.battery_policy, self._battery_exchange_context,
+            self._policy_delivery_store.async_save,
+            lambda: int(dt_util.utcnow().timestamp() * 1000),
+        )
         self._recovering = False
         self.last_runtime_report: str | None = None
         self.last_runtime_error: str | None = None
@@ -445,6 +455,22 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._plan_configuration_changed = stored.get("plan_configuration_changed", False)
         self.last_optimisation_push = stored.get("last_optimisation_push")
         self.last_optimisation_attempt = stored.get("last_optimisation_attempt")
+
+    def _battery_exchange_context(self):
+        plan = self.optimisation_plan
+        options = resolved_options(self.hass, dict(self.entry.options))
+        if (not plan or options.get(OPT_PLANNING_MODE) != PLANNING_MODE_LIVE
+                or self._plan_configuration_changed or plan.get("status") != "ready"
+                or device_mode(options, "battery") not in ("control_verification", "controlling")
+                or plan.get("operating_scope", {}).get("modes") != operating_mode_identity(options)):
+            return None
+        return {"plan_id": plan["plan_id"], "snapshot_id": plan["snapshot_id"],
+            "config_revision": hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest(),
+            "native_context": self._battery_native_context}
+
+    async def async_battery_policy_refresh(self, _now=None):
+        await self.battery_policy_exchange.refresh()
+        self.async_update_listeners()
 
     async def async_report_runtime(self) -> dict[str, Any]:
         """Serialize fresh reports so an older local read cannot win a race."""
@@ -3063,6 +3089,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self._store.async_save(stored)
             self.async_update_listeners()
         await self.async_report_runtime()
+        await self.async_battery_policy_refresh()
 
     @property
     def current_plan_slot(self) -> dict[str, Any] | None:

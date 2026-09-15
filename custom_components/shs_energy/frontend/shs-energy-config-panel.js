@@ -1046,6 +1046,23 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return device.mode === "controlling" && slot.execution ? slot.execution : slot;
   }
 
+  _policyDelivery(device) {
+    const status = device.policy_delivery;
+    if (!status || status.state === "not_requested") return "";
+    const messages = {
+      native_context_required: "Waiting for verified battery response and measurement configuration.",
+      source_quarter_expired: "A fresh plan is needed for battery policy verification.",
+      runtime_admission_required: "Policy received; live measurement and control checks are still required.",
+      local_context_changed: "Waiting for a policy matching the current configuration.",
+      native_context_configuration_mismatch: "Battery response checks need to match the current configuration.",
+      policy_expired: "Waiting for a fresh battery policy.",
+      plan_not_acknowledged: "Waiting for the current plan to be acknowledged.",
+    };
+    const reason = status.reasons?.[0];
+    const text = messages[reason] || (status.state === "requesting" ? "Requesting battery policy." : "Battery policy unavailable; see diagnostics for details.");
+    return `<p class="muted">Battery policy: ${this._escape(text)}</p>`;
+  }
+
   _scheduleCommand(device, slot) {
     slot = this._scheduleSlot(device, slot);
     const deviceAction = { heating: "heating", cooling: "cooling", hot_water: "heating", pool_heating: "heating", ev_charging: "charging" }[device.category] || "general";
@@ -1127,7 +1144,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
       <p class="muted">Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
       ${!devices.length ? '<p role="status">No devices match these filters.</p>' : ""}
-      ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}<div class="device-field-issues">${this._deviceFieldButtons(d)}</div>${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._scheduleCommand(d, slots[1]).text)}` : ""}</small></article>`).join("")}`;
+      ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}<div class="device-field-issues">${this._deviceFieldButtons(d)}</div>${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._scheduleCommand(d, slots[1]).text)}` : ""}</small>${this._policyDelivery(d)}</article>`).join("")}`;
   }
 
   _attention() {

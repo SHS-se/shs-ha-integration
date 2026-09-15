@@ -75,7 +75,8 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         controller.metrics = meter
         controller.verification = VerificationJournal(fixtures.Store())
         entry = SimpleNamespace(runtime_data=SimpleNamespace(controller=controller,
-            client=SimpleNamespace(traffic=SimpleNamespace(snapshot=lambda: {'requests': 0}))))
+            client=SimpleNamespace(traffic=SimpleNamespace(snapshot=lambda: {'requests': 0})),
+            battery_policy_exchange=SimpleNamespace(snapshot=lambda: {'state': 'blocked', 'control_authority': False})))
 
         def load_function(file, name, namespace):
             tree = ast.parse((root / file).read_text())
