@@ -178,6 +178,7 @@ class ScheduledController:
         self.status = {device: {"state": "disabled"} for device in DEVICES}
         self.listeners = set()
         self.lock = asyncio.Lock()
+        self.battery_writer_fence = None
         self.closed = False
         self.restoring = False
         self.active_options = None
@@ -311,6 +312,8 @@ class ScheduledController:
             raise ValueError("control disabled or manually overridden")
 
     async def command(self, entity, value):
+        if self.battery_writer_fence is not None and not self.verifying:
+            self.battery_writer_fence.check_legacy(entity)
         self.check_authority()
         domain = entity.split(".")[0]
         state = ((self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)) if getattr(self, "device", None) == "battery" and domain == "number" else self.state(entity)
@@ -376,6 +379,8 @@ class ScheduledController:
                 await self.save()
             self.check_authority()
             if not equal:
+                if self.battery_writer_fence is not None:
+                    self.battery_writer_fence.check_legacy(entity)
                 self.write_attempted = True
                 self.command_times[entity] = datetime.now(timezone.utc)
                 command.update(called=True, transport="ambiguous")

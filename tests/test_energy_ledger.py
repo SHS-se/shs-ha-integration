@@ -9,7 +9,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 from energy_ledger import (
     EnergyBounds, MeterSpec, CounterSample, create_ledger, record_sample,
-    prune_ledger, mark_actuals, actuals_since,
+    prune_ledger, mark_actuals, mark_retained_actuals, actuals_since,
 )
 from home_runtime import (
     create_home, GroupSpec, Envelope, Limits, MeterObserved, LedgerPruned,
@@ -36,6 +36,30 @@ class EnergyLedgerTests(unittest.TestCase):
 
     def append(self, ledger, value):
         return record_sample(ledger, value, value.at_ms)[0]
+
+    def test_delayed_policy_cut_uses_retained_counters_without_rebasing(self):
+        ledger = self.append(self.ledger(maximum=1000), sample(0, 0, 0))
+        ledger = self.append(ledger, sample(1, HOUR, 800000))
+        ledger = self.append(ledger, sample(2, HOUR * 2, 1600000))
+        with self.assertRaises(ValueError):
+            mark_actuals(ledger, HOUR)
+        watermark = mark_retained_actuals(ledger, HOUR, HOUR * 2)
+        self.assertEqual(watermark.at_ms, HOUR)
+        self.assertEqual(actuals_since(ledger, watermark, HOUR * 2)[0].energy, EnergyBounds(800000, 800000))
+        partial = mark_retained_actuals(ledger, HOUR // 2, HOUR * 2)
+        self.assertEqual(actuals_since(ledger, partial, HOUR * 2)[0].energy, EnergyBounds(1100000, 1300000))
+
+    def test_historical_cut_requires_a_left_anchor_for_every_stream(self):
+        ledger = self.append(self.ledger(), sample(0, HOUR, 0))
+        for cut, now in [(0, HOUR), (HOUR, HOUR - 1), (HOUR * 2, HOUR)]:
+            with self.assertRaises(ValueError):
+                mark_retained_actuals(ledger, cut, now)
+        with self.assertRaises(ValueError):
+            mark_retained_actuals(self.ledger(), 0, HOUR)
+        ledger = self.append(ledger, sample(1, HOUR * 2, 2000))
+        ledger = prune_ledger(ledger, HOUR * 2)
+        with self.assertRaises(ValueError):
+            mark_retained_actuals(ledger, 0, HOUR * 2)
 
     def test_same_epoch_recovers_whole_downtime_and_duplicates_are_idempotent(self):
         ledger = self.append(self.ledger(), sample(0, 0, 10000000))

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import voluptuous as vol
@@ -47,6 +47,7 @@ from .configuration import (
     resolved_options,
 )
 from .controller import ScheduledController
+from .battery_writer import BatteryWriterFence
 from .verification import VerificationJournal
 from .coordinator import ShsStatusCoordinator
 from .migration import mapped_entity_ids, migrate_options
@@ -194,27 +195,51 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         entity_registry=er.async_get(hass),
     )
     coordinator.controller = controller
+    coordinator.battery_writer = BatteryWriterFence(
+        Store(hass, 1, f"shs_energy.battery_writer.{entry.entry_id}"), controller.lock,
+        lambda: resolved_options(hass, dict(entry.options)),
+        lambda: int(datetime.now(timezone.utc).timestamp() * 1000),
+        # Native response admission is not connected; no runtime identity can
+        # acquire this writer until installation evidence has been admitted.
+        lambda: None,
+    )
+    controller.battery_writer_fence = coordinator.battery_writer
+    await coordinator.battery_writer.open()
+    entry.async_on_unload(coordinator.battery_live_inputs.close)
+    entry.async_on_unload(coordinator.battery_writer.close)
+
+    async def stop_controller(_event=None):
+        coordinator.battery_live_inputs.close()
+        try:
+            await controller.async_stop()
+        finally:
+            coordinator.battery_writer.close()
+
     entry.async_on_unload(coordinator.battery_policy_exchange.close)
     entry.async_on_unload(hass.bus.async_listen_once(
         EVENT_HOMEASSISTANT_STOP, lambda _event: coordinator.battery_policy_exchange.close()))
     scheduler = attach_controller_events(hass, entry, controller)
     # Recover local ownership before contacting the cloud. A network outage
     # must not prevent restoration of commands left by the previous process.
-    await coordinator.async_restore_plan()
-    await controller.async_start(reason="integration_load" if hass.is_running else "homeassistant_startup")
     try:
+        await coordinator.async_restore_plan()
+        await controller.async_start(reason="integration_load" if hass.is_running else "homeassistant_startup")
         await coordinator.async_config_entry_first_refresh()
     except BaseException:
-        await controller.async_stop()
+        await stop_controller()
         raise
 
-    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, controller.async_stop))
+    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stop_controller))
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except BaseException:
-        await controller.async_stop()
+        await stop_controller()
         raise
     scheduler.coordinator_updated()
+    entry.async_on_unload(async_track_time_interval(
+        hass, coordinator.async_battery_inputs_refresh, timedelta(seconds=5)))
+    entry.async_create_background_task(hass, coordinator.async_battery_inputs_refresh(),
+        name="shs_energy_battery_live_inputs")
     entry.async_on_unload(async_track_time_interval(
         hass, coordinator.async_battery_policy_refresh, timedelta(minutes=1)))
     entry.async_create_background_task(hass, coordinator.async_battery_policy_refresh(),
@@ -279,5 +304,9 @@ async def _async_options_updated(
 async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
     """Unload a config entry."""
     entry.runtime_data.battery_policy_exchange.close()
-    await entry.runtime_data.controller.async_stop()
+    entry.runtime_data.battery_live_inputs.close()
+    try:
+        await entry.runtime_data.controller.async_stop()
+    finally:
+        entry.runtime_data.battery_writer.close()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

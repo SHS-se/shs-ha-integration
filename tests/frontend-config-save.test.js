@@ -1018,3 +1018,23 @@ test('mixed-mode schedule selects execution targets only for controlling devices
   assert.equal(panel._scheduleCommand({ system: 'pool', mode: 'control_verification' }, slot).text, 'No heating requested');
   assert.equal(panel._scheduleCommand({ system: 'pool', mode: 'controlling' }, slot).text, 'No instruction');
 });
+
+test('battery live inputs distinguish stale zero from unavailable and do not imply commissioning', () => {
+  const panel = makePanel();
+  const device = { live_inputs: { sources: {
+    house_consumption_power_entity: { state: 'reported', watts: 3000 },
+    solar_production_power_entity: { state: 'stale_report', watts: 0 },
+    battery_power_measurement_entity: { state: 'unavailable' },
+  } }, battery_writer: { owner: 'legacy' } };
+  let html = panel._batteryLiveInputs(device);
+  assert.match(html, /House: 3.00 kW/);
+  assert.match(html, /Solar: 0.00 kW \(stale\)/);
+  assert.match(html, /Battery: unavailable/);
+  assert.match(html, /awaits verified measurement and inverter response checks/);
+  device.live_inputs.capture_stale = true;
+  device.battery_writer.owner = 'fenced';
+  html = panel._batteryLiveInputs(device);
+  assert.match(html, /House: unavailable/);
+  assert.match(html, /Legacy battery control is fenced/);
+  assert.doesNotMatch(html, /3.00 kW/);
+});

@@ -274,6 +274,23 @@ def mark_actuals(ledger: EnergyLedger, at_ms: int) -> ActualsWatermark:
     return ActualsWatermark(ledger.id, ledger.mapping_revision, ledger.revision, at_ms)
 
 
+def mark_retained_actuals(ledger: EnergyLedger, at_ms: int, now_ms: int) -> ActualsWatermark:
+    """Anchor a delayed policy to retained evidence, never to its receipt time.
+
+    This is a new view of the current ledger, not a fabricated earlier revision.
+    A cut inside a counter interval retains that interval's uncertainty bounds.
+    Require a retained left anchor in every stream, including at first startup.
+    """
+    _integer(at_ms)
+    _integer(now_ms, at_ms)
+    if any(not s.samples or s.samples[0].at_ms > at_ms or s.samples[-1].at_ms > now_ms
+           for s in ledger.streams):
+        raise ValueError("policy source cut lacks retained meter evidence")
+    watermark = ActualsWatermark(ledger.id, ledger.mapping_revision, ledger.revision, at_ms)
+    actuals_since(ledger, watermark, now_ms)
+    return watermark
+
+
 @dataclass(frozen=True)
 class StreamActuals:
     spec: MeterSpec

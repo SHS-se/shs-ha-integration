@@ -23,6 +23,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .battery_policy_exchange import BatteryPolicyExchange
+from .battery_live import BatteryLiveInputs
 from .operating_modes import device_mode, operating_mode_identity
 
 from .api import (
@@ -258,6 +259,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._push_lock = asyncio.Lock()
         self._runtime_lock = asyncio.Lock()
         self._battery_native_context = None
+        self._battery_inputs_lock = asyncio.Lock()
+        self._battery_inputs_store = Store(hass, 1, f"shs_energy.battery_live_inputs.{entry.entry_id}")
+        self.battery_live_inputs = BatteryLiveInputs(
+            self._battery_entity_report, lambda: int(dt_util.utcnow().timestamp() * 1000),
+            self._battery_inputs_store.async_save,
+        )
         self._policy_delivery_store = Store(hass, 1, f"shs_energy.battery_policy_delivery.{entry.entry_id}")
         self.battery_policy_exchange = BatteryPolicyExchange(
             client.battery_policy, self._battery_exchange_context,
@@ -467,6 +474,39 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {"plan_id": plan["plan_id"], "snapshot_id": plan["snapshot_id"],
             "config_revision": hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest(),
             "native_context": self._battery_native_context}
+
+    def _battery_entity_report(self, entity_id):
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return None
+        return {"state": state.state, "attributes": dict(state.attributes),
+                "last_reported": state.last_reported.isoformat()}
+
+    async def async_battery_planned_devices(self):
+        """Preserve website membership even when local control setup is invalid."""
+        stored = await self._store.async_load() or {}
+        configuration = stored.get("optimisation_device_configuration")
+        if not isinstance(configuration, dict):
+            raise ValueError("device membership has not been acknowledged")
+        devices = []
+        for key, choice in configuration.items():
+            if not isinstance(choice, dict):
+                raise ValueError("invalid cached device choice")
+            if choice.get("planning_role") == "controllable":
+                devices.append({**choice, "key": key})
+        return devices
+
+    async def async_battery_inputs_refresh(self, _now=None):
+        """Read-only capture; no measurement or native commissioning is inferred."""
+        async with self._battery_inputs_lock:
+            try:
+                devices = await self.async_battery_planned_devices()
+            except Exception as error:
+                self.battery_live_inputs.unavailable(type(error).__name__)
+            else:
+                options = resolved_options(self.hass, dict(self.entry.options))
+                await self.battery_live_inputs.sample(options, devices)
+            self.async_update_listeners()
 
     async def async_battery_policy_refresh(self, _now=None):
         await self.battery_policy_exchange.refresh()

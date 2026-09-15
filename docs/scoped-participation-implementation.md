@@ -122,17 +122,33 @@ Rollout dependency: apply the new nullable-column migration and deploy the proto
 3 planning worker and ingest together, followed by the exchange endpoint and HA.
 No compatibility fallback is provided. This work has not been deployed.
 
+## Live capture and writer fence
+
+The next HA stage now samples live sources, preserves per-entity report timestamps,
+shows source health in Schedule/diagnostics, and opens a durable writer fence before
+legacy controller startup. Planned membership includes devices with incomplete
+control setup. The ledger has a validated retained-history source-cut helper.
+
+This is still read-only with respect to the new policy runtime. No runtime identity
+is admitted and `HomeHost` is not connected. Read-only installation checks found a
+specific model mismatch: Sigen ESS limits act at the battery connection, while the
+current native catalog binds their numeric watts directly to AC response watts.
+The fresh plant-PV sensor also needs boundary validation before replacing the stale
+inverter-PV source. See [live commissioning evidence and remaining work](battery-live-commissioning.md).
+
 ## Work still required before the battery replacement is complete
 
 1. Produce the native context from verified local configuration and commissioning
    evidence, with its approved supply scope and per-quarter native permissions.
-   Establish physical native-mode response, units/quantization, transition ordering,
+   Correct the Sigen ESS/DC-to-AC response representation. Units/quantization have
+   been inspected, but establish physical native-mode response, transition ordering,
    write/response latency, stale-input behavior, a shared AC meter boundary and
    subgroup enforcement precision. The supplied house/PV entity names and a prior
    406 W cap observation are not evidence for every mode or transition.
 2. Connect same-capture physical measurements, energy accounting, durable grant
    arbitration and commissioned adapter IO to `HomeHost` in HA setup. Fence/release
-   the old battery writer before any new runtime grant; requested Controlling or
+   the old battery writer using the installed durable fence before any new runtime
+   grant; requested Controlling or
    successful policy delivery alone is not effective authority.
 3. Extend represented constraints if needed. Nonzero shaping thresholds, hard
    per-boundary targets, positive reserves for enabled battery export, fixed-plan

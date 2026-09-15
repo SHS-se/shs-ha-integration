@@ -76,6 +76,8 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         controller.verification = VerificationJournal(fixtures.Store())
         entry = SimpleNamespace(runtime_data=SimpleNamespace(controller=controller,
             client=SimpleNamespace(traffic=SimpleNamespace(snapshot=lambda: {'requests': 0})),
+            battery_live_inputs=SimpleNamespace(snapshot=lambda: {"control_authority": False}),
+            battery_writer=SimpleNamespace(snapshot=lambda: {"owner": "legacy"}),
             battery_policy_exchange=SimpleNamespace(snapshot=lambda: {'state': 'blocked', 'control_authority': False})))
 
         def load_function(file, name, namespace):
