@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components/shs_energy
 from configuration_schema import prepare_options, resolve_configuration, save_device
 from migration import migrate_options
 from configuration_fields import _control_fields
+from presentation import system_fields
 from device_commands import execution_setup_errors
 
 ENTITIES = {key: {'state': '20', 'attributes': {}} for key in
@@ -89,6 +90,16 @@ class CurrentConfigurationTests(unittest.TestCase):
                       {'rooms': {}}, {'automatic_setup': False}, {'forecast_resolution_minutes': 60}):
             with self.subTest(patch=patch), self.assertRaises(ValueError):
                 prepare_options({}, patch, ENTITIES.get)
+
+    def test_ev_start_stop_switch_is_required_without_blocking_other_ev_settings(self):
+        field = next(f for f in system_fields('ev') if f['key'] == 'ev_charge_switch_entity')
+        self.assertTrue(field['required'])
+        entities = {**ENTITIES, 'switch.charge': {'state': 'on', 'attributes': {}}}
+        saved = prepare_options({}, {'ev_charge_switch_entity': 'switch.charge'}, entities.get)
+        with self.assertRaisesRegex(ValueError, 'EV charging start/stop switch is required'):
+            prepare_options(saved, {'ev_charge_switch_entity': None}, entities.get)
+        # Only a submitted value is validated, so a card without a switch can still save its other settings.
+        self.assertEqual(prepare_options({}, {'ev_kwh_per_km': 0.18}, entities.get)['ev_kwh_per_km'], 0.18)
 
     def test_removed_mapping_power_stays_explicitly_empty(self):
         mapping = {'control_type': 'setpoint', 'actuator_entity_ids': ['climate.a'],
