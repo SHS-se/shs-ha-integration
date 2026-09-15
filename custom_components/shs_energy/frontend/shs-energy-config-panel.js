@@ -1,5 +1,5 @@
 const TABS = [["energy", "Energy"], ["devices", "Devices"], ["schedule", "Schedule"], ["status", "Status"]];
-const DEVICE_MODES = [["monitoring", "Monitoring"], ["planning", "Planning"], ["control_verification", "Control verification"], ["controlling", "Controlling"]];
+const DEVICE_MODES = [["control_verification", "Verification"], ["controlling", "Controlling"]];
 const SCHEDULE_ACTIONS = {
   heating: { label: "Heating", colour: "#f5a38a" },
   cooling: { label: "Cooling", colour: "#a8cfe8" },
@@ -516,7 +516,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (element.dataset.share) {
       const excluded = new Set(this._draft.excluded_device_readings || []);
       if (element.checked) excluded.delete(element.dataset.share); else excluded.add(element.dataset.share);
-      this._draft.excluded_device_readings = [...excluded]; this._render(); return;
+      this._draft.excluded_device_readings = [...excluded];
+      this._saveInclusion(); return;
     }
     if (element.dataset.permission) {
       this._control(element.dataset.permission, element.value); return;
@@ -938,22 +939,33 @@ class ShsEnergyConfigPanel extends HTMLElement {
         return `<li><strong>${this._escape(field?.label || "Source")}</strong>: ${this._escape(JSON.stringify(this._savedDraft[key] ?? []))} → ${this._escape(JSON.stringify(value))}</li>`;
       }).join("")}</ul>` : "No source changes proposed."}<p>Save changes to apply, or Cancel to retain your current sources.</p></section>` : ""}
       ${sections.map(s => this._renderSection(s)).join("")}
-      <details class="card compact"><summary>Individual device readings</summary><p>Choose which devices send individual readings. Excluded devices remain in the website inventory and inside household totals; their individual load is not scheduled. Shared room observations may still be sent for another heater in the same room.</p>
-      ${(this._data.meter_inventory || []).map(d => `<label class="choice-row"><span>${this._escape(d.name)}</span><input type="checkbox" aria-label="Share ${this._escape(d.name)} readings" data-share="${this._escape(d.key)}" ${(this._draft.excluded_device_readings || []).includes(d.key) ? "" : "checked"}></label>`).join("")}</details>
       <p class="muted">Solar location ${this._data.configured_keys?.some(k => ["pv_forecast_latitude", "pv_forecast_longitude"].includes(k)) ? "uses your configured override" : "comes from Home Assistant"}. An override can be added in Solar and electrical measurements.</p>
       <details class="card compact"><summary>Current readings · ${selected.length} selected sources</summary><div class="table-wrap"><table><thead><tr><th>Source</th><th>Used for</th><th>Reading</th><th>Last update</th><th>Selected in</th></tr></thead><tbody>${selected.map(({ field, entity, id }) => `<tr><td>${this._escape(entity?.name || id)}</td><td>${this._escape(field.label)}</td><td>${this._escape(entity ? `${entity.state} ${entity.unit || ""}` : "Unavailable")}</td><td>${this._time(entity?.last_updated)}</td><td>${this._data.configured_keys?.includes(field.key) ? "SHS configuration" : "HA Energy / discovery"}</td></tr>`).join("")}</tbody></table></div></details>`;
+  }
+
+  async _saveInclusion() {
+    if (this._saving) return;
+    const excluded = [...this._draft.excluded_device_readings];
+    this._saving = true; this._render();
+    try {
+      await this._hass.callWS({ type: "shs_energy/config/save", config_entry: this._entryId,
+        configuration: { excluded_device_readings: excluded } });
+      this._savedDraft.excluded_device_readings = excluded;
+      await this._load(false);
+    } catch (error) {
+      this._error = error.message || String(error);
+      this._draft.excluded_device_readings = [...(this._savedDraft.excluded_device_readings || [])];
+    } finally { this._saving = false; this._render(); }
   }
 
   _choices(device, section = "schedule") {
     const permission = device.permission;
     const disabled = Boolean(this._saving || this._savingDeviceKey);
-    const blocked = value => this._refreshError || this._deviceDirty(device.key) ||
-      (value === "control_verification" ? permission.verification_reason : permission.reason);
+    const blocked = value => value === "controlling" && (this._refreshError || this._deviceDirty(device.key) || permission.reason);
     return `<div class="choices">
-      <div class="choice-row"><span>Include in the plan</span><strong>${this._escape(device.choice_label)} · <a href="${this._escape(this._data.website_url)}" target="_blank" rel="noreferrer">Website</a></strong></div>
       ${section === "schedule" ? `<div class="choice-row"><span>Device mode</span><select data-mode="${this._escape(device.mode)}" aria-label="Mode for ${this._escape(device.name)}" data-permission="${this._escape(device.key)}" ${disabled ? "disabled" : ""}>
         ${DEVICE_MODES.map(([value, label]) => `<option data-mode="${value}" value="${value}" ${device.mode === value ? "selected" : ""} ${blocked(value) && ["control_verification", "controlling"].includes(value) && device.mode !== value ? "disabled" : ""}>${label}</option>`).join("")}</select>
-      <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Monitoring collects readings. Planning adds this device to the plan. Verification logs commands. Controlling executes them."))}</small></div>` : ""}
+      <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Verification logs proposed commands. Controlling attempts them on the equipment."))}</small></div>` : ""}
     </div>`;
   }
 
@@ -973,7 +985,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       : `${device.room_name || "No room"} · ${this._label(device.category)}`;
     return `<details class="card device-card" data-open-key="${this._escape(id)}" ${edit ? "open" : ""}>
       <summary><div><strong>${this._escape(title)}</strong><small>${this._escape(description)}</small></div>
-        <span class="badge warning" data-field-count ${issueCount ? "" : "hidden"}>${issueCount} field${issueCount === 1 ? "" : "s"} need${issueCount === 1 ? "s" : ""} attention</span><span data-setup-status ${issueCount ? "hidden" : ""}>${planning ? `<span class="badge">${device.included ? "Included in planning" : "Excluded"}</span>` : this._statusBadge(device.included ? device.mapping_status : "base_load", device.included && device.mapping_status === "ready" ? "Controls configured" : undefined)}</span></summary>
+        <span class="badge warning" data-field-count ${issueCount ? "" : "hidden"}>${issueCount} field${issueCount === 1 ? "" : "s"} need${issueCount === 1 ? "s" : ""} attention</span><span data-setup-status ${issueCount ? "hidden" : ""}>${planning ? `<span class="badge">${device.planned ? "Planned" : device.included ? "Monitoring" : "Excluded"}</span>` : this._statusBadge(device.included ? device.mapping_status : "base_load", device.included && device.mapping_status === "ready" ? "Controls configured" : undefined)}</span></summary>
       <div class="device-body">
         ${planning ? `<p>Connected equipment: ${members.map(d => this._escape(d.name)).join(", ")}</p>` : mappingFields.length ? `<p>${this._escape(device.name)} · ${this._escape(this._label(device.control_type))}</p>` : ""}
         ${!planning && device.mapping_error ? `<p class="inline-warning">${this._escape(device.mapping_error)}</p>` : ""}
@@ -1020,6 +1032,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const excludedCount = devices.filter(d => !d.included).length;
     return `<div class="page-intro"><h2>Devices in your home</h2><p>Connect your equipment in Controls, then configure its model in Planning.</p>
       <div class="choice-row"><span>Show excluded devices${excludedCount ? ` (${excludedCount})` : ""}</span><label class="switch"><input type="checkbox" aria-label="Show excluded devices" data-filter="showExcluded" ${this._showExcluded ? "checked" : ""}><span></span></label></div></div>
+      <details class="card compact"><summary>Included devices</summary><p>Included devices share individual data with SHS. Excluded devices send no individual readings, profiles or metadata and cannot be planned or controlled. Their consumption remains in household totals.</p>
+      ${[...(this._data.meter_inventory || []), ...devices.filter(d => d.key === "$battery")].map(d => `<label class="choice-row"><span>${this._escape(d.name)}</span><input type="checkbox" aria-label="Include ${this._escape(d.name)}" data-share="${this._escape(d.key)}" ${this._saving ? "disabled" : ""} ${(this._draft.excluded_device_readings || []).includes(d.key) ? "" : "checked"}></label>`).join("")}</details>
       <section aria-labelledby="controls-heading"><h2 id="controls-heading">Controls</h2><p>Measurements, actions, operating limits and permission to operate your equipment.</p>
       ${this._renderDeviceFilters(visible)}
       ${filtered.map(d => this._renderDevice(d, "controls")).join("") || `<p>No matching devices.${!this._showExcluded && excludedCount ? " Turn on Show excluded devices to see excluded equipment." : ""}</p>`}</section>
@@ -1094,9 +1108,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const now = Date.parse(status.now);
     const available = (this._refreshError ? [] : this._data.timeline?.slots || []).filter(slot => Date.parse(slot.start) + 900000 > now);
     const slots = this._fullHorizon ? available : available.filter(slot => Date.parse(slot.start) < now + 86400000);
-    const allDevices = this._sortedDevices();
+    const allDevices = this._sortedDevices().filter(d => d.planned);
     const devices = this._filterDevices(allDevices, true);
-    const scheduledDevices = devices.filter(d => d.included);
+    const scheduledDevices = devices;
     const start = Date.parse(slots[0]?.start), end = Date.parse(slots.at(-1)?.start) + 900000;
     const position = (now - start) / (end - start) * 100;
     const selected = slots[this._selectedSlot];
@@ -1107,11 +1121,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
         const { text, active, action } = this._scheduleCommand(d, slot);
         const description = `${SCHEDULE_ACTIONS[action].label} · ${text}`;
         return `<button class="slot ${active ? "running" : ""} ${slot.binding ? "" : "advisory"}" data-action="slot" data-index="${index}" data-schedule-action="${action}" aria-label="${this._escape(d.name + ', ' + this._time(slot.start) + ', ' + description + (slot.binding ? ', published prices' : ', estimated prices'))}" title="${this._escape(description)}"></button>`;
-      }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Published prices" : "Estimated prices"}${this._schedulePrices(selected)}</h3><ul>${scheduledDevices.map(d => `<li>${this._escape(d.name)}: ${this._escape(this._scheduleCommand(d, selected).text)}${this._scheduleCommandDetail(d, selected)}</li>`).join("")}</ul></div>` : ""}` : `<p>${slots.length ? "No included devices match these filters." : "No actionable schedule is available. Details are in Status."}</p>`}
-      <p>Controlling devices show live requests; Planning and Control verification devices show hypothetical requests. Targets do not prove that heat, charging or power was delivered.</p></div>
-      <div class="card"><h2>Controller diagnostics</h2><p>Download every non-excluded device in Monitoring, Planning, Control verification or Controlling, with its current mode, configuration, readings, plan and controller status. Retained runtime evaluations and real service calls are separate from simulated verification commands and coverage. Verification does not prove physical response. The file contains local entity IDs and configuration. Observations are sampled about once a minute in every mode, with up to 720 samples retained. Energy-counter differences are labelled as interval averages, with missing or stale readings identified. Current-session checks and coverage are summarised separately from older evidence. Repeated checks are grouped; up to 2,000 groups of each kind are retained. Downloads are gzip-compressed JSON.</p><button class="secondary" data-action="verification">Download controller diagnostics</button></div>
+      }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Published prices" : "Estimated prices"}${this._schedulePrices(selected)}</h3><ul>${scheduledDevices.map(d => `<li>${this._escape(d.name)}: ${this._escape(this._scheduleCommand(d, selected).text)}${this._scheduleCommandDetail(d, selected)}</li>`).join("")}</ul></div>` : ""}` : `<p>${slots.length ? "No Planned devices match these filters." : "No actionable schedule is available. Details are in Status."}</p>`}
+      <p>Controlling devices show live requests; Verification devices show hypothetical requests. Targets do not prove that heat, charging or power was delivered.</p></div>
+      <div class="card"><h2>Controller diagnostics</h2><p>Download every Included device, with its current mode, configuration, readings, plan and controller status. Retained runtime evaluations and real service calls are separate from simulated verification commands and coverage. Verification does not prove physical response. The file contains local entity IDs and configuration. Observations are sampled about once a minute in every mode, with up to 720 samples retained. Energy-counter differences are labelled as interval averages, with missing or stale readings identified. Current-session checks and coverage are summarised separately from older evidence. Repeated checks are grouped; up to 2,000 groups of each kind are retained. Downloads are gzip-compressed JSON.</p><button class="secondary" data-action="verification">Download controller diagnostics</button></div>
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
-      <p class="muted">Website choices define the planning method. Device mode here controls participation and execution. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
+      <p class="muted">Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
       ${!devices.length ? '<p role="status">No devices match these filters.</p>' : ""}
       ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}<div class="device-field-issues">${this._deviceFieldButtons(d)}</div>${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._scheduleCommand(d, slots[1]).text)}` : ""}</small></article>`).join("")}`;
   }
@@ -1255,7 +1269,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
           ${this._notice ? `<div class="alert notice"><span>${this._escape(this._notice)}</span></div>` : ""}
           ${this._renderBody()}
         </section>
-        <footer aria-live="polite"><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Website choices define the planning method. Device mode here controls participation and execution.</span></footer>
+        <footer aria-live="polite"><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling.</span></footer>
         ${this._renderDatalist()}
       </main>`;
     const fields = [...this.shadowRoot.querySelectorAll("input,select")];

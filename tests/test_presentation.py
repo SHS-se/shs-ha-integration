@@ -138,9 +138,10 @@ class PresentationTests(unittest.TestCase):
         self.options['device_modes'] = {self.device['key']: 'controlling'}
         view = self.view()[0]
         self.assertTrue(view['permission']['enabled']) # user can still turn it off
-        self.assertIn('Include', view['permission']['reason'])
+        self.assertIn('Planned', view['permission']['reason'])
         self.assertIsNone(view['mapping_error'])
-        self.assertEqual(view['choice_label'], 'Excluded')
+        self.assertFalse(view['planned'])
+        self.assertNotIn('choice_label', view)
         self.assertEqual(view['mode'], 'controlling')
 
     def test_battery_shares_the_same_two_choice_contract_and_requires_setup(self):
@@ -150,7 +151,8 @@ class PresentationTests(unittest.TestCase):
         # Supply known actionable status: this test isolates permission setup, not plan validation.
         views = complete_device_views([], self.options, self.choices, {'actionable': True}, self.plan, {}, {}, {}, self.now)
         battery = views[0]
-        self.assertEqual(battery['choice_label'], 'Included')
+        self.assertTrue(battery['planned'])
+        self.assertNotIn('choice_label', battery)
         self.assertFalse(battery['permission']['enabled'])
         self.assertIn('required', battery['permission']['reason'])
         fields = [f['key'] for f in system_fields('battery')]
@@ -190,12 +192,14 @@ class PresentationTests(unittest.TestCase):
         tree = ast.parse((Path(__file__).parents[1] / 'custom_components/shs_energy/coordinator.py').read_text())
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'ShsStatusCoordinator')
         function = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == '_record_device_exchange')
+        for node in ast.walk(function):
+            if isinstance(node, ast.ImportFrom): node.level = 0
         module = ast.Module(body=[function], type_ignores=[])
         namespace = {'Any': Any, 'datetime': datetime, 'timezone': timezone, 'ShsApiError': ValueError,
                      'resolved_options': lambda hass, options: options, 'planning_path': planning_path, 'unplanned_services': unplanned_services}
         exec(compile(module, 'coordinator.py', 'exec'), namespace)
         calls = {}
-        fake = SimpleNamespace(hass=None, entry=SimpleNamespace(options=self.options), optimisation_degraded_devices=[{'key': 'pool'}],
+        fake = SimpleNamespace(hass=SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=lambda entry, **kw: setattr(entry, 'options', kw['options']))), entry=SimpleNamespace(options=self.options), optimisation_degraded_devices=[{'key': 'pool'}],
             _sync_device_control_issue=lambda *args: None, _sync_degraded_device_issue=lambda: None,
             _sync_unplanned_service_issue=lambda: None,
             _sync_battery_control_issue=lambda options, **kw: calls.update(battery=kw['included']),

@@ -195,7 +195,8 @@ def measurement_sample(options, devices, read, *, at, session_id, context_id, sl
         power["unit"] = "W"
         if power["entity_id"] not in observations:
             power["quality"] = "not_configured_as_measurement"
-    for field in ("grid_export_power_entity", "battery_power_measurement_entity"):
+    for field in ("grid_export_power_entity", "battery_power_measurement_entity",
+                  "house_consumption_power_entity", "solar_production_power_entity"):
         sample.setdefault("instantaneous_power", {})[field] = {"entity_id": options.get(field), "unit": "W",
             **numeric_observation(observations.get(options.get(field)), at, {"W": 1, "kW": 1000})}
     return sample

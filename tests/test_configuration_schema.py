@@ -62,7 +62,7 @@ class CurrentConfigurationTests(unittest.TestCase):
                             entities.get, entity_names={key: key for key in entities},
                             area_names={}, entity_area_ids={})
         self.assertEqual(saved["device_control_mappings"]["sensor.pool"], mapping)
-        self.assertEqual(saved["device_modes"]["$pool"], "monitoring")
+        self.assertEqual(saved["device_modes"], {})
 
     def test_patch_does_not_persist_defaults_or_mutate_input(self):
         existing = {'ev_enabled': False, 'device_control_mappings': {'inactive': {

@@ -18,12 +18,12 @@ def policy_wire():
     identity = dict(policy_id='test-policy', revision=1, battery_id='battery', intent_revision='intent-1',
         plant_revision='plant-1', scope_revision='scope-1', external_scenario_revision='external-1',
         tariff_revision='tariff-1', response_model_revision='pv-first-v1', catalog_revision='catalog-1')
-    return dict(schema='battery-execution-policy-v1', profile='finite-continuation-v1', view='executable',
+    return dict(schema='battery-execution-policy-v2', supply_scope={'kind':'whole_house'}, solar_attribution='proportional-self-consumed-pv-v1', profile='finite-continuation-v1', view='executable',
         identity=identity, actuals_origin_ms=0,
         validity=dict(from_ms=0, refresh_after_ms=840000, until_ms=900000, boundary_ms=900000),
         domain=dict(energy_kwh=[1,10],pv_w=[0,12000],residual_load_w=[0,15000]),
         plant=dict(cutoff_kwh=1,capacity_kwh=10,charge_max_w=4000,discharge_max_w=4000,
-            charge_efficiency=.95,discharge_efficiency=.95,import_limit_w=17000,export_limit_w=13000,wear_sek_per_kwh=.1),
+            charge_efficiency=.95,discharge_efficiency=.95,import_limit_w=17000,export_limit_w=13000,wear_basis="ac_throughput",wear_sek_per_kwh=.1),
         permissions=dict(available=True,grid_charge_allowed=True,battery_export_allowed=True,export_reserve_kwh=3,
             export_price_eligible=True,minimum_export_price_sek_per_kwh=.1,price_revision='tariff-1'),
         economics=dict(import_sek_per_kwh=.5,export_sek_per_kwh=.3,shaping_sek_per_kwh_per_kw=.02,ramp_sek_per_kw=.01),
@@ -33,7 +33,7 @@ def policy_wire():
         continuation=dict(representation='piecewise-quadratic-absolute-v1',coordinate_order=['energy_kwh','previous_import_w'],
             cells=[dict(id='terminal',witness_id='synthetic-no-terminal',domain=dict(energy_kwh=[1,10],previous_import_w=[0,17000],inequalities=[]),
                 cost={key:dict(polynomial=[0,0,0],absolute_terms=[]) for key in ['import_sek','export_sek','wear_sek','shaping_sek','ramp_sek','terminal_sek']})]),
-        quality=dict(assurance='exact-scoring-within-published-family',scorer_revision='offline-household-v1',compiler_revision='execution-v1',
+        quality=dict(assurance='exact-scoring-within-published-family',scorer_revision='offline-household-v2',compiler_revision='execution-v2',
             family_id='synthetic-test',source_hash='sha256:synthetic-test',numeric_tolerance_sek=1e-7,
             search_exhaustive_in_declared_graph=True,search_pruned_prefixes=0,heldout_count=0,heldout_max_regret_sek=None,certified_regret_bound_sek=None))
 
@@ -47,6 +47,18 @@ def conditions(p, *, now=1000, energy=5, pv=1000, load=2000, previous=1000, revi
 
 
 class BatteryExecutionPolicyTests(unittest.TestCase):
+    def test_discharge_storage_wear_matches_planner_basis(self):
+        wire = policy_wire()
+        wire['plant']['wear_basis'] = 'discharged_storage'
+        p = policy(wire)
+        for operation in p.summary.operations:
+            result = evaluate_current(p, operation, conditions(p, now=0, pv=0, load=2500), 0)
+            if isinstance(result, OutsideCoverage):
+                continue
+            components = dict(zip(COMPONENTS, result.current))
+            self.assertAlmostEqual(components['wear_sek'],
+                (5 - result.energy_end_kwh) * .1 if result.energy_end_kwh < 5 else 0)
+
     def test_live_time_energy_pv_and_load_reprice_without_recompile(self):
         p = policy()
         for now, energy, pv, load in [(1000,5,1000,2000),(180000,5.5,2500,1500),(720000,6,100,4000)]:
@@ -191,3 +203,38 @@ class BatteryExecutionPolicyTests(unittest.TestCase):
 
 
 if __name__=='__main__': unittest.main()
+
+class ScopedPolicyTests(unittest.TestCase):
+    def test_scoped_native_response_is_rejected_instead_of_model_only_clipping(self):
+        wire=policy_wire()
+        wire['supply_scope']={'kind':'selected','include_base':True,'planned_device_keys':[]}
+        p=policy(wire)
+        c=replace(conditions(p,load=3000,pv=1000),eligible_load_w=1000)
+        supplied=evaluate_current(p,next(o for o in p.summary.operations if o.id=='supply_house'),c,1000)
+        self.assertIsInstance(supplied,OutsideCoverage)
+        self.assertEqual(supplied.reason,'native_operation_exceeds_supply_scope')
+        exported=evaluate_current(p,next(o for o in p.summary.operations if o.id=='export'),c,1000)
+        self.assertIsInstance(exported,OutsideCoverage)
+        self.assertEqual(exported.reason,'native_operation_exceeds_supply_scope')
+        wire['operations'].append(dict(id='scoped-500',operation='supply_house',charge_limit_w=0,discharge_limit_w=500))
+        p=policy(wire)
+        supplied=evaluate_current(p,next(o for o in p.summary.operations if o.id=='scoped-500'),c,1000)
+        self.assertNotIsInstance(supplied,OutsideCoverage)
+        self.assertAlmostEqual(supplied.terminal_import_w,1500)
+        absent=replace(c,eligible_load_w=None)
+        self.assertEqual(evaluate_policy(p,absent,1000).reason,'reference_uncovered')
+
+    def test_scope_is_permission_economics_can_charge_or_preserve(self):
+        wire=policy_wire()
+        wire['economics'].update(import_sek_per_kwh=2.77,export_sek_per_kwh=0,ramp_sek_per_kw=0,shaping_sek_per_kwh_per_kw=0)
+        p=policy(wire)
+        c=conditions(p,load=1200,pv=0,energy=9)
+        self.assertEqual(evaluate_policy(p,c,1000).selected_id,'self_consumption')
+        # A high future value can make preservation win at the same load/price.
+        wire['continuation']['cells'][0]['cost']['terminal_sek']['polynomial']=[0,4,0]
+        wire['permissions']['grid_charge_allowed']=False
+        wire['permissions']['battery_export_allowed']=False
+        p=policy(wire);c=conditions(p,load=1200,pv=0,energy=9)
+        decision=evaluate_policy(p,c,1000)
+        selected=next(r for r in decision.ranked if r.operation.id==decision.selected_id)
+        self.assertEqual(selected.operation.discharge_limit_w,0)

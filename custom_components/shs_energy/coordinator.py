@@ -897,12 +897,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _configured_entities(self) -> dict[str, list[str]]:
         """Return category → entity ids from the options flow."""
-        return {
-            category: list(
-                self.entry.options.get(f"{OPT_PREFIX_ENTITIES}{category}", [])
-            )
-            for category in CONFIGURABLE_CATEGORIES
-        }
+        excluded = set(self.entry.options.get("excluded_device_readings", []))
+        aggregate = {"total_consumption", "grid_import", "grid_export", "solar_production",
+                     "battery_charge", "battery_discharge"}
+        return {category: [entity for entity in self.entry.options.get(f"{OPT_PREFIX_ENTITIES}{category}", [])
+                           if category in aggregate or entity not in excluded]
+                for category in CONFIGURABLE_CATEGORIES}
 
     def _mapped_power_w(self, mapping: dict[str, Any]) -> float | None:
         """Resolve the card's reviewed watts or current W/kW sensor value."""
@@ -927,6 +927,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         stored: dict[str, Any],
         mappings: dict[str, dict[str, Any]] | None = None,
+        *, included_only: bool = True,
     ) -> list[dict[str, Any]]:
         """Hydrate Energy Dashboard devices with server requests and local status."""
         devices = await async_energy_dashboard_inventory(self.hass)
@@ -959,7 +960,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             watts = self._mapped_power_w(mapping)
             if watts is not None:
                 device["active_power_w"] = round(watts, 1)
-        return prepared
+        from .configuration_schema import shared_devices
+        return shared_devices(prepared, self.entry.options) if included_only else prepared
 
     def _record_device_exchange(
         self,
@@ -998,6 +1000,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         home = result.get("home_configuration")
         if not isinstance(home, dict) or not isinstance(home.get("battery", {}).get("included"), bool):
             raise ShsApiError("Website planning choices are unavailable; update the website first")
+        from .operating_modes import reconcile_admissions
+        admitted = reconcile_admissions(dict(self.entry.options), list(configuration.values()), home)
+        if admitted != dict(self.entry.options):
+            self.hass.config_entries.async_update_entry(self.entry, options=admitted)
+            self._plan_configuration_changed = stored["plan_configuration_changed"] = True
         stored["home_planning_configuration"] = home
         stored["planning_configuration_refreshed_at"] = datetime.now(timezone.utc).isoformat()
         stored["optimisation_device_configuration"] = configuration
@@ -1038,15 +1045,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # The first exchange discovers the new website request. Report
                 # its status immediately in a second device-only exchange so a
                 # previously saved matching mapping becomes Ready in one click.
-                apply_requested_configuration(
-                    devices,
-                    configuration,
-                    resolved_options(self.hass, dict(self.entry.options)).get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
-                    {state.entity_id for state in self.hass.states.async_all()},
-                    entity_display_name_by_id(self.hass),
-                    area_name_by_id(self.hass),
-                    entity_area_id_by_id(self.hass),
-                )
+                devices = await self._prepared_device_inventory(stored)
                 result = await self.client.push_optimisation(
                     [], None, devices, device_inventory_complete=True, equipment=self.equipment_presence()
                 )
@@ -1106,13 +1105,20 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_cached_planning_configuration(self) -> dict[str, Any]:
         stored = await self._store.async_load() or {}
-        return {"devices": list(stored.get("optimisation_device_configuration", {}).values()),
-                "home": stored.get("home_planning_configuration", {}),
+        devices = await self._prepared_device_inventory(stored, included_only=False)
+        requested = stored.get("optimisation_device_configuration", {})
+        excluded = set(self.entry.options.get("excluded_device_readings", []))
+        for device in devices:
+            if device["key"] not in excluded and device["key"] in requested:
+                # Website intent is independent of whether local controls are ready.
+                for key in ("planning_role", "control_type", "planning_choice_at"):
+                    device[key] = requested[device["key"]].get(key)
+        return {"devices": devices, "home": stored.get("home_planning_configuration", {}),
                 "refreshed_at": stored.get("planning_configuration_refreshed_at")}
 
     def equipment_presence(self) -> dict[str, bool]:
         options = resolved_options(self.hass, dict(self.entry.options))
-        return {"battery": bool(options.get("battery_enabled") and (options.get("battery_soc_entity") or self.entry.options.get("battery_enabled") is True))}
+        return {"battery": bool("$battery" not in options.get("excluded_device_readings", []) and options.get("battery_enabled") and (options.get("battery_soc_entity") or self.entry.options.get("battery_enabled") is True))}
 
     @property
     def operational_status(self) -> dict[str, Any]:
@@ -2057,9 +2063,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         drift from the one the planner uses.
         """
         options = resolved_options(self.hass, dict(self.entry.options))
+        devices = await self._prepared_device_inventory(await self._store.async_load() or {})
         wanted = {
-            "battery_soc": options.get(OPT_BATTERY_SOC_ENTITY),
-            "ev_soc": options.get(OPT_EV_SOC_ENTITY),
+            "battery_soc": options.get(OPT_BATTERY_SOC_ENTITY)
+                if "$battery" not in options.get("excluded_device_readings", []) else None,
+            "ev_soc": options.get(OPT_EV_SOC_ENTITY)
+                if any(d.get("category") == "ev_charging" for d in devices) else None,
         }
         entity_ids = sorted({
             entity_id for entity_id in wanted.values()
@@ -2126,6 +2135,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if category in configured
             )
             row["total_load_kwh"] = round(max(0.0, total), 6)
+        if "$battery" in self.entry.options.get("excluded_device_readings", []):
+            for row in rows:
+                for field in ("battery_soc", "battery_charge_kwh", "battery_discharge_kwh"):
+                    row.pop(field, None)
         return rows
 
     async def _device_actual_quarters(
@@ -2230,6 +2243,17 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         from .configuration_schema import shared_devices
         from .operating_modes import planning_devices
         scope_devices = shared_devices(devices, options)
+        requested = stored.get("optimisation_device_configuration", {})
+        unready = [d for d in scope_devices if requested.get(d["key"], {}).get("planning_role") == "controllable"
+                   and d.get("mapping_status") != "ready"]
+        if unready:
+            raise OptimisationInputError("Planned device setup is incomplete: " + ", ".join(
+                str(d.get("name") or d["key"]) for d in unready))
+        options = dict(options)
+        # A store's local sensor configuration is not permission to share it.
+        for system, category in (("ev", "ev_charging"), ("pool", "pool_heating")):
+            if not any(d.get("category") == category for d in scope_devices):
+                options[system + "_enabled"] = False
         devices = planning_devices(scope_devices, options)
         captured = dt_util.utcnow()
         horizon = utc_slots(captured, OPTIMISATION_HORIZON_HOURS)
@@ -2259,7 +2283,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._entity_payload(options[OPT_BATTERY_SOC_ENTITY])
             if options.get(OPT_BATTERY_SOC_ENTITY)
             and options.get(OPT_BATTERY_ENABLED, True)
-            and options.get("device_modes", {}).get("$battery", "monitoring") != "monitoring"
+            and "$battery" not in options.get("excluded_device_readings", [])
             and stored.get("home_planning_configuration", {}).get("battery", {}).get("included") is True
             else None
         )
@@ -2497,9 +2521,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # configuration gap, not a house without the equipment. Say so rather
         # than publishing a snapshot that quietly omits the store.
         self.optimisation_unplanned_services = unplanned_services(
-            {**options, **{system + "_enabled": options.get(system + "_enabled", True)
-                          and options.get("device_modes", {}).get("$" + system, "monitoring") != "monitoring"
-                          for system in ("pool", "ev")}},
+            options,
             planned_paths,
             # Read from the persisted exchange, never from an in-memory cache:
             # a cache filled only when a device exchange happens is empty on
@@ -2581,6 +2603,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     sorted({
                         entity_id
                         for category in base_source_categories
+                        if "$battery" not in options.get("excluded_device_readings", [])
+                        or category not in ("battery_charge", "battery_discharge")
                         for entity_id in entities_by_category[category]
                     } | {
                         str(model["statistic_id"]) for model in device_models
@@ -2752,6 +2776,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             snapshot_error: str | None = None
             try:
                 entities = self._configured_entities()
+                exchange_options = dict(self.entry.options)
                 devices = await self._prepared_device_inventory(stored)
                 for device in devices:
                     category_entities = entities.setdefault(device["category"], [])
@@ -2828,9 +2853,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     _LOGGER.debug("Thermal observations unavailable: %s", err)
                     thermal_slots = []
                 try:
-                    pool_slots = await self._pool_quarters(
+                    pool_slots = (await self._pool_quarters(
                         thermal_options, thermal_start, complete_end
-                    )
+                    )) if any(d.get("category") == "pool_heating" for d in devices) else []
                 except (HomeAssistantError, OptimisationInputError, ValueError) as err:
                     _LOGGER.debug("Pool observations unavailable: %s", err)
                     pool_slots = []
@@ -2913,6 +2938,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.last_optimisation_error = snapshot_error
                     self.async_update_listeners()
                     return
+                if dict(self.entry.options) != exchange_options:
+                    raise OptimisationInputError("Configuration changed while preparing the exchange; retry with current participation")
                 result = await self.client.push_optimisation(
                     actuals,
                     snapshot,

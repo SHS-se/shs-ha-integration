@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "initial": {
-    "schema_version": 5,
+    "schema_version": 6,
     "state": {
       "authority": null,
       "authority_revision": -1,

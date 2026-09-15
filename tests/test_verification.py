@@ -472,7 +472,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
 class ModeTests(unittest.TestCase):
     def test_old_booleans_cannot_authorize_and_modes_derive_planning(self):
         options = resolve_configuration({'planning_mode': 'live', 'battery_control_enabled': True})
-        self.assertEqual(options['planning_mode'], 'disabled')
+        self.assertEqual(options['planning_mode'], 'live')
         self.assertFalse(options['battery_control_enabled'])
         self.assertEqual(device_mode(options, 'battery'), 'monitoring')
         options = resolve_configuration({'device_modes': {'$pool': 'planning', '$battery': 'control_verification'}})
@@ -480,30 +480,29 @@ class ModeTests(unittest.TestCase):
         self.assertFalse(options['pool_control_enabled'])
         self.assertFalse(options['battery_control_enabled'])
 
-    def test_monitoring_keeps_meter_but_removes_planning_role(self):
+    def test_local_execution_mode_cannot_override_website_planning_role(self):
         devices = [{'key': 'pool', 'category': 'pool_heating', 'control_type': 'setpoint', 'planning_role': 'controllable'},
                    {'key': 'heater', 'category': 'heating', 'control_type': 'switch_schedule', 'planning_role': 'controllable'}]
         options = {'pool_water_temperature_entity': 'sensor.water', 'device_modes': {'heater': 'planning'},
                    'device_control_mappings': {'pool': {'temperature_entity_id': 'sensor.water'}}}
         result = planning_devices(devices, options)
         self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]['planning_role'], 'base_load')
-        self.assertIsNone(result[0]['control_type'])
+        self.assertEqual(result[0]['planning_role'], 'controllable')
+        self.assertEqual(result[0]['control_type'], 'setpoint')
         self.assertEqual(result[1]['planning_role'], 'controllable')
         self.assertEqual(devices[0]['planning_role'], 'controllable')
 
-    def test_one_time_migration_preserves_permission_without_escalation(self):
+    def test_one_time_migration_requires_new_planned_admission(self):
         options = {'planning_mode': 'live', 'battery_control_enabled': False, 'pool_control_enabled': True,
                    'device_control_mappings': {'heater': {'control_type': 'switch_schedule', 'control_enabled': False}}}
         migrated, _ = migrate_options(options, source_version=11)
-        self.assertEqual(migrated['device_modes']['$pool'], 'controlling')
-        self.assertEqual(migrated['device_modes']['$battery'], 'planning')
-        self.assertEqual(migrated['device_modes']['heater'], 'planning')
+        self.assertEqual(migrated['device_modes'], {})
+        self.assertEqual(migrated['planning_admissions'], {})
         self.assertNotIn('planning_mode', migrated)
         self.assertNotIn('control_enabled', migrated['device_control_mappings']['heater'])
         options['planning_mode'] = 'disabled'
         migrated, _ = migrate_options(options, source_version=11)
-        self.assertEqual(set(migrated['device_modes'].values()), {'monitoring'})
+        self.assertEqual(migrated['device_modes'], {})
 
     def test_monitoring_and_planning_are_independent_for_two_pool_meters(self):
         devices = [{'key': 'heater', 'category': 'pool_heating', 'control_type': 'setpoint', 'planning_role': 'controllable'},
@@ -512,7 +511,7 @@ class ModeTests(unittest.TestCase):
                    'device_control_mappings': {'heater': {'temperature_entity_id': 'sensor.water'}}}
         result = planning_devices(devices, options)
         self.assertEqual(result[0]['planning_role'], 'controllable')
-        self.assertEqual(result[1]['planning_role'], 'base_load')
+        self.assertEqual(result[1]['planning_role'], 'controllable')
 
 
 class JournalRetentionTests(unittest.IsolatedAsyncioTestCase):

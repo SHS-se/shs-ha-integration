@@ -8,6 +8,7 @@ from typing import Literal, Optional, Union
 if __package__:
     from .battery_execution_policy import (ExecutionPolicy, ExecutionConditions, ContextIdentity,
         Permissions, BatteryPlant, BatteryOperation, Decision, OutsideCoverage, evaluate_policy, NUMERICAL_TOLERANCE_SEK)
+    from .battery_supply import SupplyScope
     from .runtime_json import read_runtime_json
     from .energy_ledger import (
         EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, SettledActuals,
@@ -17,6 +18,7 @@ if __package__:
 else:
     from battery_execution_policy import (ExecutionPolicy, ExecutionConditions, ContextIdentity,
         Permissions, BatteryPlant, BatteryOperation, Decision, OutsideCoverage, evaluate_policy, NUMERICAL_TOLERANCE_SEK)
+    from battery_supply import SupplyScope
     from runtime_json import read_runtime_json
     from energy_ledger import (
         EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, SettledActuals,
@@ -521,8 +523,11 @@ class ExecutionAuthority:
     scope: ExecutionScope
     catalog: NativeCatalog
     owner_id: str
+    supply_scope: SupplyScope
 
     def __post_init__(self):
+        if not isinstance(self.supply_scope, SupplyScope):
+            raise ValueError("configured battery supply scope is required")
         _identity(self.config_revision)
         _identity(self.owner_id)
         if (self.identity.battery_id != self.scope.battery_group_id
@@ -1030,7 +1035,7 @@ def _validate_authority(state, authority):
 
 def _validate_policy(state, compiled):
     authority, summary = state.authority, compiled.summary
-    if authority is None or summary.identity.context != authority.identity or summary.permissions != authority.permissions or summary.plant != authority.plant:
+    if authority is None or summary.identity.context != authority.identity or summary.permissions != authority.permissions or summary.plant != authority.plant or summary.supply_scope != authority.supply_scope:
         raise ValueError("policy differs from configured authority")
     participants = {p.group_id: p for p in authority.scope.participants}
     if any((g.mode, g.mode_revision) != (participants[g.spec.id].mode, participants[g.spec.id].mode_revision)

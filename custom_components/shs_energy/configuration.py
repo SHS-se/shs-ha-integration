@@ -607,6 +607,14 @@ async def async_discover_configuration(
             detail="Proposed from the same plant limit; review if export is restricted",
         )
 
+    # These device-specific names are discovery proposals, never hardcoded
+    # runtime readings. Explicitly saved bindings always take precedence.
+    for key, entity in (("house_consumption_power_entity", "sensor.sigen_plant_total_load_power"),
+                        ("solar_production_power_entity", "sensor.sigen_inverter_pv_power")):
+        state = next((s for s in states if s.entity_id == entity), None)
+        if state and state.attributes.get("unit_of_measurement") in ("W", "kW") and state.attributes.get("state_class") == "measurement":
+            record_state(key, state, exact_ids=(entity,), detail="Instantaneous household power; verify the shared AC measurement boundary")
+
     export_power_ids = ("sensor.sigen_plant_grid_export_power",)
     export_power = _first_state(
         states,

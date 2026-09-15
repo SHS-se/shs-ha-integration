@@ -217,4 +217,9 @@ def migrate_options(
         report["removed"].update(f"discovery_evidence.{key}" for key in set(evidence) - OPTION_KEYS)
     if any(report.values()):
         result["_migration_report"] = {kind: sorted(names) for kind, names in report.items()}
+    if source_version is not None and source_version < 14:
+        # The two-axis contract requires a new Planned admission. Historical
+        # permissions cannot be rebound to a changed website role automatically.
+        result["device_modes"] = {}
+        result["planning_admissions"] = {}
     return result, result != options

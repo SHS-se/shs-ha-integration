@@ -26,7 +26,7 @@ OPTION_FIELDS = {
 # Internal scheduling resolution is fixed, not another editable setting.
 OPTION_KEYS = frozenset(OPTION_FIELDS)
 METADATA_KEYS = frozenset({"configuration_reviewed_at", "discovery_evidence", "_migration_report"})
-PERSISTED_KEYS = OPTION_KEYS | METADATA_KEYS | {"device_control_mappings", "rooms", "automatic_setup", "forecast_resolution_minutes", "device_modes"}
+PERSISTED_KEYS = OPTION_KEYS | METADATA_KEYS | {"device_control_mappings", "rooms", "automatic_setup", "forecast_resolution_minutes", "device_modes", "planning_admissions"}
 ROOM_AREA_FIELD = c.ROOM_AREA_FIELD
 MAPPING_KEYS = {
     kind: {field["key"] for field in fields} | {"control_type", ROOM_AREA_FIELD}
@@ -105,6 +105,15 @@ def normalise_field_value(
     """Validate and normalise one field submitted by the custom panel."""
     kind = field["kind"]
     label = field["label"]
+    if field["key"] == "excluded_device_readings":
+        if value in (None, "", []):
+            return []
+        # Inventory keys can be external statistics or synthetic equipment keys.
+        # Exclusion must also survive a sensor being removed or unavailable.
+        if not isinstance(value, list) or any(type(key) is not str or not key.strip() for key in value):
+            raise ValueError(f"{context}: {label} must be a list of device keys")
+        return sorted({key.strip() for key in value})
+
     missing = value in (None, "", [])
     if missing:
         if field.get("required"):
@@ -182,6 +191,10 @@ def normalise_field_value(
             raise ValueError(f"{context}: {label} must be positive watts")
         return watts
 
+    if field["key"] in {"house_consumption_power_entity", "solar_production_power_entity"}:
+        state = read_entity(value)
+        if state is None or state["attributes"].get("unit_of_measurement") not in ("W", "kW") or state["attributes"].get("state_class") != "measurement":
+            raise ValueError(f"{context}: {label} must be an instantaneous W or kW measurement")
     if kind in {"entity", "entities"}:
         if kind == "entity" and not isinstance(value, str):
             raise ValueError(f"{context}: {label} must be one entity")
@@ -221,8 +234,7 @@ def resolve_configuration(options, latitude=0.0, longitude=0.0):
         from .operating_modes import device_mode
     else:
         from operating_modes import device_mode
-    modes = resolved.get("device_modes", {})
-    resolved["planning_mode"] = "live" if any(mode != "monitoring" for mode in modes.values()) else "disabled"
+    resolved["planning_mode"] = "live"
     for system in ("battery", "pool", "ev"):
         resolved[system + "_control_enabled"] = device_mode(resolved, system) == "controlling"
     rooms = resolved["rooms"]
@@ -244,6 +256,13 @@ def prepare_options(existing, incoming, read_entity, *, latitude=0.0, longitude=
         value = normalise_field_value(read_entity, OPTION_FIELDS[key], value, context="Configuration")
         # A cleared setting remains explicitly empty rather than regaining a default.
         result[key] = value
+    if "excluded_device_readings" in incoming:
+        excluded = set(result.get("excluded_device_readings") or [])
+        admissions = result.get("planning_admissions", {})
+        revoked = {owner for owner, members in admissions.items()
+                   if owner in excluded or any(member[0] in excluded for member in members)} | excluded
+        result["device_modes"] = {k: v for k, v in result.get("device_modes", {}).items() if k not in revoked}
+        result["planning_admissions"] = {k: v for k, v in admissions.items() if k not in revoked}
     current = resolve_configuration(result, latitude, longitude)
     if "battery_min_soc" in incoming and current.get("battery_min_soc") is not None:
         minimum = resolve_quantity(current["battery_min_soc"], read_entity, unit="%", minimum=0, maximum=1, label="Minimum charge")

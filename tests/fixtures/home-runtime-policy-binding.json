@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "initial": {
-    "schema_version": 5,
+    "schema_version": 6,
     "state": {
       "authority": null,
       "authority_revision": -1,
@@ -150,7 +150,8 @@
             "discharge_efficiency": 0.95,
             "import_limit_w": 17000,
             "export_limit_w": 13000,
-            "wear_sek_per_kwh": 0.1
+            "wear_sek_per_kwh": 0.1,
+            "wear_basis": "ac_throughput"
           },
           "scope": {
             "type": "ExecutionScope",
@@ -395,7 +396,13 @@
               }
             ]
           },
-          "owner_id": "shs-runtime"
+          "owner_id": "shs-runtime",
+          "supply_scope": {
+            "type": "SupplyScope",
+            "kind": "whole_house",
+            "include_base": false,
+            "planned_device_keys": []
+          }
         },
         "revision": 1
       }
@@ -539,7 +546,8 @@
             "export_price_eligible": true,
             "minimum_export_price_sek_per_kwh": 0.1,
             "price_revision": "tariff-1"
-          }
+          },
+          "eligible_load_w": null
         }
       }
     },
@@ -549,7 +557,7 @@
         "type": "PolicyOffered",
         "compiled": {
           "type": "ExecutionPolicy",
-          "source_json": "{\"actuals_origin_ms\":0,\"continuation\":{\"cells\":[{\"cost\":{\"export_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"import_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"ramp_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"shaping_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"terminal_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"wear_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]}},\"domain\":{\"energy_kwh\":[1,10],\"inequalities\":[],\"previous_import_w\":[0,17000]},\"id\":\"terminal\",\"witness_id\":\"synthetic-no-terminal\"}],\"coordinate_order\":[\"energy_kwh\",\"previous_import_w\"],\"representation\":\"piecewise-quadratic-absolute-v1\"},\"domain\":{\"energy_kwh\":[1,10],\"pv_w\":[0,12000],\"residual_load_w\":[0,15000]},\"economics\":{\"export_sek_per_kwh\":0,\"import_sek_per_kwh\":-1,\"ramp_sek_per_kw\":0,\"shaping_sek_per_kwh_per_kw\":0},\"identity\":{\"battery_id\":\"battery\",\"catalog_revision\":\"catalog-1\",\"external_scenario_revision\":\"external-1\",\"intent_revision\":\"intent-1\",\"plant_revision\":\"plant-1\",\"policy_id\":\"test-policy\",\"response_model_revision\":\"pv-first-v1\",\"revision\":1,\"scope_revision\":\"scope-1\",\"tariff_revision\":\"tariff-1\"},\"operations\":[{\"charge_limit_w\":0,\"discharge_limit_w\":0,\"id\":\"hold\",\"operation\":\"hold\"},{\"charge_limit_w\":4000,\"discharge_limit_w\":4000,\"id\":\"self_consumption\",\"operation\":\"self_consumption\"},{\"charge_limit_w\":4000,\"discharge_limit_w\":0,\"id\":\"solar_charge\",\"operation\":\"solar_charge\"},{\"charge_limit_w\":0,\"discharge_limit_w\":4000,\"id\":\"supply_house\",\"operation\":\"supply_house\"},{\"charge_limit_w\":3000,\"discharge_limit_w\":0,\"id\":\"grid_charge\",\"operation\":\"grid_charge\"},{\"charge_limit_w\":0,\"discharge_limit_w\":2000,\"id\":\"export\",\"operation\":\"export\"}],\"permissions\":{\"available\":true,\"battery_export_allowed\":true,\"export_price_eligible\":true,\"export_reserve_kwh\":3,\"grid_charge_allowed\":true,\"minimum_export_price_sek_per_kwh\":0.1,\"price_revision\":\"tariff-1\"},\"plant\":{\"capacity_kwh\":10,\"charge_efficiency\":0.95,\"charge_max_w\":4000,\"cutoff_kwh\":1,\"discharge_efficiency\":0.95,\"discharge_max_w\":4000,\"export_limit_w\":13000,\"import_limit_w\":17000,\"wear_sek_per_kwh\":0.1},\"profile\":\"finite-continuation-v1\",\"quality\":{\"assurance\":\"exact-scoring-within-published-family\",\"certified_regret_bound_sek\":null,\"compiler_revision\":\"execution-v1\",\"family_id\":\"synthetic-test\",\"heldout_count\":0,\"heldout_max_regret_sek\":null,\"numeric_tolerance_sek\":1e-07,\"scorer_revision\":\"offline-household-v1\",\"search_exhaustive_in_declared_graph\":true,\"search_pruned_prefixes\":0,\"source_hash\":\"sha256:synthetic-test\"},\"reference_id\":\"hold\",\"schema\":\"battery-execution-policy-v1\",\"validity\":{\"boundary_ms\":900000,\"from_ms\":0,\"refresh_after_ms\":840000,\"until_ms\":900000},\"view\":\"executable\"}"
+          "source_json": "{\"actuals_origin_ms\":0,\"continuation\":{\"cells\":[{\"cost\":{\"export_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"import_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"ramp_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"shaping_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"terminal_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"wear_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]}},\"domain\":{\"energy_kwh\":[1,10],\"inequalities\":[],\"previous_import_w\":[0,17000]},\"id\":\"terminal\",\"witness_id\":\"synthetic-no-terminal\"}],\"coordinate_order\":[\"energy_kwh\",\"previous_import_w\"],\"representation\":\"piecewise-quadratic-absolute-v1\"},\"domain\":{\"energy_kwh\":[1,10],\"pv_w\":[0,12000],\"residual_load_w\":[0,15000]},\"economics\":{\"export_sek_per_kwh\":0,\"import_sek_per_kwh\":-1,\"ramp_sek_per_kw\":0,\"shaping_sek_per_kwh_per_kw\":0},\"identity\":{\"battery_id\":\"battery\",\"catalog_revision\":\"catalog-1\",\"external_scenario_revision\":\"external-1\",\"intent_revision\":\"intent-1\",\"plant_revision\":\"plant-1\",\"policy_id\":\"test-policy\",\"response_model_revision\":\"pv-first-v1\",\"revision\":1,\"scope_revision\":\"scope-1\",\"tariff_revision\":\"tariff-1\"},\"operations\":[{\"charge_limit_w\":0,\"discharge_limit_w\":0,\"id\":\"hold\",\"operation\":\"hold\"},{\"charge_limit_w\":4000,\"discharge_limit_w\":4000,\"id\":\"self_consumption\",\"operation\":\"self_consumption\"},{\"charge_limit_w\":4000,\"discharge_limit_w\":0,\"id\":\"solar_charge\",\"operation\":\"solar_charge\"},{\"charge_limit_w\":0,\"discharge_limit_w\":4000,\"id\":\"supply_house\",\"operation\":\"supply_house\"},{\"charge_limit_w\":3000,\"discharge_limit_w\":0,\"id\":\"grid_charge\",\"operation\":\"grid_charge\"},{\"charge_limit_w\":0,\"discharge_limit_w\":2000,\"id\":\"export\",\"operation\":\"export\"}],\"permissions\":{\"available\":true,\"battery_export_allowed\":true,\"export_price_eligible\":true,\"export_reserve_kwh\":3,\"grid_charge_allowed\":true,\"minimum_export_price_sek_per_kwh\":0.1,\"price_revision\":\"tariff-1\"},\"plant\":{\"capacity_kwh\":10,\"charge_efficiency\":0.95,\"charge_max_w\":4000,\"cutoff_kwh\":1,\"discharge_efficiency\":0.95,\"discharge_max_w\":4000,\"export_limit_w\":13000,\"import_limit_w\":17000,\"wear_basis\":\"ac_throughput\",\"wear_sek_per_kwh\":0.1},\"profile\":\"finite-continuation-v1\",\"quality\":{\"assurance\":\"exact-scoring-within-published-family\",\"certified_regret_bound_sek\":null,\"compiler_revision\":\"execution-v2\",\"family_id\":\"synthetic-test\",\"heldout_count\":0,\"heldout_max_regret_sek\":null,\"numeric_tolerance_sek\":1e-07,\"scorer_revision\":\"offline-household-v2\",\"search_exhaustive_in_declared_graph\":true,\"search_pruned_prefixes\":0,\"source_hash\":\"sha256:synthetic-test\"},\"reference_id\":\"hold\",\"schema\":\"battery-execution-policy-v2\",\"solar_attribution\":\"proportional-self-consumed-pv-v1\",\"supply_scope\":{\"kind\":\"whole_house\"},\"validity\":{\"boundary_ms\":900000,\"from_ms\":0,\"refresh_after_ms\":840000,\"until_ms\":900000},\"view\":\"executable\"}"
         },
         "watermark": {
           "type": "ActualsWatermark",

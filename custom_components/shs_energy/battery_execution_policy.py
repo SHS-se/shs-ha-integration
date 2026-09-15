@@ -12,9 +12,11 @@ from math import isfinite
 from typing import Optional
 
 if __package__:
+    from .battery_supply import SupplyScope, proportional_supply
     from .runtime_json import read_runtime_json
     from .battery_policy import COMPONENTS, canonical_json
 else:
+    from battery_supply import SupplyScope, proportional_supply
     from runtime_json import read_runtime_json
     from battery_policy import COMPONENTS, canonical_json
 
@@ -130,8 +132,11 @@ class ExecutionConditions:
     previous_import_w: float
     identity: ContextIdentity
     permissions: Permissions
+    eligible_load_w: Optional[float] = None
 
     def __post_init__(self):
+        if self.eligible_load_w is not None:
+            _num(self.eligible_load_w, 0, self.residual_load_w)
         for value in (self.revision, self.at_ms, self.valid_until_ms):
             _int(value)
         if self.at_ms >= self.valid_until_ms:
@@ -176,11 +181,15 @@ class BatteryPlant:
     discharge_efficiency: float
     import_limit_w: float
     export_limit_w: float
+    wear_basis: str
     wear_sek_per_kwh: float
 
     def __post_init__(self):
+        if self.wear_basis not in ("ac_throughput", "discharged_storage"):
+            raise ValueError("unknown battery wear basis")
         for field in fields(self):
-            _num(getattr(self, field.name), 0, 1e6)
+            if field.name != "wear_basis":
+                _num(getattr(self, field.name), 0, 1e6)
         if not self.cutoff_kwh < self.capacity_kwh:
             raise ValueError("invalid battery physical state bounds")
         if not 0 < self.charge_efficiency <= 1 or not 0 < self.discharge_efficiency <= 1:
@@ -271,6 +280,7 @@ class PolicySummary:
     operations: tuple[BatteryOperation, ...]
     cells: tuple[ContinuationCell, ...]
     quality: PolicyQuality
+    supply_scope: SupplyScope
 
 
 def _record(cls, value):
@@ -280,9 +290,12 @@ def _record(cls, value):
 def _summary(source_json):
     if type(source_json) is not str or len(source_json.encode()) > MAX_POLICY_BYTES:
         raise ValueError("execution policy exceeds 128KB")
-    wire = _obj(read_runtime_json(source_json), "schema profile view identity actuals_origin_ms validity domain plant permissions economics reference_id operations continuation quality")
-    if (wire["schema"], wire["profile"], wire["view"]) != ("battery-execution-policy-v1", "finite-continuation-v1", "executable"):
+    wire = _obj(read_runtime_json(source_json), "schema profile view identity actuals_origin_ms validity domain plant permissions economics reference_id operations continuation quality supply_scope solar_attribution")
+    if (wire["schema"], wire["profile"], wire["view"]) != ("battery-execution-policy-v2", "finite-continuation-v1", "executable"):
         raise ValueError("unsupported or conditional execution policy")
+    if wire["solar_attribution"] != "proportional-self-consumed-pv-v1":
+        raise ValueError("unsupported supply solar attribution")
+    supply_scope = SupplyScope.read(wire["supply_scope"])
     raw_id = _obj(wire["identity"], "policy_id revision battery_id intent_revision plant_revision scope_revision external_scenario_revision tariff_revision response_model_revision catalog_revision")
     context = ContextIdentity(**{f.name: raw_id[f.name] for f in fields(ContextIdentity)})
     identity = PolicyIdentity(raw_id["policy_id"], raw_id["revision"], context)
@@ -351,8 +364,8 @@ def _summary(source_json):
     if len({c.id for c in cells}) != len(cells):
         raise ValueError("duplicate continuation cell")
     q = _obj(wire["quality"], "assurance scorer_revision compiler_revision family_id source_hash numeric_tolerance_sek search_exhaustive_in_declared_graph search_pruned_prefixes heldout_count heldout_max_regret_sek certified_regret_bound_sek")
-    if (q["assurance"] != "exact-scoring-within-published-family" or q["scorer_revision"] != "offline-household-v1"
-            or q["compiler_revision"] != "execution-v1" or q["numeric_tolerance_sek"] != NUMERICAL_TOLERANCE_SEK
+    if (q["assurance"] != "exact-scoring-within-published-family" or q["scorer_revision"] != "offline-household-v2"
+            or q["compiler_revision"] != "execution-v2" or q["numeric_tolerance_sek"] != NUMERICAL_TOLERANCE_SEK
             or type(q["numeric_tolerance_sek"]) is bool or q["certified_regret_bound_sek"] is not None):
         raise ValueError("unsupported execution quality claim")
     exhaustive = _bool(q["search_exhaustive_in_declared_graph"])
@@ -363,7 +376,7 @@ def _summary(source_json):
         raise ValueError("inconsistent finite-family evidence")
     quality = PolicyQuality(_id(q["family_id"]), _id(q["source_hash"]), exhaustive, pruned, count, regret)
     return PolicySummary(identity, origin, start, refresh, until, boundary, domain, plant, permissions,
-                         economics, reference, operations, tuple(cells), quality)
+                         economics, reference, operations, tuple(cells), quality, supply_scope)
 
 
 @dataclass(frozen=True)
@@ -434,6 +447,15 @@ def evaluate_current(policy: ExecutionPolicy, operation: BatteryOperation,
     surplus = c.pv_w - c.residual_load_w
     charge = operation.charge_limit_w if op == "grid_charge" else min(operation.charge_limit_w, max(0, surplus)) if op in ("self_consumption", "solar_charge") else 0.0
     discharge = operation.discharge_limit_w if op == "export" else min(operation.discharge_limit_w, max(0, -surplus)) if op in ("self_consumption", "supply_house") else 0.0
+    if s.supply_scope.kind == "selected" and c.eligible_load_w is None:
+        return OutsideCoverage("scope_measurements_unavailable")
+    eligible = (c.residual_load_w if s.supply_scope.kind == "whole_house" else
+                0.0 if s.supply_scope.kind == "none" else c.eligible_load_w)
+    bound = proportional_supply(c.residual_load_w, c.pv_w, eligible).house_supply_bound_w
+    # Keep the catalog's commissioned operation intact. Clipping the response
+    # without changing the native target would falsely claim enforcement.
+    if min(discharge, max(0.0, -surplus)) > bound + PHYSICAL_TOLERANCE:
+        return OutsideCoverage("native_operation_exceeds_supply_scope")
     hours = (s.boundary_ms - now_ms) / 3600000
     rate = (charge * p.charge_efficiency - discharge / p.discharge_efficiency) / 1000
     energy = c.energy_kwh
@@ -463,7 +485,8 @@ def evaluate_current(policy: ExecutionPolicy, operation: BatteryOperation,
             return OutsideCoverage("grid_limit")
         account["import_sek"] += imported / 1000 * duration * econ.import_sek_per_kwh
         account["export_sek"] += exported / 1000 * duration * econ.export_sek_per_kwh
-        account["wear_sek"] += (charged + discharged) / 1000 * duration * p.wear_sek_per_kwh
+        wear_w = discharged / p.discharge_efficiency if p.wear_basis == "discharged_storage" else charged + discharged
+        account["wear_sek"] += wear_w / 1000 * duration * p.wear_sek_per_kwh
         account["shaping_sek"] += .5 * econ.shaping_sek_per_kwh_per_kw * (imported / 1000) ** 2 * duration
         account["ramp_sek"] += abs(imported - previous) / 1000 * econ.ramp_sek_per_kw
         previous = imported

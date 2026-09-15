@@ -1,14 +1,20 @@
-"""Device operating authority. Missing choices always mean monitoring."""
+"""Website planning and local execution are independent participation axes."""
 from copy import deepcopy
 
-MODES = ("monitoring", "planning", "control_verification", "controlling")
+MODES = ("control_verification", "controlling")
+# Existing plan/journal identities retain inactive and historical modes. This
+# reader is also used for releasing already-issued effects after migration.
+WIRE_MODES = ("monitoring", "planning", *MODES)
 EXECUTING_MODES = {"control_verification", "controlling"}
 
 
 def device_mode(options, device):
     key = "$" + device if device in ("battery", "pool", "ev") else device.removeprefix("device:")
-    mode = options.get("device_modes", {}).get(key, "monitoring")
-    if mode not in MODES:
+    mode = options.get("device_modes", {}).get(key)
+    if mode is None:
+        # Internal absence of admission, never a selectable execution mode.
+        return "monitoring"
+    if mode not in WIRE_MODES:
         raise ValueError(f"Invalid operating mode for {key}: {mode}")
     return mode
 
@@ -31,14 +37,9 @@ def system_device_keys(devices, options):
 
 
 def planning_devices(devices, options):
-    """Keep monitored meters in base load, with their observations intact."""
-    result = deepcopy(devices)
-    owners = system_device_keys(devices, options)
-    for device in result:
-        owner = owners.get(device["key"], "device:" + device["key"])
-        if device_mode(options, owner) == "monitoring":
-            device.update(planning_role="base_load", control_type=None)
-    return result
+    """Website roles alone decide which Included meters are Planned."""
+    excluded = set(options.get("excluded_device_readings", []))
+    return deepcopy([device for device in devices if device["key"] not in excluded])
 
 
 def ownership_configuration(options, device):
@@ -55,7 +56,7 @@ def ownership_configuration(options, device):
 def operating_mode_identity(options):
     """Canonical coupled authority, including choices for temporarily absent devices."""
     configured = options.get("device_modes", {})
-    if not isinstance(configured, dict) or any(mode not in MODES for mode in configured.values()):
+    if not isinstance(configured, dict) or any(mode not in WIRE_MODES for mode in configured.values()):
         raise ValueError("Invalid device operating modes")
     return dict(sorted({"$battery": "monitoring", "$pool": "monitoring", "$ev": "monitoring",
                         **{key: mode for key, mode in configured.items() if mode != "monitoring"}}.items()))
@@ -72,3 +73,32 @@ def scoped_plan(plan, options, device):
         execution = plan.get("execution_plan")
         return execution if isinstance(execution, dict) else None
     return plan
+
+
+def reconcile_admissions(options, devices, home):
+    """Bind local grants to one acknowledged website admission per physical owner.
+
+    A changed member, role revision, exclusion or planning method starts a new
+    admission. Removing the saved grant also fences commands queued for the old
+    options before a release is attempted by the single existing writer.
+    """
+    result = deepcopy(options)
+    excluded = set(options.get("excluded_device_readings", []))
+    owners = system_device_keys(devices, options)
+    groups = {}
+    for device in devices:
+        if device["key"] in excluded or device.get("planning_role") != "controllable":
+            continue
+        owner = "$" + owners[device["key"]] if device["key"] in owners else device["key"]
+        groups.setdefault(owner, []).append([device["key"], device.get("planning_choice_at"), device.get("control_type")])
+    battery = home.get("battery", {})
+    if options.get("battery_enabled", True) and "$battery" not in excluded and battery.get("included") is True:
+        groups["$battery"] = [["$battery", battery.get("choice_at"), "battery"]]
+    groups = {key: sorted(members) for key, members in sorted(groups.items())}
+    previous = options.get("planning_admissions", {})
+    modes = options.get("device_modes", {})
+    result["device_modes"] = {key: modes.get(key, "control_verification")
+        if previous.get(key) == members else "control_verification"
+        for key, members in groups.items()}
+    result["planning_admissions"] = groups
+    return result

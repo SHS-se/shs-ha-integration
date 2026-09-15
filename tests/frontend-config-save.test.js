@@ -121,10 +121,10 @@ test('one permission row serves every device and always permits stopping', () =>
   const panel = makePanel(); panel._data.website_url = 'https://example.test/settings';
   for (const key of ['heater', 'ev', 'pool', '$battery']) {
     const html = panel._choices({ key, name: key, choice_label: 'Excluded', mode: 'controlling', permission: { enabled: true, reason: 'Excluded on website', verification_reason: 'Excluded on website' } });
-    assert.match(html, /Include in the plan/); assert.match(html, /Device mode/);
+    assert.doesNotMatch(html, /Include in the plan|not reviewed|>Website</); assert.match(html, /Device mode/);
     assert.match(html, /value="controlling" selected/);
-    assert.match(html, /value="monitoring"\s*>/);
-    assert.match(html, /value="control_verification"\s+disabled>/);
+    assert.doesNotMatch(html, /value="monitoring"|value="planning"/);
+    assert.match(html, /value="control_verification"\s*>/);
   }
 });
 
@@ -227,9 +227,9 @@ const splitPanel = () => {
   const temperature = { key: 'pool_water_temperature_entity', kind: 'entity', label: 'Pool water temperature' };
   const permission = { key: 'pool_permission_entity', kind: 'entity', label: 'Pool permission switch' };
   const mapping = { control_type: 'switch_schedule', actuator_entity_ids: ['switch.pool'] };
-  panel._data = { devices: [{ key: 'pool', name: 'Pool pump', system: 'pool', category: 'pool_heating', included: true,
+  panel._data = { devices: [{ key: 'pool', name: 'Pool pump', system: 'pool', category: 'pool_heating', included: true, planned: true,
     mapping_status: 'ready', permission: { enabled: false }, fields: [], system_fields: [permission, temperature, volume], planning_fields: [volume] },
-    { key: 'excluded', name: 'Excluded microwave', included: false, category: 'household', fields: [], permission: { enabled: false } }],
+    { key: 'excluded', name: 'Excluded microwave', included: false, planned: false, category: 'household', fields: [], permission: { enabled: false } }],
     sections: [], labels: { ready: 'Ready', base_load: 'Excluded', pool_heating: 'Pool' } };
   panel._draft = { pool_permission_entity: 'switch.permit', pool_volume_m3: 55, pool_water_temperature_entity: 'sensor.water', device_control_mappings: { pool: mapping } };
   panel._savedDraft = JSON.parse(JSON.stringify(panel._draft));
@@ -836,7 +836,7 @@ test('schedule keeps a compact plan ID without duplicated plan details', () => {
     start: '2026-09-14T10:15:00Z', binding: false, pool_w: 1952,
     commands: { pool: { type: 'unavailable', reason: 'No executable planning model for this device' } },
   }] };
-  panel._sortedDevices = () => [{ key: 'pool', name: 'Pool heater', system: 'pool', included: true }];
+  panel._sortedDevices = () => [{ key: 'pool', name: 'Pool heater', system: 'pool', included: true, planned: true }];
   panel._choices = () => ''; panel._deviceFieldButtons = () => '';
   panel._selectedSlot = 0;
   const html = panel._renderSchedule();
@@ -872,10 +872,10 @@ const scheduleFilterPanel = () => {
   panel._data.operation = { state: 'ready', label: 'Ready', reason: 'Plan available', now: '2026-09-14T10:15:00Z' };
   panel._data.portal = {};
   panel._data.devices = [
-    { key: 'a', name: 'Living heater', room_name: 'Living room', category: 'heating', mode: 'controlling', included: true },
-    { key: 'b', name: 'Bedroom heater', room_name: 'Bedroom', category: 'heating', mode: 'planning', included: true },
-    { key: 'c', name: 'Test charger', category: 'ev_charging', mode: 'control_verification', included: true },
-    { key: 'd', name: 'Observed meter', category: 'household', mode: 'monitoring', included: false },
+    { key: 'a', name: 'Living heater', room_name: 'Living room', category: 'heating', mode: 'controlling', included: true, planned: true },
+    { key: 'b', name: 'Bedroom heater', room_name: 'Bedroom', category: 'heating', mode: 'control_verification', included: true, planned: true },
+    { key: 'c', name: 'Test charger', category: 'ev_charging', mode: 'control_verification', included: true, planned: true },
+    { key: 'd', name: 'Observed meter', category: 'household', mode: 'monitoring', included: false, planned: false },
   ];
   panel._data.timeline = { slots: [{ start: '2026-09-14T10:15:00Z', binding: true, commands: {} }] };
   panel._choices = () => ''; panel._deviceFieldButtons = () => '';
@@ -911,25 +911,22 @@ test('schedule combines search, room, category and mode across timeline, details
   assert.match(html, /Clear filters/);
 });
 
-test('schedule quick mode filters include excluded monitoring devices and clear without changing modes', () => {
+test('Schedule contains only Planned devices and the two execution modes', () => {
   const panel = scheduleFilterPanel();
   const before = JSON.stringify(panel._data.devices);
-  for (const [mode, name] of [['monitoring', 'Observed meter'], ['planning', 'Bedroom heater'],
-    ['control_verification', 'Test charger'], ['controlling', 'Living heater']]) {
+  let html = panel._renderSchedule();
+  assert.doesNotMatch(html, /<h2>Observed meter<\/h2>|data-mode="monitoring"|data-mode="planning"/);
+  for (const [mode, name] of [['control_verification', 'Test charger'], ['controlling', 'Living heater']]) {
     panel._onClick({ target: { closest: () => ({ dataset: { action: 'schedule-mode', mode } }) } });
-    assert.equal(panel._filterDevices(panel._data.devices, true).length, 1);
     assert.match(panel._renderSchedule(), new RegExp(`<h2>${name}</h2>`));
   }
   panel._scheduleSearch = 'not found';
   assert.match(panel._renderSchedule(), /No devices match these filters/);
-  assert.doesNotMatch(panel._renderSchedule(), /class="timeline-row"/);
   panel._onClick({ target: { closest: () => ({ dataset: { action: 'clear-schedule-filters' } }) } });
-  assert.equal(panel._filterDevices(panel._data.devices, true).length, 4);
-  assert.equal(JSON.stringify(panel._data.devices), before);
-  const html = panel._renderSchedule();
+  html = panel._renderSchedule();
   assert.match(html, /data-mode="" aria-pressed="true"/);
-  assert.match(html, /<h2>Observed meter<\/h2>/);
-  assert.doesNotMatch(html, /<strong>Observed meter<\/strong>/);
+  assert.doesNotMatch(html, /<h2>Observed meter<\/h2>/);
+  assert.equal(JSON.stringify(panel._data.devices), before);
 });
 
 test('shared device filters keep Schedule and Devices selections independent', () => {

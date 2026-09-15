@@ -1,5 +1,9 @@
 {
-  "schema": "battery-execution-policy-v1",
+  "schema": "battery-execution-policy-v2",
+  "supply_scope": {
+    "kind": "whole_house"
+  },
+  "solar_attribution": "proportional-self-consumed-pv-v1",
   "profile": "finite-continuation-v1",
   "view": "executable",
   "identity": {
@@ -44,6 +48,7 @@
     "discharge_efficiency": 0.9,
     "import_limit_w": 17000,
     "export_limit_w": 10000,
+    "wear_basis": "ac_throughput",
     "wear_sek_per_kwh": 0.1
   },
   "permissions": {
@@ -1425,10 +1430,10 @@
   },
   "quality": {
     "assurance": "exact-scoring-within-published-family",
-    "scorer_revision": "offline-household-v1",
-    "compiler_revision": "execution-v1",
-    "family_id": "family-1446393c110f04a67e2d5ba0",
-    "source_hash": "sha256:1446393c110f04a67e2d5ba081498d36f4e168f6fcaf65d9ef21d2fb9c42c2e7",
+    "scorer_revision": "offline-household-v2",
+    "compiler_revision": "execution-v2",
+    "family_id": "family-f27548bf52f56998a7740467",
+    "source_hash": "sha256:f27548bf52f56998a77404678b39c432badac9dea6986264de4b4dc45749cbc2",
     "numeric_tolerance_sek": 1e-7,
     "search_exhaustive_in_declared_graph": true,
     "search_pruned_prefixes": 0,

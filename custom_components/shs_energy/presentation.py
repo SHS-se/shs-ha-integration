@@ -180,17 +180,16 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         key = device["key"]
         mapping = device.get("mapping", {})
         system = device.get("system")
-        included = device.get("planning_role") == "controllable"
+        included = key not in options.get("excluded_device_readings", [])
+        planned = included and device.get("planning_role") == "controllable"
         device["included"] = included
-        device["choice_label"] = ("Included" if included else "Excluded") + (" · not reviewed" if not device.get("planning_choice_at") else "")
-        if not refreshed or (system == "battery" and "battery" not in choices.get("home", {})):
-            device["choice_label"] = "Waiting for website choices"
+        device["planned"] = planned
         controller_id = system or "device:" + key
         reason = None
-        if not included:
-            reason = "Include this device in the plan on the website first"
+        if not planned:
+            reason = "Choose Planned on the website before enabling execution"
         elif key in options.get("excluded_device_readings", []):
-            reason = "Share individual readings for this device before enabling control"
+            reason = "Include this device before enabling execution"
         elif not fresh:
             reason = "Refresh the website choices before enabling control"
         elif system == "battery":
@@ -224,11 +223,10 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
                     reason = command.get("reason") if command else "Waiting for instructions for this device"
         mode = device_mode(options, controller_id)
         device["mode"] = mode
-        device["included"] = included and mode != "monitoring"
         device["permission"] = {"enabled": mode == "controlling", "reason": reason, "verification_reason": verification_reason, "controller_id": controller_id}
         device["last_controller_result"] = deepcopy(controllers.get(controller_id))
         device["execution_status"] = execution_view(mode, controllers.get(controller_id))
-        device["optimisation_included"] = device["included"]
+        device["optimisation_included"] = planned
         device["mapping_readiness"] = {"state": device.get("mapping_status"), "reason": device.get("mapping_error")}
         command = (active or {}).get("device_commands", {}).get(key)
         if not status["actionable"]:
@@ -253,7 +251,7 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
             device["fields"] = [f for f in device.get("fields", []) if f["key"] != "temperature_entity_id"]
 
         device["fields"] = [f for f in device.get("fields", []) if f["key"] != "control_enabled"]
-        if not included:
+        if not planned:
             device["mapping_error"] = None
             device["execution_reason"] = None
     return devices

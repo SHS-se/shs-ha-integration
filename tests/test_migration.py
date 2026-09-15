@@ -52,7 +52,7 @@ class OptionMigrationTests(unittest.TestCase):
         self.assertNotIn("pool_temperature_maximum", migrated)
         self.assertEqual(migrated["pool_start_temperature_entity"], "number.nibe_start")
         self.assertEqual(migrated["pool_stop_temperature_entity"], "number.nibe_stop")
-        self.assertEqual(migrated["device_modes"], options["device_modes"])
+        self.assertEqual(migrated["device_modes"], {})
         self.assertEqual(migrate_options(migrated, source_version=13), (migrated, False))
 
     def test_retired_electrical_values_are_never_restored(self):
@@ -68,7 +68,7 @@ class OptionMigrationTests(unittest.TestCase):
                    'battery_authority_confirm_entity': 'sensor.work_mode', 'battery_authority_confirm_state': 'Remote EMS'}
         result, changed = migrate_options(options, source_version=10)
         self.assertTrue(changed)
-        self.assertEqual(result['device_modes']['$battery'], 'controlling')
+        self.assertEqual(result['device_modes'], {})
         self.assertNotIn('battery_control_enabled', result)
         self.assertTrue(all(not key.startswith('battery_authority') for key in result))
 

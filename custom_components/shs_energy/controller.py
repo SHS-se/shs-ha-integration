@@ -261,7 +261,7 @@ class ScheduledController:
                 return False
             override = mapping.get("control_override_entity")
             return not override or self.state(override).state == "off"
-        if device not in self.requested_systems:
+        if "$" + device in options.get("excluded_device_readings", []) or device not in self.requested_systems:
             return False
         if device_mode(options, device) not in EXECUTING_MODES:
             return False

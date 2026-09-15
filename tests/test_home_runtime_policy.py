@@ -69,7 +69,7 @@ class Harness:
                              ScopeParticipant('pool','control_verification',1,'external',('pool.enable',)))
         self.authority = ExecutionAuthority('config-1',s.identity.context,s.permissions,s.plant,
             ExecutionScope(s.identity.context.scope_revision,s.identity.context.battery_id,participants),
-            catalog_for(self.compiled), 'shs-runtime')
+            catalog_for(self.compiled), 'shs-runtime', s.supply_scope)
         self.event(AuthorityInstalled(self.authority,1))
         release = Request('approved-release',1,s.until_ms + 900000,native('Maximum Self Consumption',s.plant.charge_max_w,s.plant.discharge_max_w),())
         self.event(AuthorityChanged(self.group.spec.id,mode,1,release))
@@ -492,26 +492,35 @@ class ExecutableRuntimeTests(unittest.TestCase):
         h.observe(h.group.desired.target,envelope=Envelope(0,3000))
         self.assertNotEqual(h.state.policy.selected_id,'export')
 
-    def test_generated_schema_five_policy_trace_keeps_issued_reservation_after_expiry(self):
+    def test_generated_schema_six_policy_trace_keeps_issued_reservation_after_expiry(self):
         root=Path(__file__).parents[1]
         output=subprocess.run([sys.executable,str(root/'scripts/replay-home-runtime.py'),
             str(FIXTURES/'home-runtime-policy-binding.json')],check=True,capture_output=True,text=True)
         trace=json.loads(output.stdout)
         sends=[e for row in trace['rows'] for e in row['effects'] if e['type']=='Send']
         self.assertEqual(len(sends),1)
-        self.assertEqual(trace['final_checkpoint']['schema_version'],5)
+        self.assertEqual(trace['final_checkpoint']['schema_version'],6)
         self.assertEqual(trace['rows'][-1]['policy']['status'],'outside_coverage')
         self.assertEqual(len(trace['rows'][-1]['groups'][0]['attempts']),1)
         self.assertEqual(trace['rows'][-1]['groups'][0]['reservation_w']['import'],4000)
 
-    def test_schema_five_rejects_four_and_corrupt_grant_or_actuals_proof(self):
+    def test_schema_six_rejects_five_and_corrupt_grant_or_actuals_proof(self):
         h=Harness();h.offer();h.prepare();encoded=json.loads(encode_checkpoint(h.state))
-        self.assertEqual(encoded['schema_version'],5)
-        for mutate in (lambda v:v.update(schema_version=4),
+        self.assertEqual(encoded['schema_version'],6)
+        for mutate in (lambda v:v.update(schema_version=5),
             lambda v:v['state']['groups'][0]['attempts'][0]['grant'].update(epoch=999),
             lambda v:v['state']['policy']['watermark'].update(at_ms=1)):
             value=json.loads(json.dumps(encoded));mutate(value)
             with self.assertRaises(ValueError):decode_checkpoint(json.dumps(value).encode())
+
+    def test_scope_change_cannot_reuse_an_old_context_revision(self):
+        h = Harness()
+        wire = json.loads(h.compiled.source_json)
+        wire['supply_scope'] = {'kind': 'none'}
+        h.compiled = load(wire)
+        effects = h.offer()
+        self.assertIsNone(h.state.policy)
+        self.assertTrue(any(getattr(e, 'reason', '').startswith('policy_rejected') for e in effects))
 
     def test_backend_generated_policy_is_usable_with_local_native_catalog(self):
         compiled=read_execution_policy(BACKEND_POLICY.read_bytes());h=Harness(compiled=compiled)

@@ -360,6 +360,12 @@ async def async_apply_configuration(
             timezone.utc
         ).isoformat()
     hass.config_entries.async_update_entry(entry, options=options)
+    if "excluded_device_readings" in incoming and _entry_state(entry) == "loaded":
+        coordinator = entry.runtime_data
+        coordinator._plan_configuration_changed = True
+        await coordinator.controller.async_tick()
+        entry.async_create_background_task(hass, coordinator.async_refresh_device_configuration(),
+            name=f"{shs_const.DOMAIN}_refresh_included_inventory")
     return options
 
 
@@ -575,7 +581,7 @@ async def websocket_get_status(hass, connection, msg):
 
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{shs_const.DOMAIN}/config/control", vol.Required("config_entry"): str,
-    vol.Required("device_key"): str, vol.Required("mode"): vol.In(("monitoring", "planning", "control_verification", "controlling"))})
+    vol.Required("device_key"): str, vol.Required("mode"): vol.In(("control_verification", "controlling"))})
 @websocket_api.async_response
 async def websocket_control_permission(hass, connection, msg):
     entry = _entry_from_message(hass, msg["config_entry"])
@@ -589,13 +595,13 @@ async def websocket_control_permission(hass, connection, msg):
             raise ValueError("This equipment is no longer present")
         mode = msg["mode"]
         reason = device["permission"]["verification_reason" if mode == "control_verification" else "reason"]
-        if mode in ("control_verification", "controlling") and reason:
+        if mode == "controlling" and reason:
             raise ValueError(reason)
-        if mode == "planning" and device.get("planning_role") != "controllable":
-            raise ValueError("Include this device on the website and select its planning method first")
+        if not device["planned"]:
+            raise ValueError("Only Planned devices have execution permission")
         key = "$" + device["system"] if device.get("system") else device["key"]
         options = dict(entry.options)
-        previous_mode = options.get("device_modes", {}).get(key, "monitoring")
+        previous_mode = options.get("device_modes", {}).get(key, "control_verification")
         options["device_modes"] = {**options.get("device_modes", {}), key: mode}
         options[shs_const.OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(timezone.utc).isoformat()
         hass.config_entries.async_update_entry(entry, options=options)

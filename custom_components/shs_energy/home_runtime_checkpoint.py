@@ -1,4 +1,4 @@
-"""Closed version-5 JSON for the offline runtime and conservative crash restoration."""
+"""Closed version-6 JSON for the offline runtime and conservative crash restoration."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -113,7 +113,7 @@ def _check_state(state):
 
 def encode_checkpoint(state: runtime.HomeState) -> bytes:
     _check_state(state)
-    data = json.dumps({"schema_version": 5, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    data = json.dumps({"schema_version": 6, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > MAX_BYTES:
         raise ValueError("checkpoint exceeds byte limit")
     return data
@@ -121,7 +121,7 @@ def encode_checkpoint(state: runtime.HomeState) -> bytes:
 
 def decode_checkpoint(data: bytes) -> runtime.HomeState:
     value = read_runtime_json(data)
-    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 5:
+    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 6:
         raise ValueError("unsupported checkpoint version/fields")
     return _check_state(_decode(value["state"], runtime.HomeState))
 
