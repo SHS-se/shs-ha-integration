@@ -883,6 +883,17 @@ const scheduleFilterPanel = () => {
   return panel;
 };
 
+test('selected quarter heading shows the buy and sell prices it was planned on', () => {
+  const panel = scheduleFilterPanel();
+  const slot = panel._data.timeline.slots[0];
+  Object.assign(slot, { shadow_import_sek_per_kwh: 1.23456, shadow_export_sek_per_kwh: -0.004 });
+  assert.match(panel._renderSchedule(), /<h3>[^<]* · Published prices: Buy 1\.23 SEK\/kWh, Sell 0\.00 SEK\/kWh<\/h3>/);
+  Object.assign(slot, { binding: false, shadow_export_sek_per_kwh: null });
+  assert.match(panel._renderSchedule(), /<h3>[^<]* · Estimated prices: Buy 1\.23 SEK\/kWh<\/h3>/);
+  delete slot.shadow_import_sek_per_kwh;
+  assert.match(panel._renderSchedule(), /<h3>[^<]* · Estimated prices<\/h3>/);
+});
+
 test('schedule combines search, room, category and mode across timeline, details and cards', () => {
   const panel = scheduleFilterPanel();
   panel._scheduleSearch = ' HEATER ';

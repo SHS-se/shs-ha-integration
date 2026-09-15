@@ -19,6 +19,12 @@ class PresentationTests(unittest.TestCase):
         result['slots'][0]['battery_command']['charge_limit_w'] = -1
         self.assertNotEqual(source['battery_command']['charge_limit_w'], -1)
 
+    def test_timeline_includes_the_prices_each_quarter_was_planned_on(self):
+        plan = json.loads((Path(__file__).parent / 'fixtures/schema-8-battery-plan.json').read_text())['plan']
+        plan['plans']['priority']['slots'][0].update(shadow_import_sek_per_kwh=1.25, shadow_export_sek_per_kwh=0.4)
+        slot = timeline(plan, {'state': 'ready'})['slots'][0]
+        self.assertEqual((slot['shadow_import_sek_per_kwh'], slot['shadow_export_sek_per_kwh']), (1.25, 0.4))
+
     def test_timeline_includes_each_slots_read_only_command_preview(self):
         preview = lambda slot: {'device:heater': {'fields': [{'label': 'Target', 'value': slot['start']}]}}
         result = timeline(self.plan, {'state': 'ready'}, command_preview=preview)

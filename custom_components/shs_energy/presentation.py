@@ -60,7 +60,10 @@ def timeline(plan, status, *, command_preview=None):
          "commands": deepcopy(slot.get("device_commands", {})),
          "battery_command": deepcopy(slot.get("battery_command")),
          "command_previews": command_preview(slot) if command_preview is not None else {},
-         **{key: slot.get(key) for key in ("battery_charge_w", "battery_discharge_w", "ev_target_current_a", "pool_w")}}
+         # Shadow prices are what the planner valued each quarter at: the
+         # published price where one exists, otherwise the server's estimate.
+         **{key: slot.get(key) for key in ("battery_charge_w", "battery_discharge_w", "ev_target_current_a", "pool_w",
+                                           "shadow_import_sek_per_kwh", "shadow_export_sek_per_kwh")}}
         for slot in plan["plans"]["priority"]["slots"]
     ], "reason": None}
 
