@@ -278,7 +278,7 @@ class ScheduledController:
         options = self.options()
         if options != self.active_options or self.closed:
             raise ValueError("configuration changed during execution")
-        slot = self.coordinator.current_plan_slot
+        plan, slot = self.coordinator.binding_plan_for(self.device, options)
         if slot != self.active_slot:
             now = datetime.now(timezone.utc)
             old_start = self.active_slot["start"]
@@ -855,7 +855,8 @@ class ScheduledController:
     async def execute_device(self, device, options, slot):
         key = device.removeprefix("device:")
         mapping = options["device_control_mappings"][key]
-        models = self.coordinator.optimisation_plan["device_models"]
+        selected, _ = self.coordinator.binding_plan_for(device, options)
+        models = selected["device_models"]
         validate_commands(slot["device_commands"], models)
         command = slot["device_commands"][key]
         if command["type"] == "unavailable":
@@ -1189,6 +1190,9 @@ class ScheduledController:
                 if devices is not None and device not in devices:
                     continue
                 self.device = device
+                plan, slot = self.coordinator.binding_plan_for(device, options)
+                self.active_options, self.active_slot = deepcopy(options), deepcopy(slot)
+                self.active_plan_id = plan.get("plan_id")
                 self.write_attempted = False
                 if self.scheduler is not None:
                     self.scheduler.begin_device(device)

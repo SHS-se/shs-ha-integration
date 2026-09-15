@@ -712,3 +712,41 @@ def build_device_models(
     if device_gaps:
         raise OptimisationInputError(*device_gaps, remedy=REMEDY_DEFECT)
     return device_models, degraded
+
+
+def build_operating_scope(options, devices, device_models, device_actuals, horizon):
+    """Freeze external electrical demand before any hypothetical thermal enrichment.
+
+    The last completed meter quarter conditions only the current quarter. The
+    subsequent empirical forecast remains an expectation, not a claim that the
+    observed running state persists through the planning horizon.
+    """
+    if __package__:
+        from .operating_modes import operating_mode_identity, system_device_keys
+    else:
+        from operating_modes import operating_mode_identity, system_device_keys
+    from math import isfinite
+    owners = system_device_keys(devices, options)
+    modes = operating_mode_identity(options)
+    model_owners = {model["key"]: "$" + owners[model["key"]] if model["key"] in owners else model["key"]
+                    for model in device_models}
+    # Explicit monitoring entries are needed only when they own an included model.
+    for owner in model_owners.values():
+        if owner not in modes:
+            raise OptimisationInputError(f"Included model {owner} has no planning authority")
+    previous_start = horizon[0] - timedelta(minutes=15)
+    recent = next((row.get("device_energy_kwh", {}) for row in device_actuals
+                   if datetime.fromisoformat(row["start"]) == previous_start), {})
+    external = {}
+    for model in device_models:
+        key = model["key"]
+        if modes[model_owners[key]] == "controlling":
+            continue
+        energy = recent.get(key)
+        observation = None
+        if isinstance(energy, (int, float)) and not isinstance(energy, bool) and isfinite(energy) and 0 <= energy <= 25:
+            observation = {"start": previous_start.isoformat(), "end": horizon[0].isoformat(),
+                           "average_w": energy * 4000, "source": "completed_meter_quarter"}
+        external[key] = {"forecast_w_by_slot": list(model["forecast_w_by_slot"]),
+                         "recent_observation": observation}
+    return {"modes": modes, "device_owners": model_owners, "external_demands": external}

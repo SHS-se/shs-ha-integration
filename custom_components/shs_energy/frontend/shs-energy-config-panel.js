@@ -1028,10 +1028,15 @@ class ShsEnergyConfigPanel extends HTMLElement {
       <details class="card compact"><summary>Equipment present in this home</summary><p>Choose what is installed. Planning participation is chosen separately on the website.</p>${equipment.map(s => this._renderField({ ...s.toggle, help: "Describes installed equipment; planning participation and control permission are configured separately." }, this._draft[s.toggle.key])).join("")}</details></section>`;
   }
 
+  _scheduleSlot(device, slot) {
+    return device.mode === "controlling" && slot.execution ? slot.execution : slot;
+  }
+
   _scheduleCommand(device, slot) {
+    slot = this._scheduleSlot(device, slot);
     const deviceAction = { heating: "heating", cooling: "cooling", hot_water: "heating", pool_heating: "heating", ev_charging: "charging" }[device.category] || "general";
     const result = (text, active = false, action = deviceAction) => ({ text, active, action: active ? action : "idle" });
-    if (device.system && !this._data.timeline?.capabilities?.[device.system]) return result("No instruction");
+    if (device.system && !(slot.capabilities || this._data.timeline?.capabilities)?.[device.system]) return result("No instruction");
     if (device.system === "battery") {
       const command = slot.battery_command;
       if (!command || command.schema_version !== 2) return result("No supported instruction");
@@ -1064,6 +1069,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _scheduleCommandDetail(device, slot) {
+    slot = this._scheduleSlot(device, slot);
     const preview = slot.command_previews?.[device.system || `device:${device.key}`];
     if (!preview) return "";
     if (preview.error) return `<span class="command-detail muted"> | Command preview unavailable: ${this._escape(preview.error)}</span>`;
@@ -1102,7 +1108,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         const description = `${SCHEDULE_ACTIONS[action].label} · ${text}`;
         return `<button class="slot ${active ? "running" : ""} ${slot.binding ? "" : "advisory"}" data-action="slot" data-index="${index}" data-schedule-action="${action}" aria-label="${this._escape(d.name + ', ' + this._time(slot.start) + ', ' + description + (slot.binding ? ', published prices' : ', estimated prices'))}" title="${this._escape(description)}"></button>`;
       }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Published prices" : "Estimated prices"}${this._schedulePrices(selected)}</h3><ul>${scheduledDevices.map(d => `<li>${this._escape(d.name)}: ${this._escape(this._scheduleCommand(d, selected).text)}${this._scheduleCommandDetail(d, selected)}</li>`).join("")}</ul></div>` : ""}` : `<p>${slots.length ? "No included devices match these filters." : "No actionable schedule is available. Details are in Status."}</p>`}
-      <p>Targets shown here are requests. They do not prove that heat, charging or power was delivered.</p></div>
+      <p>Controlling devices show live requests; Planning and Control verification devices show hypothetical requests. Targets do not prove that heat, charging or power was delivered.</p></div>
       <div class="card"><h2>Controller diagnostics</h2><p>Download every non-excluded device in Monitoring, Planning, Control verification or Controlling, with its current mode, configuration, readings, plan and controller status. Retained runtime evaluations and real service calls are separate from simulated verification commands and coverage. Verification does not prove physical response. The file contains local entity IDs and configuration. Observations are sampled about once a minute in every mode, with up to 720 samples retained. Energy-counter differences are labelled as interval averages, with missing or stale readings identified. Current-session checks and coverage are summarised separately from older evidence. Repeated checks are grouped; up to 2,000 groups of each kind are retained. Downloads are gzip-compressed JSON.</p><button class="secondary" data-action="verification">Download controller diagnostics</button></div>
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
       <p class="muted">Website choices define the planning method. Device mode here controls participation and execution. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>

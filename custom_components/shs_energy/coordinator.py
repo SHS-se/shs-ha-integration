@@ -1117,9 +1117,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @property
     def operational_status(self) -> dict[str, Any]:
         from .presentation import operational_status
-        result = operational_status(self.optimisation_plan,
-            resolved_options(self.hass, dict(self.entry.options))[OPT_PLANNING_MODE],
-            self.optimisation_missing_inputs, datetime.now(timezone.utc))
+        options = resolved_options(self.hass, dict(self.entry.options))
+        result = operational_status(self.optimisation_plan, options[OPT_PLANNING_MODE],
+            self.optimisation_missing_inputs, datetime.now(timezone.utc), options=options)
         if self._plan_configuration_changed:
             result.update(state="not_configured", label="Configuration changed",
                 reason="Device configuration changed; cached plan retained but requires replacement", actionable=False)
@@ -2229,7 +2229,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> dict[str, Any]:
         from .configuration_schema import shared_devices
         from .operating_modes import planning_devices
-        devices = planning_devices(shared_devices(devices, options), options)
+        scope_devices = shared_devices(devices, options)
+        devices = planning_devices(scope_devices, options)
         captured = dt_util.utcnow()
         horizon = utc_slots(captured, OPTIMISATION_HORIZON_HOURS)
         horizon_end = horizon[-1] + timedelta(minutes=15)
@@ -2658,6 +2659,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "services": services,
             "service_requirement_sample_days": service_samples,
         }
+        from .planning import build_operating_scope
+        snapshot["operating_scope"] = build_operating_scope(
+            options, scope_devices, device_models, device_profile_actuals, horizon
+        )
         # Outdoor temperature is what makes a thermal projection forward-
         # looking. It is attached only when a provider actually covered the
         # horizon, so a short or missing forecast leaves the field absent
@@ -3045,6 +3050,22 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if start <= now < start + timedelta(minutes=15):
                 return slot
         return None
+
+    def binding_plan_for(self, device, options):
+        """Select and validate the physical or hypothetical plan as one unit."""
+        from .operating_modes import scoped_plan
+        from .presentation import operational_status
+        if self._plan_configuration_changed:
+            return {}, None
+        plan = scoped_plan(self.optimisation_plan, options, device)
+        now = dt_util.utcnow()
+        status = operational_status(plan, options.get("planning_mode", "live"), [], now)
+        if not status["actionable"]:
+            return plan or {}, None
+        slot = next((slot for slot in plan["plans"]["priority"]["slots"]
+                     if datetime.fromisoformat(slot["start"]) <= now
+                     < datetime.fromisoformat(slot["start"]) + timedelta(minutes=15)), None)
+        return plan, slot
 
     @property
     def reactive_surplus_w(self) -> float | None:

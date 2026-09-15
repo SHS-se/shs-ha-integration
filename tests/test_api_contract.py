@@ -22,8 +22,8 @@ class ApiContractTests(unittest.TestCase):
     def status(self, **overrides):
         return {
             "api_version": API_VERSION,
-            "supported_snapshot_schema_versions": [5, 6, 7, 8],
-            "supported_plan_schema_versions": [5, 6, 7, 8],
+            "supported_snapshot_schema_versions": [5, 6, 7, 8, 9],
+            "supported_plan_schema_versions": [5, 6, 7, 8, 9],
             "minimum_snapshot_schema_version": 5,
             "minimum_plan_schema_version": 5,
             "latest_plan_request_id": None,

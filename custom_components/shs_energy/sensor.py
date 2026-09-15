@@ -86,6 +86,9 @@ class ShsBaseSensor(CoordinatorEntity[ShsStatusCoordinator], SensorEntity):
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
+    def planned_request(self, device):
+        return self.coordinator.binding_plan_for(device, self.coordinator.controller.options())
+
     @property
     def available(self) -> bool:
         """A failed refresh does not erase a previously received value."""
@@ -248,14 +251,13 @@ class ShsPlanRequestSensor(ShsBaseSensor):
 
     @property
     def native_value(self) -> float | None:
-        slot = self.coordinator.current_plan_slot
+        plan, slot = self.planned_request(self.device)
         # Unavailable means "the planner has no authority"; zero is reserved
         # for a valid binding slot that explicitly requests the device off.
         if slot is None:
             return None
         if self.device != "boiler":
             return float(slot.get(f"{self.device}_w", 0))
-        plan = self.coordinator.optimisation_plan or {}
         duty_service = next(
             (
                 service for service in plan.get("services", [])
@@ -271,13 +273,12 @@ class ShsPlanRequestSensor(ShsBaseSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        slot = self.coordinator.current_plan_slot or {}
+        plan, slot = self.planned_request(self.device)
+        slot = slot or {}
         attributes = {
             "slot_start": slot.get("start"),
             "binding": slot.get("binding"),
-            "plan_status": (
-                self.coordinator.optimisation_plan or {}
-            ).get("status"),
+            "plan_status": plan.get("status"),
             "advisory_only": self.coordinator.entry.options.get("device_modes", {}).get("$" + self.device) != "controlling",
         }
         if self.device == "ev":
@@ -309,7 +310,7 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
         self._attr_unique_id = f"{coordinator.entry.entry_id}_ev_planned_current"
 
     def _control(self) -> dict[str, Any] | None:
-        plan = self.coordinator.optimisation_plan or {}
+        plan, _ = self.planned_request("ev")
         for service in plan.get("services", []):
             control = service.get("control", {})
             if (
@@ -369,15 +370,15 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
 
     @property
     def native_value(self) -> float | None:
-        slot = self.coordinator.current_plan_slot
-        plan = self.coordinator.optimisation_plan or {}
+        plan, slot = self.planned_request("ev")
         if slot is None or not plan.get("capabilities", {}).get("ev"):
             return None
         return float(slot["ev_target_current_a"])
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        slot = self.coordinator.current_plan_slot or {}
+        _, slot = self.planned_request("ev")
+        slot = slot or {}
         control = self._control() or {}
         current_entity = self._current_entity()
         current_state = (

@@ -243,7 +243,7 @@ async def _configuration_payload(
     return {
         "labels": LABELS,
         "operation": operation,
-        "timeline": timeline(plan, operation, command_preview=coordinator.controller.preview_commands),
+        "timeline": timeline(plan, operation, command_preview=coordinator.controller.preview_commands, options=options),
         "website_url": shs_const.website_url(entry.data[shs_const.CONF_BASE_URL], "/portal/energy-modeling?tab=devices"),
         "configured_keys": list(entry.options),
         "meter_inventory": [{"key": d["key"], "name": device_name(entity_names.get(d["key"]) or d["name"])} for d in requested],
@@ -569,7 +569,7 @@ async def websocket_get_status(hass, connection, msg):
     coordinator = entry.runtime_data
     status = coordinator.operational_status
     connection.send_result(msg["id"], {"operation": status,
-        "timeline": timeline(coordinator.optimisation_plan, status, command_preview=coordinator.controller.preview_commands),
+        "timeline": timeline(coordinator.optimisation_plan, status, command_preview=coordinator.controller.preview_commands, options=coordinator.controller.options()),
         "controllers": dict(coordinator.controller.status)})
 
 
@@ -600,7 +600,7 @@ async def websocket_control_permission(hass, connection, msg):
         options[shs_const.OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(timezone.utc).isoformat()
         hass.config_entries.async_update_entry(entry, options=options)
         await entry.runtime_data.controller.async_tick()
-        if (previous_mode == "monitoring") != (mode == "monitoring"):
+        if previous_mode != mode:
             entry.async_create_background_task(
                 hass, entry.runtime_data.async_optimisation_push(force_plan=True),
                 name=f"{shs_const.DOMAIN}_replan_after_mode_change",

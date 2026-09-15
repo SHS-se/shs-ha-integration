@@ -1007,3 +1007,17 @@ test('schedule action legend shares palette colours with slots and retains price
   }
   assert.match(css, /\.slot\.advisory \{ background-image:repeating-linear-gradient/);
 });
+
+test('mixed-mode schedule selects execution targets only for controlling devices', () => {
+  const panel = makePanel();
+  panel._data.timeline = { capabilities: { battery: true, pool: true } };
+  const slot = { battery_command: { schema_version: 2, operation: 'solar_charge', charge_limit_w: 8800, discharge_limit_w: 0 },
+    pool_w: 0, execution: { capabilities: { battery: true, pool: false },
+      battery_command: { schema_version: 2, operation: 'grid_charge', charge_limit_w: 500, discharge_limit_w: 0 },
+      command_previews: { battery: { fields: [{ label: 'Charge limit', value: .5, unit: 'kW' }] } } } };
+  assert.match(panel._scheduleCommand({ system: 'battery', mode: 'controlling' }, slot).text, /Charge up to 500 W/);
+  assert.match(panel._scheduleCommand({ system: 'battery', mode: 'control_verification' }, slot).text, /Capture surplus/);
+  assert.match(panel._scheduleCommandDetail({ system: 'battery', mode: 'controlling' }, slot), /0.5 kW/);
+  assert.equal(panel._scheduleCommand({ system: 'pool', mode: 'control_verification' }, slot).text, 'No heating requested');
+  assert.equal(panel._scheduleCommand({ system: 'pool', mode: 'controlling' }, slot).text, 'No instruction');
+});

@@ -1061,6 +1061,60 @@ def validate_plan_contract(
         raise OptimisationInputError(
             "optimisation plan mode is unsupported", remedy=REMEDY_DEFECT
         )
+    if plan["schema_version"] == 9:
+        scope = plan.get("operating_scope")
+        execution = plan.get("execution_plan")
+        if not isinstance(scope, dict) or not all(isinstance(scope.get(k), dict)
+                for k in ("modes", "device_owners", "external_demands")):
+            raise OptimisationInputError("plan operating scope is missing or invalid")
+        from_modes = scope["modes"]
+        if (any(mode not in ("monitoring", "planning", "control_verification", "controlling") for mode in from_modes.values())
+                or not {"$battery", "$pool", "$ev"} <= from_modes.keys()):
+            raise OptimisationInputError("plan operating modes are invalid")
+        models = plan.get("device_models")
+        if (not isinstance(models, list) or any(not isinstance(m, dict) or not isinstance(m.get("key"), str) for m in models)
+                or set(scope["device_owners"]) != {m["key"] for m in models}):
+            raise OptimisationInputError("plan operating scope inventory differs from device models")
+        if any(not isinstance(owner, str) or owner not in from_modes for owner in scope["device_owners"].values()):
+            raise OptimisationInputError("plan operating scope has an unknown owner")
+        live = {key for key, owner in scope["device_owners"].items() if from_modes[owner] == "controlling"}
+        if set(scope["external_demands"]) != set(scope["device_owners"]) - live:
+            raise OptimisationInputError("plan external demand coverage is incomplete")
+        if (not isinstance(execution, dict) or execution.get("schema_version") != 8
+                or "execution_plan" in execution or "operating_scope" in execution):
+            raise OptimisationInputError("plan requires a self-contained execution plan")
+        if any(execution.get(key) != plan.get(key) for key in
+               ("plan_id", "snapshot_id", "issued_at", "valid_until", "binding_until", "timezone", "mode")):
+            raise OptimisationInputError("execution plan identity or horizon differs")
+        execution_models = execution.get("device_models")
+        if (not isinstance(execution_models, list)
+                or any(not isinstance(m, dict) or not isinstance(m.get("key"), str) for m in execution_models)
+                or {m["key"] for m in execution_models} != live):
+            raise OptimisationInputError("execution plan contains devices outside live control")
+        if from_modes["$battery"] != "controlling" and execution.get("battery") is not None:
+            raise OptimisationInputError("execution plan includes a hypothetical battery")
+        for system in ("battery", "pool", "ev"):
+            if from_modes["$" + system] != "controlling" and execution.get("capabilities", {}).get(system):
+                raise OptimisationInputError("execution plan enables a hypothetical system")
+        validate_plan_contract(execution, now, require_recent_issue=require_recent_issue)
+        starts = [slot["start"] for slot in execution["plans"]["priority"]["slots"]]
+        for scenario in ("baseline", "priority", "cost"):
+            if [s.get("start") for s in plan.get("plans", {}).get(scenario, {}).get("slots", [])] != starts:
+                raise OptimisationInputError("execution plan slot horizon differs")
+        def valid_power(value):
+            return type(value) in (int, float) and isfinite(value) and 0 <= value <= 100_000
+        for demand in scope["external_demands"].values():
+            if (not isinstance(demand, dict) or not isinstance(demand.get("forecast_w_by_slot"), list)
+                    or len(demand["forecast_w_by_slot"]) != len(starts)
+                    or not all(valid_power(w) for w in demand["forecast_w_by_slot"])):
+                raise OptimisationInputError("external demand requires finite nonnegative watts for every slot")
+            recent = demand.get("recent_observation", {})
+            if recent is not None:
+                if (not isinstance(recent, dict) or recent.get("source") != "completed_meter_quarter"
+                        or not valid_power(recent.get("average_w"))
+                        or _timestamp(recent.get("end")) != _timestamp(starts[0])
+                        or _timestamp(recent.get("start")) != _timestamp(starts[0]) - timedelta(minutes=15)):
+                    raise OptimisationInputError("external demand observation must be the last completed meter quarter")
     # `model_version` is deliberately *not* a gate. It names the algorithm, not
     # the contract, and the two are independent: renaming the planner changes
     # nothing this integration reads. Gating on it meant the server could brick

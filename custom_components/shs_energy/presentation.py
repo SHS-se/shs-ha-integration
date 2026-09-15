@@ -22,7 +22,7 @@ def device_name(name):
     return stripped or value
 
 
-def operational_status(plan, mode, missing, now):
+def operational_status(plan, mode, missing, now, *, options=None):
     result = {"state": "unavailable", "reason": "Waiting for a plan", "actionable": False,
               "now": now.isoformat(), "plan_id": (plan or {}).get("plan_id"),
               **{key: (plan or {}).get(key) for key in ("issued_at", "binding_until", "valid_until")}}
@@ -37,10 +37,23 @@ def operational_status(plan, mode, missing, now):
             valid_until = datetime.fromisoformat(plan["valid_until"])
             check_at = issued if now >= valid_until else now
             validate_plan_contract(plan, check_at, require_recent_issue=False)
-            if now >= valid_until:
+            selected = plan
+            scope_changed = False
+            if options is not None:
+                if __package__:
+                    from .operating_modes import operating_mode_identity
+                else:
+                    from operating_modes import operating_mode_identity
+                modes = operating_mode_identity(options)
+                scope_changed = plan.get("operating_scope", {}).get("modes") != modes
+                if not scope_changed and "controlling" in modes.values():
+                    selected = plan["execution_plan"]
+            if scope_changed:
+                result.update(state="not_configured", reason="Waiting for a plan for the current device modes")
+            elif now >= valid_until:
                 result.update(state="expired", reason="The last plan has expired")
-            elif plan["status"] != "ready":
-                result.update(state=plan["status"], reason=LABELS[plan["status"]])
+            elif selected["status"] != "ready":
+                result.update(state=selected["status"], reason=LABELS[selected["status"]])
             elif now >= datetime.fromisoformat(plan["binding_until"]):
                 result.update(state="ready", reason="Executing cached schedule using estimated prices", actionable=True)
             else:
@@ -51,12 +64,21 @@ def operational_status(plan, mode, missing, now):
     return result
 
 
-def timeline(plan, status, *, command_preview=None):
+def timeline(plan, status, *, command_preview=None, options=None):
     """Never expose an invalid/expired schedule as actionable instructions."""
     if status["state"] not in {"ready", "advisory_only"}:
         return {"capabilities": {}, "slots": [], "reason": status["reason"]}
+    if plan.get("schema_version") == 9 and options is not None:
+        if __package__:
+            from .operating_modes import operating_mode_identity
+        else:
+            from operating_modes import operating_mode_identity
+        if plan["operating_scope"]["modes"] != operating_mode_identity(options):
+            return {"capabilities": {}, "slots": [], "reason": "Waiting for a plan for the current device modes"}
+    execution = timeline(plan["execution_plan"], status, command_preview=command_preview) if plan.get("execution_plan") else None
     return {"capabilities": deepcopy(plan.get("capabilities", {})), "slots": [
         {"start": slot["start"], "binding": slot["binding"],
+         **({"execution": {**execution["slots"][i], "capabilities": execution["capabilities"]}} if execution else {}),
          "commands": deepcopy(slot.get("device_commands", {})),
          "battery_command": deepcopy(slot.get("battery_command")),
          "command_previews": command_preview(slot) if command_preview is not None else {},
@@ -64,7 +86,7 @@ def timeline(plan, status, *, command_preview=None):
          # published price where one exists, otherwise the server's estimate.
          **{key: slot.get(key) for key in ("battery_charge_w", "battery_discharge_w", "ev_target_current_a", "pool_w",
                                            "shadow_import_sek_per_kwh", "shadow_export_sek_per_kwh")}}
-        for slot in plan["plans"]["priority"]["slots"]
+        for i, slot in enumerate(plan["plans"]["priority"]["slots"])
     ], "reason": None}
 
 

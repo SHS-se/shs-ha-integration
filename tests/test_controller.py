@@ -84,6 +84,10 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.coordinator = SimpleNamespace(current_plan_slot=self.slot, optimisation_plan={
             'plan_id': 'test', 'schema_version': 8, 'capabilities': dict.fromkeys(('battery', 'ev', 'pool'), True),
             'device_models': [{'key': 'charger', 'category': 'ev_charging', 'control_type': 'variable_power'}]})
+        # Sequencing tests inject a current binding plan; scope selection has
+        # separate cross-mode tests using the real scoped_plan function.
+        self.coordinator.binding_plan_for = lambda device, options: (
+            self.coordinator.optimisation_plan, self.coordinator.current_plan_slot)
         self.coordinator.async_cached_device_configuration = AsyncMock(return_value=[
             {"key": "charger", "control_type": "variable_power", "category": "ev_charging"},
             {"key": "pool", "control_type": "switch_schedule", "category": "pool_heating"}])
@@ -108,6 +112,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                     self.states[sensor].last_reported = datetime.now(timezone.utc)
         self.hass = SimpleNamespace(states=SimpleNamespace(get=self.states.get), services=SimpleNamespace(async_call=call))
         self.controller = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options))
+        self.controller.device = "battery"
         # Timeouts are exercised as refusal rather than sleeping in a test.
         async def confirm(predicate, error):
             self.controller.check_authority()
