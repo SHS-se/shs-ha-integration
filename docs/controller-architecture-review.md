@@ -1,5 +1,12 @@
 # Controller architecture review and battery release gates
 
+## Updated battery release requirements — 15 September 2026
+
+The latest agreement replaces the four-mode target with three separately owned participation facts and adds explicit battery house-supply scope. The v35 rating-wide correction is not the final policy. Release gates now include metadata exclusion, immutable role/scope identity, Verification external demand, graph partition, aligned subgroup observations, solar attribution and native scope enforcement, as well as existing C + V and single-writer gates. Earlier test counts and completion claims below do not establish this new scope.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 Current assessment, 15 September 2026: the usable battery policy and mixed-mode
 software execution/ownership stage is implemented in `0.8.0-beta.91`. The
 [execution design](battery-execution-design.md) and [binding contract](policy-binding.md)

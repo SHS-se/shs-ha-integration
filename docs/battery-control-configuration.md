@@ -1,5 +1,12 @@
 # Battery configuration and execution — 11 September 2026
 
+## Replacement supply semantics — 15 September 2026
+
+The operation/mode tables below describe the current native adapter. The target adds explicit None/Whole house/Base/Selected/Base+selected house-supply scope, separately from forecast watts, economic action and hardware ceilings. The adapter must enforce the measured eligible-deficit bound for every operation that supplies the house, including forced routes. Solar attribution must be explicit; no forecast/rated-power fallback is introduced. Existing handover is a separate approved ownership protocol.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 Integration/device selection remains a proposal in [the catalog notes](device-catalog-design.md).
 It is not implemented by this change.
 

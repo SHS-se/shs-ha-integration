@@ -1,5 +1,12 @@
 # Network traffic diagnostics
 
+## Inclusion boundary update — 15 September 2026
+
+The target exclusion rule stops future individual device metadata, inventory entries, profiles and readings, not merely readings. Publish a versioned complete Included inventory to retire prior membership, while keeping whole-house totals and independently shared observations. Existing traffic figures below describe the earlier payload and are not proof that this boundary is implemented.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 On the Smart Home Solutions Energy integration entry in **Settings → Devices &
 services**, open its menu and choose **Download diagnostics**. The
 `network_traffic` section contains counters since the current API client was

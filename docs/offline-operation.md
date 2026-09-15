@@ -1,5 +1,12 @@
 # Cached execution and cloud exchange
 
+## Participation and supply validity — 15 September 2026
+
+Persist the independently owned inclusion/planning/authority revisions and the accepted battery scope with existing validity, grant and pending-effect records. Local exclusion fences optimization writes immediately; offline cached website state cannot resurrect authority. Missing scope membership or required subgroup readings is unavailable coverage, not permission to substitute forecast demand, whole-house scope or rated power. Continue only under the existing accepted-policy and explicit release protocol; this decision adds no fallback.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 HA executes the last validated schedule locally until `valid_until`, the end of
 its supplied slots (up to 72 hours). `binding_until` describes published-price
 coverage, not an execution lease: later slots use estimated prices. Hardware

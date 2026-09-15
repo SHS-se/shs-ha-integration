@@ -1,5 +1,12 @@
 # House-battery implementation scope
 
+## Participation and supply added to implementation scope — 15 September 2026
+
+Add the three-owner participation contract, removal of excluded-device metadata, role-based chart accounting, explicit battery supply selector, solar attribution, and live eligible-demand enforcement to the required battery work packages. Reuse existing scorer/compiler/evaluator/reconciliation boundaries. Four local modes and rating-wide full-residual supply are current implementation inputs to migrate, not acceptance criteria. Verify mixed-mode physical demand, observation quality, subgroup capability and future-cost ranking before rollout.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 **Progress update, 14 September:** the scorer, captured accounting audit, bounded
 battery suffix compiler, diagnostic time/state coverage, pure runtime/checkpoint,
 gross actuals ledger and exact-anchor HA binding now exist. They remain offline

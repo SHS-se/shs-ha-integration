@@ -1,5 +1,12 @@
 # Mixed-mode execution (0.8.0-beta.92)
 
+## Next participation contract — 15 September 2026
+
+Schema 9 below remains dated implementation evidence. Its four local modes are replaced in the agreed design by HA inclusion, website planning and HA Verification/Controlling authority. Verification devices remain separately Planned but external in the executable demand model. Base consumption excludes all Planned devices; execution external demand adds those without effective authority once. Explicit battery supply scope selects accounting demand independently of whether each Planned device is physically controlled.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 The integration now sends schema 9 with the captured device modes, physical
 owners and empirical demand for devices outside Controlling mode. A completed
 meter quarter conditions their current-quarter demand; missing evidence stays

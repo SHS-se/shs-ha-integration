@@ -1,5 +1,12 @@
 # Device make/model catalog — requirements
 
+## Participation and physical-owner boundary — 15 September 2026
+
+The catalog provides capabilities, mappings and physical-owner groups; it does not decide website planning roles or revive HA authority. Included/Excluded is chosen on HA Devices. Only Planned equipment appears on Schedule in Verification/Controlling. Battery catalog responses must support and commission the explicit supply-scope bound; native Maximum Self Consumption cannot identify base or selected devices itself. An installation power rating is a physical maximum, not supply intent.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 Status: incremental design, started 11 September 2026. This is a new requirements
 record, not a revival of the rolled-back catalog design or approval to implement
 a catalog. Add decisions as concrete device cases become understood.

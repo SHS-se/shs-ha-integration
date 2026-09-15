@@ -1,5 +1,12 @@
 # Actual energy ledger
 
+## Scope is not source measurement — 15 September 2026
+
+Record the supply-scope and participation identity with decision evidence without resetting physical energy accounting. Scope controls the amount permitted to offset eligible demand; it does not prove which appliance received battery electrons. Excluded consumption remains in aggregate meters. Keep gross consumption, solar and battery flows separate, subtract PV once, and label any per-device source/cost attribution as accounting rather than direct measurement.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 Review update: the expired-policy retention defect from the
 [architecture review](controller-architecture-review.md) is fixed. The
 [recovery follow-up](runtime-recovery-fixes.md) adds per-stream settlement and

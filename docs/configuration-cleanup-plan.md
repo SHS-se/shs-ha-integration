@@ -1,5 +1,12 @@
 # Integration configuration cleanup plan
 
+## Superseding interface decision — 15 September 2026
+
+This decision supersedes the older two-line planning/permission card proposal, unreviewed-choice prompts, local four-mode selector and sharing selector under Energy. Included/Excluded is owned on Devices; Monitoring/Planned is owned on the website; Schedule contains only Planned equipment and Verification/Controlling. Delete the redundant inclusion/review/Website-link rows. Preserve genuine readiness and release status; do not promote old control grants after re-admission.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 Prepared 8 September 2026 against repository commit `dd17660` and a read-only inspection of the installed `0.8.0-beta.20` integration. Phases 0–4 are implemented. Phase 4 was implemented before Phase 3; Phase 3 builds on it. Phase 5's beta rollout and live persistence checks are verified; physical commissioning remains open. The screenshots are evidence of the interface, not instructions to execute.
 
 ## Intended outcome

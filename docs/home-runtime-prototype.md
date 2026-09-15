@@ -1,5 +1,12 @@
 # Household runtime and restart journal prototype
 
+## Later design decision — 15 September 2026
+
+Preserve the dated implementation/rollout evidence below. The agreed participation ownership, metadata exclusion, graph partition and explicit battery supply scope supersede conflicting target requirements; this older record is not an instruction to deploy the replacement.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 Review update: the [14 September architecture review and battery release gates](controller-architecture-review.md)
 compares this prototype with the target and proposes its live host/mixed-mode
 boundary. Its four reproduced runtime defects are now fixed in

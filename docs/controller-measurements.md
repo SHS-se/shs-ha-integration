@@ -1,5 +1,12 @@
 # Controller baseline measurements
 
+## Measurement terminology for the replacement — 15 September 2026
+
+Record HA inclusion, website planning role, requested/effective HA authority and battery supply scope separately. Only Planned equipment has Verification/Controlling command evidence; aggregate physical observations still cover the household. Distinguish gross base consumption, external demand and signed net demand. Energy-counter averages are not instantaneous watts. Diagnostics must show eligible demand, PV attribution, measured bound, economic selection and enforcement quality; scope cannot be inferred from a forecast or chart colour. Older exports below retain their original labels.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 Keep devices in **Control verification** while collecting the baseline. Install
 the beta and let it run across several battery and pool slots, then download
 either Home Assistant integration diagnostics or the controller diagnostics download.

@@ -1,5 +1,12 @@
 # Battery execution policy and mixed-mode ownership
 
+## Required scope extension — 15 September 2026
+
+Extend the existing compiler, current-response evaluator and sole-writer host/adapter with revision-bound explicit battery supply scope and its solar-attribution convention. The current software policy below does not yet carry that extension. Feed aligned measured gross demand and PV separately; enforce eligible house supply and physical native routing while retaining remaining-time C + V ranking. Derive mixed-mode membership from HA inclusion, website planning and HA authority; Verification remains external demand. The v35 rating-wide shortcut is superseded as target policy.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 Architecture decision, 15 September 2026. Implementation is authorised for the
 software compiler, evaluator and command-reconciliation protocol. The existing
 ScheduledController remains the live owner until a separately tested host and

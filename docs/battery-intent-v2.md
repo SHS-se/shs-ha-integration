@@ -1,5 +1,12 @@
 # Basic battery intent execution
 
+## Superseded correction; retained implementation record — 15 September 2026
+
+Planner v35 and HA beta.94 describe the already-made rating-wide full-house permission correction below. This is not the agreed replacement design or a recommendation to roll it out further. The user selected explicit battery supply scope, measured eligible demand and actual-state economic evaluation. Keep the historical behaviour/version evidence; do not reinterpret current schema-2 commands as carrying scope or undo the change automatically during documentation work.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 Battery command version 2 separates native permissions from forecast power.
 Planner v35 and the accompanying HA update extend the solar-capture correction
 to full household supply without implementing the full household policy design.
@@ -72,7 +79,7 @@ No hardware mode mapping, operating permission or deployed installation is
 changed by these code changes. Broader reserve/headroom economics and reactive
 household control remain in the implementation scope document.
 
-## Full house-supply rollout
+## Historical v35 full house-supply rollout (superseded target)
 
 Install the updated HA validator before deploying planner v35, then request a
 fresh plan. Older HA validators reject supply-house forecasts below their command

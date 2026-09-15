@@ -1,5 +1,12 @@
 # Battery charge timing from actual state
 
+## Supply scope is now an agreed product requirement — 15 September 2026
+
+The user explicitly selected battery accounting scopes: None, Whole house, Base only, Selected Planned devices, and Base plus selected devices. This supersedes the earlier suggestion that beneficiary accounting could remain outside this work. Scope bounds feasible house supply; it does not replace C + V with a forecast ceiling, rated-power permission, energy entitlement or recovery-to-planned-SOC rule. The implemented v35 correction recorded below is superseded as target policy. Solar attribution and measurement validity are part of the scope contract.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 Architecture adjustment, 15 September 2026. This is a documented requirement and
 validation plan, not a newly implemented controller feature. It extends the
 [battery execution design](battery-execution-design.md) and the deployed
@@ -266,3 +273,13 @@ fixed-future minimum-SOC guard was rejected: this capture's plan eventually
 reaches the floor on September 18, so that guard would prohibit any extra
 September 15 discharge even when a cheaper overnight refill repairs the future.
 The full actual-state economic policy remains outstanding.
+
+## Settled proportional solar accounting for explicit supply scope
+
+Solar is attributed proportionally to each component's share of gross household
+consumption, capped at total self-consumed PV. A scope receives the sum of its
+components' solar shares. For base 1 kW, other loads 2 kW and PV 1 kW, base-only
+supply has a measured eligibility bound of about 0.67 kW. That bound does not
+require discharge: current cost plus future value still chooses the amount.
+[Canonical definitions, formula and guards](device-participation-and-battery-supply.md#solar-allocation-within-a-selected-scope)
+apply to both compiler and runtime; missing meters do not justify a fallback.

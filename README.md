@@ -1,5 +1,12 @@
 # Smart Home Solutions Energy — Home Assistant integration
 
+## Agreed design; implementation pending — 15 September 2026
+
+HA Devices owns Included/Excluded; the website owns Monitoring/Planned; HA Schedule shows only Planned equipment with Verification (default) or Controlling. Device-specific metadata as well as readings must stop on exclusion. The replacement battery policy communicates an explicit house-supply scope, evaluates measured demand and future cost, and supersedes the v35 rating-wide permission shortcut. The implementation descriptions below retain their deployed-version scope.
+
+See the [agreed participation and battery supply specification](docs/device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 Upgrading to `0.8.0-beta.27`: read the [four-page configuration release notes](docs/releases/0.8.0-beta.26.md) and [rollout checks](docs/releases/0.8.0-beta.27.md). Deploy the website database/API changes first. Config-entry version 4 prevents earlier builds from loading the upgraded entry.
 
 Pushes privacy-bounded energy data from Home Assistant to your

@@ -1,5 +1,12 @@
 # Runtime recovery fixes
 
+## Later design decision — 15 September 2026
+
+Preserve the dated implementation/rollout evidence below. The agreed participation ownership, metadata exclusion, graph partition and explicit battery supply scope supersede conflicting target requirements; this older record is not an instruction to deploy the replacement.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 Implementation scope: the four reproduced defects from the 14 September
 [architecture review](controller-architecture-review.md). The completed independent
 Opus Max/Codex designs are reused; production policy replacement and commissioning

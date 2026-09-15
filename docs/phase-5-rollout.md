@@ -1,5 +1,12 @@
 # Phase 5 beta rollout — 8 September 2026
 
+## Later design decision — 15 September 2026
+
+Preserve the dated implementation/rollout evidence below. The agreed participation ownership, metadata exclusion, graph partition and explicit battery supply scope supersede conflicting target requirements; this older record is not an instruction to deploy the replacement.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 The beta rollout and persistence checks passed against the user's live HA
 installation and the **test** SHS website. Hardware commissioning remains open;
 no new control permission was enabled. The production website was not promoted.

@@ -1,5 +1,23 @@
 # Device operating modes and control verification
 
+## Replacement participation model — 15 September 2026
+
+The four-mode selector and local planning override below are implementation history, not the target design. Included/Excluded belongs to HA Devices; Monitoring/Planned belongs to the website; only Planned equipment appears on HA Schedule, with Verification or Controlling. New Planned admission defaults to Verification. Verification consumption remains external demand for live planning even though the device stays Planned on the chart. Remove the duplicate plan-inclusion/review/Website-link rows.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
+
+| Decision | Owner | Values |
+|---|---|---|
+| Individual participation | HA Devices | Included / Excluded |
+| Scheduling intent | Website | Monitoring / Planned |
+| Planned-device execution | HA Schedule | Verification / Controlling |
+
+The remaining four-mode descriptions are a dated implementation record. They do
+not define the replacement user choices. Proportional solar allocation and explicit
+battery supply scope are defined in the linked specification.
+
 Each equipment card has one mode selector on Schedule. Devices contains setup fields only:
 
 | Mode | Collect readings | Include in optimisation | Record proposed commands | Call actuators |

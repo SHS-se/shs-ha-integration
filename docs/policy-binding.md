@@ -1,5 +1,12 @@
 # Battery execution policy binding
 
+## Additional binding identity — 15 September 2026
+
+Battery supply scope, solar attribution and acknowledged participation revisions join the policy binding identity. A same-watts request with different eligible demand is not semantically identical. Recheck the same scope and physical-owner authority before dispatch; retain already-issued effects and durable proof boundaries. The current binding implementation described below is not evidence that these new fields are implemented.
+
+See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
+Documentation only; replacement implementation and coordinated rollout remain pending.
+
 The `battery-execution-policy-v1` contract replaces the runtime's former
 exact-anchor, one-millisecond binding. The complete architecture and wire contract
 are in [the execution design](battery-execution-design.md).
