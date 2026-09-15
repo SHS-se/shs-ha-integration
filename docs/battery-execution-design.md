@@ -437,3 +437,14 @@ byte-identical after the shared scorer extraction.
 Validation commands and the remaining live rollout gates are recorded in
 [the controller review](controller-architecture-review.md). No deployment or
 battery enablement forms part of this implementation.
+
+## Charge timing from actual state
+
+The [charge-now versus wait adjustment](battery-opportunity-cost.md) makes the
+existing C/F/J comparison an explicit acceptance requirement. Compare useful
+charge amounts and waiting from fresh energy over the remaining segment, each
+with its own conditional future. A forecast SOC shortfall is evidence for
+re-evaluation, not an obligation to catch up. The document distinguishes the
+finite continuation family from fresh future search and specifies cost, coverage
+and external-demand sensitivity evidence. This documentation adjustment does not
+complete the production host/adapter cutover or change the installed writer.

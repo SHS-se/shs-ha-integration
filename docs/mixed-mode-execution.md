@@ -25,3 +25,12 @@ mode change during an awaited service call. The supplied September 15 replay
 raised current execution demand from about 0.83 kW to 2.92 kW and removed the
 hypothetical 1.24 kW solar charging surplus. Actual evening adequacy still needs
 to be assessed from subsequent demand and solar conditions.
+
+## Subsequent charge-timing decision
+
+The [15 September opportunity-cost design](battery-opportunity-cost.md) specifies
+how charging now competes with waiting from the actual state. Both alternatives
+include changed future purchases, demand and PV headroom. It extends the existing
+compiled-policy architecture; no SOC catch-up rule or time-of-day trigger is added.
+The mixed-mode accounting fix remains live, while continuation-policy host wiring
+and forecast-risk validation remain separate work.
