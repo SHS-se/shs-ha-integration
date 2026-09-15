@@ -1,115 +1,41 @@
 {
   "schema_version": 1,
   "initial": {
-    "schema_version": 4,
+    "schema_version": 5,
     "state": {
-      "frame": {
-        "at_ms": 1789372800000,
-        "external": {
-          "export_w": 0,
-          "import_w": 0,
-          "type": "Envelope"
-        },
-        "limits": {
-          "export_w": 4000,
-          "import_w": 4000,
-          "type": "Envelope"
-        },
-        "revision": 0,
-        "type": "Frame",
-        "valid_until_ms": 1789372810000
-      },
+      "authority": null,
+      "authority_revision": -1,
+      "conditions": null,
+      "conditions_revision": -1,
+      "frame": null,
       "groups": [
         {
           "attempts": [],
-          "authority_confirmed": true,
+          "authority_confirmed": false,
           "consecutive_attempts": 0,
           "desired": null,
-          "generation": 1,
+          "generation": 0,
+          "grant": null,
+          "grant_confirmed": false,
+          "grant_epoch": 0,
           "journal_fault": false,
-          "mode": "controlling",
-          "mode_revision": 1,
+          "mode": "monitoring",
+          "mode_revision": 0,
           "next_attempt": 1,
-          "observation": {
-            "at_ms": 1789372800000,
-            "controls": [
-              [
-                "charge_w",
-                0
-              ],
-              [
-                "discharge_w",
-                0
-              ],
-              [
-                "solar_charge_w",
-                0
-              ],
-              [
-                "export_w",
-                0
-              ],
-              [
-                "pv_curtail_w",
-                0
-              ]
-            ],
-            "envelope": {
-              "export_w": 0,
-              "import_w": 0,
-              "type": "Envelope"
-            },
-            "measurements": [
-              [
-                "energy_kwh",
-                0
-              ],
-              [
-                "pv_w",
-                0
-              ],
-              [
-                "load_w",
-                0
-              ],
-              [
-                "import_sek_per_kwh",
-                -1
-              ],
-              [
-                "export_sek_per_kwh",
-                0
-              ],
-              [
-                "available",
-                1
-              ],
-              [
-                "grid_charge_allowed",
-                1
-              ],
-              [
-                "export_allowed",
-                0
-              ]
-            ],
-            "revision": 0,
-            "type": "Observation",
-            "valid_until_ms": 1789372810000
-          },
-          "observation_revision": 0,
+          "next_transition": 1,
+          "observation": null,
+          "observation_revision": -1,
           "owned": false,
           "plan": null,
           "release": null,
+          "release_pending": false,
           "retry_not_before_ms": 0,
           "spec": {
-            "adapter_revision": "synthetic-imposed-power-v1",
+            "adapter_revision": "synthetic-pv-first-adapter",
             "control_keys": [
-              "charge_w",
-              "discharge_w",
-              "solar_charge_w",
-              "export_w",
-              "pv_curtail_w"
+              "mode",
+              "charge",
+              "discharge"
             ],
             "id": "battery",
             "maximum": {
@@ -117,21 +43,21 @@
               "import_w": 4000,
               "type": "Envelope"
             },
+            "relief_rules": [],
             "type": "GroupSpec",
-            "relief_rules": []
+            "writer": null
           },
           "status": "inactive",
-          "type": "Group",
           "transition_work": null,
-          "next_transition": 1
+          "type": "Group"
         }
       ],
-      "last_time_ms": 1789372800000,
+      "last_time_ms": 0,
       "ledger": {
         "id": "house",
         "mapping_revision": "mapping-1",
         "max_intervals": 128,
-        "revision": 1,
+        "revision": 0,
         "streams": [
           {
             "archived": {
@@ -140,18 +66,7 @@
               "upper_mwh": 0
             },
             "archived_intervals": 0,
-            "samples": [
-              {
-                "at_ms": 1789372800000,
-                "epoch": 0,
-                "epoch_reason": "initial binding",
-                "revision": 0,
-                "source_id": "physical-register",
-                "stream_id": "charge",
-                "total_mwh": 1000000,
-                "type": "CounterSample"
-              }
-            ],
+            "samples": [],
             "spec": {
               "boundary_id": "AC",
               "device_id": "battery",
@@ -161,167 +76,573 @@
               "stream_id": "charge",
               "type": "MeterSpec"
             },
-            "started_at_ms": 1789372800000,
+            "started_at_ms": null,
             "type": "MeterStream"
           }
         ],
         "type": "EnergyLedger"
       },
       "limits": {
-        "dispatch_window_ms": 10,
-        "retry_base_ms": 30,
-        "retry_max_ms": 120,
-        "type": "Limits",
-        "transition_timeout_ms": 1000
+        "dispatch_window_ms": 100,
+        "retry_base_ms": 300,
+        "retry_max_ms": 1200,
+        "transition_timeout_ms": 1000,
+        "type": "Limits"
       },
       "policy": null,
-      "policy_context": {
-        "frame_revision": 0,
-        "mode_revision": 1,
-        "observation_revision": 0,
-        "problem_json": "{\"economics\":{\"completed_event_ids\":[],\"export_sek_per_kwh\":[0,0],\"import_sek_per_kwh\":[-1,10],\"initial_import_w\":null,\"ramp_sek_per_kw\":0,\"services\":[],\"shaping_sek_per_kwh_per_kw\":0,\"tariff\":\"energy_only\",\"terminal\":[]},\"identity\":{\"actuals_watermark\":\"2026-09-14T08:00:00.000Z\",\"case_id\":\"negative-price-grid-recovery\",\"intent_revision\":\"synthetic-v1\",\"model_revision\":\"ideal-battery-v1\",\"provenance\":\"synthetic\"},\"intervals\":[{\"end\":\"2026-09-14T08:15:00.000Z\",\"start\":\"2026-09-14T08:00:00.000Z\"},{\"end\":\"2026-09-14T08:30:00.000Z\",\"start\":\"2026-09-14T08:15:00.000Z\"}],\"plant\":{\"equipment\":[{\"available\":[true,true],\"charge_efficiency\":0.95,\"charge_max_w\":1000,\"discharge_efficiency\":0.95,\"discharge_max_w\":1000,\"export_allowed\":[false,false],\"grid_charge_allowed\":[true,true],\"id\":\"battery\",\"kind\":\"battery\",\"model_id\":\"ideal-battery\",\"state_kwh\":{\"initial\":0,\"max\":0.25,\"min\":0,\"provenance\":\"synthetic analytical example\"},\"wear_sek_per_kwh\":0.1}],\"grid\":{\"export_limit_w\":4000,\"import_limit_w\":4000},\"pv_w\":[0,0],\"residual_loads\":[{\"id\":\"external-demand\",\"power_w\":[0,1000]}],\"thermal_stores\":[]},\"schema_version\":1}",
-        "revision": 0,
-        "type": "PolicyContext",
-        "watermark": {
-          "at_ms": 1789372800000,
-          "ledger_id": "house",
-          "ledger_revision": 1,
-          "mapping_revision": "mapping-1",
-          "type": "ActualsWatermark"
-        }
-      },
       "resume_after_ms": 0,
-      "revision": 5,
+      "revision": 0,
       "type": "HomeState"
     }
   },
   "records": [
     {
-      "at_ms": 1789372800000,
+      "at_ms": 0,
+      "event": {
+        "type": "MeterObserved",
+        "sample": {
+          "type": "CounterSample",
+          "stream_id": "charge",
+          "source_id": "physical-register",
+          "epoch": 0,
+          "revision": 0,
+          "at_ms": 0,
+          "total_mwh": 1000000,
+          "epoch_reason": "initial binding"
+        }
+      }
+    },
+    {
+      "at_ms": 0,
+      "event": {
+        "type": "AuthorityInstalled",
+        "authority": {
+          "type": "ExecutionAuthority",
+          "config_revision": "config-1",
+          "identity": {
+            "type": "ContextIdentity",
+            "battery_id": "battery",
+            "intent_revision": "intent-1",
+            "plant_revision": "plant-1",
+            "scope_revision": "scope-1",
+            "external_scenario_revision": "external-1",
+            "tariff_revision": "tariff-1",
+            "response_model_revision": "pv-first-v1",
+            "catalog_revision": "catalog-1"
+          },
+          "permissions": {
+            "type": "Permissions",
+            "available": true,
+            "grid_charge_allowed": true,
+            "battery_export_allowed": true,
+            "export_reserve_kwh": 3,
+            "export_price_eligible": true,
+            "minimum_export_price_sek_per_kwh": 0.1,
+            "price_revision": "tariff-1"
+          },
+          "plant": {
+            "type": "BatteryPlant",
+            "cutoff_kwh": 1,
+            "capacity_kwh": 10,
+            "charge_max_w": 4000,
+            "discharge_max_w": 4000,
+            "charge_efficiency": 0.95,
+            "discharge_efficiency": 0.95,
+            "import_limit_w": 17000,
+            "export_limit_w": 13000,
+            "wear_sek_per_kwh": 0.1
+          },
+          "scope": {
+            "type": "ExecutionScope",
+            "revision": "scope-1",
+            "battery_group_id": "battery",
+            "participants": [
+              {
+                "type": "ScopeParticipant",
+                "group_id": "battery",
+                "mode": "controlling",
+                "mode_revision": 1,
+                "owner": "new_runtime",
+                "control_surface_ids": [
+                  "mode",
+                  "charge",
+                  "discharge"
+                ]
+              }
+            ]
+          },
+          "catalog": {
+            "type": "NativeCatalog",
+            "revision": "catalog-1",
+            "adapter_revision": "synthetic-pv-first-adapter",
+            "control_surface_revision": "native-surface-1",
+            "mode_key": "mode",
+            "charge_key": "charge",
+            "discharge_key": "discharge",
+            "mode_options": [
+              "Command Charging (PV First)",
+              "Command Discharging (PV First)",
+              "Maximum Self Consumption",
+              "Standby"
+            ],
+            "quantum_w": 1,
+            "charge_max_w": 4000,
+            "discharge_max_w": 4000,
+            "bindings": [
+              {
+                "type": "OperationBinding",
+                "operation": {
+                  "type": "BatteryOperation",
+                  "id": "hold",
+                  "operation": "hold",
+                  "charge_limit_w": 0,
+                  "discharge_limit_w": 0
+                },
+                "target": [
+                  [
+                    "mode",
+                    "Standby"
+                  ],
+                  [
+                    "charge",
+                    0
+                  ],
+                  [
+                    "discharge",
+                    0
+                  ]
+                ],
+                "response_model_revision": "pv-first-v1",
+                "response_evidence": "synthetic-native-response",
+                "native_guards": [
+                  {
+                    "type": "Guard",
+                    "key": "ready",
+                    "minimum": 1,
+                    "maximum": 1
+                  }
+                ]
+              },
+              {
+                "type": "OperationBinding",
+                "operation": {
+                  "type": "BatteryOperation",
+                  "id": "self_consumption",
+                  "operation": "self_consumption",
+                  "charge_limit_w": 4000,
+                  "discharge_limit_w": 4000
+                },
+                "target": [
+                  [
+                    "mode",
+                    "Maximum Self Consumption"
+                  ],
+                  [
+                    "charge",
+                    4000
+                  ],
+                  [
+                    "discharge",
+                    4000
+                  ]
+                ],
+                "response_model_revision": "pv-first-v1",
+                "response_evidence": "synthetic-native-response",
+                "native_guards": [
+                  {
+                    "type": "Guard",
+                    "key": "ready",
+                    "minimum": 1,
+                    "maximum": 1
+                  }
+                ]
+              },
+              {
+                "type": "OperationBinding",
+                "operation": {
+                  "type": "BatteryOperation",
+                  "id": "solar_charge",
+                  "operation": "solar_charge",
+                  "charge_limit_w": 4000,
+                  "discharge_limit_w": 0
+                },
+                "target": [
+                  [
+                    "mode",
+                    "Maximum Self Consumption"
+                  ],
+                  [
+                    "charge",
+                    4000
+                  ],
+                  [
+                    "discharge",
+                    0
+                  ]
+                ],
+                "response_model_revision": "pv-first-v1",
+                "response_evidence": "synthetic-native-response",
+                "native_guards": [
+                  {
+                    "type": "Guard",
+                    "key": "ready",
+                    "minimum": 1,
+                    "maximum": 1
+                  }
+                ]
+              },
+              {
+                "type": "OperationBinding",
+                "operation": {
+                  "type": "BatteryOperation",
+                  "id": "supply_house",
+                  "operation": "supply_house",
+                  "charge_limit_w": 0,
+                  "discharge_limit_w": 4000
+                },
+                "target": [
+                  [
+                    "mode",
+                    "Maximum Self Consumption"
+                  ],
+                  [
+                    "charge",
+                    0
+                  ],
+                  [
+                    "discharge",
+                    4000
+                  ]
+                ],
+                "response_model_revision": "pv-first-v1",
+                "response_evidence": "synthetic-native-response",
+                "native_guards": [
+                  {
+                    "type": "Guard",
+                    "key": "ready",
+                    "minimum": 1,
+                    "maximum": 1
+                  }
+                ]
+              },
+              {
+                "type": "OperationBinding",
+                "operation": {
+                  "type": "BatteryOperation",
+                  "id": "grid_charge",
+                  "operation": "grid_charge",
+                  "charge_limit_w": 3000,
+                  "discharge_limit_w": 0
+                },
+                "target": [
+                  [
+                    "mode",
+                    "Command Charging (PV First)"
+                  ],
+                  [
+                    "charge",
+                    3000
+                  ],
+                  [
+                    "discharge",
+                    0
+                  ]
+                ],
+                "response_model_revision": "pv-first-v1",
+                "response_evidence": "synthetic-native-response",
+                "native_guards": [
+                  {
+                    "type": "Guard",
+                    "key": "ready",
+                    "minimum": 1,
+                    "maximum": 1
+                  }
+                ]
+              },
+              {
+                "type": "OperationBinding",
+                "operation": {
+                  "type": "BatteryOperation",
+                  "id": "export",
+                  "operation": "export",
+                  "charge_limit_w": 0,
+                  "discharge_limit_w": 2000
+                },
+                "target": [
+                  [
+                    "mode",
+                    "Command Discharging (PV First)"
+                  ],
+                  [
+                    "charge",
+                    0
+                  ],
+                  [
+                    "discharge",
+                    2000
+                  ]
+                ],
+                "response_model_revision": "pv-first-v1",
+                "response_evidence": "synthetic-native-response",
+                "native_guards": [
+                  {
+                    "type": "Guard",
+                    "key": "ready",
+                    "minimum": 1,
+                    "maximum": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "owner_id": "shs-runtime"
+        },
+        "revision": 1
+      }
+    },
+    {
+      "at_ms": 0,
+      "event": {
+        "type": "AuthorityChanged",
+        "group_id": "battery",
+        "mode": "controlling",
+        "revision": 1,
+        "approved_release": {
+          "type": "Request",
+          "id": "approved-release",
+          "revision": 1,
+          "valid_until_ms": 1800000,
+          "target": [
+            [
+              "mode",
+              "Maximum Self Consumption"
+            ],
+            [
+              "charge",
+              4000
+            ],
+            [
+              "discharge",
+              4000
+            ]
+          ],
+          "native_guards": []
+        }
+      }
+    },
+    {
+      "at_ms": 0,
+      "event": {
+        "type": "GrantConfirmed",
+        "group_id": "battery",
+        "grant": {
+          "type": "WriterGrant",
+          "owner_id": "shs-runtime",
+          "epoch": 1,
+          "config_revision": "config-1",
+          "control_surface_revision": "native-surface-1",
+          "expires_at_ms": 1800000
+        }
+      }
+    },
+    {
+      "at_ms": 0,
+      "event": {
+        "type": "FrameObserved",
+        "frame": {
+          "type": "Frame",
+          "revision": 1,
+          "at_ms": 0,
+          "valid_until_ms": 1800000,
+          "external": {
+            "type": "Envelope",
+            "import_w": 1000,
+            "export_w": 0
+          },
+          "limits": {
+            "type": "Envelope",
+            "import_w": 17000,
+            "export_w": 13000
+          },
+          "external_demands": []
+        }
+      }
+    },
+    {
+      "at_ms": 0,
+      "event": {
+        "type": "Observed",
+        "group_id": "battery",
+        "observation": {
+          "type": "Observation",
+          "revision": 0,
+          "at_ms": 0,
+          "valid_until_ms": 1800000,
+          "controls": [
+            [
+              "mode",
+              "Standby"
+            ],
+            [
+              "charge",
+              0
+            ],
+            [
+              "discharge",
+              0
+            ]
+          ],
+          "measurements": [
+            [
+              "ready",
+              1
+            ]
+          ],
+          "envelope": {
+            "type": "Envelope",
+            "import_w": 0,
+            "export_w": 0
+          }
+        }
+      }
+    },
+    {
+      "at_ms": 0,
+      "event": {
+        "type": "ConditionsObserved",
+        "conditions": {
+          "type": "ExecutionConditions",
+          "revision": 0,
+          "at_ms": 0,
+          "valid_until_ms": 1800000,
+          "energy_kwh": 5,
+          "pv_w": 0,
+          "residual_load_w": 1000,
+          "previous_import_w": 1000,
+          "identity": {
+            "type": "ContextIdentity",
+            "battery_id": "battery",
+            "intent_revision": "intent-1",
+            "plant_revision": "plant-1",
+            "scope_revision": "scope-1",
+            "external_scenario_revision": "external-1",
+            "tariff_revision": "tariff-1",
+            "response_model_revision": "pv-first-v1",
+            "catalog_revision": "catalog-1"
+          },
+          "permissions": {
+            "type": "Permissions",
+            "available": true,
+            "grid_charge_allowed": true,
+            "battery_export_allowed": true,
+            "export_reserve_kwh": 3,
+            "export_price_eligible": true,
+            "minimum_export_price_sek_per_kwh": 0.1,
+            "price_revision": "tariff-1"
+          }
+        }
+      }
+    },
+    {
+      "at_ms": 0,
       "event": {
         "type": "PolicyOffered",
-        "revision": 1,
         "compiled": {
-          "type": "BatteryPolicy",
-          "source_json": "{\"alternatives\":[{\"candidate\":{\"actions\":{\"battery\":[{\"charge_w\":1000,\"discharge_w\":0,\"export_w\":0,\"kind\":\"battery\",\"solar_charge_w\":0},{\"charge_w\":0,\"discharge_w\":902.5,\"export_w\":0,\"kind\":\"battery\",\"solar_charge_w\":0}]},\"id\":\"charge\",\"pv_curtail_w\":[0,0]},\"current\":{\"billable_sek\":-0.25,\"export_sek\":0,\"import_sek\":-0.25,\"ramp_sek\":0,\"service_sek\":0,\"shaping_sek\":0,\"starts_sek\":0,\"terminal_sek\":0,\"total_sek\":-0.225,\"wear_sek\":0.025},\"full\":{\"billable_sek\":-0.006249999999999978,\"export_sek\":0,\"import_sek\":-0.006249999999999978,\"ramp_sek\":0,\"service_sek\":0,\"shaping_sek\":0,\"starts_sek\":0,\"terminal_sek\":0,\"total_sek\":0.04131250000000002,\"wear_sek\":0.0475625},\"future_delta\":{\"billable_sek\":-2.25625,\"export_sek\":0,\"import_sek\":-2.25625,\"ramp_sek\":0,\"service_sek\":0,\"shaping_sek\":0,\"starts_sek\":0,\"terminal_sek\":0,\"total_sek\":-2.2336875,\"wear_sek\":0.0225625},\"id\":\"charge\",\"search\":{\"dominated_prefixes\":0,\"exhaustive_in_declared_graph\":true,\"feasible_extensions\":3,\"interval_evaluations\":9,\"pruned_prefixes\":0,\"scorer_calls\":5},\"total_delta_sek\":-2.4586875},{\"candidate\":{\"actions\":{\"battery\":[{\"charge_w\":0,\"discharge_w\":0,\"export_w\":0,\"kind\":\"battery\",\"solar_charge_w\":0},{\"charge_w\":0,\"discharge_w\":0,\"export_w\":0,\"kind\":\"battery\",\"solar_charge_w\":0}]},\"id\":\"hold\",\"pv_curtail_w\":[0,0]},\"current\":{\"billable_sek\":0,\"export_sek\":0,\"import_sek\":0,\"ramp_sek\":0,\"service_sek\":0,\"shaping_sek\":0,\"starts_sek\":0,\"terminal_sek\":0,\"total_sek\":0,\"wear_sek\":0},\"full\":{\"billable_sek\":2.5,\"export_sek\":0,\"import_sek\":2.5,\"ramp_sek\":0,\"service_sek\":0,\"shaping_sek\":0,\"starts_sek\":0,\"terminal_sek\":0,\"total_sek\":2.5,\"wear_sek\":0},\"future_delta\":{\"billable_sek\":0,\"export_sek\":0,\"import_sek\":0,\"ramp_sek\":0,\"service_sek\":0,\"shaping_sek\":0,\"starts_sek\":0,\"terminal_sek\":0,\"total_sek\":0,\"wear_sek\":0},\"id\":\"hold\",\"search\":{\"dominated_prefixes\":0,\"exhaustive_in_declared_graph\":true,\"feasible_extensions\":2,\"interval_evaluations\":9,\"pruned_prefixes\":0,\"scorer_calls\":5},\"total_delta_sek\":0}],\"compiler_version\":\"offline-battery-policy-v1\",\"coverage\":{\"approximation_error_bound_sek\":null,\"current_interval_count\":1,\"interpolation\":\"unsupported\",\"kind\":\"exact_problem_anchor\",\"optimality\":\"optimal_in_declared_graph\",\"problem\":{\"economics\":{\"completed_event_ids\":[],\"export_sek_per_kwh\":[0,0],\"import_sek_per_kwh\":[-1,10],\"initial_import_w\":null,\"ramp_sek_per_kw\":0,\"services\":[],\"shaping_sek_per_kwh_per_kw\":0,\"tariff\":\"energy_only\",\"terminal\":[]},\"identity\":{\"actuals_watermark\":\"2026-09-14T08:00:00.000Z\",\"case_id\":\"negative-price-grid-recovery\",\"intent_revision\":\"synthetic-v1\",\"model_revision\":\"ideal-battery-v1\",\"provenance\":\"synthetic\"},\"intervals\":[{\"end\":\"2026-09-14T08:15:00.000Z\",\"start\":\"2026-09-14T08:00:00.000Z\"},{\"end\":\"2026-09-14T08:30:00.000Z\",\"start\":\"2026-09-14T08:15:00.000Z\"}],\"plant\":{\"equipment\":[{\"available\":[true,true],\"charge_efficiency\":0.95,\"charge_max_w\":1000,\"discharge_efficiency\":0.95,\"discharge_max_w\":1000,\"export_allowed\":[false,false],\"grid_charge_allowed\":[true,true],\"id\":\"battery\",\"kind\":\"battery\",\"model_id\":\"ideal-battery\",\"state_kwh\":{\"initial\":0,\"max\":0.25,\"min\":0,\"provenance\":\"synthetic analytical example\"},\"wear_sek_per_kwh\":0.1}],\"grid\":{\"export_limit_w\":4000,\"import_limit_w\":4000},\"pv_w\":[0,0],\"residual_loads\":[{\"id\":\"external-demand\",\"power_w\":[0,1000]}],\"thermal_stores\":[]},\"schema_version\":1},\"response_model\":\"explicit_imposed_power\",\"segment_end\":\"2026-09-14T08:15:00.000Z\"},\"identity\":{\"actuals_watermark\":\"2026-09-14T08:00:00.000Z\",\"case_id\":\"negative-price-grid-recovery\",\"intent_revision\":\"synthetic-v1\",\"model_revision\":\"ideal-battery-v1\",\"provenance\":\"synthetic\"},\"omitted\":[],\"ranking\":[\"charge\",\"hold\"],\"reference_id\":\"hold\",\"scorer_version\":\"offline-household-v1\",\"search_domain\":{\"energy_levels_kwh\":[0,0.2375,0.25],\"includes_minimum_export_limit_curtailment\":true,\"pv_curtailment_fractions\":[0,1],\"retained_per_level\":4},\"status\":\"compiled\",\"work\":{\"interval_evaluations\":18,\"interval_evaluations_upper_bound\":54,\"scorer_calls\":10}}"
+          "type": "ExecutionPolicy",
+          "source_json": "{\"actuals_origin_ms\":0,\"continuation\":{\"cells\":[{\"cost\":{\"export_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"import_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"ramp_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"shaping_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"terminal_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]},\"wear_sek\":{\"absolute_terms\":[],\"polynomial\":[0,0,0]}},\"domain\":{\"energy_kwh\":[1,10],\"inequalities\":[],\"previous_import_w\":[0,17000]},\"id\":\"terminal\",\"witness_id\":\"synthetic-no-terminal\"}],\"coordinate_order\":[\"energy_kwh\",\"previous_import_w\"],\"representation\":\"piecewise-quadratic-absolute-v1\"},\"domain\":{\"energy_kwh\":[1,10],\"pv_w\":[0,12000],\"residual_load_w\":[0,15000]},\"economics\":{\"export_sek_per_kwh\":0,\"import_sek_per_kwh\":-1,\"ramp_sek_per_kw\":0,\"shaping_sek_per_kwh_per_kw\":0},\"identity\":{\"battery_id\":\"battery\",\"catalog_revision\":\"catalog-1\",\"external_scenario_revision\":\"external-1\",\"intent_revision\":\"intent-1\",\"plant_revision\":\"plant-1\",\"policy_id\":\"test-policy\",\"response_model_revision\":\"pv-first-v1\",\"revision\":1,\"scope_revision\":\"scope-1\",\"tariff_revision\":\"tariff-1\"},\"operations\":[{\"charge_limit_w\":0,\"discharge_limit_w\":0,\"id\":\"hold\",\"operation\":\"hold\"},{\"charge_limit_w\":4000,\"discharge_limit_w\":4000,\"id\":\"self_consumption\",\"operation\":\"self_consumption\"},{\"charge_limit_w\":4000,\"discharge_limit_w\":0,\"id\":\"solar_charge\",\"operation\":\"solar_charge\"},{\"charge_limit_w\":0,\"discharge_limit_w\":4000,\"id\":\"supply_house\",\"operation\":\"supply_house\"},{\"charge_limit_w\":3000,\"discharge_limit_w\":0,\"id\":\"grid_charge\",\"operation\":\"grid_charge\"},{\"charge_limit_w\":0,\"discharge_limit_w\":2000,\"id\":\"export\",\"operation\":\"export\"}],\"permissions\":{\"available\":true,\"battery_export_allowed\":true,\"export_price_eligible\":true,\"export_reserve_kwh\":3,\"grid_charge_allowed\":true,\"minimum_export_price_sek_per_kwh\":0.1,\"price_revision\":\"tariff-1\"},\"plant\":{\"capacity_kwh\":10,\"charge_efficiency\":0.95,\"charge_max_w\":4000,\"cutoff_kwh\":1,\"discharge_efficiency\":0.95,\"discharge_max_w\":4000,\"export_limit_w\":13000,\"import_limit_w\":17000,\"wear_sek_per_kwh\":0.1},\"profile\":\"finite-continuation-v1\",\"quality\":{\"assurance\":\"exact-scoring-within-published-family\",\"certified_regret_bound_sek\":null,\"compiler_revision\":\"execution-v1\",\"family_id\":\"synthetic-test\",\"heldout_count\":0,\"heldout_max_regret_sek\":null,\"numeric_tolerance_sek\":1e-07,\"scorer_revision\":\"offline-household-v1\",\"search_exhaustive_in_declared_graph\":true,\"search_pruned_prefixes\":0,\"source_hash\":\"sha256:synthetic-test\"},\"reference_id\":\"hold\",\"schema\":\"battery-execution-policy-v1\",\"validity\":{\"boundary_ms\":900000,\"from_ms\":0,\"refresh_after_ms\":840000,\"until_ms\":900000},\"view\":\"executable\"}"
         },
         "watermark": {
           "type": "ActualsWatermark",
           "ledger_id": "house",
           "mapping_revision": "mapping-1",
           "ledger_revision": 1,
-          "at_ms": 1789372800000
-        },
-        "bindings": [
-          {
-            "type": "PolicyBinding",
-            "alternative_id": "charge",
-            "adapter_revision": "synthetic-imposed-power-v1",
-            "response_evidence": "synthetic-fixture-response",
-            "current_path_json": "{\"actions\":[{\"charge_w\":1000,\"discharge_w\":0,\"export_w\":0,\"kind\":\"battery\",\"solar_charge_w\":0}],\"pv_curtail_w\":[0]}",
-            "target": [
-              [
-                "charge_w",
-                1000
-              ],
-              [
-                "discharge_w",
-                0
-              ],
-              [
-                "export_w",
-                0
-              ],
-              [
-                "solar_charge_w",
-                0
-              ],
-              [
-                "pv_curtail_w",
-                0
-              ]
-            ]
-          },
-          {
-            "type": "PolicyBinding",
-            "alternative_id": "hold",
-            "adapter_revision": "synthetic-imposed-power-v1",
-            "response_evidence": "synthetic-fixture-response",
-            "current_path_json": "{\"actions\":[{\"charge_w\":0,\"discharge_w\":0,\"export_w\":0,\"kind\":\"battery\",\"solar_charge_w\":0}],\"pv_curtail_w\":[0]}",
-            "target": [
-              [
-                "charge_w",
-                0
-              ],
-              [
-                "discharge_w",
-                0
-              ],
-              [
-                "export_w",
-                0
-              ],
-              [
-                "solar_charge_w",
-                0
-              ],
-              [
-                "pv_curtail_w",
-                0
-              ]
-            ]
-          }
-        ],
-        "deadband_sek": 0.0
+          "at_ms": 0
+        }
       }
     },
     {
-      "at_ms": 1789372800000,
+      "at_ms": 0,
       "event": {
         "type": "Proposed",
         "group_id": "battery",
-        "generation": 2,
-        "request_id": "policy:1",
-        "request_revision": 1,
+        "generation": 4,
+        "request_id": "battery:4",
+        "request_revision": 4,
         "observed_revision": 0,
-        "adapter_revision": "synthetic-imposed-power-v1",
+        "adapter_revision": "synthetic-pv-first-adapter",
         "steps": [
           {
             "type": "Step",
-            "key": "charge_w",
-            "value": 1000,
+            "key": "mode",
+            "value": "Command Charging (PV First)",
             "before": [
               [
-                "charge_w",
+                "mode",
+                "Standby"
+              ],
+              [
+                "charge",
                 0
               ],
               [
-                "discharge_w",
-                0
-              ],
-              [
-                "solar_charge_w",
-                0
-              ],
-              [
-                "export_w",
-                0
-              ],
-              [
-                "pv_curtail_w",
+                "discharge",
                 0
               ]
             ],
-            "native_guards": [],
+            "native_guards": [
+              {
+                "type": "Guard",
+                "key": "ready",
+                "minimum": 1,
+                "maximum": 1
+              }
+            ],
             "possible": {
               "type": "Envelope",
-              "import_w": 1000,
-              "export_w": 0
+              "import_w": 4000,
+              "export_w": 4000
             },
-            "confirmation_timeout_ms": 10,
-            "latest_effect_delay_ms": 20,
+            "confirmation_timeout_ms": 100,
+            "latest_effect_delay_ms": 200,
             "repeat_identical": true,
-            "evidence": "synthetic-fixture-response",
+            "evidence": "synthetic-transient",
+            "relief_id": null
+          },
+          {
+            "type": "Step",
+            "key": "charge",
+            "value": 3000,
+            "before": [
+              [
+                "mode",
+                "Command Charging (PV First)"
+              ],
+              [
+                "charge",
+                0
+              ],
+              [
+                "discharge",
+                0
+              ]
+            ],
+            "native_guards": [
+              {
+                "type": "Guard",
+                "key": "ready",
+                "minimum": 1,
+                "maximum": 1
+              }
+            ],
+            "possible": {
+              "type": "Envelope",
+              "import_w": 4000,
+              "export_w": 4000
+            },
+            "confirmation_timeout_ms": 100,
+            "latest_effect_delay_ms": 200,
+            "repeat_identical": true,
+            "evidence": "synthetic-transient",
             "relief_id": null
           }
         ],
@@ -329,11 +650,11 @@
       }
     },
     {
-      "at_ms": 1789372800000,
+      "at_ms": 0,
       "action": "durable"
     },
     {
-      "at_ms": 1789372800001,
+      "at_ms": 900000,
       "event": {
         "type": "Tick"
       }

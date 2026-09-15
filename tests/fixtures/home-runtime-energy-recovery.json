@@ -1,8 +1,12 @@
 {
   "schema_version": 1,
   "initial": {
-    "schema_version": 4,
+    "schema_version": 5,
     "state": {
+      "authority": null,
+      "authority_revision": -1,
+      "conditions": null,
+      "conditions_revision": -1,
       "frame": null,
       "groups": [
         {
@@ -11,15 +15,27 @@
           "consecutive_attempts": 0,
           "desired": null,
           "generation": 0,
+          "grant": {
+            "config_revision": "synthetic-config",
+            "control_surface_revision": "synthetic-surface",
+            "epoch": 1,
+            "expires_at_ms": 100000000,
+            "owner_id": "synthetic-runtime",
+            "type": "WriterGrant"
+          },
+          "grant_confirmed": true,
+          "grant_epoch": 1,
           "journal_fault": false,
           "mode": "monitoring",
           "mode_revision": 0,
           "next_attempt": 1,
+          "next_transition": 1,
           "observation": null,
           "observation_revision": -1,
           "owned": false,
           "plan": null,
           "release": null,
+          "release_pending": false,
           "retry_not_before_ms": 0,
           "spec": {
             "adapter_revision": "synthetic-v1",
@@ -32,13 +48,18 @@
               "import_w": 2000,
               "type": "Envelope"
             },
+            "relief_rules": [],
             "type": "GroupSpec",
-            "relief_rules": []
+            "writer": {
+              "config_revision": "synthetic-config",
+              "control_surface_revision": "synthetic-surface",
+              "owner_id": "synthetic-runtime",
+              "type": "WriterIdentity"
+            }
           },
           "status": "inactive",
-          "type": "Group",
           "transition_work": null,
-          "next_transition": 1
+          "type": "Group"
         }
       ],
       "last_time_ms": 0,
@@ -95,14 +116,13 @@
         "dispatch_window_ms": 10,
         "retry_base_ms": 30,
         "retry_max_ms": 120,
-        "type": "Limits",
-        "transition_timeout_ms": 1000
+        "transition_timeout_ms": 1000,
+        "type": "Limits"
       },
+      "policy": null,
       "resume_after_ms": 0,
       "revision": 0,
-      "type": "HomeState",
-      "policy": null,
-      "policy_context": null
+      "type": "HomeState"
     }
   },
   "records": [

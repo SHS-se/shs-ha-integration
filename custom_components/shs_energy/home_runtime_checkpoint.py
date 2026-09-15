@@ -1,4 +1,4 @@
-"""Closed version-4 JSON for the offline runtime and conservative crash restoration."""
+"""Closed version-5 JSON for the offline runtime and conservative crash restoration."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -17,15 +17,15 @@ def _check_state(state):
         raise ValueError("resume fence exceeds journal time")
     if state.ledger and any(stream.samples and stream.samples[-1].at_ms > state.last_time_ms for stream in state.ledger.streams):
         raise ValueError("meter evidence exceeds checkpoint time")
+    if state.authority:
+        runtime._validate_authority(state, state.authority)
     if state.policy:
         session = state.policy
-        if len(state.groups) != 1 or state.groups[0].spec.id != session.compiled.summary.group_id:
-            raise ValueError("policy group scope differs from checkpoint")
-        runtime._validate_policy_bindings(state.groups[0], session.compiled, session.bindings)
-        if state.ledger is None or session.watermark.ledger_id != state.ledger.id or session.watermark.mapping_revision != state.ledger.mapping_revision:
-            raise ValueError("policy ledger identity differs from checkpoint")
+        group = runtime._battery_group(state)
+        if group is None or state.ledger is None:
+            raise ValueError("policy needs scoped battery and ledger")
         runtime.validate_policy_settlement(state)
-        if session.watermark.at_ms != session.compiled.summary.anchor_ms or session.watermark.ledger_revision > state.ledger.revision:
+        if session.watermark.at_ms != session.compiled.summary.actuals_origin_ms or session.watermark.ledger_revision > state.ledger.revision:
             raise ValueError("policy watermark is inconsistent")
         if session.reconciled_from is None:
             if session.reconciled_actuals:
@@ -37,22 +37,23 @@ def _check_state(state):
                     or tuple(a.spec for a in session.reconciled_actuals) != tuple(s.spec for s in state.ledger.streams)
                     or any(a.counter_measured_ms + a.uncertain_ms != session.watermark.at_ms - start.at_ms for a in session.reconciled_actuals)):
                 raise ValueError("actuals reconciliation scope differs from its watermarks")
-        group = state.groups[0]
-        if group.desired and group.desired.id == session.request_id and session.status != "active":
-            raise ValueError("inactive policy retains an executable request")
+        if group.desired:
+            if session.status not in ("active", "awaiting_context") or group.desired.id != session.request_id:
+                raise ValueError("inactive policy retains an executable request")
+            binding = next((b for b in state.authority.catalog.bindings if b.operation.id == session.selected_id), None)
+            if (binding is None or not runtime._same(binding.target, group.desired.target)
+                    or binding.native_guards != group.desired.native_guards
+                    or group.desired.valid_until_ms > session.compiled.summary.until_ms):
+                raise ValueError("policy target/validity differs from local binding")
         if session.status == "active":
-            context = state.policy_context
-            target = next(b.target for b in session.bindings if b.alternative_id == session.selected_id)
-            guards = tuple(runtime.Guard(key, value, value) for key, value in session.compiled.summary.expected_measurements)
-            if (context is None or context.revision != session.context_revision or context.watermark != session.watermark
-                    or not runtime._policy_context_matches(state, session.compiled, state.last_time_ms)
-                    or group.mode != "controlling" or group.desired is None
-                    or group.desired.id != session.request_id or group.desired.revision != session.revision
-                    or not runtime._same(group.desired.target, target) or group.desired.native_guards != guards
-                    or group.desired.valid_until_ms != session.compiled.summary.anchor_ms + 1
-                    or state.ledger.revision != session.watermark.ledger_revision):
-                raise ValueError("active policy/request/context checkpoint mismatch")
+            runtime._validate_policy(state, session.compiled)
+            if group.mode != "controlling" or group.desired is None or session.decision is None:
+                raise ValueError("active policy needs its selected request and decision")
     for group in state.groups:
+        if group.grant and group.grant.epoch != group.grant_epoch:
+            raise ValueError("writer grant epoch differs from its fence")
+        if group.grant_confirmed and group.grant is None:
+            raise ValueError("grant confirmation needs an explicit grant")
         work = group.transition_work
         if isinstance(work, runtime.TransitionJob):
             if work.token >= group.next_transition or work.key.generation != group.generation:
@@ -82,6 +83,10 @@ def _check_state(state):
                     or attempt.observed_revision > group.observation_revision
                     or attempt.latest_effect_ms != attempt.send_by_ms + attempt.step.latest_effect_delay_ms):
                 raise ValueError("checkpoint contains an impossible preparation")
+            if attempt.grant.epoch > group.grant_epoch or attempt.send_by_ms > attempt.grant.expires_at_ms:
+                raise ValueError("attempt exceeds its writer grant")
+            if attempt.stage == "prepared" and attempt.grant != group.grant:
+                raise ValueError("prepared attempt has a superseded grant")
             runtime._relief_rule(group, attempt.step)
             if not runtime._within(attempt.step.possible, group.spec.maximum):
                 raise ValueError("attempt exceeds its declared scope")
@@ -108,7 +113,7 @@ def _check_state(state):
 
 def encode_checkpoint(state: runtime.HomeState) -> bytes:
     _check_state(state)
-    data = json.dumps({"schema_version": 4, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    data = json.dumps({"schema_version": 5, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > MAX_BYTES:
         raise ValueError("checkpoint exceeds byte limit")
     return data
@@ -116,7 +121,7 @@ def encode_checkpoint(state: runtime.HomeState) -> bytes:
 
 def decode_checkpoint(data: bytes) -> runtime.HomeState:
     value = read_runtime_json(data)
-    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 4:
+    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 5:
         raise ValueError("unsupported checkpoint version/fields")
     return _check_state(_decode(value["state"], runtime.HomeState))
 
@@ -127,17 +132,16 @@ def restore_checkpoint(data: bytes, now_ms: int):
     if type(now_ms) is not int or now_ms < 0:
         raise ValueError("invalid resume time")
     after = max(old.last_time_ms, now_ms)
-    groups = tuple(replace(group, authority_confirmed=False, observation=None, plan=None,
+    groups = tuple(replace(group, grant_confirmed=False, observation=None, plan=None,
                            attempts=tuple(replace(a, stage="ambiguous") for a in group.attempts),
                            owned=group.owned or bool(group.attempts),
                            transition_work=runtime.resumed_transition_work(group, after, old.limits), status="resuming")
                    for group in old.groups)
     state = replace(old, revision=old.revision + 1, last_time_ms=after, resume_after_ms=after, groups=groups, frame=None)
-    state = replace(state, policy_context=None,
-                    policy=replace(state.policy, status="awaiting_context") if state.policy else None,
-                    groups=tuple(replace(runtime._supersede(g), desired=None)
-                                 if state.policy and g.desired and g.desired.id == state.policy.request_id else g
-                                 for g in state.groups))
+    state = replace(state, conditions=None,
+                    policy=replace(state.policy, decision=None, status="awaiting_context") if state.policy else None)
+    # Keep the current desired operation; fresh context/grant/readback may adopt it
+    # directly. Expiry and a pending passive-mode release remain authoritative.
     effects = (runtime.Persist(state), *(runtime.ConfirmAuthority(g.spec.id) for g in groups),
                *(runtime.Observe(g.spec.id) for g in groups))
     return state, effects

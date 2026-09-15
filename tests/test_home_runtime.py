@@ -11,7 +11,7 @@ from home_runtime import (
     Envelope, Guard, Request, Step, GroupSpec, Limits, Observation, Frame, create_home,
     Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable,
     JournalFailed, TransportResult, Tick, Persist, Send, NeedTransition, Observe,
-    reduce_home, reservation,
+    reduce_home, reservation, WriterIdentity, WriterGrant, GrantConfirmed, authorize_send,
 )
 from home_runtime_checkpoint import encode_checkpoint, decode_checkpoint, restore_checkpoint, decode_event, event_json
 
@@ -45,7 +45,7 @@ def synthetic_steps(before, target, *, repeat=True, delay=100):
 class Harness:
     def __init__(self, groups=("battery",), limit=10000):
         self.now = 1000
-        self.state = create_home(tuple(GroupSpec(key, "fake-v1", ("mode", "charge", "discharge"), Envelope(4000, 4000)) for key in groups), Limits(10, 30, 120))
+        self.state = create_home(tuple(GroupSpec(key, "fake-v1", ("mode", "charge", "discharge"), Envelope(4000, 4000), writer=WriterIdentity("fake-runtime", "fake-config", "fake-surface")) for key in groups), Limits(10, 30, 120))
         self.effects = ()
         self.event(FrameObserved(Frame(1, self.now, 100000, Envelope(0, 0), Envelope(limit, limit))))
         for key in groups:
@@ -75,7 +75,10 @@ class Harness:
 
     def authority(self, key, mode, revision):
         release = Request("baseline", 1, 100000, controls("baseline", 1000, 1000), ())
-        return self.event(AuthorityChanged(key, mode, revision, release))
+        effects = self.event(AuthorityChanged(key, mode, revision, release))
+        group = self.group(key)
+        self.event(GrantConfirmed(key, group.grant or WriterGrant("fake-runtime", max(1, group.grant_epoch + 1), "fake-config", "fake-surface", 100000)))
+        return effects
 
     def request(self, key="battery", target=None, revision=1, expiry=90000):
         return self.event(Requested(key, self.group(key).mode_revision, Request("desired", revision, expiry, target or controls("charge", 1000, 0), ())))
@@ -89,7 +92,10 @@ class Harness:
     def durable(self, key="battery"):
         prepared = next(a for a in self.group(key).attempts if a.stage == "prepared")
         self.event(JournalDurable(prepared.prepared_revision))
-        return next((e for e in self.effects if isinstance(e, Send) and e.group_id == key), None)
+        sent = next((e for e in self.effects if isinstance(e, Send) and e.group_id == key), None)
+        if sent:
+            assert authorize_send(self.state, sent, self.now)
+        return sent
 
     def settle(self, key="battery", target=None):
         group = self.group(key)
@@ -364,7 +370,7 @@ class HomeRuntimeTests(unittest.TestCase):
                 self.assertEqual(group.retry_not_before_ms, before.retry_not_before_ms)
                 self.assertEqual(group.next_attempt, before.next_attempt)
                 self.assertIsNone(group.plan)
-                self.assertFalse(group.authority_confirmed)
+                self.assertFalse(group.grant_confirmed)
 
     def test_invalid_checkpoint_identity_and_plan_are_rejected(self):
         h = Harness(); h.request(); h.propose()
@@ -394,7 +400,7 @@ class HomeRuntimeTests(unittest.TestCase):
         self.assertEqual(len(sends), 1)
         self.assertEqual(sends[0][0], 5)
         self.assertEqual(trace["rows"][6]["groups"][0]["attempts"][0]["stage"], "ambiguous")
-        self.assertEqual(trace["rows"][9]["groups"][0]["status"], "reconciling")
+        self.assertEqual(trace["rows"][10]["groups"][0]["status"], "reconciling")
         self.assertEqual(trace["rows"][-1]["groups"][0]["status"], "adopted")
         final = decode_checkpoint(json.dumps(trace["final_checkpoint"]).encode())
         self.assertEqual(final.groups[0].attempts, ())

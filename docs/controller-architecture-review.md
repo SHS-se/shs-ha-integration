@@ -1,30 +1,115 @@
 # Controller architecture review and battery release gates
 
-Reviewed 14 September 2026 against integration `35b2035` (manifest
-`0.8.0-beta.88`), backend `383f36c`, and both repositories' current working-tree
-design documents. Independent Claude Opus **Max** and Codex candidates were
-compared using the architect workflow, followed by local reproduction of findings.
-Existing documentation edits were retained. This is a code/design
-review and proposed implementation contract, not a live installation assessment.
-The initial review changed no product code. The follow-up below fixes the four
-reproduced runtime defects; no device settings, control permissions or deployments
-were changed.
+Current assessment, 15 September 2026: the usable battery policy and mixed-mode
+software execution/ownership stage is implemented in `0.8.0-beta.91`. The
+[execution design](battery-execution-design.md) and [binding contract](policy-binding.md)
+record the resulting interfaces and behavior. Independent Claude Opus **Max** and
+Codex designs were compared before implementation; final review reproduced and
+closed mode-scope, stale-condition and ownership-handover defects.
 
-**Recommendation: do not turn battery Controlling back on on the strength of this
-work.** The new policy/runtime path is not deployable: it has no live host or native
-battery adapter, and its HA policy binding has a one-millisecond synthetic lease.
-Installing a compatible beta with controls disabled can support software validation;
-it does not exercise or commission the new controller. Check outstanding ownership
-and release records first: current startup can hand over previously owned devices
-even in a passive selected mode. Re-enabling the existing
-scheduled battery controller would be a separate decision requiring current
-installation evidence, which this review does not provide.
+**Do not turn battery Controlling back on yet.** The new compiler, evaluator and
+reconciliation protocol are ready for live host/adapter integration, but
+`ScheduledController` remains the installed writer. No live HA ports, shared final
+writer arbiter or commissioned native adapter were installed by this work. A beta
+with controls disabled can validate installation; it cannot prove these missing
+stages. No deployment or device-setting change was made.
+
+The original review below was against integration `35b2035` (beta.88) and backend
+`383f36c`. Its findings and overnight-data analysis remain historical evidence.
+The follow-ups identify what has since been fixed; the original one-millisecond
+policy lease is no longer the active software contract.
 
 Thermal modelling, direct user controls and notifications are explicitly deferred
 by the user. They are not prerequisites for a deliberately bounded battery-first
 release. Mixed operating modes, coexistence and battery deployment gaps are in scope.
 
-## Follow-up: four runtime defects fixed
+## Follow-up: usable policy and mixed modes completed
+
+- The backend now compiles `battery-execution-policy-v1`: bounded future
+  continuation functions with explicit validity, source permissions, physical
+  domains and exact component scoring. It includes continuous SOC coverage from
+  a normally ranked idle family where feasible, while reporting remaining holes.
+- HA evaluates the remaining quarter from live SOC, PV and real household demand,
+  retaining ramp coupling, terminal utility, saturation and C/F/J reconciliation.
+  There is no fixed energy allowance or observation-by-observation recompile.
+- Forced charging uses **Command Charging (PV First)**. Grid First and implicit
+  PV curtailment are excluded. Export reserve is distinct from physical cutoff;
+  predicted crossing is rejected without inventing a native reserve-stop feature.
+- Mixed scopes keep external EV/pool demand and unresolved effects in headroom
+  accounting exactly once. A hypothetical stop cannot fund battery charging.
+  Ownership handover cannot erase a known issued effect.
+- Battery requests have one owner. Mode/revision changes require a new scope and
+  matching policy. Confirmed writer grants fence preparation and final dispatch.
+  Release has an independent revision; expiry, release failure, re-entry and
+  restart preserve unresolved effects. Fresh re-entry may cancel an unissued
+  release without forcing a baseline cycle.
+- Same-target renewals preserve execution identity and original prepared-send
+  deadlines. Discretionary changes require sustained advantage; ineligibility
+  withdraws immediately. Fresh observations alone do not create journal churn.
+- Source-watermark accounting survives delayed policy receipt, pruning and restart.
+  Schema **5** rejects schema 4; the old exact-anchor reader remains offline
+  analytical tooling. Live migration is a roll-forward host-stage decision.
+
+Findings **2** and the software/protocol portion of **5** below are now addressed.
+Finding **3** has an explicit native response model and catalog validation, but
+physical commissioning is still outstanding. Findings 4, 6, 7 and 8 were already
+fixed in beta.89 and remain covered.
+
+The remaining gates before enablement are concrete:
+
+1. Wire and test the backend policy refresh path and HA observation, meter, event,
+   timer, journal and transport ports. Handle missing/expired policy and source
+   revisions through the defined reducer protocol.
+2. Enforce one durable grant arbiter at **every** legacy and new final battery
+   write path, including startup, restoration and unload. Prove mixed-mode
+   behavior with the existing EV/pool owners on the live integration.
+3. Commission the real battery's native transition ordering, readback, settling
+   and late-effect limits, physical limits, export-reserve protection, release,
+   restart and abrupt-outage behavior. Synthetic response evidence is insufficient.
+4. Replay representative installation data to measure coverage, compile cadence
+   and economic quality, then conduct a supervised battery-only trial with the
+   commissioned release path available. Finite-family exact scoring does not
+   establish global optimality or a measured regret bound.
+
+### Validation for beta.91
+
+| Check | Result |
+| --- | --- |
+| Full HA Python suite | 613 passed |
+| HA compileall and frontend Node tests | Passed; 59 frontend tests |
+| Full backend Deno suite | 1,119 passed |
+| Backend repository lint | 0 errors; 26 pre-existing warnings, unchanged from baseline |
+| Backend production and dev test-mode frontend builds | Passed; existing large-chunk warning |
+| Mocked-backend Playwright suites | 31 passed |
+| Provider/consumer fixture regeneration check | Passed; 180 current-response and 96 continuation cases |
+| New backend/scorer files, explicit scoped lint | 0 errors or warnings |
+
+Continuation cells are checked against the authoritative household scorer at
+boundaries and interior E/P points, including idle-family terminal utility and
+PV-constrained bridge seeds. The old offline examples remain byte-identical after
+scorer extraction. Schema-5 crash, ledger and policy traces replay with final send
+authorization checks. The 64-cell evaluator bound is exercised. These are software
+results; they do not establish native timing, production policy quality or live
+writer exclusion.
+
+Reproduce with:
+
+```sh
+# HA repository
+python3.13 -m unittest discover -s tests -v
+python3.13 -m compileall -q custom_components/shs_energy
+node --test tests/frontend-config-save.test.js
+python3.13 scripts/generate-execution-policy-fixtures.py ../smart-home-solutions-t-by --check
+
+# Backend repository
+deno task test
+npm run lint
+npm run build:test  # current backend dev branch; use npm run build on main
+npm run test:e2e:local
+```
+
+## Earlier follow-up: four runtime defects fixed
+
 
 The user scoped implementation to findings **4, 6, 7 and 8**. These are now fixed
 in `0.8.0-beta.89`, with the [implementation contract and validation](runtime-recovery-fixes.md):
@@ -38,10 +123,11 @@ in `0.8.0-beta.89`, with the [implementation contract and validation](runtime-re
 - Configured finite relief rules admit proved non-worsening reductions under
   overload; observed and uncertain reservations remain until confirmation.
 
-Checkpoint schema **4** rejects earlier prototype schemas. The relief rule tests
-use synthetic evidence; no native battery rule has been commissioned. The other
-findings below remain open. Production deployment and battery enablement still
-require the executable policy, native adapter, host and mixed-mode gates.
+That beta used checkpoint schema **4**, rejecting earlier prototype schemas;
+the new execution stage advances this to schema 5. The relief rule tests
+use synthetic evidence; no native battery rule has been commissioned. The current status of the other
+findings is recorded above. Production deployment and battery enablement still
+require the native adapter, live host and writer-cutover gates.
 
 ## What has been completed
 
@@ -54,15 +140,17 @@ require the executable policy, native adapter, host and mixed-mode gates.
 | Time/state coverage | Time/energy rectangles, restricted physical feasibility witness, held-out economic error and ranking regret | Diagnostic-only; all other conditions frozen; empirical evidence is not a regional economic certificate |
 | Household reconciliation core | Pure immutable reducer; complete group targets; persist-before-send; mode/generation fencing; uncertain attempts; bounded retry pacing; independent group progress | Synthetic adapters and effect protocol only; no HA event, timer, transport or durable-storage worker |
 | Gross actual-energy ledger | Directional mWh, source revisions/epochs, uncertainty bounds, retention and watermark reconciliation in the household checkpoint | No live meter port, source-revision recovery or operational retention worker |
-| HA exact policy binding | Closed reader, current response/cost checks, ranking, context/ledger fencing, generated provider fixtures | Only `synthetic-imposed-power-v1`; exact source time; request expiry `anchor_ms + 1`; does not accept coverage bands |
+| HA execution policy | Closed native-response evaluator, bounded future functions, live conditions, context/ledger fencing and generated provider fixtures | Quarter-bounded finite family; coverage/latency/quality must be measured on installation data |
+| Mixed-mode execution and ownership | Explicit executable scope, local native catalog, durable writer grants, independent release revision and schema-5 recovery | Pure reducer/final-dispatch protocol; live ports and common legacy arbiter remain to implement |
 
 The implementation documents record historical test totals at their respective
 commits. They must not be read as successive production rollout sign-offs.
 
 ## Original findings and battery deployment gaps
 
-Findings 4, 6, 7 and 8 describe the reviewed beta.88 behaviour and are closed by the
-follow-up above. Other entries describe outstanding deployment work.
+These are the original beta.88 findings, retained for traceability. Findings 4, 6,
+7 and 8 were fixed in beta.89. The current execution-policy follow-up closes 2
+and the software portion of 5; 1 and native/live portions of 3 and 5 remain gates.
 
 1. **Live integration still uses the old owner.** `__init__.py` constructs
    `ScheduledController`; its execution lock spans device I/O, and startup/unload
@@ -404,3 +492,16 @@ and **58 frontend tests** pass. The three schema-4 replay traces and real-compil
 fixture checks pass. Independent review also compared randomized multi-stream
 settlement against an unpruned oracle and round-tripped randomized runtime states.
 These checks do not change the physical deployment assessment.
+
+## Installation correction, 15 September: forced-charging mode
+
+Phil confirmed that forced battery charging must use **Command Charging (PV First)**.
+Grid First curtails solar to charge from the grid and is excluded from normal
+operation. The supplied `history.csv` shows PV falling from 0.948 kW to zero after
+Grid First selection, then recovering to 0.936 kW after returning to PV First,
+with the charge ceiling unchanged at 3.0 kW. The
+[battery contract](battery-control-configuration.md) records the event timestamps.
+The overnight configuration's PV First mapping was correct; older Grid First
+physical-response records do not justify retaining that mode. This resolves the
+mapping question from the overnight-data review, while broader native transition,
+recovery and outage commissioning remain separate release gates.

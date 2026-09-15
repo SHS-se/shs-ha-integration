@@ -23,6 +23,7 @@ sys.path.insert(0, str(PACKAGE))
 PURE_MODULES = (
     "battery_commands", "operating_modes", "verification",
     "home_runtime", "home_runtime_checkpoint", "energy_ledger", "runtime_json", "battery_policy",
+    "battery_execution_policy",
     "controller",
     "presentation",
     "api_contract",

@@ -1,0 +1,2150 @@
+{
+  "schema": "battery-execution-current-vectors-v1",
+  "policy": {
+    "schema": "battery-execution-policy-v1",
+    "profile": "finite-continuation-v1",
+    "view": "executable",
+    "identity": {
+      "policy_id": "synthetic-execution-1",
+      "revision": 1,
+      "battery_id": "battery",
+      "intent_revision": "intent-1",
+      "plant_revision": "plant-1",
+      "scope_revision": "scope-1",
+      "external_scenario_revision": "real-demand-1",
+      "tariff_revision": "tariff-1",
+      "response_model_revision": "pv-first-v1",
+      "catalog_revision": "synthetic-catalog-1"
+    },
+    "actuals_origin_ms": 1789459380000,
+    "validity": {
+      "from_ms": 1789459380000,
+      "refresh_after_ms": 1789460040000,
+      "until_ms": 1789460100000,
+      "boundary_ms": 1789460100000
+    },
+    "domain": {
+      "energy_kwh": [
+        1,
+        10
+      ],
+      "pv_w": [
+        0,
+        12000
+      ],
+      "residual_load_w": [
+        0,
+        15000
+      ]
+    },
+    "plant": {
+      "cutoff_kwh": 1,
+      "capacity_kwh": 10,
+      "charge_max_w": 4000,
+      "discharge_max_w": 4000,
+      "charge_efficiency": 0.95,
+      "discharge_efficiency": 0.9,
+      "import_limit_w": 17000,
+      "export_limit_w": 10000,
+      "wear_sek_per_kwh": 0.1
+    },
+    "permissions": {
+      "available": true,
+      "grid_charge_allowed": false,
+      "battery_export_allowed": false,
+      "export_reserve_kwh": 3,
+      "export_price_eligible": true,
+      "minimum_export_price_sek_per_kwh": -0.25,
+      "price_revision": "tariff-1"
+    },
+    "economics": {
+      "import_sek_per_kwh": -0.7,
+      "export_sek_per_kwh": -0.15,
+      "shaping_sek_per_kwh_per_kw": 0.025,
+      "ramp_sek_per_kw": 0.07
+    },
+    "reference_id": "hold",
+    "operations": [
+      {
+        "id": "hold",
+        "operation": "hold",
+        "charge_limit_w": 0,
+        "discharge_limit_w": 0
+      },
+      {
+        "id": "msc",
+        "operation": "self_consumption",
+        "charge_limit_w": 4000,
+        "discharge_limit_w": 4000
+      },
+      {
+        "id": "solar",
+        "operation": "solar_charge",
+        "charge_limit_w": 3000,
+        "discharge_limit_w": 0
+      },
+      {
+        "id": "house",
+        "operation": "supply_house",
+        "charge_limit_w": 0,
+        "discharge_limit_w": 3000
+      },
+      {
+        "id": "charge",
+        "operation": "grid_charge",
+        "charge_limit_w": 3000,
+        "discharge_limit_w": 0
+      },
+      {
+        "id": "export",
+        "operation": "export",
+        "charge_limit_w": 0,
+        "discharge_limit_w": 2000
+      }
+    ],
+    "continuation": {
+      "representation": "piecewise-quadratic-absolute-v1",
+      "coordinate_order": [
+        "energy_kwh",
+        "previous_import_w"
+      ],
+      "cells": [
+        {
+          "id": "terminal-cell-0",
+          "witness_id": "terminal",
+          "domain": {
+            "energy_kwh": [
+              1,
+              4
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "terminal_sek": {
+              "polynomial": [
+                -0.04999999999999997,
+                0.9,
+                -0.05000000000000001
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "terminal-cell-1",
+          "witness_id": "terminal",
+          "domain": {
+            "energy_kwh": [
+              4,
+              10
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "terminal_sek": {
+              "polynomial": [
+                0.08333333333333359,
+                0.8333333333333333,
+                -0.041666666666666664
+              ],
+              "absolute_terms": []
+            }
+          }
+        }
+      ]
+    },
+    "quality": {
+      "assurance": "exact-scoring-within-published-family",
+      "scorer_revision": "offline-household-v1",
+      "compiler_revision": "execution-v1",
+      "family_id": "family-fe937d5e7ec88ddd0c4b762d",
+      "source_hash": "sha256:fe937d5e7ec88ddd0c4b762d2d911e41c9f74bd6b2fe19fdd6c665084acbdfa3",
+      "numeric_tolerance_sek": 1e-7,
+      "search_exhaustive_in_declared_graph": true,
+      "search_pruned_prefixes": 0,
+      "heldout_count": 0,
+      "heldout_max_regret_sek": null,
+      "certified_regret_bound_sek": null
+    }
+  },
+  "cases": [
+    {
+      "id": "negative-price-real-7kw-ev-hold",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 0,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": -0.8574999999999999
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "negative-price-real-7kw-ev-msc",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.42000000000000004,
+          "export_sek": 0,
+          "wear_sek": 0.08000000000000002,
+          "starts_sek": 0,
+          "shaping_sek": 0.022500000000000003,
+          "ramp_sek": 0.28,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.42000000000000004,
+          "total_sek": -0.03749999999999998
+        },
+        "energy_end_kwh": 4.111111111111111,
+        "terminal_import_w": 3000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "negative-price-real-7kw-ev-solar",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 0,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": -0.8574999999999999
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "negative-price-real-7kw-ev-house",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "house",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.5599999999999999,
+          "export_sek": 0,
+          "wear_sek": 0.06000000000000001,
+          "starts_sek": 0,
+          "shaping_sek": 0.04000000000000001,
+          "ramp_sek": 0.21000000000000002,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.5599999999999999,
+          "total_sek": -0.24999999999999994
+        },
+        "energy_end_kwh": 4.333333333333333,
+        "terminal_import_w": 4000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "negative-price-real-7kw-ev-charge",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "negative-price-real-7kw-ev-export",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "historical-import-above-limit-hold",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 25000,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 1.2600000000000002,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": 0.4025000000000003
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "historical-import-above-limit-msc",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 25000,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.42000000000000004,
+          "export_sek": 0,
+          "wear_sek": 0.08000000000000002,
+          "starts_sek": 0,
+          "shaping_sek": 0.022500000000000003,
+          "ramp_sek": 1.54,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.42000000000000004,
+          "total_sek": 1.2225000000000001
+        },
+        "energy_end_kwh": 4.111111111111111,
+        "terminal_import_w": 3000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "historical-import-above-limit-solar",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 25000,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 1.2600000000000002,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": 0.4025000000000003
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "historical-import-above-limit-house",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 25000,
+      "operation_id": "house",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.5599999999999999,
+          "export_sek": 0,
+          "wear_sek": 0.06000000000000001,
+          "starts_sek": 0,
+          "shaping_sek": 0.04000000000000001,
+          "ramp_sek": 1.4700000000000002,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.5599999999999999,
+          "total_sek": 1.0100000000000002
+        },
+        "energy_end_kwh": 4.333333333333333,
+        "terminal_import_w": 4000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "historical-import-above-limit-charge",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 25000,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "historical-import-above-limit-export",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 25000,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "live-pv-surplus-hold",
+      "at_ms": 1789459560000,
+      "energy_kwh": 5,
+      "pv_w": 6000,
+      "residual_load_w": 1500,
+      "previous_import_w": 7000,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": -0.10124999999999999,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.49000000000000005,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0.10124999999999999,
+          "total_sek": 0.59125
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "live-pv-surplus-msc",
+      "at_ms": 1789459560000,
+      "energy_kwh": 5,
+      "pv_w": 6000,
+      "residual_load_w": 1500,
+      "previous_import_w": 7000,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": -0.01125,
+          "wear_sek": 0.06,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.49000000000000005,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0.01125,
+          "total_sek": 0.56125
+        },
+        "energy_end_kwh": 5.57,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "live-pv-surplus-solar",
+      "at_ms": 1789459560000,
+      "energy_kwh": 5,
+      "pv_w": 6000,
+      "residual_load_w": 1500,
+      "previous_import_w": 7000,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": -0.033749999999999995,
+          "wear_sek": 0.045,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.49000000000000005,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0.033749999999999995,
+          "total_sek": 0.5687500000000001
+        },
+        "energy_end_kwh": 5.4275,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "live-pv-surplus-house",
+      "at_ms": 1789459560000,
+      "energy_kwh": 5,
+      "pv_w": 6000,
+      "residual_load_w": 1500,
+      "previous_import_w": 7000,
+      "operation_id": "house",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": -0.10124999999999999,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.49000000000000005,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0.10124999999999999,
+          "total_sek": 0.59125
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "live-pv-surplus-charge",
+      "at_ms": 1789459560000,
+      "energy_kwh": 5,
+      "pv_w": 6000,
+      "residual_load_w": 1500,
+      "previous_import_w": 7000,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "live-pv-surplus-export",
+      "at_ms": 1789459560000,
+      "energy_kwh": 5,
+      "pv_w": 6000,
+      "residual_load_w": 1500,
+      "previous_import_w": 7000,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "live-load-change-ramp-hold",
+      "at_ms": 1789459680000,
+      "energy_kwh": 5,
+      "pv_w": 500,
+      "residual_load_w": 10000,
+      "previous_import_w": 250,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.7758333333333334,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.13161458333333334,
+          "ramp_sek": 0.6475000000000001,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.7758333333333334,
+          "total_sek": 0.0032812500000000133
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 9500,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "live-load-change-ramp-msc",
+      "at_ms": 1789459680000,
+      "energy_kwh": 5,
+      "pv_w": 500,
+      "residual_load_w": 10000,
+      "previous_import_w": 250,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.44916666666666666,
+          "export_sek": 0,
+          "wear_sek": 0.04666666666666667,
+          "starts_sek": 0,
+          "shaping_sek": 0.04411458333333334,
+          "ramp_sek": 0.36750000000000005,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.44916666666666666,
+          "total_sek": 0.009114583333333426
+        },
+        "energy_end_kwh": 4.481481481481481,
+        "terminal_import_w": 5500,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "live-load-change-ramp-solar",
+      "at_ms": 1789459680000,
+      "energy_kwh": 5,
+      "pv_w": 500,
+      "residual_load_w": 10000,
+      "previous_import_w": 250,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.7758333333333334,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.13161458333333334,
+          "ramp_sek": 0.6475000000000001,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.7758333333333334,
+          "total_sek": 0.0032812500000000133
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 9500,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "live-load-change-ramp-house",
+      "at_ms": 1789459680000,
+      "energy_kwh": 5,
+      "pv_w": 500,
+      "residual_load_w": 10000,
+      "previous_import_w": 250,
+      "operation_id": "house",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.5308333333333333,
+          "export_sek": 0,
+          "wear_sek": 0.034999999999999996,
+          "starts_sek": 0,
+          "shaping_sek": 0.06161458333333334,
+          "ramp_sek": 0.43750000000000006,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.5308333333333333,
+          "total_sek": 0.0032812500000001243
+        },
+        "energy_end_kwh": 4.611111111111111,
+        "terminal_import_w": 6500,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "live-load-change-ramp-charge",
+      "at_ms": 1789459680000,
+      "energy_kwh": 5,
+      "pv_w": 500,
+      "residual_load_w": 10000,
+      "previous_import_w": 250,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "live-load-change-ramp-export",
+      "at_ms": 1789459680000,
+      "energy_kwh": 5,
+      "pv_w": 500,
+      "residual_load_w": 10000,
+      "previous_import_w": 250,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "fractional-charge-saturation-hold",
+      "at_ms": 1789459380000,
+      "energy_kwh": 9.9991234567,
+      "pv_w": 6000,
+      "residual_load_w": 1000,
+      "previous_import_w": 4500,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": -0.15,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.31500000000000006,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0.15,
+          "total_sek": 0.4650000000000001
+        },
+        "energy_end_kwh": 9.9991234567,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "fractional-charge-saturation-msc",
+      "at_ms": 1789459380000,
+      "energy_kwh": 9.9991234567,
+      "pv_w": 6000,
+      "residual_load_w": 1000,
+      "previous_import_w": 4500,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": -0.14986159842631572,
+          "wear_sek": 0.00009226771578951798,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.31500000000000006,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0.14986159842631572,
+          "total_sek": 0.4649538661421053
+        },
+        "energy_end_kwh": 10,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "fractional-charge-saturation-solar",
+      "at_ms": 1789459380000,
+      "energy_kwh": 9.9991234567,
+      "pv_w": 6000,
+      "residual_load_w": 1000,
+      "previous_import_w": 4500,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": -0.14986159842631572,
+          "wear_sek": 0.00009226771578951798,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.31500000000000006,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0.14986159842631572,
+          "total_sek": 0.4649538661421053
+        },
+        "energy_end_kwh": 10,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "fractional-charge-saturation-house",
+      "at_ms": 1789459380000,
+      "energy_kwh": 9.9991234567,
+      "pv_w": 6000,
+      "residual_load_w": 1000,
+      "previous_import_w": 4500,
+      "operation_id": "house",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": -0.15,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.31500000000000006,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0.15,
+          "total_sek": 0.4650000000000001
+        },
+        "energy_end_kwh": 9.9991234567,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "fractional-charge-saturation-charge",
+      "at_ms": 1789459380000,
+      "energy_kwh": 9.9991234567,
+      "pv_w": 6000,
+      "residual_load_w": 1000,
+      "previous_import_w": 4500,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "fractional-charge-saturation-export",
+      "at_ms": 1789459380000,
+      "energy_kwh": 9.9991234567,
+      "pv_w": 6000,
+      "residual_load_w": 1000,
+      "previous_import_w": 4500,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "fractional-discharge-saturation-hold",
+      "at_ms": 1789459380000,
+      "energy_kwh": 1.0001234567,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 500,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 0.45500000000000007,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": -0.40249999999999986
+        },
+        "energy_end_kwh": 1.0001234567,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "fractional-discharge-saturation-msc",
+      "at_ms": 1789459380000,
+      "energy_kwh": 1.0001234567,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 500,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.979922222279,
+          "export_sek": 0,
+          "wear_sek": 0.000011111102999992185,
+          "starts_sek": 0,
+          "shaping_sek": 0.12248611112125002,
+          "ramp_sek": 0.45500000000000007,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.979922222279,
+          "total_sek": -0.40242500005475
+        },
+        "energy_end_kwh": 1,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "fractional-discharge-saturation-solar",
+      "at_ms": 1789459380000,
+      "energy_kwh": 1.0001234567,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 500,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 0.45500000000000007,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": -0.40249999999999986
+        },
+        "energy_end_kwh": 1.0001234567,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "fractional-discharge-saturation-house",
+      "at_ms": 1789459380000,
+      "energy_kwh": 1.0001234567,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 500,
+      "operation_id": "house",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.9799222222790002,
+          "export_sek": 0,
+          "wear_sek": 0.000011111102999992185,
+          "starts_sek": 0,
+          "shaping_sek": 0.12248472223337503,
+          "ramp_sek": 0.45500000000000007,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.9799222222790002,
+          "total_sek": -0.40242638894262506
+        },
+        "energy_end_kwh": 1,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "fractional-discharge-saturation-charge",
+      "at_ms": 1789459380000,
+      "energy_kwh": 1.0001234567,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 500,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "fractional-discharge-saturation-export",
+      "at_ms": 1789459380000,
+      "energy_kwh": 1.0001234567,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 500,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "at-capacity-hold",
+      "at_ms": 1789459380000,
+      "energy_kwh": 10,
+      "pv_w": 6000,
+      "residual_load_w": 1000,
+      "previous_import_w": 7000,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": -0.15,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.49000000000000005,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0.15,
+          "total_sek": 0.64
+        },
+        "energy_end_kwh": 10,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "at-capacity-msc",
+      "at_ms": 1789459380000,
+      "energy_kwh": 10,
+      "pv_w": 6000,
+      "residual_load_w": 1000,
+      "previous_import_w": 7000,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": -0.15,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.49000000000000005,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0.15,
+          "total_sek": 0.64
+        },
+        "energy_end_kwh": 10,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "at-capacity-solar",
+      "at_ms": 1789459380000,
+      "energy_kwh": 10,
+      "pv_w": 6000,
+      "residual_load_w": 1000,
+      "previous_import_w": 7000,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": -0.15,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.49000000000000005,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0.15,
+          "total_sek": 0.64
+        },
+        "energy_end_kwh": 10,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "at-capacity-house",
+      "at_ms": 1789459380000,
+      "energy_kwh": 10,
+      "pv_w": 6000,
+      "residual_load_w": 1000,
+      "previous_import_w": 7000,
+      "operation_id": "house",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": -0.15,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.49000000000000005,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0.15,
+          "total_sek": 0.64
+        },
+        "energy_end_kwh": 10,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "at-capacity-charge",
+      "at_ms": 1789459380000,
+      "energy_kwh": 10,
+      "pv_w": 6000,
+      "residual_load_w": 1000,
+      "previous_import_w": 7000,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "at-capacity-export",
+      "at_ms": 1789459380000,
+      "energy_kwh": 10,
+      "pv_w": 6000,
+      "residual_load_w": 1000,
+      "previous_import_w": 7000,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "at-cutoff-hold",
+      "at_ms": 1789459380000,
+      "energy_kwh": 1,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 0,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": -0.8574999999999999
+        },
+        "energy_end_kwh": 1,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "at-cutoff-msc",
+      "at_ms": 1789459380000,
+      "energy_kwh": 1,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 0,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": -0.8574999999999999
+        },
+        "energy_end_kwh": 1,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "at-cutoff-solar",
+      "at_ms": 1789459380000,
+      "energy_kwh": 1,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 0,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": -0.8574999999999999
+        },
+        "energy_end_kwh": 1,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "at-cutoff-house",
+      "at_ms": 1789459380000,
+      "energy_kwh": 1,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "house",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 0,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": -0.8574999999999999
+        },
+        "energy_end_kwh": 1,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "at-cutoff-charge",
+      "at_ms": 1789459380000,
+      "energy_kwh": 1,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "at-cutoff-export",
+      "at_ms": 1789459380000,
+      "energy_kwh": 1,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "at-export-reserve-hold",
+      "at_ms": 1789459380000,
+      "energy_kwh": 3,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 0,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": -0.8574999999999999
+        },
+        "energy_end_kwh": 3,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "at-export-reserve-msc",
+      "at_ms": 1789459380000,
+      "energy_kwh": 3,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.42000000000000004,
+          "export_sek": 0,
+          "wear_sek": 0.08000000000000002,
+          "starts_sek": 0,
+          "shaping_sek": 0.022500000000000003,
+          "ramp_sek": 0.28,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.42000000000000004,
+          "total_sek": -0.03749999999999998
+        },
+        "energy_end_kwh": 2.111111111111111,
+        "terminal_import_w": 3000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "at-export-reserve-solar",
+      "at_ms": 1789459380000,
+      "energy_kwh": 3,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 0,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": -0.8574999999999999
+        },
+        "energy_end_kwh": 3,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "at-export-reserve-house",
+      "at_ms": 1789459380000,
+      "energy_kwh": 3,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "house",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.5599999999999999,
+          "export_sek": 0,
+          "wear_sek": 0.06000000000000001,
+          "starts_sek": 0,
+          "shaping_sek": 0.04000000000000001,
+          "ramp_sek": 0.21000000000000002,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.5599999999999999,
+          "total_sek": -0.24999999999999994
+        },
+        "energy_end_kwh": 2.3333333333333335,
+        "terminal_import_w": 4000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "at-export-reserve-charge",
+      "at_ms": 1789459380000,
+      "energy_kwh": 3,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "at-export-reserve-export",
+      "at_ms": 1789459380000,
+      "energy_kwh": 3,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "export-reserve-crossing-hold",
+      "at_ms": 1789459380000,
+      "energy_kwh": 3.1,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 0,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": -0.8574999999999999
+        },
+        "energy_end_kwh": 3.1,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "export-reserve-crossing-msc",
+      "at_ms": 1789459380000,
+      "energy_kwh": 3.1,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.42000000000000004,
+          "export_sek": 0,
+          "wear_sek": 0.08000000000000002,
+          "starts_sek": 0,
+          "shaping_sek": 0.022500000000000003,
+          "ramp_sek": 0.28,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.42000000000000004,
+          "total_sek": -0.03749999999999998
+        },
+        "energy_end_kwh": 2.2111111111111112,
+        "terminal_import_w": 3000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "export-reserve-crossing-solar",
+      "at_ms": 1789459380000,
+      "energy_kwh": 3.1,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.98,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.12250000000000001,
+          "ramp_sek": 0,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.98,
+          "total_sek": -0.8574999999999999
+        },
+        "energy_end_kwh": 3.1,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "export-reserve-crossing-house",
+      "at_ms": 1789459380000,
+      "energy_kwh": 3.1,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "house",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.5599999999999999,
+          "export_sek": 0,
+          "wear_sek": 0.06000000000000001,
+          "starts_sek": 0,
+          "shaping_sek": 0.04000000000000001,
+          "ramp_sek": 0.21000000000000002,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.5599999999999999,
+          "total_sek": -0.24999999999999994
+        },
+        "energy_end_kwh": 2.4333333333333336,
+        "terminal_import_w": 4000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "export-reserve-crossing-charge",
+      "at_ms": 1789459380000,
+      "energy_kwh": 3.1,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "export-reserve-crossing-export",
+      "at_ms": 1789459380000,
+      "energy_kwh": 3.1,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "no-pv-no-load-hold",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 0,
+      "residual_load_w": 0,
+      "previous_import_w": 3000,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.21000000000000002,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0,
+          "total_sek": 0.21000000000000002
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "no-pv-no-load-msc",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 0,
+      "residual_load_w": 0,
+      "previous_import_w": 3000,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.21000000000000002,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0,
+          "total_sek": 0.21000000000000002
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "no-pv-no-load-solar",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 0,
+      "residual_load_w": 0,
+      "previous_import_w": 3000,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.21000000000000002,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0,
+          "total_sek": 0.21000000000000002
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "no-pv-no-load-house",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 0,
+      "residual_load_w": 0,
+      "previous_import_w": 3000,
+      "operation_id": "house",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": 0,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0,
+          "ramp_sek": 0.21000000000000002,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": 0,
+          "total_sek": 0.21000000000000002
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 0,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "no-pv-no-load-charge",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 0,
+      "residual_load_w": 0,
+      "previous_import_w": 3000,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "no-pv-no-load-export",
+      "at_ms": 1789459380000,
+      "energy_kwh": 5,
+      "pv_w": 0,
+      "residual_load_w": 0,
+      "previous_import_w": 3000,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "uncontained-pv-hold",
+      "at_ms": 1789459380000,
+      "energy_kwh": 10,
+      "pv_w": 12000,
+      "residual_load_w": 0,
+      "previous_import_w": 7000,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_limit"
+      }
+    },
+    {
+      "id": "uncontained-pv-msc",
+      "at_ms": 1789459380000,
+      "energy_kwh": 10,
+      "pv_w": 12000,
+      "residual_load_w": 0,
+      "previous_import_w": 7000,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_limit"
+      }
+    },
+    {
+      "id": "uncontained-pv-solar",
+      "at_ms": 1789459380000,
+      "energy_kwh": 10,
+      "pv_w": 12000,
+      "residual_load_w": 0,
+      "previous_import_w": 7000,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_limit"
+      }
+    },
+    {
+      "id": "uncontained-pv-house",
+      "at_ms": 1789459380000,
+      "energy_kwh": 10,
+      "pv_w": 12000,
+      "residual_load_w": 0,
+      "previous_import_w": 7000,
+      "operation_id": "house",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_limit"
+      }
+    },
+    {
+      "id": "uncontained-pv-charge",
+      "at_ms": 1789459380000,
+      "energy_kwh": 10,
+      "pv_w": 12000,
+      "residual_load_w": 0,
+      "previous_import_w": 7000,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "uncontained-pv-export",
+      "at_ms": 1789459380000,
+      "energy_kwh": 10,
+      "pv_w": 12000,
+      "residual_load_w": 0,
+      "previous_import_w": 7000,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "last-millisecond-hold",
+      "at_ms": 1789460099999,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.000001361111111111111,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 1.701388888888889e-7,
+          "ramp_sek": 0,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.000001361111111111111,
+          "total_sek": -0.000001190972222222222
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "last-millisecond-msc",
+      "at_ms": 1789460099999,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -5.833333333333333e-7,
+          "export_sek": 0,
+          "wear_sek": 1.1111111111111111e-7,
+          "starts_sek": 0,
+          "shaping_sek": 3.125e-8,
+          "ramp_sek": 0.28,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -5.833333333333333e-7,
+          "total_sek": 0.2799995590277778
+        },
+        "energy_end_kwh": 4.999998765432099,
+        "terminal_import_w": 3000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "last-millisecond-solar",
+      "at_ms": 1789460099999,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -0.000001361111111111111,
+          "export_sek": 0,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 1.701388888888889e-7,
+          "ramp_sek": 0,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -0.000001361111111111111,
+          "total_sek": -0.000001190972222222222
+        },
+        "energy_end_kwh": 5,
+        "terminal_import_w": 7000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "last-millisecond-house",
+      "at_ms": 1789460099999,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "house",
+      "expected": {
+        "eligible": true,
+        "current": {
+          "import_sek": -7.777777777777777e-7,
+          "export_sek": 0,
+          "wear_sek": 8.333333333333334e-8,
+          "starts_sek": 0,
+          "shaping_sek": 5.5555555555555555e-8,
+          "ramp_sek": 0.21000000000000002,
+          "service_sek": 0,
+          "terminal_sek": 0,
+          "billable_sek": -7.777777777777777e-7,
+          "total_sek": 0.20999936111111114
+        },
+        "energy_end_kwh": 4.999999074074074,
+        "terminal_import_w": 4000,
+        "possible_import_w": 0,
+        "possible_export_w": 0
+      }
+    },
+    {
+      "id": "last-millisecond-charge",
+      "at_ms": 1789460099999,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "grid_charge_not_allowed"
+      }
+    },
+    {
+      "id": "last-millisecond-export",
+      "at_ms": 1789460099999,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "battery_export_not_allowed"
+      }
+    },
+    {
+      "id": "expired-hold",
+      "at_ms": 1789460100000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": false,
+        "reason": "outside_validity"
+      }
+    },
+    {
+      "id": "expired-msc",
+      "at_ms": 1789460100000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": false,
+        "reason": "outside_validity"
+      }
+    },
+    {
+      "id": "expired-solar",
+      "at_ms": 1789460100000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": false,
+        "reason": "outside_validity"
+      }
+    },
+    {
+      "id": "expired-house",
+      "at_ms": 1789460100000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "house",
+      "expected": {
+        "eligible": false,
+        "reason": "outside_validity"
+      }
+    },
+    {
+      "id": "expired-charge",
+      "at_ms": 1789460100000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "outside_validity"
+      }
+    },
+    {
+      "id": "expired-export",
+      "at_ms": 1789460100000,
+      "energy_kwh": 5,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "outside_validity"
+      }
+    },
+    {
+      "id": "outside-energy-domain-hold",
+      "at_ms": 1789459380000,
+      "energy_kwh": 0.9,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "hold",
+      "expected": {
+        "eligible": false,
+        "reason": "outside_domain"
+      }
+    },
+    {
+      "id": "outside-energy-domain-msc",
+      "at_ms": 1789459380000,
+      "energy_kwh": 0.9,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "msc",
+      "expected": {
+        "eligible": false,
+        "reason": "outside_domain"
+      }
+    },
+    {
+      "id": "outside-energy-domain-solar",
+      "at_ms": 1789459380000,
+      "energy_kwh": 0.9,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "solar",
+      "expected": {
+        "eligible": false,
+        "reason": "outside_domain"
+      }
+    },
+    {
+      "id": "outside-energy-domain-house",
+      "at_ms": 1789459380000,
+      "energy_kwh": 0.9,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "house",
+      "expected": {
+        "eligible": false,
+        "reason": "outside_domain"
+      }
+    },
+    {
+      "id": "outside-energy-domain-charge",
+      "at_ms": 1789459380000,
+      "energy_kwh": 0.9,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "charge",
+      "expected": {
+        "eligible": false,
+        "reason": "outside_domain"
+      }
+    },
+    {
+      "id": "outside-energy-domain-export",
+      "at_ms": 1789459380000,
+      "energy_kwh": 0.9,
+      "pv_w": 1000,
+      "residual_load_w": 8000,
+      "previous_import_w": 7000,
+      "operation_id": "export",
+      "expected": {
+        "eligible": false,
+        "reason": "outside_domain"
+      }
+    }
+  ]
+}

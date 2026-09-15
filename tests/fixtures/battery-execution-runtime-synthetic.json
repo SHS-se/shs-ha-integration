@@ -1,0 +1,190 @@
+{
+  "schema": "battery-execution-policy-v1",
+  "profile": "finite-continuation-v1",
+  "view": "executable",
+  "identity": {
+    "policy_id": "test-policy",
+    "revision": 1,
+    "battery_id": "battery",
+    "intent_revision": "intent-1",
+    "plant_revision": "plant-1",
+    "scope_revision": "scope-1",
+    "external_scenario_revision": "external-1",
+    "tariff_revision": "tariff-1",
+    "response_model_revision": "pv-first-v1",
+    "catalog_revision": "catalog-1"
+  },
+  "actuals_origin_ms": 0,
+  "validity": {
+    "from_ms": 0,
+    "refresh_after_ms": 840000,
+    "until_ms": 900000,
+    "boundary_ms": 900000
+  },
+  "domain": {
+    "energy_kwh": [
+      1,
+      10
+    ],
+    "pv_w": [
+      0,
+      12000
+    ],
+    "residual_load_w": [
+      0,
+      15000
+    ]
+  },
+  "plant": {
+    "cutoff_kwh": 1,
+    "capacity_kwh": 10,
+    "charge_max_w": 4000,
+    "discharge_max_w": 4000,
+    "charge_efficiency": 0.95,
+    "discharge_efficiency": 0.95,
+    "import_limit_w": 17000,
+    "export_limit_w": 13000,
+    "wear_sek_per_kwh": 0.1
+  },
+  "permissions": {
+    "available": true,
+    "grid_charge_allowed": true,
+    "battery_export_allowed": true,
+    "export_reserve_kwh": 3,
+    "export_price_eligible": true,
+    "minimum_export_price_sek_per_kwh": 0.1,
+    "price_revision": "tariff-1"
+  },
+  "economics": {
+    "import_sek_per_kwh": -1,
+    "export_sek_per_kwh": 0,
+    "shaping_sek_per_kwh_per_kw": 0,
+    "ramp_sek_per_kw": 0
+  },
+  "reference_id": "hold",
+  "operations": [
+    {
+      "id": "hold",
+      "operation": "hold",
+      "charge_limit_w": 0,
+      "discharge_limit_w": 0
+    },
+    {
+      "id": "self_consumption",
+      "operation": "self_consumption",
+      "charge_limit_w": 4000,
+      "discharge_limit_w": 4000
+    },
+    {
+      "id": "solar_charge",
+      "operation": "solar_charge",
+      "charge_limit_w": 4000,
+      "discharge_limit_w": 0
+    },
+    {
+      "id": "supply_house",
+      "operation": "supply_house",
+      "charge_limit_w": 0,
+      "discharge_limit_w": 4000
+    },
+    {
+      "id": "grid_charge",
+      "operation": "grid_charge",
+      "charge_limit_w": 3000,
+      "discharge_limit_w": 0
+    },
+    {
+      "id": "export",
+      "operation": "export",
+      "charge_limit_w": 0,
+      "discharge_limit_w": 2000
+    }
+  ],
+  "continuation": {
+    "representation": "piecewise-quadratic-absolute-v1",
+    "coordinate_order": [
+      "energy_kwh",
+      "previous_import_w"
+    ],
+    "cells": [
+      {
+        "id": "terminal",
+        "witness_id": "synthetic-no-terminal",
+        "domain": {
+          "energy_kwh": [
+            1,
+            10
+          ],
+          "previous_import_w": [
+            0,
+            17000
+          ],
+          "inequalities": []
+        },
+        "cost": {
+          "import_sek": {
+            "polynomial": [
+              0,
+              0,
+              0
+            ],
+            "absolute_terms": []
+          },
+          "export_sek": {
+            "polynomial": [
+              0,
+              0,
+              0
+            ],
+            "absolute_terms": []
+          },
+          "wear_sek": {
+            "polynomial": [
+              0,
+              0,
+              0
+            ],
+            "absolute_terms": []
+          },
+          "shaping_sek": {
+            "polynomial": [
+              0,
+              0,
+              0
+            ],
+            "absolute_terms": []
+          },
+          "ramp_sek": {
+            "polynomial": [
+              0,
+              0,
+              0
+            ],
+            "absolute_terms": []
+          },
+          "terminal_sek": {
+            "polynomial": [
+              0,
+              0,
+              0
+            ],
+            "absolute_terms": []
+          }
+        }
+      }
+    ]
+  },
+  "quality": {
+    "assurance": "exact-scoring-within-published-family",
+    "scorer_revision": "offline-household-v1",
+    "compiler_revision": "execution-v1",
+    "family_id": "synthetic-test",
+    "source_hash": "sha256:synthetic-test",
+    "numeric_tolerance_sek": 1e-07,
+    "search_exhaustive_in_declared_graph": true,
+    "search_pruned_prefixes": 0,
+    "heldout_count": 0,
+    "heldout_max_regret_sek": null,
+    "certified_regret_bound_sek": null
+  }
+}

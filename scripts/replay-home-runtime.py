@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components" / "shs_energy"))
-from home_runtime import JournalDurable, Persist, reduce_home, reservation
+from home_runtime import JournalDurable, Persist, reduce_home, reservation, Send, authorize_send
 from home_runtime_checkpoint import (
     MAX_BYTES, decode_checkpoint, decode_event, effects_json, encode_checkpoint,
     read_runtime_json, restore_checkpoint,
@@ -45,13 +45,16 @@ def replay(value):
         else:
             raise ValueError(f"record {index}: unsupported fields/action")
         for effect in effects:
+            if isinstance(effect, Send) and not authorize_send(state, effect, now):
+                raise ValueError(f"record {index}: final dispatch authorization failed")
             if isinstance(effect, Persist):
                 pending[effect.state.revision] = encode_checkpoint(effect.state)
         rows.append({
             "record": index, "at_ms": now, "revision": state.revision,
             "policy": None if state.policy is None else {
                 "revision": state.policy.revision, "selected_id": state.policy.selected_id,
-                "status": state.policy.status, "anchor_ms": state.policy.compiled.summary.anchor_ms},
+                "status": state.policy.status, "from_ms": state.policy.compiled.summary.from_ms,
+                "until_ms": state.policy.compiled.summary.until_ms},
             "effects": [{"type": "Persist", "revision": e.state.revision} if isinstance(e, Persist)
                         else effects_json((e,))[0] for e in effects],
             "groups": [{"id": g.spec.id, "status": g.status, "mode": g.mode,

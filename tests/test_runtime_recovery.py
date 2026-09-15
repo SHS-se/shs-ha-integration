@@ -4,7 +4,7 @@ import json
 import unittest
 
 from test_home_runtime import Harness, controls, synthetic_steps
-from test_battery_policy import Harness as PolicyHarness
+from test_home_runtime_policy import Harness as PolicyHarness
 from test_energy_ledger import spec, sample
 from energy_ledger import (
     EnergyBounds, CounterSample, create_ledger, record_sample, mark_actuals,
@@ -248,7 +248,7 @@ class SettlementTests(unittest.TestCase):
         # twice, without receiving a replacement policy.
         for revision in range(1, 261):
             value = CounterSample("charge", "physical-register", 0, revision,
-                                  origin.at_ms + revision * 1000, 1000000 + revision * 10)
+                                  origin.at_ms + revision * 10000, 1000000 + revision * 10)
             before = encode_checkpoint(h.state)
             h.event(MeterObserved(value), value.at_ms)
             if revision == 130:

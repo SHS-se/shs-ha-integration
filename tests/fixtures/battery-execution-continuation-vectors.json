@@ -1,0 +1,3430 @@
+{
+  "schema": "battery-execution-continuation-vectors-v1",
+  "policy": {
+    "schema": "battery-execution-policy-v1",
+    "profile": "finite-continuation-v1",
+    "view": "executable",
+    "identity": {
+      "policy_id": "synthetic-execution-1",
+      "revision": 1,
+      "battery_id": "battery",
+      "intent_revision": "intent-1",
+      "plant_revision": "plant-1",
+      "scope_revision": "scope-1",
+      "external_scenario_revision": "real-demand-1",
+      "tariff_revision": "tariff-1",
+      "response_model_revision": "pv-first-v1",
+      "catalog_revision": "synthetic-catalog-1"
+    },
+    "actuals_origin_ms": 1789459380000,
+    "validity": {
+      "from_ms": 1789459380000,
+      "refresh_after_ms": 1789460040000,
+      "until_ms": 1789460100000,
+      "boundary_ms": 1789460100000
+    },
+    "domain": {
+      "energy_kwh": [
+        1,
+        10
+      ],
+      "pv_w": [
+        0,
+        12000
+      ],
+      "residual_load_w": [
+        0,
+        15000
+      ]
+    },
+    "plant": {
+      "cutoff_kwh": 1,
+      "capacity_kwh": 10,
+      "charge_max_w": 4000,
+      "discharge_max_w": 4000,
+      "charge_efficiency": 0.95,
+      "discharge_efficiency": 0.9,
+      "import_limit_w": 17000,
+      "export_limit_w": 10000,
+      "wear_sek_per_kwh": 0.1
+    },
+    "permissions": {
+      "available": true,
+      "grid_charge_allowed": true,
+      "battery_export_allowed": true,
+      "export_reserve_kwh": 3,
+      "export_price_eligible": true,
+      "minimum_export_price_sek_per_kwh": -0.25,
+      "price_revision": "tariff-1"
+    },
+    "economics": {
+      "import_sek_per_kwh": -0.7,
+      "export_sek_per_kwh": -0.15,
+      "shaping_sek_per_kwh_per_kw": 0.025,
+      "ramp_sek_per_kw": 0.07
+    },
+    "reference_id": "hold",
+    "operations": [
+      {
+        "id": "hold",
+        "operation": "hold",
+        "charge_limit_w": 0,
+        "discharge_limit_w": 0
+      },
+      {
+        "id": "msc",
+        "operation": "self_consumption",
+        "charge_limit_w": 4000,
+        "discharge_limit_w": 4000
+      },
+      {
+        "id": "solar",
+        "operation": "solar_charge",
+        "charge_limit_w": 3000,
+        "discharge_limit_w": 0
+      },
+      {
+        "id": "house",
+        "operation": "supply_house",
+        "charge_limit_w": 0,
+        "discharge_limit_w": 3000
+      },
+      {
+        "id": "charge",
+        "operation": "grid_charge",
+        "charge_limit_w": 3000,
+        "discharge_limit_w": 0
+      },
+      {
+        "id": "export",
+        "operation": "export",
+        "charge_limit_w": 0,
+        "discharge_limit_w": 2000
+      }
+    ],
+    "continuation": {
+      "representation": "piecewise-quadratic-absolute-v1",
+      "coordinate_order": [
+        "energy_kwh",
+        "previous_import_w"
+      ],
+      "cells": [
+        {
+          "id": "idle-cell-0",
+          "witness_id": "idle",
+          "domain": {
+            "energy_kwh": [
+              1,
+              4
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0.9850000000000001,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                0.21,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0.017781250000000002,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.14,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": -1,
+                  "constant": 0
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                -0.04999999999999997,
+                0.9,
+                -0.05000000000000001
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "idle-cell-1",
+          "witness_id": "idle",
+          "domain": {
+            "energy_kwh": [
+              4,
+              10
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0.9850000000000001,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                0.21,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0.017781250000000002,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.14,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": -1,
+                  "constant": 0
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                0.08333333333333359,
+                0.8333333333333333,
+                -0.041666666666666664
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-0-cell-0",
+          "witness_id": "anchor-0",
+          "domain": {
+            "energy_kwh": [
+              1,
+              1
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0.9850000000000001,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                -0.06,
+                0.26999999999999996,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                -0.09000000000000001,
+                0.09000000000000001,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0.017781250000000002,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": -1,
+                  "constant": 0
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": 0,
+                  "constant": 1300
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                0.8,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-1-cell-0",
+          "witness_id": "anchor-1",
+          "domain": {
+            "energy_kwh": [
+              2.0500000000000003,
+              2.0500000000000003
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0.24763157894736842,
+                0.31578947368421056,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                0.3157894736842106,
+                -0.10526315789473686,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0.3198435768698063,
+                -0.25872576177285334,
+                0.055401662049861515
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": -4210.526315789474,
+                  "previous_import": -1,
+                  "constant": 9831.578947368424
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 4210.526315789474,
+                  "previous_import": 0,
+                  "constant": -8531.578947368424
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                2.2,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-1-cell-1",
+          "witness_id": "anchor-1",
+          "domain": {
+            "energy_kwh": [
+              2.0500000000000003,
+              2.335
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0.24763157894736842,
+                0.31578947368421056,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                0.3157894736842106,
+                -0.10526315789473686,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0.3198435768698063,
+                -0.25872576177285334,
+                0.055401662049861515
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": -4210.526315789474,
+                  "previous_import": -1,
+                  "constant": 9831.578947368424
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 4210.526315789474,
+                  "previous_import": 0,
+                  "constant": -8531.578947368424
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                2.2,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-1-cell-2",
+          "witness_id": "anchor-1",
+          "domain": {
+            "energy_kwh": [
+              2.335,
+              3
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0.9850000000000001,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                -0.7373684210526317,
+                0.31578947368421056,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                0.3157894736842106,
+                -0.10526315789473686,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0.017781250000000002,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": -1,
+                  "constant": 0
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": 0,
+                  "constant": 1300
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                2.2,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-1-cell-3",
+          "witness_id": "anchor-1",
+          "domain": {
+            "energy_kwh": [
+              3,
+              4.111111111111111
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0.9850000000000001,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                -0.6,
+                0.26999999999999996,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                -0.27,
+                0.09000000000000001,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0.017781250000000002,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": -1,
+                  "constant": 0
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": 0,
+                  "constant": 1300
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                2.2,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-2-cell-0",
+          "witness_id": "anchor-2",
+          "domain": {
+            "energy_kwh": [
+              4.05,
+              4.05
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                -0.3839473684210526,
+                0.31578947368421056,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                0.5263157894736843,
+                -0.10526315789473686,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                1.0589017486149588,
+                -0.4803324099722993,
+                0.055401662049861515
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": -4210.526315789474,
+                  "previous_import": -1,
+                  "constant": 18252.63157894737
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 4210.526315789474,
+                  "previous_import": 0,
+                  "constant": -16952.63157894737
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                3.2083333333333335,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-2-cell-1",
+          "witness_id": "anchor-2",
+          "domain": {
+            "energy_kwh": [
+              4.05,
+              4.335
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                -0.3839473684210526,
+                0.31578947368421056,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                0.5263157894736843,
+                -0.10526315789473686,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                1.0589017486149588,
+                -0.4803324099722993,
+                0.055401662049861515
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": -4210.526315789474,
+                  "previous_import": -1,
+                  "constant": 18252.63157894737
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 4210.526315789474,
+                  "previous_import": 0,
+                  "constant": -16952.63157894737
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                3.2083333333333335,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-2-cell-2",
+          "witness_id": "anchor-2",
+          "domain": {
+            "energy_kwh": [
+              4.335,
+              5
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0.9850000000000001,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                -1.3689473684210527,
+                0.31578947368421056,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                0.5263157894736843,
+                -0.10526315789473686,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0.017781250000000002,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": -1,
+                  "constant": 0
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": 0,
+                  "constant": 1300
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                3.2083333333333335,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-2-cell-3",
+          "witness_id": "anchor-2",
+          "domain": {
+            "energy_kwh": [
+              5,
+              6.111111111111111
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0.9850000000000001,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                -1.14,
+                0.26999999999999996,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                -0.45,
+                0.09000000000000001,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0.017781250000000002,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": -1,
+                  "constant": 0
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": 0,
+                  "constant": 1300
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                3.2083333333333335,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-3-cell-0",
+          "witness_id": "anchor-3",
+          "domain": {
+            "energy_kwh": [
+              6.050000000000001,
+              6.335
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                -1.0155263157894738,
+                0.31578947368421056,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                0.7368421052631581,
+                -0.10526315789473686,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                2.241173216759004,
+                -0.7019390581717454,
+                0.055401662049861515
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": -4210.526315789474,
+                  "previous_import": -1,
+                  "constant": 26673.68421052632
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 4210.526315789474,
+                  "previous_import": 0,
+                  "constant": -25373.68421052632
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                3.875,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-3-cell-1",
+          "witness_id": "anchor-3",
+          "domain": {
+            "energy_kwh": [
+              6.335,
+              7
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0.9850000000000001,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                -2.000526315789474,
+                0.31578947368421056,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                0.7368421052631581,
+                -0.10526315789473686,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0.017781250000000002,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": -1,
+                  "constant": 0
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": 0,
+                  "constant": 1300
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                3.875,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-3-cell-2",
+          "witness_id": "anchor-3",
+          "domain": {
+            "energy_kwh": [
+              7,
+              8.11111111111111
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0.9850000000000001,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                -1.68,
+                0.26999999999999996,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                -0.63,
+                0.09000000000000001,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0.017781250000000002,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": -1,
+                  "constant": 0
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": 0,
+                  "constant": 1300
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                3.875,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-4-cell-0",
+          "witness_id": "anchor-4",
+          "domain": {
+            "energy_kwh": [
+              9.049999999999999,
+              9.05
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                -1.9628947368421052,
+                0.31578947368421056,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                1.0526315789473686,
+                -0.10526315789473686,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                4.845605349722993,
+                -1.0343490304709144,
+                0.055401662049861515
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": -4210.526315789474,
+                  "previous_import": -1,
+                  "constant": 39305.26315789474
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 4210.526315789474,
+                  "previous_import": 0,
+                  "constant": -38005.26315789474
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                4.25,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-4-cell-1",
+          "witness_id": "anchor-4",
+          "domain": {
+            "energy_kwh": [
+              9.05,
+              9.335
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                -1.9628947368421052,
+                0.31578947368421056,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                0,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                1.0526315789473686,
+                -0.10526315789473686,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                4.845605349722993,
+                -1.0343490304709144,
+                0.055401662049861515
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": -4210.526315789474,
+                  "previous_import": -1,
+                  "constant": 39305.26315789474
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 4210.526315789474,
+                  "previous_import": 0,
+                  "constant": -38005.26315789474
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                4.25,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        },
+        {
+          "id": "anchor-4-cell-2",
+          "witness_id": "anchor-4",
+          "domain": {
+            "energy_kwh": [
+              9.335,
+              10
+            ],
+            "previous_import_w": [
+              0,
+              17000
+            ],
+            "inequalities": []
+          },
+          "cost": {
+            "import_sek": {
+              "polynomial": [
+                0.9850000000000001,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "export_sek": {
+              "polynomial": [
+                -2.9478947368421053,
+                0.31578947368421056,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "wear_sek": {
+              "polynomial": [
+                1.0526315789473686,
+                -0.10526315789473686,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "shaping_sek": {
+              "polynomial": [
+                0.017781250000000002,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            },
+            "ramp_sek": {
+              "polynomial": [
+                0.049,
+                0,
+                0
+              ],
+              "absolute_terms": [
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": -1,
+                  "constant": 0
+                },
+                {
+                  "weight": 0.00007000000000000001,
+                  "energy": 0,
+                  "previous_import": 0,
+                  "constant": 1300
+                }
+              ]
+            },
+            "terminal_sek": {
+              "polynomial": [
+                4.25,
+                0,
+                0
+              ],
+              "absolute_terms": []
+            }
+          }
+        }
+      ]
+    },
+    "quality": {
+      "assurance": "exact-scoring-within-published-family",
+      "scorer_revision": "offline-household-v1",
+      "compiler_revision": "execution-v1",
+      "family_id": "family-1446393c110f04a67e2d5ba0",
+      "source_hash": "sha256:1446393c110f04a67e2d5ba081498d36f4e168f6fcaf65d9ef21d2fb9c42c2e7",
+      "numeric_tolerance_sek": 1e-7,
+      "search_exhaustive_in_declared_graph": true,
+      "search_pruned_prefixes": 0,
+      "heldout_count": 0,
+      "heldout_max_regret_sek": null,
+      "certified_regret_bound_sek": null
+    }
+  },
+  "cases": [
+    {
+      "id": "continuation-0",
+      "energy_kwh": 1,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-0",
+        "cell_id": "anchor-0-cell-0",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.20999999999999996,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 0.8,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": 0.13278125000000007
+        }
+      }
+    },
+    {
+      "id": "continuation-1",
+      "energy_kwh": 1,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-0",
+        "cell_id": "anchor-0-cell-0",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.20999999999999996,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 0.8,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": 0.18396875000000001
+        }
+      }
+    },
+    {
+      "id": "continuation-2",
+      "energy_kwh": 1,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-0",
+        "cell_id": "anchor-0-cell-0",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.20999999999999996,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 0.8,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": 1.32278125
+        }
+      }
+    },
+    {
+      "id": "continuation-3",
+      "energy_kwh": 2.113,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-1",
+        "objective": {
+          "import_sek": 0.9148947368421053,
+          "export_sek": 0,
+          "wear_sek": 0.09336842105263163,
+          "starts_sek": 0,
+          "shaping_sek": 0.020511665512465277,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.9148947368421053,
+          "total_sek": -1.0312251765927978
+        }
+      }
+    },
+    {
+      "id": "continuation-4",
+      "energy_kwh": 2.113,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-1",
+        "objective": {
+          "import_sek": 0.9148947368421053,
+          "export_sek": 0,
+          "wear_sek": 0.09336842105263163,
+          "starts_sek": 0,
+          "shaping_sek": 0.020511665512465277,
+          "ramp_sek": 0.08881250000000002,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.9148947368421053,
+          "total_sek": -1.082412676592798
+        }
+      }
+    },
+    {
+      "id": "continuation-5",
+      "energy_kwh": 2.113,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-1",
+        "objective": {
+          "import_sek": 0.9148947368421053,
+          "export_sek": 0,
+          "wear_sek": 0.09336842105263163,
+          "starts_sek": 0,
+          "shaping_sek": 0.020511665512465277,
+          "ramp_sek": 1.199136842105263,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.9148947368421053,
+          "total_sek": 0.027911665512465156
+        }
+      }
+    },
+    {
+      "id": "continuation-6",
+      "energy_kwh": 4,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-0",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 2.75,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -1.8172187499999999
+        }
+      }
+    },
+    {
+      "id": "continuation-7",
+      "energy_kwh": 4,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-0",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 2.75,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -1.76603125
+        }
+      }
+    },
+    {
+      "id": "continuation-8",
+      "energy_kwh": 4,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-0",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 2.75,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -0.6272187499999999
+        }
+      }
+    },
+    {
+      "id": "continuation-9",
+      "energy_kwh": 6.226,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.6565385,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.72375725
+        }
+      }
+    },
+    {
+      "id": "continuation-10",
+      "energy_kwh": 6.226,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
+        "objective": {
+          "import_sek": 0.9505789473684212,
+          "export_sek": 0,
+          "wear_sek": 0.08147368421052636,
+          "starts_sek": 0,
+          "shaping_sek": 0.018439477146814376,
+          "ramp_sek": 0.12693486842105253,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.9505789473684212,
+          "total_sek": -2.6975730228531853
+        }
+      }
+    },
+    {
+      "id": "continuation-11",
+      "energy_kwh": 6.226,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
+        "objective": {
+          "import_sek": 0.9505789473684212,
+          "export_sek": 0,
+          "wear_sek": 0.08147368421052636,
+          "starts_sek": 0,
+          "shaping_sek": 0.018439477146814376,
+          "ramp_sek": 1.2657473684210525,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.9505789473684212,
+          "total_sek": -1.5587605228531856
+        }
+      }
+    },
+    {
+      "id": "continuation-12",
+      "energy_kwh": 10,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.2100000000000004,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 4.25,
+          "billable_sek": 0.7749999999999997,
+          "total_sek": -3.3172187500000003
+        }
+      }
+    },
+    {
+      "id": "continuation-13",
+      "energy_kwh": 10,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.2100000000000004,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 4.25,
+          "billable_sek": 0.7749999999999997,
+          "total_sek": -3.26603125
+        }
+      }
+    },
+    {
+      "id": "continuation-14",
+      "energy_kwh": 10,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.2100000000000004,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 4.25,
+          "billable_sek": 0.7749999999999997,
+          "total_sek": -2.1272187500000004
+        }
+      }
+    },
+    {
+      "id": "continuation-15",
+      "energy_kwh": 2.0500000000000003,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-0",
+        "objective": {
+          "import_sek": 0.8950000000000001,
+          "export_sek": 0,
+          "wear_sek": 0.10000000000000003,
+          "starts_sek": 0,
+          "shaping_sek": 0.022281249999999947,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.8950000000000001,
+          "total_sek": -1.0427187500000001
+        }
+      }
+    },
+    {
+      "id": "continuation-16",
+      "energy_kwh": 2.0500000000000003,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-0",
+        "objective": {
+          "import_sek": 0.8950000000000001,
+          "export_sek": 0,
+          "wear_sek": 0.10000000000000003,
+          "starts_sek": 0,
+          "shaping_sek": 0.022281249999999947,
+          "ramp_sek": 0.0888125,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.8950000000000001,
+          "total_sek": -1.09390625
+        }
+      }
+    },
+    {
+      "id": "continuation-17",
+      "energy_kwh": 2.0500000000000003,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-0",
+        "objective": {
+          "import_sek": 0.8950000000000001,
+          "export_sek": 0,
+          "wear_sek": 0.10000000000000003,
+          "starts_sek": 0,
+          "shaping_sek": 0.022281249999999947,
+          "ramp_sek": 1.162,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.8950000000000001,
+          "total_sek": -0.02071875000000034
+        }
+      }
+    },
+    {
+      "id": "continuation-18",
+      "energy_kwh": 2.155735,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-1",
+        "objective": {
+          "import_sek": 0.92839,
+          "export_sek": 0,
+          "wear_sek": 0.08887000000000006,
+          "starts_sek": 0,
+          "shaping_sek": 0.01956163449999998,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.92839,
+          "total_sek": -1.0231783655000002
+        }
+      }
+    },
+    {
+      "id": "continuation-19",
+      "energy_kwh": 2.155735,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-1",
+        "objective": {
+          "import_sek": 0.92839,
+          "export_sek": 0,
+          "wear_sek": 0.08887000000000006,
+          "starts_sek": 0,
+          "shaping_sek": 0.01956163449999998,
+          "ramp_sek": 0.0888125,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.92839,
+          "total_sek": -1.0743658655000001
+        }
+      }
+    },
+    {
+      "id": "continuation-20",
+      "energy_kwh": 2.155735,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-1",
+        "objective": {
+          "import_sek": 0.92839,
+          "export_sek": 0,
+          "wear_sek": 0.08887000000000006,
+          "starts_sek": 0,
+          "shaping_sek": 0.01956163449999998,
+          "ramp_sek": 1.2243279999999999,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.92839,
+          "total_sek": 0.06114963449999955
+        }
+      }
+    },
+    {
+      "id": "continuation-21",
+      "energy_kwh": 2.335,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0,
+          "wear_sek": 0.07000000000000003,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781249999999915,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.9850000000000001,
+          "total_sek": -0.9872187500000003
+        }
+      }
+    },
+    {
+      "id": "continuation-22",
+      "energy_kwh": 2.335,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0,
+          "wear_sek": 0.07000000000000003,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781249999999915,
+          "ramp_sek": 0.1911874999999998,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.9850000000000001,
+          "total_sek": -0.9360312500000003
+        }
+      }
+    },
+    {
+      "id": "continuation-23",
+      "energy_kwh": 2.335,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0,
+          "wear_sek": 0.07000000000000003,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781249999999915,
+          "ramp_sek": 1.3299999999999998,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.9850000000000001,
+          "total_sek": 0.2027812499999997
+        }
+      }
+    },
+    {
+      "id": "continuation-24",
+      "energy_kwh": 2.581715,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.07791000000000003,
+          "wear_sek": 0.044030000000000014,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.9070900000000001,
+          "total_sek": -1.09109875
+        }
+      }
+    },
+    {
+      "id": "continuation-25",
+      "energy_kwh": 2.581715,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.07791000000000003,
+          "wear_sek": 0.044030000000000014,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.9070900000000001,
+          "total_sek": -1.03991125
+        }
+      }
+    },
+    {
+      "id": "continuation-26",
+      "energy_kwh": 2.581715,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.07791000000000003,
+          "wear_sek": 0.044030000000000014,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.9070900000000001,
+          "total_sek": 0.09890124999999994
+        }
+      }
+    },
+    {
+      "id": "continuation-27",
+      "energy_kwh": 3,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.20999999999999996,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -1.26721875
+        }
+      }
+    },
+    {
+      "id": "continuation-28",
+      "energy_kwh": 3,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.20999999999999996,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -1.2160312500000001
+        }
+      }
+    },
+    {
+      "id": "continuation-29",
+      "energy_kwh": 3,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.20999999999999996,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 2.2,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -0.07721875000000011
+        }
+      }
+    },
+    {
+      "id": "continuation-30",
+      "energy_kwh": 3.412222222222222,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-0",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 2.438836975308642,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -1.506055725308642
+        }
+      }
+    },
+    {
+      "id": "continuation-31",
+      "energy_kwh": 3.412222222222222,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-0",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 2.438836975308642,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -1.454868225308642
+        }
+      }
+    },
+    {
+      "id": "continuation-32",
+      "energy_kwh": 3.412222222222222,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-0",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 2.438836975308642,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -0.316055725308642
+        }
+      }
+    },
+    {
+      "id": "continuation-33",
+      "energy_kwh": 4.111111111111111,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-1",
+        "objective": {
+          "import_sek": 0.9142982456140352,
+          "export_sek": 0,
+          "wear_sek": 0.09356725146198835,
+          "starts_sek": 0,
+          "shaping_sek": 0.020558326707363017,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.9142982456140352,
+          "total_sek": -2.039909509549947
+        }
+      }
+    },
+    {
+      "id": "continuation-34",
+      "energy_kwh": 4.111111111111111,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-1",
+        "objective": {
+          "import_sek": 0.9142982456140352,
+          "export_sek": 0,
+          "wear_sek": 0.09356725146198835,
+          "starts_sek": 0,
+          "shaping_sek": 0.020558326707363017,
+          "ramp_sek": 0.0888125,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.9142982456140352,
+          "total_sek": -2.091097009549947
+        }
+      }
+    },
+    {
+      "id": "continuation-35",
+      "energy_kwh": 4.111111111111111,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-1",
+        "objective": {
+          "import_sek": 0.9142982456140352,
+          "export_sek": 0,
+          "wear_sek": 0.09356725146198835,
+          "starts_sek": 0,
+          "shaping_sek": 0.020558326707363017,
+          "ramp_sek": 1.1980233918128653,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.9142982456140352,
+          "total_sek": -0.9818861177370817
+        }
+      }
+    },
+    {
+      "id": "continuation-36",
+      "energy_kwh": 4.05,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-0",
+        "objective": {
+          "import_sek": 0.8950000000000002,
+          "export_sek": 0,
+          "wear_sek": 0.10000000000000003,
+          "starts_sek": 0,
+          "shaping_sek": 0.02228125000000003,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.8950000000000002,
+          "total_sek": -2.051052083333333
+        }
+      }
+    },
+    {
+      "id": "continuation-37",
+      "energy_kwh": 4.05,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-0",
+        "objective": {
+          "import_sek": 0.8950000000000002,
+          "export_sek": 0,
+          "wear_sek": 0.10000000000000003,
+          "starts_sek": 0,
+          "shaping_sek": 0.02228125000000003,
+          "ramp_sek": 0.0888125,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.8950000000000002,
+          "total_sek": -2.102239583333333
+        }
+      }
+    },
+    {
+      "id": "continuation-38",
+      "energy_kwh": 4.05,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-0",
+        "objective": {
+          "import_sek": 0.8950000000000002,
+          "export_sek": 0,
+          "wear_sek": 0.10000000000000003,
+          "starts_sek": 0,
+          "shaping_sek": 0.02228125000000003,
+          "ramp_sek": 1.1620000000000001,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.8950000000000002,
+          "total_sek": -1.0290520833333328
+        }
+      }
+    },
+    {
+      "id": "continuation-39",
+      "energy_kwh": 4.155735,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-1",
+        "objective": {
+          "import_sek": 0.9283900000000003,
+          "export_sek": 0,
+          "wear_sek": 0.08887,
+          "starts_sek": 0,
+          "shaping_sek": 0.019561634500000036,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.9283900000000003,
+          "total_sek": -2.031511698833333
+        }
+      }
+    },
+    {
+      "id": "continuation-40",
+      "energy_kwh": 4.155735,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-1",
+        "objective": {
+          "import_sek": 0.9283900000000003,
+          "export_sek": 0,
+          "wear_sek": 0.08887,
+          "starts_sek": 0,
+          "shaping_sek": 0.019561634500000036,
+          "ramp_sek": 0.0888125,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.9283900000000003,
+          "total_sek": -2.082699198833333
+        }
+      }
+    },
+    {
+      "id": "continuation-41",
+      "energy_kwh": 4.155735,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-1",
+        "objective": {
+          "import_sek": 0.9283900000000003,
+          "export_sek": 0,
+          "wear_sek": 0.08887,
+          "starts_sek": 0,
+          "shaping_sek": 0.019561634500000036,
+          "ramp_sek": 1.224328,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.9283900000000003,
+          "total_sek": -0.9471836988333329
+        }
+      }
+    },
+    {
+      "id": "continuation-42",
+      "energy_kwh": 4.335,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0,
+          "wear_sek": 0.07,
+          "starts_sek": 0,
+          "shaping_sek": 0.01778125000000008,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.9850000000000001,
+          "total_sek": -1.9955520833333331
+        }
+      }
+    },
+    {
+      "id": "continuation-43",
+      "energy_kwh": 4.335,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0,
+          "wear_sek": 0.07,
+          "starts_sek": 0,
+          "shaping_sek": 0.01778125000000008,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.9850000000000001,
+          "total_sek": -1.9443645833333332
+        }
+      }
+    },
+    {
+      "id": "continuation-44",
+      "energy_kwh": 4.335,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0,
+          "wear_sek": 0.07,
+          "starts_sek": 0,
+          "shaping_sek": 0.01778125000000008,
+          "ramp_sek": 1.3300000000000003,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.9850000000000001,
+          "total_sek": -0.8055520833333332
+        }
+      }
+    },
+    {
+      "id": "continuation-45",
+      "energy_kwh": 4.581715,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.07791000000000015,
+          "wear_sek": 0.04402999999999996,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.90709,
+          "total_sek": -2.0994320833333333
+        }
+      }
+    },
+    {
+      "id": "continuation-46",
+      "energy_kwh": 4.581715,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.07791000000000015,
+          "wear_sek": 0.04402999999999996,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.90709,
+          "total_sek": -2.0482445833333336
+        }
+      }
+    },
+    {
+      "id": "continuation-47",
+      "energy_kwh": 4.581715,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.07791000000000015,
+          "wear_sek": 0.04402999999999996,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.90709,
+          "total_sek": -0.9094320833333334
+        }
+      }
+    },
+    {
+      "id": "continuation-48",
+      "energy_kwh": 5,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.2100000000000002,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.7749999999999999,
+          "total_sek": -2.2755520833333334
+        }
+      }
+    },
+    {
+      "id": "continuation-49",
+      "energy_kwh": 5,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.2100000000000002,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.7749999999999999,
+          "total_sek": -2.2243645833333336
+        }
+      }
+    },
+    {
+      "id": "continuation-50",
+      "energy_kwh": 5,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-2",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.2100000000000002,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 3.2083333333333335,
+          "billable_sek": 0.7749999999999999,
+          "total_sek": -1.0855520833333334
+        }
+      }
+    },
+    {
+      "id": "continuation-51",
+      "energy_kwh": 5.412222222222222,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.3730122942386833,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.440231044238683
+        }
+      }
+    },
+    {
+      "id": "continuation-52",
+      "energy_kwh": 5.412222222222222,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 3.3730122942386833,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.3890435442386835
+        }
+      }
+    },
+    {
+      "id": "continuation-53",
+      "energy_kwh": 5.412222222222222,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 3.3730122942386833,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -1.2502310442386833
+        }
+      }
+    },
+    {
+      "id": "continuation-54",
+      "energy_kwh": 6.111111111111111,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
+        "objective": {
+          "import_sek": 0.9142982456140349,
+          "export_sek": 0,
+          "wear_sek": 0.09356725146198841,
+          "starts_sek": 0,
+          "shaping_sek": 0.02055832670736324,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.9142982456140349,
+          "total_sek": -2.7065761762166134
+        }
+      }
+    },
+    {
+      "id": "continuation-55",
+      "energy_kwh": 6.111111111111111,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
+        "objective": {
+          "import_sek": 0.9142982456140349,
+          "export_sek": 0,
+          "wear_sek": 0.09356725146198841,
+          "starts_sek": 0,
+          "shaping_sek": 0.02055832670736324,
+          "ramp_sek": 0.08881250000000002,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.9142982456140349,
+          "total_sek": -2.7577636762166136
+        }
+      }
+    },
+    {
+      "id": "continuation-56",
+      "energy_kwh": 6.111111111111111,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
+        "objective": {
+          "import_sek": 0.9142982456140349,
+          "export_sek": 0,
+          "wear_sek": 0.09356725146198841,
+          "starts_sek": 0,
+          "shaping_sek": 0.02055832670736324,
+          "ramp_sek": 1.1980233918128649,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.9142982456140349,
+          "total_sek": -1.6485527844037486
+        }
+      }
+    },
+    {
+      "id": "continuation-57",
+      "energy_kwh": 6.050000000000001,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
+        "objective": {
+          "import_sek": 0.8950000000000002,
+          "export_sek": 0,
+          "wear_sek": 0.09999999999999998,
+          "starts_sek": 0,
+          "shaping_sek": 0.022281250000000252,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.8950000000000002,
+          "total_sek": -2.7177187499999995
+        }
+      }
+    },
+    {
+      "id": "continuation-58",
+      "energy_kwh": 6.050000000000001,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
+        "objective": {
+          "import_sek": 0.8950000000000002,
+          "export_sek": 0,
+          "wear_sek": 0.09999999999999998,
+          "starts_sek": 0,
+          "shaping_sek": 0.022281250000000252,
+          "ramp_sek": 0.0888125,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.8950000000000002,
+          "total_sek": -2.7689062499999997
+        }
+      }
+    },
+    {
+      "id": "continuation-59",
+      "energy_kwh": 6.050000000000001,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
+        "objective": {
+          "import_sek": 0.8950000000000002,
+          "export_sek": 0,
+          "wear_sek": 0.09999999999999998,
+          "starts_sek": 0,
+          "shaping_sek": 0.022281250000000252,
+          "ramp_sek": 1.162,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.8950000000000002,
+          "total_sek": -1.6957187499999997
+        }
+      }
+    },
+    {
+      "id": "continuation-60",
+      "energy_kwh": 6.155735000000001,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.634234442073959,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.701453192073959
+        }
+      }
+    },
+    {
+      "id": "continuation-61",
+      "energy_kwh": 6.155735000000001,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
+        "objective": {
+          "import_sek": 0.9283900000000003,
+          "export_sek": 0,
+          "wear_sek": 0.08887,
+          "starts_sek": 0,
+          "shaping_sek": 0.019561634500000924,
+          "ramp_sek": 0.0888125,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.9283900000000003,
+          "total_sek": -2.749365865499999
+        }
+      }
+    },
+    {
+      "id": "continuation-62",
+      "energy_kwh": 6.155735000000001,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
+        "objective": {
+          "import_sek": 0.9283900000000003,
+          "export_sek": 0,
+          "wear_sek": 0.08887,
+          "starts_sek": 0,
+          "shaping_sek": 0.019561634500000924,
+          "ramp_sek": 1.2243279999999999,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.9283900000000003,
+          "total_sek": -1.613850365499999
+        }
+      }
+    },
+    {
+      "id": "continuation-63",
+      "energy_kwh": 6.335,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.6903239583333334,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.7575427083333333
+        }
+      }
+    },
+    {
+      "id": "continuation-64",
+      "energy_kwh": 6.335,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 3.6903239583333334,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.706355208333333
+        }
+      }
+    },
+    {
+      "id": "continuation-65",
+      "energy_kwh": 6.335,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 3.6903239583333334,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -1.5675427083333333
+        }
+      }
+    },
+    {
+      "id": "continuation-66",
+      "energy_kwh": 6.581715,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.7631386524489585,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.8303574024489584
+        }
+      }
+    },
+    {
+      "id": "continuation-67",
+      "energy_kwh": 6.581715,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 3.7631386524489585,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.7791699024489587
+        }
+      }
+    },
+    {
+      "id": "continuation-68",
+      "energy_kwh": 6.581715,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 3.7631386524489585,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -1.6403574024489584
+        }
+      }
+    },
+    {
+      "id": "continuation-69",
+      "energy_kwh": 7,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.20999999999999996,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.94221875
+        }
+      }
+    },
+    {
+      "id": "continuation-70",
+      "energy_kwh": 7,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.20999999999999996,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.89103125
+        }
+      }
+    },
+    {
+      "id": "continuation-71",
+      "energy_kwh": 7,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.20999999999999996,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 3.875,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -1.75221875
+        }
+      }
+    },
+    {
+      "id": "continuation-72",
+      "energy_kwh": 7.412222222222222,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 3.970975257201647,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.0381940072016467
+        }
+      }
+    },
+    {
+      "id": "continuation-73",
+      "energy_kwh": 7.412222222222222,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 3.970975257201647,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.987006507201647
+        }
+      }
+    },
+    {
+      "id": "continuation-74",
+      "energy_kwh": 7.412222222222222,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 3.970975257201647,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -1.8481940072016467
+        }
+      }
+    },
+    {
+      "id": "continuation-75",
+      "energy_kwh": 8.11111111111111,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 4.101337448559671,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.168556198559671
+        }
+      }
+    },
+    {
+      "id": "continuation-76",
+      "energy_kwh": 8.11111111111111,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 4.101337448559671,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.1173686985596714
+        }
+      }
+    },
+    {
+      "id": "continuation-77",
+      "energy_kwh": 8.11111111111111,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 4.101337448559671,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -1.9785561985596711
+        }
+      }
+    },
+    {
+      "id": "continuation-78",
+      "energy_kwh": 9.049999999999999,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 4.212395833333334,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.2796145833333337
+        }
+      }
+    },
+    {
+      "id": "continuation-79",
+      "energy_kwh": 9.049999999999999,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 4.212395833333334,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.228427083333334
+        }
+      }
+    },
+    {
+      "id": "continuation-80",
+      "energy_kwh": 9.049999999999999,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 4.212395833333334,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.0896145833333337
+        }
+      }
+    },
+    {
+      "id": "continuation-81",
+      "energy_kwh": 9.05,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 4.212395833333334,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.2796145833333337
+        }
+      }
+    },
+    {
+      "id": "continuation-82",
+      "energy_kwh": 9.05,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 4.212395833333334,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.228427083333334
+        }
+      }
+    },
+    {
+      "id": "continuation-83",
+      "energy_kwh": 9.05,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 4.212395833333334,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.0896145833333337
+        }
+      }
+    },
+    {
+      "id": "continuation-84",
+      "energy_kwh": 9.155735,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 4.220300692073959,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.287519442073959
+        }
+      }
+    },
+    {
+      "id": "continuation-85",
+      "energy_kwh": 9.155735,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 4.220300692073959,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.236331942073959
+        }
+      }
+    },
+    {
+      "id": "continuation-86",
+      "energy_kwh": 9.155735,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 4.220300692073959,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.097519442073959
+        }
+      }
+    },
+    {
+      "id": "continuation-87",
+      "energy_kwh": 9.335,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 4.231573958333334,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.2987927083333335
+        }
+      }
+    },
+    {
+      "id": "continuation-88",
+      "energy_kwh": 9.335,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 4.231573958333334,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.2476052083333338
+        }
+      }
+    },
+    {
+      "id": "continuation-89",
+      "energy_kwh": 9.335,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 4.231573958333334,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.1087927083333335
+        }
+      }
+    },
+    {
+      "id": "continuation-90",
+      "energy_kwh": 9.581715,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 4.242709902448959,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.3099286524489586
+        }
+      }
+    },
+    {
+      "id": "continuation-91",
+      "energy_kwh": 9.581715,
+      "previous_import_w": 731.25,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.1911875,
+          "service_sek": 0,
+          "terminal_sek": 4.242709902448959,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -3.258741152448959
+        }
+      }
+    },
+    {
+      "id": "continuation-92",
+      "energy_kwh": 9.581715,
+      "previous_import_w": 17000,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-1",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 1.33,
+          "service_sek": 0,
+          "terminal_sek": 4.242709902448959,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": -2.1199286524489587
+        }
+      }
+    },
+    {
+      "id": "continuation-93",
+      "energy_kwh": 1.01,
+      "previous_import_w": 0,
+      "expected": {
+        "witness_id": "idle",
+        "cell_id": "idle-cell-0",
+        "objective": {
+          "import_sek": 0.9850000000000001,
+          "export_sek": 0.21,
+          "wear_sek": 0,
+          "starts_sek": 0,
+          "shaping_sek": 0.017781250000000002,
+          "ramp_sek": 0.14,
+          "service_sek": 0,
+          "terminal_sek": 0.8079950000000001,
+          "billable_sek": 0.7750000000000001,
+          "total_sek": 0.12478624999999999
+        }
+      }
+    },
+    {
+      "id": "continuation-94",
+      "energy_kwh": 0.9,
+      "previous_import_w": 0,
+      "expected": null
+    },
+    {
+      "id": "continuation-95",
+      "energy_kwh": 5,
+      "previous_import_w": 17001,
+      "expected": null
+    }
+  ]
+}
