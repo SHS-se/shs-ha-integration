@@ -105,8 +105,9 @@ def measured_supply(scope, house, pv, planned_readings, planned_keys, *, now_ms,
     readings = [house, pv, *(planned_readings[key] for key in sorted(required))]
     if any(not isinstance(r, PowerReading) for r in readings):
         raise ValueError("house and PV power measurements are required")
-    if any(r.basis != "instantaneous_ac" or not r.at_ms <= now_ms < r.valid_until_ms for r in readings):
-        raise ValueError("scope requires fresh instantaneous AC measurements")
+    stale = [r.source for r in readings if r.basis != "instantaneous_ac" or not r.at_ms <= now_ms < r.valid_until_ms]
+    if stale:
+        raise ValueError("scope requires fresh instantaneous AC measurements: " + ", ".join(stale))
     if len({r.boundary for r in readings}) != 1 or max(r.at_ms for r in readings) - min(r.at_ms for r in readings) > max_alignment_ms:
         raise ValueError("unaligned power measurements")
     if len({r.source for r in readings}) != len(readings):

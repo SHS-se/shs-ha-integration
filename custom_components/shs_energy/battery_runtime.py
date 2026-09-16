@@ -67,15 +67,24 @@ def iso(ms):
     return datetime.fromtimestamp(ms/1000,timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
 
 
-def power(report, *, now_ms, signed=False):
+class BatteryPowerReadingError(ValueError):
+    """A failed live source is distinct from an actuator configuration error."""
+    fix = {'kind': 'diagnostics'}
+    next_step = 'Check that the named power sensor is reporting current measurements. Control retries automatically when fresh readings arrive.'
+
+
+def power(report, *, source, now_ms, signed=False):
     if not isinstance(report,dict):
-        raise ValueError('configured power source is unavailable')
+        raise BatteryPowerReadingError(f'{source}: configured power source is unavailable')
     attrs=report['attributes'];unit=attrs.get('unit_of_measurement')
     if attrs.get('state_class')!='measurement' or unit not in ('W','kW'):
-        raise ValueError('instantaneous W or kW power required')
-    at=stamp(report['last_reported']);value=float(report['state'])*(1000 if unit=='kW' else 1)
+        raise BatteryPowerReadingError(f'{source}: instantaneous W or kW power required')
+    try:
+        at=stamp(report['last_reported']);value=float(report['state'])*(1000 if unit=='kW' else 1)
+    except (KeyError, TypeError, ValueError) as error:
+        raise BatteryPowerReadingError(f'{source}: invalid physical power reading') from error
     if not isfinite(value) or (value<0 and not signed) or not at<=now_ms<at+AGE_MS:
-        raise ValueError('power source is invalid or stale')
+        raise BatteryPowerReadingError(f'{source}: power source is invalid or stale (last report: {report["last_reported"]})')
     return value,at
 
 
@@ -130,6 +139,14 @@ class BatteryRuntime:
             self._identity=rt.WriterIdentity(OWNER,authority.config_revision,self._surface['revision'])
             self._releasing=True;self._seeded=True
             await self._open_host(state,checkpoint)
+            if self._scope.kind=='whole_house':
+                participants=tuple(p for p in authority.scope.participants if p.owner=='new_runtime') + tuple(
+                    rt.ScopeParticipant(key,mode,1,'external',(entity,)) for key,entity,mode in self._demand_sources())
+                if participants!=authority.scope.participants:
+                    revision=digest({'previous_scope':authority.scope.revision,'participants':[asdict(p) for p in participants]})
+                    recovered=replace(authority,identity=replace(authority.identity,scope_revision=revision),
+                                      scope=replace(authority.scope,revision=revision,participants=participants))
+                    await self.host.accept(rt.AuthorityInstalled(recovered,self.host.state.authority_revision+1))
             # Recover local ownership without waiting for a cloud plan. The old
             # configured sources remain available for this exact baseline release.
             try:
@@ -193,7 +210,7 @@ class BatteryRuntime:
                     except Exception:
                         pass  # The existing journal/fence retains unresolved work.
                     self._status={'state':'fault','reason':self._last_error}
-                if isinstance(error, (BatteryMeasurementConfigurationError, BatteryPolicyUnavailableError)):
+                if isinstance(error, (BatteryMeasurementConfigurationError, BatteryPolicyUnavailableError, BatteryPowerReadingError)):
                     self._status.update(reason=str(error), fix=error.fix, next_step=error.next_step, retry_automatically=True)
             self.coordinator.async_update_listeners()
 
@@ -316,10 +333,10 @@ class BatteryRuntime:
             self._seeded=True
         group=self.host.state.groups[0]
         participants=[rt.ScopeParticipant(group.spec.id,mode,self._mode_revision,'new_runtime',keys)]
-        for key,entity in planned_power_bindings(options,self._devices).items():
+        for key,entity,participant_mode in self._demand_sources():
             if not entity:
                 raise ValueError(f'{key}: Planned power sensor is not configured')
-            participants.append(rt.ScopeParticipant('load:'+key,device_mode(options,'device:'+key),1,'external',(entity,)))
+            participants.append(rt.ScopeParticipant(key,participant_mode,1,'external',(entity,)))
         authority=rt.ExecutionAuthority(config,summary.identity.context,summary.permissions,summary.plant,
             rt.ExecutionScope(summary.identity.context.scope_revision,group.spec.id,tuple(participants)),catalog,OWNER,scope)
         if authority!=self.host.state.authority:
@@ -350,6 +367,14 @@ class BatteryRuntime:
             {'state':'limited','reason':'Battery policy is waiting for an executable choice: '+getattr(self,'_runtime_reason','current evidence')})
         if self.host._fault:
             raise ValueError('battery command journal is unavailable')
+
+    def _demand_sources(self):
+        # Whole-house permission and grid headroom use the gross meter, which
+        # already includes every appliance (Planned and Monitored alike).
+        if self._scope.kind=='whole_house':
+            return (('household-load',self._options['house_consumption_power_entity'],'monitoring'),)
+        return tuple(('load:'+key,entity,device_mode(self._options,'device:'+key))
+                     for key,entity in planned_power_bindings(self._options,self._devices).items())
 
     def _meter_specs(self,options):
         specs=[]
@@ -404,7 +429,7 @@ class BatteryRuntime:
             await self.coordinator.async_battery_native_readback(self._control_entities())
             self._native_checked=True
         now=self.now()
-        entities=set(self._control_entities())|set(planned_power_bindings(options,self._devices).values())|{options.get(k) for k in
+        entities=set(self._control_entities())|{entity for _,entity,_ in self._demand_sources()}|{options.get(k) for k in
             ('house_consumption_power_entity','solar_production_power_entity','battery_power_measurement_entity','battery_soc_entity','grid_power_entity')}
         if None in entities:
             raise ValueError('house, solar, signed grid/battery, SOC and Planned power bindings are required')
@@ -416,10 +441,13 @@ class BatteryRuntime:
         if surface['revision']!=self._surface['revision']:
             raise ValueError('native control metadata changed')
         source=source_revision(options,self._devices)
-        accounting,evidence=observe_supply(self._scope,options,self._devices,reports.get,at_ms=now,max_age_ms=AGE_MS,max_alignment_ms=ALIGNMENT_MS,
-            boundary='configured_household_reported_power',membership_revision=source,expected_membership_revision=self._model_sources)
-        battery,bat_at=power(reports[options['battery_power_measurement_entity']],now_ms=now,signed=True)
-        grid,grid_at=power(reports[options['grid_power_entity']],now_ms=now,signed=True)
+        try:
+            accounting,evidence=observe_supply(self._scope,options,self._devices,reports.get,at_ms=now,max_age_ms=AGE_MS,max_alignment_ms=ALIGNMENT_MS,
+                boundary='configured_household_reported_power',membership_revision=source,expected_membership_revision=self._model_sources)
+        except ValueError as error:
+            raise BatteryPowerReadingError(str(error)) from error
+        battery,bat_at=power(reports[options['battery_power_measurement_entity']],source=options['battery_power_measurement_entity'],now_ms=now,signed=True)
+        grid,grid_at=power(reports[options['grid_power_entity']],source=options['grid_power_entity'],now_ms=now,signed=True)
         soc=reports[options['battery_soc_entity']];soc_at=stamp(soc['last_reported'])
         fraction=float(soc['state'])/100
         if soc['attributes'].get('unit_of_measurement')!='%' or not isfinite(fraction) or not 0<=fraction<=1 or not soc_at<=now<soc_at+AGE_MS:
@@ -428,9 +456,9 @@ class BatteryRuntime:
         if not native_at<=now<native_at+AGE_MS:
             raise ValueError('native register report is stale')
         external=[];times=[bat_at,grid_at,soc_at,native_at,*(r.at_ms for r in evidence)]
-        for key,entity in planned_power_bindings(options,self._devices).items():
-            value,at=power(reports[entity],now_ms=now);times.append(at)
-            external.append(rt.ExternalDemand('load:'+key,rt.Envelope(value,0),rt.Envelope(0,0)))
+        for key,entity,_ in self._demand_sources():
+            value,at=power(reports[entity],source=entity,now_ms=now);times.append(at)
+            external.append(rt.ExternalDemand(key,rt.Envelope(value,0),rt.Envelope(0,0)))
         if max(times)-min(times)>ALIGNMENT_MS:
             raise ValueError('battery source reports are not aligned')
         if sum(e.observed.import_w for e in external)>accounting.house_w+1e-6:
@@ -558,7 +586,7 @@ class BatteryRuntime:
             return False
         report=self.coordinator._battery_entity_report(self._options['battery_power_measurement_entity'])
         try:
-            watts,_=power(report,now_ms=self.now(),signed=True)
+            watts,_=power(report,source=self._options['battery_power_measurement_entity'],now_ms=self.now(),signed=True)
             mode=self.coordinator._battery_entity_report(self._options['battery_mode_entity'])['state']
             limit=self.coordinator._battery_entity_report(self._options['battery_charge_limit_entity'])
             ceiling=float(limit['state'])*(1000 if limit['attributes']['unit_of_measurement']=='kW' else 1)

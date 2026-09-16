@@ -1122,6 +1122,21 @@ test('battery policy service failure offers diagnostics without an actuator setu
   assert.equal((html.match(/Download diagnostics/g) || []).length, 1);
 });
 
+test('stale battery power sensor identifies its source and warning clears on recovery', () => {
+  const panel = splitPanel();
+  const battery = panel._data.devices[0];
+  battery.execution_status = { state: 'fault', reason: 'sensor.grid: power source is invalid or stale',
+    next_step: 'Check that the named power sensor is reporting current measurements. Control retries automatically when fresh readings arrive.',
+    fix: { kind: 'diagnostics' }, retry_automatically: true };
+  const html = panel._renderAttention();
+  assert.match(html, /sensor.grid/);
+  assert.match(html, /retries automatically when fresh readings arrive/);
+  assert.doesNotMatch(html, /Edit .* setup|data-action="edit-device"|mapped controls/);
+  assert.equal((html.match(/Download diagnostics/g) || []).length, 1);
+  battery.execution_status = { state: 'controlling', reason: 'Live battery policy connected' };
+  assert.doesNotMatch(panel._renderAttention(), /sensor.grid|power source is invalid or stale/);
+});
+
 test('battery quarter renewal routes to diagnostics and clears when policy is active', () => {
   const panel = splitPanel();
   const battery = panel._data.devices[0];

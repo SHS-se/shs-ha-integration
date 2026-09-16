@@ -1,6 +1,7 @@
 """Production composition, including real adapter and durable host, without HA."""
 import asyncio
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -89,6 +90,13 @@ class Rig:
         self.plan['valid_until']=self.plan['binding_until']=iso(2700000)
         self.plan['plans']['priority']['slots'].extend(
             {'start':iso(at),'duration_hours':.25} for at in (900000,1800000))
+
+    def add_pool(self):
+        self.options['device_control_mappings']['pool']={'power':'sensor.pool'}
+        async def devices():return [{'key':'pool','planning_role':'controllable'}]
+        self.coordinator.async_battery_planned_devices=devices
+        self.rows['sensor.pool']={'state':'900','attributes':{'unit_of_measurement':'W','state_class':'measurement'},
+                                 'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_one_plan_rolls_across_quarters_and_reconciles_meter_origins(self):
@@ -199,12 +207,61 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(c['future_permissions'][0]['grid_charge_allowed'])
             self.assertEqual(c['future_permissions'][0]['start'],iso(10000))
         finally:await r.runtime.close()
-    async def test_stale_source_does_not_send(self):
-        r=Rig();r.rows['sensor.house']['last_reported']=iso(0)
+    async def test_required_stale_sources_block_then_recover_with_sensor_diagnostics(self):
+        for entity in ('sensor.house','sensor.pv','sensor.grid','sensor.battery'):
+            with self.subTest(entity=entity):
+                r=Rig();r.rows[entity]['last_reported']=iso(0)
+                await r.start()
+                try:
+                    self.assertEqual(r.calls,[])
+                    status=r.runtime.snapshot()
+                    self.assertEqual(status['state'],'fault')
+                    self.assertEqual(status['fix'],{'kind':'diagnostics'})
+                    self.assertIn(entity,status['reason'])
+                    self.assertTrue(status['retry_automatically'])
+                    for _ in range(5):await r.advance()
+                    self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+                    self.assertNotIn('fix',r.runtime.snapshot())
+                    self.assertTrue(r.calls)
+                finally:await r.runtime.close()
+
+    async def test_whole_house_controls_with_unusable_individual_pool_readings(self):
+        for invalid in ('stale','missing','unavailable'):
+            with self.subTest(invalid=invalid):
+                r=Rig();r.add_pool()
+                if invalid=='missing':r.rows.pop('sensor.pool')
+                elif invalid=='unavailable':r.rows['sensor.pool']['state']='unavailable'
+                r.rows['sensor.house']['state']='2000'
+                await r.start()
+                try:
+                    for _ in range(5):
+                        r.now+=20000
+                        for entity,row in r.rows.items():
+                            if entity!='sensor.pool':row['last_reported']=iso(r.now)
+                        await r.runtime.refresh();await r.runtime.host.idle()
+                    self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+                    external=[p for p in r.runtime.host.state.authority.scope.participants if p.owner=='external']
+                    self.assertEqual([p.group_id for p in external],['household-load'])
+                    frame=r.runtime.host.state.frame
+                    self.assertEqual(frame.external.import_w,2000)
+                    self.assertEqual(sum(d.observed.import_w for d in frame.external_demands),2000)
+                    self.assertTrue(r.calls)
+                    self.assertTrue(all(c[2]['entity_id'] in ('select.mode','number.charge','number.discharge') for c in r.calls))
+                    if invalid=='stale':self.assertEqual(r.rows['sensor.pool']['last_reported'],iso(0))
+                finally:await r.runtime.close()
+
+    async def test_selected_scope_still_requires_fresh_individual_measurements(self):
+        r=Rig();r.add_pool()
+        r.plan['battery_supply_scope']={'kind':'selected','include_base':True,'planned_device_keys':['pool']}
         await r.start()
         try:
             self.assertEqual(r.calls,[])
-            self.assertEqual(r.runtime.snapshot()['state'],'fault')
+            self.assertEqual(r.runtime.snapshot()['fix'],{'kind':'diagnostics'})
+            self.assertIn('sensor.pool',r.runtime.snapshot()['reason'])
+            for _ in range(5):await r.advance()
+            self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+            self.assertNotIn('fix',r.runtime.snapshot())
+            self.assertTrue(r.calls)
         finally:await r.runtime.close()
     async def test_missing_measurements_are_actionable_before_policy_or_writes(self):
         r=Rig()
@@ -342,27 +399,38 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(r.runtime.host.state.authority.scope.revision,previous)
         finally:await r.runtime.close()
 
-    async def test_restart_recovers_native_commands_without_cloud(self):
-        from home_runtime import Tick
-        r=Rig();await r.start()
-        for _ in range(5):await r.advance()
-        await r.runtime.close()
-        restarted=Rig();restarted.now=r.now+25*3600000;restarted.rows=deepcopy(r.rows)
-        for row in restarted.rows.values():row['last_reported']=iso(restarted.now)
-        restarted.store.saved=deepcopy(r.store.saved)
-        restarted.fence_store.saved=deepcopy(r.fence_store.saved)
-        await restarted.fence.open();await restarted.runtime.open()
-        try:
-            self.assertIsNone(restarted.exchange.policy)
-            for _ in range(36):
-                restarted.now+=10000
+    async def test_restart_recovers_native_commands_without_cloud_or_pool_readings(self):
+        from home_runtime import Tick, ScopeParticipant
+        from home_runtime_checkpoint import decode_checkpoint, encode_checkpoint
+        for old_participants in (False,True):
+            with self.subTest(old_participants=old_participants):
+                r=Rig();r.add_pool();await r.start()
+                for _ in range(5):await r.advance()
+                await r.runtime.close()
+                restarted=Rig();restarted.now=r.now+25*3600000;restarted.rows=deepcopy(r.rows)
                 for row in restarted.rows.values():row['last_reported']=iso(restarted.now)
-                await restarted.runtime._release('Recovering without cloud')
-                await restarted.runtime.host.accept(Tick());await restarted.runtime.host.idle()
-            self.assertTrue(restarted.calls)
-            self.assertEqual(restarted.rows['select.mode']['state'],'Maximum Self Consumption')
-            self.assertFalse(restarted.runtime.host.state.groups[0].owned,restarted.runtime.snapshot())
-        finally:await restarted.runtime.close()
+                restarted.store.saved=deepcopy(r.store.saved)
+                if old_participants:
+                    state=decode_checkpoint(restarted.store.saved['checkpoint'].encode())
+                    scope=state.authority.scope
+                    scope=replace(scope,participants=tuple(p for p in scope.participants if p.owner=='new_runtime') +
+                                  (ScopeParticipant('load:pool','monitoring',1,'external',('sensor.pool',)),))
+                    state=replace(state,authority=replace(state.authority,scope=scope))
+                    restarted.store.saved['checkpoint']=encode_checkpoint(state).decode()
+                restarted.rows.pop('sensor.pool')
+                restarted.fence_store.saved=deepcopy(r.fence_store.saved)
+                await restarted.fence.open();await restarted.runtime.open()
+                try:
+                    self.assertIsNone(restarted.exchange.policy)
+                    for _ in range(36):
+                        restarted.now+=10000
+                        for row in restarted.rows.values():row['last_reported']=iso(restarted.now)
+                        await restarted.runtime._release('Recovering without cloud')
+                        await restarted.runtime.host.accept(Tick());await restarted.runtime.host.idle()
+                    self.assertTrue(restarted.calls)
+                    self.assertEqual(restarted.rows['select.mode']['state'],'Maximum Self Consumption')
+                    self.assertFalse(restarted.runtime.host.state.groups[0].owned,restarted.runtime.snapshot())
+                finally:await restarted.runtime.close()
 
     async def test_recovery_waits_for_sigen_entities_then_retries(self):
         from battery_runtime import NativeReadbackPending
