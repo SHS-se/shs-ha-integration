@@ -496,6 +496,39 @@ def apply_requested_configuration(
     return devices
 
 
+BATTERY_MEASUREMENT_FIELDS = {
+    "battery_power_measurement_entity": "Measured battery power",
+    "house_consumption_power_entity": "Instantaneous house consumption",
+    "solar_production_power_entity": "Instantaneous solar production",
+    "grid_power_entity": "Signed grid power",
+}
+
+
+def battery_measurement_errors(options, *, field_errors=None):
+    """Report every missing or duplicated physical measurement at its editor."""
+    errors = []
+    for key, label in BATTERY_MEASUREMENT_FIELDS.items():
+        if not _text(options, key):
+            _field_error(errors, field_errors, f"{label} is required for battery control", key)
+    for entity in dict.fromkeys(options[key] for key in BATTERY_MEASUREMENT_FIELDS if _text(options, key)):
+        keys = [key for key in BATTERY_MEASUREMENT_FIELDS if options.get(key) == entity]
+        if len(keys) > 1:
+            labels = ", ".join(BATTERY_MEASUREMENT_FIELDS[key] for key in keys)
+            _field_error(errors, field_errors, f"{labels} must use distinct measurement sources", *keys)
+    return errors
+
+
+class BatteryMeasurementConfigurationError(ValueError):
+    """A configuration failure with destinations independent of message wording."""
+    def __init__(self, options):
+        fields = {}
+        errors = battery_measurement_errors(options, field_errors=fields)
+        super().__init__("; ".join(errors))
+        self.fix = {"kind": "fields", "fields": [
+            {"key": key, "message": "; ".join(messages)} for key, messages in fields.items()]}
+        self.next_step = "Select a separate power sensor for each highlighted measurement. Use the field links to open its settings."
+
+
 def battery_control_errors(options: dict[str, Any], *, field_errors: dict[str, list[str]] | None = None) -> list[str]:
     """Return what still stops the storage executor from commanding a battery.
 
@@ -511,7 +544,7 @@ def battery_control_errors(options: dict[str, Any], *, field_errors: dict[str, l
     """
     if not options.get(OPT_BATTERY_CONTROL_ENABLED):
         return []
-    errors: list[str] = []
+    errors = battery_measurement_errors(options, field_errors=field_errors)
     if not options.get(OPT_BATTERY_ENABLED):
         _field_error(errors, field_errors, "this home is not marked as having a house battery", OPT_BATTERY_ENABLED)
     for key, label in (
@@ -520,7 +553,6 @@ def battery_control_errors(options: dict[str, Any], *, field_errors: dict[str, l
         (OPT_BATTERY_DISCHARGE_LIMIT_ENTITY, "discharge power limit entity"),
         (OPT_BATTERY_CHARGING_ENTITY, "battery charging sensor"),
         (OPT_BATTERY_DISCHARGING_ENTITY, "battery discharging sensor"),
-        (OPT_BATTERY_POWER_MEASUREMENT_ENTITY, "measured battery power entity"),
         (OPT_BATTERY_SOC_ENTITY, "battery state of charge entity"),
     ):
         if not _text(options, key):

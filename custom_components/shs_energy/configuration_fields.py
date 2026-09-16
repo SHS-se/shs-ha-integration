@@ -258,7 +258,7 @@ def section_fields(section: dict[str, Any]) -> list[dict[str, Any]]:
     return [*([toggle] if toggle else []), *section["fields"]]
 
 
-def _configuration_sections() -> list[dict[str, Any]]:
+def _configuration_sections(*, battery_control_required=False) -> list[dict[str, Any]]:
     """Return the editable non-device configuration grouped for the panel."""
     c = shs_const
     category_labels = (
@@ -301,11 +301,11 @@ def _configuration_sections() -> list[dict[str, Any]]:
             "description": "Supplier and price area are configured on the Smart Home Solutions website; prices are fetched and calculated by the service.",
             "fields": [
                 _field(c.OPT_PV_FORECAST_ENTITIES, "Solar forecast", "entities", domains=("sensor",)),
-                _field("house_consumption_power_entity", "Instantaneous house consumption", "entity", domains=("sensor",),
+                _field("house_consumption_power_entity", "Instantaneous house consumption", "entity", domains=("sensor",), required=battery_control_required,
                        help_text="Gross appliance power before solar, excluding battery charging. Use a W or kW measurement at the household AC boundary."),
-                _field("solar_production_power_entity", "Instantaneous solar production", "entity", domains=("sensor",),
+                _field("solar_production_power_entity", "Instantaneous solar production", "entity", domains=("sensor",), required=battery_control_required,
                        help_text="Reported plant solar power. The battery adapter accounts for conversion; energy counters and forecasts cannot authorize current supply."),
-                _field("grid_power_entity", "Signed grid power", "entity", domains=("sensor",),
+                _field("grid_power_entity", "Signed grid power", "entity", domains=("sensor",), required=battery_control_required,
                        help_text="Instantaneous W or kW: positive importing, negative exporting. Used for battery control and measured conversion losses."),
                 _field(c.OPT_GRID_EXPORT_POWER_ENTITY, "Instantaneous grid-export power", "entity", domains=("sensor",)),
                 _field(c.OPT_PV_FORECAST_LATITUDE, "Solar forecast latitude", "number", step=0.00001),

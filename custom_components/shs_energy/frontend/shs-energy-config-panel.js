@@ -991,6 +991,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         ${!planning ? `<div class="choice-row"><span>${included ? "Included" : "Excluded"}</span><label class="switch"><input type="checkbox" aria-label="Include ${this._escape(device.name)}" data-share="${this._escape(device.key)}" ${this._saving || this._savingDeviceKey ? "disabled" : ""} ${included ? "checked" : ""}><span></span></label></div>
         <p class="muted">${included ? "Shares device data with SHS and allows planning and control when configured." : "Sends no individual readings, profiles or metadata to SHS and cannot be planned or controlled. Consumption stays in household totals."}</p>` : ""}
         ${planning ? `<p>Connected equipment: ${members.map(d => this._escape(d.name)).join(", ")}</p>` : mappingFields.length ? `<p>${this._escape(device.name)} · ${this._escape(this._label(device.control_type))}</p>` : ""}
+        ${!planning && device.system === "battery" ? this._fieldButtons(this._attention().filter(item => item.key === "battery_control").flatMap(item => this._fieldTargets(item))) : ""}
         ${!planning && device.mapping_error ? `<p class="inline-warning">${this._escape(device.mapping_error)}</p>` : ""}
         ${this._deviceErrors[device.key] ? `<p role="alert" class="inline-error">${this._escape(this._deviceErrors[device.key])}</p>` : ""}
         ${this._fields(mappingFields, mapping, "mapping", device.key, [
@@ -1069,7 +1070,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const runtime = device.battery_runtime;
     if (runtime) {
       const m = runtime.measurements;
-      const power = m ? `House ${(m.house_w / 1000).toFixed(2)} kW · Solar ${(m.pv_w / 1000).toFixed(2)} kW · Battery ${(m.battery_dc_w / 1000).toFixed(2)} kW` : "Waiting for current measurements";
+      const power = m ? `House ${(m.house_w / 1000).toFixed(2)} kW · Solar ${(m.pv_w / 1000).toFixed(2)} kW · Battery ${(m.battery_dc_w / 1000).toFixed(2)} kW` : runtime.fix?.kind === "fields" ? "Complete the highlighted measurement settings." : "Waiting for current measurements";
       const response = m?.response_matches_direction === false ? `Requested ${m.requested_direction}; measured battery is ${m.physical_response}.` : m ? `Measured battery: ${m.physical_response}.` : "";
       const loss = runtime.loss_evidence?.discharge;
       const curve = runtime.loss_model?.discharge;
@@ -1178,6 +1179,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const items = [...(this._data?.attention || [])];
     for (const device of this._data?.devices || []) {
       const status = device.execution_status || {};
+      if (device.system === "battery" && status.fix?.kind === "fields" && items.some(item => item.key === "battery_control")) continue;
       if (!["fault", "unsupported", "overridden", "limited"].includes(status.state) && !status.handover_pending) continue;
       const key = "controller:" + (device.permission?.controller_id || device.key);
       if (items.some(item => item.key === key)) continue;

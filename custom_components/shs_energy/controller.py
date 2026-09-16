@@ -1203,7 +1203,8 @@ class ScheduledController:
             for device in (*DEVICES, *sorted(generic)):
                 if device == "battery" and getattr(self,"battery_runtime",None) is not None:
                     status=self.battery_runtime.snapshot()
-                    self.report(device,status["state"],reason=status["reason"],battery_runtime=status)
+                    self.report(device,status["state"],reason=status["reason"],battery_runtime=status,
+                        **{key: status[key] for key in ("fix", "next_step", "retry_automatically") if key in status})
                     continue
                 if devices is not None and device not in devices:
                     continue

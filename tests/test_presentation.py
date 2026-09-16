@@ -60,6 +60,24 @@ class PresentationTests(unittest.TestCase):
             operational_status(self.plan, 'live', [], self.now), self.plan, {},
             {'sensor.laundry_energy': 'Laundry floor Energy'}, {'laundry': 'Laundry'}, self.now, **kwargs)
 
+    def test_battery_cannot_show_ready_with_missing_shared_measurements(self):
+        from test_device_controls import _battery
+        self.options.update(_battery())
+        self.choices['home']['battery'] = {'included': True, 'choice_at': self.now.isoformat()}
+        self.options['device_modes'] = {'$battery': 'controlling'}
+        missing = ('house_consumption_power_entity', 'solar_production_power_entity', 'grid_power_entity')
+        for key in missing:
+            self.options.pop(key)
+        battery = next(d for d in self.view(configured_keys=['battery_enabled']) if d.get('system') == 'battery')
+        self.assertEqual(battery['mapping_status'], 'not_configured')
+        self.assertFalse(battery['execution_eligibility']['eligible'])
+        for label in ('Instantaneous house consumption', 'Instantaneous solar production', 'Signed grid power'):
+            self.assertIn(label, battery['permission']['reason'])
+        for key in missing:
+            self.options[key] = 'sensor.' + key
+        battery = next(d for d in self.view(configured_keys=['battery_enabled']) if d.get('system') == 'battery')
+        self.assertEqual(battery['mapping_status'], 'ready')
+
     def test_battery_model_properties_are_separate_from_controls(self):
         self.options['battery_enabled'] = True
         self.choices['home']['battery'] = {'included': True}

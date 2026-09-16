@@ -232,6 +232,8 @@ async def _configuration_payload(
         hass.config_entries.async_update_entry(entry, options=initialised_options)
         coordinator._plan_configuration_changed = True
         return await _configuration_payload(hass, entry, refresh_roles=False)
+    battery_required = any(device.get("system") == "battery" and device["included"] for device in devices)
+    coordinator._sync_battery_control_issue({**options, "battery_control_enabled": True}, included=battery_required)
     for device in devices:
         if device.get("system") == "battery":
             device["policy_delivery"] = coordinator.battery_policy_exchange.snapshot()
@@ -263,7 +265,7 @@ async def _configuration_payload(
             "state": _entry_state(entry),
         },
         "configuration": options,
-        "sections": _configuration_sections(),
+        "sections": _configuration_sections(battery_control_required=battery_required),
         "entities": _entity_catalog(hass),
         "devices": devices,
         "portal": {

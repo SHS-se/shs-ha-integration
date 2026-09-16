@@ -1066,3 +1066,46 @@ test('failed inclusion saves restore the toggle and explanation', async () => {
   assert.equal(panel._error, 'Save failed');
   assert.match(panel._renderDevice(panel._data.devices[0]), /data-share="pool"[^>]*checked/);
 });
+
+
+test('battery measurement errors open and highlight the Energy fields, not the device editor', () => {
+  const panel = splitPanel();
+  const fields = [
+    ['house_consumption_power_entity', 'Instantaneous house consumption'],
+    ['solar_production_power_entity', 'Instantaneous solar production'],
+    ['grid_power_entity', 'Signed grid power'],
+  ].map(([key, label]) => ({ key, label, kind: 'entity', required: true }));
+  const section = { id: 'prices_forecasts', tab: 'energy', title: 'Solar and electrical measurements', fields };
+  panel._data.sections = [section];
+  const fix = { kind: 'fields', fields: fields.map(f => ({ key: f.key, message: f.label + ' is required for battery control' })) };
+  panel._data.attention = [{ key: 'battery_control', severity: 'warning', title: 'House battery setup needs attention', fix }];
+  const battery = { key: '$battery', name: 'House battery', system: 'battery', included: true, fields: [], system_fields: [],
+    permission: {}, mapping_status: 'not_configured', execution_status: { state: 'fault', fix } };
+  panel._data.devices = [battery];
+  panel._draft.device_control_mappings = {};
+  const status = panel._renderAttention();
+  assert.equal(panel._attention().length, 1);
+  assert.doesNotMatch(status, /Edit House battery setup/);
+  for (const field of fields) {
+    assert.match(status, new RegExp('data-field-token="configuration::' + field.key + '"'));
+    assert.equal(panel._fieldProblems(field.key).length, 1);
+  }
+  const sectionHtml = panel._renderSection(section);
+  assert.match(sectionHtml, /3 fields need attention/);
+  assert.equal((sectionHtml.match(/aria-invalid="true"/g) || []).length, 3);
+  assert.equal((sectionHtml.match(/Required/g) || []).length, 3);
+  assert.doesNotMatch(sectionHtml, /Add a setting/);
+  battery.battery_runtime = { state: 'fault', reason: 'Measurement settings need attention', fix };
+  assert.doesNotMatch(panel._batteryLiveInputs(battery), /Waiting for current measurements/);
+  assert.match(panel._batteryLiveInputs(battery), /Complete the highlighted measurement settings/);
+  const card = panel._renderDevice(battery);
+  assert.doesNotMatch(card, /Controls configured/);
+  assert.match(card, /data-field-token="configuration::grid_power_entity"/);
+  panel.shadowRoot = { querySelectorAll: () => [] };
+  panel._openField('configuration::house_consumption_power_entity');
+  assert.equal(panel._tab, 'energy');
+  assert.ok(panel._expanded.has('section:prices_forecasts'));
+  panel._data.attention = [];
+  battery.execution_status = {};
+  assert.equal(panel._fieldProblems('house_consumption_power_entity').length, 0);
+});

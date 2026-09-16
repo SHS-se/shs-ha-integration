@@ -355,6 +355,9 @@ def _battery(**extra):
         "battery_discharging_entity": "binary_sensor.discharging",
         "battery_mode_baseline": "Maximum Self Consumption",
         "battery_power_measurement_entity": "sensor.battery_power",
+        "house_consumption_power_entity": "sensor.house",
+        "solar_production_power_entity": "sensor.solar",
+        "grid_power_entity": "sensor.grid",
         "battery_soc_entity": "sensor.soc",
         **extra,
     }
@@ -376,7 +379,7 @@ class BatteryControlTests(unittest.TestCase):
         })
         self.assertIn("battery mode entity is required", errors)
         self.assertIn("charge power limit entity is required", errors)
-        self.assertIn("measured battery power entity is required", errors)
+        self.assertIn("Measured battery power is required for battery control", errors)
         self.assertIn("battery state of charge entity is required", errors)
         self.assertIn("the mode value meaning charge is required", errors)
 

@@ -8,7 +8,7 @@ import unittest
 ROOT = Path(__file__).parents[1] / 'custom_components/shs_energy'
 sys.path.insert(0, str(ROOT))
 from optimisation import OptimisationInputError, REMEDY_WAITING
-from device_controls import battery_control_errors, pool_band_errors, mapping_report, apply_requested_configuration
+from device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError, battery_control_errors, pool_band_errors, mapping_report, apply_requested_configuration
 
 
 def price_catalog(coordinator):
@@ -43,6 +43,28 @@ class FieldIssueTests(unittest.TestCase):
         errors = pool_band_errors({'pool_enabled': True, 'pool_start_temperature_entity': 'number.start'}, field_errors=fields)
         self.assertEqual(list(fields), ['pool_stop_temperature_entity'])
         self.assertEqual(fields['pool_stop_temperature_entity'], errors)
+
+    def test_battery_measurements_report_all_missing_and_duplicate_fields(self):
+        options = {'battery_power_measurement_entity': 'sensor.battery'}
+        fields = {}
+        battery_measurement_errors(options, field_errors=fields)
+        self.assertEqual(set(fields), {'house_consumption_power_entity', 'solar_production_power_entity', 'grid_power_entity'})
+        error = BatteryMeasurementConfigurationError(options)
+        self.assertEqual({f['key'] for f in error.fix['fields']}, set(fields))
+        options.update(house_consumption_power_entity='sensor.house', solar_production_power_entity='sensor.house', grid_power_entity='sensor.grid')
+        fields = {}
+        battery_measurement_errors(options, field_errors=fields)
+        self.assertEqual(set(fields), {'house_consumption_power_entity', 'solar_production_power_entity'})
+        options['solar_production_power_entity'] = 'sensor.solar'
+        self.assertEqual(battery_measurement_errors(options), [])
+
+    def test_battery_measurements_are_visible_and_required_only_when_applicable(self):
+        from configuration_fields import _configuration_sections
+        keys = {'house_consumption_power_entity', 'solar_production_power_entity', 'grid_power_entity'}
+        for included in (False, True):
+            sections = _configuration_sections(battery_control_required=included)
+            fields = {f['key']: f for section in sections for f in section['fields']}
+            self.assertEqual({key for key in keys if fields[key]['required']}, keys if included else set())
 
     def test_battery_reports_keys_for_each_missing_control(self):
         fields = {}

@@ -22,6 +22,7 @@ if __package__:
     from .battery_supply import SupplyScope, observe_supply
     from .configuration_values import resolve_battery_quantities
     from .energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
+    from .device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
     from .operating_modes import device_mode
 else:
     import home_runtime as rt
@@ -33,6 +34,7 @@ else:
     from battery_supply import SupplyScope, observe_supply
     from configuration_values import resolve_battery_quantities
     from energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
+    from device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
     from operating_modes import device_mode
 
 AGE_MS=30000
@@ -189,6 +191,8 @@ class BatteryRuntime:
                     except Exception:
                         pass  # The existing journal/fence retains unresolved work.
                     self._status={'state':'fault','reason':self._last_error}
+                if isinstance(error, BatteryMeasurementConfigurationError):
+                    self._status.update(reason=str(error), fix=error.fix, next_step=error.next_step, retry_automatically=True)
             self.coordinator.async_update_listeners()
 
     async def _refresh(self):
@@ -212,6 +216,8 @@ class BatteryRuntime:
         if mode=='control_verification' and 'battery' in self.controller.records:
             async with self.controller.lock:
                 await self.controller.restore('battery')
+        if battery_measurement_errors(options):
+            raise BatteryMeasurementConfigurationError(options)
         self._devices=await self.coordinator.async_battery_planned_devices()
         source=source_revision(options,self._devices)
         read=self.coordinator._battery_entity_report

@@ -104,7 +104,7 @@ from .configuration import (
 )
 from .device_controls import (
     apply_requested_configuration,
-    battery_control_errors,
+    battery_control_errors, battery_measurement_errors, BatteryMeasurementConfigurationError,
     pool_band_errors,
     is_room_thermal_control,
     mapping_report,
@@ -519,8 +519,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         bindings={role:options.get(key) for role,key in (
             ("battery","battery_power_measurement_entity"),("house","house_consumption_power_entity"),
             ("pv","solar_production_power_entity"),("grid","grid_power_entity"))}
-        if any(not entity for entity in bindings.values()) or len(set(bindings.values()))!=4:
-            raise ValueError("four distinct battery/house/solar/signed-grid sources are required")
+        if battery_measurement_errors(options):
+            raise BatteryMeasurementConfigurationError(options)
         end=dt_util.utcnow()
         values=await get_instance(self.hass).async_add_executor_job(statistics_during_period,
             self.hass,end-timedelta(days=2),end,set(bindings.values()),"5minute",{"power":"W"},{"mean","min","max"})
@@ -755,11 +755,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     def _sync_battery_control_issue(self, options: dict[str, Any], *, included: bool) -> None:
-        """Name what still stops an authorised battery from being commanded.
+        """Name every setup gap for an included battery at its owning field.
 
-        Only reachable once someone has switched control on, so it never nags
-        a home that is content to let the inverter decide. Planning continues
-        either way: an unwritable battery is still modelled as a store.
+        The panel also runs this preflight before execution is enabled, so
+        users can complete setup without first attempting a control operation.
         """
         field_errors = {}
         errors = battery_control_errors(options, field_errors=field_errors)
@@ -769,10 +768,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._set_attention(
             ISSUE_BATTERY_CONTROL,
             severity="warning",
-            title="Battery control is switched on but not fully configured",
+            title="House battery setup needs attention",
             detail=(
-                "The planner still schedules the battery, but nothing will "
-                "command it until the battery control section is complete."
+                "Complete the highlighted settings before battery control can operate. "
+                "Each field link opens the setting that needs correction."
             ),
             items=list(errors),
             fix={"kind": "fields", "fields": [{"key": key, "message": "; ".join(messages)} for key, messages in field_errors.items()]},

@@ -116,6 +116,23 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(r.calls,[])
             self.assertEqual(r.runtime.snapshot()['state'],'fault')
         finally:await r.runtime.close()
+    async def test_missing_measurements_are_actionable_before_policy_or_writes(self):
+        r=Rig()
+        for key in ('house_consumption_power_entity','solar_production_power_entity','grid_power_entity'):
+            r.options.pop(key)
+        try:
+            await r.runtime.refresh()
+            status=r.runtime.snapshot()
+            self.assertEqual(status['state'],'fault')
+            self.assertNotIn('ValueError:',status['reason'])
+            self.assertEqual(status['fix']['kind'],'fields')
+            self.assertEqual({f['key'] for f in status['fix']['fields']},
+                {'house_consumption_power_entity','solar_production_power_entity','grid_power_entity'})
+            self.assertTrue(status['retry_automatically'])
+            self.assertEqual(r.calls,[])
+            self.assertIsNone(r.runtime.host)
+        finally:await r.runtime.close()
+
     async def test_failed_journal_prevents_service_calls(self):
         r=Rig()
         async def fail(value):raise OSError('disk full')
