@@ -191,7 +191,7 @@ def normalise_field_value(
             raise ValueError(f"{context}: {label} must be positive watts")
         return watts
 
-    if field["key"] in {"house_consumption_power_entity", "solar_production_power_entity"}:
+    if field["key"] in {"house_consumption_power_entity", "solar_production_power_entity", "grid_power_entity"}:
         state = read_entity(value)
         if state is None or state["attributes"].get("unit_of_measurement") not in ("W", "kW") or state["attributes"].get("state_class") != "measurement":
             raise ValueError(f"{context}: {label} must be an instantaneous W or kW measurement")

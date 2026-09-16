@@ -492,22 +492,22 @@ class ExecutableRuntimeTests(unittest.TestCase):
         h.observe(h.group.desired.target,envelope=Envelope(0,3000))
         self.assertNotEqual(h.state.policy.selected_id,'export')
 
-    def test_generated_schema_six_policy_trace_keeps_issued_reservation_after_expiry(self):
+    def test_generated_schema_seven_policy_trace_keeps_issued_reservation_after_expiry(self):
         root=Path(__file__).parents[1]
         output=subprocess.run([sys.executable,str(root/'scripts/replay-home-runtime.py'),
             str(FIXTURES/'home-runtime-policy-binding.json')],check=True,capture_output=True,text=True)
         trace=json.loads(output.stdout)
         sends=[e for row in trace['rows'] for e in row['effects'] if e['type']=='Send']
         self.assertEqual(len(sends),1)
-        self.assertEqual(trace['final_checkpoint']['schema_version'],6)
+        self.assertEqual(trace['final_checkpoint']['schema_version'],7)
         self.assertEqual(trace['rows'][-1]['policy']['status'],'outside_coverage')
         self.assertEqual(len(trace['rows'][-1]['groups'][0]['attempts']),1)
         self.assertEqual(trace['rows'][-1]['groups'][0]['reservation_w']['import'],4000)
 
-    def test_schema_six_rejects_five_and_corrupt_grant_or_actuals_proof(self):
+    def test_schema_seven_rejects_six_and_corrupt_grant_or_actuals_proof(self):
         h=Harness();h.offer();h.prepare();encoded=json.loads(encode_checkpoint(h.state))
-        self.assertEqual(encoded['schema_version'],6)
-        for mutate in (lambda v:v.update(schema_version=5),
+        self.assertEqual(encoded['schema_version'],7)
+        for mutate in (lambda v:v.update(schema_version=6),
             lambda v:v['state']['groups'][0]['attempts'][0]['grant'].update(epoch=999),
             lambda v:v['state']['policy']['watermark'].update(at_ms=1)):
             value=json.loads(json.dumps(encoded));mutate(value)

@@ -1,4 +1,4 @@
-"""Closed version-6 JSON for the offline runtime and conservative crash restoration."""
+"""Closed version-7 JSON for the offline runtime and conservative crash restoration."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -40,7 +40,7 @@ def _check_state(state):
         if group.desired:
             if session.status not in ("active", "awaiting_context") or group.desired.id != session.request_id:
                 raise ValueError("inactive policy retains an executable request")
-            binding = next((b for b in state.authority.catalog.bindings if b.operation.id == session.selected_id), None)
+            binding = runtime.policy_binding(state,session.selected_id) if session.selected_id else None
             if (binding is None or not runtime._same(binding.target, group.desired.target)
                     or binding.native_guards != group.desired.native_guards
                     or group.desired.valid_until_ms > session.compiled.summary.until_ms):
@@ -113,7 +113,7 @@ def _check_state(state):
 
 def encode_checkpoint(state: runtime.HomeState) -> bytes:
     _check_state(state)
-    data = json.dumps({"schema_version": 6, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    data = json.dumps({"schema_version": 7, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > MAX_BYTES:
         raise ValueError("checkpoint exceeds byte limit")
     return data
@@ -121,7 +121,7 @@ def encode_checkpoint(state: runtime.HomeState) -> bytes:
 
 def decode_checkpoint(data: bytes) -> runtime.HomeState:
     value = read_runtime_json(data)
-    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 6:
+    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 7:
         raise ValueError("unsupported checkpoint version/fields")
     return _check_state(_decode(value["state"], runtime.HomeState))
 

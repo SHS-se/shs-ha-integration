@@ -41,3 +41,23 @@ class NativeAdapterTests(unittest.TestCase):
         bad = replace(self.steps[-1], value=100000)
         with self.assertRaises(ValueError):
             replace(self.adapter, steps=(*self.steps[:-1], bad))
+
+class NativeReadbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_poll_publishes_unchanged_registers_but_rejects_missing_values(self):
+        from types import SimpleNamespace, ModuleType
+        from unittest.mock import patch
+        from battery_sigen import refresh_sigen_readback
+        keys=('plant_remote_ems_control_mode','plant_ess_max_charging_limit','plant_ess_max_discharging_limit')
+        called=[]
+        async def refresh():called.append('poll')
+        coordinator=SimpleNamespace(data={'plant':dict(zip(keys,(4,0,4)))},last_update_success=True,async_refresh=refresh)
+        entities={key:SimpleNamespace(coordinator=coordinator,entity_description=SimpleNamespace(key=key),available=True,
+                    async_write_ha_state=lambda key=key:called.append(key)) for key in keys}
+        module=ModuleType('homeassistant.helpers.entity_platform')
+        module.async_get_platforms=lambda hass,domain:[SimpleNamespace(entities=entities)] if domain=='sigen' else []
+        with patch.dict('sys.modules',{'homeassistant.helpers.entity_platform':module}):
+            await refresh_sigen_readback(None,keys)
+            self.assertEqual(called,['poll',*keys])
+            called.clear();coordinator.data['plant'].pop(keys[1])
+            with self.assertRaisesRegex(ValueError,'incomplete'):await refresh_sigen_readback(None,keys)
+            self.assertEqual(called,['poll'])

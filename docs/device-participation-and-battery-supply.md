@@ -1,11 +1,12 @@
 # Device participation and explicit battery supply intent
 
-**Agreed design, 15 September 2026. Implementation pending.** This is the
+**Agreed design, 15 September 2026; production command wiring implemented 16 September.** This is the
 normative decision for device terminology, configuration ownership, mixed-mode
 accounting, chart membership and battery house-supply scope. It supersedes
 conflicting four-mode, website inclusion, reviewed/unreviewed and forecast-sized
 or rating-wide battery-supply proposals in earlier documents. Those documents
-retain dated implementation evidence; this decision does not change running code.
+retain dated implementation evidence. See [current rollout status](battery-live-commissioning.md);
+implementation in this checkout is not a claim of deployment.
 
 ## User-facing ownership
 
@@ -318,3 +319,17 @@ measurements, economic evaluation and a commissioned enforcement path together.
 Related specifications: [actual-state opportunity cost](battery-opportunity-cost.md),
 [battery runtime and native response](battery-execution-design.md), and
 [backend contract companion](https://github.com/SHS-se/smart-home-solutions/blob/dev/docs/energy-optimisation/device-participation-and-battery-supply.md).
+
+## Sigen conversion and command connection — 16 September 2026
+
+The household controller now binds this intent to real Sigen PV First commands.
+ESS limits and battery power are DC; grid and house measurements are AC. Field
+roles establish ownership/signs and individual HA timestamps establish freshness.
+No extra shared-HA-device or manual meter-certification step is required.
+
+Directional conversion uses stable history to separate fixed overhead from gain.
+Current and future scoring share the same versioned curves. Insufficient charge
+observations retain labelled configured assumptions. Solar residuals do not prove
+pure DC efficiency; separate PV-to-house conversion remains unmodelled in this
+version. The [live guide](battery-live-commissioning.md) states these limits and the
+actual deployment/test sequence, including cloud-independent command recovery.

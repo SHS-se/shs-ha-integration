@@ -1,8 +1,8 @@
 # Participation and scoped supply: implementation status
 
-16 September 2026. **Partial implementation; the live battery replacement is not
-connected or commissioned. Do not deploy this as the fix for the September 15
-battery discharge incident.** The normative decisions remain in
+16 September 2026. **The live battery command path is now connected in code;
+deployment and hardware testing remain.** See [live operation, conversion losses
+and rollout](battery-live-commissioning.md). The normative decisions remain in
 [device participation and battery supply](device-participation-and-battery-supply.md).
 
 ## Implemented
@@ -29,7 +29,8 @@ battery discharge incident.** The normative decisions remain in
   membership revisions, freshness/alignment, unique measurement sources and gross
   reconciliation. Interval averages and reviewed watts cannot authorize instant
   subgroup supply. The user-named house/PV entities are discovery candidates;
-  their common AC measurement boundary still needs verification.
+  saved field roles define their measurement meaning; the Sigen DC conversion model
+  and its remaining daylight approximation are documented in the live guide.
 - Closed execution-policy v2 adds mandatory scope, proportional attribution and
   explicit wear basis. Both compiler and evaluator reject native responses that
   exceed scope, including house supply during forced export. They never silently
@@ -40,18 +41,18 @@ battery discharge incident.** The normative decisions remain in
   explicit per-quarter permissions. Current ineligibility cannot by itself erase
   an otherwise permitted future charge/export opportunity.
 - Runtime authority now binds the actual supply selector, not only its revision
-  label. Checkpoint v6 carries the updated policy/authority shape and rejects older
-  offline checkpoints; no production host was using that checkpoint format.
+  label. Checkpoint v7 carries the updated policy/authority shape and rejects older
+  offline checkpoints; the production owner uses a version-2 outer journal carrying recovery bindings.
 - The async `HomeHost` implements reducer effects, durable-before-send, final
   authority checks, ambiguous transport outcomes and conservative restart. A pure
-  native adapter only composes supplied commissioned transitions. Neither module
-  is attached to HA setup or granted physical authority yet.
+  Sigen adapter constructs bounded PV First register transitions. HA setup now
+  connects both modules through the durable battery writer fence.
 
 ## Production conditional projection
 
 `generateOptimisationPlanWithBatteryProjection` returns the existing plan and a
 separate resolved battery projection from the same generation. The existing plan
-API and HA plan wire output are unchanged. Schema 9 uses the execution branch's
+wire also carries explicit `battery_supply_scope` (`whole_house` for current generated plans). Schema 9 uses the execution branch's
 projection for Controlling; provenance is trimmed with that branch's remaining
 horizon. Verification uses the conditional branch described below.
 
@@ -111,55 +112,27 @@ the closed delivery envelope and Python policy, coalesces requests, persists sta
 and rejects replies overtaken by reconfiguration, expiry or shutdown. Schedule and
 HA diagnostics expose delivery blockers separately from existing command status.
 
-HA does **not yet produce a commissioned native context**. Its explicit null
-context yields `native_context_required`; it never invents operations, evidence or
-measurement boundaries. Even a valid received policy is `delivered_not_admitted`.
-The exchange does not send a runtime policy event or grant a writer. The real
-compiler/provider fixture consumed by Python is marked synthetic test data and
-is not physical commissioning evidence.
+## Production connection and remaining rollout
 
-Rollout dependency: apply the new nullable-column migration and deploy the protocol
-3 planning worker and ingest together, followed by the exchange endpoint and HA.
-No compatibility fallback is provided. This work has not been deployed.
+HA now builds the native context from configured Sigen controls, ratings, live
+membership and a versioned directional conversion model. The delivery envelope
+still grants no authority by itself: `HomeHost` validates it, observes live load,
+installs the scoped policy and acquires the sole writer before sending commands.
+Current and future scoring use the same DC storage / converted AC flow semantics.
+The pure `pv-first-v1` AC fixtures remain a separately declared offline model.
 
-## Live capture and writer fence
+The production `ScheduledController` delegates battery work to this owner. It
+continues to coordinate other adapters through the shared lock and pending-demand
+reservations. Policy withdrawal, restart and unload use the journalled approved
+release; they do not reactivate the legacy forecast/rating battery algorithm.
 
-The next HA stage now samples live sources, preserves per-entity report timestamps,
-shows source health in Schedule/diagnostics, and opens a durable writer fence before
-legacy controller startup. Planned membership includes devices with incomplete
-control setup. The ledger has a validated retained-history source-cut helper.
-
-This is still read-only with respect to the new policy runtime. No runtime identity
-is admitted and `HomeHost` is not connected. Read-only installation checks found a
-specific model mismatch: Sigen ESS limits act at the battery connection, while the
-current native catalog binds their numeric watts directly to AC response watts.
-The fresh plant-PV sensor also needs boundary validation before replacing the stale
-inverter-PV source. See [live commissioning evidence and remaining work](battery-live-commissioning.md).
-
-## Work still required before the battery replacement is complete
-
-1. Produce the native context from verified local configuration and commissioning
-   evidence, with its approved supply scope and per-quarter native permissions.
-   Correct the Sigen ESS/DC-to-AC response representation. Units/quantization have
-   been inspected, but establish physical native-mode response, transition ordering,
-   write/response latency, stale-input behavior, a shared AC meter boundary and
-   subgroup enforcement precision. The supplied house/PV entity names and a prior
-   406 W cap observation are not evidence for every mode or transition.
-2. Connect same-capture physical measurements, energy accounting, durable grant
-   arbitration and commissioned adapter IO to `HomeHost` in HA setup. Fence/release
-   the old battery writer using the installed durable fence before any new runtime
-   grant; requested Controlling or
-   successful policy delivery alone is not effective authority.
-3. Extend represented constraints if needed. Nonzero shaping thresholds, hard
-   per-boundary targets, positive reserves for enabled battery export, fixed-plan
-   authority and curtailment remain explicitly unsupported by this projection.
-4. Replay the captured incident through the connected path, including a contrary
-   case where conserving energy is cheaper, then coordinate both-repo rollout.
-
-The current `ScheduledController.execute_battery` remains the live writer in this
-checkout. The rated/forecast command path has **not** been replaced by these offline
-policy and delivery changes. Unit tests are not evidence that the house now runs scoped C+V
-control. No HA settings, native mode, service command or deployment was changed.
+The [live guide](battery-live-commissioning.md) records sensor signs, freshness,
+register refresh, native ordering, source-cut counters, measured-loss evidence,
+remaining solar conversion approximation and coordinated deployment steps.
+Nonzero shaping thresholds, hard per-boundary targets, positive export reserves
+and PV-curtailment remain outside the existing production projection's coverage.
+A real installation run is still required to validate physical response and timing.
+Nothing has been deployed or commanded on the user's installation by these tests.
 
 ## Validation
 

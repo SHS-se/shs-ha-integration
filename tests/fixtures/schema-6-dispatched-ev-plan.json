@@ -170,6 +170,9 @@
       "battery_export_reserve_soc": 0,
       "battery_export_min_price_sek_per_kwh": 0
     },
+    "battery_supply_scope": {
+      "kind": "whole_house"
+    },
     "battery": null,
     "ev_battery": {
       "name": "Contract EV",

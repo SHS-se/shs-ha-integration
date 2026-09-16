@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "initial": {
-    "schema_version": 6,
+    "schema_version": 7,
     "state": {
       "authority": null,
       "authority_revision": -1,
@@ -151,7 +151,8 @@
             "import_limit_w": 17000,
             "export_limit_w": 13000,
             "wear_sek_per_kwh": 0.1,
-            "wear_basis": "ac_throughput"
+            "wear_basis": "ac_throughput",
+            "conversion": null
           },
           "scope": {
             "type": "ExecutionScope",
@@ -654,7 +655,8 @@
             "relief_id": null
           }
         ],
-        "token": 1
+        "token": 1,
+        "relief_rules": []
       }
     },
     {

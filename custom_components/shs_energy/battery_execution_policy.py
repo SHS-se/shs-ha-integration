@@ -12,10 +12,12 @@ from math import isfinite
 from typing import Optional
 
 if __package__:
+    from .battery_conversion import Conversion
     from .battery_supply import SupplyScope, proportional_supply
     from .runtime_json import read_runtime_json
     from .battery_policy import COMPONENTS, canonical_json
 else:
+    from battery_conversion import Conversion
     from battery_supply import SupplyScope, proportional_supply
     from runtime_json import read_runtime_json
     from battery_policy import COMPONENTS, canonical_json
@@ -86,7 +88,7 @@ class ContextIdentity:
     def __post_init__(self):
         for field in fields(self):
             _id(getattr(self, field.name))
-        if self.response_model_revision != RESPONSE_MODEL:
+        if self.response_model_revision not in (RESPONSE_MODEL, "pv-first-dc-v2"):
             raise ValueError("unsupported native response model")
 
 
@@ -183,12 +185,13 @@ class BatteryPlant:
     export_limit_w: float
     wear_basis: str
     wear_sek_per_kwh: float
+    conversion: Optional[Conversion] = None
 
     def __post_init__(self):
         if self.wear_basis not in ("ac_throughput", "discharged_storage"):
             raise ValueError("unknown battery wear basis")
         for field in fields(self):
-            if field.name != "wear_basis":
+            if field.name not in ("wear_basis", "conversion"):
                 _num(getattr(self, field.name), 0, 1e6)
         if not self.cutoff_kwh < self.capacity_kwh:
             raise ValueError("invalid battery physical state bounds")
@@ -237,8 +240,11 @@ class ContinuationCell:
     previous_import_w: tuple[float, float]
     inequalities: tuple[tuple[float, float, float], ...]
     cost: tuple[CostFunction, ...]
+    open_energy: tuple[bool, bool] = (False, False)
 
     def evaluate(self, energy, previous_import):
+        if self.open_energy[0] and energy <= self.energy_kwh[0] or self.open_energy[1] and energy >= self.energy_kwh[1]:
+            return None
         eps = PHYSICAL_TOLERANCE
         if (not self.energy_kwh[0] - eps <= energy <= self.energy_kwh[1] + eps
                 or not self.previous_import_w[0] - eps <= previous_import <= self.previous_import_w[1] + eps):
@@ -306,7 +312,12 @@ def _summary(source_json):
         raise ValueError("invalid absolute execution window")
     d = _obj(wire["domain"], "energy_kwh pv_w residual_load_w")
     domain = Domain(*(_range(d[key]) for key in ("energy_kwh", "pv_w", "residual_load_w")))
-    plant = _record(BatteryPlant, wire["plant"])
+    raw_plant = dict(wire["plant"])
+    conversion = Conversion.read(raw_plant.pop("conversion")) if "conversion" in raw_plant else None
+    names = " ".join(f.name for f in fields(BatteryPlant) if f.name != "conversion")
+    plant = BatteryPlant(**_obj(raw_plant,names),conversion=conversion)
+    if (context.response_model_revision == "pv-first-dc-v2") != (conversion is not None):
+        raise ValueError("conversion model/basis mismatch")
     permissions = _record(Permissions, wire["permissions"])
     economics = _record(Economics, wire["economics"])
     if (domain.energy_kwh[0] < plant.cutoff_kwh or domain.energy_kwh[1] > plant.capacity_kwh
@@ -327,7 +338,9 @@ def _summary(source_json):
     cells = []
     for raw in _arr(continuation["cells"], 1, 64):
         _obj(raw, "id witness_id domain cost")
-        cd = _obj(raw["domain"], "energy_kwh previous_import_w inequalities")
+        cd = dict(raw["domain"])
+        opened = tuple(_bool(v) for v in _arr(cd.pop("open_energy",[False,False]),2,2))
+        _obj(cd, "energy_kwh previous_import_w inequalities")
         er, pr = _range(cd["energy_kwh"]), _range(cd["previous_import_w"])
         if er[0] < plant.cutoff_kwh or er[1] > plant.capacity_kwh or pr[1] > plant.import_limit_w:
             raise ValueError("continuation domain exceeds physical limits")
@@ -346,7 +359,7 @@ def _summary(source_json):
                 _num(term["weight"], 0)
                 absolute.append(tuple(_num(term[k]) for k in ("weight", "energy", "previous_import", "constant")))
             functions.append(CostFunction(poly, tuple(absolute)))
-        cell = ContinuationCell(_id(raw["id"]), _id(raw["witness_id"]), er, pr, tuple(inequalities), tuple(functions))
+        cell = ContinuationCell(_id(raw["id"]), _id(raw["witness_id"]), er, pr, tuple(inequalities), tuple(functions),opened)
         # Validate nonnegative accounts at polynomial minima and ramp kinks too.
         points = {er[0], er[1]}
         for fn in functions:
@@ -427,8 +440,7 @@ def evaluate_current(policy: ExecutionPolicy, operation: BatteryOperation,
     """Exact steady native model over the remaining interval, split at saturation."""
     s, p, c = policy.summary, policy.summary.plant, conditions
     permissions, econ = s.permissions, s.economics
-    if operation not in s.operations:
-        raise ValueError("operation is not in this policy")
+    operation_family(policy,operation)
     if not s.from_ms <= now_ms < s.until_ms:
         return OutsideCoverage("outside_validity")
     if any(not bounds[0] <= value <= bounds[1] for value, bounds in (
@@ -444,9 +456,10 @@ def evaluate_current(policy: ExecutionPolicy, operation: BatteryOperation,
             return OutsideCoverage("battery_export_not_allowed")
         if not permissions.export_price_eligible or econ.export_sek_per_kwh < permissions.minimum_export_price_sek_per_kwh:
             return OutsideCoverage("export_price_ineligible")
+    m = p.conversion
     surplus = c.pv_w - c.residual_load_w
-    charge = operation.charge_limit_w if op == "grid_charge" else min(operation.charge_limit_w, max(0, surplus)) if op in ("self_consumption", "solar_charge") else 0.0
-    discharge = operation.discharge_limit_w if op == "export" else min(operation.discharge_limit_w, max(0, -surplus)) if op in ("self_consumption", "supply_house") else 0.0
+    charge = operation.charge_limit_w if op == "grid_charge" else min(operation.charge_limit_w, m.solar_capacity(c.pv_w,c.residual_load_w) if m else max(0, surplus)) if op in ("self_consumption", "solar_charge") else 0.0
+    discharge = operation.discharge_limit_w if op == "export" else min(operation.discharge_limit_w, m.discharge.input(max(0,-surplus)) if m else max(0, -surplus)) if op in ("self_consumption", "supply_house") else 0.0
     if s.supply_scope.kind == "selected" and c.eligible_load_w is None:
         return OutsideCoverage("scope_measurements_unavailable")
     eligible = (c.residual_load_w if s.supply_scope.kind == "whole_house" else
@@ -454,10 +467,10 @@ def evaluate_current(policy: ExecutionPolicy, operation: BatteryOperation,
     bound = proportional_supply(c.residual_load_w, c.pv_w, eligible).house_supply_bound_w
     # Keep the catalog's commissioned operation intact. Clipping the response
     # without changing the native target would falsely claim enforcement.
-    if min(discharge, max(0.0, -surplus)) > bound + PHYSICAL_TOLERANCE:
+    if min(m.discharge.output(discharge) if m else discharge, max(0.0, -surplus)) > bound + PHYSICAL_TOLERANCE:
         return OutsideCoverage("native_operation_exceeds_supply_scope")
     hours = (s.boundary_ms - now_ms) / 3600000
-    rate = (charge * p.charge_efficiency - discharge / p.discharge_efficiency) / 1000
+    rate = (charge-discharge if m else charge * p.charge_efficiency - discharge / p.discharge_efficiency) / 1000
     energy = c.energy_kwh
     if not p.cutoff_kwh <= energy <= p.capacity_kwh:
         return OutsideCoverage("energy_out_of_bounds")
@@ -479,21 +492,21 @@ def evaluate_current(policy: ExecutionPolicy, operation: BatteryOperation,
     account = dict.fromkeys(COMPONENTS, 0.0)
     previous = c.previous_import_w
     for duration, charged, discharged in segments:
-        imported = max(0, c.residual_load_w + charged - discharged - c.pv_w)
-        exported = max(0, c.pv_w + discharged - charged - c.residual_load_w)
+        net = m.net_grid(charged,discharged,c.pv_w,c.residual_load_w) if m else c.residual_load_w + charged - discharged - c.pv_w
+        imported,exported = max(0,net),max(0,-net)
         if imported > p.import_limit_w + PHYSICAL_TOLERANCE or exported > p.export_limit_w + PHYSICAL_TOLERANCE:
             return OutsideCoverage("grid_limit")
         account["import_sek"] += imported / 1000 * duration * econ.import_sek_per_kwh
         account["export_sek"] += exported / 1000 * duration * econ.export_sek_per_kwh
-        wear_w = discharged / p.discharge_efficiency if p.wear_basis == "discharged_storage" else charged + discharged
+        wear_w = discharged / (1 if m else p.discharge_efficiency) if p.wear_basis == "discharged_storage" else sum(m.charge_inputs(charged,c.pv_w,c.residual_load_w))+m.discharge.output(discharged) if m else charged + discharged
         account["wear_sek"] += wear_w / 1000 * duration * p.wear_sek_per_kwh
         account["shaping_sek"] += .5 * econ.shaping_sek_per_kwh_per_kw * (imported / 1000) ** 2 * duration
         account["ramp_sek"] += abs(imported - previous) / 1000 * econ.ramp_sek_per_kw
         previous = imported
     endpoint = max(p.cutoff_kwh, min(p.capacity_kwh, energy + rate * active))
     return CurrentResponse(objective(account), endpoint, previous,
-                           operation.charge_limit_w if op == "grid_charge" else 0.0,
-                           operation.discharge_limit_w if op == "export" else 0.0)
+                           (m.grid_charge.input(operation.charge_limit_w) if m else operation.charge_limit_w) if op == "grid_charge" else 0.0,
+                           (m.discharge.output(operation.discharge_limit_w) if m else operation.discharge_limit_w) if op == "export" else 0.0)
 
 
 def evaluate_continuation(policy: ExecutionPolicy, energy_kwh: float, previous_import_w: float):
@@ -551,7 +564,19 @@ def evaluate_policy(policy: ExecutionPolicy, conditions: ExecutionConditions, no
             (c.energy_kwh, s.domain.energy_kwh), (c.pv_w, s.domain.pv_w), (c.residual_load_w, s.domain.residual_load_w))):
         return OutsideCoverage("conditions_outside_domain")
     rows, excluded = {}, []
-    for op in s.operations:
+    candidates = list(operation_candidates(policy,c,now_ms))
+    if incumbent_id and incumbent_id not in {o.id for o in candidates} and s.plant.conversion:
+        for base in s.operations:
+            prefix = base.id[:70] + "@"
+            if incumbent_id.startswith(prefix):
+                try:
+                    charge,discharge = map(float,incumbent_id[len(prefix):].split(":"))
+                    incumbent = BatteryOperation(incumbent_id,base.operation,charge,discharge)
+                    operation_family(policy,incumbent)
+                    candidates.append(incumbent)
+                except (ValueError,TypeError):
+                    pass
+    for op in candidates:
         response = evaluate_current(policy, op, c, now_ms)
         if isinstance(response, OutsideCoverage):
             excluded.append((op.id, response.reason))
@@ -580,3 +605,59 @@ def evaluate_policy(policy: ExecutionPolicy, conditions: ExecutionConditions, no
         selected = incumbent
     return Decision(now_ms, s.until_ms, s.reference_id, tuple(ranked), selected.operation.id,
                     now_ms >= s.refresh_after_ms, tuple(excluded))
+
+
+def operation_family(policy, operation):
+    """DC policies authorize bounded, one-watt native operation families."""
+    for base in policy.summary.operations:
+        if operation == base:
+            return base
+        if (policy.summary.plant.conversion is not None and base.operation not in ("hold","self_consumption")
+                and operation.operation == base.operation
+                and operation.id == f"{base.id[:70]}@{operation.charge_limit_w:g}:{operation.discharge_limit_w:g}"
+                and operation.charge_limit_w <= base.charge_limit_w
+                and operation.discharge_limit_w <= base.discharge_limit_w
+                and operation.charge_limit_w == int(operation.charge_limit_w)
+                and operation.discharge_limit_w == int(operation.discharge_limit_w)):
+            return base
+    raise ValueError("operation is not in this policy family")
+
+
+def operation_candidates(policy, conditions, now_ms):
+    """Score representable live scope and continuation boundaries, not forecasts.
+
+    The finite candidate family is explicit; this makes no continuous optimality
+    claim. Native regulation still follows demand within its selected DC ceiling.
+    """
+    from math import floor
+    s,c=policy.summary,conditions
+    m=s.plant.conversion
+    if m is None:
+        return s.operations
+    hours=(s.boundary_ms-now_ms)/3600000
+    if hours<=0:
+        return s.operations
+    eligible=c.residual_load_w if s.supply_scope.kind=='whole_house' else 0 if s.supply_scope.kind=='none' else c.eligible_load_w
+    bound=None if eligible is None else proportional_supply(c.residual_load_w,c.pv_w,eligible).house_supply_bound_w
+    result={op.id:op for op in s.operations}
+    ends={e for cell in s.cells for e in cell.energy_kwh}
+    for base in s.operations:
+        charging=base.operation in ('grid_charge','solar_charge')
+        if base.operation not in ('grid_charge','solar_charge','supply_house','export'):
+            continue
+        maximum=base.charge_limit_w if charging else base.discharge_limit_w
+        values={maximum*f for f in (.25,.5,.75,1)}
+        values.update((e-c.energy_kwh if charging else c.energy_kwh-e)*1000/hours for e in ends)
+        if charging:
+            values.add(m.solar_capacity(c.pv_w,c.residual_load_w))
+        elif bound is not None:
+            values.add(m.discharge.input(bound))
+        for raw in values:
+            watts=floor(min(maximum,raw))
+            if watts<=0:
+                continue
+            charge,discharge=(watts,0) if charging else (0,watts)
+            op=BatteryOperation(f'{base.id[:70]}@{charge:g}:{discharge:g}',base.operation,charge,discharge)
+            if op.key != base.key:
+                result[op.id]=op
+    return tuple(result.values())

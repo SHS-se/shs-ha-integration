@@ -138,7 +138,7 @@ class BatteryExecutionPolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError): policy(wire)
 
     def test_generated_provider_current_response_parity(self):
-        for filename in ('battery-execution-current-vectors.json', 'battery-execution-native-permissions-current-vectors.json'):
+        for filename in ('battery-execution-dc-current-vectors.json', 'battery-execution-current-vectors.json', 'battery-execution-native-permissions-current-vectors.json'):
             corpus = json.loads((ROOT / 'tests/fixtures' / filename).read_text())
             p = read_execution_policy(json.dumps(corpus['policy']).encode())
             for case in corpus['cases']:
@@ -175,22 +175,23 @@ class BatteryExecutionPolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError): read_execution_policy(b'x'*(MAX_POLICY_BYTES+1))
 
     def test_generated_provider_continuation_parity_and_low_state_coverage(self):
-        corpus = json.loads((ROOT / 'tests/fixtures/battery-execution-continuation-vectors.json').read_text())
-        p = read_execution_policy(json.dumps(corpus['policy']).encode())
-        for case in corpus['cases']:
-            with self.subTest(case=case['id']):
-                actual = evaluate_continuation(p, case['energy_kwh'], case['previous_import_w'])
-                expected = case['expected']
-                if expected is None:
-                    self.assertIsNone(actual)
-                else:
-                    self.assertEqual(actual[0], expected['witness_id'])
-                    for key, value in zip(COMPONENTS, actual[1]):
-                        self.assertAlmostEqual(value, expected['objective'][key], places=7)
-        s = p.summary
-        c = ExecutionConditions(1, s.from_ms, s.until_ms, s.plant.cutoff_kwh+.01, 3000, 1000, 0,
-                                s.identity.context, s.permissions)
-        self.assertNotIsInstance(evaluate_policy(p, c, s.from_ms), OutsideCoverage)
+        for filename in ('battery-execution-continuation-vectors.json','battery-execution-dc-continuation-vectors.json'):
+            corpus = json.loads((ROOT / 'tests/fixtures' / filename).read_text())
+            p = read_execution_policy(json.dumps(corpus['policy']).encode())
+            for case in corpus['cases']:
+                with self.subTest(case=case['id']):
+                    actual = evaluate_continuation(p, case['energy_kwh'], case['previous_import_w'])
+                    expected = case['expected']
+                    if expected is None:
+                        self.assertIsNone(actual)
+                    else:
+                        self.assertEqual(actual[0], expected['witness_id'])
+                        for key, value in zip(COMPONENTS, actual[1]):
+                            self.assertAlmostEqual(value, expected['objective'][key], places=7)
+            s = p.summary
+            c = ExecutionConditions(1, s.from_ms, s.until_ms, s.plant.cutoff_kwh+.01, 3000, 1000, 0,
+                                    s.identity.context, s.permissions)
+            self.assertNotIsInstance(evaluate_policy(p, c, s.from_ms), OutsideCoverage)
 
     def test_declared_maximum_cells_evaluate_with_bounded_work(self):
         wire=policy_wire(); cell=wire['continuation']['cells'][0]

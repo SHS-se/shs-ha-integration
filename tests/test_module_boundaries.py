@@ -24,7 +24,7 @@ PURE_MODULES = (
     "battery_commands", "operating_modes", "verification",
     "home_runtime", "home_runtime_checkpoint", "energy_ledger", "runtime_json", "battery_policy",
     "battery_execution_policy", "battery_supply", "battery_policy_exchange", "home_host", "battery_native_adapter",
-    "controller", "battery_live", "battery_writer",
+    "controller", "battery_live", "battery_writer", "battery_runtime", "battery_conversion",
     "presentation",
     "api_contract",
     "const",
@@ -56,7 +56,7 @@ HOME_ASSISTANT_MODULES = (
     "coordinator",
     "diagnostics",
     "sensor",
-    "controller_events",
+    "controller_events", "battery_sigen",
 )
 
 

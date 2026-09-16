@@ -261,6 +261,9 @@
       "battery_export_reserve_soc": 0.8,
       "battery_export_min_price_sek_per_kwh": 0
     },
+    "battery_supply_scope": {
+      "kind": "whole_house"
+    },
     "battery": {
       "capacity_kwh": 18.08,
       "soc": 0.5,
@@ -6758,6 +6761,9 @@
         "battery_export_enabled": false,
         "battery_export_reserve_soc": 0.8,
         "battery_export_min_price_sek_per_kwh": 0
+      },
+      "battery_supply_scope": {
+        "kind": "whole_house"
       },
       "battery": {
         "capacity_kwh": 18.08,

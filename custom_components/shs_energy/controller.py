@@ -381,6 +381,11 @@ class ScheduledController:
             if not equal:
                 if self.battery_writer_fence is not None:
                     self.battery_writer_fence.check_legacy(entity)
+                runtime=getattr(self,"battery_runtime",None)
+                if runtime is not None and self.device!="battery" and not runtime.before_external_command(self.device):
+                    if self.scheduler is not None:
+                        self.scheduler.device_deadline(self.device,"battery_headroom",datetime.now(timezone.utc)+timedelta(seconds=5))
+                    raise ControlDeadlineError("Waiting for battery charging to release grid capacity")
                 self.write_attempted = True
                 self.command_times[entity] = datetime.now(timezone.utc)
                 command.update(called=True, transport="ambiguous")
@@ -1113,6 +1118,8 @@ class ScheduledController:
                 self.diagnostics_error = journal_error
         async with self.lock:
             for device in tuple(self.records):
+                if device == "battery" and getattr(self,"battery_runtime",None) is not None:
+                    continue
                 if journal_error is None:
                     self.begin_diagnostic_evaluation(device, self.options(), self.coordinator.current_plan_slot,
                         self.coordinator.optimisation_plan or {}, "startup_handover")
@@ -1192,6 +1199,10 @@ class ScheduledController:
                 "requested_systems": sorted(self.requested_systems, key=str),
             }).hex()
             for device in (*DEVICES, *sorted(generic)):
+                if device == "battery" and getattr(self,"battery_runtime",None) is not None:
+                    status=self.battery_runtime.snapshot()
+                    self.report(device,status["state"],reason=status["reason"],battery_runtime=status)
+                    continue
                 if devices is not None and device not in devices:
                     continue
                 self.device = device
@@ -1234,6 +1245,10 @@ class ScheduledController:
                     self.failed.pop(device, None)
                     self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"))
                 except Exception as err:
+                    if isinstance(err,ControlDeadlineError):
+                        self.failed.pop(device,None)
+                        self.report(device,"pending",reason=str(err),retry_automatically=True)
+                        continue
                     if (isinstance(err, PlanChangedError)
                             and self.coordinator.current_plan_slot is not None
                             and self.coordinator.operational_status["actionable"]
@@ -1281,6 +1296,8 @@ class ScheduledController:
         try:
             async with self.lock:
                 for device in tuple(self.records):
+                    if device == "battery" and getattr(self,"battery_runtime",None) is not None:
+                        continue
                     self.begin_diagnostic_evaluation(device, self.options(), self.coordinator.current_plan_slot,
                         self.coordinator.optimisation_plan or {}, "shutdown_handover")
                     try:

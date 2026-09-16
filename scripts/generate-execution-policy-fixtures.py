@@ -13,7 +13,9 @@ subprocess.run(['deno', 'run', '--cached-only', '--allow-read', *([] if args.che
                cwd=args.backend, check=True)
 source = args.backend / 'docs/energy-optimisation/fixtures/battery-execution'
 target = Path(__file__).resolve().parents[1] / 'tests/fixtures'
-for name, output in [('policy.json','battery-execution-policy.json'),
+for name, output in [('dc-current-vectors.json','battery-execution-dc-current-vectors.json'),
+                     ('dc-continuation-vectors.json','battery-execution-dc-continuation-vectors.json'),
+                     ('policy.json','battery-execution-policy.json'),
                      ('current-vectors.json','battery-execution-current-vectors.json'),
                      ('continuation-vectors.json','battery-execution-continuation-vectors.json'),
                      ('native-permissions-current-vectors.json','battery-execution-native-permissions-current-vectors.json')]:

@@ -11,6 +11,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import (
     async_track_time_change,
@@ -48,6 +49,7 @@ from .configuration import (
 )
 from .controller import ScheduledController
 from .battery_writer import BatteryWriterFence
+from .battery_runtime import BatteryRuntime, NativeReadbackPending
 from .verification import VerificationJournal
 from .coordinator import ShsStatusCoordinator
 from .migration import mapped_entity_ids, migrate_options
@@ -195,22 +197,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         entity_registry=er.async_get(hass),
     )
     coordinator.controller = controller
+    coordinator.battery_runtime = BatteryRuntime(coordinator, controller,
+        Store(hass, 1, f"shs_energy.battery_runtime.{entry.entry_id}"),
+        lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
     coordinator.battery_writer = BatteryWriterFence(
         Store(hass, 1, f"shs_energy.battery_writer.{entry.entry_id}"), controller.lock,
         lambda: resolved_options(hass, dict(entry.options)),
         lambda: int(datetime.now(timezone.utc).timestamp() * 1000),
-        # Native response admission is not connected; no runtime identity can
-        # acquire this writer until installation evidence has been admitted.
-        lambda: None,
+        coordinator.battery_runtime.identity,
     )
     controller.battery_writer_fence = coordinator.battery_writer
     await coordinator.battery_writer.open()
+    try:
+        await coordinator.battery_runtime.open()
+    except NativeReadbackPending as error:
+        coordinator.battery_writer.close()
+        raise ConfigEntryNotReady(str(error)) from error
     entry.async_on_unload(coordinator.battery_live_inputs.close)
     entry.async_on_unload(coordinator.battery_writer.close)
 
     async def stop_controller(_event=None):
         coordinator.battery_live_inputs.close()
         try:
+            await coordinator.battery_runtime.close(release=True)
             await controller.async_stop()
         finally:
             coordinator.battery_writer.close()
@@ -303,6 +312,7 @@ async def _async_options_updated(
 
 async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
     """Unload a config entry."""
+    await entry.runtime_data.battery_runtime.close(release=True)
     entry.runtime_data.battery_policy_exchange.close()
     entry.runtime_data.battery_live_inputs.close()
     try:

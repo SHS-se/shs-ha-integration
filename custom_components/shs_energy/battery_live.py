@@ -16,7 +16,7 @@ else:
     from battery_supply import SupplyScope, observe_supply
 
 
-POWER_OPTIONS = ("house_consumption_power_entity", "solar_production_power_entity", "battery_power_measurement_entity")
+POWER_OPTIONS = ("house_consumption_power_entity", "solar_production_power_entity", "battery_power_measurement_entity", "grid_power_entity")
 CONTROL_OPTIONS = ("battery_mode_entity", "battery_charge_limit_entity", "battery_discharge_limit_entity")
 # Diagnostics only; an admitted measurement profile owns its own timing budget.
 DIAGNOSTIC_AGE_MS = 30_000
@@ -170,7 +170,7 @@ def capture_battery_inputs(options, devices, read_entity, *, now_ms, profile=Non
                     if unit not in ("W", "kW") or attributes.get("state_class") != "measurement":
                         raise ValueError("instantaneous_power_required")
                     watts *= 1000 if unit == "kW" else 1
-                    if watts < 0 and role != "battery_power_measurement_entity":
+                    if watts < 0 and role not in ("battery_power_measurement_entity", "grid_power_entity"):
                         raise ValueError("negative_consumption_or_pv")
                     if not isfinite(watts):
                         raise ValueError("nonfinite power after unit conversion")

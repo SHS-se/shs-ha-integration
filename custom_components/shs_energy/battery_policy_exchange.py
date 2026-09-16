@@ -70,6 +70,7 @@ class BatteryPolicyExchange:
         self._closed = False
         self._context = None
         self._next_ms = 0
+        self.energy_origin_kwh = None
         self.policy = None
         self.status = {"state": "not_requested", "reasons": [], "control_authority": False}
 
@@ -124,6 +125,7 @@ class BatteryPolicyExchange:
                     self.status = {"state": "blocked", "reasons": ["local_context_changed"], "control_authority": False}
                     self._next_ms = 0
                     return
+                self.energy_origin_kwh = result.get("energy_origin_kwh")
                 self.policy, self.status = policy, status
                 self._next_ms = max(self._now_ms() + 60_000, policy.summary.refresh_after_ms) if policy else (now // 900_000 + 1) * 900_000
             except Exception as error:

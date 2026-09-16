@@ -1048,6 +1048,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _policyDelivery(device) {
     const status = device.policy_delivery;
+    if (["active", "diagnostic_only"].includes(device.battery_runtime?.policy_state)) return "";
     if (!status || status.state === "not_requested") return "";
     const messages = {
       native_context_required: "Waiting for verified battery response and measurement configuration.",
@@ -1064,6 +1065,16 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _batteryLiveInputs(device) {
+    const runtime = device.battery_runtime;
+    if (runtime) {
+      const m = runtime.measurements;
+      const power = m ? `House ${(m.house_w / 1000).toFixed(2)} kW · Solar ${(m.pv_w / 1000).toFixed(2)} kW · Battery ${(m.battery_dc_w / 1000).toFixed(2)} kW` : "Waiting for current measurements";
+      const response = m?.response_matches_direction === false ? `Requested ${m.requested_direction}; measured battery is ${m.physical_response}.` : m ? `Measured battery: ${m.physical_response}.` : "";
+      const loss = runtime.loss_evidence?.discharge;
+      const curve = runtime.loss_model?.discharge;
+      const lossText = curve ? loss?.model_source === "measured" ? `Discharge loss: approximately ${Math.round(curve.overhead_w)} W fixed, plus ${((1-curve.gain)*100).toFixed(1)}% of battery power (${loss.windows} observation periods).` : "Conversion losses currently use configured efficiencies; measurements are still being collected." : "";
+      return `<p class="muted">${this._escape(runtime.reason)}${runtime.command_state ? ` · ${this._escape(this._label(runtime.command_state))}` : ""}<br>${this._escape(power)}${response ? `<br>${this._escape(response)}` : ""}${runtime.selected_operation ? `<br>Current choice: ${this._escape(runtime.selected_operation.split("@")[0])}${runtime.mode === "control_verification" ? " (verification only)" : ""}` : ""}${lossText ? `<br>${this._escape(lossText)}` : ""}</p>`;
+    }
     const live = device.live_inputs;
     if (!live) return "";
     const readings = live.sources || {};

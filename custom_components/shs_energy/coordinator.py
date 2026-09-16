@@ -497,7 +497,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return devices
 
     async def async_battery_inputs_refresh(self, _now=None):
-        """Read-only capture; no measurement or native commissioning is inferred."""
+        """Capture raw diagnostics and advance the household battery owner."""
         async with self._battery_inputs_lock:
             try:
                 devices = await self.async_battery_planned_devices()
@@ -506,7 +506,38 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 options = resolved_options(self.hass, dict(self.entry.options))
                 await self.battery_live_inputs.sample(options, devices)
+            if getattr(self,"battery_runtime",None) is not None:
+                await self.battery_runtime.refresh()
             self.async_update_listeners()
+
+    async def async_battery_native_readback(self, entity_ids):
+        from .battery_sigen import refresh_sigen_readback
+        await refresh_sigen_readback(self.hass, entity_ids)
+
+    async def async_battery_loss_statistics(self, options):
+        """Complete five-minute mean/min/max in W for directional loss fitting."""
+        bindings={role:options.get(key) for role,key in (
+            ("battery","battery_power_measurement_entity"),("house","house_consumption_power_entity"),
+            ("pv","solar_production_power_entity"),("grid","grid_power_entity"))}
+        if any(not entity for entity in bindings.values()) or len(set(bindings.values()))!=4:
+            raise ValueError("four distinct battery/house/solar/signed-grid sources are required")
+        end=dt_util.utcnow()
+        values=await get_instance(self.hass).async_add_executor_job(statistics_during_period,
+            self.hass,end-timedelta(days=2),end,set(bindings.values()),"5minute",{"power":"W"},{"mean","min","max"})
+        result={}
+        for role,entity in bindings.items():
+            rows=[]
+            for row in values.get(entity,[]):
+                at=row.get("start")
+                if isinstance(at,datetime):
+                    at=round(at.timestamp()*1000)
+                elif isinstance(at,(float,int)):
+                    at=round(at*1000)
+                else:
+                    continue
+                rows.append({"start":at,**{key:row.get(key) for key in ("mean","min","max")}})
+            result[role]=rows
+        return result
 
     async def async_battery_policy_refresh(self, _now=None):
         await self.battery_policy_exchange.refresh()

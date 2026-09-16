@@ -232,6 +232,7 @@ async def _configuration_payload(
             device["policy_delivery"] = coordinator.battery_policy_exchange.snapshot()
             device["live_inputs"] = coordinator.battery_live_inputs.snapshot()
             device["battery_writer"] = coordinator.battery_writer.snapshot()
+            device["battery_runtime"] = coordinator.battery_runtime.snapshot()
         mapping = device.get("mapping", {})
         source_ids = [mapping.get("temperature_entity_id"), mapping.get("power")]
         if device.get("system"):

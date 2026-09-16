@@ -423,7 +423,7 @@ class OperationBinding:
     def __post_init__(self):
         _pairs(self.target)
         _identity(self.response_evidence)
-        if self.response_model_revision != "pv-first-v1":
+        if self.response_model_revision not in ("pv-first-v1", "pv-first-dc-v2"):
             raise ValueError("unsupported local response model")
 
 
@@ -533,7 +533,7 @@ class ExecutionAuthority:
         if (self.identity.battery_id != self.scope.battery_group_id
                 or self.identity.scope_revision != self.scope.revision
                 or self.identity.catalog_revision != self.catalog.revision
-                or self.identity.response_model_revision != "pv-first-v1"
+                or self.identity.response_model_revision not in ("pv-first-v1", "pv-first-dc-v2")
                 or self.catalog.charge_max_w != self.plant.charge_max_w
                 or self.catalog.discharge_max_w != self.plant.discharge_max_w):
             raise ValueError("configured scope/catalog/plant identity mismatch")
@@ -679,6 +679,7 @@ class Proposed:
     adapter_revision: str
     steps: tuple[Step, ...]
     token: int
+    relief_rules: tuple[ReliefRule, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1033,6 +1034,25 @@ def _validate_authority(state, authority):
         raise ValueError("catalog differs from local group surfaces/adapter")
 
 
+def policy_binding(state, operation_id):
+    from dataclasses import replace
+    session, catalog = state.policy, state.authority.catalog
+    direct = next((b for b in catalog.bindings if b.operation.id == operation_id),None)
+    if direct is not None:
+        return direct
+    if session is None or session.decision is None:
+        raise ValueError("candidate has no evaluated decision")
+    operation = next(r.operation for r in session.decision.ranked if r.operation.id == operation_id)
+    if __package__:
+        from .battery_execution_policy import operation_family
+    else:
+        from battery_execution_policy import operation_family
+    family=operation_family(session.compiled,operation)
+    base=next(b for b in catalog.bindings if b.operation==family)
+    target=tuple((key, operation.charge_limit_w if key==catalog.charge_key else operation.discharge_limit_w if key==catalog.discharge_key else value) for key,value in base.target)
+    return replace(base,operation=operation,target=target)
+
+
 def _validate_policy(state, compiled):
     authority, summary = state.authority, compiled.summary
     if authority is None or summary.identity.context != authority.identity or summary.permissions != authority.permissions or summary.plant != authority.plant or summary.supply_scope != authority.supply_scope:
@@ -1117,12 +1137,13 @@ def _refresh_policy_decision(state, now, effects):
     if isinstance(decision, OutsideCoverage):
         return _withdraw_policy(state, decision.reason, effects, refresh=decision.refresh_required)
     ranked = {r.operation.id: r for r in decision.ranked}
+    state = replace(state,policy=replace(session,decision=decision))
     # Local physical and native evidence can make an otherwise economic option
     # ineligible. Such changes bypass discretionary sustain immediately.
     if _scope_frame_valid(state, now) and _fresh(group.observation, now):
         eligible = {}
         for key, row in ranked.items():
-            local = next(b for b in state.authority.catalog.bindings if b.operation.id == key)
+            local = policy_binding(state,key)
             predicted = Envelope(row.possible_import_w, row.possible_export_w)
             drift = (row.operation.operation == "export" and _same(group.observation.controls, local.target)
                      and not _within(group.observation.envelope, predicted))
@@ -1137,7 +1158,7 @@ def _refresh_policy_decision(state, now, effects):
     incumbent = ranked.get(session.selected_id)
     selected = incumbent.operation.id if incumbent and incumbent.total_delta_sek <= best.total_delta_sek + .02 else best.operation.id
     decision = replace(decision, selected_id=selected)
-    binding = next(b for b in state.authority.catalog.bindings if b.operation.id == selected)
+    binding = policy_binding(state,selected)
     same_target = group.desired is not None and _same(group.desired.target, binding.target) and group.desired.native_guards == binding.native_guards
     if selected != session.selected_id and session.selected_id in ranked and not same_target:
         if selected != session.candidate_id:
@@ -1148,7 +1169,7 @@ def _refresh_policy_decision(state, now, effects):
                               candidate_observation_revision=conditions.revision)
         if now - session.candidate_since_ms < 5000 or session.candidate_observations < 2:
             selected = session.selected_id
-            binding = next(b for b in state.authority.catalog.bindings if b.operation.id == selected)
+            binding = policy_binding(state,selected)
     if selected == decision.selected_id:
         session = replace(session, candidate_id=None, candidate_since_ms=0,
                           candidate_observations=0, candidate_observation_revision=-1)
@@ -1192,7 +1213,7 @@ def _policy_send_valid(state, group, request, now):
     if isinstance(decision, OutsideCoverage) or state.conditions.identity != state.authority.identity or state.conditions.permissions != state.authority.permissions:
         return False
     chosen = next((r for r in decision.ranked if r.operation.id == session.selected_id), None)
-    binding = next((b for b in state.authority.catalog.bindings if b.operation.id == session.selected_id), None)
+    binding = policy_binding(state,session.selected_id) if session.selected_id else None
     return (chosen is not None and binding is not None and _same(request.target, binding.target)
             and request.native_guards == binding.native_guards
             and state.conditions.residual_load_w >= sum(e.observed.import_w for e in state.frame.external_demands)
@@ -1481,6 +1502,12 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                      and event.request_revision == request.revision and _fresh(group.observation, now_ms)
                      and event.observed_revision == group.observation.revision and event.adapter_revision == group.spec.adapter_revision)
             if valid and group.plan is None:
+                if len(event.relief_rules)>8 or any(rule.id not in {step.relief_id for step in event.steps} for rule in event.relief_rules):
+                    raise ValueError("adapter relief must belong to this bounded proposal")
+                retained={a.step.relief_id for a in group.attempts if a.step.relief_id}
+                rules=tuple(r for r in group.spec.relief_rules if r.id in retained) if event.relief_rules else group.spec.relief_rules
+                rules=tuple({r.id:r for r in (*rules,*event.relief_rules)}.values())
+                group=replace(group,spec=replace(group.spec,relief_rules=rules))
                 group = replace(group, plan=_validate_proposal(group, event, request, purpose), transition_work=None)
         elif isinstance(event, TransitionFailed):
             _integer(event.token, 1)

@@ -18,6 +18,10 @@ else:
     from home_runtime_checkpoint import encode_checkpoint, restore_checkpoint
 
 
+class DispatchRejected(Exception):
+    """The transport port rejected a write before calling its service."""
+
+
 @dataclass(frozen=True)
 class HostPorts:
     persist: Callable[[bytes], Awaitable[None]]
@@ -34,8 +38,8 @@ class HostPorts:
 class HomeHost:
     """One serialized reducer; slow transport returns identity-bound events.
 
-    The dispatch port must call its underlying transport before its first await:
-    final grant validation and starting a write must share the event-loop turn.
+    The dispatch port must revalidate after any awaited household lock. Final
+    grant validation and starting the transport must share the event-loop turn.
     The external arbiter must fence the old writer before confirming a grant.
     """
     def __init__(self, state: runtime.HomeState, ports: HostPorts):
@@ -157,6 +161,8 @@ class HomeHost:
             return (runtime.TransportResult(effect.group_id, effect.attempt_id, "not_sent", "host_final_fence"),)
         try:
             await self.ports.dispatch(effect)
+        except DispatchRejected:
+            return (runtime.TransportResult(effect.group_id,effect.attempt_id,"not_sent","transport_final_fence"),)
         except (Exception, asyncio.CancelledError):
             # Once transport has been invoked, an error/timeout/cancellation is
             # ambiguous. Never retry as if no physical write could have happened.
