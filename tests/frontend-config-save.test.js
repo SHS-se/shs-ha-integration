@@ -1121,3 +1121,21 @@ test('battery policy service failure offers diagnostics without an actuator setu
   assert.doesNotMatch(html, /Edit .* setup|data-action="edit-device"|mapped controls/);
   assert.equal((html.match(/Download diagnostics/g) || []).length, 1);
 });
+
+test('battery quarter renewal routes to diagnostics and clears when policy is active', () => {
+  const panel = splitPanel();
+  const battery = panel._data.devices[0];
+  battery.execution_status = { state: 'fault', reason: 'Waiting for battery policy for the current quarter',
+    next_step: 'Policy delivery retries automatically.', fix: { kind: 'diagnostics' } };
+  battery.policy_delivery = { state: 'blocked', reasons: ['source_quarter_expired'] };
+  const html = panel._renderAttention();
+  assert.match(html, /current quarter/);
+  assert.match(html, /retries automatically/);
+  assert.doesNotMatch(html, /Edit .* setup|data-action="edit-device"|mapped controls/);
+  assert.match(panel._policyDelivery(battery), /waiting for the next battery policy/);
+  assert.doesNotMatch(panel._policyDelivery(battery), /fresh plan/i);
+  battery.execution_status = { state: 'controlling', reason: 'Live battery policy connected' };
+  battery.battery_runtime = { policy_state: 'active' };
+  assert.doesNotMatch(panel._renderAttention(), /Waiting for battery policy/);
+  assert.equal(panel._policyDelivery(battery), '');
+});

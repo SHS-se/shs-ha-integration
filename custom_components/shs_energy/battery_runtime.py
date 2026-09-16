@@ -238,10 +238,18 @@ class BatteryRuntime:
             self._model,self._fits=conversion_model(windows,charge_efficiency=options['battery_charge_efficiency'],
                 discharge_efficiency=options['battery_discharge_efficiency'],source_revision=source)
             self._model_sources=source;self._model_at=self.now()
-        slots=plan['plans']['priority']['slots']
-        cut=exact_start(slots[0]);until=min(stamp(slots[0]['start'])+900000,stamp(plan['valid_until']))
+        # Statistics and membership reads may cross a quarter or plan replacement.
+        # Select the current captured slot after those awaits, preserving its timestamp.
+        plan,slot=self.coordinator.binding_plan_for('battery',options)
+        if not slot or self.controller.options()!=options:
+            self.coordinator._battery_native_context=None
+            raise BatteryPolicyUnavailableError({'reasons':['local_context_changed']})
+        all_slots=plan['plans']['priority']['slots']
+        slots=all_slots[all_slots.index(slot):]
+        cut=exact_start(slot);until=min(stamp(slot['start'])+900000,stamp(plan['valid_until']),stamp(plan['binding_until']))
         if not cut<=self.now()<until:
-            raise ValueError('A fresh plan generation is required for this quarter')
+            self.coordinator._battery_native_context=None
+            raise BatteryPolicyUnavailableError({'reasons':['plan_window_unavailable']})
         scope=SupplyScope.read(plan['battery_supply_scope'])
         capacity=(1-ratings['battery_min_soc'])*ratings['battery_capacity_kwh']
         cc=min(ratings['battery_charge_max_w'],surface['limits']['charge']['maximum_w'])
@@ -273,6 +281,15 @@ class BatteryRuntime:
         if policy is None:
             raise BatteryPolicyUnavailableError(exchange.snapshot())
         summary=policy.summary
+        current_plan,current_slot=self.coordinator.binding_plan_for('battery',options)
+        if (self.controller.options()!=options or not current_slot
+                or any(current_plan[key]!=plan[key] for key in ('plan_id','snapshot_id'))
+                or exact_start(current_slot)!=cut or not cut<=self.now()<until
+                or summary.identity.context.intent_revision!=plan['snapshot_id']
+                or summary.actuals_origin_ms!=cut or summary.from_ms!=cut
+                or not self.now()<summary.until_ms<=until):
+            self.coordinator._battery_native_context=None
+            raise BatteryPolicyUnavailableError({'reasons':['local_context_changed']})
         if summary.plant.conversion!=self._model or summary.supply_scope!=scope or summary.identity.context.catalog_revision!=catalog_revision:
             raise ValueError('delivered policy does not match current native model')
         if abs(exchange.energy_origin_kwh-ratings['battery_min_soc']*ratings['battery_capacity_kwh'])>1e-6:
@@ -507,6 +524,8 @@ class BatteryRuntime:
                 return False
         plan,slot=self.coordinator.binding_plan_for('battery',options)
         return bool(slot and self.coordinator.battery_policy_exchange.policy and self.host.state.policy
+                    and self.host.state.policy.compiled.summary.identity.context.intent_revision==plan['snapshot_id']
+                    and self.host.state.policy.compiled.summary.from_ms==exact_start(slot)
                     and self.coordinator.battery_policy_exchange.policy.summary.identity==self.host.state.policy.compiled.summary.identity)
 
     async def _dispatch(self,effect):

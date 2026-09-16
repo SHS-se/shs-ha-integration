@@ -60,9 +60,14 @@ class BatteryPolicyUnavailableError(ValueError):
     def __init__(self, status):
         error = status.get("error", {})
         invalid = error.get("code") in {"invalid_response_envelope", "invalid_policy_response"}
+        reasons = status.get("reasons", [])
+        window_wait = any(reason in {"local_context_changed", "policy_expired", "source_quarter_expired",
+                                    "native_context_expired_or_different_cut"} for reason in reasons)
         reason = ("Battery policy service returned an invalid response" if invalid else
                   "Battery policy service is unavailable" if status.get("state") == "unreachable" else
-                  "Battery policy is unavailable: " + ", ".join(status.get("reasons", [])))
+                  "Waiting for battery policy for the current quarter" if window_wait else
+                  "The accepted plan does not cover the current battery policy window" if "plan_window_unavailable" in reasons else
+                  "Battery policy is unavailable: " + ", ".join(reasons))
         if error.get("request_id"):
             reason += f" [request_id={error['request_id']}]"
         super().__init__(reason)

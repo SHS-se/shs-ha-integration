@@ -38,6 +38,25 @@ class DeliveryTests(unittest.TestCase):
 
 
 class ExchangeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_current_quarter_context_bypasses_previous_quarter_retry_delay(self):
+        exchange = await self.make()
+        boundary = self.context['native_context']['valid_until_ms']
+        self.now = boundary - 10000
+        async def unavailable(body):
+            self.calls.append(deepcopy(body))
+            raise OSError('offline')
+        exchange._request = unavailable
+        await exchange.refresh()
+        self.assertGreater(exchange._next_ms, boundary)
+        self.now = boundary
+        native = self.context['native_context']
+        native['source_cut_ms'] = boundary
+        native['valid_until_ms'] = boundary + 900000
+        native['future_permissions'] = native['future_permissions'][1:]
+        await exchange.refresh()
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.calls[-1]['native_context']['source_cut_ms'], boundary)
+
     async def make(self, native=True):
         self.context = {'plan_id': FIXTURE['request']['plan_id'], 'snapshot_id': FIXTURE['request']['snapshot_id'],
             'config_revision': 'test-config', 'native_context': deepcopy(FIXTURE['request']['native_context']) if native else None}

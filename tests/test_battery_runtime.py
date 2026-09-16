@@ -8,7 +8,7 @@ import sys
 from types import SimpleNamespace
 import unittest
 sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
-from battery_runtime import BatteryRuntime, exact_start, iso
+from battery_runtime import BatteryRuntime, exact_start, iso, stamp
 from battery_writer import BatteryWriterFence
 from battery_execution_policy import read_execution_policy
 
@@ -33,7 +33,7 @@ class Rig:
         for key in ('charge','discharge'):row('number.'+key,0,'kW',min=0,max=4,step=.001)
         for key in ('grid_import','grid_export','battery_charge','battery_discharge'):
             entity='sensor.'+key;self.options['entities_'+key]=[entity];row(entity,100,'kWh',state_class='total_increasing')
-        self.plan={'plan_id':'p','snapshot_id':'s','valid_until':iso(900000),'battery_supply_scope':{'kind':'whole_house'},
+        self.plan={'plan_id':'p','snapshot_id':'s','valid_until':iso(900000),'binding_until':iso(900000),'battery_supply_scope':{'kind':'whole_house'},
                    'plans':{'priority':{'slots':[{'start':iso(0),'duration_hours':(900000-10000)/3600000}]}}}
         self.store=Store();self.fence_store=Store()
         async def service(domain,name,data,blocking):
@@ -55,15 +55,20 @@ class Rig:
             return {e:[(datetime.fromtimestamp(5,timezone.utc),'100',deepcopy(self.rows[e]['attributes']))] for e in entities}
         self.coordinator=SimpleNamespace(_battery_entity_report=lambda e:deepcopy(self.rows.get(e)),async_battery_planned_devices=devices,
             async_battery_native_readback=readback,async_battery_loss_statistics=statistics,_state_history=history,async_update_listeners=lambda:None,
-            binding_plan_for=lambda device,options:(self.plan,self.plan['plans']['priority']['slots'][0]),_battery_native_context=None)
+            binding_plan_for=lambda device,options:(self.plan,next((s for s in self.plan['plans']['priority']['slots']
+                if stamp(s['start'])<=self.now<min(stamp(s['start'])+900000,stamp(self.plan['valid_until']),stamp(self.plan['binding_until']))),None)),_battery_native_context=None)
         async def refresh():
             c=self.coordinator._battery_native_context
-            if self.exchange.policy and c==self.exchange.context:return
+            if (self.exchange.policy and c==self.exchange.context
+                    and self.exchange.policy.summary.identity.context.intent_revision==self.plan['snapshot_id']):return
             wire=json.loads((Path(__file__).parent/'fixtures'/'battery-execution-runtime-synthetic.json').read_text())
-            wire['identity'].update(response_model_revision='pv-first-dc-v2',catalog_revision=c['catalog_revision'],scope_revision=c['catalog_revision'],revision=self.now)
+            wire['identity'].update(response_model_revision='pv-first-dc-v2',catalog_revision=c['catalog_revision'],scope_revision=c['catalog_revision'],revision=self.now,
+                                    intent_revision=self.plan['snapshot_id'])
             wire['plant'].update(cutoff_kwh=0,conversion=c['conversion'])
             wire['domain']=c['domain'];wire['operations']=c['operations'];wire['reference_id']='hold';wire['supply_scope']=c['supply_scope']
-            wire['actuals_origin_ms']=c['source_cut_ms'];wire['validity']['from_ms']=c['source_cut_ms']
+            wire['actuals_origin_ms']=c['source_cut_ms']
+            wire['validity']={'from_ms':c['source_cut_ms'],'refresh_after_ms':max(c['source_cut_ms'],c['valid_until_ms']-60000),
+                              'until_ms':c['valid_until_ms'],'boundary_ms':(c['source_cut_ms']//900000+1)*900000}
             wire['permissions']['battery_export_allowed']=False
             self.exchange.policy=read_execution_policy(json.dumps(wire));self.exchange.context=deepcopy(c)
         self.exchange=SimpleNamespace(refresh=refresh,policy=None,context=None,energy_origin_kwh=0,snapshot=lambda:{'reasons':[]},_next_ms=0)
@@ -80,7 +85,92 @@ class Rig:
         await self.runtime.refresh()
         if self.runtime.host:await asyncio.wait_for(self.runtime.host.idle(),2)
 
+    def extend_plan(self):
+        self.plan['valid_until']=self.plan['binding_until']=iso(2700000)
+        self.plan['plans']['priority']['slots'].extend(
+            {'start':iso(at),'duration_hours':.25} for at in (900000,1800000))
+
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_one_plan_rolls_across_quarters_and_reconciles_meter_origins(self):
+        for mode in ('controlling','control_verification'):
+            with self.subTest(mode=mode):
+                r=Rig(mode);r.extend_plan();await r.start()
+                try:
+                    for cut in (900000,1800000):
+                        previous=r.runtime.host.state.policy.watermark
+                        await r.advance(cut-r.now)
+                        self.assertNotEqual(r.runtime.snapshot()['state'],'fault',r.runtime.snapshot())
+                        session=r.runtime.host.state.policy
+                        self.assertEqual(session.compiled.summary.from_ms,cut)
+                        self.assertEqual(session.watermark.at_ms,cut)
+                        self.assertEqual(session.reconciled_from,previous)
+                        self.assertEqual(r.coordinator._battery_native_context['future_permissions'][0]['start'],iso(cut))
+                        self.assertEqual(session.compiled.summary.identity.context.intent_revision,'s')
+                        for _ in range(4):await r.advance()
+                    self.assertEqual(r.runtime.snapshot()['state'],'controlling' if mode=='controlling' else 'verified',r.runtime.snapshot())
+                    if mode=='control_verification':self.assertEqual(r.calls,[])
+                    else:self.assertTrue(r.calls)
+                finally:await r.runtime.close()
+
+    async def test_late_policy_reply_is_diagnostic_and_next_quarter_clears_the_fault(self):
+        r=Rig();r.extend_plan();original=r.exchange.refresh
+        async def late():
+            await original()
+            r.now=960000
+            for row in r.rows.values():row['last_reported']=iso(r.now)
+        r.exchange.refresh=late
+        await r.start()
+        try:
+            status=r.runtime.snapshot()
+            self.assertEqual(status['state'],'fault')
+            self.assertEqual(status['fix'],{'kind':'diagnostics'})
+            self.assertIn('current quarter',status['reason'])
+            self.assertEqual(r.calls,[])
+            self.assertIsNone(r.runtime.host)
+            r.exchange.refresh=original
+            await r.advance()
+            for _ in range(4):await r.advance()
+            self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+            self.assertNotIn('fix',r.runtime.snapshot())
+            self.assertEqual(r.runtime.host.state.policy.watermark.at_ms,900000)
+            self.assertTrue(r.calls)
+        finally:await r.runtime.close()
+
+    async def test_new_plan_during_exchange_cannot_admit_the_previous_policy(self):
+        r=Rig();original=r.exchange.refresh
+        async def replaced():
+            await original()
+            r.plan={**r.plan,'plan_id':'new-plan','snapshot_id':'new-snapshot'}
+        r.exchange.refresh=replaced
+        await r.start()
+        try:
+            self.assertEqual(r.calls,[])
+            self.assertEqual(r.runtime.snapshot()['fix'],{'kind':'diagnostics'})
+            r.exchange.refresh=original
+            await r.advance()
+            self.assertNotEqual(r.runtime.snapshot()['state'],'fault',r.runtime.snapshot())
+            self.assertEqual(r.runtime.host.state.policy.compiled.summary.identity.context.intent_revision,'new-snapshot')
+        finally:await r.runtime.close()
+
+    async def test_replacement_plan_moves_actuals_to_its_exact_partial_quarter_cut(self):
+        r=Rig('control_verification');r.extend_plan();await r.start()
+        try:
+            await r.advance(900000-r.now)
+            await r.advance()
+            previous=r.runtime.host.state.policy.watermark
+            cut=r.now
+            r.plan={**r.plan,'plan_id':'replacement','snapshot_id':'replacement-snapshot',
+                    'plans':{'priority':{'slots':[
+                        {'start':iso(900000),'duration_hours':(1800000-cut)/3600000},
+                        {'start':iso(1800000),'duration_hours':.25}]}}}
+            await r.advance()
+            self.assertNotEqual(r.runtime.snapshot()['state'],'fault',r.runtime.snapshot())
+            session=r.runtime.host.state.policy
+            self.assertEqual(session.watermark.at_ms,cut)
+            self.assertEqual(session.reconciled_from,previous)
+            self.assertEqual(session.compiled.summary.identity.context.intent_revision,'replacement-snapshot')
+        finally:await r.runtime.close()
+
     async def test_controlling_reaches_actual_service_boundary(self):
         r=Rig();await r.start()
         try:
@@ -197,6 +287,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await r.start()
         try:
             self.assertTrue(captured)
+            r.plan['snapshot_id']='superseding-snapshot'
+            self.assertFalse(r.runtime._can_send(captured[0]))
+            r.plan['snapshot_id']='s'
             r.runtime._closing=True
             self.assertFalse(r.runtime._can_send(captured[0]))
             r.runtime._closing=False

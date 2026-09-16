@@ -22,7 +22,7 @@ else:
     from runtime_json import read_runtime_json
     from battery_policy import COMPONENTS, canonical_json
 
-MAX_POLICY_BYTES = 128000
+MAX_POLICY_BYTES = 512000
 NUMERICAL_TOLERANCE_SEK = 1e-7
 PHYSICAL_TOLERANCE = 1e-9
 RESPONSE_MODEL = "pv-first-v1"
@@ -336,7 +336,7 @@ def _summary(source_json):
             or continuation["coordinate_order"] != ["energy_kwh", "previous_import_w"]):
         raise ValueError("unsupported continuation representation")
     cells = []
-    for raw in _arr(continuation["cells"], 1, 64):
+    for raw in _arr(continuation["cells"], 1, 640):
         _obj(raw, "id witness_id domain cost")
         cd = dict(raw["domain"])
         opened = tuple(_bool(v) for v in _arr(cd.pop("open_energy",[False,False]),2,2))

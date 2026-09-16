@@ -62,7 +62,7 @@ def proportional_supply(house_w, pv_w, eligible_gross_w):
         raise ValueError("eligible consumption exceeds the measured house total")
     attributed = min(pv, house) * eligible / house if house else 0.0
     return SupplyAccounting(house, pv, eligible, attributed,
-                            min(eligible - attributed, max(0.0, house - pv)))
+                            max(0.0, min(eligible - attributed, house - pv)))
 
 
 @dataclass(frozen=True)

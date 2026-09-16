@@ -1054,7 +1054,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (!status || status.state === "not_requested") return "";
     const messages = {
       native_context_required: "Waiting for verified battery response and measurement configuration.",
-      source_quarter_expired: "A fresh plan is needed for battery policy verification.",
+      source_quarter_expired: "The policy quarter ended; waiting for the next battery policy.",
+      plan_window_unavailable: "Waiting for an accepted plan covering the current quarter.",
+      native_context_expired_or_different_cut: "Waiting for battery policy for the current quarter.",
       runtime_admission_required: "Policy received; live measurement and control checks are still required.",
       local_context_changed: "Waiting for a policy matching the current configuration.",
       native_context_configuration_mismatch: "Battery response checks need to match the current configuration.",

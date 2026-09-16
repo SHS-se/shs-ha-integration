@@ -195,11 +195,11 @@ class BatteryExecutionPolicyTests(unittest.TestCase):
 
     def test_declared_maximum_cells_evaluate_with_bounded_work(self):
         wire=policy_wire(); cell=wire['continuation']['cells'][0]
-        wire['continuation']['cells']=[{**deepcopy(cell),'id':str(i)} for i in range(64)]
+        wire['continuation']['cells']=[{**deepcopy(cell),'id':str(i)} for i in range(640)]
         p=policy(wire); started=time.monotonic()
         for _ in range(100): self.assertNotIsInstance(evaluate_policy(p,conditions(p),1000),OutsideCoverage)
         self.assertLess(time.monotonic()-started,5)
-        wire['continuation']['cells'].append({**cell,'id':'65'})
+        wire['continuation']['cells'].append({**cell,'id':'641'})
         with self.assertRaises(ValueError): policy(wire)
 
 

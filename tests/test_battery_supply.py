@@ -36,6 +36,12 @@ class BatterySupplyTests(unittest.TestCase):
         self.assertEqual(proportional_supply(3000,4000,1000).house_supply_bound_w,0)
         self.assertEqual(proportional_supply(0,1000,0).house_supply_bound_w,0)
 
+    def test_decimal_surplus_cannot_create_negative_supply(self):
+        for house in (1000.067, 1100.123456, 1279.009, 3340.99):
+            for eligible in (house, house / 3):
+                for pv in (house, house + 500):
+                    self.assertEqual(proportional_supply(house, pv, eligible).house_supply_bound_w, 0)
+
     def test_unavailable_inputs_never_substitute_forecasts_or_ratings(self):
         scope=SupplyScope('selected',True)
         for changes in [dict(house=None),dict(pv=None),dict(planned_readings={}),dict(now_ms=5000),
