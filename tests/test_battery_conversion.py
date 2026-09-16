@@ -5,6 +5,14 @@ sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'/'shs_energy'
 from battery_conversion import Curve, Conversion, LossWindow, fit_branch, conversion_model, windows_from_statistics
 
 class ConversionTests(unittest.TestCase):
+    def test_tiny_commands_cannot_erase_installation_overhead(self):
+        m=Conversion('diagnostics18',Curve(.95,0),Curve(.95,0),Curve(.9885020822325284,162.58072673773927),125.82819513666756)
+        idle=m.net_grid(0,0,0,808)
+        for watts in (1,65,73,150,1000):
+            self.assertAlmostEqual(m.net_grid(watts,0,0,808)-idle,watts/.95)
+            self.assertLessEqual(idle-m.net_grid(0,watts,0,808),watts)
+        self.assertAlmostEqual(m.net_grid(0,65,0,808),808+162.58072673773927-.9885020822325284*65)
+
     def test_fits_fixed_overhead_separately_from_gain(self):
         rows=[LossWindow(i*300000,(i+1)*300000,'discharge',x/12,(.987*x-161)/12,'sources',(.013*x+161)/12) for i,x in enumerate(range(600,3600,300))]
         fit=fit_branch(rows,'discharge')

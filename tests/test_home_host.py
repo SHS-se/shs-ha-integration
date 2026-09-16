@@ -5,12 +5,27 @@ import sys
 import unittest
 sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components/shs_energy'))
 from home_host import HomeHost, HostPorts
-from home_runtime import PolicyOffered, Proposed, Step, Guard, Observed, Observation
+from home_runtime import PolicyOffered, Proposed, Step, Guard, Observed, Observation, TransportResult, WriteConfirmed
 from home_runtime_checkpoint import decode_checkpoint, encode_checkpoint
 from test_home_runtime_policy import Harness
 
 
 class HomeHostTests(unittest.IsolatedAsyncioTestCase):
+    def test_only_explicit_matching_readback_can_close_the_effect_window_early(self):
+        from dataclasses import replace
+        h=Harness();h.offer();h.prepare();h.durable()
+        attempt=h.group.attempts[0]
+        h.event(TransportResult(h.group.spec.id,attempt.id,'accepted','synthetic-ack'))
+        h.observe(attempt.step.after)
+        self.assertTrue(any(a.id==attempt.id for a in h.group.attempts))
+        physical=replace(h.group.observation,revision=h.group.observation_revision+1)
+        with self.assertRaisesRegex(ValueError,'matching physical registers'):
+            h.event(WriteConfirmed(h.group.spec.id,attempt.id,replace(physical,controls=attempt.step.before)))
+        self.assertTrue(any(a.id==attempt.id for a in h.group.attempts))
+        self.assertLess(h.now,attempt.latest_effect_ms)
+        h.event(WriteConfirmed(h.group.spec.id,attempt.id,physical))
+        self.assertFalse(any(a.id==attempt.id for a in h.group.attempts))
+
     async def make_host(self, *, fail_persist=False, grant=True, fail_send=False):
         h=Harness(); writes=[]; durable=[]; reports=[]
         async def persist(data):
@@ -59,6 +74,16 @@ class HomeHostTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(host._fault, OSError)
         with self.assertRaises(RuntimeError):
             await host.accept(PolicyOffered(h.compiled,h.watermark))
+
+    async def test_adapter_fault_keeps_explanation_in_durable_checkpoint(self):
+        from dataclasses import replace
+        host,h,_,durable,reports=await self.make_host()
+        async def failed(effect):raise ValueError('Unsupported inverter register combination: charging mode has no writable ceiling')
+        host.ports=replace(host.ports,transition=failed)
+        await host.accept(PolicyOffered(h.compiled,h.watermark));await host.idle()
+        saved=decode_checkpoint(durable[-1])
+        self.assertIn('no writable ceiling',saved.groups[0].transition_work.reason)
+        self.assertTrue(any('no writable ceiling' in row[1] for row in reports))
 
     async def test_live_arbiter_is_checked_even_when_reducer_grant_was_valid(self):
         host,h,writes,_,_=await self.make_host(grant=False)

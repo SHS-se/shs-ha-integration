@@ -67,9 +67,18 @@ class Conversion:
         return self.surplus_charge.input(solar), self.grid_charge.input(max(0.0, dc_w - solar))
 
     def net_grid(self, charge_dc_w, discharge_dc_w, pv_w, house_w):
-        """One site balance; active-curve overhead is not added twice."""
+        """Installation overhead persists across idle and active operation.
+
+        Directional fits include fixed overhead; efficiency-only configured
+        curves do not. Keep the measured idle floor without counting fitted
+        overhead twice, including discharge below the curve's zero crossing.
+        """
         solar, grid = self.charge_inputs(charge_dc_w, pv_w, house_w)
-        idle = self.idle_loss_w if charge_dc_w == discharge_dc_w == 0 else 0.0
+        charge_fixed = ((self.surplus_charge.overhead_w / self.surplus_charge.gain if solar > 0 else 0)
+                        + (self.grid_charge.overhead_w / self.grid_charge.gain if grid > 0 else 0))
+        discharge_fixed = self.discharge.overhead_w if discharge_dc_w > 0 else 0
+        represented = charge_fixed + min(discharge_fixed, self.discharge.gain * discharge_dc_w)
+        idle = max(self.idle_loss_w, charge_fixed + discharge_fixed) - represented
         return house_w - pv_w + solar + grid - self.discharge.output(discharge_dc_w) + idle
 
 
@@ -153,7 +162,8 @@ def conversion_model(windows, *, charge_efficiency, discharge_efficiency, source
     if not 0 <= idle_w <= 10000:
         raise ValueError("inconsistent idle-loss observations")
     fits["idle"]={"windows":len(idle),"model_source":"measured" if len(idle)>=6 else "unmeasured_zero", "overhead_w":idle_w}
-    identity = {"source": source_revision, "curves": {k:asdict(v) for k,v in curves.items()}, "idle_loss_w": idle_w}
+    identity = {"accounting": "installation-overhead-floor-v1", "source": source_revision,
+                "curves": {k:asdict(v) for k,v in curves.items()}, "idle_loss_w": idle_w}
     revision = "sha256:"+sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()
     return Conversion(revision, curves['grid_charge'], curves['surplus_charge'], curves['discharge'], idle_w), fits
 

@@ -48,6 +48,11 @@ def _identity(value):
         raise ValueError("identity must be a nonempty string of at most 128 characters")
 
 
+def _reason(value):
+    if type(value) is not str or not 0 < len(value) <= 2000:
+        raise ValueError("failure reason must be a nonempty string of at most 2000 characters")
+
+
 def _pairs(values):
     if type(values) is not tuple or len(values) > 32 or len({v[0] for v in values}) != len(values):
         raise ValueError("at most 32 uniquely named values are supported")
@@ -363,7 +368,7 @@ class TransitionFailure:
 
     def __post_init__(self):
         _integer(self.attempt, 1)
-        _identity(self.reason)
+        _reason(self.reason)
         if self.attempt > 32:
             raise ValueError("invalid transition retry count")
         if self.retry_at_ms is not None:
@@ -655,6 +660,14 @@ class FrameObserved:
 
 
 @dataclass(frozen=True)
+class MeasurementsObserved:
+    """One physical capture: never decide using half of a new measurement."""
+    observed: Observed
+    frame: Frame
+    conditions: ExecutionConditions
+
+
+@dataclass(frozen=True)
 class AuthorityChanged:
     group_id: str
     mode: Mode
@@ -709,11 +722,19 @@ class TransportResult:
 
 
 @dataclass(frozen=True)
+class WriteConfirmed:
+    """Transport completed, then an explicit physical read matched its registers."""
+    group_id: str
+    attempt_id: str
+    observation: Observation
+
+
+@dataclass(frozen=True)
 class Tick:
     pass
 
 
-Event = Union[AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, PolicyOffered, MeterObserved, LedgerPruned, Observed, FrameObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, Tick]
+Event = Union[AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, PolicyOffered, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, WriteConfirmed, Tick]
 
 
 @dataclass(frozen=True)
@@ -1147,7 +1168,9 @@ def _refresh_policy_decision(state, now, effects):
             predicted = Envelope(row.possible_import_w, row.possible_export_w)
             drift = (row.operation.operation == "export" and _same(group.observation.controls, local.target)
                      and not _within(group.observation.envelope, predicted))
-            if _room(state, group, predicted, now) and _guards(local.native_guards, group.observation) and not drift:
+            # Native transition guards pause writes in _drive/authorize_send.
+            # A settling inverter does not invalidate the economic policy.
+            if _room(state, group, predicted, now) and not drift:
                 eligible[key] = row
         ranked = eligible
         if not ranked:
@@ -1358,11 +1381,43 @@ def _drive(state, now, durable_revision, effects):
     return state
 
 
+def _observe_measurement(state, event, now_ms, rollback):
+    if isinstance(event, ConditionsObserved):
+        conditions = event.conditions
+        if conditions.at_ms > now_ms or conditions.at_ms < state.resume_after_ms:
+            raise ValueError("conditions outside current clock epoch")
+        if conditions.revision == state.conditions_revision and state.conditions is not None and conditions != state.conditions:
+            raise ValueError("conflicting conditions revision")
+        if conditions.revision > state.conditions_revision:
+            if state.conditions and conditions.at_ms < state.conditions.at_ms:
+                raise ValueError("conditions time regressed")
+            state = replace(state, conditions=None if rollback else conditions, conditions_revision=conditions.revision)
+    elif isinstance(event, FrameObserved):
+        if event.frame.at_ms > now_ms or (not rollback and event.frame.at_ms < state.resume_after_ms):
+            raise ValueError("future physical frame")
+        if state.frame is None or event.frame.revision > state.frame.revision:
+            state = replace(state, frame=None if rollback else event.frame)
+    elif isinstance(event, Observed):
+        group = next((g for g in state.groups if g.spec.id == event.group_id), None)
+        if group is None:
+            raise ValueError("unknown actuator group")
+        observation = event.observation
+        if observation.at_ms > now_ms or (not rollback and observation.at_ms < state.resume_after_ms) or set(dict(observation.controls)) != set(group.spec.control_keys) or not _within(observation.envelope, group.spec.maximum):
+            raise ValueError("observation exceeds its declared group scope")
+        if observation.revision > group.observation_revision:
+            if group.observation and observation.at_ms < group.observation.at_ms:
+                raise ValueError("observation time regressed")
+            group = replace(group, observation=None if rollback else observation, observation_revision=observation.revision)
+
+        state = _put(state, group)
+    return state
+
+
 def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState, tuple[Effect, ...]]:
     """Process one validated domain event; performs no I/O and never reads a clock."""
     if type(now_ms) is not int or now_ms < 0:
         raise ValueError("now_ms must be an absolute nonnegative integer")
-    if not isinstance(event, (AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, PolicyOffered, MeterObserved, LedgerPruned, Observed, FrameObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, Tick)):
+    if not isinstance(event, (AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, PolicyOffered, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, WriteConfirmed, Tick)):
         raise ValueError("unsupported runtime event")
     previous = state
     rollback = now_ms < state.last_time_ms
@@ -1384,16 +1439,16 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 raise ValueError("changed execution scope needs a new identity")
             state = replace(state, authority=event.authority, authority_revision=event.revision, conditions=None,
                             groups=tuple(replace(_supersede(g), grant_confirmed=False) for g in state.groups))
-    elif isinstance(event, ConditionsObserved):
-        conditions = event.conditions
-        if conditions.at_ms > now_ms or conditions.at_ms < state.resume_after_ms:
-            raise ValueError("conditions outside current clock epoch")
-        if conditions.revision == state.conditions_revision and state.conditions is not None and conditions != state.conditions:
-            raise ValueError("conflicting conditions revision")
-        if conditions.revision > state.conditions_revision:
-            if state.conditions and conditions.at_ms < state.conditions.at_ms:
-                raise ValueError("conditions time regressed")
-            state = replace(state, conditions=None if rollback else conditions, conditions_revision=conditions.revision)
+    elif isinstance(event, (Observed, FrameObserved, ConditionsObserved, MeasurementsObserved)):
+        if isinstance(event, MeasurementsObserved):
+            if not (event.observed.observation.at_ms == event.frame.at_ms == event.conditions.at_ms
+                    and event.observed.observation.valid_until_ms == event.frame.valid_until_ms == event.conditions.valid_until_ms):
+                raise ValueError("measurement capture timestamps differ")
+            events = (event.observed, FrameObserved(event.frame), ConditionsObserved(event.conditions))
+        else:
+            events = (event,)
+        for measurement in events:
+            state = _observe_measurement(state, measurement, now_ms, rollback)
     elif isinstance(event, PolicyOffered):
         try:
             state = _accept_policy(state, event, now_ms)
@@ -1419,11 +1474,6 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 state = replace(state, ledger=ledger, policy=replace(state.policy, settled_actuals=settled))
             else:
                 state = replace(state, ledger=prune_ledger(state.ledger, event.before_ms))
-    elif isinstance(event, FrameObserved):
-        if event.frame.at_ms > now_ms or (not rollback and event.frame.at_ms < state.resume_after_ms):
-            raise ValueError("future physical frame")
-        if state.frame is None or event.frame.revision > state.frame.revision:
-            state = replace(state, frame=None if rollback else event.frame)
     elif isinstance(event, (JournalDurable, JournalFailed)):
         if type(event.revision) is not int or not 0 <= event.revision <= state.revision:
             raise ValueError("invalid journal revision")
@@ -1435,15 +1485,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
         group = next((g for g in state.groups if g.spec.id == event.group_id), None)
         if group is None:
             raise ValueError("unknown actuator group")
-        if isinstance(event, Observed):
-            observation = event.observation
-            if observation.at_ms > now_ms or (not rollback and observation.at_ms < state.resume_after_ms) or set(dict(observation.controls)) != set(group.spec.control_keys) or not _within(observation.envelope, group.spec.maximum):
-                raise ValueError("observation exceeds its declared group scope")
-            if observation.revision > group.observation_revision:
-                if group.observation and observation.at_ms < group.observation.at_ms:
-                    raise ValueError("observation time regressed")
-                group = replace(group, observation=None if rollback else observation, observation_revision=observation.revision)
-        elif isinstance(event, GrantConfirmed):
+        if isinstance(event, GrantConfirmed):
             grant = event.grant
             if grant.epoch < group.grant_epoch or (grant.epoch == group.grant_epoch and group.grant is None):
                 effects.append(Report(group.spec.id, "stale_writer_grant"))
@@ -1511,7 +1553,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 group = replace(group, plan=_validate_proposal(group, event, request, purpose), transition_work=None)
         elif isinstance(event, TransitionFailed):
             _integer(event.token, 1)
-            _identity(event.reason)
+            _reason(event.reason)
             if event.outcome not in ("retryable", "unsupported"):
                 raise ValueError("invalid transition failure outcome")
             job = group.transition_work
@@ -1520,6 +1562,21 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                                            unsupported=event.outcome == "unsupported")
                 group = replace(group, transition_work=work)
                 effects.append(Report(group.spec.id, event.reason))
+        elif isinstance(event, WriteConfirmed):
+            attempt = next((a for a in group.attempts if a.id == event.attempt_id), None)
+            observation = event.observation
+            if (attempt is None or attempt.stage != "accepted" or not _fresh(observation, now_ms)
+                    or observation.revision <= attempt.observed_revision
+                    or observation.at_ms < attempt.prepared_at_ms
+                    or not _same(observation.controls, attempt.step.after)):
+                raise ValueError("write confirmation needs accepted transport and fresh matching physical registers")
+            state = _observe_measurement(state, Observed(event.group_id, observation), now_ms, rollback)
+            group = next(g for g in state.groups if g.spec.id == event.group_id)
+            plan = group.plan
+            if plan is not None and attempt.generation == plan.generation and attempt.step_index == plan.index:
+                plan = replace(plan, index=plan.index + 1)
+            group = replace(group, plan=plan, attempts=tuple(a for a in group.attempts if a.id != attempt.id),
+                            retry_not_before_ms=now_ms, consecutive_attempts=0)
         elif isinstance(event, TransportResult):
             _identity(event.evidence)
             if event.outcome not in ("not_sent", "accepted", "ambiguous"):

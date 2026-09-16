@@ -99,6 +99,89 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_changing_house_load_is_one_capture_without_policy_withdrawal(self):
+        r=Rig();await r.start();reasons=[]
+        async def renew(state,reason):reasons.append(reason);return ()
+        r.runtime.host.ports=replace(r.runtime.host.ports,renew=renew)
+        try:
+            for watts in (1010,980,1100,800,1250):
+                r.rows['sensor.house']['state']=str(watts)
+                await r.advance()
+                state=r.runtime.host.state
+                self.assertEqual(state.policy.status,'active')
+                self.assertFalse(state.groups[0].release_pending)
+                self.assertEqual(state.conditions.residual_load_w,watts)
+                self.assertEqual(state.frame.external_demands[0].observed.import_w,watts)
+            self.assertNotIn('external_demand_missing',reasons)
+        finally:await r.runtime.close()
+
+    async def test_invalid_capture_rejects_all_measurements_atomically(self):
+        import home_runtime as rt
+        r=Rig();await r.start()
+        try:
+            r.runtime._last_capture=None
+            events=await r.runtime._observe_batch(r.runtime.host.state.groups[0].spec.id)
+            capture=events[0]
+            self.assertIsInstance(capture,rt.MeasurementsObserved)
+            invalid=replace(capture,conditions=replace(capture.conditions,at_ms=capture.conditions.at_ms+1))
+            before=r.runtime.host.state
+            with self.assertRaisesRegex(ValueError,'capture timestamps'):
+                await r.runtime.host.accept(invalid)
+            self.assertEqual(r.runtime.host.state,before)
+        finally:await r.runtime.close()
+
+    async def test_confirmed_registers_finish_transition_without_timeout_waits(self):
+        r=Rig();started=r.now;await r.start()
+        try:
+            for _ in range(3):await r.advance(5000)
+            group=r.runtime.host.state.groups[0]
+            self.assertEqual(group.status,'adopted')
+            self.assertFalse(group.attempts)
+            self.assertEqual(dict(group.observation.controls),dict(group.desired.target))
+            self.assertLess(r.now-started,75000)
+            self.assertGreater(r.readbacks,1)
+        finally:await r.runtime.close()
+
+    async def test_failed_physical_readback_keeps_the_write_uncertain(self):
+        r=Rig();original=r.coordinator.async_battery_native_readback
+        async def readback(entities):
+            if r.calls:raise RuntimeError('Modbus read failed: inverter unavailable')
+            await original(entities)
+        r.coordinator.async_battery_native_readback=readback
+        await r.start()
+        try:
+            await r.advance(5000)
+            attempts=r.runtime.host.state.groups[0].attempts
+            self.assertTrue(attempts)
+            self.assertEqual(attempts[0].stage,'ambiguous')
+            self.assertGreater(attempts[0].latest_effect_ms,r.now)
+            status=r.runtime.snapshot()
+            self.assertEqual(status['state'],'fault')
+            self.assertIn('Modbus read failed: inverter unavailable',status['reason'])
+            self.assertEqual(status['fix'],{'kind':'diagnostics'})
+            self.assertTrue(any('Modbus read failed' in f['reason'] for f in status['fault_history']))
+            r.coordinator.async_battery_native_readback=original
+            for _ in range(6):await r.advance()
+            status=r.runtime.snapshot()
+            self.assertEqual(status['state'],'controlling',status)
+            self.assertIsNone(status['runtime_reason'])
+            self.assertTrue(any('Modbus read failed' in f['reason'] for f in status['fault_history']))
+        finally:await r.runtime.close()
+
+    async def test_settling_terminal_power_pauses_writes_without_withdrawing_policy(self):
+        r=Rig();r.rows['sensor.battery']['state']='150'
+        await r.start()
+        try:
+            self.assertEqual(r.runtime.host.state.policy.status,'active')
+            self.assertEqual(r.runtime.snapshot()['state'],'pending')
+            self.assertIn('settle',r.runtime.snapshot()['reason'])
+            self.assertEqual(r.calls,[])
+            r.rows['sensor.battery']['state']='0'
+            for _ in range(3):await r.advance(5000)
+            self.assertEqual(r.runtime.snapshot()['state'],'controlling')
+            self.assertFalse(any(f['reason']=='physical_scope_uncovered' for f in r.runtime.snapshot()['fault_history']))
+        finally:await r.runtime.close()
+
     async def test_one_plan_rolls_across_quarters_and_reconciles_meter_origins(self):
         for mode in ('controlling','control_verification'):
             with self.subTest(mode=mode):
@@ -222,6 +305,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                     for _ in range(5):await r.advance()
                     self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
                     self.assertNotIn('fix',r.runtime.snapshot())
+                    self.assertTrue(any(entity in f['reason'] for f in r.runtime.snapshot()['fault_history']))
                     self.assertTrue(r.calls)
                 finally:await r.runtime.close()
 

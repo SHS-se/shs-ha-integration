@@ -1154,3 +1154,36 @@ test('battery quarter renewal routes to diagnostics and clears when policy is ac
   assert.doesNotMatch(panel._renderAttention(), /Waiting for battery policy/);
   assert.equal(panel._policyDelivery(battery), '');
 });
+
+test('diagnostic summary retains fault reasons, correction steps and recovered history', () => {
+  const panel = splitPanel();
+  panel._data.operation = { state: 'ready' };
+  panel._data.diagnostics = {};
+  panel._data.readiness = {};
+  const battery = panel._data.devices[0];
+  const reason = 'Write uncertain: number.charge=73: RuntimeError: Modbus read failed';
+  battery.execution_status = { state: 'fault', reason, next_step: 'Check the inverter connection.',
+    fix: { kind: 'diagnostics' }, retry_automatically: true };
+  battery.battery_runtime = { state: 'fault', reason, fault_history: [{ at: '2026-09-16T19:15:01Z', reason }],
+    pending_commands: [{ entity_id: 'number.charge', value: 73, stage: 'ambiguous' }] };
+  let summary = panel._diagnosticSummary();
+  assert.equal(summary.devices[0].reason, reason);
+  assert.equal(summary.devices[0].next_step, 'Check the inverter connection.');
+  assert.equal(summary.attention.find(x => x.detail === reason).severity, 'error');
+  battery.execution_status = { state: 'controlling', reason: 'Battery settings confirmed' };
+  summary = panel._diagnosticSummary();
+  assert.equal(summary.devices[0].battery_runtime.fault_history[0].reason, reason);
+});
+
+test('battery status explains pending settings and never labels a known command state unavailable', () => {
+  const panel = makePanel();
+  const html = panel._batteryLiveInputs({ battery_runtime: {
+    state: 'pending', reason: 'Waiting for physical confirmation of battery settings', command_state: 'reconciling',
+    requested_settings: { mode: 'Command Charging (PV First)', charge_limit_w: 73, discharge_limit_w: 0 },
+    pending_commands: [{ entity_id: 'number.charge', value: 73, stage: 'accepted' }],
+  } });
+  assert.match(html, /Waiting for physical confirmation/);
+  assert.match(html, /Charge limit: 73 W/);
+  assert.match(html, /Awaiting confirmation: number.charge: 73/);
+  assert.doesNotMatch(html, /Not available|Live battery policy connected/);
+});

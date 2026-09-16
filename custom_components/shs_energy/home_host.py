@@ -25,7 +25,7 @@ class DispatchRejected(Exception):
 @dataclass(frozen=True)
 class HostPorts:
     persist: Callable[[bytes], Awaitable[None]]
-    dispatch: Callable[[runtime.Send], Awaitable[None]]
+    dispatch: Callable[[runtime.Send], Awaitable[Optional[runtime.Observation]]]
     grant_is_current: Callable[[runtime.Send], bool]
     observe: Callable[[str], Awaitable[tuple[runtime.Event, ...]]]
     confirm_authority: Callable[[str], Awaitable[tuple[runtime.Event, ...]]]
@@ -151,8 +151,10 @@ class HomeHost:
         try:
             return (await self.ports.transition(effect),)
         except Exception as error:
+            reason=f"Transition failed: {type(error).__name__}: {error}"
+            self.ports.report(effect.group_id, reason)
             return (runtime.TransitionFailed(effect.group_id, effect.token, "unsupported",
-                                             f"adapter:{type(error).__name__}"),)
+                                             reason[:2000]),)
 
     async def _send(self, effect):
         now = self.ports.now_ms()
@@ -160,14 +162,19 @@ class HomeHost:
                 or not self.ports.grant_is_current(effect)):
             return (runtime.TransportResult(effect.group_id, effect.attempt_id, "not_sent", "host_final_fence"),)
         try:
-            await self.ports.dispatch(effect)
-        except DispatchRejected:
+            confirmation = await self.ports.dispatch(effect)
+        except DispatchRejected as error:
+            self.ports.report(effect.group_id, f"Write not sent: {effect.key}: {error}")
             return (runtime.TransportResult(effect.group_id,effect.attempt_id,"not_sent","transport_final_fence"),)
-        except (Exception, asyncio.CancelledError):
+        except (Exception, asyncio.CancelledError) as error:
             # Once transport has been invoked, an error/timeout/cancellation is
             # ambiguous. Never retry as if no physical write could have happened.
+            self.ports.report(effect.group_id, f"Write uncertain: {effect.key}={effect.value}: {type(error).__name__}: {error}")
             return (runtime.TransportResult(effect.group_id, effect.attempt_id, "ambiguous", "host_transport_uncertain"),)
-        return (runtime.TransportResult(effect.group_id, effect.attempt_id, "accepted", "host_service_acknowledged"),)
+        events = (runtime.TransportResult(effect.group_id, effect.attempt_id, "accepted", "host_service_acknowledged"),)
+        if confirmation is not None:
+            events += (runtime.WriteConfirmed(effect.group_id, effect.attempt_id, confirmation),)
+        return events
 
     async def idle(self):
         """Drain current work in deterministic tests, without waiting for timers."""

@@ -105,6 +105,8 @@ class BatteryRuntime:
         self._status={'state':'pending','reason':'Waiting for current battery policy'}
         self._last_error=None;self._external_pending={};self._frame_pending={};self._releasing=False
         self._native_checked=False
+        self._fault_history=[]
+        self._observation_error=None
         controller.battery_runtime=self
 
     async def open(self):
@@ -153,6 +155,7 @@ class BatteryRuntime:
                 await self._release('Recovering previous battery commands')
             except Exception as error:
                 self._status={'state':'fault','reason':f'Battery recovery pending: {error}'}
+                self._record_fault('recovery',self._status['reason'])
 
     async def _open_host(self,state,checkpoint=None):
         ports=HostPorts(self._persist,self._dispatch,self._can_send,self._observe,self._confirm,self._transition,self._renew,self._report,self.now)
@@ -172,13 +175,48 @@ class BatteryRuntime:
 
     def snapshot(self):
         value={**self._status,'loss_model':self._model.wire() if self._model else None,'loss_evidence':self._fits,
-               'runtime_reason':getattr(self,'_runtime_reason',None),'measurements':getattr(self,'_measurements',None),'writer_current':self.coordinator.battery_writer.is_current(self._grant,self.identity())}
+               'runtime_reason':getattr(self,'_runtime_reason',None),'measurements':getattr(self,'_measurements',None),'writer_current':self.coordinator.battery_writer.is_current(self._grant,self.identity()),
+               'fault_history':[dict(row) for row in self._fault_history], 'fault_history_scope':'Last 64 distinct faults since integration load'}
         if self.host:
             group=self.host.state.groups[0];session=self.host.state.policy
             value.update(command_state=group.status,mode=group.mode,
                 selected_operation=session.selected_id if session else None,
                 policy_state=session.status if session else None,
                 pending_writes=len(group.attempts),native_target=dict(group.desired.target) if group.desired else None)
+            value['pending_commands']=[{'entity_id':a.step.key,'value':a.step.value,'stage':a.stage,
+                'started_at':iso(a.prepared_at_ms),'confirmation_deadline':iso(a.confirmation_deadline_ms),
+                'uncertain_until':iso(a.latest_effect_ms)} for a in group.attempts]
+            if group.desired:
+                target=dict(group.desired.target)
+                value['requested_settings']={'mode':target[self._options['battery_mode_entity']],
+                    'charge_limit_w':target[self._options['battery_charge_limit_entity']],
+                    'discharge_limit_w':target[self._options['battery_discharge_limit_entity']]}
+            if self._status['state']!='fault' and group.mode=='controlling':
+                uncertain=next((a for a in group.attempts if a.stage=='ambiguous'),None)
+                if self.host._fault:
+                    value.update(state='fault',reason=f'Battery command journal failed: {self.host._fault}')
+                elif self._observation_error:
+                    value.update(state='fault',reason=self._observation_error)
+                elif uncertain:
+                    reason=next((f['reason'] for f in reversed(self._fault_history) if uncertain.step.key in f['reason']),None)
+                    value.update(state='fault',reason=reason or f'{uncertain.step.key}: write of {uncertain.step.value} is unconfirmed; waiting for fresh physical register readings')
+                elif isinstance(group.transition_work,rt.TransitionFailure):
+                    value.update(state='fault',reason=group.transition_work.reason)
+                elif session and session.status=='active' and group.status!='adopted':
+                    reason={
+                        'reconciling':'Waiting for physical confirmation of battery settings',
+                        'native_guard_blocked':'Waiting for measured battery power to settle within the current limits',
+                        'awaiting_observation':'Waiting for fresh battery and household measurements',
+                        'awaiting_grant':'Waiting for exclusive battery write permission',
+                        'physical_scope_blocked':'Battery command is blocked by the measured household power limits',
+                    }.get(group.status,'Applying battery settings; physical confirmation is pending')
+                    value.update(state='pending',reason=reason)
+                elif session and session.status=='active' and group.status=='adopted':
+                    value.update(state='controlling',reason='Battery settings confirmed; live policy active',runtime_reason=None)
+                elif session and session.status not in ('active','diagnostic_only'):
+                    value.update(state='limited',reason='Battery policy is waiting for an executable choice: '+str(getattr(self,'_runtime_reason',None) or session.status))
+            if value['state']=='fault' and 'fix' not in value:
+                value.update(fix={'kind':'diagnostics'},next_step='Check the reported source or command failure. Download diagnostics if it persists.',retry_automatically=True)
             if session and session.decision:
                 value['alternatives']=[{'operation':r.operation.id,'delta_sek':r.total_delta_sek,'energy_end_kwh':r.energy_end_kwh} for r in session.decision.ranked]
         return value
@@ -191,8 +229,18 @@ class BatteryRuntime:
             'options':self._options,'devices':self._devices,'model_sources':self._model_sources,'ratings':self._ratings})
 
     def _report(self,group,reason):
-        if reason!='meter_recorded':
+        if reason not in ('meter_recorded','duplicate_meter_sample','stale_meter_sample'):
             self._runtime_reason=reason
+            self._record_fault('runtime',reason)
+
+    def _record_fault(self,source,reason):
+        now=iso(self.now())
+        if self._fault_history and (self._fault_history[-1]['source'],self._fault_history[-1]['reason'])==(source,reason):
+            self._fault_history[-1].update(last_at=now,count=self._fault_history[-1]['count']+1)
+        else:
+            self._fault_history.append({'at':now,'last_at':now,'count':1,'source':source,'reason':reason,
+                'source_cut':iso(self._source_cut) if self._source_cut is not None else None})
+            del self._fault_history[:-64]
 
     async def refresh(self):
         if self._closed or self._closing or self._lock.locked():
@@ -203,6 +251,7 @@ class BatteryRuntime:
                 self._last_error=None
             except Exception as error:
                 self._last_error=f'{type(error).__name__}: {error}'
+                self._record_fault('refresh',self._last_error)
                 self._status={'state':'fault','reason':self._last_error}
                 if self.host and (self.host.state.groups[0].owned or self.host.state.groups[0].attempts):
                     try:
@@ -414,7 +463,14 @@ class BatteryRuntime:
 
     async def _observe(self,group_id):
         async with self._observe_lock:
-            return await self._observe_batch(group_id)
+            try:
+                events=await self._observe_batch(group_id)
+            except Exception as error:
+                self._observation_error=f'{type(error).__name__}: {error}'
+                self._record_fault('observation',self._observation_error)
+                raise
+            self._observation_error=None
+            return events
 
     async def _observe_batch(self,group_id):
         if self._closed or self.host is None or self.host.state.authority is None:
@@ -494,7 +550,7 @@ class BatteryRuntime:
         self._measurements={'physical_response':response,'requested_direction':requested,
             'response_matches_direction':response==requested if requested else None,**asdict(accounting),'battery_dc_w':battery,'grid_w':grid,'at_ms':min(times),'valid_until_ms':valid}
         self._last_capture=capture
-        return (observed,frame,conditions)
+        return (rt.MeasurementsObserved(observed,frame.frame,conditions.conditions),)
 
     def _release_request(self,group,target=None):
         previous=group.release
@@ -526,6 +582,8 @@ class BatteryRuntime:
     async def _renew(self,state,reason):
         # One periodic owner performs network exchanges and installs the result.
         self._runtime_reason=reason
+        if reason!='refresh_due':
+            self._record_fault('policy',reason)
         self.coordinator.battery_policy_exchange._next_ms=0
         return ()
 
@@ -570,6 +628,26 @@ class BatteryRuntime:
                 limit=self._surface['limits'][field]
                 call=self.controller.hass.services.async_call('number','set_value',{'entity_id':entity,'value':value/(1000 if limit['unit']=='kW' else 1)},blocking=True)
             await asyncio.wait_for(call,75)
+            # HA service completion alone is not physical confirmation. Explicitly
+            # refresh the Sigen registers after the write has finished; optimistic
+            # number/select state must never shorten the uncertainty window.
+            after_write=self.now()
+            await self.coordinator.async_battery_native_readback(self._control_entities())
+            surface=native_surface(self._options,{e:self.coordinator._battery_entity_report(e) for e in self._control_entities()})
+            readback=surface['readback']
+            at=min(readback[k] for k in ('mode_reported_at_ms','charge_reported_at_ms','discharge_reported_at_ms'))
+            controls=tuple(zip(self._control_entities(),(readback['mode'],readback['charge_limit_w'],readback['discharge_limit_w'])))
+            group=self.host.state.groups[0]
+            attempt=next((a for a in group.attempts if a.id==effect.attempt_id),None)
+            if (attempt is None or surface['revision']!=self._surface['revision']
+                    or not after_write<=at<=self.now()<at+AGE_MS or dict(controls)!=dict(attempt.step.after)):
+                raise ValueError(f'{entity}: physical register readback did not confirm the completed write')
+            # Confirm settings with physical register readback; separately check
+            # the measured terminal response before permitting the next write.
+            battery,bat_at=power(self.coordinator._battery_entity_report(self._options['battery_power_measurement_entity']),
+                source=self._options['battery_power_measurement_entity'],now_ms=self.now(),signed=True)
+            ready=int(-readback['discharge_limit_w']-100<=battery<=readback['charge_limit_w']+100)
+            return rt.Observation(group.observation_revision+1,at,min(at,bat_at)+AGE_MS,controls,(('ready',ready),),self.adapter.envelope(controls))
 
     def before_external_command(self,device):
         """Reserve unknown pending demand before another adapter changes a load.

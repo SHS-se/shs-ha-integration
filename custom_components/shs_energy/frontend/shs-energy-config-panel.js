@@ -869,18 +869,27 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._render();
   }
 
-  _download() {
-    // Deliberate allowlist: no options, entity addresses, names, URLs, raw errors or recorder rows.
-    const value = { version: 1, frontend_version: FRONTEND_VERSION, exported_at: new Date().toISOString(),
-      attention: this._attention().map(item => ({ key: item.key, severity: item.severity })),
+  _diagnosticSummary() {
+    // Include the displayed failure and correction path; state alone cannot
+    // explain a fault. Keep unrelated configuration and recorder rows out.
+    return { version: 2, frontend_version: FRONTEND_VERSION, exported_at: new Date().toISOString(),
+      attention: this._attention().map(item => ({ key: item.key, severity: item.severity,
+        title: item.title, detail: item.detail, items: item.items, message: item.message, reason: item.reason, next_step: item.next_step, fix: item.fix })),
       plan: { state: this._data.operation.state, issued_at: this._data.operation.issued_at,
         binding_until: this._data.operation.binding_until, valid_until: this._data.operation.valid_until },
-      devices: this._data.devices.map((d, index) => ({ device: index + 1, included: d.included,
-        mode: d.mode, state: d.execution_status?.state })),
+      devices: this._data.devices.map((d, index) => ({ device: index + 1, key: d.key, name: d.name, included: d.included,
+        mode: d.mode, state: d.execution_status?.state, reason: d.execution_status?.reason,
+        next_step: d.execution_status?.next_step, fix: d.execution_status?.fix,
+        retry_automatically: d.execution_status?.retry_automatically,
+        battery_runtime: d.battery_runtime, policy_delivery: d.policy_delivery })),
       delivery: { last_daily_push: this._data.diagnostics.last_daily_push,
         last_plan_push: this._data.readiness.last_plan_push, electrical_history_until: this._data.readiness.actuals_accepted_until,
         thermal_history_until: this._data.diagnostics.thermal_slots_accepted_until },
       upgrade: this._data.diagnostics.migration ? Object.fromEntries(["imported", "removed", "needs_attention"].map(k => [k, this._data.diagnostics.migration[k]?.length || 0])) : null };
+  }
+
+  _download() {
+    const value = this._diagnosticSummary();
     const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }));
     const a = document.createElement("a"); a.href = url; a.download = "shs-diagnostics.json"; a.click(); URL.revokeObjectURL(url);
   }
@@ -1077,7 +1086,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
       const loss = runtime.loss_evidence?.discharge;
       const curve = runtime.loss_model?.discharge;
       const lossText = curve ? loss?.model_source === "measured" ? `Discharge loss: approximately ${Math.round(curve.overhead_w)} W fixed, plus ${((1-curve.gain)*100).toFixed(1)}% of battery power (${loss.windows} observation periods).` : "Conversion losses currently use configured efficiencies; measurements are still being collected." : "";
-      return `<p class="muted">${this._escape(runtime.reason)}${runtime.command_state ? ` · ${this._escape(this._label(runtime.command_state))}` : ""}<br>${this._escape(power)}${response ? `<br>${this._escape(response)}` : ""}${runtime.selected_operation ? `<br>Current choice: ${this._escape(runtime.selected_operation.split("@")[0])}${runtime.mode === "control_verification" ? " (verification only)" : ""}` : ""}${lossText ? `<br>${this._escape(lossText)}` : ""}</p>`;
+      const pending = runtime.pending_commands?.map(c => `${c.entity_id}: ${c.value} (${c.stage})`).join(" · ");
+      const settings = runtime.requested_settings;
+      const target = settings ? `${settings.mode} · Charge limit: ${settings.charge_limit_w} W · Discharge limit: ${settings.discharge_limit_w} W` : "";
+      return `<p class="muted">${this._escape(runtime.reason)}<br>${this._escape(power)}${response ? `<br>${this._escape(response)}` : ""}${runtime.selected_operation ? `<br>Current choice: ${this._escape(runtime.selected_operation.split("@")[0])}${runtime.mode === "control_verification" ? " (verification only)" : ""}` : ""}${target ? `<br>Requested settings: ${this._escape(target)}` : ""}${pending ? `<br>Awaiting confirmation: ${this._escape(pending)}` : ""}${lossText ? `<br>${this._escape(lossText)}` : ""}</p>`;
     }
     const live = device.live_inputs;
     if (!live) return "";
@@ -1169,7 +1181,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         const description = `${SCHEDULE_ACTIONS[action].label} · ${text}`;
         return `<button class="slot ${active ? "running" : ""} ${slot.binding ? "" : "advisory"}" data-action="slot" data-index="${index}" data-schedule-action="${action}" aria-label="${this._escape(d.name + ', ' + this._time(slot.start) + ', ' + description + (slot.binding ? ', published prices' : ', estimated prices'))}" title="${this._escape(description)}"></button>`;
       }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Published prices" : "Estimated prices"}${this._schedulePrices(selected)}</h3><ul>${scheduledDevices.map(d => `<li>${this._escape(d.name)}: ${this._escape(this._scheduleCommand(d, selected).text)}${this._scheduleCommandDetail(d, selected)}</li>`).join("")}</ul></div>` : ""}` : `<p>${slots.length ? "No Planned devices match these filters." : "No actionable schedule is available. Details are in Status."}</p>`}
-      <p>Controlling devices show live requests; Verification devices show hypothetical requests. Targets do not prove that heat, charging or power was delivered.</p></div>
+      <p>Slots show planned requests. Battery slots are forecasts; the current settings above reflect live measurements and conversion losses. Verification devices show hypothetical requests. Targets do not prove that heat, charging or power was delivered.</p></div>
       <div class="card"><h2>Controller diagnostics</h2><p>Download every Included device, with its current mode, configuration, readings, plan and controller status. Retained runtime evaluations and real service calls are separate from simulated verification commands and coverage. Verification does not prove physical response. The file contains local entity IDs and configuration. Observations are sampled about once a minute in every mode, with up to 720 samples retained. Energy-counter differences are labelled as interval averages, with missing or stale readings identified. Current-session checks and coverage are summarised separately from older evidence. Repeated checks are grouped; up to 2,000 groups of each kind are retained. Downloads are gzip-compressed JSON.</p><button class="secondary" data-action="verification">Download controller diagnostics</button></div>
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
       <p class="muted">Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>

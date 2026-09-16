@@ -275,13 +275,16 @@ class ExecutableRuntimeTests(unittest.TestCase):
         self.assertNotEqual(h.group.desired.target,request.target)
         self.assertGreater(h.group.generation,request.revision)
 
-    def test_ineligible_incumbent_changes_immediately_and_retains_issued_attempt(self):
+    def test_native_guard_pauses_writes_and_retains_policy_and_issued_attempt(self):
         h=Harness();h.offer();h.prepare();h.durable();issued=h.group.attempts
-        # At full capacity forced charging ceases to be economic; a guard failure
-        # makes every option locally ineligible and withdraws immediately.
+        # A transient response guard affects command dispatch, not economics.
+        # It cannot discard already-issued work or start a baseline release.
         h.observe(ready=0)
-        self.assertEqual(h.state.policy.status,'outside_coverage')
-        self.assertIsNone(h.group.desired)
+        self.assertEqual(h.state.policy.status,'active')
+        self.assertIsNotNone(h.group.desired)
+        self.assertFalse(h.group.release_pending)
+        self.assertEqual(h.group.status,'native_guard_blocked')
+        self.assertFalse(any(isinstance(e,Send) for e in h.effects))
         self.assertEqual(h.group.attempts,issued)
 
     def test_refresh_effect_is_deduplicated_and_expiry_has_no_coverage_grace(self):
