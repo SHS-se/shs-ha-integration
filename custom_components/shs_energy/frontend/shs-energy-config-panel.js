@@ -1215,7 +1215,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const fix = item.fix || {};
     const device = this._data.devices.find(d => d.key === (fix.device_key || item.device_key) || (fix.system && d.system === fix.system));
     const targets = this._fieldTargets(item);
-    const edit = device && !targets.length ? `<button class="text" data-action="edit-device" data-device-key="${this._escape(device.key)}">Edit ${this._escape(device.name)} setup</button>` : "";
+    const edit = device && !targets.length && (!fix.kind || fix.kind === "device") ? `<button class="text" data-action="edit-device" data-device-key="${this._escape(device.key)}">Edit ${this._escape(device.name)} setup</button>` : "";
     const affected = this._sortedDevices().filter(d => fix.device_keys?.includes(d.key)).map(d => `<button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit ${this._escape(d.name)} setup</button>`).join("");
     let primary = "";
     if (fix.url) primary = `<a href="${this._escape(fix.url)}" target="_blank" rel="noreferrer">Open website settings</a>`;
@@ -1224,7 +1224,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     else if (fix.kind === "refresh_choices") primary = `<button class="secondary" data-action="refresh">Refresh website choices</button>`;
     else if (fix.kind === "refresh") primary = `<button class="secondary" data-action="retry">Retry status refresh</button>`;
     else if (!device) primary = TABS.filter(([id]) => id !== "status" && (fix.tabs || [fix.tab]).includes(id)).map(([id, name]) => `<button class="text" data-action="tab" data-tab="${id}">Open ${name}</button>`).join("");
-    const evidence = item.device_key ? `<button class="text" data-action="${item.verification ? "verification" : "download"}">${item.verification ? "Download verification log" : "Download diagnostics"}</button>` : "";
+    const evidence = item.device_key && fix.kind !== "diagnostics" ? `<button class="text" data-action="${item.verification ? "verification" : "download"}">${item.verification ? "Download verification log" : "Download diagnostics"}</button>` : "";
     return primary + this._fieldButtons(targets) + edit + affected + evidence;
   }
 

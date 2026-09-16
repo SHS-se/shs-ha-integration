@@ -133,6 +133,23 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(r.runtime.host)
         finally:await r.runtime.close()
 
+    async def test_policy_service_failure_routes_to_diagnostics_without_commands(self):
+        r=Rig()
+        async def unavailable(): pass
+        r.exchange.refresh=unavailable
+        r.exchange.snapshot=lambda: {'state':'unreachable','reasons':['bad envelope'],
+            'error':{'code':'invalid_response_envelope','request_id':'request-123'}}
+        try:
+            await r.runtime.refresh()
+            status=r.runtime.snapshot()
+            self.assertEqual(status['fix'], {'kind':'diagnostics'})
+            self.assertIn('invalid response',status['reason'])
+            self.assertIn('request-123',status['reason'])
+            self.assertNotIn('ValueError:',status['reason'])
+            self.assertTrue(status['retry_automatically'])
+            self.assertEqual(r.calls,[])
+        finally:await r.runtime.close()
+
     async def test_failed_journal_prevents_service_calls(self):
         r=Rig()
         async def fail(value):raise OSError('disk full')

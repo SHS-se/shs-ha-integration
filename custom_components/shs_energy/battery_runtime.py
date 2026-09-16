@@ -23,6 +23,7 @@ if __package__:
     from .configuration_values import resolve_battery_quantities
     from .energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
     from .device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
+    from .battery_policy_exchange import BatteryPolicyUnavailableError
     from .operating_modes import device_mode
 else:
     import home_runtime as rt
@@ -35,6 +36,7 @@ else:
     from configuration_values import resolve_battery_quantities
     from energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
     from device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
+    from battery_policy_exchange import BatteryPolicyUnavailableError
     from operating_modes import device_mode
 
 AGE_MS=30000
@@ -191,7 +193,7 @@ class BatteryRuntime:
                     except Exception:
                         pass  # The existing journal/fence retains unresolved work.
                     self._status={'state':'fault','reason':self._last_error}
-                if isinstance(error, BatteryMeasurementConfigurationError):
+                if isinstance(error, (BatteryMeasurementConfigurationError, BatteryPolicyUnavailableError)):
                     self._status.update(reason=str(error), fix=error.fix, next_step=error.next_step, retry_automatically=True)
             self.coordinator.async_update_listeners()
 
@@ -269,7 +271,7 @@ class BatteryRuntime:
         await exchange.refresh()
         policy=exchange.policy
         if policy is None:
-            raise ValueError('Battery policy: '+', '.join(exchange.snapshot().get('reasons',[])))
+            raise BatteryPolicyUnavailableError(exchange.snapshot())
         summary=policy.summary
         if summary.plant.conversion!=self._model or summary.supply_scope!=scope or summary.identity.context.catalog_revision!=catalog_revision:
             raise ValueError('delivered policy does not match current native model')

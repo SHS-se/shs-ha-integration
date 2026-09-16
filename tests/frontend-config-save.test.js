@@ -1109,3 +1109,15 @@ test('battery measurement errors open and highlight the Energy fields, not the d
   battery.execution_status = {};
   assert.equal(panel._fieldProblems('house_consumption_power_entity').length, 0);
 });
+
+
+test('battery policy service failure offers diagnostics without an actuator setup link', () => {
+  const panel = splitPanel();
+  panel._data.devices[0].execution_status = { state: 'fault', reason: 'Battery policy service returned an invalid response [request_id=request-123]',
+    next_step: 'The service response needs investigation.', fix: { kind: 'diagnostics' } };
+  const html = panel._renderAttention();
+  assert.match(html, /request-123/);
+  assert.match(html, /service response needs investigation/);
+  assert.doesNotMatch(html, /Edit .* setup|data-action="edit-device"|mapped controls/);
+  assert.equal((html.match(/Download diagnostics/g) || []).length, 1);
+});

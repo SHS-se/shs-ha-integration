@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import unittest
 sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
-from battery_policy_exchange import BatteryPolicyExchange, read_policy_delivery
+from battery_policy_exchange import BatteryPolicyExchange, BatteryPolicyUnavailableError, read_policy_delivery
 
 FIXTURE = json.loads((Path(__file__).parent / 'fixtures/battery-policy-delivery.json').read_text())
 
@@ -93,6 +93,22 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
             release.set(); await pending
             self.assertIsNone(exchange.policy); self.assertEqual(self.saved, [])
             self.assertEqual(exchange.snapshot()['state'], 'stopped' if close else 'blocked')
+
+    async def test_response_failure_preserves_request_id_and_diagnostic_action(self):
+        exchange = await self.make()
+        class ResponseError(Exception):
+            code = 'invalid_response_envelope'
+            request_id = 'request-123'
+        async def invalid(_): raise ResponseError('invalid envelope')
+        exchange._request = invalid
+        await exchange.refresh()
+        status = exchange.snapshot()
+        self.assertEqual(status['error'], {'code': 'invalid_response_envelope', 'request_id': 'request-123'})
+        error = BatteryPolicyUnavailableError(status)
+        self.assertIn('service returned an invalid response', str(error))
+        self.assertIn('request-123', str(error))
+        self.assertEqual(error.fix, {'kind': 'diagnostics'})
+        self.assertIsNone(exchange.policy)
 
     async def test_network_and_durable_storage_failures_do_not_deliver_policy_and_retry_is_bounded(self):
         exchange = await self.make()

@@ -55,6 +55,23 @@ def read_policy_delivery(value, request, now_ms):
     return policy
 
 
+class BatteryPolicyUnavailableError(ValueError):
+    """A service/policy failure must never direct the user to actuator setup."""
+    def __init__(self, status):
+        error = status.get("error", {})
+        invalid = error.get("code") in {"invalid_response_envelope", "invalid_policy_response"}
+        reason = ("Battery policy service returned an invalid response" if invalid else
+                  "Battery policy service is unavailable" if status.get("state") == "unreachable" else
+                  "Battery policy is unavailable: " + ", ".join(status.get("reasons", [])))
+        if error.get("request_id"):
+            reason += f" [request_id={error['request_id']}]"
+        super().__init__(reason)
+        self.fix = {"kind": "diagnostics"}
+        self.next_step = ("The service response needs investigation. Download diagnostics and report the request ID. "
+                          "Battery setup changes will not correct this response error." if invalid else
+                          "Policy delivery retries automatically. If this persists, download diagnostics for investigation.")
+
+
 class BatteryPolicyExchange:
     """One exchange owner; replies cannot outlive their captured local context.
 
@@ -136,7 +153,9 @@ class BatteryPolicyExchange:
                     self.status = {"state": "blocked", "reasons": ["local_context_changed"], "control_authority": False}
                     self._next_ms = 0
                     return
-                self.status = {"state": "unreachable", "reasons": [f"{type(error).__name__}: {error}"], "control_authority": False}
+                self.status = {"state": "unreachable", "reasons": [f"{type(error).__name__}: {error}"], "control_authority": False,
+                    "error": {"code": getattr(error, "code", "invalid_policy_response" if isinstance(error, ValueError) else "policy_exchange_failed"),
+                              "request_id": getattr(error, "request_id", None)}}
                 self._next_ms = self._now_ms() + 60_000
 
     def close(self):
