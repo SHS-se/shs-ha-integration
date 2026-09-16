@@ -53,12 +53,13 @@ def ownership_configuration(options, device):
     return result
 
 
-def operating_mode_identity(options):
-    """Canonical coupled authority, including choices for temporarily absent devices."""
+def operating_mode_identity(options, model_owners=()):
+    """Include modeled monitoring owners and all explicit execution choices."""
     configured = options.get("device_modes", {})
     if not isinstance(configured, dict) or any(mode not in WIRE_MODES for mode in configured.values()):
         raise ValueError("Invalid device operating modes")
-    return dict(sorted({"$battery": "monitoring", "$pool": "monitoring", "$ev": "monitoring",
+    return dict(sorted({**{owner: "monitoring" for owner in model_owners},
+                        "$battery": "monitoring", "$pool": "monitoring", "$ev": "monitoring",
                         **{key: mode for key, mode in configured.items() if mode != "monitoring"}}.items()))
 
 
@@ -67,7 +68,7 @@ def scoped_plan(plan, options, device):
     if not isinstance(plan, dict):
         return None
     scope = plan.get("operating_scope")
-    if not isinstance(scope, dict) or scope.get("modes") != operating_mode_identity(options):
+    if not isinstance(scope, dict) or scope.get("modes") != operating_mode_identity(options, scope.get("device_owners", {}).values()):
         return None
     if device_mode(options, device) == "controlling":
         execution = plan.get("execution_plan")

@@ -727,13 +727,9 @@ def build_operating_scope(options, devices, device_models, device_actuals, horiz
         from operating_modes import operating_mode_identity, system_device_keys
     from math import isfinite
     owners = system_device_keys(devices, options)
-    modes = operating_mode_identity(options)
     model_owners = {model["key"]: "$" + owners[model["key"]] if model["key"] in owners else model["key"]
                     for model in device_models}
-    # Explicit monitoring entries are needed only when they own an included model.
-    for owner in model_owners.values():
-        if owner not in modes:
-            raise OptimisationInputError(f"Included model {owner} has no planning authority")
+    modes = operating_mode_identity(options, model_owners.values())
     previous_start = horizon[0] - timedelta(minutes=15)
     recent = next((row.get("device_energy_kwh", {}) for row in device_actuals
                    if datetime.fromisoformat(row["start"]) == previous_start), {})

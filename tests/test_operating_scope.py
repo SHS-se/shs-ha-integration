@@ -37,6 +37,42 @@ class ScopeTests(unittest.TestCase):
         self.models[0]['forecast_w_by_slot'][0] = 0
         self.assertEqual(scope['external_demands']['heater']['forecast_w_by_slot'][0], 300)
 
+    def test_monitoring_pool_pump_is_included_without_execution_authority(self):
+        for mode in (None, 'monitoring'):
+            with self.subTest(mode=mode):
+                self.options['device_modes'].pop('pump', None)
+                if mode is not None:
+                    self.options['device_modes']['pump'] = mode
+                scope = self.scope()
+                self.assertEqual(scope['device_owners'], {'heater': '$pool', 'pump': 'pump'})
+                self.assertEqual(scope['modes']['pump'], 'monitoring')
+                self.assertIn('pump', scope['external_demands'])
+                self.assertEqual(scope['external_demands']['pump']['forecast_w_by_slot'], [300, 350, 400, 450])
+                plan = {'operating_scope': scope, 'execution_plan': {'plan_id': 'real'}}
+                self.assertIs(scoped_plan(plan, self.options, 'device:pump'), plan)
+                self.options['device_modes']['pump'] = 'controlling'
+                self.assertIsNone(scoped_plan(plan, self.options, 'device:pump'))
+
+    def test_monitoring_owner_survives_plan_validation_status_and_timeline(self):
+        from presentation import operational_status, timeline
+        fixture = json.loads((Path(__file__).parent/'fixtures/schema-9-mixed-mode-plan.json').read_text())
+        plan = fixture['plan']
+        now = datetime.fromisoformat(fixture['validation_time'])
+        scope = plan['operating_scope']
+        # Pick a hypothetical model, which must stay outside the execution branch.
+        key = next(key for key in scope['external_demands'])
+        scope['device_owners'][key] = key
+        scope['modes'][key] = 'monitoring'
+        options = {'device_modes': {k: v for k, v in scope['modes'].items() if k != key}}
+        validate_plan_contract(plan, now)
+        self.assertIs(scoped_plan(plan, options, 'battery'), plan['execution_plan'])
+        self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'ready')
+        self.assertTrue(timeline(plan, {'state': 'ready'}, options=options)['slots'])
+        options['device_modes'][key] = 'controlling'
+        self.assertIsNone(scoped_plan(plan, options, 'battery'))
+        self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'not_configured')
+        self.assertEqual(timeline(plan, {'state': 'ready'}, options=options)['slots'], [])
+
     def test_zero_is_observed_and_missing_or_old_quarters_are_not_zero(self):
         recent = {'start': (self.start-timedelta(minutes=15)).isoformat(), 'device_energy_kwh': {'heater': 0}}
         scope = self.scope([recent])

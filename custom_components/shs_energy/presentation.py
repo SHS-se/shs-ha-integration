@@ -44,7 +44,7 @@ def operational_status(plan, mode, missing, now, *, options=None):
                     from .operating_modes import operating_mode_identity
                 else:
                     from operating_modes import operating_mode_identity
-                modes = operating_mode_identity(options)
+                modes = operating_mode_identity(options, plan.get("operating_scope", {}).get("device_owners", {}).values())
                 scope_changed = plan.get("operating_scope", {}).get("modes") != modes
                 if not scope_changed and "controlling" in modes.values():
                     selected = plan["execution_plan"]
@@ -73,7 +73,7 @@ def timeline(plan, status, *, command_preview=None, options=None):
             from .operating_modes import operating_mode_identity
         else:
             from operating_modes import operating_mode_identity
-        if plan["operating_scope"]["modes"] != operating_mode_identity(options):
+        if plan["operating_scope"]["modes"] != operating_mode_identity(options, plan["operating_scope"]["device_owners"].values()):
             return {"capabilities": {}, "slots": [], "reason": "Waiting for a plan for the current device modes"}
     execution = timeline(plan["execution_plan"], status, command_preview=command_preview) if plan.get("execution_plan") else None
     return {"capabilities": deepcopy(plan.get("capabilities", {})), "slots": [

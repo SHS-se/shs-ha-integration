@@ -469,7 +469,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if (not plan or options.get(OPT_PLANNING_MODE) != PLANNING_MODE_LIVE
                 or self._plan_configuration_changed or plan.get("status") != "ready"
                 or device_mode(options, "battery") not in ("control_verification", "controlling")
-                or plan.get("operating_scope", {}).get("modes") != operating_mode_identity(options)):
+                or plan.get("operating_scope", {}).get("modes") != operating_mode_identity(options, plan.get("operating_scope", {}).get("device_owners", {}).values())):
             return None
         return {"plan_id": plan["plan_id"], "snapshot_id": plan["snapshot_id"],
             "config_revision": hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest(),
