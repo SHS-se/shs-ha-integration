@@ -227,8 +227,8 @@ CONTROL_FIELDS["setpoint"] += (
     _field("maximum_temperature_c", "Highest allowed target", "number", unit="°C", minimum=5, maximum=35),
 )
 CONTROL_FIELDS["switch_schedule"] += (
-    _field("minimum_on_seconds", "Minimum continuous on time", "number", unit="s", minimum=0, maximum=900),
-    _field("minimum_off_seconds", "Minimum continuous off time", "number", unit="s", minimum=0, maximum=900),
+    _field("minimum_on_seconds", "Minimum continuous on time", "number", unit="s", minimum=0, maximum=900, help_text="Optional. Leave unset for no minimum on time."),
+    _field("minimum_off_seconds", "Minimum continuous off time", "number", unit="s", minimum=0, maximum=900, help_text="Optional. Leave unset for no minimum off time."),
 )
 
 

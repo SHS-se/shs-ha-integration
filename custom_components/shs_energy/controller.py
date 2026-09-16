@@ -498,8 +498,8 @@ class ScheduledController:
                         at = record.get("transition_times", {}).get(entity)
                         last = record.get("last_commands", {}).get(entity)
                         if at and last != value and entity not in record.get("externally_changed", []):
-                            minimum = mapping["minimum_on_seconds" if last == "on" else "minimum_off_seconds"]
-                            if (now - datetime.fromisoformat(at)).total_seconds() < minimum:
+                            minimum = mapping.get("minimum_on_seconds" if last == "on" else "minimum_off_seconds")
+                            if minimum is not None and (now - datetime.fromisoformat(at)).total_seconds() < minimum:
                                 self.device_deadline("minimum_run:" + entity,
                                                      datetime.fromisoformat(at) + timedelta(seconds=minimum))
                                 raise ControlDeadlineError("restoration waiting for minimum relay run time")
@@ -933,10 +933,12 @@ class ScheduledController:
                 for entity, value in values.items():
                     state = self.state(entity)
                     if state.state != value:
+                        minimum = mapping.get("minimum_on_seconds" if state.state == "on" else "minimum_off_seconds")
+                        if minimum is None or minimum == 0:
+                            continue
                         at = getattr(state, "last_changed", None)
                         if at is None:
                             raise ValueError("cannot establish the actuator's current run time")
-                        minimum = mapping["minimum_on_seconds" if state.state == "on" else "minimum_off_seconds"]
                         if (now - at).total_seconds() < minimum:
                             self.device_deadline("minimum_run:" + entity, at + timedelta(seconds=minimum))
                             raise ControlDeadlineError("initial switch transition violates the reviewed minimum run time")
@@ -945,8 +947,8 @@ class ScheduledController:
                     previous = record.get("last_commands", {}).get(entity)
                     changed_at = record.get("transition_times", {}).get(entity)
                     if changed_at and previous != value:
-                        minimum = mapping["minimum_on_seconds" if previous == "on" else "minimum_off_seconds"]
-                        if (now - datetime.fromisoformat(changed_at)).total_seconds() < minimum:
+                        minimum = mapping.get("minimum_on_seconds" if previous == "on" else "minimum_off_seconds")
+                        if minimum is not None and (now - datetime.fromisoformat(changed_at)).total_seconds() < minimum:
                             self.device_deadline("minimum_run:" + entity,
                                                  datetime.fromisoformat(changed_at) + timedelta(seconds=minimum))
                             raise ControlDeadlineError("planned switch transition violates the reviewed minimum run time")

@@ -24,6 +24,25 @@ def save(existing, key, mapping):
 
 
 class CurrentConfigurationTests(unittest.TestCase):
+    def test_switch_timings_are_optional_in_every_mode(self):
+        device = {"control_type": "switch_schedule", "category": "household", "name": "Heater"}
+        for mode in ("monitoring", "planning", "control_verification", "controlling"):
+            for timings in ({}, {"minimum_on_seconds": None, "minimum_off_seconds": None},
+                            {"minimum_on_seconds": 60}, {"minimum_off_seconds": 60}):
+                with self.subTest(mode=mode, timings=timings):
+                    mapping = {"control_type": "switch_schedule", "actuator_entity_ids": ["switch.heater"], **timings}
+                    saved = save_device({"device_modes": {"heater": mode}}, "heater", mapping, device,
+                        lambda _: {"state": "on", "attributes": {}},
+                        entity_names={"switch.heater": "Heater"}, area_names={}, entity_area_ids={})
+                    self.assertEqual(execution_setup_errors(saved["device_control_mappings"]["heater"]), [])
+
+    def test_supplied_switch_timings_still_require_valid_values(self):
+        for key in ("minimum_on_seconds", "minimum_off_seconds"):
+            for value in (-1, 901, "60", True, float("nan")):
+                with self.subTest(key=key, value=value):
+                    self.assertTrue(execution_setup_errors({"control_type": "switch_schedule",
+                        "actuator_entity_ids": ["switch.heater"], key: value}))
+
     def test_control_cards_use_one_actuator_and_a_consistent_field_order(self):
         for kind in ("setpoint", "switch_schedule", "permit_inhibit", "variable_power"):
             fields = _control_fields({"control_type": kind, "category": "heating"})

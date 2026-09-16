@@ -71,6 +71,6 @@ def execution_setup_errors(mapping):
     else:
         if any(t.split('.')[0] not in ('switch', 'input_boolean') for t in targets):
             return ['choose an on/off switch']
-        if kind == 'switch_schedule' and any(not numeric(mapping.get(k)) or not 0 <= mapping[k] <= 900 for k in ('minimum_on_seconds', 'minimum_off_seconds')):
-            return ['reviewed minimum on and off times are required']
+        if kind == 'switch_schedule' and any(mapping.get(k) is not None and (not numeric(mapping[k]) or not 0 <= mapping[k] <= 900) for k in ('minimum_on_seconds', 'minimum_off_seconds')):
+            return ['minimum on and off times must be between 0 and 900 seconds when specified']
     return []

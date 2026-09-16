@@ -429,6 +429,26 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.heater'].state, 'on')
         self.assertIn('maximum continuous inhibit', self.controller.status['device:heater']['reason'])
 
+    async def test_omitted_timings_allow_initial_switching_transitions_and_restoration(self):
+        self.configure_heater('switch_schedule')
+        mapping = self.options['device_control_mappings']['heater']
+        del mapping['minimum_on_seconds']
+        mapping['minimum_off_seconds'] = None
+        del self.states['switch.heater'].last_changed
+        await self.controller.async_start()
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+        self.slot['device_commands']['heater']['on_seconds'] = 900
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.heater'].state, 'on')
+        self.slot['device_commands']['heater']['on_seconds'] = 0
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+        self.options['device_modes']['heater'] = 'monitoring'
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.heater'].state, 'on')
+        self.assertNotIn('device:heater', self.controller.records)
+        self.assertNotIn(('device:heater', 'minimum_run:switch.heater'), self.scheduler.deadlines)
+
     async def test_minimum_run_deadline_retries_without_a_sensor_event(self):
         self.configure_heater('switch_schedule')
         await self.controller.async_start()
