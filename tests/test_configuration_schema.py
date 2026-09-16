@@ -6,7 +6,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
-from configuration_schema import prepare_options, resolve_configuration, save_device
+from configuration_schema import prepare_options, resolve_configuration, save_device, initialise_device_inclusion
 from migration import migrate_options
 from configuration_fields import _control_fields
 from presentation import system_fields
@@ -186,3 +186,31 @@ class CurrentConfigurationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'conflicting temperature sources'):
             migrate_options(current)
         self.assertEqual(current, before)
+
+
+class DeviceInclusionDefaultsTests(unittest.TestCase):
+    def test_initial_status_sets_inclusion_and_revokes_excluded_permissions(self):
+        devices = [{"key": status, "mapping_status": status}
+                   for status in ("not_configured", "ready", "unavailable", "unsupported", "disabled")]
+        options = {"excluded_device_readings": ["ready"],
+                   "device_modes": {"not_configured": "controlling", "ready": "monitoring"},
+                   "planning_admissions": {"pool": [["not_configured", "switch_schedule"]]}}
+        result = initialise_device_inclusion(options, devices)
+        self.assertEqual(result["excluded_device_readings"], ["not_configured"])
+        self.assertEqual(result["device_modes"], {"ready": "monitoring"})
+        self.assertEqual(result["planning_admissions"], {})
+        self.assertEqual(options["excluded_device_readings"], ["ready"])
+
+    def test_manual_choices_persist_and_new_devices_get_defaults(self):
+        devices = [{"key": "a", "mapping_status": "not_configured"},
+                   {"key": "$battery", "mapping_status": "ready"}]
+        options = initialise_device_inclusion({}, devices)
+        migrated, _ = migrate_options(options)
+        self.assertEqual(migrated["_device_inclusion_initialised"], options["_device_inclusion_initialised"])
+        options["excluded_device_readings"] = ["$battery"]
+        self.assertEqual(initialise_device_inclusion(options, devices), options)
+        devices.append({"key": "new", "mapping_status": "not_configured"})
+        result = initialise_device_inclusion(options, devices)
+        self.assertEqual(result["excluded_device_readings"], ["$battery", "new"])
+        devices[0]["mapping_status"] = "ready"
+        self.assertEqual(initialise_device_inclusion(result, devices), result)

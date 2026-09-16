@@ -26,7 +26,7 @@ OPTION_FIELDS = {
 # Internal scheduling resolution is fixed, not another editable setting.
 OPTION_KEYS = frozenset(OPTION_FIELDS)
 METADATA_KEYS = frozenset({"configuration_reviewed_at", "discovery_evidence", "_migration_report"})
-PERSISTED_KEYS = OPTION_KEYS | METADATA_KEYS | {"device_control_mappings", "rooms", "automatic_setup", "forecast_resolution_minutes", "device_modes", "planning_admissions"}
+PERSISTED_KEYS = OPTION_KEYS | METADATA_KEYS | {"device_control_mappings", "rooms", "automatic_setup", "forecast_resolution_minutes", "device_modes", "planning_admissions", "_device_inclusion_initialised"}
 ROOM_AREA_FIELD = c.ROOM_AREA_FIELD
 MAPPING_KEYS = {
     kind: {field["key"] for field in fields} | {"control_type", ROOM_AREA_FIELD}
@@ -249,6 +249,15 @@ def resolve_configuration(options, latitude=0.0, longitude=0.0):
     return resolved
 
 
+def _revoke_excluded_permissions(result):
+    excluded = set(result.get("excluded_device_readings") or [])
+    admissions = result.get("planning_admissions", {})
+    revoked = {owner for owner, members in admissions.items()
+               if owner in excluded or any(member[0] in excluded for member in members)} | excluded
+    result["device_modes"] = {k: v for k, v in result.get("device_modes", {}).items() if k not in revoked}
+    result["planning_admissions"] = {k: v for k, v in admissions.items() if k not in revoked}
+
+
 def prepare_options(existing, incoming, read_entity, *, latitude=0.0, longitude=0.0):
     """Validate a public patch without resaving derived defaults or room views."""
     result = merge_options(existing, incoming)
@@ -257,12 +266,7 @@ def prepare_options(existing, incoming, read_entity, *, latitude=0.0, longitude=
         # A cleared setting remains explicitly empty rather than regaining a default.
         result[key] = value
     if "excluded_device_readings" in incoming:
-        excluded = set(result.get("excluded_device_readings") or [])
-        admissions = result.get("planning_admissions", {})
-        revoked = {owner for owner, members in admissions.items()
-                   if owner in excluded or any(member[0] in excluded for member in members)} | excluded
-        result["device_modes"] = {k: v for k, v in result.get("device_modes", {}).items() if k not in revoked}
-        result["planning_admissions"] = {k: v for k, v in admissions.items() if k not in revoked}
+        _revoke_excluded_permissions(result)
     current = resolve_configuration(result, latitude, longitude)
     if "battery_min_soc" in incoming and current.get("battery_min_soc") is not None:
         minimum = resolve_quantity(current["battery_min_soc"], read_entity, unit="%", minimum=0, maximum=1, label="Minimum charge")
@@ -327,3 +331,23 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
 def shared_devices(devices, options):
     excluded = set(options.get("excluded_device_readings", []))
     return [device for device in devices if device["key"] not in excluded]
+
+
+def initialise_device_inclusion(options, devices):
+    """Seed each device once from setup status; retain subsequent manual choices."""
+    initialised = set(options.get("_device_inclusion_initialised", []))
+    unseen = [device for device in devices if device["key"] not in initialised]
+    if not unseen:
+        return options
+    excluded = set(options.get("excluded_device_readings", []))
+    for device in unseen:
+        key = device["key"]
+        if device["mapping_status"] == "not_configured":
+            excluded.add(key)
+        else:
+            excluded.discard(key)
+        initialised.add(key)
+    result = {**options, "excluded_device_readings": sorted(excluded)}
+    _revoke_excluded_permissions(result)
+    result["_device_inclusion_initialised"] = sorted(initialised)
+    return result

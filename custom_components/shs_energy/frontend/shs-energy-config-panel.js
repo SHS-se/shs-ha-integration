@@ -971,6 +971,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _renderDevice(device, section = "controls") {
     const planning = section === "planning";
+    const included = !(this._draft.excluded_device_readings || []).includes(device.key);
     const mapping = this._mapping(device.key) || {};
     const dirty = this._deviceDirty(device.key, section);
     const id = section + ":" + device.key;
@@ -987,6 +988,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
       <summary><div><strong>${this._escape(title)}</strong><small>${this._escape(description)}</small></div>
         <span class="badge warning" data-field-count ${issueCount ? "" : "hidden"}>${issueCount} field${issueCount === 1 ? "" : "s"} need${issueCount === 1 ? "s" : ""} attention</span><span data-setup-status ${issueCount ? "hidden" : ""}>${planning ? `<span class="badge">${device.planned ? "Planned" : device.included ? "Monitoring" : "Excluded"}</span>` : this._statusBadge(device.included ? device.mapping_status : "base_load", device.included && device.mapping_status === "ready" ? "Controls configured" : undefined)}</span></summary>
       <div class="device-body">
+        ${!planning ? `<div class="choice-row"><span>${included ? "Included" : "Excluded"}</span><label class="switch"><input type="checkbox" aria-label="Include ${this._escape(device.name)}" data-share="${this._escape(device.key)}" ${this._saving || this._savingDeviceKey ? "disabled" : ""} ${included ? "checked" : ""}><span></span></label></div>
+        <p class="muted">${included ? "Shares device data with SHS and allows planning and control when configured." : "Sends no individual readings, profiles or metadata to SHS and cannot be planned or controlled. Consumption stays in household totals."}</p>` : ""}
         ${planning ? `<p>Connected equipment: ${members.map(d => this._escape(d.name)).join(", ")}</p>` : mappingFields.length ? `<p>${this._escape(device.name)} · ${this._escape(this._label(device.control_type))}</p>` : ""}
         ${!planning && device.mapping_error ? `<p class="inline-warning">${this._escape(device.mapping_error)}</p>` : ""}
         ${this._deviceErrors[device.key] ? `<p role="alert" class="inline-error">${this._escape(this._deviceErrors[device.key])}</p>` : ""}
@@ -1032,8 +1035,6 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const excludedCount = devices.filter(d => !d.included).length;
     return `<div class="page-intro"><h2>Devices in your home</h2><p>Connect your equipment in Controls, then configure its model in Planning.</p>
       <div class="choice-row"><span>Show excluded devices${excludedCount ? ` (${excludedCount})` : ""}</span><label class="switch"><input type="checkbox" aria-label="Show excluded devices" data-filter="showExcluded" ${this._showExcluded ? "checked" : ""}><span></span></label></div></div>
-      <details class="card compact"><summary>Included devices</summary><p>Included devices share individual data with SHS. Excluded devices send no individual readings, profiles or metadata and cannot be planned or controlled. Their consumption remains in household totals.</p>
-      ${[...(this._data.meter_inventory || []), ...devices.filter(d => d.key === "$battery")].map(d => `<label class="choice-row"><span>${this._escape(d.name)}</span><input type="checkbox" aria-label="Include ${this._escape(d.name)}" data-share="${this._escape(d.key)}" ${this._saving ? "disabled" : ""} ${(this._draft.excluded_device_readings || []).includes(d.key) ? "" : "checked"}></label>`).join("")}</details>
       <section aria-labelledby="controls-heading"><h2 id="controls-heading">Controls</h2><p>Measurements, actions, operating limits and permission to operate your equipment.</p>
       ${this._renderDeviceFilters(visible)}
       ${filtered.map(d => this._renderDevice(d, "controls")).join("") || `<p>No matching devices.${!this._showExcluded && excludedCount ? " Turn on Show excluded devices to see excluded equipment." : ""}</p>`}</section>

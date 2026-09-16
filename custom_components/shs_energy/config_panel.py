@@ -30,7 +30,7 @@ from .configuration import (
 from .configuration_fields import _control_fields, _configuration_sections, LABELS
 from .presentation import complete_device_views, timeline, system_fields, device_name, device_readiness
 from .configuration_schema import (
-    prepare_options, save_device,
+    prepare_options, save_device, initialise_device_inclusion,
 )
 from .device_controls import (
     apply_planner_support,
@@ -227,6 +227,11 @@ async def _configuration_payload(
     operation = coordinator.operational_status
     devices = complete_device_views(devices, options, choices, operation, plan,
         coordinator.controller.status, entity_names, area_names, datetime.now(timezone.utc), entry.options.keys())
+    initialised_options = initialise_device_inclusion(dict(entry.options), devices)
+    if initialised_options != dict(entry.options):
+        hass.config_entries.async_update_entry(entry, options=initialised_options)
+        coordinator._plan_configuration_changed = True
+        return await _configuration_payload(hass, entry, refresh_roles=False)
     for device in devices:
         if device.get("system") == "battery":
             device["policy_delivery"] = coordinator.battery_policy_exchange.snapshot()

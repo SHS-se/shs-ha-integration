@@ -1038,3 +1038,31 @@ test('battery live inputs distinguish stale zero from unavailable and do not imp
   assert.match(html, /Legacy battery control is fenced/);
   assert.doesNotMatch(html, /3.00 kW/);
 });
+
+
+test('device inclusion lives in Controls cards with state-dependent explanations', () => {
+  const panel = splitPanel();
+  panel._draft.excluded_device_readings = ['excluded'];
+  panel._showExcluded = true;
+  let html = panel._renderDevices();
+  assert.doesNotMatch(html, /<summary>Included devices/);
+  assert.equal((html.match(/data-share="pool"/g) || []).length, 1);
+  assert.match(html, /data-share="pool"[^>]*checked/);
+  assert.match(html, /Shares device data with SHS/);
+  assert.match(html, /Sends no individual readings, profiles or metadata/);
+  panel._draft.excluded_device_readings.push('pool');
+  html = panel._renderDevice(panel._data.devices[0]);
+  assert.doesNotMatch(html, /data-share="pool"[^>]*checked/);
+  assert.doesNotMatch(html, /Shares device data with SHS/);
+  assert.match(html, /Consumption stays in household totals/);
+});
+
+test('failed inclusion saves restore the toggle and explanation', async () => {
+  const panel = splitPanel();
+  panel._savedDraft.excluded_device_readings = [];
+  panel._draft.excluded_device_readings = ['pool'];
+  panel._hass = { callWS: async () => { throw new Error('Save failed'); } };
+  await panel._saveInclusion();
+  assert.equal(panel._error, 'Save failed');
+  assert.match(panel._renderDevice(panel._data.devices[0]), /data-share="pool"[^>]*checked/);
+});
