@@ -498,7 +498,7 @@
               },
               "export_sek": {
                 "polynomial": [
-                  1.008,
+                  0.678,
                   0,
                   0
                 ],
@@ -543,7 +543,7 @@
               },
               "terminal_sek": {
                 "polynomial": [
-                  0,
+                  7.62641,
                   0,
                   0
                 ],
@@ -576,7 +576,7 @@
               },
               "export_sek": {
                 "polynomial": [
-                  0.959,
+                  0.629,
                   0.09500000000000001,
                   0
                 ],
@@ -621,7 +621,7 @@
               },
               "terminal_sek": {
                 "polynomial": [
-                  0,
+                  7.62641,
                   0,
                   0
                 ],
@@ -646,7 +646,7 @@
             "cost": {
               "import_sek": {
                 "polynomial": [
-                  1.199421052631579,
+                  0.905421052631579,
                   -0.10526315789473686,
                   0
                 ],
@@ -662,7 +662,7 @@
               },
               "wear_sek": {
                 "polynomial": [
-                  0,
+                  0.15473684210526314,
                   0,
                   0
                 ],
@@ -670,7 +670,7 @@
               },
               "shaping_sek": {
                 "polynomial": [
-                  16.683865650969533,
+                  16.395745650969534,
                   -3.8122991689750703,
                   0.22160664819944606
                 ],
@@ -678,7 +678,7 @@
               },
               "ramp_sek": {
                 "polynomial": [
-                  0.098,
+                  0,
                   0,
                   0
                 ],
@@ -693,13 +693,13 @@
                     "weight": 0.00005,
                     "energy": 4210.526315789474,
                     "previous_import": 0,
-                    "constant": -34256.84210526316
+                    "constant": -36216.84210526316
                   }
                 ]
               },
               "terminal_sek": {
                 "polynomial": [
-                  7.851455,
+                  7.7121918421052635,
                   0,
                   0
                 ],
@@ -724,7 +724,7 @@
             "cost": {
               "import_sek": {
                 "polynomial": [
-                  1.11592,
+                  0.8219200000000001,
                   -0.09500000000000001,
                   0
                 ],
@@ -740,7 +740,7 @@
               },
               "wear_sek": {
                 "polynomial": [
-                  -0.4068,
+                  -0.2520631578947369,
                   0.05,
                   0
                 ],
@@ -748,7 +748,7 @@
               },
               "shaping_sek": {
                 "polynomial": [
-                  13.799169728000004,
+                  13.511049728000005,
                   -3.123296000000001,
                   0.18050000000000005
                 ],
@@ -756,7 +756,7 @@
               },
               "ramp_sek": {
                 "polynomial": [
-                  0.098,
+                  0,
                   0,
                   0
                 ],
@@ -771,13 +771,13 @@
                     "weight": 0.00005,
                     "energy": 3800.0000000000005,
                     "previous_import": 0,
-                    "constant": -30916.800000000003
+                    "constant": -32876.8
                   }
                 ]
               },
               "terminal_sek": {
                 "polynomial": [
-                  7.851455,
+                  7.7121918421052635,
                   0,
                   0
                 ],
@@ -802,7 +802,7 @@
             "cost": {
               "import_sek": {
                 "polynomial": [
-                  0.294,
+                  0,
                   0,
                   0
                 ],
@@ -818,7 +818,7 @@
               },
               "wear_sek": {
                 "polynomial": [
-                  -0.4068,
+                  -0.2520631578947369,
                   0.05,
                   0
                 ],
@@ -826,7 +826,7 @@
               },
               "shaping_sek": {
                 "polynomial": [
-                  0.28812,
+                  0,
                   0,
                   0
                 ],
@@ -834,7 +834,7 @@
               },
               "ramp_sek": {
                 "polynomial": [
-                  0.098,
+                  0,
                   0,
                   0
                 ],
@@ -849,13 +849,13 @@
                     "weight": 0.00005,
                     "energy": 0,
                     "previous_import": 0,
-                    "constant": 1960
+                    "constant": 0
                   }
                 ]
               },
               "terminal_sek": {
                 "polynomial": [
-                  7.851455,
+                  7.7121918421052635,
                   0,
                   0
                 ],
@@ -880,7 +880,7 @@
             "cost": {
               "import_sek": {
                 "polynomial": [
-                  2.151,
+                  1.906,
                   -0.10526315789473686,
                   0
                 ],
@@ -896,7 +896,7 @@
               },
               "wear_sek": {
                 "polynomial": [
-                  0,
+                  0.12894736842105262,
                   0,
                   0
                 ],
@@ -904,7 +904,7 @@
               },
               "shaping_sek": {
                 "polynomial": [
-                  69.25710000000001,
+                  68.99299,
                   -7.818947368421054,
                   0.22160664819944606
                 ],
@@ -912,7 +912,7 @@
               },
               "ramp_sek": {
                 "polynomial": [
-                  0.098,
+                  0.049,
                   0,
                   0
                 ],
@@ -927,13 +927,13 @@
                     "weight": 0.00005,
                     "energy": 4210.526315789474,
                     "previous_import": 0,
-                    "constant": -72320
+                    "constant": -73300
                   }
                 ]
               },
               "terminal_sek": {
                 "polynomial": [
-                  8.258255,
+                  8.142202368421053,
                   0,
                   0
                 ],
@@ -950,8 +950,8 @@
         "family_id": "family-bcb112049384819bbd045b56",
         "source_hash": "sha256:bcb112049384819bbd045b56532315b3b8dd7d80cb9b67230222205293a1fb61",
         "numeric_tolerance_sek": 1e-7,
-        "search_exhaustive_in_declared_graph": true,
-        "search_pruned_prefixes": 0,
+        "search_exhaustive_in_declared_graph": false,
+        "search_pruned_prefixes": 918,
         "heldout_count": 0,
         "heldout_max_regret_sek": null,
         "certified_regret_bound_sek": null
@@ -977,20 +977,41 @@
         "anchor-0": {
           "kind": "anchor",
           "anchor_kwh": 0,
-          "first_suffix_charge": null,
+          "first_suffix_charge": {
+            "start_ms": 1787228100000,
+            "end_ms": 1787229000000,
+            "consumption_w": 1960,
+            "solar_w": 7000,
+            "import_sek_per_kwh": 3,
+            "battery_w": 4400
+          },
           "first_suffix_discharge": null
         },
         "anchor-1": {
           "kind": "anchor",
           "anchor_kwh": 8.136,
           "first_suffix_charge": null,
-          "first_suffix_discharge": null
+          "first_suffix_discharge": {
+            "start_ms": 1787218200000,
+            "end_ms": 1787219100000,
+            "consumption_w": 1960,
+            "solar_w": 0,
+            "import_sek_per_kwh": 0.1,
+            "battery_w": 1960
+          }
         },
         "anchor-2": {
           "kind": "anchor",
           "anchor_kwh": 17.176,
           "first_suffix_charge": null,
-          "first_suffix_discharge": null
+          "first_suffix_discharge": {
+            "start_ms": 1787218200000,
+            "end_ms": 1787219100000,
+            "consumption_w": 1960,
+            "solar_w": 0,
+            "import_sek_per_kwh": 0.1,
+            "battery_w": 980
+          }
         }
       }
     },

@@ -353,7 +353,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                0.24763157894736842,
+                -0.7373684210526317,
                 0.31578947368421056,
                 0
               ],
@@ -369,7 +369,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                0.3157894736842106,
+                0.39828947368421064,
                 -0.10526315789473686,
                 0
               ],
@@ -377,7 +377,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                0.3198435768698063,
+                0.3020623268698063,
                 -0.25872576177285334,
                 0.055401662049861515
               ],
@@ -385,7 +385,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -400,13 +400,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 4210.526315789474,
                   "previous_import": 0,
-                  "constant": -8531.578947368424
+                  "constant": -9831.578947368424
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                2.2,
+                1.607986111111111,
                 0,
                 0
               ],
@@ -431,7 +431,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                0.24763157894736842,
+                -0.7373684210526317,
                 0.31578947368421056,
                 0
               ],
@@ -447,7 +447,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                0.3157894736842106,
+                0.39828947368421064,
                 -0.10526315789473686,
                 0
               ],
@@ -455,7 +455,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                0.3198435768698063,
+                0.3020623268698063,
                 -0.25872576177285334,
                 0.055401662049861515
               ],
@@ -463,7 +463,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -478,13 +478,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 4210.526315789474,
                   "previous_import": 0,
-                  "constant": -8531.578947368424
+                  "constant": -9831.578947368424
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                2.2,
+                1.607986111111111,
                 0,
                 0
               ],
@@ -509,7 +509,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                0.9850000000000001,
+                0,
                 0,
                 0
               ],
@@ -525,7 +525,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                0.3157894736842106,
+                0.39828947368421064,
                 -0.10526315789473686,
                 0
               ],
@@ -533,7 +533,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                0.017781250000000002,
+                0,
                 0,
                 0
               ],
@@ -541,7 +541,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -556,13 +556,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 0,
                   "previous_import": 0,
-                  "constant": 1300
+                  "constant": 0
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                2.2,
+                1.607986111111111,
                 0,
                 0
               ],
@@ -587,7 +587,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                0.9850000000000001,
+                0,
                 0,
                 0
               ],
@@ -603,7 +603,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                -0.27,
+                -0.1875,
                 0.09000000000000001,
                 0
               ],
@@ -611,7 +611,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                0.017781250000000002,
+                0,
                 0,
                 0
               ],
@@ -619,7 +619,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -634,13 +634,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 0,
                   "previous_import": 0,
-                  "constant": 1300
+                  "constant": 0
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                2.2,
+                1.607986111111111,
                 0,
                 0
               ],
@@ -665,7 +665,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                -0.3839473684210526,
+                -1.3689473684210527,
                 0.31578947368421056,
                 0
               ],
@@ -673,7 +673,7 @@
             },
             "export_sek": {
               "polynomial": [
-                0,
+                0.54,
                 0,
                 0
               ],
@@ -681,7 +681,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                0.5263157894736843,
+                0.6763157894736843,
                 -0.10526315789473686,
                 0
               ],
@@ -689,7 +689,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                1.0589017486149588,
+                1.0411204986149587,
                 -0.4803324099722993,
                 0.055401662049861515
               ],
@@ -697,7 +697,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -712,13 +712,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 4210.526315789474,
                   "previous_import": 0,
-                  "constant": -16952.63157894737
+                  "constant": -18252.63157894737
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                3.2083333333333335,
+                2.3944444444444444,
                 0,
                 0
               ],
@@ -743,7 +743,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                -0.3839473684210526,
+                -1.3689473684210527,
                 0.31578947368421056,
                 0
               ],
@@ -751,7 +751,7 @@
             },
             "export_sek": {
               "polynomial": [
-                0,
+                0.54,
                 0,
                 0
               ],
@@ -759,7 +759,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                0.5263157894736843,
+                0.6763157894736843,
                 -0.10526315789473686,
                 0
               ],
@@ -767,7 +767,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                1.0589017486149588,
+                1.0411204986149587,
                 -0.4803324099722993,
                 0.055401662049861515
               ],
@@ -775,7 +775,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -790,13 +790,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 4210.526315789474,
                   "previous_import": 0,
-                  "constant": -16952.63157894737
+                  "constant": -18252.63157894737
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                3.2083333333333335,
+                2.3944444444444444,
                 0,
                 0
               ],
@@ -821,7 +821,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                0.9850000000000001,
+                0,
                 0,
                 0
               ],
@@ -829,7 +829,7 @@
             },
             "export_sek": {
               "polynomial": [
-                -1.3689473684210527,
+                -0.8289473684210527,
                 0.31578947368421056,
                 0
               ],
@@ -837,7 +837,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                0.5263157894736843,
+                0.6763157894736843,
                 -0.10526315789473686,
                 0
               ],
@@ -845,7 +845,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                0.017781250000000002,
+                0,
                 0,
                 0
               ],
@@ -853,7 +853,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -868,13 +868,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 0,
                   "previous_import": 0,
-                  "constant": 1300
+                  "constant": 0
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                3.2083333333333335,
+                2.3944444444444444,
                 0,
                 0
               ],
@@ -899,7 +899,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                0.9850000000000001,
+                0,
                 0,
                 0
               ],
@@ -907,7 +907,7 @@
             },
             "export_sek": {
               "polynomial": [
-                -1.14,
+                -0.5999999999999999,
                 0.26999999999999996,
                 0
               ],
@@ -915,7 +915,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                -0.45,
+                -0.3,
                 0.09000000000000001,
                 0
               ],
@@ -923,7 +923,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                0.017781250000000002,
+                0,
                 0,
                 0
               ],
@@ -931,7 +931,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -946,13 +946,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 0,
                   "previous_import": 0,
-                  "constant": 1300
+                  "constant": 0
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                3.2083333333333335,
+                2.3944444444444444,
                 0,
                 0
               ],
@@ -977,7 +977,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                -1.0155263157894738,
+                -2.000526315789474,
                 0.31578947368421056,
                 0
               ],
@@ -985,7 +985,7 @@
             },
             "export_sek": {
               "polynomial": [
-                0,
+                0.54,
                 0,
                 0
               ],
@@ -993,7 +993,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                0.7368421052631581,
+                0.8868421052631581,
                 -0.10526315789473686,
                 0
               ],
@@ -1001,7 +1001,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                2.241173216759004,
+                2.223391966759004,
                 -0.7019390581717454,
                 0.055401662049861515
               ],
@@ -1009,7 +1009,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -1024,13 +1024,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 4210.526315789474,
                   "previous_import": 0,
-                  "constant": -25373.68421052632
+                  "constant": -26673.68421052632
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                3.875,
+                3.3425925925925926,
                 0,
                 0
               ],
@@ -1055,7 +1055,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                0.9850000000000001,
+                0,
                 0,
                 0
               ],
@@ -1063,7 +1063,7 @@
             },
             "export_sek": {
               "polynomial": [
-                -2.000526315789474,
+                -1.460526315789474,
                 0.31578947368421056,
                 0
               ],
@@ -1071,7 +1071,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                0.7368421052631581,
+                0.8868421052631581,
                 -0.10526315789473686,
                 0
               ],
@@ -1079,7 +1079,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                0.017781250000000002,
+                0,
                 0,
                 0
               ],
@@ -1087,7 +1087,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -1102,13 +1102,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 0,
                   "previous_import": 0,
-                  "constant": 1300
+                  "constant": 0
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                3.875,
+                3.3425925925925926,
                 0,
                 0
               ],
@@ -1133,7 +1133,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                0.9850000000000001,
+                0,
                 0,
                 0
               ],
@@ -1141,7 +1141,7 @@
             },
             "export_sek": {
               "polynomial": [
-                -1.68,
+                -1.14,
                 0.26999999999999996,
                 0
               ],
@@ -1149,7 +1149,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                -0.63,
+                -0.48,
                 0.09000000000000001,
                 0
               ],
@@ -1157,7 +1157,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                0.017781250000000002,
+                0,
                 0,
                 0
               ],
@@ -1165,7 +1165,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -1180,13 +1180,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 0,
                   "previous_import": 0,
-                  "constant": 1300
+                  "constant": 0
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                3.875,
+                3.3425925925925926,
                 0,
                 0
               ],
@@ -1211,7 +1211,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                -1.9628947368421052,
+                -2.9478947368421053,
                 0.31578947368421056,
                 0
               ],
@@ -1219,7 +1219,7 @@
             },
             "export_sek": {
               "polynomial": [
-                0,
+                0.74,
                 0,
                 0
               ],
@@ -1227,7 +1227,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                1.0526315789473686,
+                1.2526315789473685,
                 -0.10526315789473686,
                 0
               ],
@@ -1235,7 +1235,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                4.845605349722993,
+                4.827824099722993,
                 -1.0343490304709144,
                 0.055401662049861515
               ],
@@ -1243,7 +1243,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -1258,13 +1258,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 4210.526315789474,
                   "previous_import": 0,
-                  "constant": -38005.26315789474
+                  "constant": -39305.26315789474
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                4.25,
+                4.044238683127572,
                 0,
                 0
               ],
@@ -1289,7 +1289,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                -1.9628947368421052,
+                -2.9478947368421053,
                 0.31578947368421056,
                 0
               ],
@@ -1297,7 +1297,7 @@
             },
             "export_sek": {
               "polynomial": [
-                0,
+                0.74,
                 0,
                 0
               ],
@@ -1305,7 +1305,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                1.0526315789473686,
+                1.2526315789473685,
                 -0.10526315789473686,
                 0
               ],
@@ -1313,7 +1313,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                4.845605349722993,
+                4.827824099722993,
                 -1.0343490304709144,
                 0.055401662049861515
               ],
@@ -1321,7 +1321,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -1336,13 +1336,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 4210.526315789474,
                   "previous_import": 0,
-                  "constant": -38005.26315789474
+                  "constant": -39305.26315789474
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                4.25,
+                4.044238683127572,
                 0,
                 0
               ],
@@ -1367,7 +1367,7 @@
           "cost": {
             "import_sek": {
               "polynomial": [
-                0.9850000000000001,
+                0,
                 0,
                 0
               ],
@@ -1375,7 +1375,7 @@
             },
             "export_sek": {
               "polynomial": [
-                -2.9478947368421053,
+                -2.207894736842105,
                 0.31578947368421056,
                 0
               ],
@@ -1383,7 +1383,7 @@
             },
             "wear_sek": {
               "polynomial": [
-                1.0526315789473686,
+                1.2526315789473685,
                 -0.10526315789473686,
                 0
               ],
@@ -1391,7 +1391,7 @@
             },
             "shaping_sek": {
               "polynomial": [
-                0.017781250000000002,
+                0,
                 0,
                 0
               ],
@@ -1399,7 +1399,7 @@
             },
             "ramp_sek": {
               "polynomial": [
-                0.049,
+                0,
                 0,
                 0
               ],
@@ -1414,13 +1414,13 @@
                   "weight": 0.00007000000000000001,
                   "energy": 0,
                   "previous_import": 0,
-                  "constant": 1300
+                  "constant": 0
                 }
               ]
             },
             "terminal_sek": {
               "polynomial": [
-                4.25,
+                4.044238683127572,
                 0,
                 0
               ],
@@ -1516,16 +1516,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-1",
         "objective": {
-          "import_sek": 0.9148947368421053,
+          "import_sek": -0.07010526315789478,
           "export_sek": 0,
-          "wear_sek": 0.09336842105263163,
+          "wear_sek": 0.17586842105263165,
           "starts_sek": 0,
-          "shaping_sek": 0.020511665512465277,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.0027304155124652507,
+          "ramp_sek": 0.13086315789473713,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.9148947368421053,
-          "total_sek": -1.0312251765927978
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.07010526315789478,
+          "total_sek": -1.3686293798091715
         }
       }
     },
@@ -1537,16 +1537,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-1",
         "objective": {
-          "import_sek": 0.9148947368421053,
+          "import_sek": -0.07010526315789478,
           "export_sek": 0,
-          "wear_sek": 0.09336842105263163,
+          "wear_sek": 0.17586842105263165,
           "starts_sek": 0,
-          "shaping_sek": 0.020511665512465277,
-          "ramp_sek": 0.08881250000000002,
+          "shaping_sek": 0.0027304155124652507,
+          "ramp_sek": 0.07967565789473713,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.9148947368421053,
-          "total_sek": -1.082412676592798
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.07010526315789478,
+          "total_sek": -1.4198168798091717
         }
       }
     },
@@ -1558,16 +1558,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-1",
         "objective": {
-          "import_sek": 0.9148947368421053,
+          "import_sek": -0.07010526315789478,
           "export_sek": 0,
-          "wear_sek": 0.09336842105263163,
+          "wear_sek": 0.17586842105263165,
           "starts_sek": 0,
-          "shaping_sek": 0.020511665512465277,
-          "ramp_sek": 1.199136842105263,
+          "shaping_sek": 0.0027304155124652507,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.9148947368421053,
-          "total_sek": 0.027911665512465156
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.07010526315789478,
+          "total_sek": -0.3094925377039086
         }
       }
     },
@@ -1576,19 +1576,19 @@
       "energy_kwh": 4,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-0",
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-3",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.47999999999999987,
+          "wear_sek": 0.17250000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 2.75,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -1.8172187499999999
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.47999999999999987,
+          "total_sek": -1.9154861111111108
         }
       }
     },
@@ -1597,19 +1597,19 @@
       "energy_kwh": 4,
       "previous_import_w": 731.25,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-0",
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-3",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.47999999999999987,
+          "wear_sek": 0.17250000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 2.75,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -1.76603125
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.47999999999999987,
+          "total_sek": -1.8642986111111108
         }
       }
     },
@@ -1618,19 +1618,19 @@
       "energy_kwh": 4,
       "previous_import_w": 17000,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-0",
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-3",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.47999999999999987,
+          "wear_sek": 0.17250000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 2.75,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -0.6272187499999999
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.47999999999999987,
+          "total_sek": -0.7254861111111106
         }
       }
     },
@@ -1639,19 +1639,19 @@
       "energy_kwh": 6.226,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": -0.03442105263157891,
+          "export_sek": 0.54,
+          "wear_sek": 0.2314736842105264,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.0006582271468142942,
+          "ramp_sek": 0.06425263157894748,
           "service_sek": 0,
-          "terminal_sek": 3.6565385,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.72375725
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.5744210526315789,
+          "total_sek": -3.620629102287883
         }
       }
     },
@@ -1663,16 +1663,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.9505789473684212,
-          "export_sek": 0,
-          "wear_sek": 0.08147368421052636,
+          "import_sek": -0.03442105263157891,
+          "export_sek": 0.54,
+          "wear_sek": 0.2314736842105264,
           "starts_sek": 0,
-          "shaping_sek": 0.018439477146814376,
-          "ramp_sek": 0.12693486842105253,
+          "shaping_sek": 0.0006582271468142942,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.9505789473684212,
-          "total_sek": -2.6975730228531853
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.5744210526315789,
+          "total_sek": -3.633694233866831
         }
       }
     },
@@ -1684,16 +1684,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.9505789473684212,
-          "export_sek": 0,
-          "wear_sek": 0.08147368421052636,
+          "import_sek": -0.03442105263157891,
+          "export_sek": 0.54,
+          "wear_sek": 0.2314736842105264,
           "starts_sek": 0,
-          "shaping_sek": 0.018439477146814376,
-          "ramp_sek": 1.2657473684210525,
+          "shaping_sek": 0.0006582271468142942,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.9505789473684212,
-          "total_sek": -1.5587605228531856
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.5744210526315789,
+          "total_sek": -2.4948817338668308
         }
       }
     },
@@ -1705,16 +1705,16 @@
         "witness_id": "anchor-4",
         "cell_id": "anchor-4-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.2100000000000004,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.9500000000000006,
+          "wear_sek": 0.19999999999999996,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 4.25,
-          "billable_sek": 0.7749999999999997,
-          "total_sek": -3.3172187500000003
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.9500000000000006,
+          "total_sek": -4.794238683127573
         }
       }
     },
@@ -1726,16 +1726,16 @@
         "witness_id": "anchor-4",
         "cell_id": "anchor-4-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.2100000000000004,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.9500000000000006,
+          "wear_sek": 0.19999999999999996,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 4.25,
-          "billable_sek": 0.7749999999999997,
-          "total_sek": -3.26603125
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.9500000000000006,
+          "total_sek": -4.743051183127573
         }
       }
     },
@@ -1747,16 +1747,16 @@
         "witness_id": "anchor-4",
         "cell_id": "anchor-4-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.2100000000000004,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.9500000000000006,
+          "wear_sek": 0.19999999999999996,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 4.25,
-          "billable_sek": 0.7749999999999997,
-          "total_sek": -2.1272187500000004
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.9500000000000006,
+          "total_sek": -3.604238683127573
         }
       }
     },
@@ -1768,16 +1768,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-0",
         "objective": {
-          "import_sek": 0.8950000000000001,
+          "import_sek": -0.08999999999999997,
           "export_sek": 0,
-          "wear_sek": 0.10000000000000003,
+          "wear_sek": 0.18250000000000005,
           "starts_sek": 0,
-          "shaping_sek": 0.022281249999999947,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.004499999999999921,
+          "ramp_sek": 0.168,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.8950000000000001,
-          "total_sek": -1.0427187500000001
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.08999999999999997,
+          "total_sek": -1.3429861111111108
         }
       }
     },
@@ -1789,16 +1789,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-0",
         "objective": {
-          "import_sek": 0.8950000000000001,
+          "import_sek": -0.08999999999999997,
           "export_sek": 0,
-          "wear_sek": 0.10000000000000003,
+          "wear_sek": 0.18250000000000005,
           "starts_sek": 0,
-          "shaping_sek": 0.022281249999999947,
-          "ramp_sek": 0.0888125,
+          "shaping_sek": 0.004499999999999921,
+          "ramp_sek": 0.11681250000000001,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.8950000000000001,
-          "total_sek": -1.09390625
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.08999999999999997,
+          "total_sek": -1.394173611111111
         }
       }
     },
@@ -1810,16 +1810,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-0",
         "objective": {
-          "import_sek": 0.8950000000000001,
+          "import_sek": -0.08999999999999997,
           "export_sek": 0,
-          "wear_sek": 0.10000000000000003,
+          "wear_sek": 0.18250000000000005,
           "starts_sek": 0,
-          "shaping_sek": 0.022281249999999947,
-          "ramp_sek": 1.162,
+          "shaping_sek": 0.004499999999999921,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.8950000000000001,
-          "total_sek": -0.02071875000000034
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.08999999999999997,
+          "total_sek": -0.32098611111111075
         }
       }
     },
@@ -1831,16 +1831,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-1",
         "objective": {
-          "import_sek": 0.92839,
+          "import_sek": -0.05661000000000005,
           "export_sek": 0,
-          "wear_sek": 0.08887000000000006,
+          "wear_sek": 0.17137000000000008,
           "starts_sek": 0,
-          "shaping_sek": 0.01956163449999998,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.001780384499999954,
+          "ramp_sek": 0.10567200000000017,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.92839,
-          "total_sek": -1.0231783655000002
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.05661000000000005,
+          "total_sek": -1.3857737266111108
         }
       }
     },
@@ -1852,16 +1852,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-1",
         "objective": {
-          "import_sek": 0.92839,
+          "import_sek": -0.05661000000000005,
           "export_sek": 0,
-          "wear_sek": 0.08887000000000006,
+          "wear_sek": 0.17137000000000008,
           "starts_sek": 0,
-          "shaping_sek": 0.01956163449999998,
-          "ramp_sek": 0.0888125,
+          "shaping_sek": 0.001780384499999954,
+          "ramp_sek": 0.05448450000000016,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.92839,
-          "total_sek": -1.0743658655000001
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.05661000000000005,
+          "total_sek": -1.4369612266111107
         }
       }
     },
@@ -1873,16 +1873,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-1",
         "objective": {
-          "import_sek": 0.92839,
+          "import_sek": -0.05661000000000005,
           "export_sek": 0,
-          "wear_sek": 0.08887000000000006,
+          "wear_sek": 0.17137000000000008,
           "starts_sek": 0,
-          "shaping_sek": 0.01956163449999998,
-          "ramp_sek": 1.2243279999999999,
+          "shaping_sek": 0.001780384499999954,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.92839,
-          "total_sek": 0.06114963449999955
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.05661000000000005,
+          "total_sek": -0.3014457266111108
         }
       }
     },
@@ -1894,16 +1894,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
+          "import_sek": 0,
           "export_sek": 0,
-          "wear_sek": 0.07000000000000003,
+          "wear_sek": 0.15250000000000005,
           "starts_sek": 0,
-          "shaping_sek": 0.017781249999999915,
-          "ramp_sek": 0.14,
+          "shaping_sek": -1.1102230246251565e-16,
+          "ramp_sek": 2.5465851649641993e-16,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.9850000000000001,
-          "total_sek": -0.9872187500000003
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": 0,
+          "total_sek": -1.4554861111111106
         }
       }
     },
@@ -1915,16 +1915,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
+          "import_sek": 0,
           "export_sek": 0,
-          "wear_sek": 0.07000000000000003,
+          "wear_sek": 0.15250000000000005,
           "starts_sek": 0,
-          "shaping_sek": 0.017781249999999915,
-          "ramp_sek": 0.1911874999999998,
+          "shaping_sek": -1.1102230246251565e-16,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.9850000000000001,
-          "total_sek": -0.9360312500000003
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": 0,
+          "total_sek": -1.4042986111111109
         }
       }
     },
@@ -1936,16 +1936,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
+          "import_sek": 0,
           "export_sek": 0,
-          "wear_sek": 0.07000000000000003,
+          "wear_sek": 0.15250000000000005,
           "starts_sek": 0,
-          "shaping_sek": 0.017781249999999915,
-          "ramp_sek": 1.3299999999999998,
+          "shaping_sek": -1.1102230246251565e-16,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.9850000000000001,
-          "total_sek": 0.2027812499999997
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": 0,
+          "total_sek": -0.26548611111111087
         }
       }
     },
@@ -1957,16 +1957,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
+          "import_sek": 0,
           "export_sek": 0.07791000000000003,
-          "wear_sek": 0.044030000000000014,
+          "wear_sek": 0.12653000000000003,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.9070900000000001,
-          "total_sek": -1.09109875
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.07791000000000003,
+          "total_sek": -1.5593661111111108
         }
       }
     },
@@ -1978,16 +1978,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
+          "import_sek": 0,
           "export_sek": 0.07791000000000003,
-          "wear_sek": 0.044030000000000014,
+          "wear_sek": 0.12653000000000003,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.9070900000000001,
-          "total_sek": -1.03991125
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.07791000000000003,
+          "total_sek": -1.5081786111111108
         }
       }
     },
@@ -1999,16 +1999,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
+          "import_sek": 0,
           "export_sek": 0.07791000000000003,
-          "wear_sek": 0.044030000000000014,
+          "wear_sek": 0.12653000000000003,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.9070900000000001,
-          "total_sek": 0.09890124999999994
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.07791000000000003,
+          "total_sek": -0.36936611111111084
         }
       }
     },
@@ -2020,16 +2020,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
+          "import_sek": 0,
           "export_sek": 0.20999999999999996,
-          "wear_sek": 0,
+          "wear_sek": 0.08250000000000002,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -1.26721875
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.20999999999999996,
+          "total_sek": -1.7354861111111108
         }
       }
     },
@@ -2041,16 +2041,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
+          "import_sek": 0,
           "export_sek": 0.20999999999999996,
-          "wear_sek": 0,
+          "wear_sek": 0.08250000000000002,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -1.2160312500000001
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.20999999999999996,
+          "total_sek": -1.684298611111111
         }
       }
     },
@@ -2062,16 +2062,16 @@
         "witness_id": "anchor-1",
         "cell_id": "anchor-1-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
+          "import_sek": 0,
           "export_sek": 0.20999999999999996,
-          "wear_sek": 0,
+          "wear_sek": 0.08250000000000002,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 2.2,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -0.07721875000000011
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.20999999999999996,
+          "total_sek": -0.5454861111111107
         }
       }
     },
@@ -2080,19 +2080,19 @@
       "energy_kwh": 3.412222222222222,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-0",
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-3",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.3212999999999998,
+          "wear_sek": 0.11959999999999998,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 2.438836975308642,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -1.506055725308642
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.3212999999999998,
+          "total_sek": -1.8096861111111107
         }
       }
     },
@@ -2101,19 +2101,19 @@
       "energy_kwh": 3.412222222222222,
       "previous_import_w": 731.25,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-0",
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-3",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.3212999999999998,
+          "wear_sek": 0.11959999999999998,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 2.438836975308642,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -1.454868225308642
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.3212999999999998,
+          "total_sek": -1.7584986111111107
         }
       }
     },
@@ -2122,19 +2122,19 @@
       "energy_kwh": 3.412222222222222,
       "previous_import_w": 17000,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-0",
+        "witness_id": "anchor-1",
+        "cell_id": "anchor-1-cell-3",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.3212999999999998,
+          "wear_sek": 0.11959999999999998,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 2.438836975308642,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -0.316055725308642
+          "terminal_sek": 1.607986111111111,
+          "billable_sek": -0.3212999999999998,
+          "total_sek": -0.6196861111111105
         }
       }
     },
@@ -2146,16 +2146,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-1",
         "objective": {
-          "import_sek": 0.9142982456140352,
-          "export_sek": 0,
-          "wear_sek": 0.09356725146198835,
+          "import_sek": -0.07070175438596493,
+          "export_sek": 0.54,
+          "wear_sek": 0.24356725146198838,
           "starts_sek": 0,
-          "shaping_sek": 0.020558326707363017,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.0027770767073629354,
+          "ramp_sek": 0.13197660818713464,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.9142982456140352,
-          "total_sek": -2.039909509549947
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.610701754385965,
+          "total_sek": -2.6268252624739232
         }
       }
     },
@@ -2167,16 +2167,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-1",
         "objective": {
-          "import_sek": 0.9142982456140352,
-          "export_sek": 0,
-          "wear_sek": 0.09356725146198835,
+          "import_sek": -0.07070175438596493,
+          "export_sek": 0.54,
+          "wear_sek": 0.24356725146198838,
           "starts_sek": 0,
-          "shaping_sek": 0.020558326707363017,
-          "ramp_sek": 0.0888125,
+          "shaping_sek": 0.0027770767073629354,
+          "ramp_sek": 0.08078910818713464,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.9142982456140352,
-          "total_sek": -2.091097009549947
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.610701754385965,
+          "total_sek": -2.6780127624739234
         }
       }
     },
@@ -2188,16 +2188,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-1",
         "objective": {
-          "import_sek": 0.9142982456140352,
-          "export_sek": 0,
-          "wear_sek": 0.09356725146198835,
+          "import_sek": -0.07070175438596493,
+          "export_sek": 0.54,
+          "wear_sek": 0.24356725146198838,
           "starts_sek": 0,
-          "shaping_sek": 0.020558326707363017,
-          "ramp_sek": 1.1980233918128653,
+          "shaping_sek": 0.0027770767073629354,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.9142982456140352,
-          "total_sek": -0.9818861177370817
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.610701754385965,
+          "total_sek": -1.5688018706610578
         }
       }
     },
@@ -2209,16 +2209,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-0",
         "objective": {
-          "import_sek": 0.8950000000000002,
-          "export_sek": 0,
-          "wear_sek": 0.10000000000000003,
+          "import_sek": -0.08999999999999986,
+          "export_sek": 0.54,
+          "wear_sek": 0.25000000000000006,
           "starts_sek": 0,
-          "shaping_sek": 0.02228125000000003,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.0044999999999999485,
+          "ramp_sek": 0.168,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.8950000000000002,
-          "total_sek": -2.051052083333333
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.6299999999999999,
+          "total_sek": -2.6019444444444444
         }
       }
     },
@@ -2230,16 +2230,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-0",
         "objective": {
-          "import_sek": 0.8950000000000002,
-          "export_sek": 0,
-          "wear_sek": 0.10000000000000003,
+          "import_sek": -0.08999999999999986,
+          "export_sek": 0.54,
+          "wear_sek": 0.25000000000000006,
           "starts_sek": 0,
-          "shaping_sek": 0.02228125000000003,
-          "ramp_sek": 0.0888125,
+          "shaping_sek": 0.0044999999999999485,
+          "ramp_sek": 0.11681250000000001,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.8950000000000002,
-          "total_sek": -2.102239583333333
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.6299999999999999,
+          "total_sek": -2.653131944444444
         }
       }
     },
@@ -2251,16 +2251,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-0",
         "objective": {
-          "import_sek": 0.8950000000000002,
-          "export_sek": 0,
-          "wear_sek": 0.10000000000000003,
+          "import_sek": -0.08999999999999986,
+          "export_sek": 0.54,
+          "wear_sek": 0.25000000000000006,
           "starts_sek": 0,
-          "shaping_sek": 0.02228125000000003,
-          "ramp_sek": 1.1620000000000001,
+          "shaping_sek": 0.0044999999999999485,
+          "ramp_sek": 1.1900000000000004,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.8950000000000002,
-          "total_sek": -1.0290520833333328
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.6299999999999999,
+          "total_sek": -1.579944444444444
         }
       }
     },
@@ -2272,16 +2272,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-1",
         "objective": {
-          "import_sek": 0.9283900000000003,
-          "export_sek": 0,
-          "wear_sek": 0.08887,
+          "import_sek": -0.05660999999999983,
+          "export_sek": 0.54,
+          "wear_sek": 0.23887000000000003,
           "starts_sek": 0,
-          "shaping_sek": 0.019561634500000036,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.001780384499999954,
+          "ramp_sek": 0.1056719999999999,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.9283900000000003,
-          "total_sek": -2.031511698833333
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.5966099999999999,
+          "total_sek": -2.6447320599444444
         }
       }
     },
@@ -2293,16 +2293,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-1",
         "objective": {
-          "import_sek": 0.9283900000000003,
-          "export_sek": 0,
-          "wear_sek": 0.08887,
+          "import_sek": -0.05660999999999983,
+          "export_sek": 0.54,
+          "wear_sek": 0.23887000000000003,
           "starts_sek": 0,
-          "shaping_sek": 0.019561634500000036,
-          "ramp_sek": 0.0888125,
+          "shaping_sek": 0.001780384499999954,
+          "ramp_sek": 0.0544844999999999,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.9283900000000003,
-          "total_sek": -2.082699198833333
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.5966099999999999,
+          "total_sek": -2.6959195599444445
         }
       }
     },
@@ -2314,16 +2314,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-1",
         "objective": {
-          "import_sek": 0.9283900000000003,
-          "export_sek": 0,
-          "wear_sek": 0.08887,
+          "import_sek": -0.05660999999999983,
+          "export_sek": 0.54,
+          "wear_sek": 0.23887000000000003,
           "starts_sek": 0,
-          "shaping_sek": 0.019561634500000036,
-          "ramp_sek": 1.224328,
+          "shaping_sek": 0.001780384499999954,
+          "ramp_sek": 1.19,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.9283900000000003,
-          "total_sek": -0.9471836988333329
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.5966099999999999,
+          "total_sek": -1.5604040599444442
         }
       }
     },
@@ -2335,16 +2335,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0,
-          "wear_sek": 0.07,
+          "import_sek": 0,
+          "export_sek": 0.54,
+          "wear_sek": 0.22000000000000003,
           "starts_sek": 0,
-          "shaping_sek": 0.01778125000000008,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.9850000000000001,
-          "total_sek": -1.9955520833333331
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.54,
+          "total_sek": -2.714444444444444
         }
       }
     },
@@ -2356,16 +2356,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0,
-          "wear_sek": 0.07,
+          "import_sek": 0,
+          "export_sek": 0.54,
+          "wear_sek": 0.22000000000000003,
           "starts_sek": 0,
-          "shaping_sek": 0.01778125000000008,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.9850000000000001,
-          "total_sek": -1.9443645833333332
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.54,
+          "total_sek": -2.6632569444444445
         }
       }
     },
@@ -2377,16 +2377,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0,
-          "wear_sek": 0.07,
+          "import_sek": 0,
+          "export_sek": 0.54,
+          "wear_sek": 0.22000000000000003,
           "starts_sek": 0,
-          "shaping_sek": 0.01778125000000008,
-          "ramp_sek": 1.3300000000000003,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000004,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.9850000000000001,
-          "total_sek": -0.8055520833333332
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.54,
+          "total_sek": -1.524444444444444
         }
       }
     },
@@ -2398,16 +2398,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.07791000000000015,
-          "wear_sek": 0.04402999999999996,
+          "import_sek": 0,
+          "export_sek": 0.6179100000000002,
+          "wear_sek": 0.19402999999999998,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.90709,
-          "total_sek": -2.0994320833333333
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.6179100000000002,
+          "total_sek": -2.8183244444444444
         }
       }
     },
@@ -2419,16 +2419,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.07791000000000015,
-          "wear_sek": 0.04402999999999996,
+          "import_sek": 0,
+          "export_sek": 0.6179100000000002,
+          "wear_sek": 0.19402999999999998,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.90709,
-          "total_sek": -2.0482445833333336
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.6179100000000002,
+          "total_sek": -2.7671369444444447
         }
       }
     },
@@ -2440,16 +2440,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.07791000000000015,
-          "wear_sek": 0.04402999999999996,
+          "import_sek": 0,
+          "export_sek": 0.6179100000000002,
+          "wear_sek": 0.19402999999999998,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.90709,
-          "total_sek": -0.9094320833333334
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.6179100000000002,
+          "total_sek": -1.6283244444444445
         }
       }
     },
@@ -2461,16 +2461,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.2100000000000002,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.7500000000000002,
+          "wear_sek": 0.15000000000000002,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.7749999999999999,
-          "total_sek": -2.2755520833333334
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.7500000000000002,
+          "total_sek": -2.9944444444444445
         }
       }
     },
@@ -2482,16 +2482,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.2100000000000002,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.7500000000000002,
+          "wear_sek": 0.15000000000000002,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.7749999999999999,
-          "total_sek": -2.2243645833333336
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.7500000000000002,
+          "total_sek": -2.9432569444444443
         }
       }
     },
@@ -2503,16 +2503,16 @@
         "witness_id": "anchor-2",
         "cell_id": "anchor-2-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.2100000000000002,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.7500000000000002,
+          "wear_sek": 0.15000000000000002,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 3.2083333333333335,
-          "billable_sek": 0.7749999999999999,
-          "total_sek": -1.0855520833333334
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.7500000000000002,
+          "total_sek": -1.8044444444444445
         }
       }
     },
@@ -2521,19 +2521,19 @@
       "energy_kwh": 5.412222222222222,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-3",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.8612999999999997,
+          "wear_sek": 0.18710000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 3.3730122942386833,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.440231044238683
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.8612999999999997,
+          "total_sek": -3.068644444444444
         }
       }
     },
@@ -2542,19 +2542,19 @@
       "energy_kwh": 5.412222222222222,
       "previous_import_w": 731.25,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-3",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.8612999999999997,
+          "wear_sek": 0.18710000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 3.3730122942386833,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.3890435442386835
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.8612999999999997,
+          "total_sek": -3.017456944444444
         }
       }
     },
@@ -2563,19 +2563,19 @@
       "energy_kwh": 5.412222222222222,
       "previous_import_w": 17000,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-2",
+        "cell_id": "anchor-2-cell-3",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.8612999999999997,
+          "wear_sek": 0.18710000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 3.3730122942386833,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -1.2502310442386833
+          "terminal_sek": 2.3944444444444444,
+          "billable_sek": -0.8612999999999997,
+          "total_sek": -1.878644444444444
         }
       }
     },
@@ -2587,16 +2587,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.9142982456140349,
-          "export_sek": 0,
-          "wear_sek": 0.09356725146198841,
+          "import_sek": -0.07070175438596515,
+          "export_sek": 0.54,
+          "wear_sek": 0.24356725146198843,
           "starts_sek": 0,
-          "shaping_sek": 0.02055832670736324,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.0027770767073631575,
+          "ramp_sek": 0.13197660818713514,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.9142982456140349,
-          "total_sek": -2.7065761762166134
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.6107017543859652,
+          "total_sek": -3.574973410622071
         }
       }
     },
@@ -2608,16 +2608,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.9142982456140349,
-          "export_sek": 0,
-          "wear_sek": 0.09356725146198841,
+          "import_sek": -0.07070175438596515,
+          "export_sek": 0.54,
+          "wear_sek": 0.24356725146198843,
           "starts_sek": 0,
-          "shaping_sek": 0.02055832670736324,
-          "ramp_sek": 0.08881250000000002,
+          "shaping_sek": 0.0027770767073631575,
+          "ramp_sek": 0.08078910818713514,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.9142982456140349,
-          "total_sek": -2.7577636762166136
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.6107017543859652,
+          "total_sek": -3.626160910622071
         }
       }
     },
@@ -2629,16 +2629,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.9142982456140349,
-          "export_sek": 0,
-          "wear_sek": 0.09356725146198841,
+          "import_sek": -0.07070175438596515,
+          "export_sek": 0.54,
+          "wear_sek": 0.24356725146198843,
           "starts_sek": 0,
-          "shaping_sek": 0.02055832670736324,
-          "ramp_sek": 1.1980233918128649,
+          "shaping_sek": 0.0027770767073631575,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.9142982456140349,
-          "total_sek": -1.6485527844037486
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.6107017543859652,
+          "total_sek": -2.516950018809206
         }
       }
     },
@@ -2650,16 +2650,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.8950000000000002,
-          "export_sek": 0,
-          "wear_sek": 0.09999999999999998,
+          "import_sek": -0.08999999999999986,
+          "export_sek": 0.54,
+          "wear_sek": 0.25,
           "starts_sek": 0,
-          "shaping_sek": 0.022281250000000252,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.0045000000000001705,
+          "ramp_sek": 0.168,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.8950000000000002,
-          "total_sek": -2.7177187499999995
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.6299999999999999,
+          "total_sek": -3.550092592592592
         }
       }
     },
@@ -2671,16 +2671,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.8950000000000002,
-          "export_sek": 0,
-          "wear_sek": 0.09999999999999998,
+          "import_sek": -0.08999999999999986,
+          "export_sek": 0.54,
+          "wear_sek": 0.25,
           "starts_sek": 0,
-          "shaping_sek": 0.022281250000000252,
-          "ramp_sek": 0.0888125,
+          "shaping_sek": 0.0045000000000001705,
+          "ramp_sek": 0.11681250000000001,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.8950000000000002,
-          "total_sek": -2.7689062499999997
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.6299999999999999,
+          "total_sek": -3.6012800925925923
         }
       }
     },
@@ -2692,16 +2692,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.8950000000000002,
-          "export_sek": 0,
-          "wear_sek": 0.09999999999999998,
+          "import_sek": -0.08999999999999986,
+          "export_sek": 0.54,
+          "wear_sek": 0.25,
           "starts_sek": 0,
-          "shaping_sek": 0.022281250000000252,
-          "ramp_sek": 1.162,
+          "shaping_sek": 0.0045000000000001705,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.8950000000000002,
-          "total_sek": -1.6957187499999997
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.6299999999999999,
+          "total_sek": -2.528092592592592
         }
       }
     },
@@ -2710,19 +2710,19 @@
       "energy_kwh": 6.155735000000001,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": -0.05660999999999983,
+          "export_sek": 0.54,
+          "wear_sek": 0.23887000000000003,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.0017803845000008423,
+          "ramp_sek": 0.1056719999999999,
           "service_sek": 0,
-          "terminal_sek": 3.634234442073959,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.701453192073959
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.5966099999999999,
+          "total_sek": -3.5928802080925917
         }
       }
     },
@@ -2734,16 +2734,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.9283900000000003,
-          "export_sek": 0,
-          "wear_sek": 0.08887,
+          "import_sek": -0.05660999999999983,
+          "export_sek": 0.54,
+          "wear_sek": 0.23887000000000003,
           "starts_sek": 0,
-          "shaping_sek": 0.019561634500000924,
-          "ramp_sek": 0.0888125,
+          "shaping_sek": 0.0017803845000008423,
+          "ramp_sek": 0.0544844999999999,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.9283900000000003,
-          "total_sek": -2.749365865499999
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.5966099999999999,
+          "total_sek": -3.644067708092592
         }
       }
     },
@@ -2755,16 +2755,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.9283900000000003,
-          "export_sek": 0,
-          "wear_sek": 0.08887,
+          "import_sek": -0.05660999999999983,
+          "export_sek": 0.54,
+          "wear_sek": 0.23887000000000003,
           "starts_sek": 0,
-          "shaping_sek": 0.019561634500000924,
-          "ramp_sek": 1.2243279999999999,
+          "shaping_sek": 0.0017803845000008423,
+          "ramp_sek": 1.1899999999999997,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.9283900000000003,
-          "total_sek": -1.613850365499999
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.5966099999999999,
+          "total_sek": -2.508552208092592
         }
       }
     },
@@ -2773,19 +2773,19 @@
       "energy_kwh": 6.335,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.54,
+          "wear_sek": 0.22000000000000008,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 4.440892098500626e-16,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 3.6903239583333334,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.7575427083333333
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.54,
+          "total_sek": -3.662592592592592
         }
       }
     },
@@ -2794,19 +2794,19 @@
       "energy_kwh": 6.335,
       "previous_import_w": 731.25,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.54,
+          "wear_sek": 0.22000000000000008,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 4.440892098500626e-16,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 3.6903239583333334,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.706355208333333
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.54,
+          "total_sek": -3.6114050925925922
         }
       }
     },
@@ -2815,19 +2815,19 @@
       "energy_kwh": 6.335,
       "previous_import_w": 17000,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-0",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.54,
+          "wear_sek": 0.22000000000000008,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 4.440892098500626e-16,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 3.6903239583333334,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -1.5675427083333333
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.54,
+          "total_sek": -2.472592592592592
         }
       }
     },
@@ -2836,19 +2836,19 @@
       "energy_kwh": 6.581715,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.6179100000000002,
+          "wear_sek": 0.19403000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 3.7631386524489585,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.8303574024489584
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.6179100000000002,
+          "total_sek": -3.7664725925925926
         }
       }
     },
@@ -2857,19 +2857,19 @@
       "energy_kwh": 6.581715,
       "previous_import_w": 731.25,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.6179100000000002,
+          "wear_sek": 0.19403000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 3.7631386524489585,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.7791699024489587
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.6179100000000002,
+          "total_sek": -3.715285092592593
         }
       }
     },
@@ -2878,19 +2878,19 @@
       "energy_kwh": 6.581715,
       "previous_import_w": 17000,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.6179100000000002,
+          "wear_sek": 0.19403000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 3.7631386524489585,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -1.6403574024489584
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.6179100000000002,
+          "total_sek": -2.5764725925925926
         }
       }
     },
@@ -2902,16 +2902,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.20999999999999996,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.75,
+          "wear_sek": 0.15000000000000002,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.94221875
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.75,
+          "total_sek": -3.9425925925925926
         }
       }
     },
@@ -2923,16 +2923,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.20999999999999996,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.75,
+          "wear_sek": 0.15000000000000002,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.89103125
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.75,
+          "total_sek": -3.8914050925925925
         }
       }
     },
@@ -2944,16 +2944,16 @@
         "witness_id": "anchor-3",
         "cell_id": "anchor-3-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.20999999999999996,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.75,
+          "wear_sek": 0.15000000000000002,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 3.875,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -1.75221875
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.75,
+          "total_sek": -2.7525925925925923
         }
       }
     },
@@ -2962,19 +2962,19 @@
       "energy_kwh": 7.412222222222222,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.8612999999999997,
+          "wear_sek": 0.18710000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 3.970975257201647,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.0381940072016467
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.8612999999999997,
+          "total_sek": -4.0167925925925925
         }
       }
     },
@@ -2983,19 +2983,19 @@
       "energy_kwh": 7.412222222222222,
       "previous_import_w": 731.25,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.8612999999999997,
+          "wear_sek": 0.18710000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 3.970975257201647,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.987006507201647
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.8612999999999997,
+          "total_sek": -3.9656050925925923
         }
       }
     },
@@ -3004,19 +3004,19 @@
       "energy_kwh": 7.412222222222222,
       "previous_import_w": 17000,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.8612999999999997,
+          "wear_sek": 0.18710000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 3.970975257201647,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -1.8481940072016467
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -0.8612999999999997,
+          "total_sek": -2.826792592592592
         }
       }
     },
@@ -3025,19 +3025,19 @@
       "energy_kwh": 8.11111111111111,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 1.0499999999999996,
+          "wear_sek": 0.2500000000000001,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 4.101337448559671,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.168556198559671
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -1.0499999999999996,
+          "total_sek": -4.142592592592592
         }
       }
     },
@@ -3046,19 +3046,19 @@
       "energy_kwh": 8.11111111111111,
       "previous_import_w": 731.25,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 1.0499999999999996,
+          "wear_sek": 0.2500000000000001,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 4.101337448559671,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.1173686985596714
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -1.0499999999999996,
+          "total_sek": -4.091405092592592
         }
       }
     },
@@ -3067,19 +3067,19 @@
       "energy_kwh": 8.11111111111111,
       "previous_import_w": 17000,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-3",
+        "cell_id": "anchor-3-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 1.0499999999999996,
+          "wear_sek": 0.2500000000000001,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 4.101337448559671,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -1.9785561985596711
+          "terminal_sek": 3.3425925925925926,
+          "billable_sek": -1.0499999999999996,
+          "total_sek": -2.952592592592592
         }
       }
     },
@@ -3088,19 +3088,19 @@
       "energy_kwh": 9.049999999999999,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-0",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": -0.08999999999999986,
+          "export_sek": 0.74,
+          "wear_sek": 0.30000000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.0045000000000001705,
+          "ramp_sek": 0.168,
           "service_sek": 0,
-          "terminal_sek": 4.212395833333334,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.2796145833333337
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.8299999999999998,
+          "total_sek": -4.401738683127572
         }
       }
     },
@@ -3109,19 +3109,19 @@
       "energy_kwh": 9.049999999999999,
       "previous_import_w": 731.25,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-0",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": -0.08999999999999986,
+          "export_sek": 0.74,
+          "wear_sek": 0.30000000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0.0045000000000001705,
+          "ramp_sek": 0.11681250000000001,
           "service_sek": 0,
-          "terminal_sek": 4.212395833333334,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.228427083333334
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.8299999999999998,
+          "total_sek": -4.4529261831275715
         }
       }
     },
@@ -3130,19 +3130,19 @@
       "energy_kwh": 9.049999999999999,
       "previous_import_w": 17000,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-0",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": -0.08999999999999986,
+          "export_sek": 0.74,
+          "wear_sek": 0.30000000000000004,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0.0045000000000001705,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 4.212395833333334,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.0896145833333337
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.8299999999999998,
+          "total_sek": -3.379738683127572
         }
       }
     },
@@ -3151,19 +3151,19 @@
       "energy_kwh": 9.05,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-0",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": -0.08999999999999941,
+          "export_sek": 0.74,
+          "wear_sek": 0.2999999999999998,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.0045000000000001705,
+          "ramp_sek": 0.167999999999999,
           "service_sek": 0,
-          "terminal_sek": 4.212395833333334,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.2796145833333337
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.8299999999999994,
+          "total_sek": -4.401738683127572
         }
       }
     },
@@ -3172,19 +3172,19 @@
       "energy_kwh": 9.05,
       "previous_import_w": 731.25,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-0",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": -0.08999999999999941,
+          "export_sek": 0.74,
+          "wear_sek": 0.2999999999999998,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0.0045000000000001705,
+          "ramp_sek": 0.116812499999999,
           "service_sek": 0,
-          "terminal_sek": 4.212395833333334,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.228427083333334
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.8299999999999994,
+          "total_sek": -4.452926183127572
         }
       }
     },
@@ -3193,19 +3193,19 @@
       "energy_kwh": 9.05,
       "previous_import_w": 17000,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-0",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": -0.08999999999999941,
+          "export_sek": 0.74,
+          "wear_sek": 0.2999999999999998,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0.0045000000000001705,
+          "ramp_sek": 1.19,
           "service_sek": 0,
-          "terminal_sek": 4.212395833333334,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.0896145833333337
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.8299999999999994,
+          "total_sek": -3.379738683127572
         }
       }
     },
@@ -3214,19 +3214,19 @@
       "energy_kwh": 9.155735,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": -0.056609999999999605,
+          "export_sek": 0.74,
+          "wear_sek": 0.28886999999999996,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0.0017803845000008423,
+          "ramp_sek": 0.1056719999999994,
           "service_sek": 0,
-          "terminal_sek": 4.220300692073959,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.287519442073959
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.7966099999999996,
+          "total_sek": -4.444526298627571
         }
       }
     },
@@ -3235,19 +3235,19 @@
       "energy_kwh": 9.155735,
       "previous_import_w": 731.25,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": -0.056609999999999605,
+          "export_sek": 0.74,
+          "wear_sek": 0.28886999999999996,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0.0017803845000008423,
+          "ramp_sek": 0.054484499999999395,
           "service_sek": 0,
-          "terminal_sek": 4.220300692073959,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.236331942073959
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.7966099999999996,
+          "total_sek": -4.4957137986275715
         }
       }
     },
@@ -3256,19 +3256,19 @@
       "energy_kwh": 9.155735,
       "previous_import_w": 17000,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": -0.056609999999999605,
+          "export_sek": 0.74,
+          "wear_sek": 0.28886999999999996,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0.0017803845000008423,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 4.220300692073959,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.097519442073959
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.7966099999999996,
+          "total_sek": -3.360198298627571
         }
       }
     },
@@ -3277,19 +3277,19 @@
       "energy_kwh": 9.335,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 4.440892098500626e-16,
+          "export_sek": 0.74,
+          "wear_sek": 0.2699999999999998,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 8.881784197001252e-16,
+          "ramp_sek": 1.0186340659856797e-15,
           "service_sek": 0,
-          "terminal_sek": 4.231573958333334,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.2987927083333335
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.7399999999999995,
+          "total_sek": -4.51423868312757
         }
       }
     },
@@ -3298,19 +3298,19 @@
       "energy_kwh": 9.335,
       "previous_import_w": 731.25,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 4.440892098500626e-16,
+          "export_sek": 0.74,
+          "wear_sek": 0.2699999999999998,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 8.881784197001252e-16,
+          "ramp_sek": 0.051187500000001024,
           "service_sek": 0,
-          "terminal_sek": 4.231573958333334,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.2476052083333338
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.7399999999999995,
+          "total_sek": -4.46305118312757
         }
       }
     },
@@ -3319,19 +3319,19 @@
       "energy_kwh": 9.335,
       "previous_import_w": 17000,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-1",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 4.440892098500626e-16,
+          "export_sek": 0.74,
+          "wear_sek": 0.2699999999999998,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 8.881784197001252e-16,
+          "ramp_sek": 1.190000000000001,
           "service_sek": 0,
-          "terminal_sek": 4.231573958333334,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.1087927083333335
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.7399999999999995,
+          "total_sek": -3.32423868312757
         }
       }
     },
@@ -3340,19 +3340,19 @@
       "energy_kwh": 9.581715,
       "previous_import_w": 0,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.8179100000000008,
+          "wear_sek": 0.24402999999999975,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.14,
+          "shaping_sek": 0,
+          "ramp_sek": 0,
           "service_sek": 0,
-          "terminal_sek": 4.242709902448959,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.3099286524489586
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.8179100000000008,
+          "total_sek": -4.618118683127573
         }
       }
     },
@@ -3361,19 +3361,19 @@
       "energy_kwh": 9.581715,
       "previous_import_w": 731.25,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.8179100000000008,
+          "wear_sek": 0.24402999999999975,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 0.1911875,
+          "shaping_sek": 0,
+          "ramp_sek": 0.051187500000000004,
           "service_sek": 0,
-          "terminal_sek": 4.242709902448959,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -3.258741152448959
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.8179100000000008,
+          "total_sek": -4.566931183127573
         }
       }
     },
@@ -3382,19 +3382,19 @@
       "energy_kwh": 9.581715,
       "previous_import_w": 17000,
       "expected": {
-        "witness_id": "idle",
-        "cell_id": "idle-cell-1",
+        "witness_id": "anchor-4",
+        "cell_id": "anchor-4-cell-2",
         "objective": {
-          "import_sek": 0.9850000000000001,
-          "export_sek": 0.21,
-          "wear_sek": 0,
+          "import_sek": 0,
+          "export_sek": 0.8179100000000008,
+          "wear_sek": 0.24402999999999975,
           "starts_sek": 0,
-          "shaping_sek": 0.017781250000000002,
-          "ramp_sek": 1.33,
+          "shaping_sek": 0,
+          "ramp_sek": 1.1900000000000002,
           "service_sek": 0,
-          "terminal_sek": 4.242709902448959,
-          "billable_sek": 0.7750000000000001,
-          "total_sek": -2.1199286524489587
+          "terminal_sek": 4.044238683127572,
+          "billable_sek": -0.8179100000000008,
+          "total_sek": -3.428118683127573
         }
       }
     },
