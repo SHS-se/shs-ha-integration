@@ -1382,6 +1382,7 @@ def _drive(state, now, durable_revision, effects):
 
 
 def _observe_measurement(state, event, now_ms, rollback):
+    # Local revisions order updates; source timestamps only bound freshness.
     if isinstance(event, ConditionsObserved):
         conditions = event.conditions
         if conditions.at_ms > now_ms or conditions.at_ms < state.resume_after_ms:
@@ -1389,8 +1390,6 @@ def _observe_measurement(state, event, now_ms, rollback):
         if conditions.revision == state.conditions_revision and state.conditions is not None and conditions != state.conditions:
             raise ValueError("conflicting conditions revision")
         if conditions.revision > state.conditions_revision:
-            if state.conditions and conditions.at_ms < state.conditions.at_ms:
-                raise ValueError("conditions time regressed")
             state = replace(state, conditions=None if rollback else conditions, conditions_revision=conditions.revision)
     elif isinstance(event, FrameObserved):
         if event.frame.at_ms > now_ms or (not rollback and event.frame.at_ms < state.resume_after_ms):
@@ -1405,8 +1404,6 @@ def _observe_measurement(state, event, now_ms, rollback):
         if observation.at_ms > now_ms or (not rollback and observation.at_ms < state.resume_after_ms) or set(dict(observation.controls)) != set(group.spec.control_keys) or not _within(observation.envelope, group.spec.maximum):
             raise ValueError("observation exceeds its declared group scope")
         if observation.revision > group.observation_revision:
-            if group.observation and observation.at_ms < group.observation.at_ms:
-                raise ValueError("observation time regressed")
             group = replace(group, observation=None if rollback else observation, observation_revision=observation.revision)
 
         state = _put(state, group)

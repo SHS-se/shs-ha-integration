@@ -99,6 +99,43 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_command_readback_does_not_make_house_reports_out_of_order(self):
+        r=Rig();original=r.controller.hass.services.async_call
+        async def delayed(domain,name,data,blocking):
+            r.now+=200
+            await original(domain,name,data,blocking)
+        r.controller.hass.services.async_call=delayed
+        try:
+            await r.start()
+            initial_calls=deepcopy(r.calls)
+            self.assertTrue(initial_calls)
+            for _ in range(3):
+                # Native readback follows the write; household reports are still fresh.
+                r.now+=1000
+                await r.runtime.refresh();await r.runtime.host.idle()
+                self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+                self.assertEqual(r.rows['select.mode']['state'],'Command Charging (PV First)')
+                self.assertEqual(r.calls,initial_calls)
+                await r.advance(5000)
+            self.assertEqual(r.calls,initial_calls)
+            self.assertEqual(r.runtime.snapshot()['fault_history'],[])
+        finally:await r.runtime.close()
+
+    async def test_later_capture_accepts_updated_values_with_earlier_report_time(self):
+        r=Rig('control_verification')
+        try:
+            await r.start();await r.advance(5000)
+            previous=r.runtime.host.state.conditions
+            r.rows['sensor.house'].update(state='1100',last_reported=iso(r.now-1000))
+            await r.runtime.refresh();await r.runtime.host.idle()
+            current=r.runtime.host.state.conditions
+            self.assertEqual(r.runtime.snapshot()['state'],'verified',r.runtime.snapshot())
+            self.assertGreater(current.revision,previous.revision)
+            self.assertLess(current.at_ms,previous.at_ms)
+            self.assertEqual(current.residual_load_w,1100)
+            self.assertEqual(r.runtime.snapshot()['fault_history'],[])
+        finally:await r.runtime.close()
+
     async def test_changing_house_load_is_one_capture_without_policy_withdrawal(self):
         r=Rig();await r.start();reasons=[]
         async def renew(state,reason):reasons.append(reason);return ()
