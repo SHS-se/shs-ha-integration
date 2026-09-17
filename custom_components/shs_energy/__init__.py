@@ -199,7 +199,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     coordinator.controller = controller
     coordinator.battery_runtime = BatteryRuntime(coordinator, controller,
         Store(hass, 1, f"shs_energy.battery_runtime.{entry.entry_id}"),
-        lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
+        lambda: int(datetime.now(timezone.utc).timestamp() * 1000),
+        lambda key: Store(hass, 1, f"shs_energy.execution_evidence.{entry.entry_id}.{key}"))
     coordinator.battery_writer = BatteryWriterFence(
         Store(hass, 1, f"shs_energy.battery_writer.{entry.entry_id}"), controller.lock,
         lambda: resolved_options(hass, dict(entry.options)),
@@ -224,9 +225,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         finally:
             coordinator.battery_writer.close()
 
-    entry.async_on_unload(coordinator.battery_policy_exchange.close)
-    entry.async_on_unload(hass.bus.async_listen_once(
-        EVENT_HOMEASSISTANT_STOP, lambda _event: coordinator.battery_policy_exchange.close()))
     scheduler = attach_controller_events(hass, entry, controller)
     # Recover local ownership before contacting the cloud. A network outage
     # must not prevent restoration of commands left by the previous process.
@@ -249,10 +247,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         hass, coordinator.async_battery_inputs_refresh, timedelta(seconds=5)))
     entry.async_create_background_task(hass, coordinator.async_battery_inputs_refresh(),
         name="shs_energy_battery_live_inputs")
-    entry.async_on_unload(async_track_time_interval(
-        hass, coordinator.async_battery_policy_refresh, timedelta(minutes=1)))
-    entry.async_create_background_task(hass, coordinator.async_battery_policy_refresh(),
-        name="shs_energy_battery_policy_delivery")
 
     # Nightly push shortly after midnight; also catch up on startup in case
     # HA was down at the scheduled time.
@@ -313,7 +307,6 @@ async def _async_options_updated(
 async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
     """Unload a config entry."""
     await entry.runtime_data.battery_runtime.close(release=True)
-    entry.runtime_data.battery_policy_exchange.close()
     entry.runtime_data.battery_live_inputs.close()
     try:
         await entry.runtime_data.controller.async_stop()

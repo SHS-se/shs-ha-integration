@@ -1,0 +1,265 @@
+"""Executable session, local native bindings and durable ownership protocol tests.
+
+All native/transport evidence and grants here are synthetic, not commissioned.
+"""
+from dataclasses import replace
+import json
+from pathlib import Path
+import subprocess
+import sys
+import unittest
+
+sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
+from battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation
+from battery_supply import SupplyScope
+from types import SimpleNamespace
+from battery_conversion import Conversion, Curve
+from plan_execution import *
+from home_runtime import ReplanRequested, CounterReceived
+from energy_ledger import (MeterSpec, CounterSample, EnergyBounds, create_ledger, mark_actuals,
+                           reconciled_actuals)
+from home_runtime import (
+    OperationBinding, NativeCatalog, ScopeParticipant, ExecutionScope, ExecutionAuthority,
+    AuthorityInstalled, ConditionsObserved, ExecutionPlanOffered, ExternalDemand, WriterIdentity,
+    WriterGrant, GrantConfirmed, GrantRevoked, ReleaseApproved, AuthorityChanged, Requested,
+    GroupSpec, Envelope, Limits, Request, Guard, Observation, Observed, Frame, FrameObserved,
+    Step, Proposed, TransitionFailed, JournalDurable, TransportResult, Tick, MeterObserved,
+    LedgerPruned, Persist, Send, NeedPlan, NeedTransition, create_home, reduce_home,
+    reservation, authorize_send,
+)
+from home_runtime_checkpoint import encode_checkpoint, decode_checkpoint, restore_checkpoint, event_json
+
+FIXTURES = Path(__file__).parent / 'fixtures'
+
+
+def load():
+    plant=BatteryPlant(1,10,4000,4000,.95,.95,17000,13000,'discharged_storage',0)
+    identity=ContextIdentity('battery','intent-1','plant-1','scope-1','external-1','tariff-1','pv-first-v1','catalog-1')
+    operations=(BatteryOperation('hold','hold',0,0),BatteryOperation('grid_charge','grid_charge',4000,0),
+        BatteryOperation('solar_charge','solar_charge',4000,0),BatteryOperation('supply_house','supply_house',0,4000),
+        BatteryOperation('export','export',0,4000))
+    return SimpleNamespace(summary=SimpleNamespace(plant=plant,identity=SimpleNamespace(context=identity),
+        permissions=Permissions(True,True,True,3,True,0,'tariff-1'),operations=operations,
+        supply_scope=SupplyScope.read({'kind':'whole_house'}),from_ms=0,until_ms=900000,actuals_origin_ms=0))
+
+
+def native(mode='Standby', charge=0, discharge=0):
+    return (('mode', mode), ('charge', charge), ('discharge', discharge))
+
+
+def catalog_for(compiled):
+    modes = {'self_consumption':'Maximum Self Consumption', 'solar_charge':'Maximum Self Consumption',
+             'supply_house':'Maximum Self Consumption', 'grid_charge':'Command Charging (PV First)',
+             'export':'Command Discharging (PV First)', 'hold':'Standby'}
+    s = compiled.summary
+    bindings = tuple(OperationBinding(op, native(modes[op.operation],
+        s.plant.charge_max_w if op.operation == 'self_consumption' else op.charge_limit_w,
+        s.plant.discharge_max_w if op.operation == 'self_consumption' else op.discharge_limit_w),
+        'pv-first-v1', 'synthetic-native-response', (Guard('ready', 1, 1),)) for op in s.operations)
+    return NativeCatalog(s.identity.context.catalog_revision, 'synthetic-pv-first-adapter', 'native-surface-1',
+                         'mode', 'charge', 'discharge', tuple(sorted(set(modes.values()))),
+                         1, s.plant.charge_max_w, s.plant.discharge_max_w, bindings)
+
+
+class Harness:
+    def __init__(self, *, compiled=None, mode='controlling', mixed=False, initial=None):
+        self.compiled = compiled or load()
+        s = self.compiled.summary
+        self.now = s.from_ms
+        self.state = create_home((GroupSpec(s.identity.context.battery_id, 'synthetic-pv-first-adapter',
+            ('mode','charge','discharge'), Envelope(s.plant.charge_max_w, s.plant.discharge_max_w)),),
+            Limits(100, 300, 1200), ledger=create_ledger('house', 'mapping-1',
+                (MeterSpec('charge','battery','AC','charge',None),)))
+        self.effects = ()
+        self.records = []
+        self.initial = json.loads(encode_checkpoint(self.state))
+        self.event(MeterObserved(CounterSample('charge','physical-register',0,0,s.actuals_origin_ms,1000000,'initial binding')))
+        participants = (ScopeParticipant(s.identity.context.battery_id, mode,1,'new_runtime',('mode','charge','discharge')),)
+        if mixed:
+            participants += (ScopeParticipant('ev','planning',1,'legacy',('ev.enable',)),
+                             ScopeParticipant('pool','control_verification',1,'external',('pool.enable',)))
+        self.authority = ExecutionAuthority('config-1',s.identity.context,s.permissions,replace(s.plant,conversion=Conversion('lossless',Curve(1,0),Curve(1,0),Curve(1,0),0)),
+            ExecutionScope(s.identity.context.scope_revision,s.identity.context.battery_id,participants),
+            catalog_for(self.compiled), 'shs-runtime', s.supply_scope)
+        self.event(AuthorityInstalled(self.authority,1))
+        release = Request('approved-release',1,s.until_ms + 900000,native('Maximum Self Consumption',s.plant.charge_max_w,s.plant.discharge_max_w),())
+        self.event(AuthorityChanged(self.group.spec.id,mode,1,release))
+        self.grant()
+        self.frame(mixed=mixed)
+        self.observe(initial or native())
+        self.conditions(load_w=8000 if mixed else 1000)
+        self.watermark = mark_actuals(self.state.ledger,s.actuals_origin_ms)
+        start,end=s.from_ms,s.until_ms
+        charge=round(2000*(end-start)/3600);load_energy=round(1000*(end-start)/3600)
+        row=ReferenceInterval(start,end,5000000,5000000+charge,'grid_charge','stored_energy',True,False,
+            4000,0,False,charge,0,0,load_energy,load_energy+charge,0,0,0,0)
+        self.contract=ExecutionContract('initial','plan',0,mode,'config-1','model','stored_energy_mwh',
+            round(s.plant.capacity_kwh*1e6),round(s.plant.cutoff_kwh*1e6),round(s.plant.capacity_kwh*1e6),
+            round(s.plant.cutoff_kwh*1e6),end,0,None,(row,),
+            (Objective('charge','stored_energy',start,end,row.stored_end_mwh,'charge now'),),(),())
+
+
+    @property
+    def group(self):
+        return self.state.groups[0]
+
+    def event(self, event, now=None):
+        if now is not None:
+            self.now = now
+        self.records.append({'at_ms':self.now,'event':event_json(event)})
+        self.state, self.effects = reduce_home(self.state,event,self.now)
+        self.state = decode_checkpoint(encode_checkpoint(self.state))
+        return self.effects
+
+    def grant(self, epoch=None, **changes):
+        grant = self.group.grant if epoch is None and self.group.grant else WriterGrant('shs-runtime',epoch or 1,
+            self.authority.config_revision,self.authority.catalog.control_surface_revision,self.compiled.summary.until_ms+900000)
+        return self.event(GrantConfirmed(self.group.spec.id,replace(grant,**changes)))
+
+    def frame(self, *, mixed=False, limit=None):
+        s=self.compiled.summary
+        evidence=(ExternalDemand('ev',Envelope(7000,0),Envelope(7000,0)), ExternalDemand('pool',Envelope(1000,0),Envelope(1000,0))) if mixed else ()
+        return self.event(FrameObserved(Frame((self.state.frame.revision+1) if self.state.frame else 1,
+            self.now,self.now+1800000,Envelope(8000 if mixed else 1000,0),
+            Envelope(limit or s.plant.import_limit_w,s.plant.export_limit_w),evidence)))
+
+    def observe(self, target=None, *, ready=1, envelope=None):
+        return self.event(Observed(self.group.spec.id,Observation(self.group.observation_revision+1,
+            self.now,self.now+1800000,target or self.group.observation.controls,(('ready',ready),),envelope or Envelope(0,0))))
+
+    def conditions(self, *, energy=5, pv=0, load_w=1000, now=None, **changes):
+        if now is not None: self.now=now
+        s=self.compiled.summary
+        c=ExecutionConditions(self.state.conditions_revision+1,self.now,self.now+1800000,energy,pv,load_w,load_w,s.identity.context,s.permissions)
+        return self.event(ConditionsObserved(replace(c,**changes)))
+
+    def offer(self, contract=None):
+        return self.event(ExecutionPlanOffered(contract or self.contract))
+
+    def prepare(self):
+        group=self.group
+        request=group.release if group.release_pending or group.mode!='controlling' or not group.desired else group.desired
+        current=group.observation.controls
+        steps=[]
+        # Explicit synthetic transition evidence; no hardware sequencing claim.
+        for key,value in request.target:
+            if dict(current)[key] != value:
+                step=Step(key,value,current,(Guard('ready',1,1),),group.spec.maximum,100,200,True,'synthetic-transient')
+                steps.append(step);current=step.after
+        self.event(Proposed(group.spec.id,group.generation,request.id,request.revision,group.observation_revision,
+            group.spec.adapter_revision,tuple(steps),group.transition_work.token))
+        return self.group.attempts[-1].prepared_revision if self.group.attempts else None
+
+    def durable(self):
+        a=next(a for a in self.group.attempts if a.stage=='prepared')
+        self.event(JournalDurable(a.prepared_revision))
+        send=next((e for e in self.effects if isinstance(e,Send)),None)
+        if send: assert authorize_send(self.state,send,self.now)
+        return send
+
+
+class ExecutableRuntimeTests(unittest.TestCase):
+    def test_durable_ack_with_advancing_clock_does_not_persist_forever(self):
+        h=Harness(mode='control_verification');h.offer()
+        h.event(Tick(),1)
+        revision=h.state.revision
+        for now in range(2,6):
+            h.event(JournalDurable(revision),now)
+            self.assertFalse(any(isinstance(e,Persist) for e in h.effects))
+            self.assertEqual(h.state.revision,revision)
+
+
+    def test_nominal_plan_selects_charge_without_economic_ranking_or_timer(self):
+        h=Harness();h.offer()
+        self.assertEqual(h.state.execution.assessment.operation,'grid_charge')
+        self.assertEqual(dict(h.group.desired.target)['charge'],2000)
+        self.assertFalse(hasattr(h.state,'policy'))
+
+    def test_verification_assesses_without_request_or_writer_effect(self):
+        h=Harness(mode='control_verification');h.offer()
+        self.assertEqual(h.state.execution.status,'diagnostic_only')
+        self.assertIsNone(h.group.desired)
+        self.assertFalse(any(isinstance(e,Send) for e in h.effects))
+
+    def test_stale_measurements_withdraw_owned_request(self):
+        h=Harness();h.offer();h.prepare();h.durable()
+        h.event(Tick(),h.state.conditions.valid_until_ms)
+        self.assertIsNone(h.group.desired)
+        self.assertTrue(h.group.release_pending)
+        self.assertTrue(h.group.attempts)
+
+    def test_pending_native_effect_survives_plan_expiry(self):
+        h=Harness();h.offer();h.prepare();h.durable()
+        before=h.group.attempts
+        h.event(Tick(),h.contract.valid_until_ms)
+        self.assertEqual(h.group.attempts[0].id,before[0].id)
+        self.assertEqual(h.group.attempts[0].stage,'ambiguous')
+        self.assertIsNone(h.group.desired)
+        self.assertTrue(h.group.release_pending)
+
+    def test_unchanged_target_preserves_native_request_identity(self):
+        h=Harness();h.offer();request=h.group.desired
+        h.conditions(load_w=1500)
+        self.assertEqual(h.group.desired.id,request.id)
+        self.assertEqual(h.group.desired.revision,request.revision)
+
+    def test_large_load_error_only_reduces_charge_at_physical_limit(self):
+        h=Harness();h.offer();h.conditions(load_w=2500)
+        self.assertEqual(h.state.execution.assessment.charge_dc_w,2000)
+        h.conditions(load_w=h.authority.plant.import_limit_w-100)
+        self.assertEqual(h.state.execution.assessment.charge_dc_w,100)
+
+    def test_rejected_stale_observation_cannot_create_deadline_evidence(self):
+        h=Harness();h.offer();before=h.state.execution.account.observations
+        h.event(ConditionsObserved(h.state.conditions),h.now+10)
+        self.assertEqual(h.state.execution.account.observations,before)
+
+    def test_capture_is_atomic_and_old_response_cannot_replace_new_generation(self):
+        h=Harness();h.offer()
+        h.event(ReplanRequested(StateObservation(h.now,5000000,'soc'),'config-1'))
+        first=json.loads(h.state.execution.captured_feedback)
+        h.event(CounterReceived(MeterReceipt('m','charge','charge','battery_dc','0',h.now,1000,0)))
+        self.assertEqual(json.loads(h.state.execution.captured_feedback),first)
+        h.event(ReplanRequested(StateObservation(h.now,5000000,'soc'),'config-1'))
+        h.offer(replace(h.contract,id='late',generation=1,source_receipt=first['source_receipt'],previous_contract_id='initial'))
+        self.assertEqual(h.state.execution.account.contract.id,'initial')
+
+    def test_replan_capture_and_issued_effects_survive_restart(self):
+        h=Harness();h.offer();h.prepare();h.durable()
+        h.event(ReplanRequested(StateObservation(h.now,5000000,'soc'),'config-1'))
+        restored,effects=restore_checkpoint(encode_checkpoint(h.state),h.now+1)
+        self.assertEqual(restored.execution.account,h.state.execution.account)
+        self.assertEqual(restored.execution.captured_feedback,h.state.execution.captured_feedback)
+        self.assertEqual(restored.groups[0].attempts[0].stage,'ambiguous')
+        self.assertFalse(restored.groups[0].grant_confirmed)
+        self.assertFalse(any(isinstance(e,Send) for e in effects))
+
+    def test_final_send_requires_live_grant_and_current_plan(self):
+        h=Harness();h.offer();h.prepare();send=h.durable()
+        self.assertTrue(authorize_send(h.state,send,h.now))
+        state=replace(h.state,execution=replace(h.state.execution,status='unavailable'))
+        self.assertFalse(authorize_send(state,send,h.now))
+        h.event(GrantRevoked(h.group.spec.id,h.group.grant_epoch+1))
+        self.assertFalse(authorize_send(h.state,send,h.now))
+
+    def test_direct_request_cannot_replace_battery_owner(self):
+        h=Harness();h.offer()
+        with self.assertRaisesRegex(ValueError,'execution owner'):
+            h.event(Requested(h.group.spec.id,h.group.mode_revision,h.group.desired))
+
+    def test_mode_change_requires_new_matching_plan(self):
+        h=Harness();h.offer();h.event(AuthorityChanged('battery','control_verification',2,None))
+        self.assertIsNone(h.group.desired)
+        self.assertEqual(h.state.execution.status,'unavailable')
+
+    def test_legacy_journal_retires_policy_preserving_issued_effect_and_release(self):
+        h=Harness();h.offer();h.prepare();h.durable()
+        wire=json.loads(encode_checkpoint(h.state));wire['schema_version']=7
+        wire['state'].pop('execution');wire['state']['policy']={'retired':True}
+        wire['state']['conditions'].pop('stored_at_ms')
+        restored=decode_checkpoint(json.dumps(wire))
+        self.assertIsNone(restored.groups[0].desired)
+        self.assertTrue(restored.groups[0].release_pending)
+        self.assertEqual(restored.groups[0].attempts,h.group.attempts)
+        self.assertEqual(restored.groups[0].release,h.group.release)
+        self.assertIsNone(restored.execution.account.contract)

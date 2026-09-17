@@ -1042,6 +1042,20 @@ def validate_plan_contract(
                 for k in ("modes", "device_owners", "external_demands")):
             raise OptimisationInputError("plan operating scope is missing or invalid")
         from_modes = scope["modes"]
+        if "battery_execution" in plan:
+            try:
+                if __package__:
+                    from .plan_execution import read_contract
+                else:
+                    from plan_execution import read_contract
+                contract = read_contract(plan["battery_execution"])
+                if contract.plan_id != plan.get("plan_id") or contract.mode != from_modes.get("$battery"):
+                    raise ValueError("battery execution identity or mode differs from the plan")
+                if contract.valid_until_ms != round(datetime.fromisoformat(plan["valid_until"]).timestamp()*1000):
+                    raise ValueError("battery execution validity differs from the plan")
+            except (ValueError, TypeError, KeyError) as error:
+                raise OptimisationInputError(f"Invalid battery execution contract: {error}", remedy=REMEDY_DEFECT) from error
+
         if (any(mode not in ("monitoring", "planning", "control_verification", "controlling") for mode in from_modes.values())
                 or not {"$battery", "$pool", "$ev"} <= from_modes.keys()):
             raise OptimisationInputError("plan operating modes are invalid")

@@ -5,9 +5,9 @@ import sys
 import unittest
 sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components/shs_energy'))
 from home_host import HomeHost, HostPorts
-from home_runtime import PolicyOffered, Proposed, Step, Guard, Observed, Observation, TransportResult, WriteConfirmed
+from home_runtime import ExecutionPlanOffered, Proposed, Step, Guard, Observed, Observation, TransportResult, WriteConfirmed
 from home_runtime_checkpoint import decode_checkpoint, encode_checkpoint
-from test_home_runtime_policy import Harness
+from test_home_runtime_execution import Harness
 
 
 class HomeHostTests(unittest.IsolatedAsyncioTestCase):
@@ -60,7 +60,7 @@ class HomeHostTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_reducer_persists_before_every_native_assignment(self):
         host,h,writes,durable,_=await self.make_host()
-        await host.accept(PolicyOffered(h.compiled,h.watermark));await host.idle()
+        await host.accept(ExecutionPlanOffered(h.contract));await host.idle()
         self.assertTrue(writes)
         self.assertTrue(durable)
         self.assertEqual(host.state.groups[0].observation.controls,host.state.groups[0].desired.target)
@@ -68,31 +68,33 @@ class HomeHostTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_disk_failure_prevents_dispatch(self):
         host,h,writes,_,reports=await self.make_host(fail_persist=True)
-        await host.accept(PolicyOffered(h.compiled,h.watermark));await host.idle()
+        with self.assertRaises(RuntimeError):
+            await host.accept(ExecutionPlanOffered(h.contract))
+        await host.idle()
         self.assertEqual(writes,[])
         self.assertTrue(reports)
         self.assertIsInstance(host._fault, OSError)
         with self.assertRaises(RuntimeError):
-            await host.accept(PolicyOffered(h.compiled,h.watermark))
+            await host.accept(ExecutionPlanOffered(h.contract))
 
     async def test_adapter_fault_keeps_explanation_in_durable_checkpoint(self):
         from dataclasses import replace
         host,h,_,durable,reports=await self.make_host()
         async def failed(effect):raise ValueError('Unsupported inverter register combination: charging mode has no writable ceiling')
         host.ports=replace(host.ports,transition=failed)
-        await host.accept(PolicyOffered(h.compiled,h.watermark));await host.idle()
+        await host.accept(ExecutionPlanOffered(h.contract));await host.idle()
         saved=decode_checkpoint(durable[-1])
         self.assertIn('no writable ceiling',saved.groups[0].transition_work.reason)
         self.assertTrue(any('no writable ceiling' in row[1] for row in reports))
 
     async def test_live_arbiter_is_checked_even_when_reducer_grant_was_valid(self):
         host,h,writes,_,_=await self.make_host(grant=False)
-        await host.accept(PolicyOffered(h.compiled,h.watermark));await host.idle()
+        await host.accept(ExecutionPlanOffered(h.contract));await host.idle()
         self.assertEqual(writes,[])
 
     async def test_timeout_and_restart_preserve_possible_physical_effect(self):
         host,h,writes,durable,_=await self.make_host(fail_send=True)
-        await host.accept(PolicyOffered(h.compiled,h.watermark));await host.idle()
+        await host.accept(ExecutionPlanOffered(h.contract));await host.idle()
         self.assertEqual(len(writes),1)
         self.assertEqual(host.state.groups[0].attempts[0].stage,'ambiguous')
         restored=HomeHost(h.state,host.ports)

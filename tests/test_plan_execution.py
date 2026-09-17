@@ -44,7 +44,7 @@ class ContractTests(unittest.TestCase):
         fixture = json.loads((Path(__file__).parent / "fixtures/battery-plan-execution-v1.json").read_text())
         plan = read_contract(fixture["contract"])
         self.assertEqual(plan.intervals[0].end_ms - plan.intervals[0].start_ms, 7 * 60_000)
-        account = admit_plan(Account(), plan, plan.intervals[0].start_ms,
+        account = admit_plan(Account(requested_generation=plan.generation), plan, plan.intervals[0].start_ms,
             StateObservation(plan.intervals[0].start_ms, plan.intervals[0].stored_start_mwh, "fixture-opening"))
         self.assertEqual(balance(account, account.opening.at_ms).flow_debt_low_mwh, 0)
         self.assertEqual(contract_wire(plan), fixture["contract"])
@@ -429,3 +429,46 @@ class ExecutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class BasisReconciliationTests(unittest.TestCase):
+    def test_capacity_calibration_is_explicit_state_adjustment_not_charge(self):
+        account=opening_account()
+        account=meter(account,'charge',1000,0)
+        account=meter(account,'discharge',1000,0)
+        account=request_replan(account)
+        new=replace(contract(generation=1,previous=account.contract.id),capacity_mwh=12000000,maximum_mwh=12000000,
+            source_receipt=account.requests[-1].source_receipt)
+        amended=admit_plan(account,new,1000,StateObservation(1000,6000000,'capacity_recalibration',False))
+        self.assertEqual(amended.meters,account.meters)
+        self.assertEqual(len(amended.reconciliations),1)
+        record=amended.reconciliations[0]
+        self.assertEqual((record.old_capacity_mwh,record.new_capacity_mwh),(10000000,12000000))
+        self.assertIn('not delivered charge',record.reason)
+        self.assertEqual(balance(amended,1000).charge.low,0)
+        self.assertEqual(balance(amended,0),balance(account,0))
+
+    def test_live_reserve_increase_is_authoritative_without_changing_plan(self):
+        plan=contract(increment=-250000)
+        row=replace(plan.intervals[0],operation='supply_house',target_kind='demand_following',
+            charge_ac_mwh=0,discharge_ac_mwh=250000,import_mwh=0,charge_ac_limit_w=0,discharge_ac_limit_w=1000,follows_demand=True)
+        plan=replace(plan,intervals=(row,),objectives=(replace(plan.objectives[0],kind='demand_following'),))
+        account=opening_account(plan,energy=5000000)
+        live=LiveState(0,5000000,1000,0,1000,4000,4000,10000,10000,minimum_mwh=6000000)
+        model=Conversion('lossless',Curve(1,0),Curve(1,0),Curve(1,0),0)
+        decision=assess_execution(account,live,model)
+        self.assertEqual(decision.discharge_dc_w,0)
+        self.assertEqual(decision.replan_reason,'local_storage_reserve_changed')
+
+    def test_planner_feedback_omits_repeated_history_but_acknowledges_its_revision(self):
+        import json
+        from plan_execution import Admission, planner_feedback
+        base=contract()
+        admissions=tuple(Admission(replace(base,id=f'c{i}',generation=i,
+            previous_contract_id=f'c{i-1}' if i else None),0,0,i+1) for i in range(1000))
+        account=Account(requested_generation=999,receipt=1000,admissions=admissions,
+            opening=StateObservation(0,5000000,'soc'))
+        full=feedback(account,0);compact=planner_feedback(account,0)
+        self.assertGreater(len(json.dumps(full)),100000)
+        self.assertLess(len(json.dumps(compact)),5000)
+        self.assertNotIn('versions',compact['objectives'][0])
+        self.assertEqual(compact['settled_history']['through_receipt'],1000)

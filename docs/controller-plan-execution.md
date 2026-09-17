@@ -1,6 +1,10 @@
 # Plan execution and deviation accounting
 
-**Normative replacement design, 17 September 2026. Implementation pending.**
+**Normative replacement design, 17 September 2026. Battery implementation completed
+18 September 2026; equipment validation pending.**
+
+See the [implementation and Verification guide](controller-plan-execution-implementation.md)
+for the software boundary, diagnostic replay and rollout status.
 
 See the [current-code gap analysis](controller-plan-execution-gap-analysis.md)
 for the integration and server assessment and replacement sequence.

@@ -15,7 +15,6 @@ async def async_get_config_entry_diagnostics(
     return {
         "integration_version": INTEGRATION_VERSION,
         "network_traffic": entry.runtime_data.client.traffic.snapshot(),
-        "battery_policy_delivery": entry.runtime_data.battery_policy_exchange.snapshot(),
         "battery_live_inputs": entry.runtime_data.battery_live_inputs.snapshot(),
         "battery_writer": entry.runtime_data.battery_writer.snapshot(),
         "battery_runtime": entry.runtime_data.battery_runtime.snapshot(),

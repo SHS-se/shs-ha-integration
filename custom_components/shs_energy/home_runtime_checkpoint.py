@@ -1,4 +1,4 @@
-"""Closed version-7 JSON for the offline runtime and conservative crash restoration."""
+"""Closed version-8 JSON for the offline runtime and conservative crash restoration."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -19,36 +19,17 @@ def _check_state(state):
         raise ValueError("meter evidence exceeds checkpoint time")
     if state.authority:
         runtime._validate_authority(state, state.authority)
-    if state.policy:
-        session = state.policy
+    session = state.execution
+    if session.account.contract:
         group = runtime._battery_group(state)
-        if group is None or state.ledger is None:
-            raise ValueError("policy needs scoped battery and ledger")
-        runtime.validate_policy_settlement(state)
-        if session.watermark.at_ms != session.compiled.summary.actuals_origin_ms or session.watermark.ledger_revision > state.ledger.revision:
-            raise ValueError("policy watermark is inconsistent")
-        if session.reconciled_from is None:
-            if session.reconciled_actuals:
-                raise ValueError("actuals reconciliation has no source watermark")
-        else:
-            start = session.reconciled_from
-            if ((start.ledger_id, start.mapping_revision) != (state.ledger.id, state.ledger.mapping_revision)
-                    or start.at_ms > session.watermark.at_ms or start.ledger_revision > session.watermark.ledger_revision
-                    or tuple(a.spec for a in session.reconciled_actuals) != tuple(s.spec for s in state.ledger.streams)
-                    or any(a.counter_measured_ms + a.uncertain_ms != session.watermark.at_ms - start.at_ms for a in session.reconciled_actuals)):
-                raise ValueError("actuals reconciliation scope differs from its watermarks")
-        if group.desired:
-            if session.status not in ("active", "awaiting_context") or group.desired.id != session.request_id:
-                raise ValueError("inactive policy retains an executable request")
-            binding = runtime.policy_binding(state,session.selected_id) if session.selected_id else None
-            if (binding is None or not runtime._same(binding.target, group.desired.target)
-                    or binding.native_guards != group.desired.native_guards
-                    or group.desired.valid_until_ms > session.compiled.summary.until_ms):
-                raise ValueError("policy target/validity differs from local binding")
+        if group is None:
+            raise ValueError("execution account needs its physical battery group")
+        if group.desired and group.desired.id != session.request_id:
+            raise ValueError("battery request differs from its execution account")
         if session.status == "active":
-            runtime._validate_policy(state, session.compiled)
-            if group.mode != "controlling" or group.desired is None or session.decision is None:
-                raise ValueError("active policy needs its selected request and decision")
+            runtime._validate_execution(state, session.account.contract)
+            if group.mode != "controlling" or group.desired is None or session.assessment is None:
+                raise ValueError("active execution needs a request and assessment")
     for group in state.groups:
         if group.grant and group.grant.epoch != group.grant_epoch:
             raise ValueError("writer grant epoch differs from its fence")
@@ -113,7 +94,7 @@ def _check_state(state):
 
 def encode_checkpoint(state: runtime.HomeState) -> bytes:
     _check_state(state)
-    data = json.dumps({"schema_version": 7, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    data = json.dumps({"schema_version": 8, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > MAX_BYTES:
         raise ValueError("checkpoint exceeds byte limit")
     return data
@@ -121,14 +102,36 @@ def encode_checkpoint(state: runtime.HomeState) -> bytes:
 
 def decode_checkpoint(data: bytes) -> runtime.HomeState:
     value = read_runtime_json(data)
-    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int or value["schema_version"] != 7:
+    if type(value) is not dict or set(value) != {"schema_version", "state"} or type(value["schema_version"]) is not int:
+        raise ValueError("unsupported checkpoint version/fields")
+    if value["schema_version"] == 7:
+        # One-way retirement of economic authority. Keep issued native effects,
+        # their writer fence and approved release; never resume an old selector.
+        raw = value["state"]
+        if not isinstance(raw, dict) or "policy" not in raw:
+            raise ValueError("invalid retired controller journal")
+        retired = raw.pop("policy")
+        raw["execution"] = _encode(runtime.ExecutionSession())
+        if raw.get("conditions"):
+            raw["conditions"]["stored_at_ms"] = None
+        for group in raw["groups"] if retired is not None else ():
+            issued = [a for a in group["attempts"] if a["stage"] != "prepared"]
+            group.update(desired=None, plan=None, transition_work=None, attempts=issued,
+                generation=group["generation"] + 1,
+                release_pending=group["release_pending"] or group["owned"] or bool(issued))
+        return _check_state(_decode(raw, runtime.HomeState))
+    if value["schema_version"] != 8:
         raise ValueError("unsupported checkpoint version/fields")
     return _check_state(_decode(value["state"], runtime.HomeState))
 
 
 def restore_checkpoint(data: bytes, now_ms: int):
     """No replayed sends: require fresh authority/frame/readback after restart."""
-    old = decode_checkpoint(data)
+    return restore_state(decode_checkpoint(data), now_ms)
+
+
+def restore_state(old, now_ms):
+    _check_state(old)
     if type(now_ms) is not int or now_ms < 0:
         raise ValueError("invalid resume time")
     after = max(old.last_time_ms, now_ms)
@@ -139,7 +142,7 @@ def restore_checkpoint(data: bytes, now_ms: int):
                    for group in old.groups)
     state = replace(old, revision=old.revision + 1, last_time_ms=after, resume_after_ms=after, groups=groups, frame=None)
     state = replace(state, conditions=None,
-                    policy=replace(state.policy, decision=None, status="awaiting_context") if state.policy else None)
+                    execution=replace(state.execution, assessment=None, status="awaiting_context"))
     # Keep the current desired operation; fresh context/grant/readback may adopt it
     # directly. Expiry and a pending passive-mode release remain authoritative.
     effects = (runtime.Persist(state), *(runtime.ConfirmAuthority(g.spec.id) for g in groups),

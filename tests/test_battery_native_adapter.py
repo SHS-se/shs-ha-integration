@@ -1,7 +1,7 @@
 """Synthetic transition records exercise routing; they do not commission hardware."""
 from dataclasses import replace
 import unittest
-from test_home_runtime_policy import Harness
+from test_home_runtime_execution import Harness
 from home_runtime import NeedTransition, Step, Guard
 from battery_native_adapter import CommissionedAdapter
 

@@ -6,6 +6,10 @@ read models. All energies are integer mWh, all times UTC milliseconds.
 """
 from __future__ import annotations
 
+from hashlib import sha256
+import json
+from functools import cached_property
+from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass, replace
 from fractions import Fraction
 from math import ceil, isfinite
@@ -279,8 +283,11 @@ class MeterReceipt:
     source_at_ms: int
     total_mwh: int
     receipt: int
+    physical_id: Optional[str] = None
 
     def __post_init__(self):
+        if self.physical_id is not None:
+            _text(self.physical_id)
         for value in (self.event_id, self.stream, self.epoch):
             _text(value)
         for value in (self.source_at_ms, self.total_mwh, self.receipt):
@@ -289,45 +296,52 @@ class MeterReceipt:
             raise ValueError("explicit supported meter boundary/direction required")
 
 
-def measured(receipts, direction, start_ms, end_ms):
-    """Interval evidence, with later receipts correcting earlier source instants.
+class MeterIndex:
+    """Receipt-corrected directional counters with indexed aggregate intervals."""
+    def __init__(self, receipts):
+        streams={}
+        for row in receipts:
+            streams.setdefault((row.direction,row.stream),{})[row.source_at_ms]=row
+        self.streams={}
+        for (direction,stream), latest in streams.items():
+            rows=sorted(latest.values(),key=lambda r:r.source_at_ms)
+            energy=[0];unknown=[0]
+            for a,b in zip(rows,rows[1:]):
+                valid=a.epoch==b.epoch and b.total_mwh>=a.total_mwh
+                energy.append(energy[-1]+(b.total_mwh-a.total_mwh if valid else 0))
+                unknown.append(unknown[-1]+int(not valid))
+            self.streams.setdefault(direction,[]).append((rows,[r.source_at_ms for r in rows],energy,unknown))
 
-    Ordering the measurement *intervals* is not ordering event admission. A
-    regressed/equal source time is accepted and can amend retained history. No
-    power integration, proportional allocation, or command acknowledgement is
-    ever used to manufacture measured energy.
-    """
-    if end_ms < start_ms:
-        raise ValueError("reversed accounting interval")
-    if end_ms == start_ms:
-        return Bounds(0, 0)
-    rows = [r for r in receipts if r.direction == direction]
-    if not rows:
-        return Bounds(0, None)
-    streams = {r.stream for r in rows}
-    result = Bounds(0, 0)
-    for stream in streams:
-        latest = {}
-        for r in rows:  # Receipt order is authoritative for corrections.
-            if r.stream == stream:
-                latest[r.source_at_ms] = r
-        samples = sorted(latest.values(), key=lambda r: r.source_at_ms)
-        low = high = covered = 0
-        uncertain = False
-        for a, b in zip(samples, samples[1:]):
-            left, right = max(start_ms, a.source_at_ms), min(end_ms, b.source_at_ms)
-            if left >= right:
-                continue
-            covered += right - left
-            if a.epoch != b.epoch or b.total_mwh < a.total_mwh:
-                uncertain = True
-                continue
-            delta = b.total_mwh - a.total_mwh
-            high += delta
-            if left == a.source_at_ms and right == b.source_at_ms:
-                low += delta
-        result = result.plus(Bounds(low, None if uncertain or covered != end_ms - start_ms else high))
-    return result
+    def measure(self,direction,start,end):
+        if end<start:raise ValueError("reversed accounting interval")
+        if end==start:return Bounds(0,0)
+        if direction not in self.streams:return Bounds(0,None)
+        result=Bounds(0,0)
+        for rows,times,energy,unknown in self.streams[direction]:
+            low=high=0
+            uncertain=start<times[0] or end>times[-1]
+            first=bisect_left(times,start);last=bisect_right(times,end)-1
+            if first<=last:
+                low=energy[last]-energy[first]
+                high=low
+                uncertain=uncertain or unknown[last]!=unknown[first]
+            # Only the two boundary intervals lack an exact allocation.
+            edges={bisect_right(times,start)-1,bisect_left(times,end)-1}
+            for i in edges:
+                if i<0 or i+1>=len(rows):continue
+                a,b=rows[i:i+2]
+                left,right=max(start,a.source_at_ms),min(end,b.source_at_ms)
+                if left>=right or (left==a.source_at_ms and right==b.source_at_ms):continue
+                if a.epoch!=b.epoch or b.total_mwh<a.total_mwh:uncertain=True
+                else:high+=b.total_mwh-a.total_mwh
+            result=result.plus(Bounds(low,None if uncertain else high))
+        return result
+
+
+def measured(receipts,direction,start_ms,end_ms):
+    """Never prorate a measured counter interval or order admission by source time."""
+    index=receipts if isinstance(receipts,MeterIndex) else MeterIndex(receipts)
+    return index.measure(direction,start_ms,end_ms)
 
 
 @dataclass(frozen=True)
@@ -350,6 +364,7 @@ class StateObservation:
     at_ms: int
     stored_mwh: int
     source: str
+    measured: bool = True
 
     def __post_init__(self):
         _integer(self.at_ms, minimum=0); _integer(self.stored_mwh, minimum=0); _text(self.source)
@@ -365,6 +380,29 @@ class RequestAnchor:
 
 
 @dataclass(frozen=True)
+class StateReconciliation:
+    at_ms: int
+    old_capacity_mwh: int
+    new_capacity_mwh: int
+    observation: StateObservation
+    prior_flow_debt_low_mwh: Optional[int]
+    prior_flow_debt_high_mwh: Optional[int]
+    reason: str
+
+    def __post_init__(self):
+        _integer(self.at_ms, minimum=0)
+        _integer(self.old_capacity_mwh, minimum=1)
+        _integer(self.new_capacity_mwh, minimum=1)
+        if self.observation.at_ms != self.at_ms or not self.reason:
+            raise ValueError("state reconciliation needs a common-instant observation and reason")
+        for value in (self.prior_flow_debt_low_mwh, self.prior_flow_debt_high_mwh):
+            if value is not None: _integer(value)
+        if (self.prior_flow_debt_low_mwh is not None and self.prior_flow_debt_high_mwh is not None
+                and self.prior_flow_debt_low_mwh > self.prior_flow_debt_high_mwh):
+            raise ValueError("inverted pre-reconciliation flow bounds")
+
+
+@dataclass(frozen=True)
 class Account:
     requested_generation: int = 0
     receipt: int = 0
@@ -373,6 +411,7 @@ class Account:
     opening: Optional[StateObservation] = None
     observations: tuple[StateObservation, ...] = ()
     requests: tuple[RequestAnchor, ...] = ()
+    reconciliations: tuple[StateReconciliation, ...] = ()
 
     def __post_init__(self):
         _integer(self.requested_generation, minimum=0); _integer(self.receipt, minimum=0)
@@ -394,6 +433,13 @@ class Account:
                 any(r.source_receipt > self.receipt for r in self.requests)):
             raise ValueError("request snapshot differs from local receipt history")
 
+    @cached_property
+    def meter_index(self):
+        return MeterIndex(self.meters)
+
+    def anchor(self, at_ms):
+        return next((r.observation for r in reversed(self.reconciliations) if r.at_ms <= at_ms), self.opening)
+
     @property
     def contract(self):
         return self.admissions[-1].contract if self.admissions else None
@@ -407,16 +453,18 @@ def request_replan(account):
     """Reserve a local generation before sending; network results carry it back."""
     generation = account.requested_generation + 1
     return replace(account, requested_generation=generation,
-                   requests=(*account.requests, RequestAnchor(generation, account.receipt)))
+                   requests=(RequestAnchor(generation, account.receipt),))
 
 
 def observe_state(account, observation):
     # Source time never decides receipt order. Interval time remains provenance.
+    if account.observed == observation:
+        return account
     return replace(account, receipt=account.receipt + 1, observations=(*account.observations, observation))
 
 
-def record_meter(account, *, event_id, stream, direction, boundary, epoch, source_at_ms, total_mwh):
-    receipt = MeterReceipt(event_id, stream, direction, boundary, epoch, source_at_ms, total_mwh, account.receipt + 1)
+def record_meter(account, *, event_id, stream, direction, boundary, epoch, source_at_ms, total_mwh, physical_id=None):
+    receipt = MeterReceipt(event_id, stream, direction, boundary, epoch, source_at_ms, total_mwh, account.receipt + 1, physical_id)
     existing = next((r for r in account.meters if r.event_id == event_id), None)
     if existing:
         if replace(existing, receipt=receipt.receipt) != receipt:
@@ -425,7 +473,7 @@ def record_meter(account, *, event_id, stream, direction, boundary, epoch, sourc
     previous = [r for r in account.meters if r.stream == stream]
     if previous and (previous[-1].boundary, previous[-1].direction) != (boundary, direction):
         raise ValueError("meter mapping changes need a distinct physical stream")
-    if any(r.stream != stream and r.boundary == boundary and r.direction == direction for r in account.meters):
+    if any(r.stream != stream and r.boundary == boundary and r.direction == direction and r.physical_id == physical_id for r in account.meters):
         raise ValueError("one declared physical boundary cannot be counted twice")
     return replace(account, receipt=receipt.receipt, meters=(*account.meters, receipt))
 
@@ -457,8 +505,12 @@ def admit_plan(account, contract, at_ms, observation):
         raise ValueError("activation requires an observation captured at acceptance")
     if not 0 <= observation.stored_mwh <= contract.capacity_mwh:
         raise ValueError("observed state is outside the declared battery capacity")
-    if old and (old.energy_basis, old.capacity_mwh, old.minimum_mwh, old.maximum_mwh) != (contract.energy_basis, contract.capacity_mwh, contract.minimum_mwh, contract.maximum_mwh):
-        raise ValueError("changed storage basis requires an explicit state reconciliation")
+    reconciliations=account.reconciliations
+    if old and old.capacity_mwh != contract.capacity_mwh:
+        prior=balance(account,at_ms)
+        reconciliations=(*reconciliations,StateReconciliation(at_ms,old.capacity_mwh,contract.capacity_mwh,
+            observation,prior.flow_debt_low_mwh,prior.flow_debt_high_mwh,
+            "Configured capacity changed; observed SOC establishes a new stored-energy basis, not delivered charge"))
     previous = old.stored_at(min(at_ms, old.valid_until_ms)) if old else contract.stored_at(at_ms)
     amendment = contract.stored_at(at_ms) - previous
     # Omitted dispositions never erase an outcome; objective_history retains it.
@@ -477,7 +529,7 @@ def admit_plan(account, contract, at_ms, observation):
                 if not any(d.objective_id == objective.id and d.outcome == "retained" for d in contract.dispositions):
                     raise ValueError("changed objective target needs an explicit retained amendment")
     number = account.receipt + 1
-    return replace(account, receipt=number, opening=account.opening or observation,
+    return replace(account, receipt=number, opening=account.opening or observation, reconciliations=reconciliations,
                    observations=(*account.observations, observation),
                    admissions=(*account.admissions, Admission(contract, at_ms, amendment, number)))
 
@@ -502,9 +554,10 @@ def balance(account, at_ms):
         raise ValueError("accounting instant precedes admission")
     contract = admission.contract
     reference = contract.stored_at(min(at_ms, contract.valid_until_ms))
-    charge = measured(account.meters, "charge", account.opening.at_ms, at_ms)
-    discharge = measured(account.meters, "discharge", account.opening.at_ms, at_ms)
-    origin = account.opening.stored_mwh
+    anchor=account.anchor(at_ms)
+    charge = measured(account.meter_index, "charge", anchor.at_ms, at_ms)
+    discharge = measured(account.meter_index, "discharge", anchor.at_ms, at_ms)
+    origin = anchor.stored_mwh
     lo = None if charge.high is None else reference - origin - charge.high + discharge.low
     hi = None if discharge.high is None else reference - origin - charge.low + discharge.high
     observation = next((o for o in reversed(account.observations) if o.at_ms == at_ms), None)
@@ -539,15 +592,16 @@ def objective_history(account, at_ms):
         if closed and closed["at_ms"] < deadline:
             row["outcome"] = "changed_before_deadline"
         elif objective["kind"] == "stored_energy" and deadline <= at_ms and account.opening.at_ms <= deadline:
-            charged = measured(account.meters, "charge", account.opening.at_ms, deadline)
-            discharged = measured(account.meters, "discharge", account.opening.at_ms, deadline)
+            anchor=account.anchor(deadline)
+            charged = measured(account.meter_index, "charge", anchor.at_ms, deadline)
+            discharged = measured(account.meter_index, "discharge", anchor.at_ms, deadline)
             if charged.exact and discharged.exact:
-                shortfall = max(0, objective["target_mwh"] - account.opening.stored_mwh - charged.low + discharged.low)
+                shortfall = max(0, objective["target_mwh"] - anchor.stored_mwh - charged.low + discharged.low)
                 row.update(outcome="missed" if shortfall else "fulfilled", shortfall_mwh=shortfall,
                            fulfilment_basis="accounted_stored_energy", flow_shortfall_mwh=shortfall)
             else:
                 row["outcome"] = "unresolved"
-            observed = next((o for o in reversed(account.observations) if o.at_ms == deadline), None)
+            observed = next((o for o in reversed(account.observations) if o.at_ms == deadline and o.measured), None)
             if observed:
                 shortfall = max(0, objective["target_mwh"] - observed.stored_mwh)
                 row.update(outcome="missed" if shortfall else "fulfilled", shortfall_mwh=shortfall,
@@ -564,8 +618,31 @@ def feedback(account, at_ms):
     return {"generation": account.requested_generation, "source_receipt": account.receipt,
             "previous_contract_id": account.contract.id if account.contract else None,
             "observed": asdict(account.observed) if account.observed else None,
+            "state_reconciliations": [asdict(r) for r in account.reconciliations],
             "balance": asdict(balance(account, at_ms)) if account.contract else None,
             "objectives": list(objective_history(account, at_ms)) if account.contract else []}
+
+
+def planner_feedback(account,at_ms):
+    """Bound planning input to live responsibilities; archive the complete audit."""
+    value=feedback(account,at_ms)
+    history=value['objectives']
+    value['objectives']=[{key:row[key] for key in ('objective','responsibility','outcome','shortfall_mwh','fulfilment_basis')}
+        for row in history if row['responsibility'] in ('outstanding','retained')
+        and row['outcome'] not in ('fulfilled','forecast_complete')]
+    value['state_reconciliations']=value['state_reconciliations'][-1:]
+    acknowledged=account.contract.source_receipt if account.contract else 0
+    prior_times={}
+    for row in account.meters:
+        if row.receipt<=acknowledged:
+            prior_times[row.stream]=max(prior_times.get(row.stream,0),row.source_at_ms)
+    late=[r for r in account.meters if r.receipt>acknowledged and r.source_at_ms<=prior_times.get(r.stream,-1)]
+    value['settled_history']={'objective_count':len(history),
+        'sha256':sha256(json.dumps(history,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+        'through_receipt':account.receipt,'previously_acknowledged_receipt':acknowledged,
+        'late_evidence_count':len(late),
+        'earliest_amended_source_ms':min((r.source_at_ms for r in late),default=None)}
+    return value
 
 
 def capture_replan(account, at_ms):
@@ -575,7 +652,7 @@ def capture_replan(account, at_ms):
     payload as an effect. Later receipts cannot change the request's prefix.
     """
     updated = request_replan(account)
-    return updated, feedback(updated, at_ms)
+    return updated, planner_feedback(updated, at_ms)
 
 
 @dataclass(frozen=True)
@@ -594,9 +671,10 @@ class LiveState:
     grid_charge_allowed: bool = True
     export_allowed: bool = False
     export_reserve_mwh: int = 0
+    minimum_mwh: int = 0
 
     def __post_init__(self):
-        for value in (self.at_ms, self.stored_mwh, self.charge_max_dc_w, self.discharge_max_dc_w, self.export_reserve_mwh):
+        for value in (self.at_ms, self.stored_mwh, self.charge_max_dc_w, self.discharge_max_dc_w, self.export_reserve_mwh, self.minimum_mwh):
             _integer(value, minimum=0)
         for value in (self.house_w, self.pv_w, self.eligible_load_w, self.import_limit_w,
                       self.export_limit_w, self.pending_import_w):
@@ -639,7 +717,8 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion) 
         if operation == "grid_charge" and not (row.grid_charge_allowed and live.grid_charge_allowed):
             operation, reason, replan = "solar_charge", "grid_source_restricted", "source_permission_changed"
         if operation == "solar_charge":
-            nominal = min(live.charge_max_dc_w, int(conversion.solar_capacity(live.pv_w, live.house_w)))
+            nominal = min(live.charge_max_dc_w, int(conversion.solar_capacity(live.pv_w, live.house_w)),
+                          int(conversion.surplus_charge.output(row.charge_ac_limit_w)))
         else:
             # Nominal energy defines a constant AC request. It is converted with
             # the retained empirical model, rather than mistaking AC watts for
@@ -660,7 +739,7 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion) 
             if recipes:
                 recipe = recipes[0]
                 target = next(o.target_mwh for o in contract.objectives if o.id == recipe.objective_id)
-                charged = measured(account.meters, "charge", recipe.start_ms, now)
+                charged = measured(account.meter_index, "charge", recipe.start_ms, now)
                 planned = max(0, contract.stored_at(now) - contract.stored_at(recipe.start_ms))
                 used = None if charged.high is None else max(0, charged.high - planned)
                 quantity = 0 if used is None else min(debt, max(0, recipe.max_correction_mwh - used), max(0, target - live.stored_mwh))
@@ -700,6 +779,10 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion) 
             charge, reason = 0, "stored_target_reached"
         elif charge < desired:
             reason = "import_headroom_reduced"
+        if charge:
+            target=min([contract.maximum_mwh, *(o.target_mwh for o in contract.objectives
+                if o.kind=="stored_energy" and o.start_ms<=now<o.deadline_ms)])
+            until=min(until,now+max(1,ceil((target-live.stored_mwh)*3600/charge)))
         if extra:
             extra = max(0, charge - nominal)
             recovery_state = "executing" if extra else "temporarily_limited"
@@ -713,7 +796,7 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion) 
                     continue
                 used = 0
                 if r.start_ms < now:
-                    delivered = measured(account.meters, "charge", r.start_ms, now)
+                    delivered = measured(account.meter_index, "charge", r.start_ms, now)
                     if delivered.high is None:
                         known = False
                         continue
@@ -735,9 +818,11 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion) 
                 if scope < max(0, live.house_w - live.pv_w) and ac > scope:
                     ac, reason, replan = scope, "supply_scope_restricted", "export_cannot_respect_supply_scope"
             discharge = min(live.discharge_max_dc_w, int(conversion.discharge.input(ac)))
-            reserve = max(contract.minimum_mwh, contract.export_reserve_mwh, live.export_reserve_mwh) if operation == "export" else contract.minimum_mwh
+            reserve = max(contract.minimum_mwh, live.minimum_mwh, contract.export_reserve_mwh, live.export_reserve_mwh) if operation == "export" else max(contract.minimum_mwh,live.minimum_mwh)
             if live.stored_mwh <= reserve:
                 discharge, reason = 0, "battery_reserve"
+                if live.minimum_mwh>contract.minimum_mwh:
+                    replan="local_storage_reserve_changed"
             elif discharge:
                 until = min(until, now + ceil((live.stored_mwh - reserve) * 3600 / discharge))
     if not charge and not discharge:

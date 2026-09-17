@@ -3,23 +3,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from math import isfinite
+import json
 from typing import Literal, Optional, Union
 
 if __package__:
-    from .battery_execution_policy import (ExecutionPolicy, ExecutionConditions, ContextIdentity,
-        Permissions, BatteryPlant, BatteryOperation, Decision, OutsideCoverage, evaluate_policy, NUMERICAL_TOLERANCE_SEK)
+    from .battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation
+    from . import plan_execution as execution
     from .battery_supply import SupplyScope
-    from .runtime_json import read_runtime_json
+    from .runtime_json import read_runtime_json, encode_value
     from .energy_ledger import (
         EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, SettledActuals,
         actuals_since, record_actuals, prune_ledger, start_settlement,
         settle_and_prune, reconciled_actuals, validate_settlement,
     )
 else:
-    from battery_execution_policy import (ExecutionPolicy, ExecutionConditions, ContextIdentity,
-        Permissions, BatteryPlant, BatteryOperation, Decision, OutsideCoverage, evaluate_policy, NUMERICAL_TOLERANCE_SEK)
+    from battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation
+    import plan_execution as execution
     from battery_supply import SupplyScope
-    from runtime_json import read_runtime_json
+    from runtime_json import read_runtime_json, encode_value
     from energy_ledger import (
         EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, SettledActuals,
         actuals_since, record_actuals, prune_ledger, start_settlement,
@@ -545,35 +546,29 @@ class ExecutionAuthority:
 
 
 @dataclass(frozen=True)
-class PolicySession:
-    compiled: ExecutionPolicy
-    watermark: ActualsWatermark
-    settled_actuals: tuple[SettledActuals, ...]
-    reconciled_from: Optional[ActualsWatermark] = None
-    reconciled_actuals: tuple[StreamActuals, ...] = ()
-    decision: Optional[Decision] = None
-    status: Literal["active", "diagnostic_only", "outside_coverage", "awaiting_context"] = "awaiting_context"
+class ExecutionTrace:
+    at_ms: int
+    account_receipt: int
+    observation_count: int
+    reconciliation_count: int
+    reference_id: Optional[str]
+    input_json: str
+    effects_json: str
+    live: Optional[execution.LiveState]
+    assessment: Optional[execution.Assessment]
+    conversion_json: Optional[str]
+
+
+@dataclass(frozen=True)
+class ExecutionSession:
+    account: execution.Account = execution.Account()
+    assessment: Optional[execution.Assessment] = None
+    status: str = "awaiting_context"
     request_id: Optional[str] = None
-    selected_id: Optional[str] = None
-    candidate_id: Optional[str] = None
-    candidate_since_ms: int = 0
-    candidate_observations: int = 0
-    candidate_observation_revision: int = -1
-    refresh_requested: bool = False
-
-    def __post_init__(self):
-        for value in (self.request_id, self.selected_id, self.candidate_id):
-            if value is not None:
-                _identity(value)
-        _integer(self.candidate_since_ms)
-        _integer(self.candidate_observation_revision, -1)
-        _integer(self.candidate_observations)
-        if self.candidate_observations > 2 or (self.candidate_id is None and self.candidate_observations):
-            raise ValueError("invalid hysteresis observation count")
-
-    @property
-    def revision(self):
-        return self.compiled.summary.identity.revision
+    replan_reason: Optional[str] = None
+    captured_feedback: Optional[str] = None
+    traces: tuple[ExecutionTrace, ...] = ()
+    live: Optional[execution.LiveState] = None
 
 
 @dataclass(frozen=True)
@@ -589,7 +584,7 @@ class HomeState:
     authority_revision: int = -1
     conditions: Optional[ExecutionConditions] = None
     conditions_revision: int = -1
-    policy: Optional[PolicySession] = None
+    execution: ExecutionSession = ExecutionSession()
 
     def __post_init__(self):
         for value in (self.revision, self.last_time_ms, self.resume_after_ms):
@@ -615,9 +610,19 @@ class ConditionsObserved:
 
 
 @dataclass(frozen=True)
-class PolicyOffered:
-    compiled: ExecutionPolicy
-    watermark: ActualsWatermark
+class ExecutionPlanOffered:
+    contract: execution.ExecutionContract
+
+
+@dataclass(frozen=True)
+class ReplanRequested:
+    observation: execution.StateObservation
+    scope_revision: str
+
+
+@dataclass(frozen=True)
+class CounterReceived:
+    sample: execution.MeterReceipt
 
 
 @dataclass(frozen=True)
@@ -734,7 +739,7 @@ class Tick:
     pass
 
 
-Event = Union[AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, PolicyOffered, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, WriteConfirmed, Tick]
+Event = Union[AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, WriteConfirmed, Tick]
 
 
 @dataclass(frozen=True)
@@ -756,7 +761,7 @@ class Send:
 
 
 @dataclass(frozen=True)
-class NeedPolicy:
+class NeedPlan:
     reason: str
 
 
@@ -793,7 +798,7 @@ class Report:
     reason: str
 
 
-Effect = Union[NeedPolicy, Persist, Send, Observe, ConfirmAuthority, NeedTransition, WakeAt, Report]
+Effect = Union[NeedPlan, Persist, Send, Observe, ConfirmAuthority, NeedTransition, WakeAt, Report]
 
 
 def create_home(specs: tuple[GroupSpec, ...], limits: Limits, *, ledger: Optional[EnergyLedger] = None) -> HomeState:
@@ -1055,198 +1060,107 @@ def _validate_authority(state, authority):
         raise ValueError("catalog differs from local group surfaces/adapter")
 
 
-def policy_binding(state, operation_id):
-    from dataclasses import replace
-    session, catalog = state.policy, state.authority.catalog
-    direct = next((b for b in catalog.bindings if b.operation.id == operation_id),None)
-    if direct is not None:
-        return direct
-    if session is None or session.decision is None:
-        raise ValueError("candidate has no evaluated decision")
-    operation = next(r.operation for r in session.decision.ranked if r.operation.id == operation_id)
-    if __package__:
-        from .battery_execution_policy import operation_family
-    else:
-        from battery_execution_policy import operation_family
-    family=operation_family(session.compiled,operation)
-    base=next(b for b in catalog.bindings if b.operation==family)
-    target=tuple((key, operation.charge_limit_w if key==catalog.charge_key else operation.discharge_limit_w if key==catalog.discharge_key else value) for key,value in base.target)
-    return replace(base,operation=operation,target=target)
+def execution_live(state, now):
+    c, a = state.conditions, state.authority
+    pending = max(0, state.frame.external.import_w - c.residual_load_w) if state.frame else 0
+    return execution.LiveState(now, round(c.energy_kwh * 1e6), c.residual_load_w, c.pv_w,
+        c.eligible_load_w if c.eligible_load_w is not None else c.residual_load_w,
+        int(a.plant.charge_max_w), int(a.plant.discharge_max_w), a.plant.import_limit_w,
+        a.plant.export_limit_w, pending, a.permissions.available,
+        a.permissions.grid_charge_allowed, a.permissions.battery_export_allowed,
+        round(a.permissions.export_reserve_kwh * 1e6), round(a.plant.cutoff_kwh * 1e6))
 
 
-def _validate_policy(state, compiled):
-    authority, summary = state.authority, compiled.summary
-    if authority is None or summary.identity.context != authority.identity or summary.permissions != authority.permissions or summary.plant != authority.plant or summary.supply_scope != authority.supply_scope:
-        raise ValueError("policy differs from configured authority")
-    participants = {p.group_id: p for p in authority.scope.participants}
-    if any((g.mode, g.mode_revision) != (participants[g.spec.id].mode, participants[g.spec.id].mode_revision)
-           for g in state.groups):
-        raise ValueError("policy scope differs from requested operating modes")
-    bindings = {b.operation.id: b for b in authority.catalog.bindings}
-    if any(op.id not in bindings or bindings[op.id].operation != op for op in summary.operations):
-        raise ValueError("policy operation lacks an exact local native binding")
+def execution_binding(state, assessment):
+    catalog = state.authority.catalog
+    base = next(b for b in catalog.bindings if b.operation.operation == assessment.operation)
+    target = tuple((key, assessment.charge_dc_w if key == catalog.charge_key else
+                    assessment.discharge_dc_w if key == catalog.discharge_key else value)
+                   for key, value in base.target)
+    return replace(base, target=target)
 
 
-def _accept_policy(state, event, now):
-    summary = event.compiled.summary
-    if state.policy and summary.identity.revision <= state.policy.revision:
-        raise ValueError("duplicate or stale policy revision")
-    _validate_policy(state, event.compiled)
-    if state.ledger is None or event.watermark.at_ms != summary.actuals_origin_ms or not summary.from_ms <= now < summary.until_ms:
-        raise ValueError("policy needs a real source watermark and current validity")
-    if event.watermark.at_ms > now:
-        raise ValueError("future policy source cut")
-    # Admission is atomic: validate both the retained tail and the old settled
-    # prefix before installing anything. Never reconcile through receipt time.
-    actuals_since(state.ledger, event.watermark, now)
-    old = state.policy
-    reconciliation = reconciled_actuals(state.ledger, old.watermark, old.settled_actuals,
-                                        event.watermark.at_ms) if old else ()
-    session = PolicySession(event.compiled, event.watermark, start_settlement(state.ledger, event.watermark),
-                            old.watermark if old else None, reconciliation,
-                            request_id=old.request_id if old else None,
-                            selected_id=old.selected_id if old else None,
-                            candidate_id=old.candidate_id if old else None,
-                            candidate_since_ms=old.candidate_since_ms if old else 0,
-                            candidate_observations=old.candidate_observations if old else 0,
-                            candidate_observation_revision=old.candidate_observation_revision if old else -1)
-    return replace(state, policy=session)
+def _validate_execution(state, contract):
+    a = state.authority
+    if a is None or contract is None:
+        raise ValueError("plan and local battery authority required")
+    group = _battery_group(state)
+    if contract.mode != group.mode or contract.scope_revision != a.config_revision:
+        raise ValueError("plan differs from current operating mode or supply scope")
+    if contract.capacity_mwh != round(a.plant.capacity_kwh * 1e6):
+        raise ValueError("plan differs from current battery capacity")
 
 
-def validate_policy_settlement(state):
-    validate_settlement(state.ledger, state.policy.watermark, state.policy.settled_actuals)
-    if any(prefix.through_ms > state.last_time_ms for prefix in state.policy.settled_actuals):
-        raise ValueError("settlement exceeds checkpoint time")
-
-
-def _withdraw_policy(state, reason, effects, *, refresh=True):
-    session, group = state.policy, _battery_group(state)
-    if group.desired is not None:
+def _withdraw_execution(state, reason, effects, *, refresh=True):
+    session, group = state.execution, _battery_group(state)
+    if group and group.desired is not None:
         group = replace(_supersede(group), desired=None,
                         release_pending=group.release_pending or group.owned or any(a.stage != "prepared" for a in group.attempts))
         state = _put(state, group)
-    if refresh and not session.refresh_requested:
-        effects.append(NeedPolicy(reason))
-    return replace(state, policy=replace(session, status="outside_coverage", decision=None,
-                    candidate_id=None, candidate_since_ms=0, candidate_observations=0,
-                    candidate_observation_revision=-1,
-                    refresh_requested=session.refresh_requested or refresh))
+    if refresh and session.replan_reason != reason:
+        effects.append(NeedPlan(reason))
+    return replace(state, execution=replace(session, status="unavailable", assessment=None,
+                   replan_reason=reason if refresh else session.replan_reason))
 
 
-def _refresh_policy_decision(state, now, effects):
-    session = state.policy
-    if session is None:
+def _refresh_execution(state, now, effects):
+    session, conditions = state.execution, state.conditions
+    contract = session.account.contract
+    if contract is None:
         return state
-    group, conditions = _battery_group(state), state.conditions
-    summary = session.compiled.summary
-    if not summary.from_ms <= now < summary.until_ms:
-        return _withdraw_policy(state, "policy_expired", effects)
+    group = _battery_group(state)
     try:
-        _validate_policy(state, session.compiled)
+        _validate_execution(state, contract)
     except ValueError:
-        return _withdraw_policy(state, "policy_authority_changed", effects)
-    if conditions is None:
-        return replace(state, policy=replace(session, status="awaiting_context", decision=None))
-    if not _fresh(conditions, now):
+        return _withdraw_execution(state, "plan_authority_changed", effects)
+    if contract.interval(now) is None:
+        return _withdraw_execution(state, "plan_expired", effects)
+    if conditions is None or not _fresh(conditions, now):
         effects.append(Observe(group.spec.id))
-        return _withdraw_policy(state, "stale_conditions", effects, refresh=False)
+        return _withdraw_execution(state, "waiting_for_measurements", effects, refresh=False)
     if conditions.identity != state.authority.identity or conditions.permissions != state.authority.permissions:
-        return _withdraw_policy(state, "conditions_authority_mismatch", effects)
-    if state.frame and (conditions.residual_load_w < sum(e.observed.import_w for e in state.frame.external_demands)):
-        return _withdraw_policy(state, "external_demand_missing", effects)
-    decision = evaluate_policy(session.compiled, conditions, now, incumbent_id=session.selected_id, deadband_sek=.02)
-    if isinstance(decision, OutsideCoverage):
-        return _withdraw_policy(state, decision.reason, effects, refresh=decision.refresh_required)
-    ranked = {r.operation.id: r for r in decision.ranked}
-    state = replace(state,policy=replace(session,decision=decision))
-    # Local physical and native evidence can make an otherwise economic option
-    # ineligible. Such changes bypass discretionary sustain immediately.
-    if _scope_frame_valid(state, now) and _fresh(group.observation, now):
-        eligible = {}
-        for key, row in ranked.items():
-            local = policy_binding(state,key)
-            predicted = Envelope(row.possible_import_w, row.possible_export_w)
-            drift = (row.operation.operation == "export" and _same(group.observation.controls, local.target)
-                     and not _within(group.observation.envelope, predicted))
-            # Native transition guards pause writes in _drive/authorize_send.
-            # A settling inverter does not invalidate the economic policy.
-            if _room(state, group, predicted, now) and not drift:
-                eligible[key] = row
-        ranked = eligible
-        if not ranked:
-            return _withdraw_policy(state, "physical_scope_uncovered", effects)
-    minimum = min(row.total_delta_sek for row in ranked.values())
-    best = min((row for row in ranked.values() if row.total_delta_sek <= minimum + NUMERICAL_TOLERANCE_SEK),
-               key=lambda row: row.operation.id)
-    incumbent = ranked.get(session.selected_id)
-    selected = incumbent.operation.id if incumbent and incumbent.total_delta_sek <= best.total_delta_sek + .02 else best.operation.id
-    decision = replace(decision, selected_id=selected)
-    binding = policy_binding(state,selected)
-    same_target = group.desired is not None and _same(group.desired.target, binding.target) and group.desired.native_guards == binding.native_guards
-    if selected != session.selected_id and session.selected_id in ranked and not same_target:
-        # Sustain the advantage over the incumbent, not an exact candidate ID.
-        # Live power and remaining slot time move the best watt limit. Restarting
-        # on each move can retain an inferior setting indefinitely. Apply the
-        # latest eligible winner once the existing time/evidence checks pass.
-        if session.candidate_id is None:
-            session = replace(session, candidate_id=selected, candidate_since_ms=now,
-                              candidate_observations=1, candidate_observation_revision=conditions.revision)
-        else:
-            session = replace(session, candidate_id=selected)
-            if conditions.revision > session.candidate_observation_revision and session.candidate_observations < 2:
-                session = replace(session, candidate_observations=min(2, session.candidate_observations + 1),
-                                  candidate_observation_revision=conditions.revision)
-        if now - session.candidate_since_ms < 5000 or session.candidate_observations < 2:
-            selected = session.selected_id
-            binding = policy_binding(state,selected)
-    if selected == decision.selected_id:
-        session = replace(session, candidate_id=None, candidate_since_ms=0,
-                          candidate_observations=0, candidate_observation_revision=-1)
-    if decision.refresh_due and not session.refresh_requested:
-        effects.append(NeedPolicy("refresh_due"))
-        session = replace(session, refresh_requested=True)
-    session = replace(session, decision=replace(decision, selected_id=selected), selected_id=selected,
-                      status="active" if group.mode == "controlling" else "diagnostic_only")
+        return _withdraw_execution(state, "measurement_authority_changed", effects)
+    live = execution_live(state, now)
+    assessment = execution.assess_execution(session.account, live, state.authority.plant.conversion)
+    if assessment.replan_reason and assessment.replan_reason != session.replan_reason:
+        effects.append(NeedPlan(assessment.replan_reason))
+    session = replace(session, assessment=assessment, live=live,
+        replan_reason=assessment.replan_reason or session.replan_reason,
+        status="active" if group.mode == "controlling" else "diagnostic_only")
+    binding = execution_binding(state, assessment)
     if group.mode == "controlling":
-        # A fresh scope/policy may supersede an unissued release on rapid entry.
-        # Issued release effects still reconcile in _drive before incompatible work.
         if group.release_pending:
             group = replace(_supersede(group), release_pending=False)
-        # Request identity belongs to executable intent, not economic policy revision.
         if group.desired and _same(group.desired.target, binding.target) and group.desired.native_guards == binding.native_guards:
-            request = replace(group.desired, valid_until_ms=min(summary.until_ms, decision.valid_until_ms))
+            request = replace(group.desired, valid_until_ms=assessment.valid_until_ms)
         else:
             group = _supersede(group)
             request = Request(f"battery:{group.generation}", group.generation,
-                              min(summary.until_ms, decision.valid_until_ms), binding.target, binding.native_guards)
+                              assessment.valid_until_ms, binding.target, binding.native_guards)
         group = replace(group, desired=request)
         session = replace(session, request_id=request.id)
     elif group.desired is not None:
         group = replace(_supersede(group), desired=None,
                         release_pending=group.release_pending or group.owned or bool(group.attempts))
-    return replace(_put(state, group), policy=session)
+    return replace(_put(state, group), execution=session)
 
 
-def _policy_send_valid(state, group, request, now):
+def _execution_send_valid(state, group, request, now):
     if not _is_battery(state, group):
         return True
-    session = state.policy
-    if session is None or session.status != "active" or not _fresh(state.conditions, now):
+    session = state.execution
+    if session.status != "active" or not _fresh(state.conditions, now):
         return False
     try:
-        _validate_policy(state, session.compiled)
-        decision = evaluate_policy(session.compiled, state.conditions, now,
-                                   incumbent_id=session.selected_id, deadband_sek=.02)
-    except ValueError:
+        _validate_execution(state, session.account.contract)
+        assessment = execution.assess_execution(session.account, execution_live(state, now), state.authority.plant.conversion)
+        binding = execution_binding(state, assessment)
+    except (ValueError, StopIteration):
         return False
-    if isinstance(decision, OutsideCoverage) or state.conditions.identity != state.authority.identity or state.conditions.permissions != state.authority.permissions:
-        return False
-    chosen = next((r for r in decision.ranked if r.operation.id == session.selected_id), None)
-    binding = policy_binding(state,session.selected_id) if session.selected_id else None
-    return (chosen is not None and binding is not None and _same(request.target, binding.target)
+    return (now < assessment.valid_until_ms and _same(request.target, binding.target)
             and request.native_guards == binding.native_guards
-            and state.conditions.residual_load_w >= sum(e.observed.import_w for e in state.frame.external_demands)
-            and _room(state, group, Envelope(chosen.possible_import_w, chosen.possible_export_w), now))
+            and state.conditions.identity == state.authority.identity
+            and state.conditions.permissions == state.authority.permissions)
 
 
 def authorize_send(state: HomeState, send: Send, now_ms: int) -> bool:
@@ -1270,13 +1184,13 @@ def authorize_send(state: HomeState, send: Send, now_ms: int) -> bool:
             and _guards(request.native_guards + attempt.step.native_guards, group.observation)
             and _admissible(_put(state, replace(group, attempts=tuple(a for a in group.attempts if a.id != attempt.id))),
                             replace(group, attempts=tuple(a for a in group.attempts if a.id != attempt.id)), attempt.step, now_ms)
-            and (purpose == "release" or _policy_send_valid(state, group, request, now_ms)))
+            and (purpose == "release" or _execution_send_valid(state, group, request, now_ms)))
 
 
 def _durable_view(state):
     """Frequent physical evidence and derived diagnostics do not journal by themselves."""
-    policy = replace(state.policy, decision=None, status="awaiting_context") if state.policy else None
-    return replace(state, last_time_ms=0, frame=None, conditions=None, conditions_revision=-1, policy=policy,
+    session = replace(state.execution, assessment=None, live=None, status="awaiting_context")
+    return replace(state, last_time_ms=0, frame=None, conditions=None, conditions_revision=-1, execution=session,
                    groups=tuple(replace(g, observation=None, observation_revision=-1, status="inactive") for g in state.groups))
 
 
@@ -1290,7 +1204,7 @@ def _drive(state, now, durable_revision, effects):
             effects.append(ConfirmAuthority(group.spec.id))
             state = _put(state, replace(group, status="awaiting_grant" if request or group.owned else "inactive"))
             continue
-        if purpose == "optimisation" and _is_battery(state, group) and (state.policy is None or state.policy.status != "active"):
+        if purpose == "optimisation" and _is_battery(state, group) and state.execution.status != "active":
             state = _put(state, replace(group, status="awaiting_context"))
             continue
         if not group.authority_confirmed:
@@ -1335,7 +1249,7 @@ def _drive(state, now, durable_revision, effects):
         if prepared is not None:
             step = prepared.step
             valid = (prepared.generation == group.generation and prepared.grant == group.grant and now < prepared.send_by_ms
-                     and (purpose == "release" or _policy_send_valid(state, group, request, now))
+                     and (purpose == "release" or _execution_send_valid(state, group, request, now))
                      and _same(group.observation.controls, step.before) and _guards(step.native_guards, group.observation)
                      and _admissible(_put(state, group), group, step, now))
             if not valid:
@@ -1368,7 +1282,7 @@ def _drive(state, now, durable_revision, effects):
         elif len(group.attempts) >= 64:
             group = replace(group, status="attempt_limit")
             effects.append(Observe(group.spec.id))
-        elif not _admissible(_put(state, group), group, step, now) or (purpose == "optimisation" and not _policy_send_valid(state, group, request, now)):
+        elif not _admissible(_put(state, group), group, step, now) or (purpose == "optimisation" and not _execution_send_valid(state, group, request, now)):
             group = replace(group, status="physical_scope_blocked")
         else:
             send_by = min(now + state.limits.dispatch_window_ms, request.valid_until_ms,
@@ -1420,7 +1334,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
     """Process one validated domain event; performs no I/O and never reads a clock."""
     if type(now_ms) is not int or now_ms < 0:
         raise ValueError("now_ms must be an absolute nonnegative integer")
-    if not isinstance(event, (AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, PolicyOffered, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, WriteConfirmed, Tick)):
+    if not isinstance(event, (AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, WriteConfirmed, Tick)):
         raise ValueError("unsupported runtime event")
     previous = state
     rollback = now_ms < state.last_time_ms
@@ -1452,31 +1366,43 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
             events = (event,)
         for measurement in events:
             state = _observe_measurement(state, measurement, now_ms, rollback)
-    elif isinstance(event, PolicyOffered):
+        if isinstance(event, (ConditionsObserved, MeasurementsObserved)) and state.conditions is not None and not rollback and state.conditions_revision > previous.conditions_revision and _fresh(state.conditions, now_ms):
+            observation = execution.StateObservation(state.conditions.stored_at_ms if state.conditions.stored_at_ms is not None else state.conditions.at_ms, round(state.conditions.energy_kwh * 1e6), "live_soc")
+            state = replace(state, execution=replace(state.execution,
+                account=execution.observe_state(state.execution.account, observation)))
+    elif isinstance(event, ExecutionPlanOffered):
         try:
-            state = _accept_policy(state, event, now_ms)
+            _validate_execution(state, event.contract)
+            if state.conditions is None or not _fresh(state.conditions, now_ms):
+                raise ValueError("fresh state required for plan admission")
+            account = execution.admit_plan(state.execution.account, event.contract, now_ms,
+                execution.StateObservation(now_ms, round(state.conditions.energy_kwh * 1e6), "live_soc_at_acceptance", False))
+            state = replace(state, execution=replace(state.execution, account=account, replan_reason=None))
         except ValueError as error:
-            effects.append(Report("home", "policy_rejected: " + str(error)))
+            effects.append(Report("home", "plan_rejected: " + str(error)))
+            effects.append(NeedPlan("plan_handover_rejected"))
+    elif isinstance(event, ReplanRequested):
+        account = execution.observe_state(state.execution.account, event.observation)
+        account, captured = execution.capture_replan(account, now_ms)
+        captured.update(scope_revision=event.scope_revision, reason=state.execution.replan_reason)
+        from dataclasses import asdict
+        captured["pending_effects"] = [asdict(a) for g in state.groups for a in g.attempts]
+        state = replace(state, execution=replace(state.execution, account=account,
+            captured_feedback=json.dumps(captured, sort_keys=True, allow_nan=False)))
+    elif isinstance(event, CounterReceived):
+        sample = event.sample
+        account = execution.record_meter(state.execution.account, **{
+            key: getattr(sample, key) for key in sample.__dataclass_fields__ if key != "receipt"})
+        state = replace(state, execution=replace(state.execution, account=account))
     elif isinstance(event, (MeterObserved, LedgerPruned)):
         if state.ledger is None:
             raise ValueError("energy ledger is not configured")
         if isinstance(event, MeterObserved):
-            policy = state.policy
-            ledger, settled, outcome = record_actuals(state.ledger, event.sample, now_ms,
-                origin=policy.watermark if policy else None, settled=policy.settled_actuals if policy else ())
-            state = replace(state, ledger=ledger,
-                            policy=replace(policy, settled_actuals=settled) if policy else None)
+            ledger, _, outcome = record_actuals(state.ledger, event.sample, now_ms)
+            state = replace(state, ledger=ledger)
             effects.append(Report(event.sample.stream_id, outcome))
         else:
-            _integer(event.before_ms)
-            if event.before_ms > now_ms:
-                raise ValueError("future ledger retention cut")
-            if state.policy:
-                ledger, settled = settle_and_prune(state.ledger, state.policy.watermark,
-                                                   state.policy.settled_actuals, event.before_ms)
-                state = replace(state, ledger=ledger, policy=replace(state.policy, settled_actuals=settled))
-            else:
-                state = replace(state, ledger=prune_ledger(state.ledger, event.before_ms))
+            state = replace(state, ledger=prune_ledger(state.ledger, event.before_ms))
     elif isinstance(event, (JournalDurable, JournalFailed)):
         if type(event.revision) is not int or not 0 <= event.revision <= state.revision:
             raise ValueError("invalid journal revision")
@@ -1528,7 +1454,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                                 desired=None if changed and not _is_battery(state, group) else group.desired)
         elif isinstance(event, Requested):
             if _is_battery(state, group):
-                raise ValueError("direct request cannot overwrite the scoped battery policy owner")
+                raise ValueError("direct request cannot overwrite the scoped battery execution owner")
             if event.mode_revision != group.mode_revision or not group.authority_confirmed:
                 effects.append(Report(group.spec.id, "stale_request_authority"))
             else:
@@ -1591,9 +1517,22 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 elif not (attempt.stage == "ambiguous" and event.outcome == "accepted"):
                     group = replace(group, attempts=tuple(replace(a, stage=event.outcome) if a.id == attempt.id else a for a in group.attempts))
         state = _put(state, group)
-    state = _refresh_policy_decision(state, now_ms, effects)
+    state = _refresh_execution(state, now_ms, effects)
     if not rollback:
         state = _drive(state, now_ms, event.revision if isinstance(event, JournalDurable) else None, effects)
+    if state.authority and (not isinstance(event, JournalDurable) or any(isinstance(e, Send) for e in effects)):
+        # Archive the evidence for real evaluations and outgoing/returned native
+        # effects. Durability acknowledgements alone never create a journal loop.
+        if state != previous or isinstance(event, (Tick, ExecutionPlanOffered)):
+            session=state.execution
+            contract=session.account.contract
+            trace=ExecutionTrace(now_ms,session.account.receipt,len(session.account.observations),
+                len(session.account.reconciliations),contract.id if contract else None,
+                json.dumps(encode_value(event),sort_keys=True,allow_nan=False),
+                json.dumps([encode_value(e) for e in effects if not isinstance(e,Persist)],sort_keys=True,allow_nan=False),
+                session.live,session.assessment,
+                json.dumps(state.authority.plant.conversion.wire()) if state.authority.plant.conversion else None)
+            state=replace(state,execution=replace(session,traces=(*session.traces,trace)))
     changed = _durable_view(state) != _durable_view(previous)
     state = replace(state, revision=previous.revision + int(changed), last_time_ms=max(previous.last_time_ms, now_ms))
     if changed:
@@ -1611,11 +1550,12 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
             deadlines.append(group.observation.valid_until_ms)
         for attempt in group.attempts:
             deadlines.extend([attempt.send_by_ms, attempt.confirmation_deadline_ms, attempt.latest_effect_ms])
-    if state.policy:
-        summary = state.policy.compiled.summary
-        deadlines.extend((summary.until_ms, summary.refresh_after_ms))
-        if state.policy.candidate_id:
-            deadlines.append(state.policy.candidate_since_ms + 5000)
+    if state.execution.account.contract:
+        contract = state.execution.account.contract
+        deadlines.extend([contract.valid_until_ms, *(r.end_ms for r in contract.intervals),
+                          *(o.deadline_ms for o in contract.objectives)])
+        if state.execution.assessment:
+            deadlines.append(state.execution.assessment.valid_until_ms)
     if state.conditions:
         deadlines.append(state.conditions.valid_until_ms)
     for group in state.groups:

@@ -102,4 +102,7 @@ def controller_diagnostics(controller, panel):
         },
         controller_metrics=controller.metrics.snapshot(),
     )
+    runtime = getattr(controller, "battery_runtime", None)
+    if runtime is not None:
+        report["battery_execution"] = runtime.snapshot(include_evidence=True)
     return report

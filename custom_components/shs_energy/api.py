@@ -210,10 +210,6 @@ class ShsApiClient:
         """Fetch subscription status for the paired customer."""
         return await self._request("GET", "integration-status")
 
-    async def battery_policy(self, request: dict[str, Any]) -> dict[str, Any]:
-        """Fetch a diagnostic policy; the exchange owner validates its closed wire."""
-        return await self._request("POST", "energy-battery-policy", json_body=request)
-
     async def report_runtime(self, runtime: dict[str, Any]) -> dict[str, Any]:
         """Report current local readiness, independently of plan acceptance."""
         result = await self._request(

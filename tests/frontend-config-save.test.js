@@ -1030,12 +1030,12 @@ test('battery live inputs distinguish stale zero from unavailable and do not imp
   assert.match(html, /House: 3.00 kW/);
   assert.match(html, /Solar: 0.00 kW \(stale\)/);
   assert.match(html, /Battery: unavailable/);
-  assert.match(html, /awaits verified measurement and inverter response checks/);
+  assert.match(html, /Waiting for the battery plan/);
   device.live_inputs.capture_stale = true;
   device.battery_writer.owner = 'fenced';
   html = panel._batteryLiveInputs(device);
   assert.match(html, /House: unavailable/);
-  assert.match(html, /Legacy battery control is fenced/);
+  assert.match(html, /Waiting for the battery plan/);
   assert.doesNotMatch(html, /3.00 kW/);
 });
 
@@ -1137,24 +1137,6 @@ test('stale battery power sensor identifies its source and warning clears on rec
   assert.doesNotMatch(panel._renderAttention(), /sensor.grid|power source is invalid or stale/);
 });
 
-test('battery quarter renewal routes to diagnostics and clears when policy is active', () => {
-  const panel = splitPanel();
-  const battery = panel._data.devices[0];
-  battery.execution_status = { state: 'fault', reason: 'Waiting for battery policy for the current quarter',
-    next_step: 'Policy delivery retries automatically.', fix: { kind: 'diagnostics' } };
-  battery.policy_delivery = { state: 'blocked', reasons: ['source_quarter_expired'] };
-  const html = panel._renderAttention();
-  assert.match(html, /current quarter/);
-  assert.match(html, /retries automatically/);
-  assert.doesNotMatch(html, /Edit .* setup|data-action="edit-device"|mapped controls/);
-  assert.match(panel._policyDelivery(battery), /waiting for the next battery policy/);
-  assert.doesNotMatch(panel._policyDelivery(battery), /fresh plan/i);
-  battery.execution_status = { state: 'controlling', reason: 'Live battery policy connected' };
-  battery.battery_runtime = { policy_state: 'active' };
-  assert.doesNotMatch(panel._renderAttention(), /Waiting for battery policy/);
-  assert.equal(panel._policyDelivery(battery), '');
-});
-
 test('diagnostic summary retains fault reasons, correction steps and recovered history', () => {
   const panel = splitPanel();
   panel._data.operation = { state: 'ready' };
@@ -1180,60 +1162,42 @@ test('battery status explains pending settings and never labels a known command 
   const html = panel._batteryLiveInputs({ battery_runtime: {
     state: 'pending', reason: 'Waiting for physical confirmation of battery settings', command_state: 'reconciling',
     requested_settings: { mode: 'Command Charging (PV First)', charge_limit_w: 73, discharge_limit_w: 0 },
-    pending_commands: [{ entity_id: 'number.charge', value: 73, stage: 'accepted' }],
+    pending_writes: 1, pending_commands: [{ entity_id: 'number.charge', value: 73, stage: 'accepted' }],
   } });
   assert.match(html, /Waiting for physical confirmation/);
-  assert.match(html, /Charge limit: 73 W/);
-  assert.match(html, /Awaiting confirmation: number.charge: 73/);
+  assert.match(html, /Waiting for the battery to confirm its settings/);
+  assert.doesNotMatch(html, /number.charge|Charge limit|PV First/);
   assert.doesNotMatch(html, /Not available|Live battery policy connected/);
 });
 
-const controllerOutlook = () => ({
-  state: 'available', basis: 'controlling', selected_operation: 'supply',
-  evaluated_at_ms: Date.parse('2026-09-17T10:00:00Z'), horizon_end_ms: Date.parse('2026-09-18T10:00:00Z'),
-  battery_power_basis: 'dc', benefit_vs_hold_sek: 0.42,
-  events: [{kind: 'charge', start_ms: Date.parse('2026-09-17T10:15:00Z'), end_ms: Date.parse('2026-09-17T10:30:00Z'), battery_w: 830, consumption_w: 2870, solar_w: 2460, import_sek_per_kwh: 1.14},
-    {kind: 'discharge', start_ms: Date.parse('2026-09-17T16:00:00Z'), end_ms: Date.parse('2026-09-17T16:15:00Z'), battery_w: 1407, consumption_w: 1950, solar_w: 200, import_sek_per_kwh: 2.5}],
+const controllerExplanation = () => ({
+  status: "Testing the plan; battery settings are not being changed",
+  plan: "The plan is to charge the battery now for later use.",
+  now: "The battery is charging at 1.50 kW.",
+  difference: "The battery has 0.50 kWh less stored than the plan expected.",
+  next: "In control mode, SHS would request extra charging to catch up.",
+  deadline_ms: Date.parse('2026-09-17T10:15:00Z'),
 });
 
-test('battery outlook is one compact paragraph with controller events, house/PV, baseline and HA timezone', () => {
+test('battery card explains plan, difference and next action using the home timezone', () => {
   const panel = Object.create(context.Panel.prototype);
   panel._hass = {language: 'en-GB', config: {time_zone: 'Europe/Stockholm'}};
-  const html = panel._batteryOutlook({battery_runtime: {outlook: controllerOutlook()}});
+  const html = panel._batteryOutlook({battery_runtime: {explanation: controllerExplanation()}});
   assert.equal((html.match(/<p /g) || []).length, 1);
-  assert.doesNotMatch(html, /<br|<li|Next quarter/);
-  assert.match(html, /Conditional: Charge 12:15: 0.83 kW DC \(house 2.87 \/ solar 2.46 kW\)/);
-  assert.match(html, /Discharge 18:00: 1.41 kW DC/);
-  assert.match(html, /Est. modeled benefit 0.42 SEK vs standby this quarter/);
-  assert.match(html, /through 18 Sept, 12:00/);
+  assert.match(html, /charge the battery now for later use/);
+  assert.match(html, /0.50 kWh less/);
+  assert.match(html, /In control mode, SHS would request/);
+  assert.match(html, /12:15/);
+  assert.doesNotMatch(html, /SEK|benefit|continuation|DC|Next quarter/);
 });
 
-test('battery outlook distinguishes absent actions, unavailable, verification and negative benefit', () => {
-  const panel = Object.create(context.Panel.prototype);
-  panel._hass = {language: 'en-GB', config: {time_zone: 'Europe/Stockholm'}};
-  const outlook = {...controllerOutlook(), basis: 'verification', events: [], benefit_vs_hold_sek: -0.19};
-  const html = panel._batteryOutlook({battery_runtime: {outlook}});
-  assert.match(html, /verification only/);
-  assert.match(html, /No later charge forecast · No later discharge forecast/);
-  assert.match(html, /benefit -0.19 SEK/);
-  outlook.benefit_vs_hold_sek = null;
-  assert.match(panel._batteryOutlook({battery_runtime: {outlook}}), /Benefit vs standby unavailable/);
-  assert.match(panel._batteryOutlook({battery_runtime: {outlook: {state: 'unavailable'}}}), /waiting for a current decision and its forecast/);
-  assert.equal(panel._batteryOutlook({}), '');
-  panel._refreshError = 'offline';
-  assert.match(panel._batteryOutlook({battery_runtime: {outlook: controllerOutlook()}}), /waiting for a current decision/);
-});
-
-test('battery outlook preserves tiny actions and escapes text without misleading negative zero', () => {
-  const panel = Object.create(context.Panel.prototype);
-  panel._hass = {language: 'en-GB', config: {time_zone: 'Europe/Stockholm'}};
-  const outlook = controllerOutlook();
-  outlook.benefit_vs_hold_sek = -0.00001;
-  outlook.events = [{...outlook.events[0], battery_w: 0.2}];
-  const html = panel._batteryOutlook({battery_runtime: {outlook}});
-  assert.match(html, /&lt;0.01 kW DC/);
-  assert.match(html, /benefit 0.00 SEK/);
-  assert.doesNotMatch(html, /No later charge forecast/);
+test('stale battery status hides predictions and escapes explanation text', () => {
+  const panel = makePanel();
+  const explanation = {...controllerExplanation(), next: '<script>untrusted</script>', deadline_ms:null};
+  assert.match(panel._batteryOutlook({battery_runtime:{explanation}}), /&lt;script&gt;/);
+  panel._refreshError='offline';
+  assert.match(panel._batteryOutlook({battery_runtime:{explanation}}), /Waiting for a current battery plan/);
+  assert.doesNotMatch(panel._batteryOutlook({battery_runtime:{explanation}}), /0.50/);
 });
 
 test('battery card uses controller outlook while other devices keep planner next-quarter text', () => {
@@ -1247,14 +1211,14 @@ test('battery card uses controller outlook while other devices keep planner next
   ]};
   panel._sortedDevices = () => [
     {key: '$battery', name: 'House battery', system: 'battery', included: true, planned: true,
-      battery_runtime: {reason: 'Live', outlook: controllerOutlook()}},
+      battery_runtime: {reason: 'Live', explanation: controllerExplanation()}},
     {key: 'pool', name: 'Pool heater', system: 'pool', included: true, planned: true},
   ];
   panel._choices = () => ''; panel._deviceFieldButtons = () => '';
   panel._selectedSlot = 0;
   const html = panel._renderSchedule();
   const cards = html.match(/<article class="card schedule-device">.*?<\/article>/gs);
-  assert.match(cards[0], /Controller outlook/);
+  assert.match(cards[0], /The plan is to charge/);
   assert.doesNotMatch(cards[0], /Next quarter|9999 W/);
   assert.match(cards[1], /Next quarter/);
 });

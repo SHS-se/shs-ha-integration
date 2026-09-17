@@ -11,8 +11,9 @@ import unittest
 sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
 from battery_runtime import BatteryRuntime, exact_start, iso, stamp
 from battery_writer import BatteryWriterFence
-from battery_execution_policy import read_execution_policy
-from battery_execution_outlook import ExecutionOutlook, Witness, Quarter
+from battery_runtime import digest
+from plan_execution import *
+
 
 class Store:
     def __init__(self):self.saved=None;self.writes=[]
@@ -59,26 +60,28 @@ class Rig:
             async_battery_native_readback=readback,async_battery_loss_statistics=statistics,_state_history=history,async_update_listeners=lambda:None,
             binding_plan_for=lambda device,options:(self.plan,next((s for s in self.plan['plans']['priority']['slots']
                 if stamp(s['start'])<=self.now<min(stamp(s['start'])+900000,stamp(self.plan['valid_until']),stamp(self.plan['binding_until']))),None)),_battery_native_context=None)
-        async def refresh():
-            c=self.coordinator._battery_native_context
-            if (self.exchange.policy and c==self.exchange.context
-                    and self.exchange.policy.summary.identity.context.intent_revision==self.plan['snapshot_id']):return
-            wire=json.loads((Path(__file__).parent/'fixtures'/'battery-execution-runtime-synthetic.json').read_text())
-            wire['identity'].update(response_model_revision='pv-first-dc-v2',catalog_revision=c['catalog_revision'],scope_revision=c['catalog_revision'],revision=self.now,
-                                    intent_revision=self.plan['snapshot_id'])
-            wire['plant'].update(cutoff_kwh=0,conversion=c['conversion'])
-            wire['domain']=c['domain'];wire['operations']=c['operations'];wire['reference_id']='hold';wire['supply_scope']=c['supply_scope']
-            wire['actuals_origin_ms']=c['source_cut_ms']
-            wire['validity']={'from_ms':c['source_cut_ms'],'refresh_after_ms':max(c['source_cut_ms'],c['valid_until_ms']-60000),
-                              'until_ms':c['valid_until_ms'],'boundary_ms':(c['source_cut_ms']//900000+1)*900000}
-            wire['permissions']['battery_export_allowed']=False
-            self.exchange.policy=read_execution_policy(json.dumps(wire));self.exchange.context=deepcopy(c)
-        self.exchange=SimpleNamespace(refresh=refresh,policy=None,outlook=None,context=None,energy_origin_kwh=0,snapshot=lambda:{'reasons':[]},_next_ms=0)
-        self.coordinator.battery_policy_exchange=self.exchange
-        self.runtime=BatteryRuntime(self.coordinator,self.controller,self.store,lambda:self.now)
+        self.replans=[]
+        async def replan(**kw):self.replans.append(kw)
+        self.coordinator.async_optimisation_push=replan
+        self.plan['grid']={'import_limit_w':10000,'export_limit_w':10000}
+        self.install_contract()
+        self.archive_stores={}
+        self.runtime=BatteryRuntime(self.coordinator,self.controller,self.store,lambda:self.now,
+            lambda key:self.archive_stores.setdefault(key,Store()))
         self.fence=BatteryWriterFence(self.fence_store,self.controller.lock,self.controller.options,lambda:self.now,self.runtime.identity)
         self.coordinator.battery_writer=self.fence
+    def install_contract(self, generation=0, previous=None, start=10000, end=900000):
+        row=ReferenceInterval(start,end,5000000,5000000+round(2000*(end-start)/3600),
+            'grid_charge','stored_energy',True,False,4000,0,False,
+            round(2000*(end-start)/3600),0,0,round(1000*(end-start)/3600),round(2000*(end-start)/3600)+round(1000*(end-start)/3600),0,0,0,0)
+        row=replace(row,rounding_mwh=row.import_mwh-row.load_mwh-row.charge_ac_mwh)
+        contract=ExecutionContract('c'+str(generation),self.plan['plan_id'],generation,self.options['device_modes']['$battery'],
+            digest(self.options),'configured-95','stored_energy_mwh',10000000,0,10000000,0,end,0,previous,
+            (row,), (Objective('charge:'+str(end),'stored_energy',start,end,row.stored_end_mwh,'Charge now'),),(),())
+        self.plan['battery_execution']=contract_wire(contract)
+
     async def start(self):
+        self.plan['battery_execution']['scope_revision']=digest(self.options)
         await self.fence.open();await self.runtime.open();await self.runtime.refresh()
         if self.runtime.host:await asyncio.wait_for(self.runtime.host.idle(),2)
     async def advance(self,millis=20000):
@@ -100,27 +103,6 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_snapshot_attaches_current_outlook_and_hides_it_on_fault_or_expiry(self):
-        rig = Rig()
-        self.assertEqual(rig.runtime.snapshot()['outlook'], {'state': 'unavailable'})
-        await rig.start()
-        session = rig.runtime.host.state.policy
-        summary = session.compiled.summary
-        rig.exchange.outlook = ExecutionOutlook(summary.quality.source_hash, summary.quality.family_id,
-            'dc', summary.boundary_ms + 900000,
-            Quarter(summary.boundary_ms, summary.boundary_ms + 900000, 1000, 0, 1),
-            {c.witness_id: Witness('anchor', 5) for c in summary.cells})
-        result = rig.runtime.snapshot()['outlook']
-        self.assertEqual(result['state'], 'available')
-        self.assertEqual(result['selected_operation'], session.selected_id)
-        json.dumps(result, allow_nan=False)
-        rig.runtime._status = {'state': 'fault', 'reason': 'test fault'}
-        self.assertEqual(rig.runtime.snapshot()['outlook'], {'state': 'unavailable'})
-        rig.runtime._status = {'state': 'controlling', 'reason': 'live'}
-        rig.now = summary.until_ms
-        self.assertEqual(rig.runtime.snapshot()['outlook'], {'state': 'unavailable'})
-        await rig.runtime.close()
-
     async def test_command_readback_does_not_make_house_reports_out_of_order(self):
         r=Rig();original=r.controller.hass.services.async_call
         async def delayed(domain,name,data,blocking):
@@ -167,7 +149,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 r.rows['sensor.house']['state']=str(watts)
                 await r.advance()
                 state=r.runtime.host.state
-                self.assertEqual(state.policy.status,'active')
+                self.assertEqual(state.execution.status,'active')
                 self.assertFalse(state.groups[0].release_pending)
                 self.assertEqual(state.conditions.residual_load_w,watts)
                 self.assertEqual(state.frame.external_demands[0].observed.import_w,watts)
@@ -231,7 +213,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         r=Rig();r.rows['sensor.battery']['state']='150'
         await r.start()
         try:
-            self.assertEqual(r.runtime.host.state.policy.status,'active')
+            self.assertEqual(r.runtime.host.state.execution.status,'active')
             self.assertEqual(r.runtime.snapshot()['state'],'pending')
             self.assertIn('settle',r.runtime.snapshot()['reason'])
             self.assertEqual(r.calls,[])
@@ -239,86 +221,6 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             for _ in range(3):await r.advance(5000)
             self.assertEqual(r.runtime.snapshot()['state'],'controlling')
             self.assertFalse(any(f['reason']=='physical_scope_uncovered' for f in r.runtime.snapshot()['fault_history']))
-        finally:await r.runtime.close()
-
-    async def test_one_plan_rolls_across_quarters_and_reconciles_meter_origins(self):
-        for mode in ('controlling','control_verification'):
-            with self.subTest(mode=mode):
-                r=Rig(mode);r.extend_plan();await r.start()
-                try:
-                    for cut in (900000,1800000):
-                        previous=r.runtime.host.state.policy.watermark
-                        await r.advance(cut-r.now)
-                        self.assertNotEqual(r.runtime.snapshot()['state'],'fault',r.runtime.snapshot())
-                        session=r.runtime.host.state.policy
-                        self.assertEqual(session.compiled.summary.from_ms,cut)
-                        self.assertEqual(session.watermark.at_ms,cut)
-                        self.assertEqual(session.reconciled_from,previous)
-                        self.assertEqual(r.coordinator._battery_native_context['future_permissions'][0]['start'],iso(cut))
-                        self.assertEqual(session.compiled.summary.identity.context.intent_revision,'s')
-                        for _ in range(4):await r.advance()
-                    self.assertEqual(r.runtime.snapshot()['state'],'controlling' if mode=='controlling' else 'verified',r.runtime.snapshot())
-                    if mode=='control_verification':self.assertEqual(r.calls,[])
-                    else:self.assertTrue(r.calls)
-                finally:await r.runtime.close()
-
-    async def test_late_policy_reply_is_diagnostic_and_next_quarter_clears_the_fault(self):
-        r=Rig();r.extend_plan();original=r.exchange.refresh
-        async def late():
-            await original()
-            r.now=960000
-            for row in r.rows.values():row['last_reported']=iso(r.now)
-        r.exchange.refresh=late
-        await r.start()
-        try:
-            status=r.runtime.snapshot()
-            self.assertEqual(status['state'],'fault')
-            self.assertEqual(status['fix'],{'kind':'diagnostics'})
-            self.assertIn('current quarter',status['reason'])
-            self.assertEqual(r.calls,[])
-            self.assertIsNone(r.runtime.host)
-            r.exchange.refresh=original
-            await r.advance()
-            for _ in range(4):await r.advance()
-            self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
-            self.assertNotIn('fix',r.runtime.snapshot())
-            self.assertEqual(r.runtime.host.state.policy.watermark.at_ms,900000)
-            self.assertTrue(r.calls)
-        finally:await r.runtime.close()
-
-    async def test_new_plan_during_exchange_cannot_admit_the_previous_policy(self):
-        r=Rig();original=r.exchange.refresh
-        async def replaced():
-            await original()
-            r.plan={**r.plan,'plan_id':'new-plan','snapshot_id':'new-snapshot'}
-        r.exchange.refresh=replaced
-        await r.start()
-        try:
-            self.assertEqual(r.calls,[])
-            self.assertEqual(r.runtime.snapshot()['fix'],{'kind':'diagnostics'})
-            r.exchange.refresh=original
-            await r.advance()
-            self.assertNotEqual(r.runtime.snapshot()['state'],'fault',r.runtime.snapshot())
-            self.assertEqual(r.runtime.host.state.policy.compiled.summary.identity.context.intent_revision,'new-snapshot')
-        finally:await r.runtime.close()
-
-    async def test_replacement_plan_moves_actuals_to_its_exact_partial_quarter_cut(self):
-        r=Rig('control_verification');r.extend_plan();await r.start()
-        try:
-            await r.advance(900000-r.now)
-            await r.advance()
-            previous=r.runtime.host.state.policy.watermark
-            cut=r.now
-            r.plan={**r.plan,'plan_id':'replacement','snapshot_id':'replacement-snapshot',
-                    'plans':{'priority':{'slots':[
-                        {'start':iso(900000),'duration_hours':(1800000-cut)/3600000},
-                        {'start':iso(1800000),'duration_hours':.25}]}}}
-            await r.advance()
-            self.assertNotEqual(r.runtime.snapshot()['state'],'fault',r.runtime.snapshot())
-            session=r.runtime.host.state.policy
-            self.assertEqual(session.watermark.at_ms,cut)
-            self.assertEqual(session.reconciled_from,previous)
-            self.assertEqual(session.compiled.summary.identity.context.intent_revision,'replacement-snapshot')
         finally:await r.runtime.close()
 
     async def test_controlling_reaches_actual_service_boundary(self):
@@ -336,18 +238,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         r=Rig('control_verification');await r.start()
         try:
             self.assertNotEqual(r.runtime.snapshot()['state'],'fault',r.runtime.snapshot())
-            self.assertIsNotNone(r.runtime.snapshot()['selected_operation'])
+            self.assertIsNotNone(r.runtime.snapshot()['assessment'])
             self.assertEqual(r.calls,[])
             self.assertEqual(r.fence.snapshot()['owner'],'legacy')
-        finally:await r.runtime.close()
-    async def test_source_cut_and_future_permissions_ignore_old_dispatch_choice(self):
-        r=Rig();r.plan['plans']['priority']['slots'][0]['battery_command']={'allow_grid_charge':False}
-        await r.start()
-        try:
-            c=r.coordinator._battery_native_context
-            self.assertEqual(c['source_cut_ms'],10000)
-            self.assertTrue(c['future_permissions'][0]['grid_charge_allowed'])
-            self.assertEqual(c['future_permissions'][0]['start'],iso(10000))
         finally:await r.runtime.close()
     async def test_required_stale_sources_block_then_recover_with_sensor_diagnostics(self):
         for entity in ('sensor.house','sensor.pv','sensor.grid','sensor.battery'):
@@ -423,23 +316,6 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(r.runtime.host)
         finally:await r.runtime.close()
 
-    async def test_policy_service_failure_routes_to_diagnostics_without_commands(self):
-        r=Rig()
-        async def unavailable(): pass
-        r.exchange.refresh=unavailable
-        r.exchange.snapshot=lambda: {'state':'unreachable','reasons':['bad envelope'],
-            'error':{'code':'invalid_response_envelope','request_id':'request-123'}}
-        try:
-            await r.runtime.refresh()
-            status=r.runtime.snapshot()
-            self.assertEqual(status['fix'], {'kind':'diagnostics'})
-            self.assertIn('invalid response',status['reason'])
-            self.assertIn('request-123',status['reason'])
-            self.assertNotIn('ValueError:',status['reason'])
-            self.assertTrue(status['retry_automatically'])
-            self.assertEqual(r.calls,[])
-        finally:await r.runtime.close()
-
     async def test_failed_journal_prevents_service_calls(self):
         r=Rig()
         async def fail(value):raise OSError('disk full')
@@ -487,9 +363,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await r.start()
         try:
             self.assertTrue(captured)
-            r.plan['snapshot_id']='superseding-snapshot'
+            r.plan['battery_execution']['id']='superseding-plan'
             self.assertFalse(r.runtime._can_send(captured[0]))
-            r.plan['snapshot_id']='s'
+            r.plan['battery_execution']['id']='c0'
             r.runtime._closing=True
             self.assertFalse(r.runtime._can_send(captured[0]))
             r.runtime._closing=False
@@ -517,7 +393,6 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         r=Rig();await r.start()
         try:
             for _ in range(4):await r.advance()
-            r.exchange.policy=None
             r.now=900001
             for row in r.rows.values():row['last_reported']=iso(r.now)
             for event in await r.runtime._observe(r.runtime.host.state.groups[0].spec.id):await r.runtime.host.accept(event)
@@ -553,6 +428,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 restarted=Rig();restarted.now=r.now+25*3600000;restarted.rows=deepcopy(r.rows)
                 for row in restarted.rows.values():row['last_reported']=iso(restarted.now)
                 restarted.store.saved=deepcopy(r.store.saved)
+                restarted.archive_stores.update(r.archive_stores)
                 if old_participants:
                     state=decode_checkpoint(restarted.store.saved['checkpoint'].encode())
                     scope=state.authority.scope
@@ -564,7 +440,6 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 restarted.fence_store.saved=deepcopy(r.fence_store.saved)
                 await restarted.fence.open();await restarted.runtime.open()
                 try:
-                    self.assertIsNone(restarted.exchange.policy)
                     for _ in range(36):
                         restarted.now+=10000
                         for row in restarted.rows.values():row['last_reported']=iso(restarted.now)
@@ -579,6 +454,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         from battery_runtime import NativeReadbackPending
         r=Rig();await r.start();await r.runtime.close()
         restarted=Rig();restarted.store.saved=deepcopy(r.store.saved)
+        restarted.archive_stores.update(r.archive_stores)
         restarted.fence_store.saved=deepcopy(r.fence_store.saved)
         await restarted.fence.open()
         missing=restarted.rows.pop('select.mode')
@@ -603,3 +479,105 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.calls,[])
         self.assertEqual(r.runtime.host.state.groups[0].mode,'control_verification')
         finish.set();await asyncio.wait_for(closing,1)
+
+class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_verified_dump_replays_account_without_commands(self):
+        from runtime_json import decode_value
+        r=Rig('control_verification');await r.start()
+        try:
+            await r.advance()
+            dump=r.runtime.snapshot(include_evidence=True)
+            account=decode_value(dump['accounting_journal'],Account)
+            self.assertEqual(feedback(account,r.now),dump['accounting'])
+            self.assertEqual(r.calls,[])
+            self.assertIn('not being changed',dump['explanation']['status'])
+            self.assertNotIn('accounting_journal',r.runtime.snapshot())
+            self.assertIsNone(dump['native_target'])
+        finally:await r.runtime.close()
+
+    async def test_capture_after_host_creation_persists_exact_prefix_and_payload(self):
+        r=Rig('control_verification');await r.start()
+        try:
+            captured=await r.runtime.capture_feedback(5000000,'snapshot')
+            saved=await r.runtime.archive.load_session(r.store.saved['execution_root'])
+            self.assertEqual(json.loads(saved.captured_feedback),captured)
+            await r.advance()
+            self.assertEqual(json.loads(r.runtime.host.state.execution.captured_feedback),captured)
+            self.assertGreater(r.runtime.host.state.execution.account.receipt,captured['source_receipt'])
+        finally:await r.runtime.close()
+
+    async def test_counter_unavailable_keeps_live_execution_and_unknown_delivery(self):
+        r=Rig('control_verification');await r.start()
+        try:
+            r.rows['sensor.battery_charge']['state']='unavailable'
+            await r.advance()
+            self.assertEqual(r.runtime.snapshot()['state'],'verified')
+            self.assertIsNone(r.runtime.snapshot()['accounting']['balance']['charge']['high'])
+        finally:await r.runtime.close()
+
+    async def test_receipt_order_reset_and_late_correction_do_not_invent_epochs(self):
+        r=Rig('control_verification');await r.start()
+        try:
+            entity='sensor.battery_charge';attrs=r.rows[entity]['attributes']
+            await r.runtime._meter(entity,101,attrs,70000,'before-reset')
+            await r.runtime._meter(entity,1,attrs,80000,'reset')
+            await r.runtime._meter(entity,100.5,attrs,65000,'late')
+            await r.runtime._meter(entity,2,attrs,90000,'after-reset')
+            rows=[m for m in r.runtime.host.state.execution.account.meters if m.stream==entity]
+            self.assertEqual([m.epoch for m in rows[-4:]],['0','1','0','1'])
+            await r.runtime._meter(entity,100.6,attrs,65000,'correction')
+            before=r.runtime.host.state.execution.account
+            await r.runtime._meter(entity,100.5,attrs,65000,'late')
+            self.assertEqual(r.runtime.host.state.execution.account,before)
+        finally:await r.runtime.close()
+
+    async def test_multiple_configured_counters_are_explicit_additive_sources(self):
+        r=Rig('control_verification')
+        r.options['entities_battery_charge'].append('sensor.second_charge')
+        r.rows['sensor.second_charge']=deepcopy(r.rows['sensor.battery_charge'])
+        await r.start()
+        try:
+            self.assertEqual(r.runtime.snapshot()['state'],'verified',r.runtime.snapshot())
+            sources={m.physical_id for m in r.runtime.host.state.execution.account.meters if m.direction=='charge'}
+            self.assertEqual(sources,{'sensor.battery_charge','sensor.second_charge'})
+        finally:await r.runtime.close()
+
+    async def test_configuration_change_keeps_physical_account_while_waiting_for_new_plan(self):
+        r=Rig('control_verification');await r.start()
+        try:
+            original=r.runtime.host.state.execution.account
+            r.options['battery_export_enabled']=True
+            await r.runtime.refresh()
+            self.assertEqual(r.runtime._bootstrap,original)
+            self.assertFalse(r.calls)
+            captured=await r.runtime.capture_feedback(5000000,'new_config')
+            self.assertEqual(captured['previous_contract_id'],original.contract.id)
+        finally:await r.runtime.close()
+
+    async def test_expired_plan_keeps_recording_energy_without_replan_success(self):
+        r=Rig('control_verification');await r.start()
+        try:
+            before=r.runtime.host.state.execution.account
+            r.now=1000000
+            r.rows['sensor.battery_charge'].update(state='101',last_reported=iso(r.now))
+            await r.runtime.refresh()
+            account=r.runtime.host.state.execution.account
+            self.assertGreater(len(account.meters),len(before.meters))
+            self.assertEqual(account.contract.id,before.contract.id)
+            self.assertEqual(r.calls,[])
+        finally:await r.runtime.close()
+
+    async def test_diagnostic_dump_replays_all_assessments_and_detects_changed_result(self):
+        import runpy
+        replay=runpy.run_path(str(Path(__file__).parents[1]/'scripts/replay-battery-execution.py'))['replay']
+        r=Rig('control_verification');await r.start()
+        try:
+            for _ in range(4):await r.advance()
+            dump=r.runtime.snapshot(include_evidence=True)
+            result=replay({'battery_execution':dump})
+            self.assertTrue(result['matches_recorded_results'],result['mismatches'])
+            self.assertGreater(result['assessments_checked'],0)
+            self.assertFalse(r.calls)
+            dump['assessment']['charge_dc_w']+=1
+            self.assertFalse(replay(dump)['matches_recorded_results'])
+        finally:await r.runtime.close()

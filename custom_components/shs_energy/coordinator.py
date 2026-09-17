@@ -22,7 +22,6 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .battery_policy_exchange import BatteryPolicyExchange
 from .battery_live import BatteryLiveInputs
 from .operating_modes import device_mode, operating_mode_identity
 
@@ -265,12 +264,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._battery_entity_report, lambda: int(dt_util.utcnow().timestamp() * 1000),
             self._battery_inputs_store.async_save,
         )
-        self._policy_delivery_store = Store(hass, 1, f"shs_energy.battery_policy_delivery.{entry.entry_id}")
-        self.battery_policy_exchange = BatteryPolicyExchange(
-            client.battery_policy, self._battery_exchange_context,
-            self._policy_delivery_store.async_save,
-            lambda: int(dt_util.utcnow().timestamp() * 1000),
-        )
         self._recovering = False
         self.last_runtime_report: str | None = None
         self.last_runtime_error: str | None = None
@@ -463,24 +456,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_optimisation_push = stored.get("last_optimisation_push")
         self.last_optimisation_attempt = stored.get("last_optimisation_attempt")
 
-    def _battery_exchange_context(self):
-        plan = self.optimisation_plan
-        options = resolved_options(self.hass, dict(self.entry.options))
-        if (not plan or options.get(OPT_PLANNING_MODE) != PLANNING_MODE_LIVE
-                or self._plan_configuration_changed or plan.get("status") != "ready"
-                or device_mode(options, "battery") not in ("control_verification", "controlling")
-                or plan.get("operating_scope", {}).get("modes") != operating_mode_identity(options, plan.get("operating_scope", {}).get("device_owners", {}).values())):
-            return None
-        return {"plan_id": plan["plan_id"], "snapshot_id": plan["snapshot_id"],
-            "config_revision": hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest(),
-            "native_context": self._battery_native_context}
-
     def _battery_entity_report(self, entity_id):
         state = self.hass.states.get(entity_id)
         if state is None:
             return None
         return {"state": state.state, "attributes": dict(state.attributes),
-                "last_reported": state.last_reported.isoformat()}
+                "last_reported": state.last_reported.isoformat(), "event_id": state.context.id}
 
     async def async_battery_planned_devices(self):
         """Preserve website membership even when local control setup is invalid."""
@@ -538,10 +519,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 rows.append({"start":at,**{key:row.get(key) for key in ("mean","min","max")}})
             result[role]=rows
         return result
-
-    async def async_battery_policy_refresh(self, _now=None):
-        await self.battery_policy_exchange.refresh()
-        self.async_update_listeners()
 
     async def async_report_runtime(self) -> dict[str, Any]:
         """Serialize fresh reports so an older local read cannot win a race."""
@@ -2338,6 +2315,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> dict[str, Any]:
         from .configuration_schema import shared_devices
         from .operating_modes import planning_devices
+        runtime = getattr(self, "battery_runtime", None)
+        execution_options = runtime.controller.options() if runtime is not None else None
         scope_devices = shared_devices(devices, options)
         requested = stored.get("optimisation_device_configuration", {})
         unready = [d for d in scope_devices if requested.get(d["key"], {}).get("planning_role") == "controllable"
@@ -2810,6 +2789,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._record_forecast_ledger(
                 stored, {start: pv[start] for start in horizon}, captured
             )
+        if runtime is not None and runtime.controller.options()!=execution_options:
+            raise OptimisationInputError("Battery configuration changed while the planning snapshot was being captured")
+        if runtime is not None and snapshot.get("battery") and device_mode(options, "battery") in ("controlling", "control_verification"):
+            battery = snapshot["battery"]
+            snapshot["battery_execution_feedback"] = await runtime.capture_feedback(
+                round(battery["soc"] * battery["capacity_kwh"] * 1e6), "planning_snapshot_soc", round(datetime.fromisoformat(snapshot["sources"]["battery"]["issued_at"]).timestamp()*1000))
         return snapshot
 
     async def _retry_pending_plan_ack(self, stored: dict[str, Any]) -> bool:
@@ -3084,6 +3069,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if returned_plan:
                 try:
                     validate_plan_contract(returned_plan, dt_util.utcnow())
+                    runtime=getattr(self,"battery_runtime",None)
+                    if runtime is not None:
+                        try:
+                            runtime.validate_plan_response(returned_plan)
+                        except ValueError as error:
+                            raise OptimisationInputError(str(error)) from error
                 except OptimisationInputError as err:
                     plan_error = str(err)
                     _LOGGER.warning("Optimisation plan refused: %s", err)
@@ -3157,7 +3148,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self._store.async_save(stored)
             self.async_update_listeners()
         await self.async_report_runtime()
-        await self.async_battery_policy_refresh()
+        await self.async_battery_inputs_refresh()
 
     @property
     def current_plan_slot(self) -> dict[str, Any] | None:
@@ -3180,6 +3171,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._plan_configuration_changed:
             return {}, None
         plan = scoped_plan(self.optimisation_plan, options, device)
+        if device == "battery" and plan and self.optimisation_plan.get("battery_execution"):
+            plan = {**plan, "battery_execution": self.optimisation_plan["battery_execution"]}
         now = dt_util.utcnow()
         status = operational_status(plan, options.get("planning_mode", "live"), [], now)
         if not status["actionable"]:

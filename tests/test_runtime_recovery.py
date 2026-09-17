@@ -4,7 +4,7 @@ import json
 import unittest
 
 from test_home_runtime import Harness, controls, synthetic_steps
-from test_home_runtime_policy import Harness as PolicyHarness
+from test_home_runtime_execution import Harness as PolicyHarness
 from test_energy_ledger import spec, sample
 from energy_ledger import (
     EnergyBounds, CounterSample, create_ledger, record_sample, mark_actuals,
@@ -241,32 +241,18 @@ class ReliefTests(unittest.TestCase):
 
 
 class SettlementTests(unittest.TestCase):
-    def test_expired_policy_survives_multiple_retention_windows_and_crash_replay(self):
-        h = PolicyHarness(); h.offer()
-        origin = h.state.policy.watermark
-        # 260 intervals reproduce exhaustion of the default 128 interval buffer
-        # twice, without receiving a replacement policy.
-        for revision in range(1, 261):
-            value = CounterSample("charge", "physical-register", 0, revision,
-                                  origin.at_ms + revision * 10000, 1000000 + revision * 10)
-            before = encode_checkpoint(h.state)
-            h.event(MeterObserved(value), value.at_ms)
-            if revision == 130:
-                expected = (h.state.ledger, h.state.policy.settled_actuals)
-                for checkpoint in (before, encode_checkpoint(h.state)):
-                    resumed, _ = restore_checkpoint(checkpoint, value.at_ms)
-                    resumed, _ = reduce_home(resumed, MeterObserved(value), value.at_ms)
-                    self.assertEqual((resumed.ledger, resumed.policy.settled_actuals), expected)
-        self.assertEqual(h.state.policy.watermark, origin)
-        self.assertEqual(h.state.policy.status, "outside_coverage")
-        self.assertEqual(len(h.state.ledger.streams[0].samples), 129)
-        expected = reconciled_actuals(h.state.ledger, origin, h.state.policy.settled_actuals, h.now)
-        self.assertEqual(expected[0].energy, EnergyBounds(2600, 2600))
-        self.assertEqual(h.state.ledger.streams[0].lifetime, expected[0].energy)
-        h.event(LedgerPruned(h.now))
-        self.assertEqual(len(h.state.ledger.streams[0].samples), 1)
-        self.assertEqual(reconciled_actuals(h.state.ledger, origin, h.state.policy.settled_actuals, h.now), expected)
-        self.assertFalse(any(isinstance(e, Send) for e in h.effects))
+    def test_execution_actuals_survive_expiry_and_restart_without_replan(self):
+        from home_runtime import CounterReceived
+        from plan_execution import MeterReceipt, measured
+        h=PolicyHarness();h.offer();start=h.now
+        for revision in range(261):
+            h.event(CounterReceived(MeterReceipt(str(revision),'charge','charge','battery_dc','0',
+                start+revision*10000,1000000+revision*10,0)),start+revision*10000)
+        restored,_=restore_checkpoint(encode_checkpoint(h.state),h.now)
+        self.assertEqual(restored.execution.account,h.state.execution.account)
+        total=measured(restored.execution.account.meters,'charge',start,h.now)
+        self.assertEqual((total.low,total.high),(2600,2600))
+        self.assertFalse(any(isinstance(e,Send) for e in h.effects))
 
     def test_async_stream_settlement_matches_unpruned_oracle_with_partial_cuts_and_reset(self):
         specs = (spec("fast", maximum=3600), spec("slow"), spec("missing"))
@@ -307,20 +293,16 @@ class SettlementTests(unittest.TestCase):
         self.assertEqual(ledger.streams[0].lifetime, EnergyBounds(30, 30))
         self.assertEqual(len(ledger.streams[0].samples), 2)
 
-    def test_corrupt_settlement_checkpoint_is_rejected(self):
-        h = PolicyHarness(); h.offer()
-        h.event(MeterObserved(CounterSample("charge", "physical-register", 0, 1,
-                                          h.now + 1000, 1000010)), h.now + 1000)
-        h.event(LedgerPruned(h.now))
+    def test_corrupt_execution_account_checkpoint_is_rejected(self):
+        h=PolicyHarness();h.offer()
         for mutate in (
-            lambda p: p.update(through_ms=p["through_ms"] - 1),
-            lambda p: p["actuals"].update(counter_measured_ms=0),
-            lambda p: p["actuals"]["spec"].update(stream_id="other"),
+            lambda a:a.update(receipt=-1),
+            lambda a:a['admissions'][0].update(receipt=a['receipt']+1),
+            lambda a:a['admissions'][0]['contract'].update(generation=99),
         ):
-            value = json.loads(encode_checkpoint(h.state))
-            mutate(value["state"]["policy"]["settled_actuals"][0])
-            with self.assertRaises(ValueError):
-                decode_checkpoint(json.dumps(value).encode())
+            value=json.loads(encode_checkpoint(h.state))
+            mutate(value['state']['execution']['account'])
+            with self.assertRaises(ValueError):decode_checkpoint(json.dumps(value))
 
 
 if __name__ == "__main__":

@@ -881,7 +881,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         mode: d.mode, state: d.execution_status?.state, reason: d.execution_status?.reason,
         next_step: d.execution_status?.next_step, fix: d.execution_status?.fix,
         retry_automatically: d.execution_status?.retry_automatically,
-        battery_runtime: d.battery_runtime, policy_delivery: d.policy_delivery })),
+        battery_runtime: d.battery_runtime })),
       delivery: { last_daily_push: this._data.diagnostics.last_daily_push,
         last_plan_push: this._data.readiness.last_plan_push, electrical_history_until: this._data.readiness.actuals_accepted_until,
         thermal_history_until: this._data.diagnostics.thermal_slots_accepted_until },
@@ -1057,73 +1057,36 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return device.mode === "controlling" && slot.execution ? slot.execution : slot;
   }
 
-  _policyDelivery(device) {
-    const status = device.policy_delivery;
-    if (["active", "diagnostic_only"].includes(device.battery_runtime?.policy_state)) return "";
-    if (!status || status.state === "not_requested") return "";
-    const messages = {
-      native_context_required: "Waiting for verified battery response and measurement configuration.",
-      source_quarter_expired: "The policy quarter ended; waiting for the next battery policy.",
-      plan_window_unavailable: "Waiting for an accepted plan covering the current quarter.",
-      native_context_expired_or_different_cut: "Waiting for battery policy for the current quarter.",
-      runtime_admission_required: "Policy received; live measurement and control checks are still required.",
-      local_context_changed: "Waiting for a policy matching the current configuration.",
-      native_context_configuration_mismatch: "Battery response checks need to match the current configuration.",
-      policy_expired: "Waiting for a fresh battery policy.",
-      plan_not_acknowledged: "Waiting for the current plan to be acknowledged.",
-    };
-    const reason = status.reasons?.[0];
-    const text = messages[reason] || (status.state === "requesting" ? "Requesting battery policy." : "Battery policy unavailable; see diagnostics for details.");
-    return `<p class="muted">Battery policy: ${this._escape(text)}</p>`;
-  }
-
   _batteryOutlook(device) {
-    if (!device.battery_runtime) return "";
-    const outlook = device.battery_runtime.outlook;
-    if (this._refreshError || outlook?.state !== "available") return '<p class="muted battery-outlook">Controller outlook: waiting for a current decision and its forecast.</p>';
+    const explanation = device.battery_runtime?.explanation;
+    if (!explanation || this._refreshError) return '<p class="muted battery-outlook">Waiting for a current battery plan and measurements.</p>';
     const locale = this._hass?.locale?.language || this._hass?.language;
     const timeZone = this._hass?.locale?.time_zone === "local" ? undefined : this._hass?.config?.time_zone;
-    const day = value => new Date(value).toLocaleDateString(locale, { timeZone });
-    const clock = value => new Date(value).toLocaleString(locale, {
-      timeZone, hour: "2-digit", minute: "2-digit", hour12: false,
-      ...(day(value) !== day(outlook.evaluated_at_ms) ? { month: "short", day: "numeric" } : {}),
-    });
-    const kw = value => value > 0 && value < 10 ? "<0.01" : (value / 1000).toFixed(2);
-    const events = outlook.events.map(e => `${e.kind === "charge" ? "Charge" : "Discharge"} ${clock(e.start_ms)}: ${kw(e.battery_w)} kW ${outlook.battery_power_basis.toUpperCase()} (house ${kw(e.consumption_w)} / solar ${kw(e.solar_w)} kW)`);
-    if (!outlook.events.some(e => e.kind === "charge")) events.push("No later charge forecast");
-    if (!outlook.events.some(e => e.kind === "discharge")) events.push("No later discharge forecast");
-    const benefit = outlook.benefit_vs_hold_sek;
-    events.push(Number.isFinite(benefit) ? `Est. modeled benefit ${Math.abs(benefit) < 0.005 ? "0.00" : benefit.toFixed(2)} SEK vs standby this quarter` : "Benefit vs standby unavailable");
-    events.push(`through ${clock(outlook.horizon_end_ms)}`);
-    return `<p class="muted battery-outlook">${this._escape(`Controller outlook${outlook.basis === "verification" ? " (verification only)" : ""} · Conditional: ${events.join(" · ")}`)}</p>`;
+    const deadline = explanation.deadline_ms == null ? "" : ` Aim to finish by ${new Date(explanation.deadline_ms).toLocaleString(locale, { timeZone, hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" })}.`;
+    return `<p class="muted battery-outlook">${this._escape(explanation.plan)}<br>${this._escape(explanation.difference)}<br>${this._escape(explanation.next + deadline)}</p>`;
   }
 
   _batteryLiveInputs(device) {
     const runtime = device.battery_runtime;
-    if (runtime) {
-      const m = runtime.measurements;
-      const power = m ? `House ${(m.house_w / 1000).toFixed(2)} kW · Solar ${(m.pv_w / 1000).toFixed(2)} kW · Battery ${(m.battery_dc_w / 1000).toFixed(2)} kW` : runtime.fix?.kind === "fields" ? "Complete the highlighted measurement settings." : "Waiting for current measurements";
-      const response = m?.response_matches_direction === false ? `Requested ${m.requested_direction}; measured battery is ${m.physical_response}.` : m ? `Measured battery: ${m.physical_response}.` : "";
-      const loss = runtime.loss_evidence?.discharge;
-      const curve = runtime.loss_model?.discharge;
-      const lossText = curve ? loss?.model_source === "measured" ? `Discharge loss: approximately ${Math.round(curve.overhead_w)} W fixed, plus ${((1-curve.gain)*100).toFixed(1)}% of battery power (${loss.windows} observation periods).` : "Conversion losses currently use configured efficiencies; measurements are still being collected." : "";
-      const pending = runtime.pending_commands?.map(c => `${c.entity_id}: ${c.value} (${c.stage})`).join(" · ");
-      const settings = runtime.requested_settings;
-      const target = settings ? `${settings.mode} · Charge limit: ${settings.charge_limit_w} W · Discharge limit: ${settings.discharge_limit_w} W` : "";
-      return `<p class="muted">${this._escape(runtime.reason)}<br>${this._escape(power)}${response ? `<br>${this._escape(response)}` : ""}${runtime.selected_operation ? `<br>Current choice: ${this._escape(runtime.selected_operation.split("@")[0])}${runtime.mode === "control_verification" ? " (verification only)" : ""}` : ""}${target ? `<br>Requested settings: ${this._escape(target)}` : ""}${pending ? `<br>Awaiting confirmation: ${this._escape(pending)}` : ""}${lossText ? `<br>${this._escape(lossText)}` : ""}</p>`;
+    if (!runtime) {
+      const live = device.live_inputs;
+      if (!live) return "";
+      const labels = {house_consumption_power_entity: "House", solar_production_power_entity: "Solar", battery_power_measurement_entity: "Battery"};
+      const readings = Object.entries(labels).map(([key, label]) => {
+        const row = live.sources?.[key];
+        return `${label}: ${!row || row.state === "unavailable" || live.capture_stale ? "unavailable" : `${(row.watts / 1000).toFixed(2)} kW${row.state === "stale_report" ? " (stale)" : ""}`}`;
+      });
+      return `<p class="muted">${this._escape(readings.join(" · "))}<br>Waiting for the battery plan and current equipment readings.</p>`;
     }
-    const live = device.live_inputs;
-    if (!live) return "";
-    const readings = live.sources || {};
-    const labels = {house_consumption_power_entity: "House", solar_production_power_entity: "Solar", battery_power_measurement_entity: "Battery"};
-    const power = Object.entries(labels).map(([key, label]) => {
-      const reading = readings[key];
-      if (!reading || reading.state === "unavailable" || live.capture_stale) return `${label}: unavailable`;
-      const value = Number.isFinite(reading.watts) ? `${(reading.watts / 1000).toFixed(2)} kW` : "unavailable";
-      return `${label}: ${value}${reading.state === "stale_report" ? " (stale)" : ""}`;
-    }).join(" · ");
-    const fenced = ["fenced", "runtime"].includes(device.battery_writer?.owner);
-    return `<p class="muted">Live inputs: ${this._escape(power)}<br>${fenced ? "Legacy battery control is fenced." : "Live battery policy control awaits verified measurement and inverter response checks."}</p>`;
+    const explanation = runtime.explanation;
+    const measured = explanation?.now || (runtime.fix?.kind === "fields" ? "Complete the highlighted measurement settings." : "Waiting for current household and battery readings.");
+    const mismatch = runtime.measurements?.response_matches_direction === false && runtime.mode === "controlling"
+      ? " The battery has not yet responded as requested." : "";
+    const pending = runtime.pending_writes ? " Waiting for the battery to confirm its settings." : "";
+    const loss = runtime.loss_evidence?.discharge?.model_source === "measured"
+      ? "Energy-loss estimates use measurements from your system."
+      : runtime.loss_model ? "Energy-loss estimates use your settings while measurements are collected." : "";
+    return `<p class="muted">${this._escape(runtime.reason)}<br>${this._escape(measured + mismatch + pending)}${loss ? `<br>${this._escape(loss)}` : ""}</p>`;
   }
 
   _scheduleCommand(device, slot) {
@@ -1207,7 +1170,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
       <p class="muted">Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
       ${!devices.length ? '<p role="status">No devices match these filters.</p>' : ""}
-      ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}<div class="device-field-issues">${this._deviceFieldButtons(d)}</div>${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included && d.system !== "battery" ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._scheduleCommand(d, slots[1]).text)}` : ""}</small>${this._policyDelivery(d)}${this._batteryLiveInputs(d)}${d.system === "battery" ? this._batteryOutlook(d) : ""}</article>`).join("")}`;
+      ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}<div class="device-field-issues">${this._deviceFieldButtons(d)}</div>${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included && d.system !== "battery" ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._scheduleCommand(d, slots[1]).text)}` : ""}</small>${this._batteryLiveInputs(d)}${d.system === "battery" ? this._batteryOutlook(d) : ""}</article>`).join("")}`;
   }
 
   _attention() {

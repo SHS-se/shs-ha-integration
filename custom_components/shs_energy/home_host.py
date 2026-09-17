@@ -12,10 +12,10 @@ from typing import Awaitable, Callable, Optional
 
 if __package__:
     from . import home_runtime as runtime
-    from .home_runtime_checkpoint import encode_checkpoint, restore_checkpoint
+    from .home_runtime_checkpoint import encode_checkpoint, restore_checkpoint, restore_state
 else:
     import home_runtime as runtime
-    from home_runtime_checkpoint import encode_checkpoint, restore_checkpoint
+    from home_runtime_checkpoint import encode_checkpoint, restore_checkpoint, restore_state
 
 
 class DispatchRejected(Exception):
@@ -33,6 +33,7 @@ class HostPorts:
     renew: Callable[[runtime.HomeState, str], Awaitable[tuple[runtime.Event, ...]]]
     report: Callable[[str, str], None]
     now_ms: Callable[[], int]
+    persist_state: Optional[Callable[[runtime.HomeState], Awaitable[None]]] = None
 
 
 class HomeHost:
@@ -53,12 +54,14 @@ class HomeHost:
         self._runner = None
         self._fault = None
 
-    async def start(self, checkpoint: Optional[bytes] = None):
+    async def start(self, checkpoint: Optional[bytes] = None, *, resume=False):
         if self._runner is not None or self._closed:
             raise RuntimeError("home host can only start once")
         effects = ()
         if checkpoint is not None:
             self.state, effects = restore_checkpoint(checkpoint, self.ports.now_ms())
+        elif resume:
+            self.state, effects = restore_state(self.state, self.ports.now_ms())
         self._runner = asyncio.create_task(self._run())
         await self._effects(effects)
 
@@ -67,7 +70,7 @@ class HomeHost:
             raise RuntimeError("home host is not running") from self._fault
         completion = asyncio.get_running_loop().create_future()
         self._queue.put_nowait((event, completion))
-        await completion
+        return await completion
 
     def _enqueue(self, event):
         if not self._closed:
@@ -80,8 +83,10 @@ class HomeHost:
                 state, effects = runtime.reduce_home(self.state, event, self.ports.now_ms())
                 self.state = state
                 await self._effects(effects)
+                if self._fault is not None:
+                    raise RuntimeError("home journal could not persist the transition") from self._fault
                 if completion is not None and not completion.done():
-                    completion.set_result(None)
+                    completion.set_result(state)
             except Exception as error:
                 # Invalid inputs are rejected atomically by the pure reducer.
                 # Host failures are visible and must never start another writer.
@@ -111,7 +116,10 @@ class HomeHost:
                 return
             if isinstance(effect, runtime.Persist):
                 try:
-                    await self.ports.persist(encode_checkpoint(effect.state))
+                    if self.ports.persist_state:
+                        await self.ports.persist_state(effect.state)
+                    else:
+                        await self.ports.persist(encode_checkpoint(effect.state))
                 except Exception as error:
                     self._fault = error
                     self.ports.report("home", f"Checkpoint failed: {error}")
@@ -128,10 +136,10 @@ class HomeHost:
                 self._launch(("authority", effect.group_id), lambda e=effect: self.ports.confirm_authority(e.group_id))
             elif isinstance(effect, runtime.NeedTransition):
                 self._launch(("transition", effect.group_id, effect.token), lambda e=effect: self._transition(e))
-            elif isinstance(effect, runtime.NeedPolicy):
+            elif isinstance(effect, runtime.NeedPlan):
                 context = self.state.authority.identity if self.state.authority else None
                 state = self.state
-                self._launch(("policy", context), lambda e=effect, s=state: self.ports.renew(s, e.reason))
+                self._launch(("plan", context), lambda e=effect, s=state: self.ports.renew(s, e.reason))
             elif isinstance(effect, runtime.WakeAt):
                 if self._wake_at is None or effect.at_ms < self._wake_at:
                     if self._wake is not None:

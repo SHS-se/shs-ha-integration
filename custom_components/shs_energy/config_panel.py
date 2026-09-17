@@ -236,7 +236,6 @@ async def _configuration_payload(
     coordinator._sync_battery_control_issue({**options, "battery_control_enabled": True}, included=battery_required)
     for device in devices:
         if device.get("system") == "battery":
-            device["policy_delivery"] = coordinator.battery_policy_exchange.snapshot()
             device["live_inputs"] = coordinator.battery_live_inputs.snapshot()
             device["battery_writer"] = coordinator.battery_writer.snapshot()
             device["battery_runtime"] = coordinator.battery_runtime.snapshot()

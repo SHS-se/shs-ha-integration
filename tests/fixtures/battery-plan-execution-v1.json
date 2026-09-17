@@ -4,9 +4,9 @@
   "captured_at": "2026-08-20T09:08:00.000Z",
   "contract": {
     "schema": "battery-plan-execution-v1",
-    "id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43:battery:0",
+    "id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43:battery:1",
     "plan_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
-    "generation": 0,
+    "generation": 1,
     "mode": "controlling",
     "scope_revision": "fixture-whole-house",
     "model_revision": "marginal-value-planner-v37:ac-constant-efficiency:0.95:0.95",

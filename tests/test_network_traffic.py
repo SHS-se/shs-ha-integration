@@ -77,31 +77,6 @@ class ApiTrafficTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await client.status(), payload["data"])
         return client.traffic.snapshot()["total"], len(raw)
 
-    async def test_battery_policy_envelope_reaches_the_real_delivery_validator(self):
-        from battery_policy_exchange import read_policy_delivery
-        fixture = json.loads((Path(__file__).parent / 'fixtures/battery-policy-delivery.json').read_text())
-        delivery = fixture['delivery']
-        payload = {'api_version': 1, 'ok': True, 'request_id': 'transport-request', 'data': delivery}
-        class Response:
-            status = 200
-            headers = {'X-Request-ID': 'transport-request'}
-            async def __aenter__(self): return self
-            async def __aexit__(self, *args): pass
-            async def read(self): return json.dumps(payload).encode()
-            async def json(self): return payload
-        def request(method, url, **kwargs):
-            self.assertEqual(method, 'POST')
-            self.assertTrue(url.endswith('/energy-battery-policy'))
-            self.assertEqual(kwargs['headers']['X-SHS-API-Version'], '1')
-            return Response()
-        client = self.api['ShsApiClient'](SimpleNamespace(request=request), 'https://example', 'token')
-        result = await client.battery_policy(fixture['request'])
-        self.assertIsNotNone(read_policy_delivery(result, fixture['request'], fixture['now']))
-        payload = delivery
-        with self.assertRaises(self.api['ShsApiError']) as error:
-            await client.battery_policy(fixture['request'])
-        self.assertEqual(error.exception.code, 'invalid_response_envelope')
-
     async def test_success_measures_actual_decoded_utf8_body(self):
         total, size = await self.call()
         self.assertEqual(total["response_body_bytes"], size)

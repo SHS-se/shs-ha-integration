@@ -1,6 +1,6 @@
 """Production battery owner under the household coordinator.
 
-The cloud supplies economic policy. This owner supplies physical observations,
+The cloud supplies the energy plan. This owner supplies physical observations,
 durable command execution and the exclusive local writer. No schedule fallback.
 """
 from __future__ import annotations
@@ -17,28 +17,30 @@ if __package__:
     from .home_host import HomeHost, HostPorts, DispatchRejected
     from .battery_native_adapter import SigenAdapter
     from .battery_conversion import conversion_model, windows_from_statistics
-    from .battery_execution_policy import ExecutionConditions, BatteryOperation
+    from .battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
+    from . import plan_execution as execution
+    from .runtime_json import encode_value, decode_value
+    from .execution_archive import ExecutionArchive
     from .battery_live import native_surface, source_revision, planned_power_bindings
     from .battery_supply import SupplyScope, observe_supply
     from .configuration_values import resolve_battery_quantities
     from .energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
     from .device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
-    from .battery_policy_exchange import BatteryPolicyUnavailableError
-    from .battery_execution_outlook import describe_outlook
     from .operating_modes import device_mode
 else:
     import home_runtime as rt
     from home_host import HomeHost, HostPorts, DispatchRejected
     from battery_native_adapter import SigenAdapter
     from battery_conversion import conversion_model, windows_from_statistics
-    from battery_execution_policy import ExecutionConditions, BatteryOperation
+    from battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
+    import plan_execution as execution
+    from runtime_json import encode_value, decode_value
+    from execution_archive import ExecutionArchive
     from battery_live import native_surface, source_revision, planned_power_bindings
     from battery_supply import SupplyScope, observe_supply
     from configuration_values import resolve_battery_quantities
     from energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
     from device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
-    from battery_policy_exchange import BatteryPolicyUnavailableError
-    from battery_execution_outlook import describe_outlook
     from operating_modes import device_mode
 
 AGE_MS=30000
@@ -97,16 +99,18 @@ class BatteryRuntime:
     History/calibration reads are ports on the coordinator; tests use the same
     composition with an in-memory state table and real fake service boundary.
     """
-    def __init__(self,coordinator,controller,store,now_ms):
+    def __init__(self,coordinator,controller,store,now_ms,archive_store_for):
         self.coordinator,self.controller,self.store,self.now=coordinator,controller,store,now_ms
+        self.archive=ExecutionArchive(archive_store_for)
         self.host=None;self.adapter=None;self._grant=None;self._identity=None
         self._lock=asyncio.Lock();self._observe_lock=asyncio.Lock();self._closed=False;self._closing=False
         self._options=None;self._devices=[];self._model=None;self._fits={};self._model_sources=None
         self._model_at=0;self._surface=None;self._source_cut=None;self._seeded=False
         self._mode_revision=0;self._mode=None;self._capture_revision=0;self._last_capture=None
-        self._status={'state':'pending','reason':'Waiting for current battery policy'}
+        self._status={'state':'pending','reason':'Waiting for the battery plan'}
         self._last_error=None;self._external_pending={};self._frame_pending={};self._releasing=False
-        self._native_checked=False
+        self._native_checked=False;self._release_revision=0
+        self._bootstrap=execution.Account();self._replan_task=None;self._replan_pending=False
         self._fault_history=[]
         self._observation_error=None
         controller.battery_runtime=self
@@ -114,14 +118,22 @@ class BatteryRuntime:
     async def open(self):
         value=await self.store.async_load()
         if value is not None:
-            if set(value)!={'schema','checkpoint','options','devices','model_sources','ratings'} or value['schema']!='battery-runtime-v2':
+            if value.get('schema') not in ('battery-runtime-v2','battery-runtime-v3'):
                 raise ValueError('invalid battery runtime journal')
             if __package__:
                 from .home_runtime_checkpoint import decode_checkpoint
             else:
                 from home_runtime_checkpoint import decode_checkpoint
+            if value['schema']=='battery-runtime-v3':
+                self._bootstrap=decode_value(value['account'],execution.Account) if value['account'] is not None else execution.Account()
+            if value['checkpoint'] is None:
+                if value.get('execution_root'):
+                    self._bootstrap=(await self.archive.load_session(value['execution_root'])).account
+                return
             checkpoint=value['checkpoint'].encode()
             state=decode_checkpoint(checkpoint)
+            if value.get("execution_root"):
+                state=replace(state,execution=await self.archive.load_session(value["execution_root"]))
             self._options,self._devices=value['options'],value['devices']
             self._model_sources,self._ratings=value['model_sources'],value['ratings']
             group=state.groups[0];authority=state.authority
@@ -141,7 +153,7 @@ class BatteryRuntime:
                 raise ValueError('journalled Sigen control surface changed')
             self.adapter=SigenAdapter(authority.catalog,self._model)
             self._identity=rt.WriterIdentity(OWNER,authority.config_revision,self._surface['revision'])
-            self._releasing=True;self._seeded=True
+            self._releasing=state.execution.account.contract is None;self._seeded=True
             await self._open_host(state,checkpoint)
             if self._scope.kind=='whole_house':
                 participants=tuple(p for p in authority.scope.participants if p.owner=='new_runtime') + tuple(
@@ -154,15 +166,16 @@ class BatteryRuntime:
             # Recover local ownership without waiting for a cloud plan. The old
             # configured sources remain available for this exact baseline release.
             try:
-                await self._release('Recovering previous battery commands')
+                if self._releasing:
+                    await self._release('Recovering previous battery commands')
             except Exception as error:
                 self._status={'state':'fault','reason':f'Battery recovery pending: {error}'}
                 self._record_fault('recovery',self._status['reason'])
 
     async def _open_host(self,state,checkpoint=None):
-        ports=HostPorts(self._persist,self._dispatch,self._can_send,self._observe,self._confirm,self._transition,self._renew,self._report,self.now)
+        ports=HostPorts(self._persist,self._dispatch,self._can_send,self._observe,self._confirm,self._transition,self._renew,self._report,self.now,self._persist_state)
         self.host=HomeHost(state,ports)
-        await self.host.start(checkpoint)
+        await self.host.start(resume=checkpoint is not None)
 
     def identity(self):
         if self._closed or self._identity is None or (not self._releasing and self.controller.options()!=self._options):
@@ -175,63 +188,119 @@ class BatteryRuntime:
             return None
         return self._identity
 
-    def snapshot(self):
+    def snapshot(self, *, include_evidence=False):
         value={**self._status,'loss_model':self._model.wire() if self._model else None,'loss_evidence':self._fits,
-               'runtime_reason':getattr(self,'_runtime_reason',None),'measurements':getattr(self,'_measurements',None),'writer_current':self.coordinator.battery_writer.is_current(self._grant,self.identity()),
-               'fault_history':[dict(row) for row in self._fault_history], 'fault_history_scope':'Last 64 distinct faults since integration load'}
-        value['outlook'] = {'state': 'unavailable'}
-        if self.host:
-            group=self.host.state.groups[0];session=self.host.state.policy
-            value.update(command_state=group.status,mode=group.mode,
-                selected_operation=session.selected_id if session else None,
-                policy_state=session.status if session else None,
-                pending_writes=len(group.attempts),native_target=dict(group.desired.target) if group.desired else None)
-            value['pending_commands']=[{'entity_id':a.step.key,'value':a.step.value,'stage':a.stage,
-                'started_at':iso(a.prepared_at_ms),'confirmation_deadline':iso(a.confirmation_deadline_ms),
-                'uncertain_until':iso(a.latest_effect_ms)} for a in group.attempts]
-            if group.desired:
-                target=dict(group.desired.target)
-                value['requested_settings']={'mode':target[self._options['battery_mode_entity']],
-                    'charge_limit_w':target[self._options['battery_charge_limit_entity']],
-                    'discharge_limit_w':target[self._options['battery_discharge_limit_entity']]}
-            if self._status['state']!='fault' and group.mode=='controlling':
-                uncertain=next((a for a in group.attempts if a.stage=='ambiguous'),None)
-                if self.host._fault:
-                    value.update(state='fault',reason=f'Battery command journal failed: {self.host._fault}')
-                elif self._observation_error:
-                    value.update(state='fault',reason=self._observation_error)
-                elif uncertain:
-                    reason=next((f['reason'] for f in reversed(self._fault_history) if uncertain.step.key in f['reason']),None)
-                    value.update(state='fault',reason=reason or f'{uncertain.step.key}: write of {uncertain.step.value} is unconfirmed; waiting for fresh physical register readings')
-                elif isinstance(group.transition_work,rt.TransitionFailure):
-                    value.update(state='fault',reason=group.transition_work.reason)
-                elif session and session.status=='active' and group.status!='adopted':
-                    reason={
-                        'reconciling':'Waiting for physical confirmation of battery settings',
-                        'native_guard_blocked':'Waiting for measured battery power to settle within the current limits',
-                        'awaiting_observation':'Waiting for fresh battery and household measurements',
-                        'awaiting_grant':'Waiting for exclusive battery write permission',
-                        'physical_scope_blocked':'Battery command is blocked by the measured household power limits',
-                    }.get(group.status,'Applying battery settings; physical confirmation is pending')
-                    value.update(state='pending',reason=reason)
-                elif session and session.status=='active' and group.status=='adopted':
-                    value.update(state='controlling',reason='Battery settings confirmed; live policy active',runtime_reason=None)
-                elif session and session.status not in ('active','diagnostic_only'):
-                    value.update(state='limited',reason='Battery policy is waiting for an executable choice: '+str(getattr(self,'_runtime_reason',None) or session.status))
-            if value['state']=='fault' and 'fix' not in value:
-                value.update(fix={'kind':'diagnostics'},next_step='Check the reported source or command failure. Download diagnostics if it persists.',retry_automatically=True)
-            if session and session.decision:
-                value['alternatives']=[{'operation':r.operation.id,'delta_sek':r.total_delta_sek,'energy_end_kwh':r.energy_end_kwh} for r in session.decision.ranked]
-            if value['state'] not in ('fault', 'limited'):
-                value['outlook'] = describe_outlook(self.coordinator.battery_policy_exchange.outlook, self.host.state, self.now())
+            'runtime_reason':getattr(self,'_runtime_reason',None),'measurements':getattr(self,'_measurements',None),
+            'writer_current':self.coordinator.battery_writer.is_current(self._grant,self.identity()),
+            'fault_history':[dict(row) for row in self._fault_history],
+            'fault_history_scope':'Last 64 distinct faults since integration load'}
+        if not self.host:
+            return value
+        state=self.host.state;group=state.groups[0];session=state.execution
+        accounting_at=self.now()
+        value.update(command_state=group.status,mode=group.mode,execution_state=session.status,
+            accounting_at_ms=accounting_at,
+            pending_writes=len(group.attempts),native_target=dict(group.desired.target) if group.desired else None,
+            accounting=(execution.feedback if include_evidence else execution.planner_feedback)(session.account,accounting_at),
+            assessment=asdict(session.assessment) if session.assessment else None,
+            )
+        if include_evidence:
+            value.update(accounting_journal=encode_value(session.account), command_journal=encode_value(group),
+                captured_replan=json.loads(session.captured_feedback) if session.captured_feedback else None,
+                execution_traces=encode_value(session.traces),
+                execution_input=asdict(session.live) if session.live else None,
+                conversion_basis=state.authority.plant.conversion.wire() if state.authority else None)
+        value['pending_commands']=[{'entity_id':a.step.key,'value':a.step.value,'stage':a.stage,
+            'started_at':iso(a.prepared_at_ms),'confirmation_deadline':iso(a.confirmation_deadline_ms),
+            'uncertain_until':iso(a.latest_effect_ms)} for a in group.attempts]
+        if group.desired:
+            target=dict(group.desired.target)
+            value['requested_settings']={'mode':target[self._options['battery_mode_entity']],
+                'charge_limit_w':target[self._options['battery_charge_limit_entity']],
+                'discharge_limit_w':target[self._options['battery_discharge_limit_entity']]}
+        if state.conditions and session.assessment and state.conditions.valid_until_ms>self.now():
+            value['explanation']=execution.explain_execution(session.account,rt.execution_live(state,self.now()),
+                session.assessment,measured_battery_dc_w=getattr(self,'_measurements',{}).get('battery_dc_w'))
+            if self._status['state']!='fault':
+                value['reason']=value['explanation']['status']
+        if self.host._fault:
+            value.update(state='fault',reason=f'Battery command journal failed: {self.host._fault}')
+        elif self._observation_error:
+            value.update(state='fault',reason=self._observation_error)
+        elif any(a.stage=='ambiguous' for a in group.attempts):
+            reason=next((f['reason'] for f in reversed(self._fault_history) if 'send failed' in f['reason'] or 'Modbus' in f['reason']), 'The battery has not confirmed its settings; waiting for fresh readings')
+            value.update(state='fault',reason=reason)
+        elif isinstance(group.transition_work,rt.TransitionFailure):
+            value.update(state='fault',reason=group.transition_work.reason)
+        elif group.mode=='controlling' and session.status=='active':
+            if group.status=='adopted':
+                value.update(state='controlling',runtime_reason=None)
+            else:
+                value.update(state='pending',reason='Waiting for measured battery power to settle within its limits' if group.status=='native_guard_blocked' else 'Applying the planned battery settings; confirmation is pending')
+        if value['state']=='fault' and 'fix' not in value:
+            value.update(fix={'kind':'diagnostics'},next_step='Check the reported source or command failure. Download diagnostics if it persists.',retry_automatically=True)
         return value
+
+    def validate_plan_response(self,plan):
+        """Reject stale response identity before replacing the coordinator's cache."""
+        wire=plan.get('battery_execution')
+        if wire is None:
+            if plan.get('battery') and device_mode(self.controller.options(),'battery') in ('controlling','control_verification'):
+                raise ValueError('The planner did not provide battery execution instructions')
+            return
+        contract=execution.read_contract(wire)
+        options=self.controller.options()
+        if contract.scope_revision!=digest(options) or contract.mode!=device_mode(options,'battery'):
+            raise ValueError('Battery plan belongs to a different local setup or operating mode')
+        account=self.host.state.execution.account if self.host else self._bootstrap
+        if account.contract and contract.id==account.contract.id:
+            if contract!=account.contract:raise ValueError('Accepted battery reference was changed')
+            return
+        anchor=next((r for r in account.requests if r.generation==contract.generation),None)
+        if contract.generation!=account.requested_generation or anchor is None or anchor.source_receipt!=contract.source_receipt:
+            raise ValueError('Battery plan belongs to a superseded request or different actuals prefix')
+        if contract.previous_contract_id!=(account.contract.id if account.contract else None):
+            raise ValueError('Battery plan does not acknowledge the accepted reference')
+
+    async def capture_feedback(self, stored_mwh, source, at_ms=None):
+        async with self._lock:
+            return await self._capture_feedback(stored_mwh, source, at_ms)
+
+    async def _capture_feedback(self, stored_mwh, source, at_ms=None):
+        """Persist the request generation and freeze its evidence before network I/O."""
+        if self.host:
+            state=await self.host.accept(rt.ReplanRequested(
+                execution.StateObservation(at_ms if at_ms is not None else self.now(),stored_mwh,source),digest(self.controller.options())))
+            return json.loads(state.execution.captured_feedback)
+        else:
+            self._bootstrap=execution.observe_state(self._bootstrap,
+                execution.StateObservation(at_ms if at_ms is not None else self.now(),stored_mwh,source))
+            self._bootstrap=execution.request_replan(self._bootstrap)
+            captured=execution.planner_feedback(self._bootstrap,self.now())
+            captured.update(scope_revision=digest(self.controller.options()),reason=getattr(self,'_runtime_reason',None),pending_effects=[])
+            await self.store.async_save({'schema':'battery-runtime-v3','checkpoint':None,
+                'execution_root':await self.archive.save_session(rt.ExecutionSession(account=self._bootstrap,captured_feedback=json.dumps(captured))),
+                'account':None,'options':None,'devices':[],
+                'model_sources':None,'ratings':None})
+            return captured
 
     def _control_entities(self):
         return tuple(self._options[k] for k in ('battery_mode_entity','battery_charge_limit_entity','battery_discharge_limit_entity'))
 
     async def _persist(self,data):
-        await self.store.async_save({'schema':'battery-runtime-v2','checkpoint':data.decode(),
-            'options':self._options,'devices':self._devices,'model_sources':self._model_sources,'ratings':self._ratings})
+        raise RuntimeError('battery execution requires an atomic archived checkpoint')
+
+    async def _persist_state(self,state):
+        if __package__:
+            from .home_runtime_checkpoint import encode_checkpoint, _check_state
+        else:
+            from home_runtime_checkpoint import encode_checkpoint, _check_state
+        _check_state(state)
+        root=await self.archive.save_session(state.execution)
+        shell=replace(state,execution=rt.ExecutionSession())
+        await self.store.async_save({'schema':'battery-runtime-v3','checkpoint':encode_checkpoint(shell).decode(),
+            'execution_root':root,'account':None,'options':self._options,'devices':self._devices,
+            'model_sources':self._model_sources,'ratings':self._ratings})
 
     def _report(self,group,reason):
         if reason not in ('meter_recorded','duplicate_meter_sample','stale_meter_sample'):
@@ -260,16 +329,27 @@ class BatteryRuntime:
                 self._status={'state':'fault','reason':self._last_error}
                 if self.host and (self.host.state.groups[0].owned or self.host.state.groups[0].attempts):
                     try:
-                        await self._release('Current battery policy is unavailable')
+                        await self._release('The current battery plan is unavailable')
                     except Exception:
                         pass  # The existing journal/fence retains unresolved work.
                     self._status={'state':'fault','reason':self._last_error}
-                if isinstance(error, (BatteryMeasurementConfigurationError, BatteryPolicyUnavailableError, BatteryPowerReadingError)):
+                if isinstance(error, (BatteryMeasurementConfigurationError, BatteryPowerReadingError)):
                     self._status.update(reason=str(error), fix=error.fix, next_step=error.next_step, retry_automatically=True)
             self.coordinator.async_update_listeners()
 
     async def _refresh(self):
         options=self.controller.options()
+        if self.host:
+            # Actual energy is recorded even while plans are expired or the
+            # planner is unreachable. Excluded source identities are respected.
+            excluded=set(options.get('excluded_device_readings',[]))
+            for stream in self.host.state.ledger.streams:
+                if stream.spec.stream_id in excluded or '$battery' in excluded:
+                    continue
+                row=self.coordinator._battery_entity_report(stream.spec.stream_id)
+                if row and row.get('state') not in ('unknown','unavailable',None):
+                    await self._meter(stream.spec.stream_id,row['state'],row['attributes'],
+                        stamp(row['last_reported']),row.get('event_id'))
         mode=device_mode(options,'battery')
         plan,slot=self.coordinator.binding_plan_for('battery',options)
         override=any(options.get(k) and (self.coordinator._battery_entity_report(options[k]) or {}).get('state')!='off'
@@ -282,6 +362,7 @@ class BatteryRuntime:
             old=self.host.state.groups[0]
             if old.owned or old.attempts or old.release_pending:
                 raise ValueError('releasing previous battery configuration before admitting new bindings')
+            self._bootstrap=self.host.state.execution.account
             await self.host.close()
             self.host=None;self._seeded=False;self._mode=None;self._model=None;self._native_checked=False
         self._releasing=False
@@ -314,62 +395,45 @@ class BatteryRuntime:
         plan,slot=self.coordinator.binding_plan_for('battery',options)
         if not slot or self.controller.options()!=options:
             self.coordinator._battery_native_context=None
-            raise BatteryPolicyUnavailableError({'reasons':['local_context_changed']})
-        all_slots=plan['plans']['priority']['slots']
-        slots=all_slots[all_slots.index(slot):]
-        cut=exact_start(slot);until=min(stamp(slot['start'])+900000,stamp(plan['valid_until']),stamp(plan['binding_until']))
-        if not cut<=self.now()<until:
-            self.coordinator._battery_native_context=None
-            raise BatteryPolicyUnavailableError({'reasons':['plan_window_unavailable']})
+            raise ValueError('Battery plan changed while readings were collected')
+        contract_wire=plan.get('battery_execution')
+        if contract_wire is None:
+            await self._release('Waiting for the planner to provide battery execution instructions')
+            self._request_replan('execution_contract_required')
+            return
+        contract=execution.read_contract(contract_wire)
         scope=SupplyScope.read(plan['battery_supply_scope'])
-        capacity=(1-ratings['battery_min_soc'])*ratings['battery_capacity_kwh']
+        capacity=ratings['battery_capacity_kwh']
         cc=min(ratings['battery_charge_max_w'],surface['limits']['charge']['maximum_w'])
         dc=min(ratings['battery_discharge_max_w'],surface['limits']['discharge']['maximum_w'])
         if (cc,dc)!=(ratings['battery_charge_max_w'],ratings['battery_discharge_max_w']):
             raise ValueError('native register range is below configured battery rating')
         cc,dc=floor(cc),floor(dc)
         operations=[BatteryOperation('hold','hold',0,0),BatteryOperation('solar','solar_charge',cc,0),
-            BatteryOperation('supply','supply_house',0,dc),BatteryOperation('charge','grid_charge',cc,0)]
-        if options.get('battery_export_enabled'):
-            operations.append(BatteryOperation('export','export',0,dc))
+            BatteryOperation('supply','supply_house',0,dc),BatteryOperation('charge','grid_charge',cc,0),
+            BatteryOperation('export','export',0,dc)]
         config=digest(options)
+        if contract.scope_revision!=config or contract.mode!=mode:
+            self._request_replan('execution_scope_changed')
+            await self._release('Waiting for a plan matching the current battery setup')
+            return
         if self._mode!=mode:
             self._mode_revision+=1
             self._mode=mode
-        catalog_revision=digest({'mode_revision':self._mode_revision,'surface':surface['revision'],'conversion':self._model.revision,'operations':[asdict(o) for o in operations]})
-        scope_wire={'kind':scope.kind,**({'include_base':scope.include_base,'planned_device_keys':list(scope.planned_device_keys)} if scope.kind=='selected' else {})}
-        context={'config_revision':config,'catalog_revision':catalog_revision,'evidence_id':'sigen-modbus-v2.9-ess-pv-first',
-            'response_model_revision':'pv-first-dc-v2','conversion':self._model.wire(),
-            'energy_basis':'usable_kwh_above_min_soc','source_cut_ms':cut,'valid_until_ms':until,'supply_scope':scope_wire,
-            'operations':[asdict(o) for o in operations],'reference_id':'hold',
-            'domain':{'energy_kwh':[0,capacity],'pv_w':[0,1000000],'residual_load_w':[0,1000000]},
-            'future_permissions':[{'start':iso(exact_start(s)),'available':True,'grid_charge_allowed':True,
-                                  'battery_export_allowed':bool(options.get('battery_export_enabled'))} for s in slots]}
-        self.coordinator._battery_native_context=context
-        exchange=self.coordinator.battery_policy_exchange
-        await exchange.refresh()
-        policy=exchange.policy
-        if policy is None:
-            raise BatteryPolicyUnavailableError(exchange.snapshot())
-        summary=policy.summary
-        current_plan,current_slot=self.coordinator.binding_plan_for('battery',options)
-        if (self.controller.options()!=options or not current_slot
-                or any(current_plan[key]!=plan[key] for key in ('plan_id','snapshot_id'))
-                or exact_start(current_slot)!=cut or not cut<=self.now()<until
-                or summary.identity.context.intent_revision!=plan['snapshot_id']
-                or summary.actuals_origin_ms!=cut or summary.from_ms!=cut
-                or not self.now()<summary.until_ms<=until):
-            self.coordinator._battery_native_context=None
-            raise BatteryPolicyUnavailableError({'reasons':['local_context_changed']})
-        if summary.plant.conversion!=self._model or summary.supply_scope!=scope or summary.identity.context.catalog_revision!=catalog_revision:
-            raise ValueError('delivered policy does not match current native model')
-        if abs(exchange.energy_origin_kwh-ratings['battery_min_soc']*ratings['battery_capacity_kwh'])>1e-6:
-            raise ValueError('policy uses a different battery energy origin')
-        if (summary.plant.charge_max_w,summary.plant.discharge_max_w)!=(cc,dc):
-            raise ValueError('policy uses different battery ratings')
+        catalog_revision=digest({'mode_revision':self._mode_revision,'surface':surface['revision'],
+            'conversion':self._model.revision,'operations':[asdict(o) for o in operations]})
+        identity=ContextIdentity('battery',contract.plan_id,str(capacity),config,config,
+            contract.model_revision,'pv-first-dc-v2',catalog_revision)
+        permissions=Permissions(True,True,bool(options.get('battery_export_enabled')),
+            contract.export_reserve_mwh/1e6,True,0,contract.model_revision)
+        plant=BatteryPlant(ratings['battery_min_soc']*capacity,capacity,cc,dc,
+            options['battery_charge_efficiency'],options['battery_discharge_efficiency'],
+            plan['grid']['import_limit_w'],plan['grid']['export_limit_w'],
+            'discharged_storage',0,self._model)
+        cut=contract.intervals[0].start_ms
         keys=self._control_entities()
         bindings=tuple(rt.OperationBinding(o,tuple(zip(keys,(MODES[o.operation],o.charge_limit_w,o.discharge_limit_w))),
-                          'pv-first-dc-v2','sigen-modbus-v2.9-ess-pv-first',(rt.Guard('ready',1,1),)) for o in summary.operations)
+                          'pv-first-dc-v2','sigen-modbus-v2.9-ess-pv-first',(rt.Guard('ready',1,1),)) for o in operations)
         catalog=rt.NativeCatalog(catalog_revision,ADAPTER_REVISION,surface['revision'],*keys,tuple(surface['mode_options']),1,cc,dc,bindings)
         self.adapter=SigenAdapter(catalog,self._model)
         self._scope=scope
@@ -377,8 +441,9 @@ class BatteryRuntime:
         specs=self._meter_specs(options)
         if self.host is None:
             maximum=rt.Envelope(1000000,1000000)
-            state=rt.create_home((rt.GroupSpec(summary.identity.context.battery_id,ADAPTER_REVISION,keys,maximum),),rt.Limits(1000,1000,30000),
+            state=rt.create_home((rt.GroupSpec('battery',ADAPTER_REVISION,keys,maximum),),rt.Limits(1000,1000,30000),
                     ledger=create_ledger('household-battery-actuals',digest([asdict(s) for s in specs]),specs,max_intervals=256))
+            state=replace(state,execution=rt.ExecutionSession(account=self._bootstrap))
             await self._open_host(state)
             if self.host.state.groups[0].spec.control_keys!=keys or self.host.state.ledger.mapping_revision!=state.ledger.mapping_revision:
                 raise ValueError('saved battery journal belongs to different control or meter bindings')
@@ -391,8 +456,10 @@ class BatteryRuntime:
             if not entity:
                 raise ValueError(f'{key}: Planned power sensor is not configured')
             participants.append(rt.ScopeParticipant(key,participant_mode,1,'external',(entity,)))
-        authority=rt.ExecutionAuthority(config,summary.identity.context,summary.permissions,summary.plant,
-            rt.ExecutionScope(summary.identity.context.scope_revision,group.spec.id,tuple(participants)),catalog,OWNER,scope)
+        scope_revision=digest({'configuration':config,'participants':[asdict(p) for p in participants]})
+        identity=replace(identity,scope_revision=scope_revision)
+        authority=rt.ExecutionAuthority(config,identity,permissions,plant,
+            rt.ExecutionScope(scope_revision,group.spec.id,tuple(participants)),catalog,OWNER,scope)
         if authority!=self.host.state.authority:
             await self.host.accept(rt.AuthorityInstalled(authority,self.host.state.authority_revision+1))
         release=self._release_request(group,tuple(zip(keys,('Maximum Self Consumption',cc,dc))))
@@ -410,15 +477,15 @@ class BatteryRuntime:
             await self.host.accept(rt.GrantConfirmed(group.spec.id,self._grant))
         for event in await self._observe(group.spec.id):
             await self.host.accept(event)
-        current=self.host.state.policy
-        if current is None or current.compiled.summary.identity!=summary.identity:
-            watermark=mark_retained_actuals(self.host.state.ledger,cut,self.now())
-            await self.host.accept(rt.PolicyOffered(policy,watermark))
+        current=self.host.state.execution.account.contract
+        if current is None or current.id!=contract.id:
+            await self.host.accept(rt.ExecutionPlanOffered(contract))
         await self.host.accept(rt.Tick())
-        session=self.host.state.policy
-        self._status=({'state':'controlling' if mode=='controlling' else 'verified','reason':'Live battery policy connected'}
-            if session and session.status in ('active','diagnostic_only') else
-            {'state':'limited','reason':'Battery policy is waiting for an executable choice: '+getattr(self,'_runtime_reason','current evidence')})
+        session=self.host.state.execution
+        self._status=({'state':'controlling' if mode=='controlling' else 'verified',
+            'reason':'Following the battery plan' if mode=='controlling' else 'Testing the plan; battery settings are not being changed'}
+            if session.status in ('active','diagnostic_only') else
+            {'state':'limited','reason':'Waiting for a current battery plan and measurements'})
         if self.host._fault:
             raise ValueError('battery command journal is unavailable')
 
@@ -447,24 +514,29 @@ class BatteryRuntime:
         for spec in specs:
             for at,value,attributes in history.get(spec.stream_id,[]):
                 await self._meter(spec.stream_id,value,attributes,round(at.timestamp()*1000))
-        # A missing anchor is an explicit fault; do not manufacture one from SOC.
-        mark_retained_actuals(self.host.state.ledger,cut,self.now())
+        # Missing anchors remain uncertain in the execution account.
 
-    async def _meter(self,entity,value,attrs,at):
+    async def _meter(self,entity,value,attrs,at,event_id=None):
         stream=next(s for s in self.host.state.ledger.streams if s.spec.stream_id==entity)
-        if stream.samples and at<=stream.samples[-1].at_ms:
-            return
         unit=(attrs or {}).get('unit_of_measurement')
         if unit not in ('Wh','kWh','MWh') or (attrs or {}).get('state_class') not in ('total','total_increasing'):
             raise ValueError(f'{entity}: cumulative energy reading required')
         value=float(value)*{'Wh':1000,'kWh':1000000,'MWh':1000000000}[unit]
         if not isfinite(value) or value<0:
             raise ValueError(f'{entity}: invalid cumulative energy reading')
-        total=round(value);last=stream.samples[-1] if stream.samples else None
-        reset=last is not None and total<last.total_mwh
-        sample=CounterSample(entity,entity,(last.epoch+int(reset)) if last else 0,(last.revision+1) if last else 0,at,total,
-                             'counter_reset' if reset else 'configured_counter' if last is None else None)
-        await self.host.accept(rt.MeterObserved(sample))
+        total=round(value)
+        previous=[m for m in self.host.state.execution.account.meters if m.stream==entity]
+        # Same-time changes are corrections; older source time is valid evidence.
+        # A forward-time counter decrease marks a physical reset, not negative use.
+        last=max((m for m in previous if m.source_at_ms<at),key=lambda m:(m.source_at_ms,m.receipt),default=None)
+        epoch=(int(last.epoch)+int(at>last.source_at_ms and total<last.total_mwh)) if last else 0
+        same=next((m for m in reversed(previous) if m.source_at_ms==at),None)
+        if same and same.total_mwh==total:
+            return
+        event_id=digest({'entity':entity,'at':at,'total':total,'source_event':event_id})
+        sample=execution.MeterReceipt(event_id,entity,stream.spec.direction,stream.spec.boundary_id,
+            same.epoch if same else str(epoch),at,total,0,entity)
+        await self.host.accept(rt.CounterReceived(sample))
 
     async def _observe(self,group_id):
         async with self._observe_lock:
@@ -534,8 +606,8 @@ class BatteryRuntime:
         valid=min(times)+AGE_MS
         for stream in self.host.state.ledger.streams:
             row=read(stream.spec.stream_id)
-            if row:
-                await self._meter(stream.spec.stream_id,row['state'],row['attributes'],stamp(row['last_reported']))
+            if row and row.get('state') not in ('unknown','unavailable',None):
+                await self._meter(stream.spec.stream_id,row['state'],row['attributes'],stamp(row['last_reported']),row.get('event_id'))
         authority=self.host.state.authority
         observed=rt.Observed(group_id,rt.Observation(max(revision,self.host.state.groups[0].observation_revision+1),min(times),valid,controls,(('ready',ready),),envelope))
         # Gross nonbattery load is a conservative import frame. PV is included
@@ -545,10 +617,9 @@ class BatteryRuntime:
             rt.Envelope(max(accounting.house_w,authority.plant.import_limit_w if self._external_pending else 0), max(0,accounting.pv_w-accounting.house_w)),
             rt.Envelope(authority.plant.import_limit_w,authority.plant.export_limit_w),tuple(external)))
         self._frame_pending={frame.frame.revision:digest(self._external_pending)}
-        energy=(fraction-self._ratings['battery_min_soc'])*self._ratings['battery_capacity_kwh']
-        energy=max(0,energy)
+        energy=fraction*self._ratings['battery_capacity_kwh']
         conditions=rt.ConditionsObserved(ExecutionConditions(max(revision,self.host.state.conditions_revision+1),min(times),valid,energy,
-            accounting.pv_w,accounting.house_w,max(0,grid),authority.identity,authority.permissions,accounting.eligible_gross_w))
+            accounting.pv_w,accounting.house_w,max(0,grid),authority.identity,authority.permissions,accounting.eligible_gross_w,soc_at))
         response=('charging' if battery>100 else 'discharging' if battery < -100 else 'idle')
         requested=('charging' if readback['mode']=='Command Charging (PV First)' and readback['charge_limit_w']>100
                    else 'discharging' if readback['mode']=='Command Discharging (PV First)' and readback['discharge_limit_w']>100 else None)
@@ -558,11 +629,14 @@ class BatteryRuntime:
         return (rt.MeasurementsObserved(observed,frame.frame,conditions.conditions),)
 
     def _release_request(self,group,target=None):
+        if self.host:
+            group=next(g for g in self.host.state.groups if g.spec.id==group.spec.id)
         previous=group.release
         target=target if target is not None else previous.target
         if previous and previous.target==target and previous.valid_until_ms>self.now()+600000:
             return previous
-        return rt.Request('battery-release',previous.revision+1 if previous else 1,self.now()+86400000,
+        self._release_revision=max(self._release_revision,previous.revision if previous else 0)+1
+        return rt.Request('battery-release',self._release_revision,self.now()+86400000,
             target,(rt.Guard('ready',1,1),))
 
     async def _confirm(self,group_id):
@@ -584,12 +658,23 @@ class BatteryRuntime:
     async def _transition(self,effect):
         return self.adapter.propose(effect)
 
-    async def _renew(self,state,reason):
-        # One periodic owner performs network exchanges and installs the result.
+    def _request_replan(self,reason):
         self._runtime_reason=reason
-        if reason!='refresh_due':
-            self._record_fault('policy',reason)
-        self.coordinator.battery_policy_exchange._next_ms=0
+        self._replan_pending=True
+        if self._replan_task is not None and not self._replan_task.done():
+            return
+        async def run():
+            while self._replan_pending and not self._closed and not self._closing:
+                self._replan_pending=False
+                try:
+                    await self.coordinator.async_optimisation_push(force_plan=True)
+                except Exception as error:
+                    self._record_fault('replan',str(error))
+                    return  # The existing coordinator retry/poll owns transport retry.
+        self._replan_task=asyncio.create_task(run())
+
+    async def _renew(self,state,reason):
+        self._request_replan(reason)
         return ()
 
     def _can_send(self,effect):
@@ -614,10 +699,11 @@ class BatteryRuntime:
             if entity and (self.coordinator._battery_entity_report(entity) or {}).get('state')!='off':
                 return False
         plan,slot=self.coordinator.binding_plan_for('battery',options)
-        return bool(slot and self.coordinator.battery_policy_exchange.policy and self.host.state.policy
-                    and self.host.state.policy.compiled.summary.identity.context.intent_revision==plan['snapshot_id']
-                    and self.host.state.policy.compiled.summary.from_ms==exact_start(slot)
-                    and self.coordinator.battery_policy_exchange.policy.summary.identity==self.host.state.policy.compiled.summary.identity)
+        accepted=self.host.state.execution.account.contract
+        wire=plan.get('battery_execution')
+        return bool(slot and accepted and wire and wire['id']==accepted.id
+                    and wire['scope_revision']==digest(options) and self.now()<accepted.valid_until_ms)
+
 
     async def _dispatch(self,effect):
         # Share the household command lock. Recheck all authority after waiting;
@@ -723,5 +809,7 @@ class BatteryRuntime:
             except (Exception,asyncio.CancelledError) as error:
                 self._status={'state':'fault','reason':f'Battery release remains journalled: {type(error).__name__}'}
         self._closed=True;self._identity=None
+        if self._replan_task and self._replan_task is not asyncio.current_task():
+            self._replan_task.cancel()
         if self.host:
             await self.host.close()
