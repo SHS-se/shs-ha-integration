@@ -10,8 +10,10 @@ from uuid import uuid4
 
 if __package__:
     from .battery_execution_policy import read_execution_policy
+    from .battery_execution_outlook import read_execution_outlook
 else:
     from battery_execution_policy import read_execution_policy
+    from battery_execution_outlook import read_execution_outlook
 
 
 _COMMON = {"schema", "request_id", "plan_id", "snapshot_id", "purpose", "control_authority", "status"}
@@ -22,7 +24,7 @@ def read_policy_delivery(value, request, now_ms):
     if not isinstance(value, dict):
         raise ValueError("policy delivery must be an object")
     fields = _COMMON | ({"reasons"} if value.get("status") == "blocked" else
-        {"policy", "context_hash", "energy_basis", "energy_origin_kwh", "native_context"})
+        {"policy", "outlook", "context_hash", "energy_basis", "energy_origin_kwh", "native_context"})
     if (set(value) != fields or value.get("schema") != "battery-policy-delivery-v1"
             or value.get("purpose") != "verification" or value.get("control_authority") is not False
             or any(value.get(k) != request[k] for k in ("request_id", "plan_id", "snapshot_id"))):
@@ -94,6 +96,7 @@ class BatteryPolicyExchange:
         self._next_ms = 0
         self.energy_origin_kwh = None
         self.policy = None
+        self.outlook = None
         self.status = {"state": "not_requested", "reasons": [], "control_authority": False}
 
     def snapshot(self):
@@ -111,13 +114,13 @@ class BatteryPolicyExchange:
         async with self._lock:
             context = deepcopy(self._read_context())
             if context is None:
-                self._context, self.policy = None, None
+                self._context, self.policy, self.outlook = None, None, None
                 self.status = {"state": "not_requested", "reasons": [], "control_authority": False}
                 return
             now = self._now_ms()
             if context == self._context and now < self._next_ms:
                 return
-            self._context, self.policy = context, None
+            self._context, self.policy, self.outlook = context, None, None
             native = context["native_context"]
             if native is not None and native.get("config_revision") != context["config_revision"]:
                 self.status = {"state": "blocked", "reasons": ["native_context_configuration_mismatch"], "control_authority": False}
@@ -148,12 +151,19 @@ class BatteryPolicyExchange:
                     self._next_ms = 0
                     return
                 self.energy_origin_kwh = result.get("energy_origin_kwh")
-                self.policy, self.status = policy, status
+                outlook = None
+                if policy:
+                    try:
+                        outlook = read_execution_outlook(result['outlook'], policy)
+                    except ValueError as error:
+                        # An explanatory payload cannot invalidate executable control.
+                        status['outlook_error'] = str(error)
+                self.policy, self.outlook, self.status = policy, outlook, status
                 self._next_ms = max(self._now_ms() + 60_000, policy.summary.refresh_after_ms) if policy else (now // 900_000 + 1) * 900_000
             except Exception as error:
                 if self._closed:
                     return
-                self.policy = None
+                self.policy, self.outlook = None, None
                 if self._read_context() != context:
                     self.status = {"state": "blocked", "reasons": ["local_context_changed"], "control_authority": False}
                     self._next_ms = 0
@@ -165,5 +175,5 @@ class BatteryPolicyExchange:
 
     def close(self):
         self._closed = True
-        self.policy = None
+        self.policy, self.outlook = None, None
         self.status = {"state": "stopped", "reasons": [], "control_authority": False}

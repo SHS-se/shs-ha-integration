@@ -957,6 +957,43 @@
         "certified_regret_bound_sek": null
       }
     },
+    "outlook": {
+      "schema": "battery-execution-outlook-v1",
+      "source_hash": "sha256:bcb112049384819bbd045b56532315b3b8dd7d80cb9b67230222205293a1fb61",
+      "family_id": "family-bcb112049384819bbd045b56",
+      "battery_power_basis": "ac",
+      "horizon_end_ms": 1787230800000,
+      "bridge": {
+        "start_ms": 1787217300000,
+        "end_ms": 1787218200000,
+        "consumption_w": 1960,
+        "solar_w": 0,
+        "import_sek_per_kwh": 0.1
+      },
+      "witnesses": {
+        "idle": {
+          "kind": "idle"
+        },
+        "anchor-0": {
+          "kind": "anchor",
+          "anchor_kwh": 0,
+          "first_suffix_charge": null,
+          "first_suffix_discharge": null
+        },
+        "anchor-1": {
+          "kind": "anchor",
+          "anchor_kwh": 8.136,
+          "first_suffix_charge": null,
+          "first_suffix_discharge": null
+        },
+        "anchor-2": {
+          "kind": "anchor",
+          "anchor_kwh": 17.176,
+          "first_suffix_charge": null,
+          "first_suffix_discharge": null
+        }
+      }
+    },
     "native_context": {
       "config_revision": "test-config",
       "catalog_revision": "test-catalog",

@@ -38,6 +38,28 @@ class DeliveryTests(unittest.TestCase):
 
 
 class ExchangeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_bad_outlook_does_not_reject_valid_control_policy(self):
+        exchange = await self.make()
+        original = exchange._request
+        async def bad_outlook(body):
+            result = await original(body)
+            result['outlook']['source_hash'] = 'different-policy'
+            return result
+        exchange._request = bad_outlook
+        await exchange.refresh()
+        self.assertIsNotNone(exchange.policy)
+        self.assertIsNone(exchange.outlook)
+        self.assertIn('outlook_error', exchange.status)
+        self.assertEqual(exchange.status['state'], 'delivered_not_admitted')
+
+    async def test_outlook_is_delivered_and_cleared_with_policy(self):
+        exchange = await self.make()
+        await exchange.refresh()
+        self.assertEqual(exchange.outlook.source_hash, exchange.policy.summary.quality.source_hash)
+        exchange.close()
+        self.assertIsNone(exchange.policy)
+        self.assertIsNone(exchange.outlook)
+
     async def test_current_quarter_context_bypasses_previous_quarter_retry_delay(self):
         exchange = await self.make()
         boundary = self.context['native_context']['valid_until_ms']

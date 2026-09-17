@@ -24,6 +24,7 @@ if __package__:
     from .energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
     from .device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
     from .battery_policy_exchange import BatteryPolicyUnavailableError
+    from .battery_execution_outlook import describe_outlook
     from .operating_modes import device_mode
 else:
     import home_runtime as rt
@@ -37,6 +38,7 @@ else:
     from energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
     from device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
     from battery_policy_exchange import BatteryPolicyUnavailableError
+    from battery_execution_outlook import describe_outlook
     from operating_modes import device_mode
 
 AGE_MS=30000
@@ -177,6 +179,7 @@ class BatteryRuntime:
         value={**self._status,'loss_model':self._model.wire() if self._model else None,'loss_evidence':self._fits,
                'runtime_reason':getattr(self,'_runtime_reason',None),'measurements':getattr(self,'_measurements',None),'writer_current':self.coordinator.battery_writer.is_current(self._grant,self.identity()),
                'fault_history':[dict(row) for row in self._fault_history], 'fault_history_scope':'Last 64 distinct faults since integration load'}
+        value['outlook'] = {'state': 'unavailable'}
         if self.host:
             group=self.host.state.groups[0];session=self.host.state.policy
             value.update(command_state=group.status,mode=group.mode,
@@ -219,6 +222,8 @@ class BatteryRuntime:
                 value.update(fix={'kind':'diagnostics'},next_step='Check the reported source or command failure. Download diagnostics if it persists.',retry_automatically=True)
             if session and session.decision:
                 value['alternatives']=[{'operation':r.operation.id,'delta_sek':r.total_delta_sek,'energy_end_kwh':r.energy_end_kwh} for r in session.decision.ranked]
+            if value['state'] not in ('fault', 'limited'):
+                value['outlook'] = describe_outlook(self.coordinator.battery_policy_exchange.outlook, self.host.state, self.now())
         return value
 
     def _control_entities(self):

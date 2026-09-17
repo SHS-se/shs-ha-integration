@@ -1187,3 +1187,74 @@ test('battery status explains pending settings and never labels a known command 
   assert.match(html, /Awaiting confirmation: number.charge: 73/);
   assert.doesNotMatch(html, /Not available|Live battery policy connected/);
 });
+
+const controllerOutlook = () => ({
+  state: 'available', basis: 'controlling', selected_operation: 'supply',
+  evaluated_at_ms: Date.parse('2026-09-17T10:00:00Z'), horizon_end_ms: Date.parse('2026-09-18T10:00:00Z'),
+  battery_power_basis: 'dc', benefit_vs_hold_sek: 0.42,
+  events: [{kind: 'charge', start_ms: Date.parse('2026-09-17T10:15:00Z'), end_ms: Date.parse('2026-09-17T10:30:00Z'), battery_w: 830, consumption_w: 2870, solar_w: 2460, import_sek_per_kwh: 1.14},
+    {kind: 'discharge', start_ms: Date.parse('2026-09-17T16:00:00Z'), end_ms: Date.parse('2026-09-17T16:15:00Z'), battery_w: 1407, consumption_w: 1950, solar_w: 200, import_sek_per_kwh: 2.5}],
+});
+
+test('battery outlook is one compact paragraph with controller events, house/PV, baseline and HA timezone', () => {
+  const panel = Object.create(context.Panel.prototype);
+  panel._hass = {language: 'en-GB', config: {time_zone: 'Europe/Stockholm'}};
+  const html = panel._batteryOutlook({battery_runtime: {outlook: controllerOutlook()}});
+  assert.equal((html.match(/<p /g) || []).length, 1);
+  assert.doesNotMatch(html, /<br|<li|Next quarter/);
+  assert.match(html, /Conditional: Charge 12:15: 0.83 kW DC \(house 2.87 \/ solar 2.46 kW\)/);
+  assert.match(html, /Discharge 18:00: 1.41 kW DC/);
+  assert.match(html, /Est. modeled benefit 0.42 SEK vs standby this quarter/);
+  assert.match(html, /through 18 Sept, 12:00/);
+});
+
+test('battery outlook distinguishes absent actions, unavailable, verification and negative benefit', () => {
+  const panel = Object.create(context.Panel.prototype);
+  panel._hass = {language: 'en-GB', config: {time_zone: 'Europe/Stockholm'}};
+  const outlook = {...controllerOutlook(), basis: 'verification', events: [], benefit_vs_hold_sek: -0.19};
+  const html = panel._batteryOutlook({battery_runtime: {outlook}});
+  assert.match(html, /verification only/);
+  assert.match(html, /No later charge forecast · No later discharge forecast/);
+  assert.match(html, /benefit -0.19 SEK/);
+  outlook.benefit_vs_hold_sek = null;
+  assert.match(panel._batteryOutlook({battery_runtime: {outlook}}), /Benefit vs standby unavailable/);
+  assert.match(panel._batteryOutlook({battery_runtime: {outlook: {state: 'unavailable'}}}), /waiting for a current decision and its forecast/);
+  assert.equal(panel._batteryOutlook({}), '');
+  panel._refreshError = 'offline';
+  assert.match(panel._batteryOutlook({battery_runtime: {outlook: controllerOutlook()}}), /waiting for a current decision/);
+});
+
+test('battery outlook preserves tiny actions and escapes text without misleading negative zero', () => {
+  const panel = Object.create(context.Panel.prototype);
+  panel._hass = {language: 'en-GB', config: {time_zone: 'Europe/Stockholm'}};
+  const outlook = controllerOutlook();
+  outlook.benefit_vs_hold_sek = -0.00001;
+  outlook.events = [{...outlook.events[0], battery_w: 0.2}];
+  const html = panel._batteryOutlook({battery_runtime: {outlook}});
+  assert.match(html, /&lt;0.01 kW DC/);
+  assert.match(html, /benefit 0.00 SEK/);
+  assert.doesNotMatch(html, /No later charge forecast/);
+});
+
+test('battery card uses controller outlook while other devices keep planner next-quarter text', () => {
+  const panel = makePanel();
+  panel._data.operation = {state: 'ready', label: 'Ready', now: '2026-09-17T10:00:00Z'};
+  panel._data.portal = {};
+  panel._data.timeline = {capabilities: {battery: true, pool: true}, slots: [
+    {start: '2026-09-17T10:00:00Z', pool_w: 2000},
+    {start: '2026-09-17T10:15:00Z', pool_w: 2000,
+      battery_command: {schema_version: 2, operation: 'grid_charge', charge_limit_w: 9999}},
+  ]};
+  panel._sortedDevices = () => [
+    {key: '$battery', name: 'House battery', system: 'battery', included: true, planned: true,
+      battery_runtime: {reason: 'Live', outlook: controllerOutlook()}},
+    {key: 'pool', name: 'Pool heater', system: 'pool', included: true, planned: true},
+  ];
+  panel._choices = () => ''; panel._deviceFieldButtons = () => '';
+  panel._selectedSlot = 0;
+  const html = panel._renderSchedule();
+  const cards = html.match(/<article class="card schedule-device">.*?<\/article>/gs);
+  assert.match(cards[0], /Controller outlook/);
+  assert.doesNotMatch(cards[0], /Next quarter|9999 W/);
+  assert.match(cards[1], /Next quarter/);
+});

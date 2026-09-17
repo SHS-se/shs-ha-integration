@@ -1077,6 +1077,27 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<p class="muted">Battery policy: ${this._escape(text)}</p>`;
   }
 
+  _batteryOutlook(device) {
+    if (!device.battery_runtime) return "";
+    const outlook = device.battery_runtime.outlook;
+    if (this._refreshError || outlook?.state !== "available") return '<p class="muted battery-outlook">Controller outlook: waiting for a current decision and its forecast.</p>';
+    const locale = this._hass?.locale?.language || this._hass?.language;
+    const timeZone = this._hass?.locale?.time_zone === "local" ? undefined : this._hass?.config?.time_zone;
+    const day = value => new Date(value).toLocaleDateString(locale, { timeZone });
+    const clock = value => new Date(value).toLocaleString(locale, {
+      timeZone, hour: "2-digit", minute: "2-digit", hour12: false,
+      ...(day(value) !== day(outlook.evaluated_at_ms) ? { month: "short", day: "numeric" } : {}),
+    });
+    const kw = value => value > 0 && value < 10 ? "<0.01" : (value / 1000).toFixed(2);
+    const events = outlook.events.map(e => `${e.kind === "charge" ? "Charge" : "Discharge"} ${clock(e.start_ms)}: ${kw(e.battery_w)} kW ${outlook.battery_power_basis.toUpperCase()} (house ${kw(e.consumption_w)} / solar ${kw(e.solar_w)} kW)`);
+    if (!outlook.events.some(e => e.kind === "charge")) events.push("No later charge forecast");
+    if (!outlook.events.some(e => e.kind === "discharge")) events.push("No later discharge forecast");
+    const benefit = outlook.benefit_vs_hold_sek;
+    events.push(Number.isFinite(benefit) ? `Est. modeled benefit ${Math.abs(benefit) < 0.005 ? "0.00" : benefit.toFixed(2)} SEK vs standby this quarter` : "Benefit vs standby unavailable");
+    events.push(`through ${clock(outlook.horizon_end_ms)}`);
+    return `<p class="muted battery-outlook">${this._escape(`Controller outlook${outlook.basis === "verification" ? " (verification only)" : ""} · Conditional: ${events.join(" · ")}`)}</p>`;
+  }
+
   _batteryLiveInputs(device) {
     const runtime = device.battery_runtime;
     if (runtime) {
@@ -1186,7 +1207,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
       <p class="muted">Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
       ${!devices.length ? '<p role="status">No devices match these filters.</p>' : ""}
-      ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}<div class="device-field-issues">${this._deviceFieldButtons(d)}</div>${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._scheduleCommand(d, slots[1]).text)}` : ""}</small>${this._policyDelivery(d)}${this._batteryLiveInputs(d)}</article>`).join("")}`;
+      ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}<div class="device-field-issues">${this._deviceFieldButtons(d)}</div>${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included && d.system !== "battery" ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._scheduleCommand(d, slots[1]).text)}` : ""}</small>${this._policyDelivery(d)}${this._batteryLiveInputs(d)}${d.system === "battery" ? this._batteryOutlook(d) : ""}</article>`).join("")}`;
   }
 
   _attention() {

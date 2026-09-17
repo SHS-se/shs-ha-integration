@@ -12,6 +12,7 @@ sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'/'shs_energy'
 from battery_runtime import BatteryRuntime, exact_start, iso, stamp
 from battery_writer import BatteryWriterFence
 from battery_execution_policy import read_execution_policy
+from battery_execution_outlook import ExecutionOutlook, Witness, Quarter
 
 class Store:
     def __init__(self):self.saved=None;self.writes=[]
@@ -72,7 +73,7 @@ class Rig:
                               'until_ms':c['valid_until_ms'],'boundary_ms':(c['source_cut_ms']//900000+1)*900000}
             wire['permissions']['battery_export_allowed']=False
             self.exchange.policy=read_execution_policy(json.dumps(wire));self.exchange.context=deepcopy(c)
-        self.exchange=SimpleNamespace(refresh=refresh,policy=None,context=None,energy_origin_kwh=0,snapshot=lambda:{'reasons':[]},_next_ms=0)
+        self.exchange=SimpleNamespace(refresh=refresh,policy=None,outlook=None,context=None,energy_origin_kwh=0,snapshot=lambda:{'reasons':[]},_next_ms=0)
         self.coordinator.battery_policy_exchange=self.exchange
         self.runtime=BatteryRuntime(self.coordinator,self.controller,self.store,lambda:self.now)
         self.fence=BatteryWriterFence(self.fence_store,self.controller.lock,self.controller.options,lambda:self.now,self.runtime.identity)
@@ -99,6 +100,27 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_snapshot_attaches_current_outlook_and_hides_it_on_fault_or_expiry(self):
+        rig = Rig()
+        self.assertEqual(rig.runtime.snapshot()['outlook'], {'state': 'unavailable'})
+        await rig.start()
+        session = rig.runtime.host.state.policy
+        summary = session.compiled.summary
+        rig.exchange.outlook = ExecutionOutlook(summary.quality.source_hash, summary.quality.family_id,
+            'dc', summary.boundary_ms + 900000,
+            Quarter(summary.boundary_ms, summary.boundary_ms + 900000, 1000, 0, 1),
+            {c.witness_id: Witness('anchor', 5) for c in summary.cells})
+        result = rig.runtime.snapshot()['outlook']
+        self.assertEqual(result['state'], 'available')
+        self.assertEqual(result['selected_operation'], session.selected_id)
+        json.dumps(result, allow_nan=False)
+        rig.runtime._status = {'state': 'fault', 'reason': 'test fault'}
+        self.assertEqual(rig.runtime.snapshot()['outlook'], {'state': 'unavailable'})
+        rig.runtime._status = {'state': 'controlling', 'reason': 'live'}
+        rig.now = summary.until_ms
+        self.assertEqual(rig.runtime.snapshot()['outlook'], {'state': 'unavailable'})
+        await rig.runtime.close()
+
     async def test_command_readback_does_not_make_house_reports_out_of_order(self):
         r=Rig();original=r.controller.hass.services.async_call
         async def delayed(domain,name,data,blocking):
