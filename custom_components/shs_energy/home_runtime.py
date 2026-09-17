@@ -1184,12 +1184,18 @@ def _refresh_policy_decision(state, now, effects):
     binding = policy_binding(state,selected)
     same_target = group.desired is not None and _same(group.desired.target, binding.target) and group.desired.native_guards == binding.native_guards
     if selected != session.selected_id and session.selected_id in ranked and not same_target:
-        if selected != session.candidate_id:
+        # Sustain the advantage over the incumbent, not an exact candidate ID.
+        # Live power and remaining slot time move the best watt limit. Restarting
+        # on each move can retain an inferior setting indefinitely. Apply the
+        # latest eligible winner once the existing time/evidence checks pass.
+        if session.candidate_id is None:
             session = replace(session, candidate_id=selected, candidate_since_ms=now,
                               candidate_observations=1, candidate_observation_revision=conditions.revision)
-        elif conditions.revision > session.candidate_observation_revision and session.candidate_observations < 2:
-            session = replace(session, candidate_observations=min(2, session.candidate_observations + 1),
-                              candidate_observation_revision=conditions.revision)
+        else:
+            session = replace(session, candidate_id=selected)
+            if conditions.revision > session.candidate_observation_revision and session.candidate_observations < 2:
+                session = replace(session, candidate_observations=min(2, session.candidate_observations + 1),
+                                  candidate_observation_revision=conditions.revision)
         if now - session.candidate_since_ms < 5000 or session.candidate_observations < 2:
             selected = session.selected_id
             binding = policy_binding(state,selected)

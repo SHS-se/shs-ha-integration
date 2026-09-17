@@ -36,6 +36,29 @@ def native(mode='Standby', charge=0, discharge=0):
     return (('mode', mode), ('charge', charge), ('discharge', discharge))
 
 
+def inventory_target_policy():
+    """A 5 kWh future inventory target makes the best DC limit drift with time."""
+    wire = json.loads(load().source_json)
+    wire['identity']['response_model_revision'] = 'pv-first-dc-v2'
+    wire['plant']['conversion'] = {
+        'revision': 'synthetic-lossless', 'idle_loss_w': 0,
+        **{key: {'gain': 1, 'overhead_w': 0}
+           for key in ('grid_charge', 'surplus_charge', 'discharge')},
+    }
+    wire['plant']['wear_sek_per_kwh'] = 0
+    wire['economics']['import_sek_per_kwh'] = 1
+    wire['operations'] = [op for op in wire['operations'] if op['id'] in ('hold', 'supply_house')]
+    cell = wire['continuation']['cells'][0]
+    low = json.loads(json.dumps(cell))
+    low['id'] = 'below-target'
+    low['domain']['energy_kwh'] = [1, 5]
+    low['cost']['terminal_sek']['polynomial'] = [0, 2, 0]
+    cell['domain']['energy_kwh'] = [5, 10]
+    cell['cost']['terminal_sek']['polynomial'] = [10, 0, 0]
+    wire['continuation']['cells'] = [low, cell]
+    return load(wire)
+
+
 def catalog_for(compiled):
     modes = {'self_consumption':'Maximum Self Consumption', 'solar_charge':'Maximum Self Consumption',
              'supply_house':'Maximum Self Consumption', 'grid_charge':'Command Charging (PV First)',
@@ -274,6 +297,51 @@ class ExecutableRuntimeTests(unittest.TestCase):
         h.conditions(now=6000)
         self.assertNotEqual(h.group.desired.target,request.target)
         self.assertGreater(h.group.generation,request.revision)
+
+    def test_drifting_best_limit_applies_latest_target_after_sustained_advantage(self):
+        h = Harness(compiled=inventory_target_policy())
+        h.conditions(energy=5.5); h.offer(); h.observe(h.group.desired.target)
+        request = h.group.desired
+        best_ids = set()
+        for now in range(300000, 305000, 1000):
+            h.conditions(now=now, energy=5.1)
+            decision = h.state.policy.decision
+            best_ids.add(decision.ranked[0].operation.id)
+            incumbent = next(row for row in decision.ranked if row.operation.id == h.state.policy.selected_id)
+            self.assertGreater(incumbent.total_delta_sek - decision.ranked[0].total_delta_sek, .02)
+            self.assertEqual(h.group.desired, request)
+            self.assertEqual(h.state.policy.candidate_since_ms, 300000)
+        self.assertGreater(len(best_ids), 1, 'steady measurements must produce drifting watt limits')
+        h.conditions(now=305000, energy=5.1)
+        best = h.state.policy.decision.ranked[0].operation
+        self.assertEqual(h.state.policy.selected_id, best.id)
+        self.assertEqual(dict(h.group.desired.target)['discharge'], best.discharge_limit_w)
+        self.assertNotEqual(h.group.desired.target, request.target)
+        self.assertIsNone(h.state.policy.candidate_id)
+        h.prepare(); send = h.durable()
+        self.assertEqual((send.key, send.value), ('discharge', best.discharge_limit_w))
+        h.now = h.group.attempts[0].latest_effect_ms
+        h.observe(h.group.desired.target)
+        self.assertEqual(h.group.status, 'adopted')
+
+    def test_drifting_candidate_still_needs_fresh_evidence_and_resets_when_advantage_ends(self):
+        h = Harness(compiled=inventory_target_policy())
+        h.conditions(energy=5.5); h.offer(); h.observe(h.group.desired.target)
+        request = h.group.desired
+        h.conditions(now=300000, energy=5.1)
+        for now in range(301000, 307000, 1000):
+            h.event(Tick(), now)
+            self.assertEqual(h.group.desired, request, 'elapsed time cannot replace a second observation')
+            self.assertEqual(h.state.policy.candidate_observations, 1)
+        h.conditions(now=307000, energy=5.5)
+        self.assertIsNone(h.state.policy.candidate_id)
+        h.conditions(now=308000, energy=5.1)
+        h.conditions(now=309000, energy=5.1)
+        h.event(Tick(), 312999)
+        self.assertEqual(h.group.desired, request)
+        h.event(Tick(), 313000)
+        self.assertNotEqual(h.group.desired.target, request.target)
+        self.assertEqual(h.state.policy.selected_id, h.state.policy.decision.ranked[0].operation.id)
 
     def test_native_guard_pauses_writes_and_retains_policy_and_issued_attempt(self):
         h=Harness();h.offer();h.prepare();h.durable();issued=h.group.attempts
