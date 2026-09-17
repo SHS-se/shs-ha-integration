@@ -170,14 +170,14 @@
       "profile": "finite-continuation-v1",
       "view": "executable",
       "identity": {
-        "policy_id": "sha256:aec8509e6e0b1c77ea22ac086ab6dd3926bd0456fe1b7e084094920271234d82",
+        "policy_id": "sha256:6c5f7c4026e68de1eac9bf40613c1a670dedece4d2c5e43514e48d16d81c9146",
         "revision": 1787216460000,
         "battery_id": "battery",
         "intent_revision": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
-        "plant_revision": "sha256:a3d17489cbf4d82c0d6253eca7ad15c8a70f828e10b880085edecd8649f46767",
+        "plant_revision": "sha256:ec6c7e356f9ee17f589c5396c4a1f77386ddeef82ab7049fddf40bf4ee4a5c0c",
         "scope_revision": "sha256:93b79183c285d6b556b62baba770a79fda156e8345e4844e29a93abfbb854d1b",
         "external_scenario_revision": "sha256:6d7a528e66225fb53d91438a21e40e41a375a6627c3d8363581b3885219e3a78",
-        "tariff_revision": "sha256:ac5a7dee06d405e3552f1075a033f23269efc0d8cde3290199bd058e1083fdf0",
+        "tariff_revision": "sha256:422ed12dc1e41c6ad3458a8920e9ba26d5df3384d28ed8f3a6e9613a0e764d80",
         "response_model_revision": "pv-first-v1",
         "catalog_revision": "test-catalog"
       },
@@ -221,7 +221,7 @@
         "export_reserve_kwh": 13.559999999999999,
         "export_price_eligible": false,
         "minimum_export_price_sek_per_kwh": 0,
-        "price_revision": "sha256:ac5a7dee06d405e3552f1075a033f23269efc0d8cde3290199bd058e1083fdf0"
+        "price_revision": "sha256:422ed12dc1e41c6ad3458a8920e9ba26d5df3384d28ed8f3a6e9613a0e764d80"
       },
       "economics": {
         "import_sek_per_kwh": 0.1,
@@ -947,8 +947,8 @@
         "assurance": "exact-scoring-within-published-family",
         "scorer_revision": "offline-household-v2",
         "compiler_revision": "execution-v2",
-        "family_id": "family-7a9435c838eb89d65461e977",
-        "source_hash": "sha256:7a9435c838eb89d65461e977cc717e20fa470327b7c79424a060af9ad9f84f77",
+        "family_id": "family-bcb112049384819bbd045b56",
+        "source_hash": "sha256:bcb112049384819bbd045b56532315b3b8dd7d80cb9b67230222205293a1fb61",
         "numeric_tolerance_sek": 1e-7,
         "search_exhaustive_in_declared_graph": true,
         "search_pruned_prefixes": 0,

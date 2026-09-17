@@ -2554,8 +2554,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "start": start.isoformat(),
                 "pv_forecast_w": round(pv[start], 2),
                 "base_load_forecast_w": bucket["median_w"],
-                "base_load_p10_w": bucket["p10_w"],
-                "base_load_p90_w": bucket["p90_w"],
                 "import_price_sek_per_kwh": (
                     None if all_in_import is None else round(all_in_import, 5)
                 ),

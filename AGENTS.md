@@ -1,5 +1,9 @@
 # Integration changes
 
+Follow [the constraint requirements](docs/constraint-requirements.md). Do not
+invent or restore arbitrary validity constraints, including prediction bounds
+or source-timestamp event ordering, unless the user explicitly requires them.
+
 Whenever integration code changes, bump `custom_components/shs_energy/manifest.json`
 with `bash scripts/bump.sh beta` and include the version bump in the same commit.
 The Beta workflow publishes the manifest version and fails if that version has

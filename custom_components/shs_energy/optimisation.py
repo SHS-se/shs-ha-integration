@@ -616,10 +616,8 @@ def _pooled_weekday_series(
         pull = len(entries) / (len(entries) + BASE_LOAD_LEVEL_SHRINKAGE_DAYS)
         level[weekday] = 1.0 + (raw - 1.0) * pull
 
-    # 3. Per-quarter departures from that level, and the pooled relative spread
-    #    a thin cell inherits instead of claiming a tight band of its own.
+    # 3. Per-quarter departures from that level.
     cell: dict[tuple[int, int], list[tuple[float, float]]] = defaultdict(list)
-    relative: dict[int, list[tuple[float, float]]] = defaultdict(list)
     for local, weekday, quarter, value in observations:
         if quarter not in informative:
             continue
@@ -628,7 +626,6 @@ def _pooled_weekday_series(
             continue
         ratio = (value / expected, weight_of(local))
         cell[(weekday, quarter)].append(ratio)
-        relative[quarter].append(ratio)
 
     deviation: dict[tuple[int, int], float] = {}
     counts: dict[tuple[int, int], int] = {}
@@ -646,23 +643,11 @@ def _pooled_weekday_series(
             else:
                 deviation[(weekday, quarter)] = 1.0
 
-    spread: dict[int, tuple[float, float]] = {}
-    for quarter in range(96):
-        samples = relative.get(quarter, [])
-        if quarter in informative and samples:
-            spread[quarter] = (
-                _weighted_quantile(samples, 0.1),
-                _weighted_quantile(samples, 0.9),
-            )
-        else:
-            spread[quarter] = (1.0, 1.0)
-
     return {
         "shape": shape,
         "level": level,
         "deviation": deviation,
         "counts": counts,
-        "spread": spread,
     }
 
 
@@ -675,7 +660,7 @@ def build_base_load_model(
     minimum_samples: int = 3,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Forecast residual base load per weekday and quarter, with honest bands.
+    """Forecast residual base load per weekday and quarter.
 
     Subtract only device energy measured in the same household quarter.
     A device's forecast is not evidence of its past consumption: projecting a
@@ -774,19 +759,8 @@ def build_base_load_model(
                 shape[quarter] * level[weekday]
                 * fitted["deviation"][(weekday, quarter)]
             )
-            low, high = fitted["spread"][quarter]
-            # Thin evidence must widen the band rather than narrow it: the
-            # published p10/p90 is the plan's only honest statement that a
-            # weekend quarter rests on three samples.
-            widen = (1.0 + BASE_LOAD_SHAPE_SHRINKAGE_SAMPLES / (count + 1)) ** 0.5
             rows.append({
                 "median_w": round(max(0.0, centre), 2),
-                "p10_w": round(
-                    max(0.0, centre - (centre - centre * low) * widen), 2
-                ),
-                "p90_w": round(
-                    max(0.0, centre + (centre * high - centre) * widen), 2
-                ),
                 "sample_count": count,
             })
         by_weekday[weekday] = rows

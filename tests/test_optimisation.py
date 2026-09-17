@@ -262,7 +262,6 @@ class QuarterAggregationTests(unittest.TestCase):
         # remains inside the empirical base load learned from whole-home usage.
         # The 20 kW outlier day must not drag the shared shape with it.
         self.assertLess(profile[0]["median_w"], 3_000)
-        self.assertGreater(profile[0]["p90_w"], profile[0]["median_w"])
 
     def test_base_model_separates_every_day_of_the_week(self) -> None:
         """Saturday and Sunday must not share one weekend expectation."""
@@ -319,11 +318,24 @@ class QuarterAggregationTests(unittest.TestCase):
         # it: 8 kW measured must not become an 8 kW standing expectation.
         self.assertGreater(saturday["median_w"], 1_000)
         self.assertLess(saturday["median_w"], 5_000)
-        # And the thin evidence has to be visible in the published band.
-        self.assertGreater(
-            saturday["p90_w"] - saturday["p10_w"],
-            saturday["median_w"] * 0.25,
-        )
+        self.assertEqual(saturday["sample_count"], 1)
+
+    def test_base_forecast_has_no_confidence_bounds_for_changing_daily_patterns(self) -> None:
+        # This pattern used to put the upper bound below the forecast and make
+        # the cloud reject an otherwise usable snapshot.
+        start = datetime(2026, 9, 7, tzinfo=timezone.utc)
+        levels = [200, 100, 200, 1000, 200, 200, 200, 4000, 1000, 1000]
+        quiet_quarter = [600, 600, 600, 600, 500, 500, 500, 700, 600, 700]
+        rows = [
+            {"start": (start + timedelta(days=day, minutes=quarter * 15)).isoformat(),
+             "total_load_kwh": (quiet_quarter[day] if quarter == 12 else level) / 4000}
+            for day, level in enumerate(levels) for quarter in range(96)
+        ]
+        model = build_base_load_model(rows, "UTC", minimum_samples=2)
+        self.assertEqual(model["by_weekday"][1][12]["median_w"], 1368)
+        for profile in model["by_weekday"].values():
+            for row in profile:
+                self.assertEqual(set(row), {"median_w", "sample_count"})
 
     def test_base_model_weights_recent_days_more_heavily(self) -> None:
         """A routine that changed three weeks ago must not still dominate."""
