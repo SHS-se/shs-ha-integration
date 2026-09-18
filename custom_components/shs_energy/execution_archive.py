@@ -11,6 +11,8 @@ import asyncio
 from dataclasses import fields, replace
 from hashlib import sha256
 import json
+from itertools import islice
+from operator import is_
 from typing import get_type_hints, get_args
 
 if __package__:
@@ -99,12 +101,9 @@ class ExecutionArchive:
             self.saved |= {name for name in await list_pages() if _page_key(name)}
             self._listed = True
         reached = self._session_cache[3]
-        garbage = []
-        for key in self.saved:
-            if key not in reached:
-                garbage.append(key)
-                if len(garbage) >= limit:
-                    break
+        # Most pages are retained history. Compare sets in C rather than walk
+        # every retained page in Python after each meter/command checkpoint.
+        garbage = list(islice(self.saved - reached, limit))
         if not garbage:
             return 0
         self.saved.difference_update(garbage)
@@ -177,7 +176,7 @@ class ExecutionArchive:
         for index, start in enumerate(range(0, len(value), 128)):
             chunk = value[start:start + 128]
             old = old_chunks[index] if index < len(old_chunks) else None
-            if old is not None and len(old[0]) == len(chunk) and all(a is b for a, b in zip(old[0], chunk)):
+            if old is not None and len(old[0]) == len(chunk) and all(map(is_, old[0], chunk)):
                 chunks.append(old)
             else:
                 pages = set()

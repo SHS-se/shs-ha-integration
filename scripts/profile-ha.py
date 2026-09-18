@@ -41,6 +41,7 @@ def sample(seconds, interval_ms):
     pid = pids[0]
     unwinder = RemoteUnwinder(pid)
     leaf, shs_leaf, shs_inclusive, errors = Counter(), Counter(), Counter(), Counter()
+    callers = Counter()
     started_at = datetime.now(timezone.utc).isoformat()
     before = process_counters(pid)
     start = time.monotonic()
@@ -62,6 +63,7 @@ def sample(seconds, interval_ms):
                 def label(frame):
                     return f'{frame.filename}:{frame.lineno} {frame.funcname}'
                 leaf[label(frames[0])] += 1
+                callers[' <- '.join(label(frame) for frame in frames[:12])] += 1
                 own = [frame for frame in frames if '/custom_components/shs_energy/' in frame.filename]
                 if own:
                     shs_samples += 1
@@ -82,6 +84,7 @@ def sample(seconds, interval_ms):
                      'failed_reads': dict(errors), 'shs_stack_samples': shs_samples,
                      'interval_ms': interval_ms},
         'top_main_thread_frames': leaf.most_common(30),
+        'top_main_thread_callers': callers.most_common(30),
         'top_shs_frames': shs_leaf.most_common(30),
         'shs_inclusive_functions': shs_inclusive.most_common(40),
         'interpretation': (

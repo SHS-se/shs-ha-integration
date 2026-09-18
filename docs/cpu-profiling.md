@@ -23,6 +23,8 @@ The report includes:
   process. All of these include other HA integrations and all Python threads.
 - Main-thread stack samples, the innermost SHS frame, and inclusive SHS
   function counts. Inclusive counts overlap; do not add them together.
+- The most frequent main-thread caller chains (up to 12 frames), to identify
+  callers of shared routines such as `deepcopy` in SHS or other integrations.
 - Failed and empty reads. Live frame mutation can make individual reads fail.
   They must not be counted as idle or non-SHS work.
 
@@ -157,3 +159,36 @@ changed records rather than the whole retained history per decision, and the
 completed-objective replan loop is removed. Repeated meter-history scans, inventory
 construction and checkpoint work remain candidates; use the next host profile to
 rank them. A lower total CPU figure still needs validation after deployment.
+
+## Final follow-up: beta.21 host and beta.22 changes
+
+At 16:36 UTC, after the user reported about 20 minutes of runtime, a 30-second
+capture reported installed beta.21 and HA Python CPU of **13.13%** divided by
+four cores, versus **22.54%** in the earlier beta.20 capture. Kernel storage
+writes were **9,244,672 bytes**, versus **402,882,560 bytes** previously. A second
+20-second capture measured **13.04%** CPU. These are observed process-wide
+differences across time, not a controlled attribution or whole-machine sensor
+readings. As always, the manifest identifies installed code, not proof of what
+every loaded module is running.
+
+The first capture had 1,378 successful reads out of 1,484 attempts, with 129
+empty reads and 106 failed reads. SHS appeared in 50 samples. Archive saving
+appeared in 24 and collection in 9 (overlapping inclusive counts). The expanded
+caller capture identified repeated deep copies and layout hashing in Bermuda
+(`ble_trilateration`) calibration, alongside UniFi and network work. These
+callers explain why remaining process CPU cannot all be assigned to SHS.
+
+Beta.22 targets the sampled archive loops without changing persistence or
+retention: garbage collection uses native set difference instead of a Python
+loop over every retained page, and chunk identity comparison uses native
+`map`/`operator.is_` instead of a Python generator for every historical item.
+A local synthetic microbenchmark with 10,000 retained pages and ten obsolete
+pages measured **173 → 42 microseconds** for collection selection; a 128-item
+unchanged chunk measured **2.53 → 1.25 microseconds** for identity comparison.
+These are isolated operation timings, not a promised host CPU reduction.
+
+The existing archive regression suite covers exact retained-page reachability,
+bounded backlog cleanup, returning deleted content, late correction, reload,
+failed publication and cancellation during deletion. Full integration tests
+also run before committing. The profiler now retains caller chains for future
+investigation without installing an in-process profiler or changing controls.
