@@ -12,7 +12,8 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         fixtures.ControllerTests.setUp(self)
         self.audit_store = fixtures.Store()
-        self.journal = VerificationJournal(self.audit_store)
+        self.sample_store = fixtures.Store()
+        self.journal = VerificationJournal(self.audit_store, self.sample_store)
         self.controller.verification = self.journal
         self.controller.confirm = ScheduledController.confirm.__get__(self.controller)
 
@@ -74,7 +75,7 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         passive = next(row for row in export['evaluations'] if row['device'] == 'ev')
         self.assertEqual(passive['mode'], 'planning')
         self.assertEqual(passive['commands'], [])
-        reloaded = VerificationJournal(self.audit_store)
+        reloaded = VerificationJournal(self.audit_store, self.sample_store)
         await reloaded.load()
         self.assertEqual(reloaded.export()['evaluations'], export['evaluations'])
 
@@ -161,11 +162,11 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         saved['schema_version'] = 2
         del saved['evaluations']
         self.audit_store.saved = saved
-        upgraded = VerificationJournal(self.audit_store)
+        upgraded = VerificationJournal(self.audit_store, self.sample_store)
         await upgraded.load()
         self.assertEqual(upgraded.evaluations, [])
         self.assertEqual(upgraded.attempts, saved['attempts'])
-        self.assertEqual(self.audit_store.saved['schema_version'], 4)
+        self.assertEqual(self.audit_store.saved['schema_version'], 5)
 
     async def test_verification_links_survive_grouping_and_sessions_have_separate_coverage(self):
         self.options['device_modes']['$pool'] = 'control_verification'

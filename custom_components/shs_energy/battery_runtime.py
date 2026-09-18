@@ -47,6 +47,8 @@ else:
 
 AGE_MS=30000
 ALIGNMENT_MS=15000
+# Entities, the mode select and controller status all read one refresh's account.
+ACCOUNTING_REUSE_MS=1000
 # Journal/lock waits share the existing measurement lifetime. Freshness and
 # authority are still checked after the lock, immediately before each write.
 RUNTIME_LIMITS=rt.Limits(AGE_MS,1000,30000)
@@ -119,6 +121,7 @@ class BatteryRuntime:
         self._bootstrap_rejection=None;self._bootstrap_captured=None
         self._fault_history=[]
         self._observation_error=None
+        self._live_accounting=None
         controller.battery_runtime=self
 
     async def open(self):
@@ -206,18 +209,19 @@ class BatteryRuntime:
             'fault_history':[dict(row) for row in self._fault_history],
             'fault_history_scope':'Last 64 distinct faults since integration load'}
         if not self.host:
-            value.update(mode=device_mode(self.controller.options(),'battery'), accounting_at_ms=self.now(),
-                accounting=(execution.feedback if include_evidence else execution.planner_feedback)(self._bootstrap,self.now()))
+            accounting_at,accounting=self._accounting(self._bootstrap,include_evidence)
+            value.update(mode=device_mode(self.controller.options(),'battery'), accounting_at_ms=accounting_at,
+                accounting=accounting)
             if include_evidence:
                 value.update(accounting_journal=encode_value(self._bootstrap),
                     captured_replan=json.loads(self._bootstrap_captured) if self._bootstrap_captured else None)
             return self._plan_status(value, self._bootstrap_rejection, self._bootstrap.contract)
         state=self.host.state;group=state.groups[0];session=state.execution
-        accounting_at=self.now()
+        accounting_at,accounting=self._accounting(session.account,include_evidence)
         value.update(command_state=group.status,mode=group.mode,execution_state=session.status,
             accounting_at_ms=accounting_at,
             pending_writes=sum(a.stage!="accepted" for a in group.attempts),native_target=dict(group.desired.target) if group.desired else None,
-            accounting=(execution.feedback if include_evidence else execution.planner_feedback)(session.account,accounting_at),
+            accounting=accounting,
             assessment=asdict(session.assessment) if session.assessment else None,
             )
         if include_evidence:
@@ -258,6 +262,21 @@ class BatteryRuntime:
         if value['state']=='fault' and 'fix' not in value:
             value.update(fix={'kind':'diagnostics'},next_step='Check the reported source or command failure. Download diagnostics if it persists.',retry_automatically=True)
         return self._plan_status(value, session.plan_rejection, session.account.contract)
+
+    def _accounting(self,account,include_evidence):
+        """Full evidence on request; otherwise one shared live view per account and refresh.
+
+        Accounts are immutable, so the same object means the same records. The
+        shared view is read-only for its callers.
+        """
+        now=self.now()
+        if include_evidence:
+            return now,execution.feedback(account,now)
+        cached=self._live_accounting
+        if cached is not None and cached[0] is account and 0<=now-cached[1]<ACCOUNTING_REUSE_MS:
+            return cached[1],cached[2]
+        self._live_accounting=(account,now,execution.live_feedback(account,now))
+        return now,self._live_accounting[2]
 
     def _plan_status(self, value, rejection, accepted):
         value.update(plan_status='rejected' if rejection else 'accepted' if accepted else 'awaiting_plan',

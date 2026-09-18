@@ -15,7 +15,8 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         fixtures.ControllerTests.setUp(self)
         self.audit_store = fixtures.Store()
-        self.journal = VerificationJournal(self.audit_store)
+        self.sample_store = fixtures.Store()
+        self.journal = VerificationJournal(self.audit_store, self.sample_store)
         self.controller.verification = self.journal
         # Use the real confirm implementation: it must skip physical feedback
         # only during verification, not rely on a test mock to do that.
@@ -55,7 +56,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(len(self.journal.attempts), 2, 'identical attempts in the same quarter are deduplicated')
         await self.journal.flush()
-        restored = VerificationJournal(self.audit_store)
+        restored = VerificationJournal(self.audit_store, self.sample_store)
         await restored.load()
         self.assertEqual(restored.attempts, self.journal.attempts)
 
@@ -231,7 +232,8 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         import test_device_commands
         test_device_commands.DeviceExecutionTests.setUp(self)
         self.audit_store = fixtures.Store()
-        self.journal = VerificationJournal(self.audit_store)
+        self.sample_store = fixtures.Store()
+        self.journal = VerificationJournal(self.audit_store, self.sample_store)
         self.controller.verification = self.journal
         self.controller.confirm = ScheduledController.confirm.__get__(self.controller)
         self.options['device_modes']['heater'] = 'control_verification'
@@ -298,14 +300,14 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         later['observations']['sensor.battery_power']['state'] = '0.1'
         self.audit_store.saved = {'attempts': [original, later],
                                  'configurations': self.journal.configurations, 'discarded_attempts': 7}
-        migrated = VerificationJournal(self.audit_store)
+        migrated = VerificationJournal(self.audit_store, self.sample_store)
         await migrated.load()
         self.assertEqual(len(migrated.attempts), 1)
         self.assertEqual(migrated.attempts[0]['count'], 2)
         self.assertEqual(migrated.attempts[0]['last_at'], later['at'])
         self.assertEqual(migrated.discarded, 7)
-        self.assertEqual(self.audit_store.saved['schema_version'], 4)
-        reloaded = VerificationJournal(self.audit_store)
+        self.assertEqual(self.audit_store.saved['schema_version'], 5)
+        reloaded = VerificationJournal(self.audit_store, self.sample_store)
         await reloaded.load()
         self.assertEqual(reloaded.attempts, migrated.attempts)
         self.assertEqual(reloaded.slots, migrated.slots)
@@ -411,7 +413,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_stop()
         self.assertEqual(len(self.journal.events), 2)
         self.assertEqual(self.journal.events[-1]['reason'], 'homeassistant_stop')
-        restored = VerificationJournal(self.audit_store)
+        restored = VerificationJournal(self.audit_store, self.sample_store)
         await restored.load()
         await restored.lifecycle('start', start['integration_version'], 'integration_load')
         self.assertFalse(restored.events[-1]['previous_session_missing_stop'])
@@ -423,7 +425,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         await restored.append(row)
         self.assertEqual(len(restored.attempts), 2)
         self.assertEqual(restored.attempts[-1]['session_id'], restored.session_id)
-        interrupted = VerificationJournal(self.audit_store)
+        interrupted = VerificationJournal(self.audit_store, self.sample_store)
         await interrupted.load()
         await interrupted.lifecycle('start', start['integration_version'], 'integration_load')
         self.assertTrue(interrupted.events[-1]['previous_session_missing_stop'])
@@ -556,7 +558,7 @@ class ModeTests(unittest.TestCase):
 class JournalRetentionTests(unittest.IsolatedAsyncioTestCase):
     async def test_retention_prunes_old_coverage_and_reports_discarded_attempts(self):
         from unittest.mock import patch
-        journal = VerificationJournal(fixtures.Store())
+        journal = VerificationJournal(fixtures.Store(), fixtures.Store())
         row = {'device': 'pool', 'scope': 'old', 'configuration': {'old': True},
                'at': '2026-09-11T14:00:00+00:00', 'slot': {'start': 'old'},
                'expected_operations': ['heat', 'defer', 'handover'], 'operations': ['heat'], 'outcome': 'verified'}
@@ -572,3 +574,54 @@ class JournalRetentionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(export['slots'].values()), [{'start': 'new'}])
         self.assertEqual(export['coverage'][0]['missing'], ['heat'])
         self.assertEqual(export['coverage'][0]['covered'], 2)
+
+
+class JournalStorageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_version_four_journal_moves_samples_out_and_stores_each_configuration_once(self):
+        store, samples, writes = fixtures.Store(), fixtures.Store(), []
+        for name, target in (('journal', store), ('samples', samples)):
+            async def recorded(value, name=name, save=target.async_save):
+                writes.append(name)
+                await save(value)
+            target.async_save = recorded
+        configuration = {'device_modes': {'$pool': 'control_verification'}, 'evidence': 'x' * 1000}
+        rows = [{'device': device, 'scope': f'{device}:abc123', 'slot_id': 'slot-a', 'group_id': device, 'count': 1,
+                 'at': '2026-09-18T10:00:00+00:00', 'last_at': '2026-09-18T10:00:00+00:00', 'outcome': 'evaluated'}
+                for device in ('pool', 'ev', 'device:sensor.heater')]
+        store.saved = {'schema_version': 4, 'attempts': [], 'evaluations': rows,
+            'configurations': {row['scope']: deepcopy(configuration) for row in rows},
+            'slots': {'slot-a': {'start': 'a'}, 'slot-s': {'start': 's'}},
+            'samples': [{'at': 't', 'slot_id': 'slot-s', 'context_id': 'ctx'}], 'sample_contexts': {'ctx': {'c': 1}},
+            'discarded_samples': 3, 'lifecycle_events': [], 'discarded_attempts': 0}
+        journal = VerificationJournal(store, samples)
+        await journal.load()
+        # Samples are written before the journal that no longer holds their only copy.
+        self.assertEqual(writes, ['samples', 'journal'])
+        self.assertEqual(store.saved['schema_version'], 5)
+        self.assertNotIn('samples', store.saved)
+        self.assertEqual(store.saved['configurations'], {'abc123': configuration})
+        self.assertEqual(store.saved['slots'], {'slot-a': {'start': 'a'}})
+        self.assertEqual((samples.saved['slots'], samples.saved['discarded_samples']), ({'slot-s': {'start': 's'}}, 3))
+        reloaded = VerificationJournal(store, samples)
+        await reloaded.load()
+        for field in ('evaluations', 'configurations', 'slots', 'samples', 'sample_contexts', 'discarded_samples'):
+            self.assertEqual(getattr(reloaded, field), getattr(journal, field), field)
+        self.assertEqual(writes, ['samples', 'journal'], 'a current journal loads without rewriting')
+        self.assertEqual(set(reloaded.export()['configurations']), {row['scope'] for row in rows})
+
+    async def test_the_waking_event_alone_does_not_start_a_new_decision_group(self):
+        store = fixtures.Store()
+        journal = VerificationJournal(store, fixtures.Store())
+        row = {'device': 'pool', 'scope': 'pool:abc', 'configuration': {}, 'at': '2026-09-18T10:00:00+00:00',
+               'slot': {'start': 'a'}, 'outcome': 'evaluated', 'trigger': 'coordinator_update', 'result': {'state': 'verified'}}
+        await journal.append(row, runtime=True)
+        store.async_save = AsyncMock(wraps=store.async_save)
+        await journal.append({**row, 'at': '2026-09-18T10:00:05+00:00', 'trigger': 'state_change'}, runtime=True)
+        await journal.append({**row, 'at': '2026-09-18T10:00:09+00:00', 'trigger': 'slot_boundary'}, runtime=True)
+        group = journal.evaluations[0]
+        self.assertEqual(len(journal.evaluations), 1)
+        self.assertEqual((group['count'], group['trigger'], group['last_trigger']), (3, 'coordinator_update', 'slot_boundary'))
+        store.async_save.assert_not_awaited()
+        await journal.append({**row, 'result': {'state': 'fault'}, 'trigger': 'state_change'}, runtime=True)
+        self.assertEqual(len(journal.evaluations), 2)
+        store.async_save.assert_awaited_once()

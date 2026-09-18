@@ -193,7 +193,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     controller = ScheduledController(
         hass, coordinator, Store(hass, 1, f"shs_energy.controller.{entry.entry_id}"),
         lambda: resolved_options(hass, dict(entry.options)),
-        VerificationJournal(Store(hass, 1, f"shs_energy.verification.{entry.entry_id}")),
+        VerificationJournal(Store(hass, 1, f"shs_energy.verification.{entry.entry_id}"),
+                            Store(hass, 1, f"shs_energy.verification_samples.{entry.entry_id}")),
         entity_registry=er.async_get(hass),
     )
     coordinator.controller = controller

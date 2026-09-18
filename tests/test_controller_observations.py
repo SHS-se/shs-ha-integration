@@ -16,7 +16,8 @@ class ObservationTests(unittest.IsolatedAsyncioTestCase):
         fixtures.ControllerTests.setUp(self)
         self.at = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
         self.audit_store = fixtures.Store()
-        self.journal = VerificationJournal(self.audit_store)
+        self.sample_store = fixtures.Store()
+        self.journal = VerificationJournal(self.audit_store, self.sample_store)
         self.journal.session_id = 'session-one'
         self.controller.verification = self.journal
         self.options.update(entities_grid_import=['sensor.grid'], entities_total_consumption=['sensor.total'])
@@ -111,6 +112,18 @@ class ObservationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row['household']['grid_import']['quality'], 'incomplete_sources')
         self.assertIsNone(row['household']['grid_import']['average_w'])
 
+    async def test_samples_are_batched_and_written_at_a_clean_stop(self):
+        for seconds in (0, 60, 60):
+            await self.sample(seconds)
+        self.assertIsNone(self.audit_store.saved)
+        self.assertIsNone(self.sample_store.saved)
+        self.assertEqual(self.sample_store.delayed[1], 600)
+        await self.journal.lifecycle('stop', 'test', 'integration_unload_or_setup_stop')
+        self.assertIsNone(self.sample_store.delayed)
+        self.assertEqual(self.sample_store.saved['samples'], self.journal.samples)
+        self.assertNotIn('samples', self.audit_store.saved)
+        self.assertFalse(self.journal.samples_dirty)
+
     async def test_retention_reload_and_storage_failure_preserve_references(self):
         with patch('verification.MAX_SAMPLES', 2):
             await self.sample()
@@ -120,16 +133,24 @@ class ObservationTests(unittest.IsolatedAsyncioTestCase):
             await self.sample(60)
         self.assertEqual(len(self.journal.samples), 2)
         self.assertEqual(self.journal.discarded_samples, 1)
+        # Samples are batched in their own store and never rewrite the decision journal.
+        self.assertIsNone(self.audit_store.saved)
+        self.assertEqual(self.sample_store.delayed[1], 600)
+        await self.sample_store.write_delayed()
         before = self.journal.export()
-        self.audit_store.async_save = AsyncMock(side_effect=OSError('disk full'))
-        with self.assertRaises(OSError): await self.sample(60)
-        self.assertEqual(self.journal.samples, before['samples'])
-        restored = VerificationJournal(self.audit_store)
+        restored = VerificationJournal(self.audit_store, self.sample_store)
         await restored.load()
         self.assertEqual(restored.samples, before['samples'])
+        self.assertEqual(restored.discarded_samples, 1)
         for row in restored.samples:
             self.assertIn(row['slot_id'], restored.slots)
             self.assertIn(row['context_id'], restored.sample_contexts)
+        # A failed batch keeps the samples in memory for the next write.
+        self.sample_store.async_save = AsyncMock(side_effect=OSError('disk full'))
+        await self.sample(60)
+        with self.assertRaises(OSError): await self.journal.flush_samples()
+        self.assertEqual(self.journal.samples[:-1], before['samples'])
+        self.assertTrue(self.journal.samples_dirty)
 
     def test_only_typed_fields_introduce_entity_references(self):
         self.options.update(discovery_evidence={'boiler_power_w': 'discovery_evidence.boiler_power_w'},

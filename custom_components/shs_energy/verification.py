@@ -15,6 +15,8 @@ MAX_GROUPS = 2000
 MAX_LIFECYCLE_EVENTS = 500
 MAX_SAMPLES = 720
 SAVE_INTERVAL_SECONDS = 60
+# Passive samples are written in batches; decisions and lifecycle events are not.
+SAMPLE_SAVE_DELAY_SECONDS = 600
 OPERATIONS = {
     "battery": (*sorted(BATTERY_OPERATIONS), "handover"),
     "pool": ("heat", "defer", "handover"),
@@ -41,10 +43,11 @@ def operation_name(device, kind, slot, result):
 
 
 def _signature(record):
-    """Compare decisions, not telemetry that changes without affecting commands."""
+    """Compare decisions, not telemetry or the event that happened to wake the controller."""
     signature = {key: value for key, value in record.items() if key not in (
         "at", "last_at", "count", "observations", "last_observations",
-        "final_observations", "last_final_observations", "completed_at", "group_id")}
+        "final_observations", "last_final_observations", "completed_at", "group_id",
+        "trigger", "last_trigger")}
     signature["commands"] = [{key: value for key, value in command.items() if key not in ("at", "completed_at")}
                              for command in record.get("commands", [])]
     # Pool temperature is supporting evidence; actual setpoints, limited state,
@@ -52,6 +55,21 @@ def _signature(record):
     signature["result"] = {key: value for key, value in record.get("result", {}).items()
                            if key != "water_temperature_c"}
     return signature
+
+
+def configuration_id(scope):
+    """A scope is `device:id`, and every device evaluated under one configuration shares the id."""
+    return scope.rsplit(":", 1)[-1]
+
+
+def _expand_configurations(stored, records):
+    """Stored configurations are shared by id; records keep naming their device scope."""
+    expanded = {}
+    for row in records:
+        configuration = stored.get(row["scope"], stored.get(configuration_id(row["scope"])))
+        if configuration is not None:
+            expanded[row["scope"]] = configuration
+    return expanded
 
 
 def observation(state):
@@ -73,8 +91,15 @@ def evaluation_record(device, mode, options, slot, plan, version, expected=()):
 
 
 class VerificationJournal:
-    def __init__(self, store):
+    """Decisions and lifecycle events in one store; passive samples batched in another.
+
+    In memory, configurations stay keyed by record scope. On disk each
+    configuration is written once, keyed by the id its scopes share.
+    """
+
+    def __init__(self, store, sample_store):
         self.store = store
+        self.sample_store = sample_store
         self.events = []
         self.session_id = None
         self.attempts = []
@@ -86,35 +111,43 @@ class VerificationJournal:
         self.slots = {}
         self.discarded = 0
         self.dirty = False
+        self.samples_dirty = False
         self.last_saved = monotonic()
 
     async def load(self):
         saved = await self.store.async_load()
-        if saved is None:
-            return
-        version = saved.get("schema_version", 1)
-        if version not in (1, 2, 3, 4):
-            raise ValueError(f"Unsupported verification journal schema: {version}")
-        self.events = saved.get("lifecycle_events", [])
-        self.discarded = saved.get("discarded_attempts", 0)
-        self.evaluations = saved["evaluations"] if version >= 3 else []
-        if version == 1:
-            # One-time roll-forward: compact existing evidence on upgrade.
-            for attempt in saved["attempts"]:
-                self._record({**attempt, "configuration": saved["configurations"][attempt["scope"]]})
-        else:
-            self.attempts = saved["attempts"]
-            self.configurations = saved["configurations"]
-            self.slots = saved["slots"]
-        if version == 4:
-            self.samples = saved["samples"]
-            self.sample_contexts = saved["sample_contexts"]
-            self.discarded_samples = saved["discarded_samples"]
-        if version < 4:
-            for record in self.attempts + self.evaluations:
-                record.setdefault("group_id", str(uuid4()))
-            self.dirty = True
-            await self.flush()
+        sampled = await self.sample_store.async_load()
+        if saved is not None:
+            version = saved.get("schema_version", 1)
+            if version not in (1, 2, 3, 4, 5):
+                raise ValueError(f"Unsupported verification journal schema: {version}")
+            self.events = saved.get("lifecycle_events", [])
+            self.discarded = saved.get("discarded_attempts", 0)
+            self.evaluations = saved["evaluations"] if version >= 3 else []
+            if version == 1:
+                # One-time roll-forward: compact existing evidence on upgrade.
+                for attempt in saved["attempts"]:
+                    self._record({**attempt, "configuration": saved["configurations"][attempt["scope"]]})
+            else:
+                self.attempts = saved["attempts"]
+                self.slots = saved["slots"]
+                self.configurations = (_expand_configurations(saved["configurations"], self.attempts + self.evaluations)
+                                       if version >= 5 else saved["configurations"])
+            if version == 4:
+                # Samples move to their own store; until that write, this is their only copy.
+                sampled = {key: saved[key] for key in ("samples", "sample_contexts", "discarded_samples", "slots")}
+                self.samples_dirty = True
+            if version < 5:
+                for record in self.attempts + self.evaluations:
+                    record.setdefault("group_id", str(uuid4()))
+                self.dirty = True
+        if sampled is not None:
+            self.samples = sampled["samples"]
+            self.sample_contexts = sampled["sample_contexts"]
+            self.discarded_samples = sampled["discarded_samples"]
+            self.slots = {**sampled["slots"], **self.slots}
+        await self.flush_samples()
+        await self.flush()
 
     async def lifecycle(self, event, version, reason):
         previous = (self.events, self.session_id, self.dirty)
@@ -131,6 +164,8 @@ class VerificationJournal:
         except Exception:
             self.events, self.session_id, self.dirty = previous
             raise
+        if event == "stop":
+            await self.flush_samples()
 
     def _record(self, attempt, *, runtime=False):
         record = deepcopy(attempt)
@@ -150,7 +185,8 @@ class VerificationJournal:
             attempts[previous_index] = {**previous, "count": previous["count"] + 1,
                                        "last_at": record["at"],
                                        "last_observations": record.get("observations", {}),
-                                       "last_final_observations": record.get("final_observations", {})}
+                                       "last_final_observations": record.get("final_observations", {}),
+                                       **({"last_trigger": record["trigger"]} if "trigger" in record else {})}
         else:
             attempts.append(record)
         removed = attempts[:-MAX_GROUPS]
@@ -198,7 +234,6 @@ class VerificationJournal:
         sample = measurement_sample(options, devices, read, at=at, session_id=self.session_id,
             context_id=context_id, slot_id=slot_id, plan_id=plan_id, slot=slot,
             previous=self.samples[-1] if self.samples else None)
-        previous = (self.samples, self.sample_contexts, self.slots, self.discarded_samples, self.dirty)
         self.discarded_samples += max(0, len(self.samples) + 1 - MAX_SAMPLES)
         self.samples = [*self.samples, sample][-MAX_SAMPLES:]
         contexts = {row["context_id"] for row in self.samples}
@@ -207,19 +242,45 @@ class VerificationJournal:
         slots = {row["slot_id"] for row in self.samples + self.attempts + self.evaluations}
         self.slots = {key: value for key, value in self.slots.items() if key in slots}
         self.slots[slot_id] = deepcopy(slot)
-        self.dirty = True
-        try:
-            await self.flush()
-        except Exception:
-            self.samples, self.sample_contexts, self.slots, self.discarded_samples, self.dirty = previous
-            raise
+        # A minute's sample must not rewrite the whole window; a crash loses at
+        # most one batch, and a clean stop writes it at once.
+        self.samples_dirty = True
+        self.sample_store.async_delay_save(self._delayed_sample_data, SAMPLE_SAVE_DELAY_SECONDS)
+
+    def _sample_data(self):
+        slot_ids = {row["slot_id"] for row in self.samples}
+        return {"schema_version": 1, "samples": self.samples, "sample_contexts": self.sample_contexts,
+                "discarded_samples": self.discarded_samples,
+                "slots": {key: value for key, value in self.slots.items() if key in slot_ids}}
+
+    def _delayed_sample_data(self):
+        self.samples_dirty = False
+        return self._sample_data()
+
+    async def flush_samples(self):
+        """Write batched samples now; this replaces any pending delayed write."""
+        if not self.samples_dirty:
+            return
+        await self.sample_store.async_save(self._sample_data())
+        self.samples_dirty = False
+
+    def _stored_configurations(self):
+        """One copy per configuration; a scope keeps its own only if its id is ambiguous."""
+        stored = {}
+        for scope, configuration in self.configurations.items():
+            key = configuration_id(scope)
+            if key in stored and stored[key] is not configuration and stored[key] != configuration:
+                key = scope
+            stored.setdefault(key, configuration)
+        return stored
 
     async def flush(self):
         if not self.dirty:
             return
-        await self.store.async_save({"schema_version": 4, "samples": self.samples, "sample_contexts": self.sample_contexts,
-                                    "discarded_samples": self.discarded_samples, "attempts": self.attempts, "evaluations": self.evaluations,
-                                    "configurations": self.configurations, "slots": self.slots,
+        slot_ids = {row["slot_id"] for row in self.attempts + self.evaluations}
+        await self.store.async_save({"schema_version": 5, "attempts": self.attempts, "evaluations": self.evaluations,
+                                    "configurations": self._stored_configurations(),
+                                    "slots": {key: value for key, value in self.slots.items() if key in slot_ids},
                                     "lifecycle_events": self.events,
                                     "discarded_attempts": self.discarded})
         self.dirty = False
@@ -247,10 +308,11 @@ class VerificationJournal:
                 "lifecycle_events": deepcopy(self.events),
                 "retention": {"max_lifecycle_events": MAX_LIFECYCLE_EVENTS, "max_groups": MAX_GROUPS,
                               "max_runtime_groups": MAX_GROUPS, "discarded_attempts": self.discarded,
-                              "max_samples": MAX_SAMPLES, "sample_interval_seconds": 60, "discarded_samples": self.discarded_samples},
+                              "max_samples": MAX_SAMPLES, "sample_interval_seconds": 60, "discarded_samples": self.discarded_samples,
+                              "sample_save_delay_seconds": SAMPLE_SAVE_DELAY_SECONDS},
                 "coverage_definition": "Successful command-generation branches for each configuration. Includes simulated handover. Does not prove physical response, all numeric values, failure paths or transitions between slots.",
                 "configurations": deepcopy(self.configurations), "slots": deepcopy(self.slots),
-                "aggregation_definition": "Consecutive equivalent decisions per device, scoped to configuration and plan slot. at/observations/commands describe the first check; final_observations contains its last actual reads. last_at, last_observations and last_final_observations describe repeated checks; count is the number of represented checks. Verification never proves physical response; runtime results retain the controller's device-specific evidence.",
+                "aggregation_definition": "Consecutive equivalent decisions per device, scoped to configuration and plan slot. at/observations/commands describe the first check; final_observations contains its last actual reads. last_at, last_observations and last_final_observations describe repeated checks; count is the number of represented checks. trigger names what woke the first check and last_trigger the latest; a different trigger alone does not start a new group. Verification never proves physical response; runtime results retain the controller's device-specific evidence.",
                 "runtime_definition": "Observed controller evaluations, including real service attempts and handover. Transport acceptance and setting readback do not by themselves prove physical delivery. No evaluations are invented for passive devices or periods before recording began. Simulation commands appear only in attempts; a runtime evaluation can include real release commands before verification.",
                 "measurement_definition": "Read-only samples of all non-excluded inventory devices, collected about once a minute without control evaluations. Raw sample timestamps, source reporting times, modes and active slots are retained. Counter deltas estimate average power between sample boundaries; source reporting delay limits alignment. source_interval_average_w uses the actual reporting interval. A reporting interval differing by over five seconds from the sample interval is excluded from household sums; reports before the active slot are excluded from plan comparisons. Missing, stale and reset readings are not zero. No interpolation across sessions, configuration changes or gaps over two minutes. Planned comparisons require the same active plan and slot at both boundaries. Household plan values may include hypothetical Planning and Control verification devices; differences do not by themselves identify a controller fault. These samples are not proof of a causal response to a command.",
                 "samples": deepcopy(self.samples), "sample_contexts": deepcopy(self.sample_contexts),

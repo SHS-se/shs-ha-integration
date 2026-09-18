@@ -31,7 +31,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.subscriptions = {}
         self.timers = {}
         self.next_timer = 0
-        self.journal = VerificationJournal(fixtures.Store())
+        self.journal = VerificationJournal(fixtures.Store(), fixtures.Store())
         self.controller.verification = self.journal
         service = self.hass.services.async_call
 

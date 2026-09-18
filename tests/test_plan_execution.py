@@ -459,6 +459,42 @@ class BasisReconciliationTests(unittest.TestCase):
         self.assertEqual(decision.discharge_dc_w,0)
         self.assertEqual(decision.replan_reason,'local_storage_reserve_changed')
 
+    def test_live_feedback_is_planner_feedback_without_the_settled_digest(self):
+        from plan_execution import live_feedback, planner_feedback
+        account = opening_account()
+        account = meter(account, "charge", QUARTER, 400_000)
+        account = meter(account, "discharge", QUARTER, 0)
+        account = request_replan(account)
+        second = contract(generation=1, opening=5_400_000, previous="plan-0")
+        row = replace(second.intervals[0], start_ms=QUARTER, end_ms=QUARTER * 3)
+        second = replace(second, source_receipt=account.requests[-1].source_receipt, intervals=(row,),
+            valid_until_ms=QUARTER * 3,
+            objectives=(replace(second.objectives[0], id="next-window", start_ms=QUARTER, deadline_ms=QUARTER * 2),
+                        Objective("follow-load", "demand_following", QUARTER, QUARTER + 1000, 0, "Follow demand"),
+                        Objective("later-window", "stored_energy", QUARTER, QUARTER * 3, 5_600_000, "Store for later")),
+            dispositions=(Disposition("cheap-window", "incorporated", "next-window", "Replanned from actual state"),))
+        account = admit_plan(account, second, QUARTER + 100, StateObservation(QUARTER + 100, 5_410_000, "SOC"))
+        account = request_replan(account)
+        third = replace(second, id="plan-2", plan_id="plan-2", generation=2, previous_contract_id="plan-1",
+            source_receipt=account.requests[-1].source_receipt, objectives=second.objectives[2:],
+            dispositions=(Disposition("next-window", "retained", None, "Still required"),
+                          Disposition("follow-load", "retired", None, "No longer planned")))
+        account = admit_plan(account, third, QUARTER + 200, StateObservation(QUARTER + 200, 5_420_000, "SOC"))
+        account = observe_state(account, StateObservation(QUARTER * 2, 5_500_000, "SOC"))
+        account = meter(account, "charge", QUARTER * 3, 500_000)
+        account = meter(account, "discharge", QUARTER * 3, 0)
+        outcomes = set()
+        for at in (QUARTER + 200, QUARTER * 2 - 1, QUARTER * 2, QUARTER * 3):
+            expected = planner_feedback(account, at)
+            self.assertEqual(len(expected["settled_history"].pop("sha256")), 64)
+            live = live_feedback(account, at)
+            self.assertEqual(live, expected)
+            outcomes |= {(row["objective"]["id"], row["outcome"], row["fulfilment_basis"]) for row in live["objectives"]}
+        # Observed and metered misses, and open work, are all compared; settled rows are filtered alike.
+        self.assertEqual(outcomes, {("next-window", "open", None), ("later-window", "open", None),
+                                    ("next-window", "missed", "observed_stored_energy"),
+                                    ("later-window", "missed", "accounted_stored_energy")})
+
     def test_planner_feedback_omits_repeated_history_but_acknowledges_its_revision(self):
         import json
         from plan_execution import Admission, planner_feedback

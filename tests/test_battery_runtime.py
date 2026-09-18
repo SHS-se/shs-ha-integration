@@ -298,6 +298,29 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(r.runtime.snapshot()['fault_history'])
         finally:await r.runtime.close()
 
+    async def test_snapshot_readers_share_one_live_account_view(self):
+        import battery_runtime as module
+        from unittest.mock import patch
+        r=Rig();await r.start()
+        try:
+            with patch.object(module.execution,'live_feedback',wraps=module.execution.live_feedback) as live, \
+                    patch.object(module.execution,'feedback',wraps=module.execution.feedback) as full:
+                # Sensor state, sensor details, the mode select and controller status read one refresh.
+                views=[r.runtime.snapshot() for _ in range(4)]
+                self.assertEqual(live.call_count,1)
+                self.assertTrue(all(view['accounting'] is views[0]['accounting'] for view in views))
+                self.assertNotIn('sha256',views[0]['accounting']['settled_history'])
+                r.now+=2000
+                self.assertEqual(r.runtime.snapshot()['accounting_at_ms'],r.now)
+                self.assertEqual(live.call_count,2)
+                evidence=r.runtime.snapshot(include_evidence=True)
+                self.assertEqual(full.call_count,1)
+                self.assertTrue(evidence['accounting']['objectives'])
+                self.assertIn('versions',evidence['accounting']['objectives'][0])
+                await r.advance()
+                r.runtime.snapshot()
+                self.assertEqual(live.call_count,3)
+        finally:await r.runtime.close()
     async def test_refresh_never_rerenders_the_household_or_wakes_other_controllers(self):
         # The coordinator republishes battery status after each refresh on its own
         # channel. A household-wide update here re-rendered every entity every 5 s.

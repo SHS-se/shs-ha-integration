@@ -73,7 +73,7 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         fixture.setUp()
         controller = fixture.controller
         controller.metrics = meter
-        controller.verification = VerificationJournal(fixtures.Store())
+        controller.verification = VerificationJournal(fixtures.Store(), fixtures.Store())
         entry = SimpleNamespace(runtime_data=SimpleNamespace(controller=controller,
             client=SimpleNamespace(traffic=SimpleNamespace(snapshot=lambda: {'requests': 0})),
             battery_live_inputs=SimpleNamespace(snapshot=lambda: {"control_authority": False}),

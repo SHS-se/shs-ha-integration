@@ -29,10 +29,19 @@ class State:
 class Store:
     def __init__(self):
         self.saved = None
+        self.delayed = None
     async def async_load(self):
         return deepcopy(self.saved)
     async def async_save(self, value):
+        # As in Home Assistant, an immediate save supersedes a pending delayed one.
+        self.delayed = None
         self.saved = deepcopy(value)
+    def async_delay_save(self, data_func, delay=0):
+        self.delayed = (data_func, delay)
+    async def write_delayed(self):
+        data_func, _ = self.delayed
+        self.delayed = None
+        self.saved = deepcopy(data_func())
 
 
 class ControllerTests(unittest.IsolatedAsyncioTestCase):

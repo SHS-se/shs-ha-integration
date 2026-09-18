@@ -567,51 +567,91 @@ def balance(account, at_ms):
                    None if hi is None or state_debt is None else hi - state_debt)
 
 
+def _measured_observations(account):
+    """The last measured state observation at each instant."""
+    return {observation.at_ms: observation for observation in account.observations if observation.measured}
+
+
+def _objective_outcome(account, objective, closed_at_ms, at_ms, observed):
+    """One objective's outcome as of at_ms; shared by the audit and the live view."""
+    result = {"outcome": "open", "shortfall_mwh": None, "fulfilment_basis": None}
+    deadline = objective.deadline_ms
+    if closed_at_ms is not None and closed_at_ms < deadline:
+        result["outcome"] = "changed_before_deadline"
+    elif objective.kind == "stored_energy" and deadline <= at_ms and account.opening.at_ms <= deadline:
+        anchor=account.anchor(deadline)
+        charged = measured(account.meter_index, "charge", anchor.at_ms, deadline)
+        discharged = measured(account.meter_index, "discharge", anchor.at_ms, deadline)
+        if charged.exact and discharged.exact:
+            shortfall = max(0, objective.target_mwh - anchor.stored_mwh - charged.low + discharged.low)
+            result.update(outcome="missed" if shortfall else "fulfilled", shortfall_mwh=shortfall,
+                          fulfilment_basis="accounted_stored_energy", flow_shortfall_mwh=shortfall)
+        else:
+            result["outcome"] = "unresolved"
+        observation = observed.get(deadline)
+        if observation:
+            shortfall = max(0, objective.target_mwh - observation.stored_mwh)
+            result.update(outcome="missed" if shortfall else "fulfilled", shortfall_mwh=shortfall,
+                          fulfilment_basis="observed_stored_energy")
+    elif deadline <= at_ms:
+        result["outcome"] = "forecast_complete" if objective.kind != "stored_energy" else "unresolved"
+    return result
+
+
 def objective_history(account, at_ms):
     """Planner dispositions and measured outcomes remain distinct and replayable."""
-    records = {}
+    records, latest = {}, {}
     for admission in account.admissions:
         if admission.at_ms > at_ms:
             continue
         for objective in admission.contract.objectives:
-            row = records.setdefault(objective.id, {"objective": asdict(objective), "origin_contract_id": admission.contract.id,
-                                                    "versions": [], "dispositions": []})
-            row["versions"].append({"objective": asdict(objective), "contract_id": admission.contract.id, "at_ms": admission.at_ms})
-            if admission.at_ms <= at_ms:
-                row["objective"] = asdict(objective)
+            version = asdict(objective)
+            row = records.get(objective.id)
+            if row is None:
+                row = records[objective.id] = {"objective": version, "origin_contract_id": admission.contract.id,
+                                               "versions": [], "dispositions": []}
+            row["versions"].append({"objective": version, "contract_id": admission.contract.id, "at_ms": admission.at_ms})
+            row["objective"] = version
+            latest[objective.id] = objective
         for disposition in admission.contract.dispositions:
             records[disposition.objective_id]["dispositions"].append({**asdict(disposition),
                 "contract_id": admission.contract.id, "at_ms": admission.at_ms})
-    for row in records.values():
-        objective = row["objective"]
-        deadline = objective["deadline_ms"]
-        row["outcome"] = "open"
-        row["shortfall_mwh"] = None
-        row["fulfilment_basis"] = None
+    observed = _measured_observations(account)
+    for objective_id, row in records.items():
         closed = next((d for d in row["dispositions"] if d["outcome"] in ("incorporated", "retired")), None)
-        if closed and closed["at_ms"] < deadline:
-            row["outcome"] = "changed_before_deadline"
-        elif objective["kind"] == "stored_energy" and deadline <= at_ms and account.opening.at_ms <= deadline:
-            anchor=account.anchor(deadline)
-            charged = measured(account.meter_index, "charge", anchor.at_ms, deadline)
-            discharged = measured(account.meter_index, "discharge", anchor.at_ms, deadline)
-            if charged.exact and discharged.exact:
-                shortfall = max(0, objective["target_mwh"] - anchor.stored_mwh - charged.low + discharged.low)
-                row.update(outcome="missed" if shortfall else "fulfilled", shortfall_mwh=shortfall,
-                           fulfilment_basis="accounted_stored_energy", flow_shortfall_mwh=shortfall)
-            else:
-                row["outcome"] = "unresolved"
-            observed = next((o for o in reversed(account.observations) if o.at_ms == deadline and o.measured), None)
-            if observed:
-                shortfall = max(0, objective["target_mwh"] - observed.stored_mwh)
-                row.update(outcome="missed" if shortfall else "fulfilled", shortfall_mwh=shortfall,
-                           fulfilment_basis="observed_stored_energy")
-        elif deadline <= at_ms:
-            row["outcome"] = "forecast_complete" if objective["kind"] != "stored_energy" else "unresolved"
+        row.update(_objective_outcome(account, latest[objective_id], closed["at_ms"] if closed else None, at_ms, observed))
         last = row["dispositions"][-1] if row["dispositions"] else None
         row["responsibility"] = last["outcome"] if last else "outstanding"
         # Historical measured success/miss is never replaced by 'incorporated'.
     return tuple(records.values())
+
+
+def _live_objectives(account, at_ms):
+    """Live responsibilities by reference: each admitted objective is visited once, only live rows copied."""
+    latest, closed_at, responsibility = {}, {}, {}
+    for admission in account.admissions:
+        if admission.at_ms > at_ms:
+            continue
+        for objective in admission.contract.objectives:
+            latest[objective.id] = objective
+        for disposition in admission.contract.dispositions:
+            if disposition.objective_id not in latest:
+                raise KeyError(disposition.objective_id)
+            responsibility[disposition.objective_id] = disposition.outcome
+            if disposition.outcome in ("incorporated", "retired"):
+                closed_at.setdefault(disposition.objective_id, admission.at_ms)
+    observed = _measured_observations(account)
+    rows = []
+    for objective_id, objective in latest.items():
+        owner = responsibility.get(objective_id, "outstanding")
+        if owner not in ("outstanding", "retained"):
+            continue
+        outcome = _objective_outcome(account, objective, closed_at.get(objective_id), at_ms, observed)
+        if outcome["outcome"] in ("fulfilled", "forecast_complete"):
+            continue
+        rows.append({"objective": asdict(objective), "responsibility": owner, "outcome": outcome["outcome"],
+                     "shortfall_mwh": outcome["shortfall_mwh"], "fulfilment_basis": outcome["fulfilment_basis"]})
+    return rows, len(latest)
 
 
 def feedback(account, at_ms):
@@ -623,6 +663,19 @@ def feedback(account, at_ms):
             "objectives": list(objective_history(account, at_ms)) if account.contract else []}
 
 
+def _receipt_summary(account):
+    """Receipts since the accepted reference, including late evidence for earlier source times."""
+    acknowledged=account.contract.source_receipt if account.contract else 0
+    prior_times={}
+    for row in account.meters:
+        if row.receipt<=acknowledged:
+            prior_times[row.stream]=max(prior_times.get(row.stream,0),row.source_at_ms)
+    late=[r for r in account.meters if r.receipt>acknowledged and r.source_at_ms<=prior_times.get(r.stream,-1)]
+    return {'through_receipt':account.receipt,'previously_acknowledged_receipt':acknowledged,
+        'late_evidence_count':len(late),
+        'earliest_amended_source_ms':min((r.source_at_ms for r in late),default=None)}
+
+
 def planner_feedback(account,at_ms):
     """Bound planning input to live responsibilities; archive the complete audit."""
     value=feedback(account,at_ms)
@@ -631,18 +684,28 @@ def planner_feedback(account,at_ms):
         for row in history if row['responsibility'] in ('outstanding','retained')
         and row['outcome'] not in ('fulfilled','forecast_complete')]
     value['state_reconciliations']=value['state_reconciliations'][-1:]
-    acknowledged=account.contract.source_receipt if account.contract else 0
-    prior_times={}
-    for row in account.meters:
-        if row.receipt<=acknowledged:
-            prior_times[row.stream]=max(prior_times.get(row.stream,0),row.source_at_ms)
-    late=[r for r in account.meters if r.receipt>acknowledged and r.source_at_ms<=prior_times.get(r.stream,-1)]
     value['settled_history']={'objective_count':len(history),
         'sha256':sha256(json.dumps(history,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
-        'through_receipt':account.receipt,'previously_acknowledged_receipt':acknowledged,
-        'late_evidence_count':len(late),
-        'earliest_amended_source_ms':min((r.source_at_ms for r in late),default=None)}
+        **_receipt_summary(account)}
     return value
+
+
+def live_feedback(account,at_ms):
+    """planner_feedback for display: the same live view without rebuilding or hashing settled history.
+
+    The digest of every historical objective version belongs to replan requests.
+    Here each admitted objective is read by reference, so the cost does not
+    include copying every version of every accepted plan's objectives.
+    """
+    contract=account.contract
+    rows,count=_live_objectives(account,at_ms) if contract else ([],0)
+    return {"generation": account.requested_generation, "source_receipt": account.receipt,
+            "previous_contract_id": contract.id if contract else None,
+            "observed": asdict(account.observed) if account.observed else None,
+            "state_reconciliations": [asdict(r) for r in account.reconciliations[-1:]],
+            "balance": asdict(balance(account, at_ms)) if contract else None,
+            "objectives": rows,
+            "settled_history": {'objective_count': count, **_receipt_summary(account)}}
 
 
 def capture_replan(account, at_ms):

@@ -186,7 +186,7 @@ class ScopeControllerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_live_battery_uses_execution_command_and_verification_does_not_write(self):
         from verification import VerificationJournal
-        self.controller.verification = VerificationJournal(fixtures.Store())
+        self.controller.verification = VerificationJournal(fixtures.Store(), fixtures.Store())
         await self.controller.async_start()
         self.assertIn(('number.charge_limit', .5), self.calls)
         self.assertNotIn(('number.charge_limit', 2), self.calls)
