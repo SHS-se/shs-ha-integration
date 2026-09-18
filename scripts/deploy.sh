@@ -6,7 +6,9 @@
 #   scripts/deploy.sh
 #
 # Commit the change with its version bump first (scripts/bump.sh beta --commit);
-# uncommitted work is never deployed. Re-running is safe: finished steps are
+# uncommitted work is never deployed. Commits that change nothing under
+# custom_components are held back while their version is already published,
+# and go out with the next bump. Re-running is safe: finished steps are
 # skipped, so a run that stopped part-way picks up where it left off.
 #
 # Home Assistant is reached as root over the Home Assistant OS host's SSH on
@@ -132,18 +134,26 @@ git merge-base --is-ancestor origin/main HEAD \
 
 version="$(git show "HEAD:$manifest" | jq -r .version)"
 sha="$(git rev-parse HEAD)"
+changed="$(git diff --name-only origin/main HEAD)"
+# The Beta workflow builds every push that changes more than Markdown, and
+# fails unless the manifest names a pre-release that is not yet published.
+builds=false
+if [[ -n "$changed" ]] && grep -qv '\.md$' <<<"$changed"; then
+  builds=true
+fi
 if [[ "$(git rev-parse origin/main)" == "$sha" ]]; then
   echo "origin/main is already up to date."
+elif [[ "$builds" == true ]] && published "$version"; then
+  if grep -q '^custom_components/' <<<"$changed"; then
+    fail "$version is already published, so the Beta workflow would reject this push; run scripts/bump.sh beta --commit"
+  fi
+  # Nothing that installs changed, so these wait for the next bump instead of
+  # failing the version check.
+  echo "Not pushing: $version is already published and these change nothing that installs."
+  git log --oneline origin/main..HEAD
 else
-  # The Beta workflow builds every push that changes more than Markdown, and
-  # fails unless the manifest names a pre-release that is not yet published.
-  changed="$(git diff --name-only origin/main HEAD)"
-  if [[ -n "$changed" ]] && grep -qv '\.md$' <<<"$changed"; then
-    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]] \
-      || fail "$version is not a pre-release, so the Beta workflow would reject it; run scripts/bump.sh beta --commit"
-    if published "$version"; then
-      fail "$version is already published, so the Beta workflow would reject this push; run scripts/bump.sh beta --commit"
-    fi
+  if [[ "$builds" == true && ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+    fail "$version is not a pre-release, so the Beta workflow would reject it; run scripts/bump.sh beta --commit"
   fi
   git log --oneline origin/main..HEAD
   git push origin main
