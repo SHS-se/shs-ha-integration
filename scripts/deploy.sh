@@ -9,10 +9,12 @@
 # uncommitted work is never deployed. Re-running is safe: finished steps are
 # skipped, so a run that stopped part-way picks up where it left off.
 #
-# Home Assistant is reached over SSH through the Advanced SSH & Web Terminal
-# add-on, whose Supervisor token authorizes everything else, so no Home
-# Assistant credentials are needed: only an SSH key in the add-on's
-# authorized_keys. HA_SSH overrides the destination, hassio@homeassistant.
+# Home Assistant is reached as root over the Home Assistant OS host's SSH on
+# port 22222, which the HassOS SSH port 22222 Configurator add-on sets up. The
+# Home Assistant steps run inside the Advanced SSH & Web Terminal add-on's
+# container, whose Supervisor token authorizes them, so no Home Assistant
+# credentials are needed. HA_HOST and HA_PORT override the destination,
+# 192.168.10.20 on port 22222.
 
 set -euo pipefail
 
@@ -20,14 +22,18 @@ manifest="custom_components/shs_energy/manifest.json"
 domain="shs_energy"
 update_entity="update.smart_home_solutions_energy_update"
 workflow="beta.yml"
-ha_ssh="${HA_SSH:-hassio@homeassistant}"
-ssh_options=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+ha_host="${HA_HOST:-192.168.10.20}"
+ha_port="${HA_PORT:-22222}"
+# The Advanced SSH & Web Terminal add-on, whose token may call Home Assistant.
+api_container="app_a0d7b954_ssh"
+ssh_options=(-p "$ha_port" -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 
 step() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 published() { gh release view "$1" >/dev/null 2>&1; }
 
-# The next two functions run on Home Assistant, as root inside the add-on.
+# The next two functions run on Home Assistant, as root inside the add-on's
+# container, where the Supervisor provides SUPERVISOR_TOKEN.
 
 # Calls the Supervisor API; paths under core/api/ reach Home Assistant's REST API.
 supervisor_api() {
@@ -44,10 +50,6 @@ install_on_home_assistant() {
   local version="$1" update_entity="$2" domain="$3"
   local config entity installed request check response started entries attempt
   local restart=true
-
-  # The add-on hands the token only to root sessions; other users reach root
-  # through sudo without it, so load it from the add-on's profile.
-  [[ -n "${SUPERVISOR_TOKEN:-}" ]] || source /etc/profile.d/homeassistant.sh
 
   config="$(supervisor_api GET core/api/config)" || fail "Home Assistant's API did not answer"
   jq -r '"Home Assistant \(.version) is \(.state | ascii_downcase)."' <<<"$config"
@@ -170,15 +172,16 @@ else
   published "$version" || fail "the Beta workflow finished without publishing $version"
 fi
 
-step "Connecting to Home Assistant at $ha_ssh"
+step "Connecting to Home Assistant at root@$ha_host:$ha_port"
 remote="set -euo pipefail
 $(declare -f step fail supervisor_api install_on_home_assistant)
 install_on_home_assistant \"\$@\""
 status=0
-ssh "${ssh_options[@]}" "$ha_ssh" sudo -n bash -s -- "$version" "$update_entity" "$domain" \
+ssh "${ssh_options[@]}" "root@$ha_host" \
+  docker exec -i "$api_container" bash -s -- "$version" "$update_entity" "$domain" \
   <<<"$remote" || status=$?
 if (( status == 255 )); then
-  fail "could not SSH to $ha_ssh. If the key was refused, add your public key (e.g. ~/.ssh/id_ed25519.pub) to authorized_keys in the Advanced SSH & Web Terminal add-on's configuration, then restart the add-on"
+  fail "could not SSH to root@$ha_host on port $ha_port, the host login that the HassOS SSH port 22222 Configurator add-on sets up"
 fi
 (( status == 0 )) || exit "$status"
 
