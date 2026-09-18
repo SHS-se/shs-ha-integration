@@ -56,3 +56,16 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(len(set(stores)-first),6)
         self.assertEqual(await archive.get(root),items)
         self.assertEqual(len(await archive.get(newer)),4097)
+
+    async def test_legacy_session_upgrade_and_rejection_are_lossless(self):
+        from home_runtime import PlanRejection
+        from runtime_json import encode_value
+        stores={};archive=ExecutionArchive(lambda k:stores.setdefault(k,Store()))
+        session=ExecutionSession(captured_feedback='captured request')
+        legacy=encode_value(session);legacy.pop('plan_rejection')
+        old=await archive.put(legacy)
+        self.assertEqual(await archive.load_session(old),session)
+        rejected=replace(session,plan_rejection=PlanRejection(123,'new-plan',2,'changed target'))
+        root=await archive.save_session(rejected)
+        self.assertEqual(await archive.load_session(root),rejected)
+        self.assertEqual(await archive.load_session(old),session)

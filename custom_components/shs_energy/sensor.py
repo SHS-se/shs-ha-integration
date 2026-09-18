@@ -759,6 +759,8 @@ class ShsControllerSensor(ShsBaseSensor):
         if self.device == "devices":
             states = {value["state"] for key, value in self.coordinator.controller.status.items() if key.startswith("device:")}
             return next((state for state in ("fault", "overridden", "unsupported", "commanded", "idle") if state in states), "disabled")
+        if self.device == "battery":
+            return self.coordinator.battery_runtime.snapshot()["state"]
         return self.coordinator.controller.status[self.device]["state"]
 
     @property
@@ -781,5 +783,6 @@ class ShsControllerSensor(ShsBaseSensor):
         status = self.coordinator.controller.status[self.device]
         if self.device == "battery":
             runtime = self.coordinator.battery_runtime.snapshot()
-            status = {**status, "battery_runtime": runtime}
+            status = {**status, "battery_runtime": runtime, **{key: runtime.get(key)
+                for key in ("reason", "fix", "next_step", "retry_automatically")}}
         return details(self.device, status)

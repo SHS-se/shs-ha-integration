@@ -1,4 +1,4 @@
-"""Closed version-8 JSON for the offline runtime and conservative crash restoration."""
+"""Closed version-9 JSON for the offline runtime and conservative crash restoration."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -94,7 +94,7 @@ def _check_state(state):
 
 def encode_checkpoint(state: runtime.HomeState) -> bytes:
     _check_state(state)
-    data = json.dumps({"schema_version": 8, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    data = json.dumps({"schema_version": 9, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > MAX_BYTES:
         raise ValueError("checkpoint exceeds byte limit")
     return data
@@ -120,9 +120,20 @@ def decode_checkpoint(data: bytes) -> runtime.HomeState:
                 generation=group["generation"] + 1,
                 release_pending=group["release_pending"] or group["owned"] or bool(issued))
         return _check_state(_decode(raw, runtime.HomeState))
-    if value["schema_version"] != 8:
+    if value["schema_version"] == 8:
+        value["state"]["execution"] = upgrade_execution_session(value["state"]["execution"])
+    elif value["schema_version"] != 9:
         raise ValueError("unsupported checkpoint version/fields")
     return _check_state(_decode(value["state"], runtime.HomeState))
+
+
+def upgrade_execution_session(raw):
+    """One-way upgrade of the exact v8 session shape, including archived roots."""
+    from dataclasses import fields
+    old_fields = {'type', *(f.name for f in fields(runtime.ExecutionSession))} - {'plan_rejection'}
+    if isinstance(raw, dict) and set(raw) == old_fields and raw.get('type') == 'ExecutionSession':
+        return {**raw, 'plan_rejection': None}
+    return raw
 
 
 def restore_checkpoint(data: bytes, now_ms: int):

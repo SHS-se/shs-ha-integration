@@ -13,10 +13,12 @@ from typing import get_type_hints, get_args
 if __package__:
     from . import plan_execution as execution
     from .home_runtime import ExecutionSession, ExecutionTrace
+    from .home_runtime_checkpoint import upgrade_execution_session
     from .runtime_json import encode_value, decode_value
 else:
     import plan_execution as execution
     from home_runtime import ExecutionSession, ExecutionTrace
+    from home_runtime_checkpoint import upgrade_execution_session
     from runtime_json import encode_value, decode_value
 
 PAGE_BYTES = 128_000
@@ -79,7 +81,7 @@ class ExecutionArchive:
         return await self.put(encode_value(session))
 
     async def load_session(self, key):
-        raw=await self.get(key)
+        raw=upgrade_execution_session(await self.get(key))
         if not isinstance(raw,dict) or raw.get('type')!='ExecutionSession':
             raise ValueError('archive does not contain an execution session')
         hydrated=read_account(raw['account'])

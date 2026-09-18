@@ -1082,7 +1082,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     }
     const display = runtime.display;
     if (!display) return "";
-    return `<p class="muted">${this._escape(display.status)}<br>${this._escape(display.now)}${display.loss ? `<br>${this._escape(display.loss)}` : ""}</p>`;
+    return `${display.plan_warning ? `<p class="warning battery-plan-rejection">${this._escape(display.plan_warning)}</p>` : ""}<p class="muted">${this._escape(display.status)}<br>${this._escape(display.now)}${display.loss ? `<br>${this._escape(display.loss)}` : ""}</p>`;
   }
 
   _scheduleCommand(device, slot) {

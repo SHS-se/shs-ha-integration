@@ -113,6 +113,7 @@ class BatteryRuntime:
         self._last_error=None;self._external_pending={};self._frame_pending={};self._releasing=False
         self._native_checked=False;self._release_revision=0
         self._bootstrap=execution.Account();self._replan_task=None;self._replan_pending=False
+        self._bootstrap_rejection=None;self._bootstrap_captured=None
         self._fault_history=[]
         self._observation_error=None
         controller.battery_runtime=self
@@ -130,7 +131,10 @@ class BatteryRuntime:
                 self._bootstrap=decode_value(value['account'],execution.Account) if value['account'] is not None else execution.Account()
             if value['checkpoint'] is None:
                 if value.get('execution_root'):
-                    self._bootstrap=(await self.archive.load_session(value['execution_root'])).account
+                    session=await self.archive.load_session(value['execution_root'])
+                    self._bootstrap=session.account
+                    self._bootstrap_rejection=session.plan_rejection
+                    self._bootstrap_captured=session.captured_feedback
                 return
             checkpoint=value['checkpoint'].encode()
             state=decode_checkpoint(checkpoint)
@@ -197,8 +201,7 @@ class BatteryRuntime:
             'fault_history':[dict(row) for row in self._fault_history],
             'fault_history_scope':'Last 64 distinct faults since integration load'}
         if not self.host:
-            value['display'] = battery_status_text(value)
-            return value
+            return self._plan_status(value, self._bootstrap_rejection, self._bootstrap.contract)
         state=self.host.state;group=state.groups[0];session=state.execution
         accounting_at=self.now()
         value.update(command_state=group.status,mode=group.mode,execution_state=session.status,
@@ -242,8 +245,49 @@ class BatteryRuntime:
                 value.update(state='pending',reason='Waiting for measured battery power to settle within its limits' if group.status=='native_guard_blocked' else 'Applying the planned battery settings; confirmation is pending')
         if value['state']=='fault' and 'fix' not in value:
             value.update(fix={'kind':'diagnostics'},next_step='Check the reported source or command failure. Download diagnostics if it persists.',retry_automatically=True)
+        return self._plan_status(value, session.plan_rejection, session.account.contract)
+
+    def _plan_status(self, value, rejection, accepted):
+        value.update(plan_status='rejected' if rejection else 'accepted' if accepted else 'awaiting_plan',
+            accepted_plan_id=accepted.plan_id if accepted else None,
+            accepted_reference_id=accepted.id if accepted else None,
+            plan_rejection=asdict(rejection) if rejection else None)
+        if rejection:
+            # The accepted reference remains authoritative within its existing
+            # permissions and lifetime. Rejection never authorises new actions.
+            if value['state'] != 'fault':
+                value.update(state='fault',reason='A new battery plan could not be accepted.',
+                    fix={'kind':'diagnostics'},retry_automatically=True,
+                    next_step='Waiting for a corrected plan. Download controller diagnostics if this persists.')
+            if value.get('explanation'):
+                value['explanation']={**value['explanation'],
+                    'plan':'Previously accepted plan: ' + value['explanation']['plan'],
+                    'next':'Waiting for a corrected plan; the rejected update is not being used.'}
         value['display'] = battery_status_text(value)
         return value
+
+    async def reject_plan_response(self, plan, reason):
+        """Publish pre-cache identity/contract rejection through the same journal."""
+        wire=plan.get('battery_execution')
+        wire=wire if isinstance(wire,dict) else {}
+        contract_id=wire.get('id') if isinstance(wire.get('id'),str) else None
+        generation=wire.get('generation') if type(wire.get('generation')) is int else None
+        rejection=rt.PlanRejection(self.now(),contract_id,generation,reason)
+        async with self._lock:
+            if self.host:
+                await self.host.accept(rt.ExecutionPlanRejected(rejection))
+            else:
+                session=rt.record_plan_rejection(rt.ExecutionSession(account=self._bootstrap,
+                    plan_rejection=self._bootstrap_rejection),rejection)
+                self._bootstrap_rejection=session.plan_rejection
+                await self._persist_bootstrap()
+            self.coordinator.async_update_listeners()
+
+    async def _persist_bootstrap(self):
+        await self.store.async_save({'schema':'battery-runtime-v3','checkpoint':None,
+            'execution_root':await self.archive.save_session(rt.ExecutionSession(account=self._bootstrap,
+                captured_feedback=self._bootstrap_captured,plan_rejection=self._bootstrap_rejection)),
+            'account':None,'options':None,'devices':[],'model_sources':None,'ratings':None})
 
     def validate_plan_response(self,plan):
         """Reject stale response identity before replacing the coordinator's cache."""
@@ -282,10 +326,8 @@ class BatteryRuntime:
             self._bootstrap=execution.request_replan(self._bootstrap)
             captured=execution.planner_feedback(self._bootstrap,self.now())
             captured.update(scope_revision=digest(self.controller.options()),reason=getattr(self,'_runtime_reason',None),pending_effects=[])
-            await self.store.async_save({'schema':'battery-runtime-v3','checkpoint':None,
-                'execution_root':await self.archive.save_session(rt.ExecutionSession(account=self._bootstrap,captured_feedback=json.dumps(captured))),
-                'account':None,'options':None,'devices':[],
-                'model_sources':None,'ratings':None})
+            self._bootstrap_captured=json.dumps(captured)
+            await self._persist_bootstrap()
             return captured
 
     def _control_entities(self):
@@ -367,6 +409,8 @@ class BatteryRuntime:
             if old.owned or old.attempts or old.release_pending:
                 raise ValueError('releasing previous battery configuration before admitting new bindings')
             self._bootstrap=self.host.state.execution.account
+            self._bootstrap_rejection=self.host.state.execution.plan_rejection
+            self._bootstrap_captured=self.host.state.execution.captured_feedback
             await self.host.close()
             self.host=None;self._seeded=False;self._mode=None;self._model=None;self._native_checked=False
         self._releasing=False
@@ -447,7 +491,8 @@ class BatteryRuntime:
             maximum=rt.Envelope(1000000,1000000)
             state=rt.create_home((rt.GroupSpec('battery',ADAPTER_REVISION,keys,maximum),),rt.Limits(1000,1000,30000),
                     ledger=create_ledger('household-battery-actuals',digest([asdict(s) for s in specs]),specs,max_intervals=256))
-            state=replace(state,execution=rt.ExecutionSession(account=self._bootstrap))
+            state=replace(state,execution=rt.ExecutionSession(account=self._bootstrap,
+                plan_rejection=self._bootstrap_rejection,captured_feedback=self._bootstrap_captured))
             await self._open_host(state)
             if self.host.state.groups[0].spec.control_keys!=keys or self.host.state.ledger.mapping_revision!=state.ledger.mapping_revision:
                 raise ValueError('saved battery journal belongs to different control or meter bindings')

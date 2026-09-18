@@ -270,8 +270,13 @@ def battery_status_text(runtime):
     measured = (runtime.get('loss_evidence') or {}).get('discharge', {}).get('model_source') == 'measured'
     loss = ('Energy-loss estimates use measurements from your system.' if measured else
             'Energy-loss estimates use your settings while measurements are collected.' if runtime.get('loss_model') else '')
+    warning = ''
+    if runtime.get('plan_rejection'):
+        reference = ('The previously accepted plan remains in use while it is valid.' if runtime.get('accepted_reference_id')
+                     else 'There is no accepted battery plan to use.')
+        warning = 'A new battery plan could not be accepted. ' + reference + ' Waiting for a corrected plan.'
     return {'status': runtime.get('reason') or explanation.get('status') or 'Waiting for the battery controller.',
-            'now': current, 'loss': loss}
+            'now': current, 'loss': loss, 'plan_warning': warning}
 
 
 def controller_explanation(device, mode, status, slot=None):
@@ -281,11 +286,12 @@ def controller_explanation(device, mode, status, slot=None):
     if device == 'battery' and runtime is not None:
         live = battery_status_text(runtime)
         explanation = runtime.get('explanation') or {}
-        parts = [live['status'], live['now'], live['loss']]
+        parts = [live['status'], live['plan_warning'], live['now'], live['loss']]
         outlook = [explanation.get(key) for key in ('plan', 'difference', 'next')]
         text = '\n'.join(p for p in parts if p)
         if any(outlook): text += '\n\n' + '\n'.join(p for p in outlook if p)
-        result = {'explanation': text}
+        result = {'explanation': text, **{key: runtime.get(key) for key in
+            ('plan_status', 'plan_rejection', 'accepted_plan_id', 'accepted_reference_id')}}
         if explanation.get('deadline_ms') is not None:
             result['plan_target_deadline'] = datetime.fromtimestamp(explanation['deadline_ms']/1000, timezone.utc).isoformat()
         return result

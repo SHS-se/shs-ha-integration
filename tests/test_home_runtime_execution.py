@@ -263,3 +263,36 @@ class ExecutableRuntimeTests(unittest.TestCase):
         self.assertEqual(restored.groups[0].attempts,h.group.attempts)
         self.assertEqual(restored.groups[0].release,h.group.release)
         self.assertIsNone(restored.execution.account.contract)
+
+    def test_rejected_handover_survives_updates_restart_and_clears_on_acceptance(self):
+        h=Harness(mode='control_verification');h.offer()
+        h.event(ReplanRequested(StateObservation(h.now,5000000,'soc'),'config-1'))
+        updated=replace(h.contract,id='replacement',generation=1,previous_contract_id='initial',
+            source_receipt=json.loads(h.state.execution.captured_feedback)['source_receipt'],
+            objectives=(replace(h.contract.objectives[0],target_mwh=h.contract.objectives[0].target_mwh+100),))
+        h.offer(updated)
+        rejection=h.state.execution.plan_rejection
+        self.assertEqual(rejection.contract_id,'replacement')
+        self.assertIn('explicit retained amendment',rejection.reason)
+        self.assertEqual(h.state.execution.account.contract.id,'initial')
+        self.assertTrue(any(isinstance(e,NeedPlan) for e in h.effects))
+        h.conditions(load_w=1200);h.event(Tick());h.offer(h.contract)
+        self.assertEqual(h.state.execution.plan_rejection,rejection)
+        restored,_=restore_checkpoint(encode_checkpoint(h.state),h.now)
+        self.assertEqual(restored.execution.plan_rejection,rejection)
+        updated=replace(updated,dispositions=(Disposition('charge','retained',None,'Amend target'),))
+        h.offer(updated)
+        self.assertEqual(h.state.execution.account.contract.id,'replacement')
+        self.assertIsNone(h.state.execution.plan_rejection)
+        # An older response arriving late is recorded in the trace but must not
+        # replace the successful handover's current status.
+        h.offer(replace(h.contract,id='obsolete'))
+        self.assertIsNone(h.state.execution.plan_rejection)
+
+    def test_v8_checkpoint_upgrade_preserves_account_and_issued_effects(self):
+        h=Harness();h.offer();h.prepare();h.durable()
+        old=json.loads(encode_checkpoint(h.state));old['schema_version']=8
+        old['state']['execution'].pop('plan_rejection')
+        upgraded=decode_checkpoint(json.dumps(old))
+        self.assertEqual(upgraded,h.state)
+        self.assertEqual(json.loads(encode_checkpoint(upgraded))['schema_version'],9)

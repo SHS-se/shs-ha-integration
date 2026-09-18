@@ -581,3 +581,66 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             dump['assessment']['charge_dc_w']+=1
             self.assertFalse(replay(dump)['matches_recorded_results'])
         finally:await r.runtime.close()
+
+    async def test_handover_rejection_is_visible_until_corrected_plan_is_admitted(self):
+        r=Rig('control_verification');await r.start()
+        try:
+            original=read_contract(r.plan['battery_execution'])
+            captured=await r.runtime.capture_feedback(5000000,'snapshot')
+            revised=replace(original,id='replacement',generation=captured['generation'],
+                source_receipt=captured['source_receipt'],previous_contract_id=original.id,
+                objectives=(replace(original.objectives[0],target_mwh=original.objectives[0].target_mwh+100),))
+            r.plan['battery_execution']=contract_wire(revised)
+            await r.advance()
+            dump=r.runtime.snapshot(include_evidence=True)
+            self.assertEqual(dump['state'],'fault')
+            self.assertEqual(dump['plan_status'],'rejected')
+            self.assertEqual(dump['accepted_reference_id'],original.id)
+            self.assertEqual(dump['plan_rejection']['contract_id'],'replacement')
+            self.assertIn('explicit retained amendment',dump['plan_rejection']['reason'])
+            self.assertIn('previously accepted',dump['display']['plan_warning'])
+            self.assertIn('Previously accepted plan',dump['explanation']['plan'])
+            self.assertNotIn('Continue with the current plan',dump['explanation']['next'])
+            saved=await r.runtime.archive.load_session(r.store.saved['execution_root'])
+            self.assertEqual(saved.plan_rejection.contract_id,'replacement')
+            self.assertEqual(dump['fix'],{'kind':'diagnostics'})
+            await r.runtime.close()
+            restarted=Rig('control_verification');restarted.now=r.now+1000
+            for row in restarted.rows.values():row['last_reported']=iso(restarted.now)
+            restarted.runtime.store=r.store;restarted.runtime.archive=r.runtime.archive
+            r=restarted
+            await asyncio.wait_for(r.start(),3)
+            self.assertEqual(r.runtime.snapshot()['plan_rejection'],dump['plan_rejection'])
+            self.assertEqual(r.runtime.snapshot()['state'],'fault')
+            revised=replace(revised,dispositions=(Disposition(original.objectives[0].id,'retained',None,'Amend target'),))
+            r.plan['battery_execution']=contract_wire(revised)
+            await r.advance()
+            dump=r.runtime.snapshot()
+            self.assertEqual(dump['state'],'verified',dump)
+            self.assertEqual(dump['plan_status'],'accepted')
+            self.assertIsNone(dump['plan_rejection'])
+            self.assertFalse(dump['display']['plan_warning'])
+            self.assertEqual(r.calls,[])
+        finally:await r.runtime.close()
+
+    async def test_pre_cache_rejection_survives_bootstrap_restart_and_valid_acceptance(self):
+        r=Rig('control_verification')
+        await r.runtime.reject_plan_response(r.plan,'Battery plan belongs to a superseded request')
+        dump=r.runtime.snapshot()
+        self.assertEqual(dump['plan_status'],'rejected')
+        self.assertIn('no accepted battery plan',dump['display']['plan_warning'])
+        restarted=Rig('control_verification')
+        restarted.runtime.store=r.store
+        restarted.runtime.archive=r.runtime.archive
+        try:
+            await restarted.runtime.open()
+            self.assertEqual(restarted.runtime.snapshot()['plan_status'],'rejected')
+            self.assertEqual(restarted.runtime.snapshot()['plan_rejection'],dump['plan_rejection'])
+            await restarted.start()
+            self.assertIsNone(restarted.runtime.snapshot()['plan_rejection'])
+            await restarted.runtime.reject_plan_response({'battery_execution':{'id':'later','generation':1}},'Invalid receipt prefix')
+            self.assertEqual(restarted.runtime.snapshot()['plan_rejection']['contract_id'],'later')
+            await restarted.advance()
+            self.assertEqual(restarted.runtime.snapshot()['plan_status'],'rejected')
+        finally:
+            await r.runtime.close();await restarted.runtime.close()

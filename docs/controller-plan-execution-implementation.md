@@ -111,10 +111,10 @@ Keep the battery in Verification until those traces meet your acceptance criteri
 
 ## Validation
 
-- Integration: 732 Python tests and 71 frontend tests pass, including fake native
+- Integration: 754 Python tests and 74 frontend tests pass, including fake native
   services, no-write Verification, crash/restart and release, configuration
   correction, delayed/corrected counters, archive failure and diagnostic replay.
-- Backend: 1,192 Deno tests and 32 mocked-backend Playwright tests pass. TypeScript
+- Backend: 1,194 Deno tests and 32 mocked-backend Playwright tests pass. TypeScript
   checks and the production frontend build pass.
 - Backend ESLint: zero errors, 26 existing warnings in unrelated frontend code.
   The production build retains its existing large-chunk warning.
@@ -124,3 +124,44 @@ Keep the battery in Verification until those traces meet your acceptance criteri
 Deploy the compatible server code before installing the integration beta. The
 existing production publication and device mode controls remain the rollout gates;
 this implementation does not switch any installation to Controlling.
+
+## Plan handover and rejected updates (beta.9)
+
+A handover happens when the controller accepts a newly generated battery reference,
+including after periodic replanning, changed inputs or a controller replan request.
+Moving into another quarter of the same accepted plan is not a handover. Acceptance
+acknowledges the captured request and measured evidence, and records how the new
+plan handles earlier obligations. It does not reset measured delivery or erase old
+shortfalls.
+
+Objective IDs identify an obligation's lifetime, not just a kind and deadline. The
+planner reuses an ID only when the captured feedback still carries that live
+responsibility. A returning window gets a new plan/generation-scoped ID after its
+previous obligation was incorporated or retired. Retained target changes still
+require explicit amendments; the controller's admission checks are unchanged.
+
+Rejected replacement plans remain visible until a new reference is accepted.
+Reoffering the already accepted reference, taking another measurement or restarting
+does not clear the warning. An obsolete response older than the accepted local
+generation stays in diagnostic history without replacing the current status.
+The previously accepted reference keeps only its original lifetime and permissions.
+
+The Schedule battery card and Status warnings use plain-language explanations and
+link to diagnostics, not unrelated configuration fields. The battery controller
+sensor and battery mode select expose `plan_status` (`accepted`, `rejected` or
+`awaiting_plan`), `plan_rejection` (time in milliseconds, rejected contract ID,
+local generation and technical reason), `accepted_plan_id` and
+`accepted_reference_id`. These fields also appear in controller diagnostics.
+The controller sensor reports `fault` while rejection needs attention; this does
+not itself assert a hardware fault or change the selected operating mode.
+
+Checkpoint schema 9 and archived session reads upgrade the previous session shape
+once by adding an empty rejection record. Existing meter evidence, accepted plans
+and pending physical effects are retained.
+
+The supplied September 18 replay originally failed with “changed objective target
+needs an explicit retained amendment”. Regenerating it with the corrected planner
+successfully admits its generation-35 reference to the supplied account, preserving
+all four earlier admissions and every meter receipt. Deployment requires the
+server fix as well as integration beta.9; changing the integration alone cannot
+repair the planner's reused identities.

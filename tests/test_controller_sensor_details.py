@@ -43,6 +43,21 @@ class ControllerDetailsTests(unittest.TestCase):
         self.assertNotIn('not yet responded',text)
         self.assertIn('0.08 kWh more',text)
 
+    def test_battery_rejection_is_visible_even_before_controller_status_refresh(self):
+        rejection={'at_ms':123,'contract_id':'rejected','generation':2,'reason':'changed target'}
+        self.runtime.update(state='fault',reason='A new battery plan could not be accepted.',
+            plan_status='rejected',plan_rejection=rejection,accepted_reference_id='previous')
+        attributes=self.attributes('battery')
+        self.assertEqual(attributes['plan_rejection'],rejection)
+        self.assertEqual(attributes['plan_status'],'rejected')
+        self.assertEqual(attributes['accepted_reference_id'],'previous')
+        self.assertIn('Waiting for a corrected plan',attributes['explanation'])
+        getter=method('sensor.py','ShsControllerSensor','native_value')
+        self.assertEqual(getter(SimpleNamespace(coordinator=self.coordinator,device='battery')),'fault')
+        self.runtime.update(plan_status='accepted',plan_rejection=None,state='verified')
+        self.assertIsNone(self.attributes('battery')['plan_rejection'])
+        self.assertEqual(getter(SimpleNamespace(coordinator=self.coordinator,device='battery')),'verified')
+
     def test_pool_ev_and_each_other_device_have_specific_plain_language(self):
         pool=self.attributes('pool')['explanation']
         self.assertIn('28.8 °C',pool);self.assertIn('requests pool heating',pool)
@@ -84,3 +99,18 @@ class SelectDetailsTests(unittest.IsolatedAsyncioTestCase):
         getter.__globals__['controller_explanation']=controller_explanation
         self.assertIn('Store spare solar',r.manager.entities['$battery'].extra_state_attributes['explanation'])
         self.assertIn('requests this device to be on',r.manager.entities['sensor.heater'].extra_state_attributes['explanation'])
+
+    async def test_rejection_is_machine_readable_on_mode_select(self):
+        r=Rig();await r.manager.refresh()
+        rejection={'at_ms':123,'contract_id':'rejected','generation':2,'reason':'changed target'}
+        r.entry.runtime_data.controller.status={'battery':{'state':'verified'}}
+        r.entry.runtime_data.controller.options=lambda:r.entry.options
+        r.entry.runtime_data.battery_runtime=SimpleNamespace(snapshot=lambda:{'state':'fault',
+            'plan_status':'rejected','plan_rejection':rejection,'accepted_reference_id':'previous'})
+        r.entry.runtime_data.binding_plan_for=lambda *args:({},None)
+        getter=r.adapter.ExecutionModeSelect.extra_state_attributes.fget
+        getter.__globals__['controller_explanation']=controller_explanation
+        attributes=r.manager.entities['$battery'].extra_state_attributes
+        self.assertEqual(attributes['plan_rejection'],rejection)
+        self.assertEqual(attributes['accepted_reference_id'],'previous')
+        self.assertIn('Waiting for a corrected plan',attributes['explanation'])

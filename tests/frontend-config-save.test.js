@@ -1254,3 +1254,31 @@ test('battery card renders shared sensor wording without interpreting it again',
   assert.match(html, /Energy-loss estimates use measurements/);
   assert.doesNotMatch(html, /Waiting/);
 });
+
+test('battery card exposes persistent rejection without measurements and escapes text', () => {
+  const panel = makePanel();
+  const display = {status: 'A new battery plan could not be accepted.', now: 'Waiting for readings.',
+    plan_warning: 'The previously accepted plan remains in use while it is valid. Waiting for a corrected plan. <script>'};
+  let html = panel._batteryLiveInputs({battery_runtime: {display}});
+  assert.match(html, /class="warning battery-plan-rejection"/);
+  assert.match(html, /previously accepted plan/);
+  assert.match(html, /Waiting for a corrected plan/);
+  assert.match(html, /&lt;script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
+  html = panel._batteryLiveInputs({battery_runtime: {display: {...display, plan_warning: ''}}});
+  assert.doesNotMatch(html, /battery-plan-rejection/);
+});
+
+test('rejected plan appears on Status with diagnostics and clears after acceptance', () => {
+  const panel = makePanel();
+  panel._data.devices = [{key: '$battery', name: 'House battery', system: 'battery',
+    mode: 'control_verification', execution_status: {state: 'fault', plan_status: 'rejected',
+      reason: 'A new battery plan could not be accepted.', fix: {kind: 'diagnostics'},
+      next_step: 'Waiting for a corrected plan.', retry_automatically: true}}];
+  const issue = panel._attention().find(row => row.key === 'controller:$battery');
+  assert.equal(issue.fix.kind, 'diagnostics');
+  assert.match(issue.detail, /new battery plan could not be accepted/);
+  assert.match(issue.next_step, /Waiting for a corrected plan/);
+  panel._data.devices[0].execution_status = {state: 'verified', plan_status: 'accepted'};
+  assert.equal(panel._attention().some(row => row.key === 'controller:$battery'), false);
+});

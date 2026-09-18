@@ -3067,9 +3067,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 else None
             )
             if returned_plan:
+                runtime=getattr(self,"battery_runtime",None)
                 try:
                     validate_plan_contract(returned_plan, dt_util.utcnow())
-                    runtime=getattr(self,"battery_runtime",None)
                     if runtime is not None:
                         try:
                             runtime.validate_plan_response(returned_plan)
@@ -3077,6 +3077,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             raise OptimisationInputError(str(error)) from error
                 except OptimisationInputError as err:
                     plan_error = str(err)
+                    if runtime is not None and isinstance(returned_plan, dict) and (
+                        returned_plan.get("battery") or "battery_execution" in returned_plan
+                    ):
+                        await runtime.reject_plan_response(returned_plan, plan_error)
                     _LOGGER.warning("Optimisation plan refused: %s", err)
 
             self.last_optimisation_error = snapshot_error

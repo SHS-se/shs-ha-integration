@@ -560,6 +560,14 @@ class ExecutionTrace:
 
 
 @dataclass(frozen=True)
+class PlanRejection:
+    at_ms: int
+    contract_id: Optional[str]
+    generation: Optional[int]
+    reason: str
+
+
+@dataclass(frozen=True)
 class ExecutionSession:
     account: execution.Account = execution.Account()
     assessment: Optional[execution.Assessment] = None
@@ -569,6 +577,15 @@ class ExecutionSession:
     captured_feedback: Optional[str] = None
     traces: tuple[ExecutionTrace, ...] = ()
     live: Optional[execution.LiveState] = None
+    plan_rejection: Optional[PlanRejection] = None
+
+
+def record_plan_rejection(session: ExecutionSession, rejection: PlanRejection) -> ExecutionSession:
+    """Keep current rejection until a newer reference is actually admitted."""
+    accepted = session.account.contract
+    if accepted and rejection.generation is not None and rejection.generation < accepted.generation:
+        return session
+    return replace(session, plan_rejection=rejection)
 
 
 @dataclass(frozen=True)
@@ -612,6 +629,11 @@ class ConditionsObserved:
 @dataclass(frozen=True)
 class ExecutionPlanOffered:
     contract: execution.ExecutionContract
+
+
+@dataclass(frozen=True)
+class ExecutionPlanRejected:
+    rejection: PlanRejection
 
 
 @dataclass(frozen=True)
@@ -739,7 +761,7 @@ class Tick:
     pass
 
 
-Event = Union[AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, WriteConfirmed, Tick]
+Event = Union[AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ExecutionPlanRejected, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, WriteConfirmed, Tick]
 
 
 @dataclass(frozen=True)
@@ -1334,7 +1356,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
     """Process one validated domain event; performs no I/O and never reads a clock."""
     if type(now_ms) is not int or now_ms < 0:
         raise ValueError("now_ms must be an absolute nonnegative integer")
-    if not isinstance(event, (AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, WriteConfirmed, Tick)):
+    if not isinstance(event, (AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ExecutionPlanRejected, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, WriteConfirmed, Tick)):
         raise ValueError("unsupported runtime event")
     previous = state
     rollback = now_ms < state.last_time_ms
@@ -1377,10 +1399,17 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 raise ValueError("fresh state required for plan admission")
             account = execution.admit_plan(state.execution.account, event.contract, now_ms,
                 execution.StateObservation(now_ms, round(state.conditions.energy_kwh * 1e6), "live_soc_at_acceptance", False))
-            state = replace(state, execution=replace(state.execution, account=account, replan_reason=None))
+            changed = account.contract != state.execution.account.contract
+            state = replace(state, execution=replace(state.execution, account=account, replan_reason=None,
+                plan_rejection=None if changed else state.execution.plan_rejection))
         except ValueError as error:
+            state = replace(state, execution=record_plan_rejection(state.execution,
+                PlanRejection(now_ms, event.contract.id, event.contract.generation, str(error))))
             effects.append(Report("home", "plan_rejected: " + str(error)))
             effects.append(NeedPlan("plan_handover_rejected"))
+    elif isinstance(event, ExecutionPlanRejected):
+        state = replace(state, execution=record_plan_rejection(state.execution, event.rejection))
+        effects.append(Report("home", "plan_rejected: " + event.rejection.reason))
     elif isinstance(event, ReplanRequested):
         account = execution.observe_state(state.execution.account, event.observation)
         account, captured = execution.capture_replan(account, now_ms)

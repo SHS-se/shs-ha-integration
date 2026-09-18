@@ -1430,7 +1430,7 @@
     ],
     "objectives": [
       {
-        "id": "battery:permission:1787223600000",
+        "id": "battery:permission:1787223600000:9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43:1",
         "kind": "permission",
         "start_ms": 1787216880000,
         "deadline_ms": 1787223600000,
@@ -1438,7 +1438,7 @@
         "reason": "Keep the planner's selected battery role"
       },
       {
-        "id": "battery:stored_energy:1787229900000",
+        "id": "battery:stored_energy:1787229900000:9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43:1",
         "kind": "stored_energy",
         "start_ms": 1787223600000,
         "deadline_ms": 1787229900000,
@@ -1446,7 +1446,7 @@
         "reason": "Store energy during the planner's selected charging window"
       },
       {
-        "id": "battery:permission:1787245200000",
+        "id": "battery:permission:1787245200000:9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43:1",
         "kind": "permission",
         "start_ms": 1787229900000,
         "deadline_ms": 1787245200000,
@@ -1454,7 +1454,7 @@
         "reason": "Keep the planner's selected battery role"
       },
       {
-        "id": "battery:demand_following:1787274000000",
+        "id": "battery:demand_following:1787274000000:9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43:1",
         "kind": "demand_following",
         "start_ms": 1787245200000,
         "deadline_ms": 1787274000000,
