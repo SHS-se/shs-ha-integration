@@ -288,6 +288,32 @@ class ExecutionTests(unittest.TestCase):
         self.model = Conversion("measured-installation", Curve(.94, 35), Curve(.95, 0), Curve(.97, 140), 120)
         self.live = LiveState(0, 5_000_000, 1000, 0, 1000, 10000, 10000, 16000, 5000)
 
+    def test_handover_requests_only_objectives_still_sent_to_the_planner(self):
+        from unittest.mock import patch
+        from plan_execution import planner_feedback
+        cases = [('demand_following', 100, 0, None, 'forecast_complete', None),
+                 ('stored_energy', 100, 5_000_000, 5_000_000, 'fulfilled', None),
+                 ('stored_energy', 100, 5_500_000, 5_000_000, 'missed', 'objective_missed'),
+                 ('stored_energy', 100, 5_500_000, None, 'unresolved', 'handover_disposition_missing'),
+                 ('stored_energy', 400, 5_500_000, None, 'open', 'handover_disposition_missing')]
+        for kind, deadline, target, observed, outcome, reason in cases:
+            with self.subTest(outcome=outcome):
+                first = replace(contract(), objectives=(Objective('old', kind, 0, deadline, target, 'Old objective'),))
+                account = opening_account(first)
+                if observed is not None:
+                    account = observe_state(account, StateObservation(100, observed, 'measured SOC'))
+                account = request_replan(account)
+                second = replace(contract(generation=1, previous=first.id), source_receipt=account.receipt)
+                account = admit_plan(account, second, 150, StateObservation(150, 5_000_000, 'SOC'))
+                history = objective_history(account, 150)
+                self.assertEqual(history[0]['outcome'], outcome)
+                feedback_ids = {row['objective']['id'] for row in planner_feedback(account, 150)['objectives']}
+                self.assertEqual('old' in feedback_ids, reason is not None)
+                with patch('plan_execution.objective_history', side_effect=AssertionError('full audit rebuilt')):
+                    result = assess_execution(account, replace(self.live, at_ms=150, stored_mwh=second.stored_at(150)), self.model)
+                self.assertEqual(result.replan_reason, reason)
+                self.assertEqual(objective_history(account, 150), history, 'full audit evidence is retained')
+
     def test_nominal_charge_survives_ordinary_forecast_error(self):
         account = opening_account()
         baseline = assess_execution(account, self.live, self.model)

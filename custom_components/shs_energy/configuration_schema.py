@@ -1,6 +1,7 @@
 """Current persisted fields and strict save contracts, independent of runtime IO."""
 
 from copy import deepcopy
+from time import thread_time
 
 from math import isfinite
 import re
@@ -247,6 +248,32 @@ def resolve_configuration(options, latitude=0.0, longitude=0.0):
             if source is not None:
                 mapping["temperature_entity_id"] = source
     return resolved
+
+
+class ConfigurationReader:
+    """Resolve each immutable entry-options revision once; return private JSON copies.
+
+    The framework replaces entry.options when settings change. Check its identity
+    and location on every read, including after awaits in command authorization.
+    Encoded data is the cache: callers never share a mutable resolved dictionary.
+    """
+    def __init__(self, read_options, read_location, encode, decode):
+        self.read_options, self.read_location = read_options, read_location
+        self.encode, self.decode = encode, decode
+        self._source = self._location = self._encoded = None
+        self.metrics = {'reads': 0, 'rebuilds': 0, 'cpu_ms': 0.0}
+
+    def __call__(self):
+        started = thread_time()
+        source, location = self.read_options(), self.read_location()
+        if source is not self._source or location != self._location:
+            encoded = self.encode(resolve_configuration(dict(source), *location))
+            self._source, self._location, self._encoded = source, location, encoded
+            self.metrics['rebuilds'] += 1
+        result = self.decode(self._encoded)
+        self.metrics['reads'] += 1
+        self.metrics['cpu_ms'] += (thread_time() - started) * 1000
+        return result
 
 
 def _revoke_excluded_permissions(result):

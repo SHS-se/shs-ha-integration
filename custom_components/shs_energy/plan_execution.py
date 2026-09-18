@@ -890,7 +890,10 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion) 
                 until = min(until, now + ceil((live.stored_mwh - reserve) * 3600 / discharge))
     if not charge and not discharge:
         operation = "hold"
-    outstanding = objective_history(account, now)
+    # Replan from the same live responsibilities sent to the planner. Completed
+    # forecasts/fulfilled objectives remain in the audit, but cannot demand a
+    # disposition that planner_feedback deliberately no longer asks for.
+    outstanding, _ = _live_objectives(account, now)
     if any(r["outcome"] == "missed" and r["responsibility"] in ("outstanding", "retained") for r in outstanding):
         replan = replan or "objective_missed"
     active_ids = {o.id for o in contract.objectives}

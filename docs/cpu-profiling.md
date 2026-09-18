@@ -80,14 +80,80 @@ from **4.79 ms to 0.094 ms per append** across five runs. The store discarded
 pages to isolate encoding and hashing. This is not a measured whole-host CPU
 reduction and excludes disk latency.
 
-## Remaining measurements
+## Follow-up on beta.20
 
-After deployment, wait for beta.19's bounded cleanup to drain the old backlog,
-then profile again under comparable battery activity. Compare multiple windows,
-including battery inactive and active, without changing other integrations.
-The profiler itself never changes battery mode.
+The supplied `history (27).csv` contains whole-machine CPU observations. The
+time-weighted means for the 13:15, 13:30 and 13:45 UTC quarters were 14.3%, 14.3%
+and 14.4%. The 14:45, 15:00 and 15:15 quarters were 28.4%, 30.2% and 32.5%.
+These match the user's observation of a large difference with SHS enabled;
+the CSV alone cannot attribute CPU to particular functions.
 
-The decision journal still rewrites its complete retained window on new decision
-groups; immutable paging is a separate persistence change. Repeated meter-history
-scans and index construction also remain, but occupied fewer samples than archive
-serialization in this baseline. Use the next profile to determine their priority.
+A new 30-second profile with beta.20 running measured HA Python CPU of 22.54%
+when divided by four cores, and 402,882,560 kernel storage bytes written.
+779 of 1,486 stack reads succeeded (187 were empty); 707 failed. 126 reads
+contained SHS frames, including journal flushing, controller evaluation,
+replanning and checkpoint persistence. These are overlapping samples, not a CPU
+breakdown. The old evidence-file backlog had drained to about 10,000 files.
+
+The active battery reported `handover_disposition_missing`, admitting replacement
+plans roughly every 25–40 seconds. Five historical objectives were already
+`forecast_complete`, but the execution assessment still demanded dispositions
+for them. Planner feedback correctly omitted them because they were complete.
+That mismatch caused repeated replanning, feeding controller and persistence work.
+
+## Changes in beta.21
+
+- Execution assessment uses the existing live-objective view. Completed forecasts
+  and fulfilled objectives no longer request handover dispositions. Open,
+  unresolved and missed obligations still trigger the appropriate replanning;
+  the full historical audit is unchanged.
+- The verification journal uses transactional SQLite storage at
+  `.storage/shs_energy.verification.<entry_id>.sqlite`. Changed groups,
+  configuration/slot records, removals and metadata commit atomically. New
+  decisions and lifecycle events remain immediately durable; existing repeat
+  and passive-sample batching and retention remain unchanged. JSON encoding and
+  database work run in the executor. No connection remains open between operations.
+- Existing JSON journals migrate once. The old journal is removed only after a
+  successful database commit. For schema-4 journals, sample persistence is read
+  back before discarding their original copy. After migration, the database is
+  authoritative: corruption raises an error and never resurrects an old journal.
+  This is a roll-forward change; older releases cannot read the SQLite journal.
+- Control-path configuration reads resolve settings once per options revision
+  and location, using HA's JSON codec for private return copies. Every read checks
+  the current revision, including reads after awaits during command authorization.
+- Diagnostics expose session totals under `controller_metrics.performance`:
+  `verification_storage` reports commits, failures, rows written/deleted, encoded
+  bytes, preparation CPU, worker CPU and commit elapsed time;
+  `configuration_reads` reports reads, rebuilds and CPU. Encoded bytes are not
+  physical disk I/O, and these counters do not cover all integration work.
+
+The real journal snapshot contained 4,000 groups in a **15,480,519-byte** JSON
+file. A local Python 3.13 benchmark appended a copy of its latest attempt and
+expired one old group, retaining the same window. Across 15 commits, medians
+were **802 JSON bytes encoded, one row written, one row removed, 1.83 ms elapsed
+and 1.71 ms process CPU**. A reload matched the expected complete snapshot.
+The local benchmark used the standard-library JSON encoder; HA uses its native
+encoder. These numbers describe that specific record and a local SQLite database, not
+HA host disk latency or a measured whole-host CPU reduction. Tests also check
+that appending one group encodes one group with 100, 1,000 or 4,000 retained groups.
+Delta preparation still walks the retained record references; it does not encode
+all their payloads.
+
+SQLite can leave an adjacent `-journal` file after an interrupted transaction.
+Backups must capture a consistent database and any required journal, or use
+SQLite's backup mechanism. Do not copy just the database during a live write.
+
+## Next comparison
+
+A 30-second profile provides useful information immediately; there is no
+multi-minute profiler warm-up. Once HA startup has settled, collect several
+30–60-second windows under comparable battery activity. Check the running version,
+the replan reason/admission rate and deltas of the performance counters. Compare
+battery inactive and active periods without changing other integrations. The
+profiler itself never changes battery mode.
+
+More devices still mean more evaluations and evidence. The journal now encodes
+changed records rather than the whole retained history per decision, and the
+completed-objective replan loop is removed. Repeated meter-history scans, inventory
+construction and checkpoint work remain candidates; use the next host profile to
+rank them. A lower total CPU figure still needs validation after deployment.

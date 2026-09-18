@@ -20,6 +20,8 @@ from homeassistant.helpers.event import (
 )
 
 from homeassistant.helpers.storage import STORAGE_DIR, Store
+from homeassistant.helpers.json import json_bytes
+from homeassistant.util.json import json_loads
 from homeassistant.helpers import entity_registry as er
 
 from .api import ShsApiClient
@@ -52,6 +54,8 @@ from .controller import ScheduledController
 from .battery_writer import BatteryWriterFence
 from .battery_runtime import BatteryRuntime, NativeReadbackPending
 from .verification import VerificationJournal
+from .verification_storage import VerificationStorage
+from .configuration_schema import ConfigurationReader
 from .coordinator import ShsStatusCoordinator
 from .migration import mapped_entity_ids, migrate_options
 
@@ -205,14 +209,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     )
     coordinator = ShsStatusCoordinator(hass, entry, client)
     entry.runtime_data = coordinator
+    options = ConfigurationReader(lambda: entry.options,
+        lambda: (hass.config.latitude, hass.config.longitude), json_bytes, json_loads)
+    verification_store = VerificationStorage(
+        hass.config.path(STORAGE_DIR, f"shs_energy.verification.{entry.entry_id}.sqlite"),
+        hass.async_add_executor_job, Store(hass, 1, f"shs_energy.verification.{entry.entry_id}"), json_bytes)
     controller = ScheduledController(
         hass, coordinator, Store(hass, 1, f"shs_energy.controller.{entry.entry_id}"),
-        lambda: resolved_options(hass, dict(entry.options)),
-        VerificationJournal(Store(hass, 1, f"shs_energy.verification.{entry.entry_id}"),
+        options,
+        VerificationJournal(verification_store,
                             Store(hass, 1, f"shs_energy.verification_samples.{entry.entry_id}")),
         entity_registry=er.async_get(hass),
     )
     coordinator.controller = controller
+    controller.metrics.performance = {'verification_storage': verification_store.metrics,
+                                      'configuration_reads': options.metrics}
     evidence = f"shs_energy.execution_evidence.{entry.entry_id}."
     coordinator.battery_runtime = BatteryRuntime(coordinator, controller,
         Store(hass, 1, f"shs_energy.battery_runtime.{entry.entry_id}"),
@@ -220,7 +231,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         lambda key: Store(hass, 1, evidence + key), _evidence_pages(hass, evidence))
     coordinator.battery_writer = BatteryWriterFence(
         Store(hass, 1, f"shs_energy.battery_writer.{entry.entry_id}"), controller.lock,
-        lambda: resolved_options(hass, dict(entry.options)),
+        options,
         lambda: int(datetime.now(timezone.utc).timestamp() * 1000),
         coordinator.battery_runtime.identity,
     )

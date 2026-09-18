@@ -26,7 +26,7 @@ PURE_MODULES = (
     "battery_supply", "home_host", "battery_native_adapter",
     "controller", "battery_live", "battery_writer", "battery_runtime", "battery_conversion",
     "presentation", "plan_execution", "battery_physical", "execution_archive",
-    "api_contract", "durable_record",
+    "api_contract", "durable_record", "verification_storage",
     "const",
     "device_controls",
     "device_commands",

@@ -115,6 +115,7 @@ class VerificationJournal:
         self.last_saved = monotonic()
 
     async def load(self):
+        migrating_samples = False
         saved = await self.store.async_load()
         sampled = await self.sample_store.async_load()
         if saved is not None:
@@ -137,6 +138,7 @@ class VerificationJournal:
                 # Samples move to their own store; until that write, this is their only copy.
                 sampled = {key: saved[key] for key in ("samples", "sample_contexts", "discarded_samples", "slots")}
                 self.samples_dirty = True
+                migrating_samples = True
             if version < 5:
                 for record in self.attempts + self.evaluations:
                     record.setdefault("group_id", str(uuid4()))
@@ -147,6 +149,10 @@ class VerificationJournal:
             self.discarded_samples = sampled["discarded_samples"]
             self.slots = {**sampled["slots"], **self.slots}
         await self.flush_samples()
+        if migrating_samples and await self.sample_store.async_load() != self._sample_data():
+            # A logged-but-swallowed file write failure cannot authorize removal
+            # of the legacy journal, which still contains the only sample copy.
+            raise OSError('Verification sample migration did not persist')
         await self.flush()
 
     async def lifecycle(self, event, version, reason):

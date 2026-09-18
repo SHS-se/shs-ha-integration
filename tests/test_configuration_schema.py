@@ -23,6 +23,28 @@ def save(existing, key, mapping):
         entity_area_ids={'climate.a': 'office', 'climate.b': 'office'})
 
 
+class ConfigurationReaderTests(unittest.TestCase):
+    def test_revision_location_changes_and_private_copies(self):
+        from configuration_schema import ConfigurationReader
+        source = {'rooms': {'room': {'temperature_entity_id': 'sensor.old'}},
+                  'device_control_mappings': {'heater': {'room_area_id': 'room'}},
+                  'device_modes': {'$battery': 'controlling'}}
+        location = (59, 18)
+        reader = ConfigurationReader(lambda: source, lambda: location, json.dumps, json.loads)
+        first = reader()
+        self.assertEqual(first, resolve_configuration(source, *location))
+        first['rooms']['room']['temperature_entity_id'] = 'corrupted'
+        first['device_modes']['$battery'] = 'monitoring'
+        self.assertEqual(reader(), resolve_configuration(source, *location))
+        self.assertEqual(reader.metrics['rebuilds'], 1)
+        source = {**source, 'device_modes': {'$battery': 'control_verification'}}
+        self.assertFalse(reader()['battery_control_enabled'])
+        self.assertEqual(reader.metrics['rebuilds'], 2)
+        location = (60, 19)
+        self.assertEqual(reader(), resolve_configuration(source, *location))
+        self.assertEqual(reader.metrics['rebuilds'], 3)
+
+
 class CurrentConfigurationTests(unittest.TestCase):
     def test_pool_save_uses_only_switch_power_and_shared_water(self):
         existing = {'pool_water_temperature_entity': 'sensor.water'}

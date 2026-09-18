@@ -31,6 +31,7 @@ class ControllerMetrics:
         self.devices = {}
         self.previous = {}
         self.active = None
+        self.performance = {}
         self.scheduling = {"notifications": 0, "queued_while_busy": 0,
                            "coalesced_notifications": 0, "state_change_events": 0,
                            "state_report_events": 0, "registry_events": 0,
@@ -101,5 +102,6 @@ class ControllerMetrics:
             "input_basis": "Plan/configuration/ownership context and first real state/attribute reads per device evaluation; report timestamps counted separately. Unchanged inputs do not imply a safe-to-skip evaluation: time-based protections still apply. No complete sensor event stream is recorded.",
             "triggers": deepcopy(self.triggers), "devices": deepcopy(self.devices),
             "scheduling": deepcopy(self.scheduling),
+            "performance": deepcopy(self.performance),
             "latency_basis": "Earliest queued notification received locally to affected device evaluation; not hardware sampling latency",
         }
