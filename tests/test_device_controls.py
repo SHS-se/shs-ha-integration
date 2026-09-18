@@ -414,6 +414,20 @@ class PoolSwitchTests(unittest.TestCase):
 
 
 class PoolDeviceMappingTests(unittest.TestCase):
+    def test_pool_setpoint_report_identifies_pool_service_without_room_or_temperature_controls(self):
+        report = mapping_report('setpoint', {
+            'control_type': 'setpoint', 'actuator_entity_ids': ['switch.pool_heater'],
+            'temperature_entity_id': 'sensor.filtered_pool_water_temperature',
+            'power': 'sensor.pool_heater_power',
+        }, pool_control=True, pool_water_entity='sensor.filtered_pool_water_temperature')
+        self.assertEqual(report['mapping_status'], 'ready')
+        self.assertEqual(report['mapped_control_type'], 'setpoint')
+        self.assertEqual(report['mapping_summary'], {
+            'control_type': 'setpoint', 'entity_count': 2,
+            'configured_fields': ['actuator_entity_ids', 'power', 'temperature_entity_id'],
+            'power_entity_name': 'sensor.pool_heater_power', 'planning_service': 'pool',
+        })
+
     def test_a_pool_device_is_not_asked_for_a_band(self) -> None:
         """The regression: every switch_schedule meter offered its own band.
 

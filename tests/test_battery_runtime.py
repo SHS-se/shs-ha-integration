@@ -554,6 +554,64 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(captured['previous_contract_id'],original.contract.id)
         finally:await r.runtime.close()
 
+    async def test_mode_change_without_matching_plan_preserves_account_and_rebinds(self):
+        for capture_first in (False, True):
+            with self.subTest(capture_first=capture_first):
+                r=Rig('control_verification');await r.start()
+                try:
+                    original=r.runtime.host.state.execution.account
+                    binding=r.coordinator.binding_plan_for
+                    r.coordinator.binding_plan_for=lambda device,options: binding(device,options) if r.plan['battery_execution']['mode']==options['device_modes']['$battery'] else ({},None)
+                    r.options['device_modes']['$battery']='controlling'
+                    if not capture_first:
+                        await r.runtime.refresh()
+                        self.assertIsNone(r.runtime.host)
+                        self.assertEqual(r.runtime._bootstrap.contract,original.contract)
+                        self.assertEqual(r.runtime.snapshot()['state'],'idle')
+                        dump=r.runtime.snapshot(include_evidence=True)
+                        self.assertEqual(dump['mode'],'controlling')
+                        self.assertEqual(dump['accounting']['previous_contract_id'],original.contract.id)
+                        self.assertIn('accounting_journal',dump)
+                    feedback=await r.runtime.capture_feedback(5000000,'new_mode')
+                    self.assertIsNone(r.runtime.host)
+                    self.assertEqual(feedback['previous_contract_id'],original.contract.id)
+                    self.assertEqual(feedback['scope_revision'],digest(r.options))
+                    saved=await r.runtime.archive.load_session(r.store.saved['execution_root'])
+                    self.assertEqual(saved.account,r.runtime._bootstrap)
+                    self.assertEqual(r.calls,[])
+                    r.install_contract(feedback['generation'],previous=original.contract.id)
+                    r.plan['battery_execution']['source_receipt']=feedback['source_receipt']
+                    r.runtime.validate_plan_response(r.plan)
+                    await r.advance()
+                    for _ in range(4):await r.advance()
+                    self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+                    self.assertEqual(r.runtime.snapshot()['plan_status'],'accepted')
+                    self.assertTrue(r.calls)
+                    self.assertFalse(r.runtime.snapshot()['fault_history'])
+                finally:await r.runtime.close()
+
+    async def test_withdrawing_control_releases_before_retiring_old_configuration(self):
+        r=Rig();await r.start()
+        try:
+            for _ in range(4):await r.advance()
+            original=r.runtime.host.state.execution.account.contract
+            r.options['device_modes']['$battery']='control_verification'
+            r.coordinator.binding_plan_for=lambda device,options: ({},None)
+            await r.runtime.refresh()
+            # Pending native work must remain journalled until release is confirmed.
+            self.assertIsNotNone(r.runtime.host)
+            for _ in range(40):
+                await r.advance(10000)
+                if r.runtime.host is None:break
+            self.assertIsNone(r.runtime.host,r.runtime.snapshot())
+            self.assertEqual(r.rows['select.mode']['state'],'Maximum Self Consumption')
+            self.assertEqual(r.runtime._bootstrap.contract,original)
+            calls=deepcopy(r.calls)
+            await r.advance()
+            self.assertEqual(r.calls,calls)
+            self.assertEqual(r.runtime.snapshot()['state'],'idle')
+        finally:await r.runtime.close()
+
     async def test_expired_plan_keeps_recording_energy_without_replan_success(self):
         r=Rig('control_verification');await r.start()
         try:

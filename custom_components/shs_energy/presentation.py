@@ -49,7 +49,7 @@ def operational_status(plan, mode, missing, now, *, options=None):
                 if not scope_changed and "controlling" in modes.values():
                     selected = plan["execution_plan"]
             if scope_changed:
-                result.update(state="not_configured", reason="Waiting for a plan for the current device modes")
+                result.update(state="unavailable", label="Waiting for updated plan", reason="Waiting for a plan for the current device modes")
             elif now >= valid_until:
                 result.update(state="expired", reason="The last plan has expired")
             elif selected["status"] != "ready":
@@ -60,7 +60,7 @@ def operational_status(plan, mode, missing, now, *, options=None):
                 result.update(state="ready", reason="A validated plan is available", actionable=True)
         except (OptimisationInputError, KeyError, TypeError, ValueError) as err:
             result.update(state="invalid", reason=str(err))
-    result["label"] = LABELS[result["state"]]
+    result.setdefault("label", LABELS[result["state"]])
     return result
 
 

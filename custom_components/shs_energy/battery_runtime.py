@@ -201,6 +201,11 @@ class BatteryRuntime:
             'fault_history':[dict(row) for row in self._fault_history],
             'fault_history_scope':'Last 64 distinct faults since integration load'}
         if not self.host:
+            value.update(mode=device_mode(self.controller.options(),'battery'), accounting_at_ms=self.now(),
+                accounting=(execution.feedback if include_evidence else execution.planner_feedback)(self._bootstrap,self.now()))
+            if include_evidence:
+                value.update(accounting_journal=encode_value(self._bootstrap),
+                    captured_replan=json.loads(self._bootstrap_captured) if self._bootstrap_captured else None)
             return self._plan_status(value, self._bootstrap_rejection, self._bootstrap.contract)
         state=self.host.state;group=state.groups[0];session=state.execution
         accounting_at=self.now()
@@ -312,6 +317,7 @@ class BatteryRuntime:
 
     async def capture_feedback(self, stored_mwh, source, at_ms=None):
         async with self._lock:
+            await self._retire_changed_configuration(self.controller.options())
             return await self._capture_feedback(stored_mwh, source, at_ms)
 
     async def _capture_feedback(self, stored_mwh, source, at_ms=None):
@@ -383,8 +389,7 @@ class BatteryRuntime:
                     self._status.update(reason=str(error), fix=error.fix, next_step=error.next_step, retry_automatically=True)
             self.coordinator.async_update_listeners()
 
-    async def _refresh(self):
-        options=self.controller.options()
+    async def _record_counters(self, options):
         if self.host:
             # Actual energy is recorded even while plans are expired or the
             # planner is unreachable. Excluded source identities are respected.
@@ -396,23 +401,40 @@ class BatteryRuntime:
                 if row and row.get('state') not in ('unknown','unavailable',None):
                     await self._meter(stream.spec.stream_id,row['state'],row['attributes'],
                         stamp(row['last_reported']),row.get('event_id'))
+
+    async def _retire_changed_configuration(self, options):
+        """Retain the account, but finish old command ownership before rebinding."""
+        if not self.host or self._options is None or options==self._options:
+            return True
+        self._releasing=True
+        await self._record_counters(options)
+        await self._release('Waiting for a plan for the current device modes and settings')
+        old=self.host.state.groups[0]
+        if old.owned or old.attempts or old.release_pending:
+            return False
+        await self.host.close()
+        session=self.host.state.execution
+        self._bootstrap=session.account
+        self._bootstrap_rejection=session.plan_rejection
+        self._bootstrap_captured=session.captured_feedback
+        self.host=None;self._seeded=False;self._mode=None;self._model=None;self._native_checked=False
+        self._identity=None;self._last_capture=None;self._observation_error=None
+        await self._persist_bootstrap()
+        return True
+
+    async def _refresh(self):
+        options=self.controller.options()
+        if not await self._retire_changed_configuration(options):
+            return
+        await self._record_counters(options)
         mode=device_mode(options,'battery')
         plan,slot=self.coordinator.binding_plan_for('battery',options)
         override=any(options.get(k) and (self.coordinator._battery_entity_report(options[k]) or {}).get('state')!='off'
                      for k in ('control_override_entity','battery_control_override_entity'))
         if mode not in ('controlling','control_verification') or not slot or override or not options.get('battery_enabled',True) or '$battery' in options.get('excluded_device_readings',[]):
             self.coordinator._battery_native_context=None
-            await self._release('Battery is inactive, overridden or has no current binding plan')
+            await self._release('Waiting for a plan for the current device modes' if not slot and mode in ('controlling','control_verification') and not override else 'Battery is inactive or overridden')
             return
-        if self._options is not None and options!=self._options and self.host:
-            old=self.host.state.groups[0]
-            if old.owned or old.attempts or old.release_pending:
-                raise ValueError('releasing previous battery configuration before admitting new bindings')
-            self._bootstrap=self.host.state.execution.account
-            self._bootstrap_rejection=self.host.state.execution.plan_rejection
-            self._bootstrap_captured=self.host.state.execution.captured_feedback
-            await self.host.close()
-            self.host=None;self._seeded=False;self._mode=None;self._model=None;self._native_checked=False
         self._releasing=False
         self._options=options
         if mode=='control_verification' and 'battery' in self.controller.records:
@@ -829,10 +851,11 @@ class BatteryRuntime:
         if group.owned or group.attempts or group.release_pending:
             if group.release:
                 await self.host.accept(rt.ReleaseApproved(group.spec.id,self._release_request(group)))
-            if group.mode!='monitoring':
-                self._mode_revision=group.mode_revision+1
-                self._mode='monitoring'
-                await self.host.accept(rt.AuthorityChanged(group.spec.id,'monitoring',self._mode_revision,None))
+        if group.mode!='monitoring':
+            self._mode_revision=group.mode_revision+1
+            self._mode='monitoring'
+            await self.host.accept(rt.AuthorityChanged(group.spec.id,'monitoring',self._mode_revision,None))
+        if group.owned or group.attempts or group.release_pending:
             if self.identity() and not self.coordinator.battery_writer.is_current(self._grant,self.identity()):
                 async def already_released():
                     if 'battery' in self.controller.records:

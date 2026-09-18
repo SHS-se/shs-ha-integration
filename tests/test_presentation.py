@@ -10,6 +10,18 @@ from planning import unplanned_services
 
 
 class PresentationTests(unittest.TestCase):
+    def test_mode_change_wait_is_not_a_missing_configuration(self):
+        from operating_modes import operating_mode_identity
+        plan = deepcopy(self.plan)
+        plan['operating_scope'] = {'modes': operating_mode_identity(self.options), 'device_owners': {}}
+        options = {**self.options, 'device_modes': {'$battery': 'controlling'}}
+        status = operational_status(plan, 'live', [], self.now, options=options)
+        self.assertEqual(status['state'], 'unavailable')
+        self.assertEqual(status['label'], 'Waiting for updated plan')
+        self.assertFalse(status['actionable'])
+        self.assertEqual(status['plan_id'], plan['plan_id'])
+        self.assertEqual(timeline(plan, status)['slots'], [])
+
     def test_timeline_preserves_battery_intent_separately_from_forecast(self):
         fixture = json.loads((Path(__file__).parent / 'fixtures/schema-8-battery-plan.json').read_text())
         plan = fixture['plan']

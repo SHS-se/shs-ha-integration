@@ -321,6 +321,7 @@ def mapping_report(
             report["mapping_error"] = "; ".join(filter(None, [report["mapping_error"], *errors]))
         report["mapped_control_type"] = requested_control_type
         report["mapping_summary"]["control_type"] = requested_control_type
+        report["mapping_summary"]["planning_service"] = "pool"
         return report
     if requested_control_type not in CONTROL_TYPES or not mapping or mapping.get("control_type") != requested_control_type:
         field_errors = {}

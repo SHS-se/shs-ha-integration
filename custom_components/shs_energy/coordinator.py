@@ -547,6 +547,14 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             finally:
                 self.async_update_listeners()
 
+    async def async_replan_after_mode_change(self) -> None:
+        """Publish the wait immediately, including when the exchange fails."""
+        await self.async_report_runtime()
+        try:
+            await self.async_optimisation_push(force_plan=True)
+        finally:
+            await self.async_report_runtime()
+
     async def async_replan_poll(self, _now: datetime | None = None) -> None:
         """Exchange once per local 15-minute interval, independent of execution."""
         if self._push_lock.locked() or self._recovering:

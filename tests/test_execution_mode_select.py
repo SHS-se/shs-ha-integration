@@ -49,6 +49,7 @@ class Rig:
         self.tasks = []
         self.replans = []
         self.ticks = 0
+        self.battery_refreshes = 0
         self.added = []
         self.registry = Registry()
         self.listeners = []
@@ -56,7 +57,7 @@ class Rig:
             '$battery': 'control_verification', 'sensor.heater': 'control_verification'}},
             data={const.CONF_DEVICE_TOKEN_ID: 'token'}, async_create_background_task=self.background)
         self.entry.runtime_data = SimpleNamespace(controller=SimpleNamespace(async_tick=self.tick),
-            async_optimisation_push=self.replan, async_update_listeners=self.notify)
+            async_replan_after_mode_change=self.mode_replan, async_battery_inputs_refresh=self.refresh_battery, async_update_listeners=self.notify)
         self.hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=self.update_entry))
         self.shared = load_adapter('control_configuration.py', {'datetime': datetime, 'timezone': timezone,
             'shs_const': const, 'execution_mode_options': execution_mode_options})
@@ -76,7 +77,11 @@ class Rig:
         self.listeners.append(self.manager.schedule_refresh)
 
     async def get_devices(self,hass,entry): return deepcopy(self.devices)
-    async def tick(self): self.ticks += 1
+    async def refresh_battery(self): self.battery_refreshes += 1
+    async def mode_replan(self): await self.replan(force_plan=True)
+    async def tick(self):
+        assert self.battery_refreshes > self.ticks
+        self.ticks += 1
     async def replan(self,**kwargs): self.replans.append(kwargs)
     def update_entry(self,entry,*,options): entry.options=options
     def notify(self):

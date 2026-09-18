@@ -104,6 +104,7 @@ async def async_set_execution_mode(hass, entry, device_key, mode):
     hass.config_entries.async_update_entry(entry, options=options)
     coordinator = entry.runtime_data
     coordinator.async_update_listeners()
+    await coordinator.async_battery_inputs_refresh()
     await coordinator.controller.async_tick()
-    entry.async_create_background_task(hass, coordinator.async_optimisation_push(force_plan=True),
+    entry.async_create_background_task(hass, coordinator.async_replan_after_mode_change(),
         name=f"{shs_const.DOMAIN}_replan_after_mode_change")

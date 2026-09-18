@@ -70,7 +70,7 @@ class ScopeTests(unittest.TestCase):
         self.assertTrue(timeline(plan, {'state': 'ready'}, options=options)['slots'])
         options['device_modes'][key] = 'controlling'
         self.assertIsNone(scoped_plan(plan, options, 'battery'))
-        self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'not_configured')
+        self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'unavailable')
         self.assertEqual(timeline(plan, {'state': 'ready'}, options=options)['slots'], [])
 
     def test_zero_is_observed_and_missing_or_old_quarters_are_not_zero(self):
@@ -145,7 +145,7 @@ class ScopeTests(unittest.TestCase):
         plan['execution_plan']['status'] = 'infeasible'
         self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'infeasible')
         options['device_modes']['$pool'] = 'controlling'
-        self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'not_configured')
+        self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'unavailable')
 
     def test_timeline_keeps_live_and_verification_requests_and_fences_mode_changes(self):
         from presentation import timeline
