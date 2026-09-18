@@ -107,6 +107,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
             {"key": "charger", "control_type": "variable_power", "category": "ev_charging"},
             {"key": "pool", "control_type": "switch_schedule", "category": "pool_heating"}])
         self.coordinator.async_cached_planning_configuration = AsyncMock(return_value={"home": {"battery": {"included": True}}})
+        self.coordinator.async_cached_home_configuration = AsyncMock(return_value={"battery": {"included": True}})
         self.coordinator.operational_status = {"state": "ready", "reason": "A validated plan is available", "actionable": True}
         self.calls = []
         self.store = Store()
@@ -715,7 +716,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['$battery'] = 'controlling'
         await self.controller.async_start()
         self.assertIn('battery', self.controller.records)
-        self.coordinator.async_cached_planning_configuration.return_value = {'home': {'battery': {'included': False}}}
+        self.coordinator.async_cached_home_configuration.return_value = {'battery': {'included': False}}
         self.calls.clear()
         await self.controller.async_tick()
         self.assertEqual(self.states['select.mode'].state, 'Baseline')
@@ -724,6 +725,14 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.calls.clear()
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
+
+    async def test_controller_ownership_read_does_not_build_device_inventory(self):
+        self.options['device_modes']['$battery'] = 'controlling'
+        self.coordinator.async_cached_planning_configuration.side_effect = AssertionError('editor inventory used in control tick')
+        await self.controller.async_start()
+        await self.controller.async_tick()
+        self.coordinator.async_cached_home_configuration.assert_awaited()
+        self.coordinator.async_cached_planning_configuration.assert_not_awaited()
 
     async def test_vehicle_website_exclusion_restores_without_deleting_setup(self):
         self.options['device_modes']['$ev'] = 'controlling'

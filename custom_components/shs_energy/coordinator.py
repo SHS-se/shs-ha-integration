@@ -1211,6 +1211,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return []
         return requested_controllable_devices(configuration)
 
+    async def async_cached_home_configuration(self) -> dict[str, Any]:
+        """Read household ownership without rebuilding device editors and inventory."""
+        stored = await self._store.async_read()
+        return stored.get("home_planning_configuration", {})
+
     async def async_cached_planning_configuration(self) -> dict[str, Any]:
         stored = await self._store.async_read()
         devices = await self._prepared_device_inventory(stored, included_only=False)

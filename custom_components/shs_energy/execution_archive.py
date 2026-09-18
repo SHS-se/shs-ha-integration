@@ -62,11 +62,10 @@ class ExecutionArchive:
         return await self._put(value, set())
 
     async def _put(self, value, reached):
-        raw = canonical(value)
         if isinstance(value,list) and len(value)>128:
             refs=[await self._put(value[i:i+128], reached) for i in range(0,len(value),128)]
             return await self._list_page(refs, reached)
-        elif len(raw) <= PAGE_BYTES:
+        if len(canonical(value)) <= PAGE_BYTES:
             page = {'kind':'value', 'value':value}
         elif isinstance(value,list):
             page={'kind':'items','children':[await self._put(item, reached) for item in value]}
@@ -182,7 +181,28 @@ class ExecutionArchive:
                 chunks.append(old)
             else:
                 pages = set()
-                chunks.append((chunk, await self._put(encode_value(chunk), pages), frozenset(pages)))
+                # Large trace/plan chunks already live in separate item pages.
+                # Keep their identities too: appending one trace must not encode
+                # and hash the preceding 127 (potentially very large) records.
+                old_items = old[3] if old is not None else None
+                encoded = None if old_items is not None else encode_value(chunk)
+                if old_items is not None or len(canonical(encoded)) > PAGE_BYTES:
+                    items = []
+                    for position, item in enumerate(chunk):
+                        prior = old_items[position] if old_items is not None and position < len(old_items) else None
+                        if prior is not None and prior[0] is item:
+                            saved = prior
+                        else:
+                            item_pages = set()
+                            raw = encoded[position] if encoded is not None else encode_value(item)
+                            saved = (item, await self._put(raw, item_pages), frozenset(item_pages))
+                        items.append(saved)
+                        pages |= saved[2]
+                    key = await self._page({'kind': 'items', 'children': [item[1] for item in items]}, pages)
+                else:
+                    items = None
+                    key = await self._page({'kind': 'value', 'value': encoded}, pages)
+                chunks.append((chunk, key, frozenset(pages), items))
             reached |= chunks[-1][2]
         key = await self._list_page([chunk[1] for chunk in chunks], reached)
         return value, key, chunks, frozenset(reached)

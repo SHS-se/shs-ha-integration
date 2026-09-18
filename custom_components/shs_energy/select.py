@@ -58,7 +58,9 @@ class ExecutionModeEntities:
         async with self.lock:
             while not self.closed:
                 self.dirty = False
-                devices = await async_execution_devices(self.hass, self.entry)
+                # Native selects use reviewed mappings and permissions, not the
+                # editor's semantic search over every entity for suggestions.
+                devices = await async_execution_devices(self.hass, self.entry, include_suggestions=False)
                 if self.closed:
                     return
                 wanted = {d['key']: d for d in devices if d['planned']}

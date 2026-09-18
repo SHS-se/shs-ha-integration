@@ -17,6 +17,57 @@ class Store:
     async def async_load(self):return self.value
 
 class ArchiveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_small_tail_grows_into_item_pages_without_losing_the_durable_prefix(self):
+        from home_runtime import ExecutionTrace
+        stores = {}
+        archive = ExecutionArchive(lambda k: stores.setdefault(k, Store()))
+        trace = ExecutionTrace(1, 0, 0, 0, None, 'x' * 70_000, '[]', None, None, None)
+        session = ExecutionSession(traces=(trace,))
+        first = await archive.save_session(session)
+        updated = replace(session, traces=(trace, replace(trace, at_ms=2)))
+        class FailedStore(Store):
+            async def async_save(self, value): raise OSError('disk full')
+        archive.store_for = lambda k: FailedStore()
+        with self.assertRaisesRegex(OSError, 'disk full'):
+            await archive.save_session(updated)
+        archive.store_for = lambda k: stores.setdefault(k, Store())
+        self.assertEqual(await archive.load_session(first), session)
+        second = await archive.save_session(updated)
+        self.assertEqual(await archive.load_session(first), session)
+        self.assertEqual(await archive.load_session(second), updated)
+
+    async def test_large_tail_reuses_item_pages_and_retains_corrections_after_collection(self):
+        import execution_archive
+        from home_runtime import ExecutionTrace
+        stores = {}
+        async def list_pages(): return list(stores)
+        async def remove_pages(keys):
+            for key in keys: stores.pop(key, None)
+        archive = ExecutionArchive(lambda k: stores.setdefault(k, Store()), (list_pages, remove_pages))
+        trace = ExecutionTrace(1, 0, 0, 0, None, 'x' * 140_000, '[]', None, None, None)
+        traces = tuple(replace(trace, at_ms=i) for i in range(127))
+        session = ExecutionSession(traces=traces)
+        await archive.save_session(session)
+        added = replace(trace, at_ms=128)
+        updated = replace(session, traces=(*traces, added))
+        with patch('execution_archive.encode_value', wraps=execution_archive.encode_value) as encode:
+            root = await archive.save_session(updated)
+        self.assertEqual([call.args[0] for call in encode.call_args_list], [added])
+        await archive.collect(limit=len(stores))
+        self.assertEqual(await archive.load_session(root), updated)
+        # A same-length replacement must invalidate just that immutable item.
+        corrected = replace(updated, traces=(replace(traces[0], input_json='changed'), *updated.traces[1:]))
+        with patch('execution_archive.encode_value', wraps=execution_archive.encode_value) as encode:
+            root = await archive.save_session(corrected)
+        self.assertEqual([call.args[0] for call in encode.call_args_list], [corrected.traces[0]])
+        await archive.collect(limit=len(stores))
+        self.assertEqual(await archive.load_session(root), corrected)
+        # Crossing the chunk boundary retains all earlier evidence too.
+        newer = replace(corrected, traces=(*corrected.traces, replace(trace, at_ms=129)))
+        root = await archive.save_session(newer)
+        await archive.collect(limit=len(stores))
+        self.assertEqual(await archive.load_session(root), newer)
+
     async def test_incremental_save_does_not_reencode_unchanged_history(self):
         import execution_archive
         stores = {}

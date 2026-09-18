@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 ROOT = Path(__file__).parents[1] / 'custom_components' / 'shs_energy'
 sys.path.append(str(ROOT))
@@ -79,7 +80,7 @@ class Rig:
         self.manager = self.adapter.ExecutionModeEntities(self.hass,self.entry,self.add)
         self.listeners.append(self.manager.schedule_refresh)
 
-    async def get_devices(self,hass,entry):
+    async def get_devices(self,hass,entry,**kwargs):
         self.inventory_loads += 1
         return deepcopy(self.devices)
     def add_battery_listener(self,listener):
@@ -185,7 +186,7 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_refresh_coalesces_and_rechecks_change_during_await(self):
         r=Rig();started=asyncio.Event();release=asyncio.Event();calls=0
-        async def delayed(hass,entry):
+        async def delayed(hass,entry,**kwargs):
             nonlocal calls
             calls+=1;value=deepcopy(r.devices)
             if calls==1:started.set();await release.wait()
@@ -224,9 +225,20 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
             suggest_device_control_mapping=lambda *args:{},apply_planner_support=apply_planner_support,
             mapping_report=mapping_report,is_room_thermal_control=is_room_thermal_control,mapped_planning_path=mapped_planning_path,
             _control_fields=_control_fields,complete_device_views=complete_device_views)
-        async def views(hass,entry):return r.shared.execution_device_views(hass,entry,choices)
+        suggestions = Mock(return_value={'power': 'sensor.suggested_power'})
+        namespace['suggest_device_control_mapping'] = suggestions
+        full = r.shared.execution_device_views(r.hass, r.entry, choices)
+        suggestions.assert_called_once()
+        suggestions.reset_mock()
+        lean = r.shared.execution_device_views(r.hass, r.entry, choices, include_suggestions=False)
+        suggestions.assert_not_called()
+        for rows in (full, lean):
+            for row in rows: row.pop('suggested_mapping', None)
+        self.assertEqual(full, lean, 'permissions, errors and reviewed mappings must be identical')
+        async def views(hass,entry,**kwargs):return r.shared.execution_device_views(hass,entry,choices,**kwargs)
         r.manager.refresh.__globals__['async_execution_devices']=views
         await r.manager.refresh();self.assertEqual(set(r.manager.entities),{'$battery','sensor.heater'})
+        suggestions.assert_not_called()
         raw['planning_role']='base_load'
         await r.manager.refresh();self.assertEqual(set(r.manager.entities),{'$battery'})
         r.entry.options['excluded_device_readings']=['$battery']
@@ -240,7 +252,7 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
         from configuration_schema import initialise_device_inclusion
         r=Rig()
         module=load_adapter('control_configuration.py', {'initialise_device_inclusion':initialise_device_inclusion})
-        def views(hass,entry,choices):
+        def views(hass,entry,choices,**kwargs):
             return [{'key':'$battery','mapping_status':'not_configured',
                 'planned':'$battery' not in entry.options.get('excluded_device_readings',[])}]
         module.async_execution_devices.__globals__['execution_device_views']=views

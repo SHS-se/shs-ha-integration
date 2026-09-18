@@ -11,7 +11,7 @@ from .operating_modes import execution_mode_options
 from .presentation import complete_device_views
 
 
-def execution_device_views(hass, entry, choices):
+def execution_device_views(hass, entry, choices, *, include_suggestions=True):
     """Use exactly the Schedule tab's inventory, ownership and permission rules."""
     coordinator = entry.runtime_data
     options = resolved_options(hass, dict(entry.options))
@@ -66,9 +66,9 @@ def execution_device_views(hass, entry, choices):
                     and saved.get("control_type") != control_type
                     else None
                 ),
-                "suggested_mapping": suggest_device_control_mapping(
+                "suggested_mapping": (suggest_device_control_mapping(
                     hass, device, control_type
-                ),
+                ) if include_suggestions else {}),
                 "execution_status": coordinator.controller.status.get("device:" + device["key"]),
                 "fields": list(_control_fields({**device, "control_type": control_type})),
                 **report,
@@ -81,15 +81,15 @@ def execution_device_views(hass, entry, choices):
         area_names, datetime.now(timezone.utc), entry.options.keys())
 
 
-async def async_execution_devices(hass, entry, choices=None):
+async def async_execution_devices(hass, entry, choices=None, *, include_suggestions=True):
     if choices is None:
         choices = await entry.runtime_data.async_cached_planning_configuration()
-    devices = execution_device_views(hass, entry, choices)
+    devices = execution_device_views(hass, entry, choices, include_suggestions=include_suggestions)
     initialised = initialise_device_inclusion(dict(entry.options), devices)
     if initialised != dict(entry.options):
         hass.config_entries.async_update_entry(entry, options=initialised)
         entry.runtime_data._plan_configuration_changed = True
-        devices = execution_device_views(hass, entry, choices)
+        devices = execution_device_views(hass, entry, choices, include_suggestions=include_suggestions)
     return devices
 
 

@@ -1174,8 +1174,8 @@ class ScheduledController:
                     requested = await self.coordinator.async_cached_device_configuration()
                     self.requested_types = {item["key"]: item.get("control_type") for item in requested}
                     self.requested_systems = {mapped_planning_path(item, mappings.get(item["key"], {}), options.get("pool_water_temperature_entity")) for item in requested if item["key"] not in options.get("excluded_device_readings", [])}
-                    choices = await self.coordinator.async_cached_planning_configuration()
-                    if choices.get("home", {}).get("battery", {}).get("included") is True:
+                    home = await self.coordinator.async_cached_home_configuration()
+                    if home.get("battery", {}).get("included") is True:
                         self.requested_systems.add("battery")
                 except Exception as err:
                     self.requested_types = {}
