@@ -529,7 +529,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
             return listen('state_changed', action, callback(lambda data: data['entity_id'] in entities))
 
         self.hass.bus = SimpleNamespace(async_listen=listen)
-        self.coordinator.async_add_listener = lambda action: lambda: None
+        self.coordinator.async_add_control_listener = lambda action: lambda: None
         entry = SimpleNamespace(async_on_unload=unload.append,
             async_create_background_task=lambda hass, work, name: asyncio.create_task(work))
         path = Path(__file__).parents[1] / 'custom_components/shs_energy/controller_events.py'
@@ -566,6 +566,49 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         for remove in unload:
             remove()
         self.assertFalse(listeners)
+
+    async def test_battery_status_refresh_publishes_without_waking_other_controllers(self):
+        import ast
+        from pathlib import Path
+        from unittest.mock import AsyncMock
+        source = Path(__file__).parents[1] / 'custom_components/shs_energy/coordinator.py'
+        tree = ast.parse(source.read_text())
+        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'ShsStatusCoordinator')
+        cls.bases = [ast.Name(id='Base', ctx=ast.Load())]
+        cls.body = [node for node in cls.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name in ('async_add_control_listener', 'async_update_listeners', 'async_battery_inputs_refresh')]
+
+        class Base:
+            def async_update_listeners(self):
+                self.status_updates += 1
+
+        namespace = {'Base': Base, 'resolved_options': lambda hass, options: options}
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[cls], type_ignores=[])), str(source), 'exec'), namespace)
+        publisher = namespace['ShsStatusCoordinator']()
+        publisher._control_listeners = set()
+        publisher.status_updates = 0
+        publisher._battery_inputs_lock = asyncio.Lock()
+        publisher.hass = self.hass
+        publisher.entry = SimpleNamespace(options=self.options)
+        publisher.async_battery_planned_devices = AsyncMock(return_value=[])
+        publisher.battery_live_inputs = SimpleNamespace(sample=AsyncMock())
+        publisher.battery_runtime = SimpleNamespace(refresh=AsyncMock())
+        remove = publisher.async_add_control_listener(self.scheduler.coordinator_updated)
+        await self.controller.async_start()
+        before = self.evaluations('pool')
+        for _ in range(12):
+            await publisher.async_battery_inputs_refresh()
+            await self.drain()
+        self.assertEqual(publisher.status_updates, 12)
+        self.assertEqual(publisher.battery_runtime.refresh.await_count, 12)
+        self.assertEqual(self.evaluations('pool'), before)
+        publisher.async_update_listeners()
+        await self.drain()
+        self.assertEqual(self.evaluations('pool'), before + 1)
+        remove()
+        publisher.async_update_listeners()
+        await self.drain()
+        self.assertEqual(self.evaluations('pool'), before + 1)
 
     async def test_quiet_hour_only_evaluates_on_slots_despite_fresh_reports(self):
         self.options['device_modes']['$battery'] = 'planning'

@@ -49,7 +49,7 @@ def attach_controller_events(hass, entry, controller):
     def coordinator_updated():
         scheduler.coordinator_updated()
 
-    entry.async_on_unload(controller.coordinator.async_add_listener(coordinator_updated))
+    entry.async_on_unload(controller.coordinator.async_add_control_listener(coordinator_updated))
 
     @callback
     def core_configuration_updated(event):

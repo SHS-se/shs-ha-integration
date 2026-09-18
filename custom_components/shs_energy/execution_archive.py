@@ -32,6 +32,7 @@ class ExecutionArchive:
     def __init__(self, store_for):
         self.store_for = store_for
         self.saved = set()
+        self._session_cache = None
 
     async def _page(self, page):
         encoded=canonical(page)
@@ -45,9 +46,7 @@ class ExecutionArchive:
         raw = canonical(value)
         if isinstance(value,list) and len(value)>128:
             refs=[await self.put(value[i:i+128]) for i in range(0,len(value),128)]
-            while len(refs)>128:
-                refs=[await self._page({'kind':'list','children':refs[i:i+128]}) for i in range(0,len(refs),128)]
-            page={'kind':'list','children':refs}
+            return await self._list_page(refs)
         elif len(raw) <= PAGE_BYTES:
             page = {'kind':'value', 'value':value}
         elif isinstance(value,list):
@@ -60,6 +59,12 @@ class ExecutionArchive:
         else:
             raise ValueError('unsupported oversized archive value')
         return await self._page(page)
+
+    async def _list_page(self, refs):
+        while len(refs) > 128:
+            refs = [await self._page({'kind': 'list', 'children': refs[i:i + 128]})
+                    for i in range(0, len(refs), 128)]
+        return await self._page({'kind': 'list', 'children': refs})
 
     async def get(self, key):
         if not isinstance(key,str) or len(key)!=64:
@@ -78,7 +83,45 @@ class ExecutionArchive:
         raise ValueError('unknown execution evidence page kind')
 
     async def save_session(self, session):
-        return await self.put(encode_value(session))
+        # Domain records and their tuples are immutable. Reuse pages by object
+        # identity, without re-encoding or hashing historical evidence on every
+        # meter/command event. Retain only the last successfully saved tree.
+        cache = await self._save_record(session, self._session_cache)
+        self._session_cache = cache
+        return cache[1]
+
+    async def _save_record(self, value, previous):
+        if previous is not None and previous[0] is value:
+            return previous
+        old_fields = previous[2] if previous is not None else {}
+        cached = {}
+        refs = {'type': await self.put(type(value).__name__)}
+        for field in fields(value):
+            item = getattr(value, field.name)
+            old = old_fields.get(field.name)
+            if old is not None and old[0] is item:
+                saved = old
+            elif isinstance(item, execution.Account):
+                saved = await self._save_record(item, old)
+            elif isinstance(item, tuple):
+                saved = await self._save_sequence(item, old)
+            else:
+                saved = (item, await self.put(encode_value(item)), None)
+            cached[field.name] = saved
+            refs[field.name] = saved[1]
+        return value, await self._page({'kind': 'object', 'fields': refs}), cached
+
+    async def _save_sequence(self, value, previous):
+        old_chunks = previous[2] if previous is not None else []
+        chunks = []
+        for index, start in enumerate(range(0, len(value), 128)):
+            chunk = value[start:start + 128]
+            old = old_chunks[index] if index < len(old_chunks) else None
+            if old is not None and len(old[0]) == len(chunk) and all(a is b for a, b in zip(old[0], chunk)):
+                chunks.append(old)
+            else:
+                chunks.append((chunk, await self.put(encode_value(chunk))))
+        return value, await self._list_page([chunk[1] for chunk in chunks]), chunks
 
     async def load_session(self, key):
         raw=upgrade_execution_session(await self.get(key))

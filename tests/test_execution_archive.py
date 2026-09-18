@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
 from execution_archive import ExecutionArchive, canonical, PAGE_BYTES
 from home_runtime import ExecutionSession
@@ -16,6 +17,29 @@ class Store:
     async def async_load(self):return self.value
 
 class ArchiveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_incremental_save_does_not_reencode_unchanged_history(self):
+        import execution_archive
+        stores = {}
+        archive = ExecutionArchive(lambda k: stores.setdefault(k, Store()))
+        receipts = tuple(MeterReceipt(str(i), 'charge', 'charge', 'battery_dc', 'meter', i, i, i + 1)
+                         for i in range(1024))
+        session = ExecutionSession(account=Account(receipt=1024, meters=receipts))
+        first = await archive.save_session(session)
+        added = MeterReceipt('new', 'charge', 'charge', 'battery_dc', 'meter', 1024, 1024, 1025)
+        updated = replace(session, account=replace(session.account, receipt=1025, meters=(*receipts, added)))
+        with patch('execution_archive.encode_value', wraps=execution_archive.encode_value) as encode:
+            second = await archive.save_session(updated)
+        encoded_chunks = [call.args[0] for call in encode.call_args_list if isinstance(call.args[0], tuple)]
+        self.assertEqual(encoded_chunks, [(added,)])
+        self.assertEqual(await archive.load_session(first), session)
+        self.assertEqual(await archive.load_session(second), updated)
+        # Replacing an older receipt must rewrite its page, even at equal length.
+        corrected = replace(updated, account=replace(updated.account,
+            meters=(replace(receipts[0], total_mwh=99), *updated.account.meters[1:])))
+        third = await archive.save_session(corrected)
+        self.assertEqual(await archive.load_session(third), corrected)
+        self.assertEqual(await archive.load_session(second), updated)
+
     async def test_many_receipts_without_replan_restore_exactly_and_accept_late_correction(self):
         stores={};archive=ExecutionArchive(lambda k:stores.setdefault(k,Store()))
         count=5000
@@ -44,6 +68,11 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
         archive.store_for=lambda k:FailedStore()
         with self.assertRaises(OSError):await archive.save_session(replace(previous,status='new'))
         archive.store_for=lambda k:stores[k]
+        self.assertEqual(await archive.load_session(root),previous)
+        archive.store_for=lambda k:stores.setdefault(k,Store())
+        updated=replace(previous,status='new')
+        retried=await archive.save_session(updated)
+        self.assertEqual(await archive.load_session(retried),updated)
         self.assertEqual(await archive.load_session(root),previous)
         stores[root].value['kind']='corrupt'
         with self.assertRaisesRegex(ValueError,'corrupt'):await archive.load_session(root)

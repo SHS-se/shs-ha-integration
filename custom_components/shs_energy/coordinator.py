@@ -220,6 +220,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=None,
         )
         self.entry = entry
+        self._control_listeners = set()
         self.client = client
         self.last_push_date: str | None = None
         self.last_push_error: str | None = None
@@ -272,6 +273,17 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, STORAGE_KEY_TEMPLATE.format(entry_id=entry.entry_id)
         )
+
+    def async_add_control_listener(self, listener):
+        """Subscribe to shared control inputs, separately from live status."""
+        self._control_listeners.add(listener)
+        return lambda: self._control_listeners.discard(listener)
+
+    def async_update_listeners(self, *, control_changed=True):
+        super().async_update_listeners()
+        if control_changed:
+            for listener in tuple(self._control_listeners):
+                listener()
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -489,7 +501,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self.battery_live_inputs.sample(options, devices)
             if getattr(self,"battery_runtime",None) is not None:
                 await self.battery_runtime.refresh()
-            self.async_update_listeners()
+            self.async_update_listeners(control_changed=False)
 
     async def async_battery_loss_statistics(self, options):
         """Complete five-minute mean/min/max in W for directional loss fitting."""
