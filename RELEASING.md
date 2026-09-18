@@ -52,6 +52,15 @@ To install one, enable beta versions for this repository in HACS once:
 Restart Home Assistant afterwards; `custom_components` changes never apply
 without it.
 
+`scripts/deploy.sh` does all of this from a committed, bumped change: it pushes
+`main`, waits for the Beta workflow, downloads the published version through
+HACS, restarts Home Assistant, and reports whether the integration loaded. It
+asks HACS for that exact version, so the beta toggle is not needed. It reaches
+Home Assistant over SSH through the Advanced SSH & Web Terminal add-on, so it
+needs no Home Assistant credentials: add your public key to the add-on's
+`authorized_keys` once. `HA_SSH` overrides the destination,
+`hassio@homeassistant`.
+
 **Why `beta` and not `rc`:** HACS asks `AwesomeVersion` whether a version is a
 beta, and it only recognises `beta`/`b` as a marker. `0.4.0-rc.1` reports
 `beta=False` and risks reaching installs that never opted in.
