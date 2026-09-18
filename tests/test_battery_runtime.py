@@ -171,6 +171,48 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(r.runtime.host.state,before)
         finally:await r.runtime.close()
 
+    async def test_household_lock_wait_uses_current_evidence_instead_of_one_second_window(self):
+        r=Rig();original=r.runtime._dispatch
+        waits=[]
+        async def delayed(effect):
+            await r.controller.lock.acquire()
+            pending=asyncio.create_task(original(effect))
+            await asyncio.sleep(0)
+            r.now+=3000
+            waits.append(effect.attempt_id)
+            r.controller.lock.release()
+            return await pending
+        r.runtime._dispatch=delayed
+        try:
+            await r.start()
+            for _ in range(4):await r.advance(1000)
+            self.assertTrue(waits)
+            self.assertTrue(r.calls,r.runtime.snapshot())
+            self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+            self.assertFalse(r.runtime.snapshot()['fault_history'])
+        finally:await r.runtime.close()
+
+    async def test_permission_change_while_waiting_for_household_lock_prevents_service_call(self):
+        from home_host import DispatchRejected
+        r=Rig();original=r.runtime._dispatch;rejected=[]
+        async def withdrawn(effect):
+            await r.controller.lock.acquire()
+            pending=asyncio.create_task(original(effect))
+            await asyncio.sleep(0)
+            r.now+=3000
+            r.options['device_modes']['$battery']='control_verification'
+            r.controller.lock.release()
+            try:return await pending
+            except DispatchRejected:
+                rejected.append(effect.attempt_id)
+                raise
+        r.runtime._dispatch=withdrawn
+        try:
+            await r.start()
+            self.assertTrue(rejected)
+            self.assertEqual(r.calls,[])
+        finally:await r.runtime.close()
+
     async def test_confirmed_registers_finish_transition_without_timeout_waits(self):
         r=Rig();started=r.now;await r.start()
         try:

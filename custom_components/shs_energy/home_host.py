@@ -157,7 +157,15 @@ class HomeHost:
 
     async def _transition(self, effect):
         try:
-            return (await self.ports.transition(effect),)
+            # Start the adapter clock when its work actually starts, after
+            # durability and queue waits. Admission still checks live identity
+            # and observation expiry when the result reaches the reducer.
+            async with asyncio.timeout(self.state.limits.transition_timeout_ms / 1000):
+                proposal = await self.ports.transition(effect)
+            return (proposal,)
+        except TimeoutError:
+            return (runtime.TransitionFailed(effect.group_id, effect.token, "retryable",
+                "Battery command preparation timed out; it will be retried."),)
         except Exception as error:
             reason=f"Transition failed: {type(error).__name__}: {error}"
             self.ports.report(effect.group_id, reason)

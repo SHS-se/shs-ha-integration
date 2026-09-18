@@ -993,7 +993,9 @@ def _transition_failure(job, now, limits, reason, *, unsupported=False):
 def resumed_transition_work(group, now, limits):
     work = group.transition_work
     if isinstance(work, TransitionJob):
-        return _transition_failure(work, max(now, work.deadline_ms), limits, "transition_interrupted")
+        # The old host and its worker are gone. Pace the retry from recovery,
+        # not from the lifetime of the interrupted worker's input evidence.
+        return _transition_failure(work, now, limits, "transition_interrupted")
     return work
 
 
@@ -1011,8 +1013,11 @@ def _need_transition(group, request, purpose, now, limits, effects):
         if work.retry_at_ms is not None and now < work.retry_at_ms:
             return replace(group, transition_work=work, status="transition_retry_wait")
     attempt = min(work.attempt + 1, 32) if isinstance(work, TransitionFailure) else 1
-    job = TransitionJob(key, group.next_transition, attempt, min(now + limits.transition_timeout_ms,
-                        request.valid_until_ms, group.observation.valid_until_ms))
+    # The host bounds adapter execution time. Queueing and journal writes do
+    # not consume that budget; a result remains usable only with this exact
+    # request and fresh observation (also rechecked when admitting Proposed).
+    job = TransitionJob(key, group.next_transition, attempt,
+                        min(request.valid_until_ms, group.observation.valid_until_ms))
     effects.append(NeedTransition(group.spec.id, group.generation, purpose, request,
                                  group.observation, group.spec.adapter_revision, job.token, job.deadline_ms))
     return replace(group, transition_work=job, next_transition=group.next_transition + 1,

@@ -102,3 +102,74 @@ class HomeHostTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(restored.close)
         self.assertFalse(restored.state.groups[0].grant_confirmed)
         self.assertEqual(restored.state.groups[0].attempts[0].stage,'ambiguous')
+
+    async def test_slow_journal_does_not_spend_the_adapter_execution_budget(self):
+        from dataclasses import replace
+        host,h,writes,_,reports=await self.make_host()
+        host.state=replace(host.state,limits=replace(host.state.limits,dispatch_window_ms=30000))
+        persist=host.ports.persist
+        async def slow_disk(data):
+            h.now+=2000  # More than the old one-second transition deadline.
+            await asyncio.sleep(0)
+            await persist(data)
+        transition=host.ports.transition
+        async def native_timing(effect):
+            proposal=await transition(effect)
+            return replace(proposal,steps=tuple(replace(step,confirmation_timeout_ms=75000,
+                latest_effect_delay_ms=75000) for step in proposal.steps))
+        host.ports=replace(host.ports,persist=slow_disk,transition=native_timing)
+        await host.accept(ExecutionPlanOffered(h.contract))
+        await asyncio.wait_for(host.idle(),2)
+        self.assertTrue(writes)
+        self.assertEqual(host.state.groups[0].observation.controls,host.state.groups[0].desired.target)
+        self.assertFalse(any('timeout' in reason for _,reason in reports),reports)
+
+    async def test_hung_adapter_is_cancelled_and_retried_without_writing(self):
+        from dataclasses import replace
+        from home_runtime import Tick
+        host,h,writes,_,reports=await self.make_host()
+        host.state=replace(host.state,limits=replace(host.state.limits,transition_timeout_ms=10))
+        original=host.ports.transition
+        cancelled=asyncio.Event()
+        async def hung(effect):
+            try:await asyncio.Event().wait()
+            finally:cancelled.set()
+        host.ports=replace(host.ports,transition=hung)
+        await host.accept(ExecutionPlanOffered(h.contract));await asyncio.wait_for(host.idle(),2)
+        self.assertTrue(cancelled.is_set())
+        self.assertFalse(writes)
+        failure=host.state.groups[0].transition_work
+        self.assertIn('timed out',failure.reason)
+        self.assertIsNotNone(failure.retry_at_ms)
+        host.ports=replace(host.ports,transition=original)
+        h.now=failure.retry_at_ms
+        await host.accept(Tick());await host.idle()
+        self.assertTrue(writes)
+
+    async def test_proposal_waiting_in_queue_cannot_outlive_its_observation(self):
+        from dataclasses import replace
+        host,h,writes,_,_=await self.make_host()
+        original=host.ports.transition
+        async def expired(effect):
+            result=await original(effect)
+            h.now=effect.observation.valid_until_ms
+            return result
+        host.ports=replace(host.ports,transition=expired)
+        await host.accept(ExecutionPlanOffered(h.contract));await host.idle()
+        self.assertFalse(writes)
+        self.assertIsNone(host.state.groups[0].plan)
+
+    async def test_delayed_proposal_cannot_restore_revoked_authority(self):
+        from dataclasses import replace
+        from home_runtime import GrantRevoked
+        host,h,writes,_,_=await self.make_host()
+        original=host.ports.transition
+        entered=asyncio.Event();finish=asyncio.Event()
+        async def delayed(effect):
+            entered.set();await finish.wait()
+            return await original(effect)
+        host.ports=replace(host.ports,transition=delayed)
+        await host.accept(ExecutionPlanOffered(h.contract));await entered.wait()
+        await host.accept(GrantRevoked(h.group.spec.id,h.group.grant_epoch+1))
+        finish.set();await host.idle()
+        self.assertFalse(writes)

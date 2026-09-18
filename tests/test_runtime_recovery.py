@@ -66,17 +66,20 @@ class TransitionWorkerTests(unittest.TestCase):
                         g.observation_revision, g.spec.adapter_revision,
                         synthetic_steps(g.observation.controls, g.desired.target), token)
 
-    def test_lost_worker_times_out_retries_and_fences_late_success_and_failure(self):
+    def test_host_timeout_retries_and_fences_late_success_and_failure(self):
         h = Harness(); h.request()
         first = h.group().transition_work
         old = self.proposal(h, first.token)
         self.assertIn(WakeAt(first.deadline_ms), h.effects)
-        h.event(Tick(), first.deadline_ms - 1)
+        h.event(Tick(), h.now + h.state.limits.transition_timeout_ms)
         self.assertFalse(any(isinstance(e, NeedTransition) for e in h.effects))
-        h.event(Tick(), first.deadline_ms)
+        self.assertEqual(h.group().transition_work, first)
+        # Only the host can measure the adapter's execution time; queue time
+        # alone must not invalidate this still-current proposal job.
+        h.event(TransitionFailed("battery", first.token, "retryable", "preparation timed out"))
         failure = h.group().transition_work
         self.assertIsInstance(failure, TransitionFailure)
-        self.assertEqual(failure.retry_at_ms, first.deadline_ms + h.state.limits.retry_base_ms)
+        self.assertEqual(failure.retry_at_ms, h.now + h.state.limits.retry_base_ms)
         h.event(old)
         self.assertIsNone(h.group().plan)
         h.event(Tick(), failure.retry_at_ms)
@@ -132,7 +135,7 @@ class TransitionWorkerTests(unittest.TestCase):
                     h.event(TransitionFailed("battery", job.token, "retryable", "temporary"))
                 h.state, _ = restore_checkpoint(encode_checkpoint(h.state), h.now)
                 retry = h.group().transition_work.retry_at_ms
-                self.assertGreater(retry, h.now)
+                self.assertEqual(retry, h.now + h.state.limits.retry_base_ms)
                 h.authority("battery", "controlling", 1)
                 h.event(FrameObserved(replace(Harness().state.frame, revision=2)))
                 h.observe(target=controls())

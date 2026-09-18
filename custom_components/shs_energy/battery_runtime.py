@@ -47,6 +47,9 @@ else:
 
 AGE_MS=30000
 ALIGNMENT_MS=15000
+# Journal/lock waits share the existing measurement lifetime. Freshness and
+# authority are still checked after the lock, immediately before each write.
+RUNTIME_LIMITS=rt.Limits(AGE_MS,1000,30000)
 ADAPTER_REVISION='sigen-ess-dc-v2'
 OWNER='shs-household-battery'
 
@@ -180,7 +183,9 @@ class BatteryRuntime:
 
     async def _open_host(self,state,checkpoint=None):
         ports=HostPorts(self._persist,self._dispatch,self._can_send,self._observe,self._confirm,self._transition,self._renew,self._report,self.now,self._persist_state)
-        self.host=HomeHost(state,ports)
+        # Apply current scheduling limits on restart without extending any
+        # previously prepared or issued attempt's persisted effect window.
+        self.host=HomeHost(replace(state,limits=RUNTIME_LIMITS),ports)
         await self.host.start(resume=checkpoint is not None)
 
     def identity(self):
@@ -513,7 +518,7 @@ class BatteryRuntime:
         specs=self._meter_specs(options)
         if self.host is None:
             maximum=rt.Envelope(1000000,1000000)
-            state=rt.create_home((rt.GroupSpec('battery',ADAPTER_REVISION,keys,maximum),),rt.Limits(1000,1000,30000),
+            state=rt.create_home((rt.GroupSpec('battery',ADAPTER_REVISION,keys,maximum),),RUNTIME_LIMITS,
                     ledger=create_ledger('household-battery-actuals',digest([asdict(s) for s in specs]),specs,max_intervals=256))
             state=replace(state,execution=rt.ExecutionSession(account=self._bootstrap,
                 plan_rejection=self._bootstrap_rejection,captured_feedback=self._bootstrap_captured))
