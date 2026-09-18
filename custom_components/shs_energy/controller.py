@@ -598,9 +598,10 @@ class ScheduledController:
             sources[entity] = source
             entity = source
 
-    def pool_request(self, options, slot, *, read_state=None):
+    def pool_request(self, options, slot, *, read_state=None, plan=None):
         reader = read_state or self.state
-        plan, _ = self.coordinator.binding_plan_for("pool", options)
+        if plan is None:
+            plan, _ = self.coordinator.binding_plan_for("pool", options)
         key, mapping = pool_control_mapping(options, plan.get("device_models", []))
         fields = {}
         errors = pool_control_errors(options, mapping, field_errors=fields)
@@ -628,7 +629,7 @@ class ScheduledController:
         reason = ("The pool heater is allowed to run as planned." if on else
                   "The water has reached your Stop at temperature; the pool heater is off." if heating else
                   "The plan is pausing pool heating; the pool heater is off.")
-        return {"control_entity": entity, "requested_switch_state": "on" if on else "off",
+        return {"device_key": key, "control_entity": entity, "requested_switch_state": "on" if on else "off",
                 "water_temperature_c": water, "stop_temperature_c": target,
                 "requested_power_w": slot["pool_w"], "reason": reason}, sources, fresh_until
 
@@ -637,6 +638,8 @@ class ScheduledController:
         entity = request["control_entity"]
         # Refuse shared targets before either controller can acquire ownership.
         for key, mapping in options.get("device_control_mappings", {}).items():
+            if key == request["device_key"] or key in options.get("excluded_device_readings", []):
+                continue
             if device_mode(options, "device:" + key) in EXECUTING_MODES and entity in actuator_targets(mapping):
                 raise ValueError("another enabled device shares the pool actuator")
         await self.capture("pool", options, [entity])
@@ -737,13 +740,13 @@ class ScheduledController:
         state = self.hass.states.get(entity) if entity else None
         return checked_state(state, entity, max_age)
 
-    def preview_commands(self, slot):
+    def preview_commands(self, slot, *, plan=None, options=None):
         """Describe intended targets without writes, simulation, or authority changes.
 
         Pool switching depends on current water readings; future execution
         recalculates it. Other adapters publish the same fields/basis/error shape.
         """
-        options = self.options()
+        options = self.options() if options is None else options
         previews = {}
         if slot.get("battery_command"):
             try:
@@ -764,7 +767,7 @@ class ScheduledController:
                 previews["battery"] = {"error": str(err)}
         if slot.get("pool_w") is not None and options.get("pool_enabled"):
             try:
-                request, _, _ = self.pool_request(options, slot, read_state=self.preview_state)
+                request, _, _ = self.pool_request(options, slot, read_state=self.preview_state, plan=plan)
                 fields = [{"label": "Pool heater", "value": request["requested_switch_state"].capitalize()},
                           {"label": "Water temperature", "value": request["water_temperature_c"], "unit": "°C"},
                           {"label": "Stop at", "value": request["stop_temperature_c"], "unit": "°C"}]

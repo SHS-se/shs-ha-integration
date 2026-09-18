@@ -38,12 +38,12 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual((slot['shadow_import_sek_per_kwh'], slot['shadow_export_sek_per_kwh']), (1.25, 0.4))
 
     def test_timeline_includes_each_slots_read_only_command_preview(self):
-        preview = lambda slot: {'device:heater': {'fields': [{'label': 'Target', 'value': slot['start']}]}}
+        preview = lambda slot, **context: {'device:heater': {'fields': [{'label': 'Target', 'value': slot['start']}]}}
         result = timeline(self.plan, {'state': 'ready'}, command_preview=preview)
         for slot in result['slots']:
             self.assertEqual(slot['command_previews']['device:heater']['fields'][0]['value'], slot['start'])
         self.assertEqual(timeline(self.plan, {'state': 'invalid', 'reason': 'bad'},
-                                 command_preview=lambda slot: self.fail('invalid plan previewed'))['slots'], [])
+                                 command_preview=lambda slot, **context: self.fail('invalid plan previewed'))['slots'], [])
 
     def test_readiness_counts_only_included_equipment_including_home_battery(self):
         devices = [

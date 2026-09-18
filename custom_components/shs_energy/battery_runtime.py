@@ -235,7 +235,9 @@ class BatteryRuntime:
             if self._status['state']!='fault':
                 value['reason']=value['explanation']['status']
         if self.host._fault:
-            value.update(state='fault',reason=f'Battery command journal failed: {self.host._fault}')
+            value.update(state='fault',reason='Battery control has stopped because its saved execution state could not be updated.',
+                technical_error=str(self.host._fault),fix={'kind':'diagnostics'},retry_automatically=False,
+                next_step='Download controller diagnostics and report this software error. Restart Home Assistant after installing the fix.')
         elif self._observation_error:
             value.update(state='fault',reason=self._observation_error)
         elif any(a.stage=='ambiguous' for a in group.attempts):
@@ -518,9 +520,6 @@ class BatteryRuntime:
             await self._open_host(state)
             if self.host.state.groups[0].spec.control_keys!=keys or self.host.state.ledger.mapping_revision!=state.ledger.mapping_revision:
                 raise ValueError('saved battery journal belongs to different control or meter bindings')
-        if not self._seeded:
-            await self._seed_meters(cut,specs)
-            self._seeded=True
         group=self.host.state.groups[0]
         participants=[rt.ScopeParticipant(group.spec.id,mode,self._mode_revision,'new_runtime',keys)]
         for key,entity,participant_mode in self._demand_sources():
@@ -533,6 +532,11 @@ class BatteryRuntime:
             rt.ExecutionScope(scope_revision,group.spec.id,tuple(participants)),catalog,OWNER,scope)
         if authority!=self.host.state.authority:
             await self.host.accept(rt.AuthorityInstalled(authority,self.host.state.authority_revision+1))
+        # Meter receipts persist the restored account. Install its physical
+        # authority first so every checkpoint already names the battery owner.
+        if not self._seeded:
+            await self._seed_meters(cut,specs)
+            self._seeded=True
         release=self._release_request(group,tuple(zip(keys,('Maximum Self Consumption',cc,dc))))
         await self.host.accept(rt.AuthorityChanged(group.spec.id,mode,self._mode_revision,release))
         self._identity=rt.WriterIdentity(OWNER,config,surface['revision'])

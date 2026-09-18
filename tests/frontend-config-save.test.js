@@ -1312,3 +1312,24 @@ test('pool card renders the shared sensor explanation and escapes entity content
   assert.match(html, /&lt;switch.pool&gt; would be on/);
   assert.doesNotMatch(html, /<switch.pool>/);
 });
+
+test('HA object errors remain readable when loading and polling configuration', async () => {
+  const panel = makePanel();
+  assert.equal(panel._errorMessage({ error: { message: 'Unable to build configuration', code: 'configuration_error' } }), 'Unable to build configuration');
+  assert.equal(panel._errorMessage({ code: 'timeout' }), 'timeout');
+  assert.doesNotMatch(panel._errorMessage({}), /object Object/);
+  panel._data = panel._draft = panel._savedDraft = undefined;
+  panel._hass = { callWS: async () => { throw { error: { message: 'The integration is restarting' } }; } };
+  await panel._load(false);
+  assert.equal(panel._error, 'The integration is restarting');
+  assert.equal(panel._loading, false);
+  panel._entryId = 'entry';
+  panel._hass = { callWS: async () => { throw { code: 'timeout' }; } };
+  await panel._poll();
+  assert.equal(panel._refreshError, 'timeout');
+  panel._hass = { callWS: async () => ({ entry: { entry_id: 'entry' }, configuration: {}, devices: [] }) };
+  await panel._load(false);
+  await panel._poll();
+  assert.equal(panel._error, '');
+  assert.equal(panel._refreshError, '');
+});

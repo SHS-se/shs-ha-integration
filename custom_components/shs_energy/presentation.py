@@ -75,13 +75,13 @@ def timeline(plan, status, *, command_preview=None, options=None):
             from operating_modes import operating_mode_identity
         if plan["operating_scope"]["modes"] != operating_mode_identity(options, plan["operating_scope"]["device_owners"].values()):
             return {"capabilities": {}, "slots": [], "reason": "Waiting for a plan for the current device modes"}
-    execution = timeline(plan["execution_plan"], status, command_preview=command_preview) if plan.get("execution_plan") else None
+    execution = timeline(plan["execution_plan"], status, command_preview=command_preview, options=options) if plan.get("execution_plan") else None
     return {"capabilities": deepcopy(plan.get("capabilities", {})), "slots": [
         {"start": slot["start"], "binding": slot["binding"],
          **({"execution": {**execution["slots"][i], "capabilities": execution["capabilities"]}} if execution else {}),
          "commands": deepcopy(slot.get("device_commands", {})),
          "battery_command": deepcopy(slot.get("battery_command")),
-         "command_previews": command_preview(slot) if command_preview is not None else {},
+         "command_previews": command_preview(slot, plan=plan, options=options) if command_preview is not None else {},
          # Shadow prices are what the planner valued each quarter at: the
          # published price where one exists, otherwise the server's estimate.
          **{key: slot.get(key) for key in ("battery_charge_w", "battery_discharge_w", "ev_target_current_a", "pool_w",
@@ -301,7 +301,7 @@ def controller_explanation(device, mode, status, slot=None):
         text = '\n'.join(p for p in parts if p)
         if any(outlook): text += '\n\n' + '\n'.join(p for p in outlook if p)
         result = {'explanation': text, **{key: runtime.get(key) for key in
-            ('plan_status', 'plan_rejection', 'accepted_plan_id', 'accepted_reference_id')}}
+            ('plan_status', 'plan_rejection', 'accepted_plan_id', 'accepted_reference_id', 'technical_error')}}
         if explanation.get('deadline_ms') is not None:
             result['plan_target_deadline'] = datetime.fromtimestamp(explanation['deadline_ms']/1000, timezone.utc).isoformat()
         return result

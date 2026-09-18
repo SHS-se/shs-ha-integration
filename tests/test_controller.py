@@ -629,6 +629,32 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.new_pool'].state, 'off')
         self.assertFalse(other.records)
 
+    async def test_genuinely_shared_pool_switch_is_blocked_then_recovers_when_excluded(self):
+        self.options['device_modes'].update({'$pool':'controlling','other':'controlling'})
+        self.options['device_control_mappings']['other']={'control_type':'switch_schedule',
+            'actuator_entity_ids':['switch.pool'],'power':3300}
+        await self.controller.async_start()
+        self.assertEqual(self.controller.status['pool']['state'],'fault')
+        self.assertEqual(self.states['switch.pool'].state,'off')
+        self.options['excluded_device_readings']=['other']
+        await self.controller.async_tick()
+        self.assertEqual(self.controller.status['pool']['state'],'scheduled',self.controller.status['pool'])
+        self.assertEqual(self.states['switch.pool'].state,'on')
+
+    async def test_schedule_preview_uses_supplied_plan_without_execution_validation(self):
+        from presentation import timeline
+        plan={**self.coordinator.optimisation_plan,'plans':{'priority':{'slots':[
+            {**self.slot,'start':str(i)} for i in range(288)]}}}
+        plan['execution_plan']={**plan,'pool':{'stop_temperature_c':25}}
+        def forbidden(*args):self.fail('preview must not select and validate the full binding plan per quarter')
+        self.coordinator.binding_plan_for=forbidden
+        result=timeline(plan,{'state':'ready'},command_preview=self.controller.preview_commands,options=self.options)
+        self.assertEqual(len(result['slots']),288)
+        for slot in result['slots']:
+            self.assertEqual(slot['command_previews']['pool']['fields'][2]['value'],30)
+            self.assertEqual(slot['execution']['command_previews']['pool']['fields'][2]['value'],25)
+        self.assertEqual(self.calls,[])
+
     async def test_pool_missing_target_blocks_without_ownership(self):
         self.options['device_modes']['$pool'] = 'controlling'
         self.coordinator.optimisation_plan['pool'] = {}

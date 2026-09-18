@@ -21,6 +21,17 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         # only during verification, not rely on a test mock to do that.
         self.controller.confirm = ScheduledController.confirm.__get__(self.controller)
 
+    async def test_pool_owner_alias_is_not_a_competing_controller(self):
+        self.options['device_modes'].update({'$pool':'controlling','pool':'control_verification'})
+        await self.controller.async_start()
+        self.assertEqual(self.controller.status['pool']['state'],'scheduled',self.controller.status['pool'])
+        self.assertEqual(self.states['switch.pool'].state,'on')
+        self.assertNotIn('device:pool',self.controller.records)
+        self.options['device_modes']['$pool']='control_verification'
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.pool'].state,'off')
+        self.assertEqual(self.controller.status['pool']['state'],'verified',self.controller.status['pool'])
+
     async def test_shared_log_captures_pool_and_battery_without_writes(self):
         self.options['device_modes'] = {'$pool': 'control_verification', '$battery': 'control_verification'}
         before = {key: (value.state, dict(value.attributes)) for key, value in self.states.items()}

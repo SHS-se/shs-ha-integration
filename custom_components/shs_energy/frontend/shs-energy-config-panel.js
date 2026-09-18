@@ -142,6 +142,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
     }
   }
 
+  _errorMessage(error) {
+    if (typeof error === "string" && error.trim()) return error;
+    for (const value of [error?.message, error?.error?.message, error?.error, error?.code]) {
+      if (typeof value === "string" && value.trim()) return value;
+    }
+    return "Home Assistant could not complete the request. Please retry; if it continues, check the Home Assistant logs.";
+  }
+
   async _load(refreshRoles) {
     if (!this._hass || this._loading) return;
     if (refreshRoles && !this._data) {
@@ -172,7 +180,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         }
       }
     } catch (error) {
-      this._error = error?.message || String(error);
+      this._error = this._errorMessage(error);
     } finally {
       this._loading = false;
       this._renderBackground();
@@ -236,7 +244,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._notice =
         "Energy and planning settings saved. Device edits have their own Save button.";
     } catch (error) {
-      this._error = error?.message || String(error);
+      this._error = this._errorMessage(error);
     } finally {
       this._saving = false;
       this._renderBackground();
@@ -316,7 +324,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         ? `${device?.name || deviceKey} is saved and ${result.mapping_status === "ready" ? "ready" : this._label(result.mapping_status)}.`
         : `${device?.name || deviceKey} setup was removed.`;
     } catch (error) {
-      this._deviceErrors[deviceKey] = error?.message || String(error);
+      this._deviceErrors[deviceKey] = this._errorMessage(error);
     } finally {
       this._savingDeviceKey = "";
       this._renderBackground();
@@ -344,7 +352,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._notice =
         "Review the proposed source changes below, then Save or Cancel. Your current selections are still in use.";
     } catch (error) {
-      this._error = error?.message || String(error);
+      this._error = this._errorMessage(error);
     } finally {
       this._loading = false;
       this._renderBackground();
@@ -832,7 +840,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       else this._render();
     } catch (error) {
       if (!this._canPoll() || revision !== this._pollRevision || entryId !== this._entryId) return;
-      this._refreshError = error?.message || String(error);
+      this._refreshError = this._errorMessage(error);
       if (this._editing() || this._dirty) this._updateAttentionUI();
       else this._render();
     } finally { this._polling = false; }
@@ -846,7 +854,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       const data = await this._hass.callWS({ type: "shs_energy/config/control", config_entry: this._entryId, device_key: key, mode });
       this._mergePanel(data);
       this._notice = "Device mode saved: " + this._label(mode) + ".";
-    } catch (error) { this._error = error?.message || String(error); }
+    } catch (error) { this._error = this._errorMessage(error); }
     finally { this._savingDeviceKey = ""; this._renderBackground(); }
   }
 
@@ -867,7 +875,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a"); a.href = url; a.download = "shs-controller-diagnostics.json.gz"; a.click(); URL.revokeObjectURL(url);
       this._notice = `Downloaded controller diagnostics for ${data.current.devices.length} devices, with ${data.current_session.runtime_evaluations} evaluations, ${data.current_session.verification_checks} verification checks and ${data.current_session.observation_samples} observation samples this session. Earlier history is included separately.`;
-    } catch (error) { this._error = error?.message || String(error); }
+    } catch (error) { this._error = this._errorMessage(error); }
     this._render();
   }
 
@@ -963,7 +971,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._savedDraft.excluded_device_readings = excluded;
       await this._load(false);
     } catch (error) {
-      this._error = error.message || String(error);
+      this._error = this._errorMessage(error);
       this._draft.excluded_device_readings = [...(this._savedDraft.excluded_device_readings || [])];
     } finally { this._saving = false; this._render(); }
   }

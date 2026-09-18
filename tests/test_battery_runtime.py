@@ -579,6 +579,10 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
                     saved=await r.runtime.archive.load_session(r.store.saved['execution_root'])
                     self.assertEqual(saved.account,r.runtime._bootstrap)
                     self.assertEqual(r.calls,[])
+                    async def changed_history(entities,start,end,with_attributes):
+                        return {entity:[(datetime.fromtimestamp(r.now/1000,timezone.utc),
+                            '100.1',deepcopy(r.rows[entity]['attributes']))] for entity in entities}
+                    r.coordinator._state_history=changed_history
                     r.install_contract(feedback['generation'],previous=original.contract.id)
                     r.plan['battery_execution']['source_receipt']=feedback['source_receipt']
                     r.runtime.validate_plan_response(r.plan)
@@ -589,6 +593,46 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(r.calls)
                     self.assertFalse(r.runtime.snapshot()['fault_history'])
                 finally:await r.runtime.close()
+
+    async def test_restart_from_retained_account_installs_authority_before_new_meter_receipts(self):
+        r=Rig('control_verification');await r.start()
+        try:
+            r.options['device_modes']['$battery']='controlling'
+            feedback=await r.runtime.capture_feedback(5000000,'new_mode')
+            original=r.runtime._bootstrap.contract
+            await r.runtime.close()
+            restarted=Rig('controlling')
+            restarted.store.saved=deepcopy(r.store.saved)
+            restarted.runtime.archive=r.runtime.archive
+            restarted.install_contract(feedback['generation'],previous=original.id)
+            restarted.plan['battery_execution']['source_receipt']=feedback['source_receipt']
+            async def new_history(entities,start,end,with_attributes):
+                return {entity:[(datetime.fromtimestamp(20,timezone.utc),'100.1',
+                    deepcopy(restarted.rows[entity]['attributes']))] for entity in entities}
+            restarted.coordinator._state_history=new_history
+            r=restarted
+            await r.start()
+            for _ in range(4):await r.advance()
+            self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+            self.assertIsNone(r.runtime.host._fault)
+            self.assertTrue(any(m.total_mwh==100100000 for m in r.runtime.host.state.execution.account.meters))
+            self.assertTrue(r.calls)
+        finally:await r.runtime.close()
+
+    async def test_journal_failure_explains_software_fault_and_retains_technical_evidence(self):
+        r=Rig('control_verification');await r.start()
+        try:
+            r.runtime.host._fault=ValueError('execution account needs its physical battery group')
+            status=r.runtime.snapshot()
+            self.assertNotIn('group',status['reason'])
+            self.assertEqual(status['technical_error'],str(r.runtime.host._fault))
+            self.assertFalse(status['retry_automatically'])
+            self.assertIn('Restart Home Assistant',status['next_step'])
+            from presentation import controller_explanation
+            attributes=controller_explanation('battery','controlling',{'battery_runtime':status})
+            self.assertEqual(attributes['technical_error'],status['technical_error'])
+            self.assertNotIn('physical battery group',attributes['explanation'])
+        finally:await r.runtime.close()
 
     async def test_withdrawing_control_releases_before_retiring_old_configuration(self):
         r=Rig();await r.start()
