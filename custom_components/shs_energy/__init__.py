@@ -54,7 +54,7 @@ from .verification import VerificationJournal
 from .coordinator import ShsStatusCoordinator
 from .migration import mapped_entity_ids, migrate_options
 
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SELECT]
 
 ShsEnergyConfigEntry = ConfigEntry[ShsStatusCoordinator]
 

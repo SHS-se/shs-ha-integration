@@ -17,7 +17,7 @@ import sys
 import unittest
 
 PACKAGE = Path(__file__).parents[1] / "custom_components" / "shs_energy"
-sys.path.insert(0, str(PACKAGE))
+sys.path.append(str(PACKAGE))
 
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
@@ -51,7 +51,7 @@ PURE_MODULES = (
 HOME_ASSISTANT_MODULES = (
     "__init__",
     "config_flow",
-    "config_panel",
+    "config_panel", "control_configuration", "select",
     "configuration",
     "coordinator",
     "diagnostics",

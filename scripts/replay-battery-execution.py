@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'custom_components' / 'shs_energy'))
+sys.path.append(str(Path(__file__).resolve().parents[1] / 'custom_components' / 'shs_energy'))
 from battery_conversion import Conversion
 from execution_archive import read_account
 from home_runtime import ExecutionTrace

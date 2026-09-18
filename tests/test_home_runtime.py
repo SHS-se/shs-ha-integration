@@ -6,7 +6,7 @@ import sys
 import subprocess
 import unittest
 
-sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
+sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 from home_runtime import (
     Envelope, Guard, Request, Step, GroupSpec, Limits, Observation, Frame, create_home,
     Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable,

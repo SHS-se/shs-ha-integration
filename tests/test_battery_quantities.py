@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import AsyncMock
 
 ROOT = Path(__file__).parents[1] / 'custom_components/shs_energy'
-sys.path.insert(0, str(ROOT))
+sys.path.append(str(ROOT))
 import const
 from configuration_schema import prepare_options, resolve_configuration
 from configuration_values import resolve_battery_quantities

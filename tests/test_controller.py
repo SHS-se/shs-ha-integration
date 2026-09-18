@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
+sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from controller import ScheduledController, pool_band, pool_hardware_band
 from configuration_schema import resolve_configuration
 

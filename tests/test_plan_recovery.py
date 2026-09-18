@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 import sys
 
 ROOT = Path(__file__).parents[1] / 'custom_components/shs_energy'
-sys.path.insert(0, str(ROOT))
+sys.path.append(str(ROOT))
 from presentation import operational_status
 
 

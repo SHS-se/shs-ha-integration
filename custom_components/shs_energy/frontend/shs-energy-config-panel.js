@@ -1078,15 +1078,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
       });
       return `<p class="muted">${this._escape(readings.join(" · "))}<br>Waiting for the battery plan and current equipment readings.</p>`;
     }
-    const explanation = runtime.explanation;
-    const measured = explanation?.now || (runtime.fix?.kind === "fields" ? "Complete the highlighted measurement settings." : "Waiting for current household and battery readings.");
-    const mismatch = runtime.measurements?.response_matches_direction === false && runtime.mode === "controlling"
-      ? " The battery has not yet responded as requested." : "";
-    const pending = runtime.pending_writes ? " Waiting for the battery to confirm its settings." : "";
-    const loss = runtime.loss_evidence?.discharge?.model_source === "measured"
-      ? "Energy-loss estimates use measurements from your system."
-      : runtime.loss_model ? "Energy-loss estimates use your settings while measurements are collected." : "";
-    return `<p class="muted">${this._escape(runtime.reason)}<br>${this._escape(measured + mismatch + pending)}${loss ? `<br>${this._escape(loss)}` : ""}</p>`;
+    const display = runtime.display;
+    if (!display) return "";
+    return `<p class="muted">${this._escape(display.status)}<br>${this._escape(display.now)}${display.loss ? `<br>${this._escape(display.loss)}` : ""}</p>`;
   }
 
   _scheduleCommand(device, slot) {

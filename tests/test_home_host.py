@@ -3,7 +3,7 @@ import asyncio
 from pathlib import Path
 import sys
 import unittest
-sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components/shs_energy'))
+sys.path.append(str(Path(__file__).parents[1]/'custom_components/shs_energy'))
 from home_host import HomeHost, HostPorts
 from home_runtime import ExecutionPlanOffered, Proposed, Step, Guard, Observed, Observation, TransportResult, WriteConfirmed
 from home_runtime_checkpoint import decode_checkpoint, encode_checkpoint

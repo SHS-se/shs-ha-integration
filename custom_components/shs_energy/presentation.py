@@ -255,3 +255,67 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
             device["mapping_error"] = None
             device["execution_reason"] = None
     return devices
+
+
+def battery_status_text(runtime):
+    """Identical live wording for the card, status sensor and mode select."""
+    explanation = runtime.get('explanation') or {}
+    current = explanation.get('now') or (
+        'Complete the highlighted measurement settings.' if (runtime.get('fix') or {}).get('kind') == 'fields'
+        else 'Waiting for current household and battery readings.')
+    if (runtime.get('measurements') or {}).get('response_matches_direction') is False and runtime.get('mode') == 'controlling':
+        current += ' The battery has not yet responded as requested.'
+    if runtime.get('pending_writes'):
+        current += ' Waiting for the battery to confirm its settings.'
+    measured = (runtime.get('loss_evidence') or {}).get('discharge', {}).get('model_source') == 'measured'
+    loss = ('Energy-loss estimates use measurements from your system.' if measured else
+            'Energy-loss estimates use your settings while measurements are collected.' if runtime.get('loss_model') else '')
+    return {'status': runtime.get('reason') or explanation.get('status') or 'Waiting for the battery controller.',
+            'now': current, 'loss': loss}
+
+
+def controller_explanation(device, mode, status, slot=None):
+    """Plain-language details; requests never assert physical delivery."""
+    status = status or {}
+    runtime = status.get('battery_runtime')
+    if device == 'battery' and runtime is not None:
+        live = battery_status_text(runtime)
+        explanation = runtime.get('explanation') or {}
+        parts = [live['status'], live['now'], live['loss']]
+        outlook = [explanation.get(key) for key in ('plan', 'difference', 'next')]
+        text = '\n'.join(p for p in parts if p)
+        if any(outlook): text += '\n\n' + '\n'.join(p for p in outlook if p)
+        result = {'explanation': text}
+        if explanation.get('deadline_ms') is not None:
+            result['plan_target_deadline'] = datetime.fromtimestamp(explanation['deadline_ms']/1000, timezone.utc).isoformat()
+        return result
+    intro = ('Testing the plan; device settings are not being changed.' if mode == 'control_verification' else
+             'SHS is allowed to adjust this device to follow the plan.' if mode == 'controlling' else
+             'Observing this device; SHS is not changing its settings.')
+    parts = [intro]
+    reason = status.get('reason')
+    if reason == 'Commands logged; physical response and cross-slot transitions are not tested':
+        reason = 'Proposed settings have been recorded. The equipment has not been tested with these settings.'
+    if reason: parts.append(reason)
+    if status.get('water_temperature_c') is not None:
+        parts.append(f"The pool water is {status['water_temperature_c']:.1f} °C.")
+    if status.get('measured_power_w') is not None:
+        parts.append(f"This device is using {status['measured_power_w']/1000:.2f} kW.")
+    planned = None
+    if slot:
+        if device == 'ev' and 'ev_target_current_a' in slot:
+            current = slot['ev_target_current_a']
+            planned = f'The plan requests charging at {current:g} A.' if current else 'The plan requests no car charging now.'
+        elif device == 'pool' and 'pool_w' in slot:
+            planned = 'The plan requests pool heating now.' if slot['pool_w'] > 0 else 'The plan requests no pool heating now.'
+        else:
+            command = slot.get('device_commands', {}).get(device.removeprefix('device:'), {})
+            kind = command.get('type')
+            if kind == 'setpoint': planned = f"The plan requests a temperature of {command['target_c']:g} °C."
+            elif kind == 'switch_schedule': planned = 'The plan requests this device to be on.' if command['on_seconds'] else 'The plan requests this device to be off.'
+            elif kind == 'permit_inhibit': planned = 'The plan allows this device to run.' if command['permitted'] else 'The plan requests a pause.'
+            elif kind == 'variable_power': planned = f"The plan requests {command['value']:g} {command['unit']}."
+            elif kind == 'unavailable': planned = command.get('reason')
+    parts.append(planned or 'Waiting for a current plan for this device.')
+    if status.get('next_step'): parts.append(status['next_step'])
+    return {'explanation': '\n'.join(parts)}

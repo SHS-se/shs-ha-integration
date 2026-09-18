@@ -103,3 +103,18 @@ def reconcile_admissions(options, devices, home):
         for key, members in groups.items()}
     result["planning_admissions"] = groups
     return result
+
+
+def execution_mode_options(options, devices, device_key, mode):
+    """Persist the same local permission exposed on every Planned device card."""
+    if mode not in MODES:
+        raise ValueError("Choose Verification or Controlling")
+    device = next((d for d in devices if d['key'] == device_key), None)
+    if device is None or not device['planned']:
+        raise ValueError("Only Planned, Included devices have execution permission")
+    if mode == 'controlling' and device['permission']['reason']:
+        raise ValueError(device['permission']['reason'])
+    owner = '$' + device['system'] if device.get('system') else device_key
+    result = deepcopy(options)
+    result['device_modes'] = {**result.get('device_modes', {}), owner: mode}
+    return result

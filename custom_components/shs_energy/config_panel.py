@@ -18,6 +18,7 @@ from . import const as shs_const
 from .api import ShsApiError
 from .api_contract import INTEGRATION_VERSION
 from .controller_diagnostics import controller_diagnostics
+from .control_configuration import async_execution_devices, async_set_execution_mode
 from .configuration import (
     area_name_by_id,
     async_discover_configuration,
@@ -25,17 +26,14 @@ from .configuration import (
     entity_area_id_by_id,
     entity_display_name_by_id,
     resolved_options,
-    suggest_device_control_mapping,
 )
 from .configuration_fields import _control_fields, _configuration_sections, LABELS
-from .presentation import complete_device_views, timeline, system_fields, device_name, device_readiness
+from .presentation import timeline, system_fields, device_name, device_readiness
 from .configuration_schema import (
-    prepare_options, save_device, initialise_device_inclusion,
+    prepare_options, save_device,
 )
 from .device_controls import (
-    apply_planner_support,
     is_room_thermal_control,
-    mapping_report,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -97,15 +95,6 @@ def _entity_catalog(hass: HomeAssistant) -> list[dict[str, Any]]:
     return result
 
 
-def _mapping_suggestions(
-    hass: HomeAssistant,
-    device: dict[str, Any],
-    control_type: str,
-) -> dict[str, Any]:
-    """Return live Home Assistant suggestions for the current card contract."""
-    return suggest_device_control_mapping(hass, device, control_type)
-
-
 async def _configuration_payload(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -128,62 +117,10 @@ async def _configuration_payload(
     requested = choices["devices"]
     options = resolved_options(hass, dict(entry.options))
     exchange_status = await coordinator.async_cached_exchange_status()
-    mappings = options.get(shs_const.OPT_DEVICE_CONTROL_MAPPINGS, {})
-    if not isinstance(mappings, dict):
-        mappings = {}
     known_entity_ids = {state.entity_id for state in hass.states.async_all()}
     entity_names = entity_display_name_by_id(hass)
-    area_names = area_name_by_id(hass)
-    entity_area_ids = entity_area_id_by_id(hass)
-    devices: list[dict[str, Any]] = []
-    for device in requested:
-        control_type = str(device.get("control_type") or (mappings.get(device["key"]) or {}).get("control_type") or "")
-        saved = mappings.get(device["key"])
-        saved_mapping = (
-            dict(saved)
-            if isinstance(saved, dict) and saved.get("control_type") == control_type
-            else {}
-        )
-        report = apply_planner_support(
-            mapping_report(
-                control_type,
-                saved,
-                known_entity_ids,
-                entity_names,
-                area_names,
-                entity_area_ids,
-                room_control=is_room_thermal_control(
-                    control_type, str(device.get("category") or "")
-                ),
-            ),
-            control_type,
-            str(device.get("category") or ""),
-        )
-        devices.append(
-            {
-                "key": device["key"],
-                "name": str(device.get("name") or device["key"]),
-                "statistic_id": device.get("statistic_id") or device["key"],
-                "category": device.get("category"),
-                "load_type": device.get("load_type"),
-                "planning_role": device.get("planning_role"),
-                "planning_choice_at": device.get("planning_choice_at"),
-                "control_type": control_type,
-                "mapping": saved_mapping,
-                "stale_mapping_control_type": (
-                    saved.get("control_type")
-                    if isinstance(saved, dict)
-                    and saved.get("control_type") != control_type
-                    else None
-                ),
-                "suggested_mapping": _mapping_suggestions(
-                    hass, device, control_type
-                ),
-                "execution_status": coordinator.controller.status.get("device:" + device["key"]),
-                "fields": list(_control_fields({**device, "control_type": control_type})),
-                **report,
-            }
-        )
+    devices = await async_execution_devices(hass, entry, choices)
+    options = resolved_options(hass, dict(entry.options))
 
     thermal_devices = [
         device
@@ -225,13 +162,6 @@ async def _configuration_payload(
 
     plan = coordinator.optimisation_plan or {}
     operation = coordinator.operational_status
-    devices = complete_device_views(devices, options, choices, operation, plan,
-        coordinator.controller.status, entity_names, area_names, datetime.now(timezone.utc), entry.options.keys())
-    initialised_options = initialise_device_inclusion(dict(entry.options), devices)
-    if initialised_options != dict(entry.options):
-        hass.config_entries.async_update_entry(entry, options=initialised_options)
-        coordinator._plan_configuration_changed = True
-        return await _configuration_payload(hass, entry, refresh_roles=False)
     battery_required = any(device.get("system") == "battery" and device["included"] for device in devices)
     coordinator._sync_battery_control_issue({**options, "battery_control_enabled": True}, included=battery_required)
     for device in devices:
@@ -600,28 +530,7 @@ async def websocket_control_permission(hass, connection, msg):
         connection.send_error(msg["id"], "not_loaded", "The integration is not loaded")
         return
     try:
-        panel = await _configuration_payload(hass, entry, refresh_roles=False)
-        device = next((d for d in panel["devices"] if d["key"] == msg["device_key"]), None)
-        if device is None:
-            raise ValueError("This equipment is no longer present")
-        mode = msg["mode"]
-        reason = device["permission"]["verification_reason" if mode == "control_verification" else "reason"]
-        if mode == "controlling" and reason:
-            raise ValueError(reason)
-        if not device["planned"]:
-            raise ValueError("Only Planned devices have execution permission")
-        key = "$" + device["system"] if device.get("system") else device["key"]
-        options = dict(entry.options)
-        previous_mode = options.get("device_modes", {}).get(key, "control_verification")
-        options["device_modes"] = {**options.get("device_modes", {}), key: mode}
-        options[shs_const.OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(timezone.utc).isoformat()
-        hass.config_entries.async_update_entry(entry, options=options)
-        await entry.runtime_data.controller.async_tick()
-        if previous_mode != mode:
-            entry.async_create_background_task(
-                hass, entry.runtime_data.async_optimisation_push(force_plan=True),
-                name=f"{shs_const.DOMAIN}_replan_after_mode_change",
-            )
+        await async_set_execution_mode(hass, entry, msg["device_key"], msg["mode"])
         connection.send_result(msg["id"], await _configuration_payload(hass, entry, refresh_roles=False))
     except (ShsApiError, ValueError, TypeError) as err:
         connection.send_error(msg["id"], "control_permission_failed", str(err))

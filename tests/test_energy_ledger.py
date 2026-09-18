@@ -6,7 +6,7 @@ import sys
 import subprocess
 import unittest
 
-sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
+sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 from energy_ledger import (
     EnergyBounds, MeterSpec, CounterSample, create_ledger, record_sample,
     prune_ledger, mark_actuals, mark_retained_actuals, actuals_since,

@@ -31,6 +31,8 @@ from .const import (
     backend_attributes,
 )
 from .configuration import resolved_options
+from .operating_modes import device_mode
+from .presentation import controller_explanation
 from .optimisation import OptimisationInputError, validate_plan_contract
 from .coordinator import ShsStatusCoordinator
 from .supplier import current_supplier_prices
@@ -766,6 +768,18 @@ class ShsControllerSensor(ShsBaseSensor):
 
     @property
     def extra_state_attributes(self):
+        options = self.coordinator.controller.options()
+        def details(device, status):
+            _, slot = self.coordinator.binding_plan_for(device, options)
+            return {**{key: value for key, value in status.items() if key != "state"},
+                    **controller_explanation(device, device_mode(options, device), status, slot)}
         if self.device == "devices":
-            return {"devices": {key.removeprefix("device:"): value for key, value in self.coordinator.controller.status.items() if key.startswith("device:")}}
-        return {key: value for key, value in self.coordinator.controller.status[self.device].items() if key != "state"}
+            rows = {key.removeprefix("device:"): {**value, **details(key, value)}
+                    for key, value in self.coordinator.controller.status.items() if key.startswith("device:")}
+            return {"devices": rows, "explanation": "\n\n".join(
+                f"{key}:\n{value['explanation']}" for key, value in rows.items()) or "No device controller evaluations recorded."}
+        status = self.coordinator.controller.status[self.device]
+        if self.device == "battery":
+            runtime = self.coordinator.battery_runtime.snapshot()
+            status = {**status, "battery_runtime": runtime}
+        return details(self.device, status)

@@ -1095,7 +1095,8 @@ test('battery measurement errors open and highlight the Energy fields, not the d
   assert.equal((sectionHtml.match(/aria-invalid="true"/g) || []).length, 3);
   assert.equal((sectionHtml.match(/Required/g) || []).length, 3);
   assert.doesNotMatch(sectionHtml, /Add a setting/);
-  battery.battery_runtime = { state: 'fault', reason: 'Measurement settings need attention', fix };
+  battery.battery_runtime = { state: 'fault', reason: 'Measurement settings need attention', fix,
+    display: {status: 'Measurement settings need attention', now: 'Complete the highlighted measurement settings.', loss: ''} };
   assert.doesNotMatch(panel._batteryLiveInputs(battery), /Waiting for current measurements/);
   assert.match(panel._batteryLiveInputs(battery), /Complete the highlighted measurement settings/);
   const card = panel._renderDevice(battery);
@@ -1161,6 +1162,7 @@ test('battery status explains pending settings and never labels a known command 
   const panel = makePanel();
   const html = panel._batteryLiveInputs({ battery_runtime: {
     state: 'pending', reason: 'Waiting for physical confirmation of battery settings', command_state: 'reconciling',
+    display: {status: 'Waiting for physical confirmation of battery settings', now: 'Waiting for the battery to confirm its settings.', loss: ''},
     requested_settings: { mode: 'Command Charging (PV First)', charge_limit_w: 73, discharge_limit_w: 0 },
     pending_writes: 1, pending_commands: [{ entity_id: 'number.charge', value: 73, stage: 'accepted' }],
   } });
@@ -1221,4 +1223,18 @@ test('battery card uses controller outlook while other devices keep planner next
   assert.match(cards[0], /The plan is to charge/);
   assert.doesNotMatch(cards[0], /Next quarter|9999 W/);
   assert.match(cards[1], /Next quarter/);
+});
+
+
+test('battery card renders shared sensor wording without interpreting it again', () => {
+  const panel = makePanel();
+  const html = panel._batteryLiveInputs({battery_runtime: {display: {
+    status: 'Testing the plan; battery settings are not being changed',
+    now: 'Your home is using 2.67 kW. Solar is providing 0.00 kW.',
+    loss: 'Energy-loss estimates use measurements from your system.',
+  }}});
+  assert.match(html, /Testing the plan/);
+  assert.match(html, /2.67 kW/);
+  assert.match(html, /Energy-loss estimates use measurements/);
+  assert.doesNotMatch(html, /Waiting/);
 });

@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
+sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from battery_commands import validate_battery_command
 
 

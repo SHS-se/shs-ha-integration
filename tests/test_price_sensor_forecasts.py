@@ -9,7 +9,7 @@ from types import SimpleNamespace, MethodType
 import unittest
 
 ROOT = Path(__file__).parents[1] / "custom_components" / "shs_energy"
-sys.path.insert(0, str(ROOT))
+sys.path.append(str(ROOT))
 from supplier import all_in_price_slots
 from tariff import grid_price_forecast, TariffError
 from optimisation import quarter_start

@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components" / "shs_energy"))
+sys.path.append(str(Path(__file__).resolve().parents[1] / "custom_components" / "shs_energy"))
 from home_runtime import JournalDurable, Persist, reduce_home, reservation, Send, authorize_send
 from home_runtime_checkpoint import (
     MAX_BYTES, decode_checkpoint, decode_event, effects_json, encode_checkpoint,

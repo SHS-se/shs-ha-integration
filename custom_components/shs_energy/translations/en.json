@@ -198,6 +198,15 @@
       "reactive_surplus": {
         "name": "Reactive surplus"
       }
+    },
+    "select": {
+      "execution_mode": {
+        "name": "{device} execution mode",
+        "state": {
+          "control_verification": "Verification",
+          "controlling": "Controlling"
+        }
+      }
     }
   },
   "issues": {

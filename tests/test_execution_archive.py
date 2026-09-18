@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 import unittest
-sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
+sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
 from execution_archive import ExecutionArchive, canonical, PAGE_BYTES
 from home_runtime import ExecutionSession
 from plan_execution import Account, MeterReceipt, StateObservation, admit_plan, balance, measured, objective_history, record_meter

@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
+sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
 from operating_modes import operating_mode_identity, scoped_plan
 from planning import build_operating_scope
 from optimisation import validate_plan_contract, OptimisationInputError

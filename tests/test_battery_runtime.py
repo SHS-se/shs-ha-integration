@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
+sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
 from battery_runtime import BatteryRuntime, exact_start, iso, stamp
 from battery_writer import BatteryWriterFence
 from battery_runtime import digest

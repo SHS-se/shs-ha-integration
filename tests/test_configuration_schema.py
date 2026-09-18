@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
+sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
 from configuration_schema import prepare_options, resolve_configuration, save_device, initialise_device_inclusion
 from migration import migrate_options
 from configuration_fields import _control_fields

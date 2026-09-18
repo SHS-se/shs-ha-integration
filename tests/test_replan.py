@@ -14,7 +14,7 @@ import sys
 import unittest
 
 MODULE_ROOT = Path(__file__).parents[1] / "custom_components" / "shs_energy"
-sys.path.insert(0, str(MODULE_ROOT))
+sys.path.append(str(MODULE_ROOT))
 
 from api_contract import (  # noqa: E402
     API_VERSION,

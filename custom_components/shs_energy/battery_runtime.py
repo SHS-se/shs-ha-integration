@@ -27,6 +27,7 @@ if __package__:
     from .energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
     from .device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
     from .operating_modes import device_mode
+    from .presentation import battery_status_text
 else:
     import home_runtime as rt
     from home_host import HomeHost, HostPorts, DispatchRejected
@@ -42,6 +43,7 @@ else:
     from energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
     from device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
     from operating_modes import device_mode
+    from presentation import battery_status_text
 
 AGE_MS=30000
 ALIGNMENT_MS=15000
@@ -195,6 +197,7 @@ class BatteryRuntime:
             'fault_history':[dict(row) for row in self._fault_history],
             'fault_history_scope':'Last 64 distinct faults since integration load'}
         if not self.host:
+            value['display'] = battery_status_text(value)
             return value
         state=self.host.state;group=state.groups[0];session=state.execution
         accounting_at=self.now()
@@ -239,6 +242,7 @@ class BatteryRuntime:
                 value.update(state='pending',reason='Waiting for measured battery power to settle within its limits' if group.status=='native_guard_blocked' else 'Applying the planned battery settings; confirmation is pending')
         if value['state']=='fault' and 'fix' not in value:
             value.update(fix={'kind':'diagnostics'},next_step='Check the reported source or command failure. Download diagnostics if it persists.',retry_automatically=True)
+        value['display'] = battery_status_text(value)
         return value
 
     def validate_plan_response(self,plan):

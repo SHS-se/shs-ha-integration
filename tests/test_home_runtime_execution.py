@@ -9,7 +9,7 @@ import subprocess
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
+sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation
 from battery_supply import SupplyScope
 from types import SimpleNamespace

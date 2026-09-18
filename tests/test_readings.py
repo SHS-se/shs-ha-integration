@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
+sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
 from const import MAX_KWH_PER_READING, MAX_NEGATIVE_CHANGE_KWH  # noqa: E402
 from readings import daily_category_readings, usable_change  # noqa: E402

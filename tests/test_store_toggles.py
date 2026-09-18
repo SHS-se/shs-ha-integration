@@ -20,7 +20,7 @@ import sys
 import unittest
 
 PACKAGE = Path(__file__).parents[1] / "custom_components" / "shs_energy"
-sys.path.insert(0, str(PACKAGE))
+sys.path.append(str(PACKAGE))
 
 CONFIG_PANEL = (PACKAGE / "configuration_fields.py").read_text(encoding="utf-8")
 CONFIGURATION = (PACKAGE / "configuration_schema.py").read_text(encoding="utf-8")

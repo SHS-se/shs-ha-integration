@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
+sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from controller_metrics import ControllerMetrics
 
 

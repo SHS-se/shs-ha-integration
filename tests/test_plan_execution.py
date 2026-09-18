@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
+sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 from plan_execution import (Account, Bounds, Disposition, ExecutionContract, MeterReceipt,
     Objective, Recovery, ReferenceInterval, StateObservation, admit_plan, balance,
     contract_wire, feedback, measured, objective_history, observe_state, read_contract,
