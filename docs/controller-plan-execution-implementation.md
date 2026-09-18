@@ -111,7 +111,7 @@ Keep the battery in Verification until those traces meet your acceptance criteri
 
 ## Validation
 
-- Integration: 754 Python tests and 74 frontend tests pass, including fake native
+- Integration: 756 Python tests and 75 frontend tests pass, including fake native
   services, no-write Verification, crash/restart and release, configuration
   correction, delayed/corrected counters, archive failure and diagnostic replay.
 - Backend: 1,194 Deno tests and 32 mocked-backend Playwright tests pass. TypeScript
@@ -165,3 +165,16 @@ successfully admits its generation-35 reference to the supplied account, preserv
 all four earlier admissions and every meter receipt. Deployment requires the
 server fix as well as integration beta.9; changing the integration alone cannot
 repair the planner's reused identities.
+
+## Measurement revisions after restart (beta.10)
+
+The battery adapter reserves one local revision per measurement capture, under its
+capture lock, above both its previously reserved revision and all restored runtime
+watermarks. That revision is shared by the native observation, household frame and
+battery conditions. Two captures queued before either is applied therefore remain
+distinct after restart. Device timestamps do not determine update order; the
+existing freshness checks still apply. The regression test restarts a persisted
+runtime, queues two different captures before delivery and verifies that both are
+accepted, including a later capture with an earlier but still fresh source time.
+This fixes the revision collision; it does not establish that the separate
+measurement-processing delays observed in production have been resolved.

@@ -645,8 +645,6 @@ class BatteryRuntime:
             raise ValueError('battery source reports are not aligned')
         if sum(e.observed.import_w for e in external)>accounting.house_w+1e-6:
             raise ValueError('Planned device meters exceed gross house consumption')
-        self._capture_revision+=1
-        revision=self._capture_revision
         controls=tuple(zip(self._control_entities(),(readback['mode'],readback['charge_limit_w'],readback['discharge_limit_w'])))
         envelope=self.adapter.envelope(controls)
         # The native ceiling must bound actual battery power. Settings readback
@@ -657,17 +655,24 @@ class BatteryRuntime:
             row=read(stream.spec.stream_id)
             if row and row.get('state') not in ('unknown','unavailable',None):
                 await self._meter(stream.spec.stream_id,row['state'],row['attributes'],stamp(row['last_reported']),row.get('event_id'))
-        authority=self.host.state.authority
-        observed=rt.Observed(group_id,rt.Observation(max(revision,self.host.state.groups[0].observation_revision+1),min(times),valid,controls,(('ready',ready),),envelope))
+        state=self.host.state
+        # Reserve a unique local revision while holding _observe_lock. Captures
+        # may queue before either reaches the reducer, and persisted watermarks
+        # can exceed this adapter's counter after a restart.
+        self._capture_revision=max(self._capture_revision, state.conditions_revision,
+            state.groups[0].observation_revision, state.frame.revision if state.frame else 0)+1
+        revision=self._capture_revision
+        authority=state.authority
+        observed=rt.Observed(group_id,rt.Observation(revision,min(times),valid,controls,(('ready',ready),),envelope))
         # Gross nonbattery load is a conservative import frame. PV is included
         # separately as possible export, and never erased by a planned device.
         self._external_pending={key:until for key,until in self._external_pending.items() if min(times)<until}
-        frame=rt.FrameObserved(rt.Frame(max(revision,(self.host.state.frame.revision+1) if self.host.state.frame else 1),min(times),valid,
+        frame=rt.FrameObserved(rt.Frame(revision,min(times),valid,
             rt.Envelope(max(accounting.house_w,authority.plant.import_limit_w if self._external_pending else 0), max(0,accounting.pv_w-accounting.house_w)),
             rt.Envelope(authority.plant.import_limit_w,authority.plant.export_limit_w),tuple(external)))
         self._frame_pending={frame.frame.revision:digest(self._external_pending)}
         energy=fraction*self._ratings['battery_capacity_kwh']
-        conditions=rt.ConditionsObserved(ExecutionConditions(max(revision,self.host.state.conditions_revision+1),min(times),valid,energy,
+        conditions=rt.ConditionsObserved(ExecutionConditions(revision,min(times),valid,energy,
             accounting.pv_w,accounting.house_w,max(0,grid),authority.identity,authority.permissions,accounting.eligible_gross_w,soc_at))
         response=('charging' if battery>100 else 'discharging' if battery < -100 else 'idle')
         requested=('charging' if readback['mode']=='Command Charging (PV First)' and readback['charge_limit_w']>100

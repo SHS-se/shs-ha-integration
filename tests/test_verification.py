@@ -469,6 +469,47 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn('contract rejected', str(raised.exception))
 
 
+    async def test_pool_mode_transitions_preserve_permission_baseline_or_leave_unmapped_switch(self):
+        for permission in (False,True):
+            for initial in ('off','on'):
+                for first_heating in (False,True):
+                    with self.subTest(permission=permission,initial=initial,first_heating=first_heating):
+                        self.setUp()
+                        if not permission:self.options.pop('pool_permission_entity')
+                        # The website's generic actuator mapping is not the
+                        # dedicated Nibe controller's optional permission switch.
+                        self.options['device_control_mappings']['pool']={
+                            'control_type':'setpoint','actuator_entity_ids':['switch.pool'],
+                            'temperature_entity_id':'sensor.water'}
+                        self.states['switch.pool'].state=initial
+                        self.slot['pool_w']=3300 if first_heating else 0
+                        self.options['device_modes']['$pool']='control_verification'
+                        await self.controller.async_start()
+                        self.assertEqual(self.calls,[])
+                        self.assertEqual(self.states['switch.pool'].state,initial)
+                        self.options['device_modes']['$pool']='controlling'
+                        await self.controller.async_tick()
+                        self.assertIn('pool',self.controller.records)
+                        self.assertEqual(self.states['switch.pool'].state,
+                            'on' if permission and first_heating else initial)
+                        # A later heating request may enable permission. Deferral
+                        # after that adjusts the band without turning it off.
+                        self.slot['pool_w']=3300
+                        await self.controller.async_tick()
+                        self.assertEqual(self.states['switch.pool'].state,'on' if permission else initial)
+                        self.slot['pool_w']=0
+                        await self.controller.async_tick()
+                        self.assertEqual(self.states['switch.pool'].state,'on' if permission else initial)
+                        self.options['device_modes']['$pool']='control_verification'
+                        await self.controller.async_tick()
+                        self.assertEqual(self.states['switch.pool'].state,initial)
+                        self.assertEqual(float(self.states['number.start'].state),29.5)
+                        self.assertEqual(float(self.states['number.stop'].state),30)
+                        self.assertNotIn('pool',self.controller.records)
+                        if not permission:
+                            self.assertFalse(any(entity=='switch.pool' for entity,_ in self.calls))
+
+
 class ModeTests(unittest.TestCase):
     def test_old_booleans_cannot_authorize_and_modes_derive_planning(self):
         options = resolve_configuration({'planning_mode': 'live', 'battery_control_enabled': True})

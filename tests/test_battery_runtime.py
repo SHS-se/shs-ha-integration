@@ -644,3 +644,39 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(restarted.runtime.snapshot()['plan_status'],'rejected')
         finally:
             await r.runtime.close();await restarted.runtime.close()
+
+    async def test_restart_reserves_distinct_revisions_before_queued_captures_are_applied(self):
+        r=Rig('control_verification');await r.start()
+        try:
+            for _ in range(5):await r.advance(1000)
+            before=r.runtime.host.state.conditions_revision
+            await r.runtime.close()
+            restarted=Rig('control_verification');restarted.now=r.now+1000
+            for row in restarted.rows.values():row['last_reported']=iso(restarted.now)
+            restarted.store.saved=deepcopy(r.store.saved)
+            restarted.archive_stores.update(r.archive_stores)
+            r=restarted
+            await asyncio.wait_for(r.start(),3)
+            self.assertGreater(r.runtime.host.state.conditions_revision,before)
+            await r.advance(1000)
+            baseline=r.runtime.host.state
+            # Both producers return captures before the host applies either.
+            # The second source timestamp is older but still fresh; local receipt
+            # order, not source timestamps, determines which update is newer.
+            r.rows['sensor.house']['state']='1100'
+            first=(await r.runtime._observe('battery'))[0]
+            r.rows['sensor.house'].update(state='1200',last_reported=iso(r.now-100))
+            second=(await r.runtime._observe('battery'))[0]
+            self.assertLess(first.conditions.revision,second.conditions.revision)
+            self.assertGreater(first.conditions.revision,baseline.conditions_revision)
+            for event in (first,second):
+                self.assertEqual(event.observed.observation.revision,event.conditions.revision)
+                self.assertEqual(event.frame.revision,event.conditions.revision)
+                await r.runtime.host.accept(event)
+            await asyncio.wait_for(r.runtime.host.idle(),3)
+            self.assertEqual(r.runtime.host.state.conditions.residual_load_w,1200)
+            self.assertEqual(r.runtime.host.state.conditions_revision,second.conditions.revision)
+            self.assertFalse(any('conflicting conditions revision' in row['reason']
+                for row in r.runtime.snapshot()['fault_history']))
+            self.assertEqual(r.calls,[])
+        finally:await r.runtime.close()
