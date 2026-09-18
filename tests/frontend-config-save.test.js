@@ -353,6 +353,22 @@ for (const outcome of ['success', 'error']) {
   });
 }
 
+test('a failed load stays on screen instead of retrying behind the spinner on each hass update', async () => {
+  const panel = makePanel(); delete panel._render;
+  panel._data = panel._draft = panel._savedDraft = undefined;
+  panel.isConnected = true;
+  panel.shadowRoot = { innerHTML: '', activeElement: null, querySelectorAll: () => [] };
+  let requests = 0;
+  const hass = { callWS: async () => { requests++; throw new Error("'control_type'"); } };
+  panel.hass = hass;
+  await new Promise(resolve => setTimeout(resolve));
+  panel.hass = hass; panel.hass = hass;
+  assert.match(panel.shadowRoot.innerHTML, /Configuration could not be loaded/);
+  assert.match(panel.shadowRoot.innerHTML, /control_type/);
+  await new Promise(resolve => setTimeout(resolve));
+  assert.equal(requests, 1);
+});
+
 test('opening waits for entry selection before refreshing website choices', async () => {
   const panel = makePanel(); panel._data = undefined;
   const requests = [];

@@ -97,6 +97,24 @@ def is_room_thermal_control(control_type: str | None, category: str | None) -> b
     )
 
 
+def room_thermal_zones(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the planned device views that feed a room heat model.
+
+    The views also hold the $battery, $ev and $pool system entries, which carry
+    no website control type and may lack a planning role.
+    """
+    return [
+        device
+        for device in devices
+        if device.get("planning_role") == "controllable"
+        and is_room_thermal_control(device.get("control_type"), device.get("category"))
+        and (
+            device["control_type"] == "setpoint"
+            or bool(device.get("mapping", {}).get("temperature_entity_id"))
+        )
+    ]
+
+
 def planning_path(control_type: str | None, category: str | None) -> str | None:
     """Return which planning model owns one controllable device.
 

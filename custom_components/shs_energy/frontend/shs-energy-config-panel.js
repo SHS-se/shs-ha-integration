@@ -50,7 +50,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   set hass(value) {
     this._hass = value;
-    if (this.isConnected && !this._data && !this._loading) {
+    // Home Assistant sets hass on every state change. A failed load waits for
+    // Try again instead of retrying behind the spinner and hiding its error.
+    if (this.isConnected && !this._data && !this._loading && !this._error) {
       this._load(true);
     }
   }

@@ -78,6 +78,15 @@ class PresentationTests(unittest.TestCase):
         battery = next(d for d in self.view(configured_keys=['battery_enabled']) if d.get('system') == 'battery')
         self.assertEqual(battery['mapping_status'], 'ready')
 
+    def test_room_zones_ignore_the_planned_battery_and_other_system_entries(self):
+        from test_device_controls import _battery
+        from device_controls import room_thermal_zones
+        self.options.update(_battery(), ev_enabled=True, ev_connected_entity='binary_sensor.car')
+        self.choices['home']['battery'] = {'included': True, 'choice_at': self.now.isoformat()}
+        views = self.view(configured_keys=['battery_enabled'])
+        self.assertEqual({view['key'] for view in views}, {'sensor.laundry_energy', '$battery', '$ev'})
+        self.assertEqual([zone['key'] for zone in room_thermal_zones(views)], ['sensor.laundry_energy'])
+
     def test_battery_model_properties_are_separate_from_controls(self):
         self.options['battery_enabled'] = True
         self.choices['home']['battery'] = {'included': True}

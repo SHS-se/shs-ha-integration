@@ -33,7 +33,7 @@ from .configuration_schema import (
     prepare_options, save_device,
 )
 from .device_controls import (
-    is_room_thermal_control,
+    room_thermal_zones,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -122,15 +122,7 @@ async def _configuration_payload(
     devices = await async_execution_devices(hass, entry, choices)
     options = resolved_options(hass, dict(entry.options))
 
-    thermal_devices = [
-        device
-        for device in devices
-        if device["planning_role"] == "controllable" and is_room_thermal_control(device["control_type"], device.get("category"))
-        and (
-            device["control_type"] == "setpoint"
-            or bool(device.get("mapping", {}).get("temperature_entity_id"))
-        )
-    ]
+    thermal_devices = room_thermal_zones(devices)
     ready_thermal_devices = [
         device
         for device in thermal_devices
