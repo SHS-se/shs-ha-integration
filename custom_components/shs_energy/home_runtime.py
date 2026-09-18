@@ -749,19 +749,11 @@ class TransportResult:
 
 
 @dataclass(frozen=True)
-class WriteConfirmed:
-    """Transport completed, then an explicit physical read matched its registers."""
-    group_id: str
-    attempt_id: str
-    observation: Observation
-
-
-@dataclass(frozen=True)
 class Tick:
     pass
 
 
-Event = Union[AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ExecutionPlanRejected, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, WriteConfirmed, Tick]
+Event = Union[AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ExecutionPlanRejected, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, Tick]
 
 
 @dataclass(frozen=True)
@@ -807,6 +799,7 @@ class NeedTransition:
     adapter_revision: str
     token: int
     deadline_ms: int
+    command_controls: Controls
 
 
 @dataclass(frozen=True)
@@ -904,6 +897,16 @@ def preparation_matches(plan, attempt):
                 (plan.request_id, plan.request_revision, plan.purpose))
 
 
+def command_controls(group):
+    """Acknowledged assignments for this sequence, never physical measurements."""
+    if group.plan is not None and group.plan.index:
+        return group.plan.steps[group.plan.index - 1].after
+    accepted = [a for a in group.attempts if a.stage == "accepted"]
+    if accepted:
+        return accepted[-1].step.after
+    return group.observation.controls if group.observation else ()
+
+
 def _settle(group, now):
     observation = group.observation
     remaining = []
@@ -911,22 +914,30 @@ def _settle(group, now):
     for attempt in group.attempts:
         # A fresh sample after the adapter's last possible effect settles old effects,
         # whether the setting matches current intent or represents external drift.
-        settled = (attempt.stage != "prepared" and _fresh(observation, now)
+        acknowledged = (attempt.stage == "accepted"
+                        and _fresh(observation, now) and observation.revision > attempt.observed_revision
+                        and _same(observation.controls, command_controls(group)))
+        settled = acknowledged or (attempt.stage in ("sent", "ambiguous") and _fresh(observation, now)
                    and observation.at_ms >= attempt.latest_effect_ms
                    and observation.revision > attempt.observed_revision)
         if settled:
-            if plan is not None and attempt.generation == plan.generation and attempt.step_index == plan.index:
+            if attempt.stage != "accepted" and plan is not None and attempt.generation == plan.generation and attempt.step_index == plan.index:
                 if _same(observation.controls, attempt.step.after) and _guards(attempt.step.native_guards, observation):
                     plan = replace(plan, index=plan.index + 1)
                 else:
                     plan = None
         else:
-            if attempt.stage in ("sent", "accepted") and now >= attempt.confirmation_deadline_ms:
+            if attempt.stage == "sent" and now >= attempt.confirmation_deadline_ms:
                 attempt = replace(attempt, stage="ambiguous")
             remaining.append(attempt)
     # A retry is unsent software work. Advancing or invalidating its sequence
     # must cancel it in the same state update; issued effects remain independent.
     remaining = tuple(a for a in remaining if a.stage != "prepared" or preparation_matches(plan, a))
+    # Keep completed command progress while HA publication lags. Once normal
+    # reports show the final settings, observations can detect later changes.
+    if (plan is not None and plan.index == len(plan.steps) and not remaining
+            and _fresh(observation, now) and _same(observation.controls, plan.steps[-1].after)):
+        plan = None
     return replace(group, attempts=remaining, plan=plan)
 
 
@@ -967,7 +978,7 @@ def _validate_target(group, request):
 def _validate_proposal(group, event, request, purpose):
     if not 0 < len(event.steps) <= 8:
         raise ValueError("proposal must have 1..8 steps")
-    previous = group.observation.controls
+    previous = command_controls(group)
     for step in event.steps:
         if step.key not in group.spec.control_keys or not _same(step.before, previous):
             raise ValueError("step guards must describe the complete preceding control surface")
@@ -1019,7 +1030,7 @@ def _need_transition(group, request, purpose, now, limits, effects):
     job = TransitionJob(key, group.next_transition, attempt,
                         min(request.valid_until_ms, group.observation.valid_until_ms))
     effects.append(NeedTransition(group.spec.id, group.generation, purpose, request,
-                                 group.observation, group.spec.adapter_revision, job.token, job.deadline_ms))
+                                 group.observation, group.spec.adapter_revision, job.token, job.deadline_ms, command_controls(group)))
     return replace(group, transition_work=job, next_transition=group.next_transition + 1,
                    status="needs_transition")
 
@@ -1204,14 +1215,9 @@ def authorize_send(state: HomeState, send: Send, now_ms: int) -> bool:
             and send.generation == group.generation == attempt.generation
             and (send.request_id, send.request_revision) == (request.id, request.revision) == (attempt.request_id, attempt.request_revision)
             and purpose == attempt.purpose and send.send_by_ms == attempt.send_by_ms
-            and attempt.prepared_at_ms <= now_ms < attempt.send_by_ms
             and (send.key, send.value) == (attempt.step.key, attempt.step.value)
-            and _fresh(group.observation, now_ms) and _scope_frame_valid(state, now_ms)
-            and _same(group.observation.controls, attempt.step.before)
-            and _guards(request.native_guards + attempt.step.native_guards, group.observation)
-            and _admissible(_put(state, replace(group, attempts=tuple(a for a in group.attempts if a.id != attempt.id))),
-                            replace(group, attempts=tuple(a for a in group.attempts if a.id != attempt.id)), attempt.step, now_ms)
-            and (purpose == "release" or _execution_send_valid(state, group, request, now_ms)))
+            and _same(command_controls(group), attempt.step.before)
+            and (purpose == "release" or not _is_battery(state, group) or state.execution.status == "active"))
 
 
 def _durable_view(state):
@@ -1257,12 +1263,12 @@ def _drive(state, now, durable_revision, effects):
             effects.append(Observe(group.spec.id))
             state = _put(state, group)
             continue
-        if _same(group.observation.controls, request.target):
+        if _same(command_controls(group), request.target):
             # Prepared work can be cancelled in-process. Issued work cannot be erased
             # just because the desired setting currently happens to be visible.
-            group = replace(group, plan=None, transition_work=None,
+            group = replace(group, transition_work=None,
                             attempts=tuple(a for a in group.attempts if a.stage != "prepared"))
-            if group.attempts:
+            if any(a.stage != "accepted" for a in group.attempts):
                 group = replace(group, status="reconciling")
                 effects.append(Observe(group.spec.id))
             else:
@@ -1270,14 +1276,12 @@ def _drive(state, now, durable_revision, effects):
                                 owned=purpose == "optimisation", release_pending=False if purpose == "release" else group.release_pending, consecutive_attempts=0)
             state = _put(state, group)
             continue
-        if group.plan and group.plan.index == len(group.plan.steps):
-            group = replace(group, plan=None, transition_work=None)
         prepared = next((a for a in group.attempts if a.stage == "prepared"), None)
         if prepared is not None:
             step = prepared.step
             valid = (prepared.generation == group.generation and prepared.grant == group.grant and now < prepared.send_by_ms
                      and (purpose == "release" or _execution_send_valid(state, group, request, now))
-                     and _same(group.observation.controls, step.before) and _guards(step.native_guards, group.observation)
+                     and _same(command_controls(group), step.before) and _guards(step.native_guards, group.observation)
                      and _admissible(_put(state, group), group, step, now))
             if not valid:
                 group = replace(group, attempts=tuple(a for a in group.attempts if a.id != prepared.id), plan=None, transition_work=None, status="reconciling")
@@ -1300,10 +1304,10 @@ def _drive(state, now, durable_revision, effects):
             state = _put(state, group)
             continue
         step = group.plan.steps[group.plan.index]
-        if not _same(group.observation.controls, step.before) or not _guards(step.native_guards, group.observation):
+        if not _same(command_controls(group), step.before) or not _guards(step.native_guards, group.observation):
             group = replace(group, plan=None, transition_work=None, status="reconciling")
             group = _need_transition(group, request, purpose, now, state.limits, effects)
-        elif group.attempts and not all(a.stage == "ambiguous" and _compatible(a, step) for a in group.attempts):
+        elif any(a.stage != "accepted" and not (a.stage == "ambiguous" and _compatible(a, step)) for a in group.attempts):
             group = replace(group, status="reconciling")
             effects.append(Observe(group.spec.id))
         elif len(group.attempts) >= 64:
@@ -1361,7 +1365,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
     """Process one validated domain event; performs no I/O and never reads a clock."""
     if type(now_ms) is not int or now_ms < 0:
         raise ValueError("now_ms must be an absolute nonnegative integer")
-    if not isinstance(event, (AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ExecutionPlanRejected, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, WriteConfirmed, Tick)):
+    if not isinstance(event, (AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ExecutionPlanRejected, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, Tick)):
         raise ValueError("unsupported runtime event")
     previous = state
     rollback = now_ms < state.last_time_ms
@@ -1525,31 +1529,33 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                                            unsupported=event.outcome == "unsupported")
                 group = replace(group, transition_work=work)
                 effects.append(Report(group.spec.id, event.reason))
-        elif isinstance(event, WriteConfirmed):
-            attempt = next((a for a in group.attempts if a.id == event.attempt_id), None)
-            observation = event.observation
-            if (attempt is None or attempt.stage != "accepted" or not _fresh(observation, now_ms)
-                    or observation.revision <= attempt.observed_revision
-                    or observation.at_ms < attempt.prepared_at_ms
-                    or not _same(observation.controls, attempt.step.after)):
-                raise ValueError("write confirmation needs accepted transport and fresh matching physical registers")
-            state = _observe_measurement(state, Observed(event.group_id, observation), now_ms, rollback)
-            group = next(g for g in state.groups if g.spec.id == event.group_id)
-            plan = group.plan
-            if plan is not None and attempt.generation == plan.generation and attempt.step_index == plan.index:
-                plan = replace(plan, index=plan.index + 1)
-            group = replace(group, plan=plan, attempts=tuple(a for a in group.attempts if a.id != attempt.id),
-                            retry_not_before_ms=now_ms, consecutive_attempts=0)
         elif isinstance(event, TransportResult):
+            before_commands = command_controls(group)
             _identity(event.evidence)
             if event.outcome not in ("not_sent", "accepted", "ambiguous"):
                 raise ValueError("unsupported transport evidence")
             attempt = next((a for a in group.attempts if a.id == event.attempt_id), None)
             if attempt is not None and attempt.stage != "prepared":
-                if event.outcome == "not_sent":
+                if event.outcome == "not_sent" and attempt.stage != "accepted":
                     group = replace(group, attempts=tuple(a for a in group.attempts if a.id != attempt.id))
-                elif not (attempt.stage == "ambiguous" and event.outcome == "accepted"):
-                    group = replace(group, attempts=tuple(replace(a, stage=event.outcome) if a.id == attempt.id else a for a in group.attempts))
+                else:
+                    # One service result owns command progression. Queue delay,
+                    # duplicate results and superseded requests cannot turn a
+                    # completed HA call into an invalid confirmation event.
+                    plan = group.plan
+                    if (event.outcome == "accepted" and attempt.stage != "accepted"
+                            and plan is not None and attempt.generation == plan.generation
+                            and attempt.step_index == plan.index):
+                        plan = replace(plan, index=plan.index + 1)
+                    outcome = "accepted" if attempt.stage == "accepted" else event.outcome
+                    group = replace(group, plan=plan,
+                        attempts=tuple(replace(a, stage=outcome) if a.id == attempt.id else a for a in group.attempts),
+                        retry_not_before_ms=now_ms if event.outcome == "accepted" else group.retry_not_before_ms)
+            if (isinstance(group.transition_work, TransitionJob)
+                    and not _same(before_commands, command_controls(group))):
+                # An older call can finish while a new request's adapter is
+                # preparing. Its proposal must use the newly acknowledged start.
+                group = replace(group, transition_work=None)
         state = _put(state, group)
     state = _refresh_execution(state, now_ms, effects)
     if not rollback:

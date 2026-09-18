@@ -25,8 +25,7 @@ class DispatchRejected(Exception):
 @dataclass(frozen=True)
 class HostPorts:
     persist: Callable[[bytes], Awaitable[None]]
-    dispatch: Callable[[runtime.Send], Awaitable[Optional[runtime.Observation]]]
-    grant_is_current: Callable[[runtime.Send], bool]
+    dispatch: Callable[[runtime.Send], Awaitable[None]]
     observe: Callable[[str], Awaitable[tuple[runtime.Event, ...]]]
     confirm_authority: Callable[[str], Awaitable[tuple[runtime.Event, ...]]]
     transition: Callable[[runtime.NeedTransition], Awaitable[runtime.Event]]
@@ -173,12 +172,10 @@ class HomeHost:
                                              reason[:2000]),)
 
     async def _send(self, effect):
-        now = self.ports.now_ms()
-        if (self._closed or self._fault is not None or not runtime.authorize_send(self.state, effect, now)
-                or not self.ports.grant_is_current(effect)):
-            return (runtime.TransportResult(effect.group_id, effect.attempt_id, "not_sent", "host_final_fence"),)
+        if self._closed or self._fault is not None:
+            return (runtime.TransportResult(effect.group_id, effect.attempt_id, "not_sent", "host_stopped"),)
         try:
-            confirmation = await self.ports.dispatch(effect)
+            await self.ports.dispatch(effect)
         except DispatchRejected as error:
             self.ports.report(effect.group_id, f"Write not sent: {effect.key}: {error}")
             return (runtime.TransportResult(effect.group_id,effect.attempt_id,"not_sent","transport_final_fence"),)
@@ -187,10 +184,7 @@ class HomeHost:
             # ambiguous. Never retry as if no physical write could have happened.
             self.ports.report(effect.group_id, f"Write uncertain: {effect.key}={effect.value}: {type(error).__name__}: {error}")
             return (runtime.TransportResult(effect.group_id, effect.attempt_id, "ambiguous", "host_transport_uncertain"),)
-        events = (runtime.TransportResult(effect.group_id, effect.attempt_id, "accepted", "host_service_acknowledged"),)
-        if confirmation is not None:
-            events += (runtime.WriteConfirmed(effect.group_id, effect.attempt_id, confirmation),)
-        return events
+        return (runtime.TransportResult(effect.group_id, effect.attempt_id, "accepted", "ha_service_completed"),)
 
     async def idle(self):
         """Drain current work in deterministic tests, without waiting for timers."""

@@ -4,27 +4,31 @@ from pathlib import Path
 import sys
 import unittest
 sys.path.append(str(Path(__file__).parents[1]/'custom_components/shs_energy'))
-from home_host import HomeHost, HostPorts
-from home_runtime import ExecutionPlanOffered, Proposed, Step, Guard, Observed, Observation, TransportResult, WriteConfirmed
+from home_host import HomeHost, HostPorts, DispatchRejected
+from home_runtime import ExecutionPlanOffered, Proposed, Step, Guard, Observed, Observation, TransportResult
 from home_runtime_checkpoint import decode_checkpoint, encode_checkpoint
 from test_home_runtime_execution import Harness
 
 
 class HomeHostTests(unittest.IsolatedAsyncioTestCase):
-    def test_only_explicit_matching_readback_can_close_the_effect_window_early(self):
+    def test_service_completion_advances_once_without_register_confirmation(self):
         from dataclasses import replace
+        from home_runtime import Tick
         h=Harness();h.offer();h.prepare();h.durable()
         attempt=h.group.attempts[0]
-        h.event(TransportResult(h.group.spec.id,attempt.id,'accepted','synthetic-ack'))
-        h.observe(attempt.step.after)
-        self.assertTrue(any(a.id==attempt.id for a in h.group.attempts))
-        physical=replace(h.group.observation,revision=h.group.observation_revision+1)
-        with self.assertRaisesRegex(ValueError,'matching physical registers'):
-            h.event(WriteConfirmed(h.group.spec.id,attempt.id,replace(physical,controls=attempt.step.before)))
-        self.assertTrue(any(a.id==attempt.id for a in h.group.attempts))
-        self.assertLess(h.now,attempt.latest_effect_ms)
-        h.event(WriteConfirmed(h.group.spec.id,attempt.id,physical))
-        self.assertFalse(any(a.id==attempt.id for a in h.group.attempts))
+        measured=h.group.observation
+        account=h.state.execution.account
+        # A queued result may arrive after the old confirmation timeout.
+        h.event(Tick(), attempt.confirmation_deadline_ms)
+        result=TransportResult(h.group.spec.id,attempt.id,'accepted','ha_service_completed')
+        h.event(result)
+        index=h.group.plan.index
+        self.assertEqual(index,attempt.step_index+1)
+        self.assertEqual(h.group.observation,measured)
+        h.event(result)
+        self.assertEqual(h.group.plan.index,index)
+        self.assertEqual(h.group.observation,measured)
+        self.assertEqual(h.state.execution.account,account)
 
     async def make_host(self, *, fail_persist=False, grant=True, fail_send=False):
         h=Harness(); writes=[]; durable=[]; reports=[]
@@ -32,6 +36,9 @@ class HomeHostTests(unittest.IsolatedAsyncioTestCase):
             if fail_persist: raise OSError('disk unavailable')
             durable.append(data)
         async def dispatch(send):
+            from home_runtime import authorize_send
+            if not grant or not authorize_send(host.state,send,h.now):
+                raise DispatchRejected('permission changed')
             saved=decode_checkpoint(durable[-1])
             self.assertTrue(any(a.id==send.attempt_id and a.stage=='sent' for g in saved.groups for a in g.attempts))
             writes.append(send)
@@ -45,14 +52,14 @@ class HomeHostTests(unittest.IsolatedAsyncioTestCase):
         async def no_events(_):return ()
         async def renew(_,reason):return ()
         async def transition(effect):
-            controls=effect.observation.controls; steps=[]
+            controls=effect.command_controls; steps=[]
             for key,value in effect.request.target:
                 if dict(controls)[key]!=value:
                     step=Step(key,value,controls,(Guard('ready',1,1),),h.group.spec.maximum,100,200,True,'synthetic-transient')
                     steps.append(step);controls=step.after
             return Proposed(effect.group_id,effect.generation,effect.request.id,effect.request.revision,
                 effect.observation.revision,effect.adapter_revision,tuple(steps),effect.token)
-        ports=HostPorts(persist,dispatch,lambda _:grant,no_events,no_events,transition,renew,
+        ports=HostPorts(persist,dispatch,no_events,no_events,transition,renew,
                         lambda *row:reports.append(row),lambda:h.now)
         host=HomeHost(h.state,ports);await host.start()
         self.addAsyncCleanup(host.close)

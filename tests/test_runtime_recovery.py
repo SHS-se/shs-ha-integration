@@ -92,6 +92,26 @@ class TransitionWorkerTests(unittest.TestCase):
         h.propose(); h.finish()
         self.assertEqual(h.group().status, "adopted")
 
+    def test_late_completion_replaces_proposal_built_from_old_command_settings(self):
+        h=Harness();h.request();h.propose();sent=h.durable()
+        h.request(target=controls("discharge",0,1000),revision=2)
+        h.event(Tick(),h.group().retry_not_before_ms)
+        old=next(e for e in h.effects if isinstance(e,NeedTransition))
+        proposal=Proposed(old.group_id,old.generation,old.request.id,old.request.revision,
+            old.observation.revision,old.adapter_revision,
+            synthetic_steps(old.command_controls,old.request.target),old.token)
+        h.event(TransportResult("battery",sent.attempt_id,"accepted","ha_service_completed"))
+        fresh=next(e for e in h.effects if isinstance(e,NeedTransition))
+        self.assertGreater(fresh.token,old.token)
+        self.assertNotEqual(fresh.command_controls,old.command_controls)
+        h.event(proposal)  # Superseded work is harmless, not an invalid-state fault.
+        self.assertEqual(h.group().transition_work.token,fresh.token)
+        self.assertIsNone(h.group().plan)
+        h.event(Proposed(fresh.group_id,fresh.generation,fresh.request.id,fresh.request.revision,
+            fresh.observation.revision,fresh.adapter_revision,
+            synthetic_steps(fresh.command_controls,fresh.request.target),fresh.token))
+        self.assertIsNotNone(h.group().plan)
+
     def test_retryable_failure_is_capped_and_observation_churn_keeps_pacing(self):
         h = Harness(); h.request()
         delays = []

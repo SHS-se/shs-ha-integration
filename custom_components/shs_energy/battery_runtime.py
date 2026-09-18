@@ -114,7 +114,7 @@ class BatteryRuntime:
         self._mode_revision=0;self._mode=None;self._capture_revision=0;self._last_capture=None
         self._status={'state':'pending','reason':'Waiting for the battery plan'}
         self._last_error=None;self._external_pending={};self._frame_pending={};self._releasing=False
-        self._native_checked=False;self._release_revision=0
+        self._release_revision=0
         self._bootstrap=execution.Account();self._replan_task=None;self._replan_pending=False
         self._bootstrap_rejection=None;self._bootstrap_captured=None
         self._fault_history=[]
@@ -182,7 +182,7 @@ class BatteryRuntime:
                 self._record_fault('recovery',self._status['reason'])
 
     async def _open_host(self,state,checkpoint=None):
-        ports=HostPorts(self._persist,self._dispatch,self._can_send,self._observe,self._confirm,self._transition,self._renew,self._report,self.now,self._persist_state)
+        ports=HostPorts(self._persist,self._dispatch,self._observe,self._confirm,self._transition,self._renew,self._report,self.now,self._persist_state)
         # Apply current scheduling limits on restart without extending any
         # previously prepared or issued attempt's persisted effect window.
         self.host=HomeHost(replace(state,limits=RUNTIME_LIMITS),ports)
@@ -216,7 +216,7 @@ class BatteryRuntime:
         accounting_at=self.now()
         value.update(command_state=group.status,mode=group.mode,execution_state=session.status,
             accounting_at_ms=accounting_at,
-            pending_writes=len(group.attempts),native_target=dict(group.desired.target) if group.desired else None,
+            pending_writes=sum(a.stage!="accepted" for a in group.attempts),native_target=dict(group.desired.target) if group.desired else None,
             accounting=(execution.feedback if include_evidence else execution.planner_feedback)(session.account,accounting_at),
             assessment=asdict(session.assessment) if session.assessment else None,
             )
@@ -254,7 +254,7 @@ class BatteryRuntime:
             if group.status=='adopted':
                 value.update(state='controlling',runtime_reason=None)
             else:
-                value.update(state='pending',reason='Waiting for measured battery power to settle within its limits' if group.status=='native_guard_blocked' else 'Applying the planned battery settings; confirmation is pending')
+                value.update(state='pending',reason='Applying the planned battery settings')
         if value['state']=='fault' and 'fix' not in value:
             value.update(fix={'kind':'diagnostics'},next_step='Check the reported source or command failure. Download diagnostics if it persists.',retry_automatically=True)
         return self._plan_status(value, session.plan_rejection, session.account.contract)
@@ -424,7 +424,7 @@ class BatteryRuntime:
         self._bootstrap=session.account
         self._bootstrap_rejection=session.plan_rejection
         self._bootstrap_captured=session.captured_feedback
-        self.host=None;self._seeded=False;self._mode=None;self._model=None;self._native_checked=False
+        self.host=None;self._seeded=False;self._mode=None;self._model=None
         self._identity=None;self._last_capture=None;self._observation_error=None
         await self._persist_bootstrap()
         return True
@@ -510,7 +510,7 @@ class BatteryRuntime:
         cut=contract.intervals[0].start_ms
         keys=self._control_entities()
         bindings=tuple(rt.OperationBinding(o,tuple(zip(keys,(MODES[o.operation],o.charge_limit_w,o.discharge_limit_w))),
-                          'pv-first-dc-v2','sigen-modbus-v2.9-ess-pv-first',(rt.Guard('ready',1,1),)) for o in operations)
+                          'pv-first-dc-v2','sigen-modbus-v2.9-ess-pv-first',()) for o in operations)
         catalog=rt.NativeCatalog(catalog_revision,ADAPTER_REVISION,surface['revision'],*keys,tuple(surface['mode_options']),1,cc,dc,bindings)
         self.adapter=SigenAdapter(catalog,self._model)
         self._scope=scope
@@ -637,10 +637,6 @@ class BatteryRuntime:
             raise ValueError('battery configuration changed')
         options=self._options
         read=self.coordinator._battery_entity_report
-        controls=[read(e) for e in self._control_entities()]
-        if not self._native_checked or any(not r or self.now()-stamp(r['last_reported'])>=10000 for r in controls):
-            await self.coordinator.async_battery_native_readback(self._control_entities())
-            self._native_checked=True
         now=self.now()
         entities=set(self._control_entities())|{entity for _,entity,_ in self._demand_sources()}|{options.get(k) for k in
             ('house_consumption_power_entity','solar_production_power_entity','battery_power_measurement_entity','battery_soc_entity','grid_power_entity')}
@@ -665,10 +661,10 @@ class BatteryRuntime:
         fraction=float(soc['state'])/100
         if soc['attributes'].get('unit_of_measurement')!='%' or not isfinite(fraction) or not 0<=fraction<=1 or not soc_at<=now<soc_at+AGE_MS:
             raise ValueError('fresh percentage battery SOC required')
-        readback=surface['readback'];native_at=min(readback[k] for k in ('mode_reported_at_ms','charge_reported_at_ms','discharge_reported_at_ms'))
-        if not native_at<=now<native_at+AGE_MS:
-            raise ValueError('native register report is stale')
-        external=[];times=[bat_at,grid_at,soc_at,native_at,*(r.at_ms for r in evidence)]
+        readback=surface['readback']
+        # Setting values remain current until HA reports a change or makes the
+        # entity unavailable. Only physical measurements have a freshness age.
+        external=[];times=[bat_at,grid_at,soc_at,*(r.at_ms for r in evidence)]
         for key,entity,_ in self._demand_sources():
             value,at=power(reports[entity],source=entity,now_ms=now);times.append(at)
             external.append(rt.ExternalDemand(key,rt.Envelope(value,0),rt.Envelope(0,0)))
@@ -677,10 +673,11 @@ class BatteryRuntime:
         if sum(e.observed.import_w for e in external)>accounting.house_w+1e-6:
             raise ValueError('Planned device meters exceed gross house consumption')
         controls=tuple(zip(self._control_entities(),(readback['mode'],readback['charge_limit_w'],readback['discharge_limit_w'])))
-        envelope=self.adapter.envelope(controls)
-        # The native ceiling must bound actual battery power. Settings readback
-        # confirms register assignment; physical response is reported separately.
-        ready=int(-readback['discharge_limit_w']-100<=battery<=readback['charge_limit_w']+100)
+        native=self.adapter.envelope(controls)
+        # HA settings can be optimistic. Preserve actual measured battery flow
+        # in the physical reservation until its response catches up.
+        envelope=rt.Envelope(max(native.import_w,self._model.grid_charge.input(max(0,battery))),
+                            max(native.export_w,self._model.discharge.output(max(0,-battery))))
         valid=min(times)+AGE_MS
         for stream in self.host.state.ledger.streams:
             row=read(stream.spec.stream_id)
@@ -694,7 +691,7 @@ class BatteryRuntime:
             state.groups[0].observation_revision, state.frame.revision if state.frame else 0)+1
         revision=self._capture_revision
         authority=state.authority
-        observed=rt.Observed(group_id,rt.Observation(revision,min(times),valid,controls,(('ready',ready),),envelope))
+        observed=rt.Observed(group_id,rt.Observation(revision,min(times),valid,controls,(),envelope))
         # Gross nonbattery load is a conservative import frame. PV is included
         # separately as possible export, and never erased by a planned device.
         self._external_pending={key:until for key,until in self._external_pending.items() if min(times)<until}
@@ -718,11 +715,11 @@ class BatteryRuntime:
             group=next(g for g in self.host.state.groups if g.spec.id==group.spec.id)
         previous=group.release
         target=target if target is not None else previous.target
-        if previous and previous.target==target and previous.valid_until_ms>self.now()+600000:
+        if previous and previous.target==target and not previous.native_guards and previous.valid_until_ms>self.now()+600000:
             return previous
         self._release_revision=max(self._release_revision,previous.revision if previous else 0)+1
         return rt.Request('battery-release',self._release_revision,self.now()+86400000,
-            target,(rt.Guard('ready',1,1),))
+            target,())
 
     async def _confirm(self,group_id):
         events=[]
@@ -794,7 +791,7 @@ class BatteryRuntime:
         # Share the household command lock. Recheck all authority after waiting;
         # then start the HA call without another intervening await.
         async with self.controller.lock:
-            if not self._can_send(effect) or not rt.authorize_send(self.host.state,effect,self.now()):
+            if self.host._fault or not self._can_send(effect) or not rt.authorize_send(self.host.state,effect,self.now()):
                 raise DispatchRejected('battery writer or request changed')
             entity,value=effect.key,effect.value
             if entity==self._options['battery_mode_entity']:
@@ -804,26 +801,6 @@ class BatteryRuntime:
                 limit=self._surface['limits'][field]
                 call=self.controller.hass.services.async_call('number','set_value',{'entity_id':entity,'value':value/(1000 if limit['unit']=='kW' else 1)},blocking=True)
             await asyncio.wait_for(call,75)
-            # HA service completion alone is not physical confirmation. Explicitly
-            # refresh the Sigen registers after the write has finished; optimistic
-            # number/select state must never shorten the uncertainty window.
-            after_write=self.now()
-            await self.coordinator.async_battery_native_readback(self._control_entities())
-            surface=native_surface(self._options,{e:self.coordinator._battery_entity_report(e) for e in self._control_entities()})
-            readback=surface['readback']
-            at=min(readback[k] for k in ('mode_reported_at_ms','charge_reported_at_ms','discharge_reported_at_ms'))
-            controls=tuple(zip(self._control_entities(),(readback['mode'],readback['charge_limit_w'],readback['discharge_limit_w'])))
-            group=self.host.state.groups[0]
-            attempt=next((a for a in group.attempts if a.id==effect.attempt_id),None)
-            if (attempt is None or surface['revision']!=self._surface['revision']
-                    or not after_write<=at<=self.now()<at+AGE_MS or dict(controls)!=dict(attempt.step.after)):
-                raise ValueError(f'{entity}: physical register readback did not confirm the completed write')
-            # Confirm settings with physical register readback; separately check
-            # the measured terminal response before permitting the next write.
-            battery,bat_at=power(self.coordinator._battery_entity_report(self._options['battery_power_measurement_entity']),
-                source=self._options['battery_power_measurement_entity'],now_ms=self.now(),signed=True)
-            ready=int(-readback['discharge_limit_w']-100<=battery<=readback['charge_limit_w']+100)
-            return rt.Observation(group.observation_revision+1,at,min(at,bat_at)+AGE_MS,controls,(('ready',ready),),self.adapter.envelope(controls))
 
     def before_external_command(self,device):
         """Reserve unknown pending demand before another adapter changes a load.

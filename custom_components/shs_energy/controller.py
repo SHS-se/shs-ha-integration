@@ -366,9 +366,8 @@ class ScheduledController:
                     ), timeout=CONFIRM_SECONDS,
                 )
                 command["transport"] = "accepted"
-            command["settings_confirmation"] = "unresolved"
-            await self.confirm(lambda: self.matches(entity, value), f"{entity} did not accept {value}")
-            command["settings_confirmation"] = "confirmed"
+            # Service completion records an accepted setting. Ordinary readings
+            # and explicit device workflows assess the physical response.
         except (Exception, asyncio.CancelledError) as err:
             command["error"] = str(err) or type(err).__name__
             raise

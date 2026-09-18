@@ -64,9 +64,11 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(live['result']['state'], 'confirmed')
         self.assertEqual([(c['data']['entity_id'], c['value']) for c in live['commands'] if c['called']], self.calls)
         self.assertTrue(all(c['transport'] == 'accepted' for c in live['commands'] if c['called']))
-        self.assertTrue(all(c['settings_confirmation'] == 'confirmed' for c in live['commands']))
+        self.assertTrue(all(c['settings_confirmation'] == 'not_checked' for c in live['commands']))
         self.assertEqual(live['observations']['select.mode']['state'], 'Baseline')
-        self.assertEqual(live['final_observations']['select.mode']['state'], 'Charge')
+        # The command no longer polls the select after HA completes its service.
+        # Diagnostics retain the last actual read instead of inventing a report.
+        self.assertEqual(live['final_observations']['select.mode']['state'], 'Baseline')
         simulated = next(row for row in export['evaluations'] if row['device'] == 'pool')
         self.assertEqual(simulated['commands'], [])
         passive = next(row for row in export['evaluations'] if row['device'] == 'ev')

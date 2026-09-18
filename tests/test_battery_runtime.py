@@ -222,47 +222,78 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(group.attempts)
             self.assertEqual(dict(group.observation.controls),dict(group.desired.target))
             self.assertLess(r.now-started,75000)
-            self.assertGreater(r.readbacks,1)
+            self.assertEqual(r.readbacks,0)
         finally:await r.runtime.close()
 
-    async def test_failed_physical_readback_keeps_the_write_uncertain(self):
+    async def test_service_success_finishes_sequence_without_post_write_readback(self):
         r=Rig();original=r.coordinator.async_battery_native_readback
         async def readback(entities):
-            if r.calls:raise RuntimeError('Modbus read failed: inverter unavailable')
+            if r.calls:raise AssertionError('post-write readback must not be required')
             await original(entities)
+        async def lagged_service(domain,name,data,blocking):
+            r.calls.append((domain,name,data.copy()))  # HA completes, publication lags.
         r.coordinator.async_battery_native_readback=readback
+        r.controller.hass.services.async_call=lagged_service
         await r.start()
         try:
-            await r.advance(5000)
-            attempts=r.runtime.host.state.groups[0].attempts
-            self.assertTrue(attempts)
-            self.assertEqual(attempts[0].stage,'ambiguous')
-            self.assertGreater(attempts[0].latest_effect_ms,r.now)
-            status=r.runtime.snapshot()
-            self.assertEqual(status['state'],'fault')
-            self.assertIn('Modbus read failed: inverter unavailable',status['reason'])
-            self.assertEqual(status['fix'],{'kind':'diagnostics'})
-            self.assertTrue(any('Modbus read failed' in f['reason'] for f in status['fault_history']))
-            r.coordinator.async_battery_native_readback=original
-            for _ in range(6):await r.advance()
-            status=r.runtime.snapshot()
-            self.assertEqual(status['state'],'controlling',status)
-            self.assertIsNone(status['runtime_reason'])
-            self.assertTrue(any('Modbus read failed' in f['reason'] for f in status['fault_history']))
+            group=r.runtime.host.state.groups[0]
+            self.assertEqual(group.status,'adopted',r.runtime.snapshot())
+            self.assertEqual(len(r.calls),2)  # mode + requested charging ceiling
+            self.assertEqual(r.readbacks,0)
+            self.assertEqual(r.rows['select.mode']['state'],'Standby')
+            self.assertEqual(dict(group.observation.controls)['number.charge'],0)
+            self.assertEqual(r.runtime.snapshot()['measurements']['battery_dc_w'],0)
+            self.assertFalse(r.runtime.snapshot()['fault_history'])
+            calls=deepcopy(r.calls)
+            for _ in range(2):await r.advance(1000)
+            self.assertEqual(r.calls,calls)
+            self.assertEqual(r.runtime.host.state.groups[0].status,'adopted')
+            # Normal reports retire all acknowledged intermediate reservations.
+            for domain,name,data in r.calls:
+                r.rows[data['entity_id']]['state']=str(data.get('value',data.get('option')))
+            await r.advance(1000)
+            self.assertFalse(r.runtime.host.state.groups[0].attempts)
         finally:await r.runtime.close()
 
-    async def test_settling_terminal_power_pauses_writes_without_withdrawing_policy(self):
+    async def test_release_reverses_completed_commands_even_when_ha_still_shows_baseline(self):
+        r=Rig();r.rows['select.mode']['state']='Maximum Self Consumption'
+        async def lagged_service(domain,name,data,blocking):
+            r.calls.append((domain,name,data.copy()))
+        r.controller.hass.services.async_call=lagged_service
+        await r.start()
+        try:
+            self.assertTrue(any(c[2].get('option')=='Command Charging (PV First)' for c in r.calls))
+            self.assertEqual(r.rows['select.mode']['state'],'Maximum Self Consumption')
+            await r.advance(80000)  # Acknowledged settings do not expire with the old effect window.
+            r.calls.clear()
+            r.options['device_modes']['$battery']='control_verification'
+            await r.runtime.refresh();await r.runtime.host.idle()
+            for _ in range(3):await r.advance(1000)
+            self.assertTrue(any(c[2].get('option')=='Maximum Self Consumption' for c in r.calls),r.calls)
+            self.assertFalse(r.runtime.host.state.groups[0].release_pending,r.runtime.snapshot())
+            self.assertFalse(r.runtime.snapshot()['fault_history'])
+        finally:await r.runtime.close()
+
+    async def test_optimistic_zero_settings_do_not_erase_measured_power(self):
+        r=Rig('control_verification');r.rows['sensor.battery']['state']='2000'
+        await r.start()
+        try:
+            group=r.runtime.host.state.groups[0]
+            self.assertEqual(dict(group.observation.controls)['number.charge'],0)
+            self.assertGreaterEqual(group.observation.envelope.import_w,2000)
+            self.assertEqual(r.runtime.snapshot()['measurements']['battery_dc_w'],2000)
+            self.assertEqual(r.calls,[])
+        finally:await r.runtime.close()
+
+    async def test_terminal_power_does_not_gate_settings_calls(self):
         r=Rig();r.rows['sensor.battery']['state']='150'
         await r.start()
         try:
+            self.assertTrue(r.calls)
             self.assertEqual(r.runtime.host.state.execution.status,'active')
-            self.assertEqual(r.runtime.snapshot()['state'],'pending')
-            self.assertIn('settle',r.runtime.snapshot()['reason'])
-            self.assertEqual(r.calls,[])
-            r.rows['sensor.battery']['state']='0'
-            for _ in range(3):await r.advance(5000)
             self.assertEqual(r.runtime.snapshot()['state'],'controlling')
-            self.assertFalse(any(f['reason']=='physical_scope_uncovered' for f in r.runtime.snapshot()['fault_history']))
+            self.assertEqual(r.runtime.snapshot()['measurements']['battery_dc_w'],150)
+            self.assertFalse(r.runtime.snapshot()['fault_history'])
         finally:await r.runtime.close()
 
     async def test_controlling_reaches_actual_service_boundary(self):
@@ -366,23 +397,21 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         try:self.assertEqual(r.calls,[])
         finally:await r.runtime.close()
 
-    async def test_unchanged_native_registers_are_explicitly_refreshed(self):
+    async def test_unchanged_control_settings_do_not_expire(self):
         r=Rig()
         for key in ('select.mode','number.charge','number.discharge'):r.rows[key]['last_reported']=iso(0)
         await r.start()
         try:
-            self.assertGreater(r.readbacks,0)
+            self.assertEqual(r.readbacks,0)
             self.assertTrue(r.calls,r.runtime.snapshot())
         finally:await r.runtime.close()
 
-    async def test_failed_native_refresh_never_sends(self):
-        r=Rig()
-        async def fail(entities):raise ValueError('incomplete register data')
-        r.coordinator.async_battery_native_readback=fail
+    async def test_unavailable_ha_control_entity_prevents_commands(self):
+        r=Rig();r.rows['select.mode']['state']='unavailable'
         await r.start()
         try:
             self.assertEqual(r.calls,[])
-            self.assertIn('incomplete register',r.runtime.snapshot()['reason'])
+            self.assertEqual(r.runtime.snapshot()['state'],'fault')
         finally:await r.runtime.close()
 
     async def test_settings_confirmation_does_not_claim_battery_is_charging(self):

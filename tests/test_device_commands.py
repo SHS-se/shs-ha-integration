@@ -87,13 +87,30 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(float(self.states['number.target'].state), 20)
         self.assertEqual(self.controller.status['device:heater']['state'], 'fault')
 
-    async def test_failed_acknowledgement_is_fault_and_restores(self):
-        async def refuse(*args, **kwargs):
-            pass
-        self.hass.services.async_call = refuse
+    async def test_completed_service_without_state_update_is_commanded_not_measured(self):
+        self.hass.services.async_call = AsyncMock()
         await self.controller.async_start()
-        self.assertEqual(self.controller.status['device:heater']['state'], 'fault')
+        self.hass.services.async_call.assert_awaited_once_with(
+            'switch', 'turn_off', {'entity_id': 'switch.heater'}, blocking=True)
+        status = self.controller.status['device:heater']
+        self.assertEqual(status['state'], 'commanded')
+        self.assertNotIn('measured_power_w', status)
         self.assertEqual(self.states['switch.heater'].state, 'on')
+        self.assertIn('device:heater', self.controller.records)
+
+    async def test_service_failure_after_effect_is_fault_and_restores(self):
+        original_call = self.hass.services.async_call
+        async def fail_after_effect(domain, service, data, blocking):
+            await original_call(domain, service, data, blocking)
+            if service == 'turn_off':
+                raise TimeoutError('service outcome unknown')
+        self.hass.services.async_call = fail_after_effect
+        await self.controller.async_start()
+        self.assertEqual(self.calls, [('switch.heater', 'off'), ('switch.heater', 'on')])
+        self.assertEqual(self.controller.status['device:heater']['state'], 'fault')
+        self.assertIn('service outcome unknown', self.controller.status['device:heater']['reason'])
+        self.assertEqual(self.states['switch.heater'].state, 'on')
+        self.assertNotIn('device:heater', self.controller.records)
 
     async def test_bad_or_missing_device_command_rejected(self):
         models = self.coordinator.optimisation_plan['device_models']

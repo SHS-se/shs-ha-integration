@@ -295,7 +295,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
             await original(domain, service, data, blocking)
         self.hass.services.async_call = refused
         await self.controller.async_start()
-        self.assertIn('did not accept', self.controller.status['battery']['reason'])
+        self.assertIn('did not confirm the requested operation', self.controller.status['battery']['reason'])
         self.assertEqual(self.states['select.mode'].state, 'Baseline')
         self.assertEqual(float(self.states['number.charge_limit'].state), 8.8)
         async def no_response(domain, service, data, blocking):
@@ -413,7 +413,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.calls, [('number.charge_limit', 0), ('select.mode', 'Baseline'), ('number.charge_limit', 8.8), ('number.discharge_limit', 9.6)])
 
-    async def test_failed_mode_confirmation_never_writes_new_power(self):
+    async def test_accepted_mode_without_state_update_reaches_workflow_response_check(self):
         self.options['device_modes']['$battery'] = 'controlling'
         await self.controller.async_start()
         self.calls.clear()
@@ -425,8 +425,9 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.hass.services.async_call = refuse
         self.slot.update(battery_charge_w=0, battery_discharge_w=3000, battery_command=battery_command('export', 0, 3000))
         await self.controller.async_tick()
-        self.assertNotIn(('number.discharge_limit', 3), self.calls)
+        self.assertIn(('number.discharge_limit', 3), self.calls)
         self.assertEqual(self.controller.status['battery']['state'], 'fault')
+        self.assertIn('did not confirm the requested operation', self.controller.status['battery']['reason'])
         self.assertEqual(self.states['select.mode'].state, 'Baseline')
 
     async def test_battery_soc_floor_restores(self):
@@ -771,6 +772,69 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertIn(('select.mode', 'Baseline'), self.calls)
         self.assertNotIn('battery', self.controller.records)
+
+
+class EntityCommandTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        ControllerTests.setUp(self)
+        self.options['device_modes']['$pool'] = 'controlling'
+        self.controller.device = 'pool'
+        self.controller.requested_systems = {'pool'}
+        self.controller.active_options = deepcopy(self.controller.options())
+        self.controller.active_slot = deepcopy(self.slot)
+        self.controller.records['pool'] = {}
+        self.controller.diagnostic_evaluation = {'commands': [], 'observations': {}}
+        self.controller.confirm = AsyncMock(side_effect=AssertionError('command must not poll state'))
+        self.hass.services.async_call = AsyncMock()
+
+    async def test_completed_service_returns_without_entity_state_update(self):
+        await self.controller.command('switch.pool', 'on')
+        self.hass.services.async_call.assert_awaited_once_with(
+            'switch', 'turn_on', {'entity_id': 'switch.pool'}, blocking=True)
+        self.assertEqual(self.states['switch.pool'].state, 'off')
+        command, = self.controller.diagnostic_evaluation['commands']
+        self.assertEqual(command['transport'], 'accepted')
+        self.assertEqual(command['settings_confirmation'], 'not_checked')
+        self.assertIn('completed_at', command)
+        self.assertNotIn('error', command)
+        self.controller.confirm.assert_not_awaited()
+        self.assertEqual(self.store.saved['records']['pool']['last_commands'], {'switch.pool': 'on'})
+
+    async def test_service_exception_records_uncertainty_and_propagates(self):
+        self.hass.services.async_call.side_effect = TimeoutError('service outcome unknown')
+        with self.assertRaisesRegex(TimeoutError, 'service outcome unknown'):
+            await self.controller.command('switch.pool', 'on')
+        command, = self.controller.diagnostic_evaluation['commands']
+        self.assertEqual(command['transport'], 'ambiguous')
+        self.assertEqual(command['settings_confirmation'], 'not_checked')
+        self.assertEqual(command['error'], 'service outcome unknown')
+        self.assertIn('completed_at', command)
+        self.controller.confirm.assert_not_awaited()
+
+    async def test_permission_change_during_persistence_prevents_service(self):
+        original_save = self.controller.save
+        async def save_and_revoke():
+            await original_save()
+            self.options['device_modes']['$pool'] = 'planning'
+        self.controller.save = save_and_revoke
+        with self.assertRaisesRegex(ValueError, 'configuration changed'):
+            await self.controller.command('switch.pool', 'on')
+        self.hass.services.async_call.assert_not_awaited()
+        command, = self.controller.diagnostic_evaluation['commands']
+        self.assertEqual(command['transport'], 'not_sent')
+
+    async def test_verification_records_command_without_service_or_real_state_change(self):
+        self.controller.verifying = True
+        await self.controller.command('switch.pool', 'on')
+        self.hass.services.async_call.assert_not_awaited()
+        self.controller.confirm.assert_not_awaited()
+        self.assertEqual(self.states['switch.pool'].state, 'off')
+        self.assertEqual(self.controller.shadow['switch.pool'].state, 'on')
+        command, = self.controller.verification_commands
+        self.assertTrue(command['would_call'])
+        self.assertEqual(command['data'], {'entity_id': 'switch.pool'})
+        self.assertEqual(self.controller.diagnostic_evaluation['commands'], [])
+        self.assertIsNone(self.store.saved)
 
 
 if __name__ == '__main__':

@@ -43,7 +43,7 @@ class CommissionedAdapter:
     def propose(self, effect: NeedTransition):
         if effect.adapter_revision != self.catalog.adapter_revision:
             raise ValueError("adapter identity changed")
-        before = tuple(sorted(effect.observation.controls))
+        before = tuple(sorted(effect.command_controls))
         target = tuple(sorted(effect.request.target))
         # Only measured transitions can form a route. Never infer an order from
         # service names, numerical direction, or a previously successful target.
@@ -74,7 +74,7 @@ class SigenAdapter:
 
     The installation supplies the number/select metadata. Numerical targets do
     not need individual commissioning records. Each assignment is journalled and
-    confirmed from new physical reports by HomeHost before the next assignment.
+    advances on HA service completion. Physical reports remain independent.
     """
     catalog: NativeCatalog
     conversion: object
@@ -94,7 +94,7 @@ class SigenAdapter:
     def propose(self, effect: NeedTransition):
         if effect.adapter_revision != self.catalog.adapter_revision:
             raise ValueError("Sigen adapter revision changed")
-        before, target = effect.observation.controls, dict(effect.request.target)
+        before, target = effect.command_controls, dict(effect.request.target)
         c = self.catalog
         if set(target) != {c.mode_key,c.charge_key,c.discharge_key} or target[c.mode_key] not in c.mode_options:
             raise ValueError("unsupported Sigen target")

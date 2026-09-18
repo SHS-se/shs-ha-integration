@@ -491,10 +491,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self.battery_runtime.refresh()
             self.async_update_listeners()
 
-    async def async_battery_native_readback(self, entity_ids):
-        from .battery_sigen import refresh_sigen_readback
-        await refresh_sigen_readback(self.hass, entity_ids)
-
     async def async_battery_loss_statistics(self, options):
         """Complete five-minute mean/min/max in W for directional loss fitting."""
         bindings={role:options.get(key) for role,key in (

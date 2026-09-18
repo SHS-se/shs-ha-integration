@@ -133,21 +133,22 @@ class HomeRuntimeTests(unittest.TestCase):
         self.assertEqual(h.group().status, "adopted")
         self.assertEqual(h.group().observation.controls, controls("charge", 1000, 0))
 
-    def test_drift_between_steps_requests_a_fresh_whole_group_transition(self):
-        h = Harness(); h.request(); h.propose(); h.durable(); h.settle()
+    def test_delayed_reports_do_not_reset_acknowledged_sequence(self):
+        h = Harness(); h.request(); h.propose(); sent = h.durable()
+        h.event(TransportResult("battery", sent.attempt_id, "accepted", "ha_service_completed"))
+        index = h.group().plan.index
         prepared = next(a for a in h.group().attempts if a.stage == "prepared")
         h.now += 1
-        h.observe(target=controls("external"))
-        self.assertIsNone(h.group().plan)
-        self.assertTrue(any(isinstance(e, NeedTransition) for e in h.effects))
+        h.observe(target=controls("hold"))
+        self.assertEqual(h.group().plan.index, index)
         h.event(JournalDurable(prepared.prepared_revision))
-        self.assertFalse(any(isinstance(e, Send) for e in h.effects))
-        h.propose(); h.finish()
+        self.assertTrue(any(isinstance(e, Send) for e in h.effects))
+        h.finish()
         self.assertEqual(h.group().status, "adopted")
-        self.assertEqual(h.group().mode, "controlling")
 
-    def test_same_target_external_drift_is_automatically_reasserted(self):
+    def test_external_change_after_matching_report_is_reasserted(self):
         h = Harness(); h.request(); h.propose(); h.finish()
+        self.assertIsNone(h.group().plan)
         h.now += 1; h.observe(target=controls("external"))
         self.assertTrue(any(isinstance(e, NeedTransition) for e in h.effects))
         h.propose(); h.finish()
