@@ -8,7 +8,7 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
-from controller import ScheduledController, pool_band, pool_hardware_band
+from controller import ScheduledController
 from configuration_schema import resolve_configuration
 
 
@@ -66,7 +66,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
             'ev_charge_switch_entity': 'switch.charge',
             'ev_connected_entity': 'binary_sensor.connected',
             'ev_soc_entity': 'sensor.ev_soc', 'ev_target_soc_entity': 'sensor.ev_target',
-            'device_control_mappings': {'charger': {'control_entity_id': 'number.current', 'control_type': 'variable_power', 'minimum_value': 5, 'maximum_value': 16}},
+            'device_control_mappings': {'pool': {'control_type':'switch_schedule','actuator_entity_ids':['switch.pool'],'power':3300}, 'charger': {'control_entity_id': 'number.current', 'control_type': 'variable_power', 'minimum_value': 5, 'maximum_value': 16}},
             'pool_start_temperature_entity': 'number.start', 'pool_stop_temperature_entity': 'number.stop',
             'pool_water_temperature_entity': 'sensor.water', 'pool_permission_entity': 'switch.pool',
             'battery_mode_entity': 'select.mode', 'battery_mode_charge': 'Charge',
@@ -88,7 +88,8 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                      'device_loads_w': {'charger': 6900}}
         self.coordinator = SimpleNamespace(current_plan_slot=self.slot, optimisation_plan={
             'plan_id': 'test', 'schema_version': 8, 'capabilities': dict.fromkeys(('battery', 'ev', 'pool'), True),
-            'device_models': [{'key': 'charger', 'category': 'ev_charging', 'control_type': 'variable_power'}]})
+            'pool': {'stop_temperature_c': 30},
+            'device_models': [{'key':'pool','category':'pool_heating','control_type':'switch_schedule'}, {'key': 'charger', 'category': 'ev_charging', 'control_type': 'variable_power'}]})
         # Sequencing tests inject a current binding plan; scope selection has
         # separate cross-mode tests using the real scoped_plan function.
         self.coordinator.binding_plan_for = lambda device, options: (
@@ -243,8 +244,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes'].update({'$battery': 'controlling', '$pool': 'controlling'})
         await self.controller.async_start()
         self.assertEqual(float(self.states['number.charge_limit'].state), preview['battery']['fields'][1]['value'])
-        for entity, field in zip(('number.start', 'number.stop'), preview['pool']['fields']):
-            self.assertEqual(float(self.states[entity].state), field['value'])
+        self.assertEqual(self.states['switch.pool'].state, preview['pool']['fields'][0]['value'].lower())
 
     async def test_preview_uses_real_readings_and_reports_missing_mapping(self):
         self.controller.verifying = True
@@ -371,12 +371,11 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.charge'].state, 'off')
 
-    async def test_plan_expiry_restores_pool_without_recapturing_shifted_band(self):
+    async def test_plan_expiry_restores_pool_without_recapturing_switched_state(self):
         self.options['device_modes']['$pool'] = 'controlling'
         self.slot['pool_w'] = 0
         await self.controller.async_start()
-        self.assertAlmostEqual(float(self.states['number.stop'].state), 28.9)
-        self.assertAlmostEqual(float(self.states['number.start'].state), 28.4)
+        self.assertEqual(self.states['switch.pool'].state, 'off')
         self.slot['pool_w'] = 3300
         await self.controller.async_tick()
         self.assertEqual(float(self.states['number.start'].state), 29.5)
@@ -506,7 +505,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.states['sensor.water'].last_reported -= timedelta(minutes=14)
         await self.controller.async_start()
         self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
-        self.assertLess(float(self.states['number.start'].state), 29.5)
+        self.assertEqual(self.states['switch.pool'].state, 'off')
         self.states['sensor.water'].last_reported -= timedelta(minutes=2)
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'fault')
@@ -521,7 +520,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
         self.assertNotIn('retry_automatically', self.controller.status['pool'])
-        self.assertLess(float(self.states['number.start'].state), 29.5)
+        self.assertEqual(self.states['switch.pool'].state, 'off')
 
     async def test_ev_telemetry_allows_15_minutes_and_target_has_no_age_limit(self):
         self.options['device_modes']['$ev'] = 'controlling'
@@ -594,28 +593,62 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['ev']['state'], 'commanded')
 
-    def test_pool_uses_nibe_control_limits_and_half_degree_steps(self):
-        start = {'min': 5, 'max': 79.5, 'step': .5}
-        stop = {'min': 5.5, 'max': 80, 'step': .5}
-        self.assertEqual(pool_hardware_band((29.5, 30), 25.61, True, start, stop), (29.5, 30))
-        self.assertEqual(pool_hardware_band((29.5, 30), 25.61, False, start, stop), (24.5, 25))
-        self.assertEqual(pool_hardware_band((29.5, 30), 3, False, start, stop), (5, 5.5))
-        with self.assertRaisesRegex(ValueError, 'bounds or step'):
-            pool_hardware_band((29.5, 30), 25, False, start, {**stop, 'step': 0})
+    async def test_pool_temperature_and_schedule_switch_matrix(self):
+        for initial in ('on', 'off'):
+            for scheduled in (0, 3300):
+                for water in (29, 30, 31):
+                    with self.subTest(initial=initial, scheduled=scheduled, water=water):
+                        self.setUp()
+                        self.states.pop('number.start')
+                        self.states.pop('number.stop')
+                        self.states['switch.pool'].state = initial
+                        self.states['sensor.water'].state = str(water)
+                        self.slot['pool_w'] = scheduled
+                        self.options['device_modes']['$pool'] = 'controlling'
+                        await self.controller.async_start()
+                        expected = 'on' if scheduled and water < 30 else 'off'
+                        self.assertEqual(self.states['switch.pool'].state, expected)
+                        self.assertEqual(self.controller.records['pool']['originals'], {'switch.pool': initial})
+                        self.assertTrue(all(entity == 'switch.pool' for entity, _ in self.calls))
+                        self.options['device_modes']['$pool'] = 'monitoring'
+                        await self.controller.async_tick()
+                        self.assertEqual(self.states['switch.pool'].state, initial)
 
-    async def test_pool_validates_both_registers_before_ownership_or_writes(self):
+    async def test_pool_mapping_change_releases_old_switch_before_acquiring_new(self):
         self.options['device_modes']['$pool'] = 'controlling'
-        self.states['number.stop'].attributes['step'] = .3
+        self.states['switch.new_pool'] = State('off')
+        await self.controller.async_start()
+        self.calls.clear()
+        self.options['device_control_mappings']['pool']['actuator_entity_ids'] = ['switch.new_pool']
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [('switch.pool', 'off'), ('switch.new_pool', 'on')])
+        self.assertEqual(self.controller.records['pool']['originals'], {'switch.new_pool': 'off'})
+        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: resolve_configuration(self.options))
+        self.options['device_modes']['$pool'] = 'monitoring'
+        await other.async_start()
+        self.assertEqual(self.states['switch.new_pool'].state, 'off')
+        self.assertFalse(other.records)
+
+    async def test_pool_missing_target_blocks_without_ownership(self):
+        self.options['device_modes']['$pool'] = 'controlling'
+        self.coordinator.optimisation_plan['pool'] = {}
         await self.controller.async_start()
         self.assertEqual(self.calls, [])
         self.assertFalse(self.controller.records)
-        self.assertEqual(self.controller.status['pool']['state'], 'fault')
+        self.assertIn('Stop at', self.controller.status['pool']['reason'])
 
-    def test_pool_clamp_preserves_width_and_never_invents_maximum_target(self):
-        self.assertEqual(pool_band((29.5, 30), 29, True, 24, 32, .1), (29.5, 30))
-        self.assertEqual(pool_band((29.5, 30), 20, False, 24, 32, .1), (24, 24.5))
-        with self.assertRaises(ValueError):
-            pool_band((20, 30), 29, False, 24, 32, .1)
+    async def test_pool_legacy_journal_never_restores_temperature_numbers(self):
+        self.controller.records['pool'] = {'options': deepcopy(self.options),
+            'originals': {'number.start': '29.5', 'number.stop': '30', 'switch.pool': 'off'}}
+        self.states['number.start'].state = '20'
+        self.states['number.stop'].state = '21'
+        self.states['switch.pool'].state = 'on'
+        await self.controller.restore('pool')
+        self.assertEqual(self.calls, [('switch.pool', 'off')])
+        self.assertEqual(self.states['number.start'].state, '20')
+        self.assertEqual(self.states['number.stop'].state, '21')
+        self.assertNotIn('pool', self.controller.records)
+
     async def test_battery_website_exclusion_restores_even_with_cached_plan(self):
         self.options['device_modes']['$battery'] = 'controlling'
         await self.controller.async_start()

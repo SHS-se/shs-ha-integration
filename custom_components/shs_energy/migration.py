@@ -169,7 +169,16 @@ def migrate_options(
                     if target not in draft and source in options:
                         draft[target] = deepcopy(options[source])
                         report["imported"].add(f"{path}.{target}")
-        if ROOM_AREA_FIELD not in draft and (
+        water_source = result.get("pool_water_temperature_entity")
+        source = draft.get("temperature_entity_id") or result.get("rooms", {}).get(draft.get(ROOM_AREA_FIELD), {}).get("temperature_entity_id")
+        pool_switch = bool(water_source and source == water_source
+                           and draft.get("control_type") in ("setpoint", "switch_schedule"))
+        if pool_switch:
+            # Pool water belongs to the shared pool editor, not a room thermostat.
+            draft["temperature_entity_id"] = water_source
+            draft.pop(ROOM_AREA_FIELD, None)
+            report["needs_attention"].discard(f"{path}.{ROOM_AREA_FIELD}")
+        if not pool_switch and ROOM_AREA_FIELD not in draft and (
             draft.get("control_type") == "setpoint" or "temperature_entity_id" in draft
         ):
             areas = {(entity_area_ids or {}).get(e) for e in draft.get("actuator_entity_ids", [])}
@@ -179,7 +188,8 @@ def migrate_options(
                 report["imported"].add(f"{path}.{ROOM_AREA_FIELD}")
             else:
                 report["needs_attention"].add(f"{path}.{ROOM_AREA_FIELD}")
-        allowed = MAPPING_KEYS.get(draft.get("control_type"), {"control_type"})
+        allowed = ({"control_type", "actuator_entity_ids", "power", "temperature_entity_id"}
+                   if pool_switch else MAPPING_KEYS.get(draft.get("control_type"), {"control_type"}))
         mappings[key] = {field: value for field, value in draft.items() if field in allowed}
         report["removed"].update(f"{path}.{field}" for field in set(raw) - allowed)
         required = {

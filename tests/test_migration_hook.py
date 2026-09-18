@@ -73,7 +73,7 @@ class EntryMigrationHookTests(unittest.IsolatedAsyncioTestCase):
                 if version == 6:
                     report = entry.options["_migration_report"]
                     self.assertIn("device_control_mappings.sensor.pool", report["needs_attention"])
-                    self.assertIn("pool_start_temperature_entity", report["needs_attention"])
+                    self.assertNotIn("pool_start_temperature_entity", report["needs_attention"])
                     self.assertFalse(any("customer request interface" in item for item in report["needs_attention"]))
                     self.assertNotIn("pool_start_temperature_entity", entry.options)
                 self.assertTrue(await ns["async_migrate_entry"](hass, entry))

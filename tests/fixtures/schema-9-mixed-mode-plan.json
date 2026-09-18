@@ -278,7 +278,8 @@
     "pool": {
       "volume_m3": 55,
       "water_temperature_c": 26.3,
-      "heating_running": true
+      "heating_running": true,
+      "stop_temperature_c": 31
     },
     "grid": {
       "import_limit_w": 15000,

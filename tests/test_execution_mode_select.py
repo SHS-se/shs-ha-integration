@@ -180,7 +180,7 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_schedule_view_removes_website_monitoring_and_local_exclusion(self):
         from presentation import complete_device_views
-        from device_controls import apply_planner_support, mapping_report, is_room_thermal_control
+        from device_controls import apply_planner_support, mapping_report, is_room_thermal_control, mapped_planning_path
         from configuration_fields import _control_fields
         from test_device_controls import _battery
         r=Rig();r.entry.options.update(_battery())
@@ -193,7 +193,7 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
         namespace.update(resolved_options=lambda hass,options:options,
             entity_display_name_by_id=lambda hass:{},area_name_by_id=lambda hass:{},entity_area_id_by_id=lambda hass:{},
             suggest_device_control_mapping=lambda *args:{},apply_planner_support=apply_planner_support,
-            mapping_report=mapping_report,is_room_thermal_control=is_room_thermal_control,
+            mapping_report=mapping_report,is_room_thermal_control=is_room_thermal_control,mapped_planning_path=mapped_planning_path,
             _control_fields=_control_fields,complete_device_views=complete_device_views)
         async def views(hass,entry):return r.shared.execution_device_views(hass,entry,choices)
         r.manager.refresh.__globals__['async_execution_devices']=views

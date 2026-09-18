@@ -104,7 +104,7 @@ from .configuration import (
 from .device_controls import (
     apply_requested_configuration,
     battery_control_errors, battery_measurement_errors, BatteryMeasurementConfigurationError,
-    pool_band_errors,
+    pool_control_errors, mapped_planning_path,
     is_room_thermal_control,
     mapping_report,
     planning_path,
@@ -756,22 +756,18 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     def _sync_pool_control_issue(self, options: dict[str, Any], *, included: bool) -> None:
-        """Name a pool temperature band that is only half filled in.
-
-        One band per pool, however many meters heat it, so this is checked on
-        the store rather than on each device mapping.
-        """
+        """Expose the shared water sensor required for pool execution."""
         field_errors = {}
-        errors = pool_band_errors(options, field_errors=field_errors)
-        if not included or not options.get("pool_control_enabled") or not options.get("pool_enabled") or not errors:
+        errors = pool_control_errors(options, field_errors=field_errors)
+        if not included or not options.get("pool_enabled") or not errors:
             self._clear_attention(ISSUE_POOL_CONTROL)
             return
         self._set_attention(
             ISSUE_POOL_CONTROL,
             severity="warning",
-            title="The pool temperature band is incomplete",
+            title="Pool heater setup needs attention",
             detail=(
-                "Select both pool start and stop temperature controls before SHS can operate it."
+                "Select the pool water temperature sensor before SHS can operate the heater."
             ),
             items=list(errors),
             fix={"kind": "fields", "fields": [{"key": key, "message": "; ".join(messages)} for key, messages in field_errors.items()]},
@@ -835,9 +831,12 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 room_control=is_room_thermal_control(
                     device.get("control_type"), device.get("category")
                 ),
+                pool_water_entity=resolved_options(self.hass, dict(self.entry.options)).get("pool_water_temperature_entity"),
+                pool_control=mapped_planning_path(device, active_mappings.get(device["key"], {}),
+                    resolved_options(self.hass, dict(self.entry.options)).get("pool_water_temperature_entity")) == "pool",
             )
             if report["mapping_status"] != "ready":
-                field_targets.extend({"key": key, "scope": "mapping", "device_key": device["key"],
+                field_targets.extend({"key": key, "scope": "configuration" if key == "pool_water_temperature_entity" else "mapping", "device_key": device["key"],
                                       "message": "; ".join(messages)}
                                      for key, messages in report.get("field_errors", {}).items())
                 self.device_control_mapping_gaps.append(
@@ -1020,6 +1019,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             entity_display_name_by_id(self.hass),
             area_name_by_id(self.hass),
             entity_area_id_by_id(self.hass),
+            pool_water_entity=resolved_options(self.hass, dict(self.entry.options)).get("pool_water_temperature_entity"),
         )
         active_mappings = mappings if mappings is not None else resolved_options(self.hass, dict(self.entry.options)).get(
             OPT_DEVICE_CONTROL_MAPPINGS, {}

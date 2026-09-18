@@ -112,9 +112,9 @@ test('laundry editor hides empty alternatives but retains populated fields and r
   const html = panel._fields([{ key: 'temperature', label: 'Room temperature', kind: 'entity', required: true },
     { key: 'permit_entity_id', label: 'Heating permission', kind: 'entity' },
     { key: 'offset_entity_id', label: 'Offset', kind: 'entity' },
-    { key: 'pool_stop_temperature_entity', label: 'Stop heating at', kind: 'entity' }], { temperature: 'sensor.room', pool_start_temperature_entity: 'number.start' });
+    { key: 'offset_minimum', label: 'Minimum offset', kind: 'number' }], { temperature: 'sensor.room' });
   assert.match(html, /sensor.room/); assert.doesNotMatch(html, /Heating permission|data-field-key="offset_entity_id"/);
-  assert.match(html, /data-field-key="pool_stop_temperature_entity"/); assert.match(html, /aria-label="Room temperature"/);
+  assert.match(html, /aria-label="Room temperature"/);
 });
 
 test('one permission row serves every device and always permits stopping', () => {
@@ -1281,4 +1281,34 @@ test('rejected plan appears on Status with diagnostics and clears after acceptan
   assert.match(issue.next_step, /Waiting for a corrected plan/);
   panel._data.devices[0].execution_status = {state: 'verified', plan_status: 'accepted'};
   assert.equal(panel._attention().some(row => row.key === 'controller:$battery'), false);
+});
+
+
+test('pool setup links highlight switch and water editors and clear after correction', () => {
+  const panel = makePanel();
+  panel._data.devices = [{ key: 'pool', name: 'Pool heater', system: 'pool', included: true, planned: true,
+    fields: [{key: 'actuator_entity_ids', label: 'Control entity', kind: 'entities', required: true}],
+    system_fields: [{key: 'pool_water_temperature_entity', label: 'Pool water temperature', kind: 'entity', required: true}],
+    planning_fields: [], field_errors: {actuator_entity_ids: ['Choose a switch'], pool_water_temperature_entity: ['Choose water sensor']} }];
+  const issues = panel._attention();
+  assert.equal(issues.length, 1);
+  const targets = panel._fieldTargets(issues[0]);
+  assert.deepEqual(Array.from(targets, t => t.token).sort(), ['configuration:pool:pool_water_temperature_entity', 'mapping:pool:actuator_entity_ids']);
+  for (const target of targets) {
+    assert.equal(target.tab, 'devices'); assert.equal(target.card, 'controls:pool');
+    assert.equal(panel._fieldProblems(target.field.key, target.scope, 'pool').length, 1);
+  }
+  const html = panel._renderDevice(panel._data.devices[0]);
+  assert.match(html, /aria-invalid="true"/);
+  panel._data.devices[0].field_errors = {};
+  assert.equal(panel._attention().length, 0);
+});
+
+
+test('pool card renders the shared sensor explanation and escapes entity content', () => {
+  const panel = makePanel();
+  const html = panel._controllerDetails({ controller_explanation: 'Testing the plan\nWater 29 °C; Stop at 32 °C\n<switch.pool> would be on' });
+  assert.match(html, /Testing the plan<br>Water 29 °C; Stop at 32 °C/);
+  assert.match(html, /&lt;switch.pool&gt; would be on/);
+  assert.doesNotMatch(html, /<switch.pool>/);
 });

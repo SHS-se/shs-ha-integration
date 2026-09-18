@@ -42,7 +42,7 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows['sensor.load_0']['mode'], 'monitoring')
         self.assertIsNone(rows['sensor.load_0']['last_evaluated_at'])
         self.assertEqual(rows['sensor.load_0']['execution_status']['state'], 'monitoring')
-        self.assertEqual(report['current']['unassigned_mappings'][0]['key'], 'charger')
+        self.assertEqual({row['key'] for row in report['current']['unassigned_mappings']}, {'charger', 'pool'})
         self.assertEqual(report['current']['observations']['sensor.load_5']['state'], '500')
         self.assertEqual(report['current']['plan']['plan_id'], 'test')
         self.assertEqual(report['evaluations'], [])
@@ -103,6 +103,7 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(controller_diagnostics(self.controller, self.panel())['current']['failed_evaluations_this_session'], 3)
 
     async def test_mode_exit_records_real_handover_without_fake_verification(self):
+        self.states['switch.pool'].state = 'on'
         self.options['device_modes']['$pool'] = 'controlling'
         self.slot['pool_w'] = 0
         await self.controller.async_start()

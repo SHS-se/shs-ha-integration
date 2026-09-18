@@ -39,6 +39,17 @@ class OptionMigrationTests(unittest.TestCase):
             self.assertEqual(repeated["device_control_mappings"], migrated["device_control_mappings"])
         self.assertEqual(original, before)
 
+    def test_pool_water_switch_survives_reload_without_room_or_temperature_controls(self):
+        original = {'pool_water_temperature_entity': 'sensor.water',
+            'rooms': {'pool_room': {'temperature_entity_id': 'sensor.water'}},
+            'device_control_mappings': {'pool': {'control_type': 'setpoint',
+                'actuator_entity_ids': ['switch.pool'], 'power': 2000, 'room_area_id': 'pool_room',
+                'setpoint_entity_id': 'number.old', 'minimum_temperature_c': 24}}}
+        migrated, _ = migrate_options(original, source_version=14, entity_area_ids={'switch.pool': 'pool_room'})
+        self.assertEqual(migrated['device_control_mappings']['pool'], {'control_type': 'setpoint',
+            'actuator_entity_ids': ['switch.pool'], 'power': 2000, 'temperature_entity_id': 'sensor.water'})
+        self.assertEqual(migrate_options(migrated, source_version=14, entity_area_ids={'switch.pool': 'pool_room'}), (migrated, False))
+
     def test_pool_bounds_are_retired_without_changing_controls_or_mode(self):
         options = {
             "pool_temperature_minimum": 24, "pool_temperature_maximum": 32,
@@ -50,8 +61,8 @@ class OptionMigrationTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertNotIn("pool_temperature_minimum", migrated)
         self.assertNotIn("pool_temperature_maximum", migrated)
-        self.assertEqual(migrated["pool_start_temperature_entity"], "number.nibe_start")
-        self.assertEqual(migrated["pool_stop_temperature_entity"], "number.nibe_stop")
+        self.assertNotIn("pool_start_temperature_entity", migrated)
+        self.assertNotIn("pool_stop_temperature_entity", migrated)
         self.assertEqual(migrated["device_modes"], {})
         self.assertEqual(migrate_options(migrated, source_version=13), (migrated, False))
 

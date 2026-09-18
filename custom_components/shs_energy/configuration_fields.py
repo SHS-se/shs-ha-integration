@@ -235,6 +235,8 @@ CONTROL_FIELDS["switch_schedule"] += (
 def _control_fields(device: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     """Return the control contract, adding room inputs to on/off heaters."""
     control_type = str(device.get("control_type") or "")
+    if device.get("system") == "pool" or device.get("planning_system") == "pool":
+        return ({**ACTUATOR_FIELD, "domains": ["switch", "input_boolean"]}, POWER_FIELD)
     fields = CONTROL_FIELDS.get(control_type, ())
     if (
         is_room_thermal_control(control_type, str(device.get("category") or ""))
@@ -390,35 +392,12 @@ def _configuration_sections(*, battery_control_required=False) -> list[dict[str,
             ],
         },
         {
-            "id": "pool_control",
-            "tab": "devices",
-            "title": "Pool temperature control",
-            "description": "The pool temperature controls supply the normal heating band and their writable limits.",
-            "fields": [
-                _field(
-                    c.OPT_POOL_START_TEMPERATURE_ENTITY,
-                    "Start heating below",
-                    "entity",
-                    domains=("number", "input_number"),
-                    help_text="Required for pool execution and verification. The current start/stop settings define the normal heating band. SHS lowers that band to defer heating within the limits reported by these controls.",
-                ),
-                _field(
-                    c.OPT_POOL_STOP_TEMPERATURE_ENTITY,
-                    "Stop heating at",
-                    "entity",
-                    domains=("number", "input_number"),
-                    help_text="Required with the entity above: writing one end alone inverts or collapses the band.",
-                ),
-            ],
-        },
-        {
             "id": "scheduled_control",
             "tab": "devices",
             "title": "EV and pool control",
             "description": "Execute the current binding plan. Each device can be tested independently. Disable restores the settings captured before control; reactive adjustments are not included.",
             "fields": [
                 _field(c.OPT_EV_CHARGE_SWITCH_ENTITY, "EV charging start/stop switch", "entity", domains=("switch", "input_boolean"), required=True, help_text="Required for execution. Off slots stop charging without writing a current below the charger's minimum."),
-                _field(c.OPT_POOL_PERMISSION_ENTITY, "Pool accessory permission", "entity", domains=("switch", "input_boolean"), help_text="Optional. Enabled with a heat slot and restored on handover. Off slots lower the temperature band."),
                 *[_field(f"{device}_control_override_entity", f"{label} manual override", "entity", domains=("input_boolean", "binary_sensor", "switch"), help_text="On returns this device to its captured baseline and suspends planned commands.") for device, label in (("battery", "Battery"), ("ev", "EV"), ("pool", "Pool"))],
             ],
         },

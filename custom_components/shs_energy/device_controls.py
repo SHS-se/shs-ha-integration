@@ -25,9 +25,6 @@ try:  # pragma: no cover - package in HA, flat module in the pure test suite
         OPT_BATTERY_MODE_BASELINE,
         OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
         OPT_BATTERY_SOC_ENTITY,
-        OPT_POOL_ENABLED,
-        OPT_POOL_START_TEMPERATURE_ENTITY,
-        OPT_POOL_STOP_TEMPERATURE_ENTITY,
     )
 except ImportError:  # pragma: no cover - flat import path
     from const import (  # type: ignore[no-redef]
@@ -44,9 +41,6 @@ except ImportError:  # pragma: no cover - flat import path
         OPT_BATTERY_MODE_BASELINE,
         OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
         OPT_BATTERY_SOC_ENTITY,
-        OPT_POOL_ENABLED,
-        OPT_POOL_START_TEMPERATURE_ENTITY,
-        OPT_POOL_STOP_TEMPERATURE_ENTITY,
     )
 
 CONTROL_TYPES = (
@@ -311,8 +305,23 @@ def mapping_report(
     entity_area_ids: dict[str, str] | None = None,
     *,
     room_control: bool = False,
+    pool_control: bool = False,
+    pool_water_entity: str | None = None,
 ) -> dict[str, Any]:
     """Build the privacy-minimised status uploaded to the website."""
+    if pool_control and mapping and mapping.get("control_type") != requested_control_type:
+        return mapping_report(requested_control_type, mapping, known_entity_ids, entity_names, area_names, entity_area_ids)
+    if pool_control:
+        local = {**(mapping or {}), "control_type": "switch_schedule"}
+        report = mapping_report("switch_schedule", local, known_entity_ids, entity_names, area_names, entity_area_ids)
+        fields = report["field_errors"]
+        errors = pool_control_errors({"pool_water_temperature_entity": pool_water_entity}, local, field_errors=fields)
+        if errors:
+            report["mapping_status"] = "invalid"
+            report["mapping_error"] = "; ".join(filter(None, [report["mapping_error"], *errors]))
+        report["mapped_control_type"] = requested_control_type
+        report["mapping_summary"]["control_type"] = requested_control_type
+        return report
     if requested_control_type not in CONTROL_TYPES or not mapping or mapping.get("control_type") != requested_control_type:
         field_errors = {}
         if requested_control_type in CONTROL_TYPES:
@@ -479,6 +488,7 @@ def apply_requested_configuration(
     entity_names: dict[str, str] | None = None,
     area_names: dict[str, str] | None = None,
     entity_area_ids: dict[str, str] | None = None,
+    *, pool_water_entity: str | None = None,
 ) -> list[dict[str, Any]]:
     """Apply website requests, keeping incomplete controls in base load."""
     for device in devices:
@@ -497,6 +507,8 @@ def apply_requested_configuration(
                 area_names,
                 entity_area_ids,
                 room_control=is_room_thermal_control(requested_control, category),
+                pool_control=mapped_planning_path({"category": category, "control_type": requested_control}, mappings.get(device["key"], {}), pool_water_entity) == "pool",
+                pool_water_entity=pool_water_entity,
             ),
             requested_control if requested_role == "controllable" else None,
             category,
@@ -607,28 +619,27 @@ def battery_control_errors(options: dict[str, Any], *, field_errors: dict[str, l
     return errors
 
 
-def pool_band_errors(options: dict[str, Any], *, field_errors: dict[str, list[str]] | None = None) -> list[str]:
-    """Return what stops the pool's temperature band from being written.
-
-    Plant-level, for the same reason the battery's mapping is: the pool service
-    is built from every device routed to it, and a heater and its circulation
-    pump share one body of water and one pair of registers. One band per store
-    keeps a single writer on those registers.
-    """
-    if not options.get(OPT_POOL_ENABLED):
-        return []
-    start = options.get(OPT_POOL_START_TEMPERATURE_ENTITY)
-    stop = options.get(OPT_POOL_STOP_TEMPERATURE_ENTITY)
-    if not start and not stop:
-        return []
+def pool_control_errors(options, mapping=None, *, field_errors=None):
+    """The pool only controls a mapped on/off switch and reads water temperature."""
     errors = []
-    if not _text(options, OPT_POOL_START_TEMPERATURE_ENTITY):
-        _field_error(errors, field_errors, "a pool start temperature entity is required with a stop temperature", OPT_POOL_START_TEMPERATURE_ENTITY)
-    if not _text(options, OPT_POOL_STOP_TEMPERATURE_ENTITY):
-        _field_error(errors, field_errors, "a pool stop temperature entity is required with a start temperature", OPT_POOL_STOP_TEMPERATURE_ENTITY)
-    if start and start == stop:
-        _field_error(errors, field_errors, "pool start and stop must use different temperature controls", OPT_POOL_START_TEMPERATURE_ENTITY, OPT_POOL_STOP_TEMPERATURE_ENTITY)
+    if not options.get("pool_water_temperature_entity"):
+        _field_error(errors, field_errors, "Select the pool water temperature sensor", "pool_water_temperature_entity")
+    if mapping is not None:
+        actuators = mapping.get("actuator_entity_ids") or []
+        if len(actuators) != 1 or not isinstance(actuators[0], str) or actuators[0].split(".")[0] not in ("switch", "input_boolean"):
+            _field_error(errors, field_errors, "Select one on/off Control entity for the pool heater", "actuator_entity_ids")
     return errors
+
+
+def pool_control_mapping(options, devices):
+    """Resolve the same physical owner as the pool card, without a second binding."""
+    if __package__:
+        from .operating_modes import system_device_keys
+    else:
+        from operating_modes import system_device_keys
+    owners = system_device_keys(devices, options)
+    key = next((key for key, system in owners.items() if system == "pool"), None)
+    return key, options.get("device_control_mappings", {}).get(key, {})
 
 
 def requested_controllable_devices(

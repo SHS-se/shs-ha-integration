@@ -148,7 +148,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.advance(9)
         await self.drain()
         self.assertEqual(self.states['number.start'].state, '29.5')
-        self.assertEqual(self.states['number.stop'].state, '30.0')
+        self.assertEqual(self.states['number.stop'].state, '30')
         self.assertNotIn('pool', self.controller.records)
         count = len(self.calls)
         self.event('sensor.water')
@@ -194,8 +194,8 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.states['sensor.water'].state = '29'
         self.event('sensor.water')
         await self.drain()
-        self.states['number.start'].state = 'unavailable'
-        self.event('number.start')
+        self.states['switch.pool'].state = 'unavailable'
+        self.event('switch.pool')
         await self.drain()
         self.assertTrue(self.controller.records['pool']['restoration_pending'])
         self.assertNotIn(('pool', 'temperature_gap'), self.scheduler.deadlines)
@@ -250,6 +250,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
                 raise ControlObservationError('temperature lost during write', 'sensor.water', 'check source', unavailable=True)
 
         self.hass.services.async_call = fail_after_write
+        self.slot['pool_w'] = 3300
         self.states['sensor.water'].state = '28'
         self.event('sensor.water')
         await self.drain()
@@ -460,6 +461,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status['device:heater']['state'], 'commanded')
 
     async def test_failed_real_handover_alone_gets_a_timed_retry(self):
+        self.states['switch.pool'].state = 'on'
         self.options['device_modes'] = {'$pool': 'controlling'}
         self.slot['pool_w'] = 0
         await self.controller.async_start()

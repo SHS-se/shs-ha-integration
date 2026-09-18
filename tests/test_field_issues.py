@@ -8,7 +8,7 @@ import unittest
 ROOT = Path(__file__).parents[1] / 'custom_components/shs_energy'
 sys.path.append(str(ROOT))
 from optimisation import OptimisationInputError, REMEDY_WAITING
-from device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError, battery_control_errors, pool_band_errors, mapping_report, apply_requested_configuration
+from device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError, battery_control_errors, pool_control_errors, mapping_report, apply_requested_configuration
 
 
 def price_catalog(coordinator):
@@ -38,11 +38,10 @@ class FieldIssueTests(unittest.TestCase):
         catalog = {'configuration': {'price_area': 'SE3'}}
         self.assertIs(price_catalog(SimpleNamespace(supplier_prices=catalog)), catalog)
 
-    def test_pool_highlights_the_missing_stop_only(self):
+    def test_pool_highlights_switch_and_water_sensor(self):
         fields = {}
-        errors = pool_band_errors({'pool_enabled': True, 'pool_start_temperature_entity': 'number.start'}, field_errors=fields)
-        self.assertEqual(list(fields), ['pool_stop_temperature_entity'])
-        self.assertEqual(fields['pool_stop_temperature_entity'], errors)
+        pool_control_errors({}, {}, field_errors=fields)
+        self.assertEqual(set(fields), {'pool_water_temperature_entity', 'actuator_entity_ids'})
 
     def test_battery_measurements_report_all_missing_and_duplicate_fields(self):
         options = {'battery_power_measurement_entity': 'sensor.battery'}

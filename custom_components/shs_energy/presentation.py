@@ -5,12 +5,12 @@ import re
 if __package__:
     from .optimisation import validate_plan_contract, OptimisationInputError
     from .configuration_fields import _configuration_sections, _control_fields, LABELS
-    from .device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_band_errors
+    from .device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_control_errors
     from .device_commands import execution_setup_errors
 else:
     from optimisation import validate_plan_contract, OptimisationInputError
     from configuration_fields import _configuration_sections, _control_fields, LABELS
-    from device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_band_errors
+    from device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_control_errors
     from device_commands import execution_setup_errors
 
 
@@ -195,9 +195,8 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         elif system == "battery":
             reason = "; ".join(battery_control_errors({**options, "battery_control_enabled": True})) or None
         elif system == "pool":
-            reason = "; ".join(pool_band_errors(options)) or None
-            if not options.get("pool_start_temperature_entity"):
-                reason = "Set up the pool temperature controls first"
+            reason = "; ".join(pool_control_errors(options, mapping)) or device.get("mapping_error") or (
+                "Complete the pool heater's setup first" if device.get("mapping_status") != "ready" else None)
         elif system == "ev":
             if not options.get("ev_charge_switch_entity") or device.get("mapping_status") != "ready":
                 reason = "Set up the charging current and start/stop switch first"
@@ -246,10 +245,21 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         device["planning_system"] = mapped_planning_path(
             device, mapping, options.get("pool_water_temperature_entity")
         )
-        if device["planning_system"] == "pool" and device.get("control_type") == "setpoint":
-            # The shared pool sensor has one editor, on the pool Controls card.
-            device["fields"] = [f for f in device.get("fields", []) if f["key"] != "temperature_entity_id"]
+        if system == "pool":
+            device["fields"] = list(_control_fields(device))
+            errors = {}
+            gaps = pool_control_errors(options, mapping, field_errors=errors)
+            device["field_errors"] = {**device.get("field_errors", {}), **errors}
+            if gaps:
+                device["mapping_status"] = "invalid"
+                device["mapping_error"] = "; ".join(gaps)
+            device["mapping_readiness"] = {"state": device["mapping_status"], "reason": device["mapping_error"]}
+            for field in device["system_fields"]:
+                if field["key"] == "pool_water_temperature_entity":
+                    field["required"] = included
 
+        device["controller_explanation"] = controller_explanation(
+            controller_id, mode, device["execution_status"], active)["explanation"]
         device["fields"] = [f for f in device.get("fields", []) if f["key"] != "control_enabled"]
         if not planned:
             device["mapping_error"] = None
@@ -299,12 +309,18 @@ def controller_explanation(device, mode, status, slot=None):
              'SHS is allowed to adjust this device to follow the plan.' if mode == 'controlling' else
              'Observing this device; SHS is not changing its settings.')
     parts = [intro]
+    if status.get("control_notice"): parts.append(status["control_notice"])
     reason = status.get('reason')
     if reason == 'Commands logged; physical response and cross-slot transitions are not tested':
         reason = 'Proposed settings have been recorded. The equipment has not been tested with these settings.'
     if reason: parts.append(reason)
     if status.get('water_temperature_c') is not None:
         parts.append(f"The pool water is {status['water_temperature_c']:.1f} °C.")
+    if status.get('stop_temperature_c') is not None:
+        parts.append(f"Your Stop at temperature is {status['stop_temperature_c']:.1f} °C.")
+    if status.get('decision_reason'):
+        parts.append(status['decision_reason'].replace('is allowed to run', 'would be allowed to run').replace('is off', 'would be off')
+                     if mode == 'control_verification' else status['decision_reason'])
     if status.get('measured_power_w') is not None:
         parts.append(f"This device is using {status['measured_power_w']/1000:.2f} kW.")
     planned = None

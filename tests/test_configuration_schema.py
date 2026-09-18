@@ -24,6 +24,21 @@ def save(existing, key, mapping):
 
 
 class CurrentConfigurationTests(unittest.TestCase):
+    def test_pool_save_uses_only_switch_power_and_shared_water(self):
+        existing = {'pool_water_temperature_entity': 'sensor.water'}
+        states = {'sensor.water': {'state': '29', 'attributes': {'unit_of_measurement': '°C'}},
+                  'switch.pool': {'state': 'off', 'attributes': {}}}
+        mapping = {'control_type': 'setpoint', 'actuator_entity_ids': ['switch.pool'],
+                   'power': 2000, 'temperature_entity_id': 'sensor.water',
+                   'setpoint_entity_id': 'number.obsolete', 'minimum_temperature_c': 24}
+        saved = save_device(existing, 'pool', mapping,
+            {'control_type': 'setpoint', 'category': 'pool_heating', 'name': 'Pool'}, states.get,
+            entity_names={key: key for key in states}, area_names={}, entity_area_ids={})
+        self.assertEqual(saved['device_control_mappings']['pool'], {
+            'control_type': 'setpoint', 'actuator_entity_ids': ['switch.pool'],
+            'power': 2000, 'temperature_entity_id': 'sensor.water'})
+        self.assertNotIn('rooms', saved)
+
     def test_switch_timings_are_optional_in_every_mode(self):
         device = {"control_type": "switch_schedule", "category": "household", "name": "Heater"}
         for mode in ("monitoring", "planning", "control_verification", "controlling"):
@@ -75,12 +90,14 @@ class CurrentConfigurationTests(unittest.TestCase):
                                      "device_control_mappings": {}}, source_version=6)
         mapping = {"control_type": "switch_schedule",
                    "actuator_entity_ids": ["switch.esphome_pool_pump_switch"]}
-        entities = {"switch.esphome_pool_pump_switch": {"state": "off", "attributes": {}}}
+        options['pool_water_temperature_entity'] = 'sensor.water'
+        entities = {"switch.esphome_pool_pump_switch": {"state": "off", "attributes": {}},
+                    "sensor.water": {"state": "29", "attributes": {"unit_of_measurement": "°C"}}}
         saved = save_device(options, "sensor.pool", mapping,
                             {"control_type": "switch_schedule", "category": "pool_heating", "name": "Pool pump"},
                             entities.get, entity_names={key: key for key in entities},
                             area_names={}, entity_area_ids={})
-        self.assertEqual(saved["device_control_mappings"]["sensor.pool"], mapping)
+        self.assertEqual(saved["device_control_mappings"]["sensor.pool"], {**mapping, "temperature_entity_id": "sensor.water"})
         self.assertEqual(saved["device_modes"], {})
 
     def test_patch_does_not_persist_defaults_or_mutate_input(self):

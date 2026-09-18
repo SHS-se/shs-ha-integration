@@ -901,7 +901,6 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _fields(fields, values, scope = "configuration", deviceKey = "", additional = []) {
     const visible = [], optional = [];
     const linked = {
-      pool_start_temperature_entity: ["pool_stop_temperature_entity"],
       offset_entity_id: ["offset_minimum", "offset_maximum"],
     };
     for (const group of [{ fields, values, scope, deviceKey }, ...additional]) {
@@ -1059,6 +1058,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return device.mode === "controlling" && slot.execution ? slot.execution : slot;
   }
 
+  _controllerDetails(device) {
+    return device.controller_explanation ? `<p class="muted">${this._escape(device.controller_explanation).replaceAll("\n", "<br>")}</p>` : "";
+  }
+
   _batteryOutlook(device) {
     const explanation = device.battery_runtime?.explanation;
     if (!explanation || this._refreshError) return '<p class="muted battery-outlook">Waiting for a current battery plan and measurements.</p>';
@@ -1166,12 +1169,23 @@ class ShsEnergyConfigPanel extends HTMLElement {
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
       <p class="muted">Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
       ${!devices.length ? '<p role="status">No devices match these filters.</p>' : ""}
-      ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}<div class="device-field-issues">${this._deviceFieldButtons(d)}</div>${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included && d.system !== "battery" ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._scheduleCommand(d, slots[1]).text)}` : ""}</small>${this._batteryLiveInputs(d)}${d.system === "battery" ? this._batteryOutlook(d) : ""}</article>`).join("")}`;
+      ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}<div class="device-field-issues">${this._deviceFieldButtons(d)}</div>${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included && d.system !== "battery" ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._scheduleCommand(d, slots[1]).text)}` : ""}</small>${this._batteryLiveInputs(d)}${d.system === "battery" ? this._batteryOutlook(d) : this._controllerDetails(d)}</article>`).join("")}`;
   }
 
   _attention() {
     const items = [...(this._data?.attention || [])];
     for (const device of this._data?.devices || []) {
+      if (device.included && device.planned && Object.keys(device.field_errors || {}).length) {
+        const fields = Object.entries(device.field_errors).map(([key, messages]) => ({
+          key, scope: key === "pool_water_temperature_entity" ? "configuration" : "mapping",
+          device_key: device.key, message: messages.join("; "),
+        })).filter(field => !items.some(item => item.fix?.fields?.some(existing =>
+          existing.key === field.key && (existing.scope || "configuration") === field.scope &&
+          (!existing.device_key || existing.device_key === field.device_key))));
+        if (fields.length) items.push({ key: "setup:" + device.key, severity: "warning",
+          title: `${device.name}: setup needs attention`, detail: "Complete the highlighted settings before enabling control.",
+          fix: { kind: "fields", fields }, device_key: device.key });
+      }
       const status = device.execution_status || {};
       if (device.system === "battery" && status.fix?.kind === "fields" && items.some(item => item.key === "battery_control")) continue;
       if (!["fault", "unsupported", "overridden", "limited"].includes(status.state) && !status.handover_pending) continue;

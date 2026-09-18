@@ -24,7 +24,7 @@ try:
     from .battery_commands import validate_battery_command, BATTERY_MODE_KEYS
     from .configuration_values import resolve_battery_quantities, resolve_quantity
     from .device_commands import actuator_targets, execution_setup_errors, validate_commands
-    from .device_controls import battery_control_errors, pool_band_errors, mapped_planning_path, planning_path
+    from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
 except ImportError:  # Pure executor tests, without importing Home Assistant.
     from api_contract import INTEGRATION_VERSION
     from operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
@@ -33,7 +33,7 @@ except ImportError:  # Pure executor tests, without importing Home Assistant.
     from battery_commands import validate_battery_command, BATTERY_MODE_KEYS
     from configuration_values import resolve_battery_quantities, resolve_quantity
     from device_commands import actuator_targets, execution_setup_errors, validate_commands
-    from device_controls import battery_control_errors, pool_band_errors, mapped_planning_path, planning_path
+    from device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -57,7 +57,7 @@ class ControlObservationError(ValueError):
 
 @dataclass
 class PoolObservation:
-    """Evidence for holding an already accepted band, never a cached command input."""
+    """Evidence for briefly holding an accepted switch state through a reading gap."""
     configuration: dict
     slot_start: str
     heating: bool
@@ -88,39 +88,6 @@ def finite(value: Any) -> float:
     if not isfinite(result):
         raise ValueError("non-finite value")
     return result
-
-
-def pool_band(heat: tuple[float, float], water: float, on: bool,
-              minimum: float, maximum: float, step: float) -> tuple[float, float]:
-    """Move the installed hysteresis intact; never invent a warmer target."""
-    start, stop = heat
-    width = stop - start
-    if step <= 0 or width <= 0 or width > maximum - minimum:
-        raise ValueError("installed pool hysteresis does not fit the control limits")
-    if not minimum <= start < stop <= maximum:
-        raise ValueError("installed pool band is outside the control limits")
-    upper = stop if on else min(stop, water - step)
-    upper = min(max(upper, minimum + width), maximum)
-    # Round downward to the actuator grid without changing the width.
-    lower = minimum + int((upper - width - minimum + 1e-8) / step) * step
-    return round(lower, 6), round(lower + width, 6)
-
-
-def pool_hardware_band(heat, water, on, start_attributes, stop_attributes):
-    """Use both registers' advertised bounds and steps, preserving hysteresis."""
-    width = finite(heat[1]) - finite(heat[0])
-    limits = [(finite(attrs["min"]), finite(attrs["max"]), finite(attrs["step"]))
-              for attrs in (start_attributes, stop_attributes)]
-    if any(low >= high or step <= 0 for low, high, step in limits):
-        raise ValueError("invalid pool temperature control bounds or step")
-    minimum = max(limits[0][0], limits[1][0] - width)
-    maximum = min(limits[1][1], limits[0][1] + width)
-    band = pool_band(heat, water, on, minimum, maximum, max(row[2] for row in limits))
-    # Validate both writes before sending either half of a temperature band.
-    for value, (low, high, step) in zip(band, limits):
-        if not low <= value <= high or abs((value - low) / step - round((value - low) / step)) > 1e-5:
-            raise ValueError("pool temperature band does not fit both controls' bounds and steps")
-    return band
 
 
 def checked_state(state, entity, max_age=None):
@@ -198,6 +165,7 @@ class ScheduledController:
         self.diagnostic_evaluation = None
         self.diagnostics_error = None
         self.diagnostics_failed_evaluations = 0
+        self.retired_pool_temperature_settings = {}
         self.diagnostics_sampling_error = None
         self.diagnostics_failed_samples = 0
 
@@ -208,6 +176,9 @@ class ScheduledController:
     def report(self, device, state, **details):
         if self.verifying:
             return
+        if device == "pool" and self.retired_pool_temperature_settings:
+            details["retired_temperature_settings"] = deepcopy(self.retired_pool_temperature_settings)
+            details["control_notice"] = "Old temperature control has been removed. Check the heater's own temperature settings; SHS now only uses its switch."
         value = {"state": state, **details}
         if self.status.get(device) == value:
             return
@@ -447,7 +418,8 @@ class ScheduledController:
     async def save(self):
         if self.verifying:
             return
-        await self.store.async_save({"records": self.records, "overrides": self.overrides})
+        await self.store.async_save({"records": self.records, "overrides": self.overrides,
+                                     "retired_pool_temperature_settings": self.retired_pool_temperature_settings})
 
     async def capture(self, device, options, entities):
         if device in self.records:
@@ -458,16 +430,6 @@ class ScheduledController:
         self.records[device] = record
         await self.save()
         return record
-
-    async def band_commands(self, start_entity, stop_entity, band):
-        start, stop = band
-        # Raising stop first / lowering start first never transiently inverts a band.
-        if start >= self.number(stop_entity):
-            await self.command(stop_entity, stop)
-            await self.command(start_entity, start)
-        else:
-            await self.command(start_entity, start)
-            await self.command(stop_entity, stop)
 
     async def restore(self, device):
         self.device = device
@@ -529,11 +491,17 @@ class ScheduledController:
                 self.report(device, "baseline", measured_power_w=measured,
                             reason="baseline mode and normal limits confirmed; power is measured")
             elif device == "pool":
-                start = options["pool_start_temperature_entity"]
-                stop = options["pool_stop_temperature_entity"]
-                await self.band_commands(start, stop, (finite(original[start]), finite(original[stop])))
-                if permission := options.get("pool_permission_entity"):
-                    await self.command(permission, original[permission])
+                # Never write temperature registers, even from a pre-upgrade journal.
+                if any(entity.split(".")[0] not in ("switch", "input_boolean") for entity in original):
+                    self.retired_pool_temperature_settings = {entity: value for entity, value in original.items()
+                        if entity.split(".")[0] not in ("switch", "input_boolean")}
+                    self.report("pool", "legacy_control_retired",
+                        reason="Old temperature control has been removed. Check the heater's own temperature settings; SHS will only use its switch.",
+                        retired_temperature_settings={entity: value for entity, value in original.items()
+                            if entity.split(".")[0] not in ("switch", "input_boolean")})
+                for entity, value in original.items():
+                    if entity.split(".")[0] in ("switch", "input_boolean"):
+                        await self.command(entity, value)
             else:
                 switch = options["ev_charge_switch_entity"]
                 await self.command(switch, "off")
@@ -632,41 +600,52 @@ class ScheduledController:
 
     def pool_request(self, options, slot, *, read_state=None):
         reader = read_state or self.state
-        errors = pool_band_errors(options)
+        plan, _ = self.coordinator.binding_plan_for("pool", options)
+        key, mapping = pool_control_mapping(options, plan.get("device_models", []))
+        fields = {}
+        errors = pool_control_errors(options, mapping, field_errors=fields)
         if errors:
-            raise ValueError("; ".join(errors))
-        start = options.get("pool_start_temperature_entity")
-        stop = options.get("pool_stop_temperature_entity")
-        water_entity = options.get("pool_water_temperature_entity")
-        for entity in (start, stop):
-            if reader(entity).attributes.get("unit_of_measurement") != "°C":
-                raise ValueError(f"{entity}: pool control requires Celsius")
-        water, sources, fresh_until = self.pool_temperature(water_entity, read_state=reader)
-        record = self.records.get("pool")
-        heat = ((finite(record["originals"][start]), finite(record["originals"][stop]))
-                if record else (finite(reader(start).state), finite(reader(stop).state)))
-        on = finite(slot["pool_w"]) > 0
-        band = pool_hardware_band(heat, water, on, reader(start).attributes, reader(stop).attributes)
-        return start, stop, water, sources, fresh_until, band, on
+            error = ControlObservationError("; ".join(errors), None, "Complete the highlighted pool settings.")
+            error.details["fix"] = {"kind": "fields", "fields": [
+                {"key": field, "message": "; ".join(messages),
+                 **({"scope": "mapping", "device_key": key} if field == "actuator_entity_ids" else {})}
+                for field, messages in fields.items()]}
+            raise error
+        entity = mapping["actuator_entity_ids"][0]
+        if reader(entity).state not in ("on", "off"):
+            raise ValueError(f"{entity}: pool control must report on or off")
+        target = (plan.get("pool") or {}).get("stop_temperature_c")
+        if target is None:
+            error = ControlObservationError(
+                "The plan is missing the pool's Stop at temperature.", None,
+                "Refresh the plan after updating the planner. If this continues, check the website's pool preference and download diagnostics.")
+            error.details["fix"] = {"kind": "diagnostics"}
+            raise error
+        target = finite(target)
+        water, sources, fresh_until = self.pool_temperature(options.get("pool_water_temperature_entity"), read_state=reader)
+        heating = finite(slot["pool_w"]) > 0
+        on = heating and water < target
+        reason = ("The pool heater is allowed to run as planned." if on else
+                  "The water has reached your Stop at temperature; the pool heater is off." if heating else
+                  "The plan is pausing pool heating; the pool heater is off.")
+        return {"control_entity": entity, "requested_switch_state": "on" if on else "off",
+                "water_temperature_c": water, "stop_temperature_c": target,
+                "requested_power_w": slot["pool_w"], "reason": reason}, sources, fresh_until
 
     async def execute_pool(self, options, slot):
-        start, stop, water, sources, fresh_until, band, on = self.pool_request(options, slot)
-        await self.capture("pool", options, [start, stop, options.get("pool_permission_entity")])
-        await self.band_commands(start, stop, band)
-        if on and (permission := options.get("pool_permission_entity")):
-            await self.command(permission, "on")
+        request, sources, fresh_until = self.pool_request(options, slot)
+        entity = request["control_entity"]
+        # Refuse shared targets before either controller can acquire ownership.
+        for key, mapping in options.get("device_control_mappings", {}).items():
+            if device_mode(options, "device:" + key) in EXECUTING_MODES and entity in actuator_targets(mapping):
+                raise ValueError("another enabled device shares the pool actuator")
+        await self.capture("pool", options, [entity])
+        await self.command(entity, request["requested_switch_state"])
         if not self.verifying:
             self.pool_observation = PoolObservation(
-                ownership_configuration(options, "pool"), slot["start"], on, sources, fresh_until)
+                ownership_configuration(options, "pool"), slot["start"], finite(slot["pool_w"]) > 0, sources, fresh_until)
             self.device_deadline("temperature_gap", None)
-        limited = not on and band[1] >= water
-        return {"state": "limited" if limited else "scheduled",
-                "reason": "temperature control lower limit prevents further deferral" if limited else "band accepted; the local thermostat controls heating",
-                **({"next_step": "Check the Nibe start/stop limits against the current water temperature. "
-                     "The plan requests deferral that these controls cannot enforce; download the evidence for controller/planner review.",
-                    "fix": {"kind": "device"}} if limited else {}),
-                "start_temperature_c": band[0], "stop_temperature_c": band[1],
-                "water_temperature_c": water, "requested_power_w": slot["pool_w"]}
+        return {"state": "scheduled", **request}
 
     def hold_pool_gap(self, error, options, slot, plan):
         """Suspend writes briefly for a missing temperature under unchanged authority."""
@@ -761,8 +740,8 @@ class ScheduledController:
     def preview_commands(self, slot):
         """Describe intended targets without writes, simulation, or authority changes.
 
-        Pool bands depend on current water/readbacks; future execution recalculates
-        them. Other adapters can publish the same fields/basis/error shape here.
+        Pool switching depends on current water readings; future execution
+        recalculates it. Other adapters publish the same fields/basis/error shape.
         """
         options = self.options()
         previews = {}
@@ -785,11 +764,10 @@ class ScheduledController:
                 previews["battery"] = {"error": str(err)}
         if slot.get("pool_w") is not None and options.get("pool_enabled"):
             try:
-                _, _, _, _, _, band, on = self.pool_request(options, slot, read_state=self.preview_state)
-                fields = [{"label": "Start", "value": band[0], "unit": "°C"},
-                          {"label": "Stop", "value": band[1], "unit": "°C"}]
-                if on and options.get("pool_permission_entity"):
-                    fields.append({"label": "Permission", "value": "On"})
+                request, _, _ = self.pool_request(options, slot, read_state=self.preview_state)
+                fields = [{"label": "Pool heater", "value": request["requested_switch_state"].capitalize()},
+                          {"label": "Water temperature", "value": request["water_temperature_c"], "unit": "°C"},
+                          {"label": "Stop at", "value": request["stop_temperature_c"], "unit": "°C"}]
                 previews["pool"] = {"fields": fields, "basis": "current_readings"}
             except (KeyError, TypeError, ValueError) as err:
                 previews["pool"] = {"error": str(err)}
@@ -885,7 +863,9 @@ class ScheduledController:
                 raise ValueError("another enabled device shares this actuator")
         system_targets = {options.get(field) for field in (
             "battery_charge_limit_entity", "battery_discharge_limit_entity", "battery_mode_entity",
-            "ev_charge_switch_entity", "pool_start_temperature_entity", "pool_stop_temperature_entity", "pool_permission_entity")}
+            "ev_charge_switch_entity")}
+        _, pool_mapping = pool_control_mapping(options, models)
+        system_targets.update(pool_mapping.get("actuator_entity_ids", []))
         if set(targets) & system_targets:
             raise ValueError("actuator is assigned to a system controller")
         record = self.records.get(device)
@@ -1014,7 +994,10 @@ class ScheduledController:
         self.report(device, ("limited" if limited else "verified") if attempt["outcome"] == "verified" else "fault",
                     reason=attempt.get("reason") or attempt.get("handover_reason") or (attempt["result"]["reason"] if limited else "Commands logged; physical response and cross-slot transitions are not tested"),
                     plan_id=plan.get("plan_id"), slot_start=slot["start"], retry_automatically=True,
-                    **{key: attempt[key] for key in ("next_step", "fix", "handover_pending") if key in attempt})
+                    **{key: attempt[key] for key in ("next_step", "fix", "handover_pending") if key in attempt},
+                    **{key: value for key, value in attempt.get("result", {}).items()
+                       if key in ("control_entity", "requested_switch_state", "water_temperature_c", "stop_temperature_c", "requested_power_w")},
+                    **({"decision_reason": attempt["result"]["reason"]} if device == "pool" and attempt.get("result") else {}))
 
     def begin_diagnostic_evaluation(self, device, options, slot, plan, trigger):
         if self.verification is None:
@@ -1108,6 +1091,7 @@ class ScheduledController:
             for device in DEVICES:
                 self.report(device, "fault", reason=f"cannot load restoration journal: {err}")
             return
+        self.retired_pool_temperature_settings = saved.get("retired_pool_temperature_settings", {})
         self.records = saved.get("records", {})
         self.overrides = saved.get("overrides", {})
         journal_error = None

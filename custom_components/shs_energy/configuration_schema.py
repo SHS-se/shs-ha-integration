@@ -10,13 +10,13 @@ if __package__:
     from .device_commands import execution_setup_errors
     from . import const as c
     from .configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS
-    from .device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_band_errors
+    from .device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_control_errors, mapped_planning_path
 else:
     from configuration_values import resolve_quantity
     from device_commands import execution_setup_errors
     import const as c
     from configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS
-    from device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_band_errors
+    from device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_control_errors, mapped_planning_path
 
 OPTION_FIELDS = {
     field["key"]: field
@@ -283,7 +283,7 @@ def prepare_options(existing, incoming, read_entity, *, latitude=0.0, longitude=
         if errors:
             raise ValueError("Battery control: " + "; ".join(errors))
     if current["pool_control_enabled"]:
-        errors = pool_band_errors(current)
+        errors = pool_control_errors(current)
         if errors:
             raise ValueError("Pool control: " + "; ".join(errors))
     if current["ev_control_enabled"] and not current.get("ev_charge_switch_entity"):
@@ -302,6 +302,10 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
     kind = device["control_type"]
     if submitted.get("control_type") != kind:
         raise ValueError(f"{device['name']}: configuration belongs to a different control type")
+    pool = (device.get("system") == "pool" or device.get("planning_system") == "pool"
+            or mapped_planning_path(device, submitted, existing.get("pool_water_temperature_entity")) == "pool")
+    if pool:
+        device = {**device, "system": "pool"}
     mapping = {"control_type": kind}
     if stored.get(key, {}).get(ROOM_AREA_FIELD):
         mapping[ROOM_AREA_FIELD] = stored[key][ROOM_AREA_FIELD]
@@ -313,8 +317,16 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
         errors = execution_setup_errors(mapping)
         if errors:
             raise ValueError(f"{device['name']}: " + "; ".join(errors))
+    if pool:
+        # Keep the existing planner's sensor routing metadata, never a writable target.
+        mapping["temperature_entity_id"] = existing.get("pool_water_temperature_entity")
+        mapping.pop(ROOM_AREA_FIELD, None)
+        errors = pool_control_errors(existing, mapping)
+        if errors:
+            raise ValueError(f"{device['name']}: " + "; ".join(errors))
     report = mapping_report(kind, mapping, set(entity_names), entity_names, area_names, entity_area_ids,
-                            room_control=is_room_thermal_control(kind, device.get("category")))
+                            room_control=is_room_thermal_control(kind, device.get("category")), pool_control=pool,
+                            pool_water_entity=existing.get("pool_water_temperature_entity"))
     if report["mapping_status"] != "ready":
         raise ValueError(f"{device['name']}: {report['mapping_error']}")
     room = report["mapping_summary"].get("room_key")

@@ -29,7 +29,7 @@ def operation_name(device, kind, slot, result):
     if device == "battery":
         return slot["battery_command"]["operation"]
     if device == "pool":
-        return "heat" if slot["pool_w"] > 0 else "defer"
+        return "heat" if result["requested_switch_state"] == "on" else "defer"
     if device == "ev":
         return "stop" if result["state"] == "stopped" else "charge"
     if kind == "setpoint":

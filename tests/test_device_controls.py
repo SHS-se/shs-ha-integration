@@ -11,7 +11,7 @@ sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energ
 from device_controls import (  # noqa: E402
     apply_requested_configuration,
     battery_control_errors,
-    pool_band_errors,
+    pool_control_errors,
     is_room_thermal_control,
     planning_path,
     mapping_report,
@@ -402,41 +402,15 @@ class BatteryControlTests(unittest.TestCase):
         self.assertIn("this home is not marked as having a house battery", errors)
 
 
-def _pool_options(**extra):
-    return {
-        "pool_enabled": True,
-        "pool_start_temperature_entity": "number.pool_start",
-        "pool_stop_temperature_entity": "number.pool_stop",
-        **extra,
-    }
-
-
-class PoolBandTests(unittest.TestCase):
-    """One band per pool, not one per meter that heats it."""
-
-    def test_a_complete_band_has_no_errors(self) -> None:
-        self.assertEqual(pool_band_errors(_pool_options()), [])
-
-    def test_no_band_at_all_is_fine(self) -> None:
-        """The band is optional; an on/off pool schedule still works."""
-        self.assertEqual(pool_band_errors({"pool_enabled": True}), [])
-
-    def test_a_home_without_a_pool_is_never_asked(self) -> None:
-        self.assertEqual(
-            pool_band_errors(_pool_options(pool_enabled=False)), []
-        )
-
-    def test_one_end_alone_is_refused(self) -> None:
-        """Writing a start without a stop inverts the window."""
-        errors = pool_band_errors(_pool_options(pool_stop_temperature_entity=""))
-        self.assertTrue(any("stop temperature entity is required" in e for e in errors))
-
-    def test_no_separate_temperature_bounds_are_required(self) -> None:
-        self.assertEqual(pool_band_errors(_pool_options()), [])
-
-    def test_start_and_stop_cannot_share_one_control(self) -> None:
-        errors = pool_band_errors(_pool_options(pool_stop_temperature_entity="number.pool_start"))
-        self.assertTrue(any("different temperature controls" in error for error in errors))
+class PoolSwitchTests(unittest.TestCase):
+    def test_required_inputs_and_correction(self):
+        fields = {}
+        self.assertEqual(len(pool_control_errors({}, {}, field_errors=fields)), 2)
+        self.assertEqual(set(fields), {'pool_water_temperature_entity', 'actuator_entity_ids'})
+        options = {'pool_water_temperature_entity': 'sensor.water'}
+        for targets in ([], ['number.start'], ['switch.one', 'switch.two']):
+            self.assertTrue(pool_control_errors(options, {'actuator_entity_ids': targets}))
+        self.assertEqual(pool_control_errors(options, {'actuator_entity_ids': ['switch.pool']}), [])
 
 
 class PoolDeviceMappingTests(unittest.TestCase):

@@ -6,7 +6,7 @@ from .configuration import (resolved_options, entity_display_name_by_id,
     area_name_by_id, entity_area_id_by_id, suggest_device_control_mapping)
 from .configuration_fields import _control_fields
 from .configuration_schema import initialise_device_inclusion
-from .device_controls import apply_planner_support, mapping_report, is_room_thermal_control
+from .device_controls import apply_planner_support, mapping_report, is_room_thermal_control, mapped_planning_path
 from .operating_modes import execution_mode_options
 from .presentation import complete_device_views
 
@@ -40,6 +40,8 @@ def execution_device_views(hass, entry, choices):
                 entity_names,
                 area_names,
                 entity_area_ids,
+                pool_water_entity=options.get("pool_water_temperature_entity"),
+                pool_control=mapped_planning_path(device, saved_mapping, options.get("pool_water_temperature_entity")) == "pool",
                 room_control=is_room_thermal_control(
                     control_type, str(device.get("category") or "")
                 ),

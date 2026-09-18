@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import unittest
-from presentation import operational_status, timeline, complete_device_views, device_name, system_fields, device_readiness
+from presentation import controller_explanation, operational_status, timeline, complete_device_views, device_name, system_fields, device_readiness
 from configuration_schema import configuration_defaults, shared_devices
 from planning import unplanned_services
 
@@ -101,6 +101,15 @@ class PresentationTests(unittest.TestCase):
         self.assertIn('battery_charge_limit_entity', controls)
         self.assertIn('battery_discharging_entity', controls)
         self.assertNotIn('battery_max_soc', controls)
+
+    def test_pool_explanation_shares_simulated_temperature_and_switch_decision(self):
+        status = {'water_temperature_c': 31.5, 'stop_temperature_c': 32,
+                  'decision_reason': 'The pool heater is allowed to run as planned.'}
+        text = controller_explanation('pool', 'control_verification', status, {'pool_w': 2000})['explanation']
+        self.assertIn('not being changed', text)
+        self.assertIn('31.5 °C', text)
+        self.assertIn('32.0 °C', text)
+        self.assertIn('would be allowed to run', text)
 
     def test_pool_water_sensor_is_labelled_as_water_in_controls(self):
         self.options.update(pool_enabled=True, pool_water_temperature_entity='sensor.water')
