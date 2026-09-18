@@ -106,9 +106,9 @@ class BatteryRuntime:
     History/calibration reads are ports on the coordinator; tests use the same
     composition with an in-memory state table and real fake service boundary.
     """
-    def __init__(self,coordinator,controller,store,now_ms,archive_store_for):
+    def __init__(self,coordinator,controller,store,now_ms,archive_store_for,archive_pages=None):
         self.coordinator,self.controller,self.store,self.now=coordinator,controller,store,now_ms
-        self.archive=ExecutionArchive(archive_store_for)
+        self.archive=ExecutionArchive(archive_store_for,archive_pages)
         self.host=None;self.adapter=None;self._grant=None;self._identity=None
         self._lock=asyncio.Lock();self._observe_lock=asyncio.Lock();self._closed=False;self._closing=False
         self._options=None;self._devices=[];self._model=None;self._fits={};self._model_sources=None
@@ -315,10 +315,24 @@ class BatteryRuntime:
             self.coordinator.async_update_listeners()
 
     async def _persist_bootstrap(self):
+        root=await self.archive.save_session(rt.ExecutionSession(account=self._bootstrap,
+            captured_feedback=self._bootstrap_captured,plan_rejection=self._bootstrap_rejection))
         await self.store.async_save({'schema':'battery-runtime-v3','checkpoint':None,
-            'execution_root':await self.archive.save_session(rt.ExecutionSession(account=self._bootstrap,
-                captured_feedback=self._bootstrap_captured,plan_rejection=self._bootstrap_rejection)),
+            'execution_root':root,
             'account':None,'options':None,'devices':[],'model_sources':None,'ratings':None})
+        await self._collect_evidence(root)
+
+    async def _collect_evidence(self,root):
+        """Remove evidence pages that the checkpoint on disk no longer names."""
+        try:
+            # The store logs write failures instead of raising them. Only a
+            # checkpoint read back with this root proves older roots are superseded.
+            durable=await self.store.async_load()
+            if (durable or {}).get('execution_root')==root:
+                await self.archive.collect()
+        except Exception as error:
+            # Cleanup never stops battery control; unremoved pages wait for later.
+            self._record_fault('archive',f'Evidence cleanup failed: {type(error).__name__}: {error}')
 
     def validate_plan_response(self,plan):
         """Reject stale response identity before replacing the coordinator's cache."""
@@ -379,6 +393,7 @@ class BatteryRuntime:
         await self.store.async_save({'schema':'battery-runtime-v3','checkpoint':encode_checkpoint(shell).decode(),
             'execution_root':root,'account':None,'options':self._options,'devices':self._devices,
             'model_sources':self._model_sources,'ratings':self._ratings})
+        await self._collect_evidence(root)
 
     def _report(self,group,reason):
         if reason not in ('meter_recorded','duplicate_meter_sample','stale_meter_sample'):

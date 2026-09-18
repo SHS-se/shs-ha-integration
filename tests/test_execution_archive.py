@@ -98,3 +98,93 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
         root=await archive.save_session(rejected)
         self.assertEqual(await archive.load_session(root),rejected)
         self.assertEqual(await archive.load_session(old),session)
+
+
+def pages_of(stores, root, read=lambda store: store.value):
+    """Every page a root names, followed through the stored pages themselves."""
+    seen, pending = set(), [root]
+    while pending:
+        key = pending.pop()
+        if key not in seen:
+            seen.add(key)
+            page = read(stores[key])
+            pending.extend(page['fields'].values() if page['kind'] == 'object' else page.get('children', []))
+    return seen
+
+
+class CollectionTests(unittest.IsolatedAsyncioTestCase):
+    def archive(self, stores, removed=None, gate=None):
+        async def list_pages():
+            return set(stores)
+
+        async def remove_pages(keys):
+            if gate is not None:
+                await gate.wait()
+            for key in keys:
+                stores.pop(key, None)
+                if removed is not None:
+                    removed.append(key)
+        return ExecutionArchive(lambda k: stores.setdefault(k, Store()), (list_pages, remove_pages))
+
+    def session(self, count):
+        return ExecutionSession(account=Account(receipt=count, meters=tuple(
+            MeterReceipt(str(i), 'charge', 'charge', 'battery_dc', 'meter', i, i, i + 1) for i in range(count))))
+
+    async def test_collection_keeps_exactly_the_pages_the_saved_root_reaches(self):
+        orphan = '0' * 64
+        stores, removed = {orphan: Store(), 'not-a-page': Store()}, []
+        archive = self.archive(stores, removed)
+        first = await archive.save_session(self.session(300))
+        latest = self.session(301)
+        root = await archive.save_session(latest)
+        superseded = pages_of(stores, first) - pages_of(stores, root)
+        self.assertTrue(superseded)
+        await archive.collect()
+        self.assertEqual(set(stores) - {'not-a-page'}, pages_of(stores, root))
+        self.assertEqual(set(removed), superseded | {orphan})
+        self.assertEqual(await ExecutionArchive(lambda k: stores[k]).load_session(root), latest)
+
+    async def test_content_that_returns_after_removal_is_written_again(self):
+        stores = {}
+        archive = self.archive(stores)
+        original = self.session(10)
+        root = await archive.save_session(original)
+        await archive.save_session(self.session(20))
+        await archive.collect()
+        self.assertNotIn(root, stores)
+        self.assertEqual(await archive.save_session(original), root)
+        await archive.collect()
+        self.assertEqual(await ExecutionArchive(lambda k: stores[k]).load_session(root), original)
+
+    async def test_removal_is_bounded_and_drains_over_later_checkpoints(self):
+        stores = {f'{i:064x}': Store() for i in range(5)}
+        archive = self.archive(stores)
+        self.assertEqual(await archive.collect(), 0, 'nothing is removed before a tree is saved')
+        await archive.save_session(self.session(3))
+        self.assertEqual([await archive.collect(limit=2) for _ in range(4)], [2, 2, 1, 0])
+
+    async def test_a_page_written_during_removal_waits_for_it_even_if_collection_is_cancelled(self):
+        import asyncio
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel):
+                stores, gate = {}, asyncio.Event()
+                archive = self.archive(stores, gate=gate)
+                original = self.session(10)
+                root = await archive.save_session(original)
+                await archive.save_session(self.session(20))
+                collecting = asyncio.create_task(archive.collect())
+                await asyncio.sleep(0)
+                if cancel:
+                    collecting.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await collecting
+                # The same content is needed again while its removal is still running.
+                saving = asyncio.create_task(archive.save_session(original))
+                for _ in range(3):
+                    await asyncio.sleep(0)
+                self.assertFalse(saving.done())
+                gate.set()
+                if not cancel:
+                    await collecting
+                self.assertEqual(await saving, root)
+                self.assertEqual(await ExecutionArchive(lambda k: stores[k]).load_session(root), original)

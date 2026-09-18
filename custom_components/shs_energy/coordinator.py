@@ -18,11 +18,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.json import json_bytes
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
+from homeassistant.util.json import json_loads
 
 from .battery_live import BatteryLiveInputs
+from .durable_record import DurableRecord
 from .operating_modes import device_mode, operating_mode_identity
 
 from .api import (
@@ -273,9 +276,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_runtime_error: str | None = None
         self.last_connection_success: str | None = None
         self.last_connection_error: str | None = None
-        self._store: Store[dict[str, Any]] = Store(
+        # Read every few seconds but saved only on exchanges: parse it once.
+        self._store = DurableRecord(Store(
             hass, STORAGE_VERSION, STORAGE_KEY_TEMPLATE.format(entry_id=entry.entry_id)
-        )
+        ), json_bytes, json_loads)
 
     def async_add_control_listener(self, listener):
         """Subscribe to shared control inputs, separately from live status."""
@@ -488,7 +492,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_battery_planned_devices(self):
         """Preserve website membership even when local control setup is invalid."""
-        stored = await self._store.async_load() or {}
+        stored = await self._store.async_read()
         configuration = stored.get("optimisation_device_configuration")
         if not isinstance(configuration, dict):
             raise ValueError("device membership has not been acknowledged")
@@ -1201,14 +1205,14 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_cached_device_configuration(self) -> list[dict[str, Any]]:
         """Return the last website request without making a network request."""
-        stored = await self._store.async_load() or {}
+        stored = await self._store.async_read()
         configuration = stored.get("optimisation_device_configuration", {})
         if not isinstance(configuration, dict):
             return []
         return requested_controllable_devices(configuration)
 
     async def async_cached_planning_configuration(self) -> dict[str, Any]:
-        stored = await self._store.async_load() or {}
+        stored = await self._store.async_read()
         devices = await self._prepared_device_inventory(stored, included_only=False)
         requested = stored.get("optimisation_device_configuration", {})
         excluded = set(self.entry.options.get("excluded_device_readings", []))
@@ -1240,7 +1244,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_cached_exchange_status(self) -> dict[str, Any]:
         """Return durable exchange watermarks for the configuration panel."""
-        stored = await self._store.async_load() or {}
+        stored = await self._store.async_read()
         return {
             "thermal_slots_accepted_until": stored.get(
                 "thermal_slots_accepted_until"
@@ -2168,7 +2172,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         drift from the one the planner uses.
         """
         options = resolved_options(self.hass, dict(self.entry.options))
-        devices = await self._prepared_device_inventory(await self._store.async_load() or {})
+        devices = await self._prepared_device_inventory(await self._store.async_read())
         wanted = {
             "battery_soc": options.get(OPT_BATTERY_SOC_ENTITY)
                 if "$battery" not in options.get("excluded_device_readings", []) else None,
@@ -3243,7 +3247,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_scheduled_push(self, _now: datetime | None = None) -> None:
         """Nightly job: push yesterday and catch up missed raw-reading days."""
-        stored = await self._store.async_load() or {}
+        stored = await self._store.async_load()
         self.latest_calculation = self.latest_calculation or stored.get(
             "latest_calculation"
         )

@@ -153,12 +153,18 @@ class CoordinatorMembershipTests(unittest.IsolatedAsyncioTestCase):
             'ev':dict(planning_role='controllable'),
             'monitored':dict(planning_role='base_load'),
         }}
-        coordinator=SimpleNamespace(_store=SimpleNamespace(async_load=AsyncMock(return_value=cached)))
+        import json
+        from durable_record import DurableRecord
+        store=SimpleNamespace(async_load=AsyncMock(return_value=cached))
+        coordinator=SimpleNamespace(_store=DurableRecord(store,json.dumps,json.loads))
         devices=await ns['async_battery_planned_devices'](coordinator)
         self.assertEqual([d['key'] for d in devices],['broken','ev'])
+        # The five-second battery refresh reads the parsed record, not the file.
+        for _ in range(10):await ns['async_battery_planned_devices'](coordinator)
+        store.async_load.assert_awaited_once()
         options,_,reports=fixture()
         result=capture_battery_inputs(options,devices,reports.get,now_ms=2000)
         self.assertEqual(result['sources']['planned:broken']['reason'],'source_not_configured')
-        coordinator._store.async_load=AsyncMock(return_value={})
+        coordinator._store=DurableRecord(SimpleNamespace(async_load=AsyncMock(return_value=None)),json.dumps,json.loads)
         with self.assertRaisesRegex(ValueError,'not been acknowledged'):
             await ns['async_battery_planned_devices'](coordinator)

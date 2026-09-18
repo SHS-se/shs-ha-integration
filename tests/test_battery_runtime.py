@@ -298,6 +298,41 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(r.runtime.snapshot()['fault_history'])
         finally:await r.runtime.close()
 
+    def collect_pages(self,r):
+        removed=[]
+        async def list_pages():return set(r.archive_stores)
+        async def remove_pages(keys):
+            for key in keys:
+                r.archive_stores.pop(key);removed.append(key)
+        r.runtime.archive.pages=(list_pages,remove_pages)
+        return removed
+    async def test_checkpoints_remove_superseded_evidence_and_a_restart_loads_what_remains(self):
+        from execution_archive import ExecutionArchive
+        from test_execution_archive import pages_of
+        r=Rig();removed=self.collect_pages(r);await r.start()
+        try:
+            for _ in range(5):await r.advance()
+            root=r.store.saved['execution_root']
+            self.assertTrue(removed)
+            self.assertEqual(set(r.archive_stores),pages_of(r.archive_stores,root,lambda store:store.saved))
+            restored=await ExecutionArchive(lambda key:r.archive_stores[key]).load_session(root)
+            self.assertEqual(restored,r.runtime.archive._session_cache[0])
+        finally:await r.runtime.close()
+    async def test_evidence_is_kept_while_the_checkpoint_on_disk_names_an_older_root(self):
+        from test_execution_archive import pages_of
+        r=Rig();removed=self.collect_pages(r);await r.start()
+        try:
+            durable=pages_of(r.archive_stores,r.store.saved['execution_root'],lambda store:store.saved)
+            save=r.store.async_save
+            async def lost(value):pass  # Home Assistant logs a failed write and returns.
+            r.store.async_save=lost;count=len(removed)
+            for _ in range(3):await r.advance()
+            self.assertEqual(len(removed),count)
+            self.assertLessEqual(durable,set(r.archive_stores))
+            r.store.async_save=save
+            await r.advance()
+            self.assertGreater(len(removed),count)
+        finally:await r.runtime.close()
     async def test_snapshot_readers_share_one_live_account_view(self):
         import battery_runtime as module
         from unittest.mock import patch
