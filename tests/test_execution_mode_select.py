@@ -53,11 +53,14 @@ class Rig:
         self.added = []
         self.registry = Registry()
         self.listeners = []
+        self.battery_listeners = []
+        self.inventory_loads = 0
         self.entry = SimpleNamespace(entry_id='home', options={'device_modes': {
             '$battery': 'control_verification', 'sensor.heater': 'control_verification'}},
             data={const.CONF_DEVICE_TOKEN_ID: 'token'}, async_create_background_task=self.background)
         self.entry.runtime_data = SimpleNamespace(controller=SimpleNamespace(async_tick=self.tick),
-            async_replan_after_mode_change=self.mode_replan, async_battery_inputs_refresh=self.refresh_battery, async_update_listeners=self.notify)
+            async_replan_after_mode_change=self.mode_replan, async_battery_inputs_refresh=self.refresh_battery, async_update_listeners=self.notify,
+            async_add_battery_listener=self.add_battery_listener)
         self.hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=self.update_entry))
         self.shared = load_adapter('control_configuration.py', {'datetime': datetime, 'timezone': timezone,
             'shs_const': const, 'execution_mode_options': execution_mode_options})
@@ -76,7 +79,14 @@ class Rig:
         self.manager = self.adapter.ExecutionModeEntities(self.hass,self.entry,self.add)
         self.listeners.append(self.manager.schedule_refresh)
 
-    async def get_devices(self,hass,entry): return deepcopy(self.devices)
+    async def get_devices(self,hass,entry):
+        self.inventory_loads += 1
+        return deepcopy(self.devices)
+    def add_battery_listener(self,listener):
+        self.battery_listeners.append(listener)
+        return lambda: self.battery_listeners.remove(listener)
+    def notify_battery(self):
+        for listener in list(self.battery_listeners): listener()
     async def refresh_battery(self): self.battery_refreshes += 1
     async def mode_replan(self): await self.replan(force_plan=True)
     async def tick(self):
@@ -101,6 +111,20 @@ class Rig:
 
 
 class SelectTests(unittest.IsolatedAsyncioTestCase):
+    async def test_battery_refresh_rewrites_only_the_battery_select_without_reloading_inventory(self):
+        r=Rig();await r.manager.refresh()
+        battery,heater=r.manager.entities['$battery'],r.manager.entities['sensor.heater']
+        writes,loads=(battery.writes,heater.writes),r.inventory_loads
+        for _ in range(3):r.notify_battery()
+        self.assertEqual((battery.writes,heater.writes),(writes[0]+3,writes[1]))
+        self.assertEqual(r.inventory_loads,loads)
+        r.devices[0]['planned']=False
+        await r.manager.refresh()
+        self.assertTrue(battery.removed)
+        self.assertEqual(len(r.battery_listeners),1)
+        r.notify_battery()
+        self.assertEqual(battery.writes,writes[0]+3)
+
     async def test_schedule_membership_removes_active_and_registry_and_readds(self):
         r=Rig();await r.manager.refresh()
         self.assertEqual(set(r.manager.entities),{'$battery','sensor.heater'})

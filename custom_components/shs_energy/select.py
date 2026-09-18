@@ -98,6 +98,7 @@ class ExecutionModeSelect(SelectEntity):
     def __init__(self, entry, device, unique_id):
         self.entry = entry
         self.active = False
+        self._unsubscribe_battery = None
         self.device = device
         self._attr_unique_id = unique_id
         self._attr_translation_placeholders = {'device': device['name']}
@@ -108,9 +109,19 @@ class ExecutionModeSelect(SelectEntity):
 
     async def async_added_to_hass(self):
         self.active = True
+        self._unsubscribe_battery = self.entry.runtime_data.async_add_battery_listener(self._battery_updated)
 
     async def async_will_remove_from_hass(self):
         self.active = False
+        if self._unsubscribe_battery is not None:
+            self._unsubscribe_battery()
+            self._unsubscribe_battery = None
+
+    @callback
+    def _battery_updated(self):
+        # Battery details change every refresh; other owners change with the plan.
+        if self.active and self.device['permission']['controller_id'] == 'battery':
+            self.async_write_ha_state()
 
     @property
     def current_option(self):

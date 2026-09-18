@@ -22,7 +22,7 @@ def device_name(name):
     return stripped or value
 
 
-def operational_status(plan, mode, missing, now, *, options=None):
+def operational_status(plan, mode, missing, now, *, options=None, validate=validate_plan_contract):
     result = {"state": "unavailable", "reason": "Waiting for a plan", "actionable": False,
               "now": now.isoformat(), "plan_id": (plan or {}).get("plan_id"),
               **{key: (plan or {}).get(key) for key in ("issued_at", "binding_until", "valid_until")}}
@@ -36,7 +36,7 @@ def operational_status(plan, mode, missing, now, *, options=None):
             # Validate structure even for an expired plan, without treating it as executable.
             valid_until = datetime.fromisoformat(plan["valid_until"])
             check_at = issued if now >= valid_until else now
-            validate_plan_contract(plan, check_at, require_recent_issue=False)
+            validate(plan, check_at, require_recent_issue=False)
             selected = plan
             scope_changed = False
             if options is not None:

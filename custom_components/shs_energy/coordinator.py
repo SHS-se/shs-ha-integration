@@ -124,6 +124,7 @@ from .optimisation import (
     normalized_fraction,
     optimisation_plan_due,
     parse_number,
+    PlanContractCache,
     quarter_start,
     require_fresh_source,
     SNAPSHOT_SCHEMA_VERSION,
@@ -221,6 +222,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.entry = entry
         self._control_listeners = set()
+        self._battery_listeners = set()
         self.client = client
         self.last_push_date: str | None = None
         self.last_push_error: str | None = None
@@ -236,6 +238,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_calculation_error: str | None = None
         self.latest_calculation: dict[str, Any] | None = None
         self.optimisation_plan: dict[str, Any] | None = None
+        self._plan_contract = PlanContractCache(lambda: self.optimisation_plan)
         self._plan_configuration_changed = False
         self.last_optimisation_push: str | None = None
         self.last_optimisation_attempt: str | None = None
@@ -279,11 +282,19 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._control_listeners.add(listener)
         return lambda: self._control_listeners.discard(listener)
 
-    def async_update_listeners(self, *, control_changed=True):
+    def async_update_listeners(self):
         super().async_update_listeners()
-        if control_changed:
-            for listener in tuple(self._control_listeners):
-                listener()
+        for listener in tuple(self._control_listeners):
+            listener()
+
+    def async_add_battery_listener(self, listener):
+        """Subscribe to the battery owner's own status, published every refresh."""
+        self._battery_listeners.add(listener)
+        return lambda: self._battery_listeners.discard(listener)
+
+    def async_update_battery_listeners(self):
+        for listener in tuple(self._battery_listeners):
+            listener()
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -490,7 +501,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return devices
 
     async def async_battery_inputs_refresh(self, _now=None):
-        """Capture raw diagnostics and advance the household battery owner."""
+        """Capture raw diagnostics and advance the household battery owner.
+
+        This runs every five seconds. It republishes battery status only; plan,
+        price and other controller inputs are unchanged, so nothing else wakes.
+        """
         async with self._battery_inputs_lock:
             try:
                 devices = await self.async_battery_planned_devices()
@@ -501,7 +516,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self.battery_live_inputs.sample(options, devices)
             if getattr(self,"battery_runtime",None) is not None:
                 await self.battery_runtime.refresh()
-            self.async_update_listeners(control_changed=False)
+            self.async_update_battery_listeners()
 
     async def async_battery_loss_statistics(self, options):
         """Complete five-minute mean/min/max in W for directional loss fitting."""
@@ -1214,7 +1229,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         from .presentation import operational_status
         options = resolved_options(self.hass, dict(self.entry.options))
         result = operational_status(self.optimisation_plan, options[OPT_PLANNING_MODE],
-            self.optimisation_missing_inputs, datetime.now(timezone.utc), options=options)
+            self.optimisation_missing_inputs, datetime.now(timezone.utc), options=options,
+            validate=self._plan_contract)
         if self._plan_configuration_changed:
             result.update(state="not_configured", label="Configuration changed",
                 reason="Device configuration changed; cached plan retained but requires replacement", actionable=False)
@@ -3191,10 +3207,13 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._plan_configuration_changed:
             return {}, None
         plan = scoped_plan(self.optimisation_plan, options, device)
+        now = dt_util.utcnow()
+        # Check the cached branch itself: the battery view below is a new object on
+        # every call, and its added contract is checked only as part of the root.
+        status = operational_status(plan, options.get("planning_mode", "live"), [], now,
+                                    validate=self._plan_contract)
         if device == "battery" and plan and self.optimisation_plan.get("battery_execution"):
             plan = {**plan, "battery_execution": self.optimisation_plan["battery_execution"]}
-        now = dt_util.utcnow()
-        status = operational_status(plan, options.get("planning_mode", "live"), [], now)
         if not status["actionable"]:
             return plan or {}, None
         slot = next((slot for slot in plan["plans"]["priority"]["slots"]

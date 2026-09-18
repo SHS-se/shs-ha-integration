@@ -169,9 +169,11 @@ class ScheduledController:
         self.diagnostics_sampling_error = None
         self.diagnostics_failed_samples = 0
 
-    def add_listener(self, listener):
-        self.listeners.add(listener)
-        return lambda: self.listeners.discard(listener)
+    def add_listener(self, listener, reports=None):
+        """`reports` selects the status keys a listener shows; None receives all."""
+        subscription = (listener, reports)
+        self.listeners.add(subscription)
+        return lambda: self.listeners.discard(subscription)
 
     def report(self, device, state, **details):
         if self.verifying:
@@ -184,8 +186,18 @@ class ScheduledController:
             return
         self.status[device] = value
         _LOGGER.info("Scheduled %s: %s", device, value)
-        for listener in tuple(self.listeners):
-            listener()
+        for listener, reports in tuple(self.listeners):
+            if reports is None or reports(device):
+                listener()
+
+    def publish_battery_status(self):
+        """Mirror the battery owner's own status without evaluating other devices."""
+        runtime = getattr(self, "battery_runtime", None)
+        if runtime is None or self.closed or not self.initialized:
+            return
+        status = runtime.snapshot()
+        self.report("battery", status["state"], reason=status["reason"], battery_runtime=status,
+                    **{key: status[key] for key in ("fix", "next_step", "retry_automatically") if key in status})
 
     def observed_state(self, entity, *, max_age=None):
         state = self.hass.states.get(entity) if entity else None
@@ -1188,9 +1200,7 @@ class ScheduledController:
             }).hex()
             for device in (*DEVICES, *sorted(generic)):
                 if device == "battery" and getattr(self,"battery_runtime",None) is not None:
-                    status=self.battery_runtime.snapshot()
-                    self.report(device,status["state"],reason=status["reason"],battery_runtime=status,
-                        **{key: status[key] for key in ("fix", "next_step", "retry_automatically") if key in status})
+                    self.publish_battery_status()
                     continue
                 if devices is not None and device not in devices:
                     continue

@@ -1713,6 +1713,72 @@ def validate_plan_contract(
         raise OptimisationInputError("ready plan has an infeasible priority scenario")
 
 
+def _clock_regime(
+    plan: dict[str, Any], now: datetime, require_recent_issue: bool
+) -> tuple[bool, bool, bool] | None:
+    """The only validation outcomes that can differ for an unchanged plan.
+
+    `validate_plan_contract` reads the clock solely for its issue and expiry
+    checks. An execution branch must carry its parent's timestamps, so the
+    nested validation always falls in the parent's regime.
+    """
+    issued = _timestamp(plan.get("issued_at"))
+    valid_until = _timestamp(plan.get("valid_until"))
+    if issued is None or valid_until is None:
+        return None
+    current = now.astimezone(timezone.utc)
+    return (
+        issued > current + timedelta(minutes=5),
+        require_recent_issue and current - issued > timedelta(minutes=15),
+        valid_until <= current,
+    )
+
+
+class PlanContractCache:
+    """Validate the owner's current plan once per clock regime, not on every read.
+
+    Entities, the controller and the battery owner look up the binding slot many
+    times a minute. Re-checking a multi-megabyte contract on every lookup kept
+    Home Assistant's event loop busy. Verdicts, failures included, are kept only
+    for the current plan object and its execution branch, and are dropped when
+    the owner replaces the plan. A cached plan is replaced, never edited in place.
+    """
+
+    def __init__(
+        self,
+        current_plan: Callable[[], Any],
+        validate: Callable[..., None] = validate_plan_contract,
+    ) -> None:
+        self._current_plan = current_plan
+        self._validate = validate
+        self._plan: Any = None
+        self._verdicts: dict[int, tuple[Any, Any, Exception | None]] = {}
+
+    def __call__(
+        self, plan: Any, now: datetime, *, require_recent_issue: bool = True
+    ) -> None:
+        root = self._current_plan()
+        if root is not self._plan:
+            self._plan, self._verdicts = root, {}
+        if not isinstance(root, dict) or not isinstance(plan, dict) or (
+            plan is not root and plan is not root.get("execution_plan")
+        ):
+            self._validate(plan, now, require_recent_issue=require_recent_issue)
+            return
+        regime = _clock_regime(plan, now, require_recent_issue)
+        cached = self._verdicts.get(id(plan))
+        if cached is not None and cached[0] is plan and cached[1] == regime:
+            if cached[2] is not None:
+                raise cached[2].with_traceback(None)
+            return
+        try:
+            self._validate(plan, now, require_recent_issue=require_recent_issue)
+        except Exception as error:
+            self._verdicts[id(plan)] = (plan, regime, error)
+            raise
+        self._verdicts[id(plan)] = (plan, regime, None)
+
+
 def utc_slots(start: datetime, hours: int) -> list[datetime]:
     """Include the current quarter; a snapshot taken seconds late must not skip it."""
     cursor = quarter_start(start)

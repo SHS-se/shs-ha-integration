@@ -9,7 +9,7 @@ import unittest
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
 from operating_modes import operating_mode_identity, scoped_plan
 from planning import build_operating_scope
-from optimisation import validate_plan_contract, OptimisationInputError
+from optimisation import validate_plan_contract, OptimisationInputError, PlanContractCache
 import test_controller as fixtures
 
 
@@ -127,11 +127,20 @@ class ScopeTests(unittest.TestCase):
         namespace = {'datetime': datetime, 'timedelta': timedelta, 'dt_util': SimpleNamespace(utcnow=lambda: now)}
         exec(compile(ast.Module(body=[method], type_ignores=[]), 'coordinator.py', 'exec'), namespace)
         coordinator = SimpleNamespace(optimisation_plan=plan, _plan_configuration_changed=False)
+        checked = []
+        def validate(candidate, at, **kwargs):
+            checked.append(candidate)
+            validate_plan_contract(candidate, at, **kwargs)
+        coordinator._plan_contract = PlanContractCache(lambda: coordinator.optimisation_plan, validate)
         options = {'device_modes': deepcopy(plan['operating_scope']['modes'])}
         select = lambda device: namespace['binding_plan_for'](coordinator, device, options)
         self.assertIs(select('battery')[0], plan['execution_plan'])
         self.assertIs(select('battery')[1], plan['execution_plan']['plans']['priority']['slots'][0])
         self.assertIs(select('pool')[0], plan)
+        for _ in range(5):
+            select('battery'); select('pool')
+        # Repeated lookups reuse each branch's verdict instead of re-checking the contract.
+        self.assertEqual([id(candidate) for candidate in checked], [id(plan['execution_plan']), id(plan)])
         plan['execution_plan']['status'] = 'infeasible'
         self.assertIsNone(select('battery')[1])
         options['device_modes']['$pool'] = 'controlling'

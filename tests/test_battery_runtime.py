@@ -56,8 +56,10 @@ class Rig:
         async def statistics(options):return {k:[] for k in ('battery','house','pv','grid')}
         async def history(entities,start,end,with_attributes):
             return {e:[(datetime.fromtimestamp(5,timezone.utc),'100',deepcopy(self.rows[e]['attributes']))] for e in entities}
+        self.listener_updates=0
+        def update_listeners():self.listener_updates+=1
         self.coordinator=SimpleNamespace(_battery_entity_report=lambda e:deepcopy(self.rows.get(e)),async_battery_planned_devices=devices,
-            async_battery_native_readback=readback,async_battery_loss_statistics=statistics,_state_history=history,async_update_listeners=lambda:None,
+            async_battery_native_readback=readback,async_battery_loss_statistics=statistics,_state_history=history,async_update_listeners=update_listeners,
             binding_plan_for=lambda device,options:(self.plan,next((s for s in self.plan['plans']['priority']['slots']
                 if stamp(s['start'])<=self.now<min(stamp(s['start'])+900000,stamp(self.plan['valid_until']),stamp(self.plan['binding_until']))),None)),_battery_native_context=None)
         self.replans=[]
@@ -296,6 +298,15 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(r.runtime.snapshot()['fault_history'])
         finally:await r.runtime.close()
 
+    async def test_refresh_never_rerenders_the_household_or_wakes_other_controllers(self):
+        # The coordinator republishes battery status after each refresh on its own
+        # channel. A household-wide update here re-rendered every entity every 5 s.
+        r=Rig();await r.start()
+        try:
+            for _ in range(4):await r.advance()
+            self.assertNotEqual(r.runtime.snapshot()['state'],'fault',r.runtime.snapshot())
+            self.assertEqual(r.listener_updates,0)
+        finally:await r.runtime.close()
     async def test_controlling_reaches_actual_service_boundary(self):
         r=Rig();await r.start()
         try:

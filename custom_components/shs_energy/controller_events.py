@@ -52,6 +52,13 @@ def attach_controller_events(hass, entry, controller):
     entry.async_on_unload(controller.coordinator.async_add_control_listener(coordinator_updated))
 
     @callback
+    def battery_updated():
+        # The five-second battery refresh changes no plan or setting input.
+        controller.publish_battery_status()
+
+    entry.async_on_unload(controller.coordinator.async_add_battery_listener(battery_updated))
+
+    @callback
     def core_configuration_updated(event):
         # Units and home location can change without an equipment state event.
         scheduler.request("configuration_update")

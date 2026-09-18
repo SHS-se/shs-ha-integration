@@ -376,6 +376,7 @@ class BatteryRuntime:
             del self._fault_history[:-64]
 
     async def refresh(self):
+        """Advance the battery owner; the coordinator publishes its status afterwards."""
         if self._closed or self._closing or self._lock.locked():
             return
         async with self._lock:
@@ -394,7 +395,6 @@ class BatteryRuntime:
                     self._status={'state':'fault','reason':self._last_error}
                 if isinstance(error, (BatteryMeasurementConfigurationError, BatteryPowerReadingError)):
                     self._status.update(reason=str(error), fix=error.fix, next_step=error.next_step, retry_automatically=True)
-            self.coordinator.async_update_listeners()
 
     async def _record_counters(self, options):
         if self.host:

@@ -126,6 +126,32 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                 raise ValueError(error)
         self.controller.confirm = confirm
 
+    async def test_reports_notify_only_listeners_showing_that_device(self):
+        shown = []
+        for name, reports in (('battery', lambda key: key == 'battery'), ('devices', lambda key: key.startswith('device:')),
+                              ('all', None)):
+            self.controller.add_listener(lambda name=name: shown.append(name), reports)
+        self.controller.report('battery', 'idle')
+        self.controller.report('device:heater', 'idle')
+        self.controller.report('pool', 'idle')
+        self.controller.report('pool', 'idle')
+        self.assertEqual(sorted(shown), sorted(['battery', 'all', 'devices', 'all', 'all']))
+
+    async def test_battery_status_is_published_without_an_evaluation_once_started(self):
+        runtime = {'state': 'controlling', 'reason': 'Following the battery plan', 'retry_automatically': True}
+        self.controller.battery_runtime = SimpleNamespace(snapshot=lambda: dict(runtime))
+        self.controller.publish_battery_status()
+        self.assertEqual(self.controller.status['battery'], {'state': 'disabled'})
+        self.controller.initialized = True
+        self.controller.publish_battery_status()
+        self.assertEqual(self.controller.status['battery'], {'state': 'controlling', 'reason': 'Following the battery plan',
+            'battery_runtime': runtime, 'retry_automatically': True})
+        self.assertEqual(self.controller.metrics.snapshot()['triggers'], {})
+        self.controller.closed = True
+        runtime['state'] = 'fault'
+        self.controller.publish_battery_status()
+        self.assertEqual(self.controller.status['battery']['state'], 'controlling')
+
     async def test_live_battery_limits_block_requests_before_actuator_writes(self):
         self.options['battery_min_soc'] = 'sensor.cutoff'
         self.options['battery_charge_max_w'] = 'sensor.charge_rating'

@@ -752,7 +752,13 @@ class ShsControllerSensor(ShsBaseSensor):
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
-        self.async_on_remove(self.coordinator.controller.add_listener(self.async_write_ha_state))
+        device = self.device
+        if device == "battery":
+            # The battery owner's status is published after each of its refreshes.
+            self.async_on_remove(self.coordinator.async_add_battery_listener(self.async_write_ha_state))
+            return
+        shown = (lambda key: key.startswith("device:")) if device == "devices" else (lambda key: key == device)
+        self.async_on_remove(self.coordinator.controller.add_listener(self.async_write_ha_state, shown))
 
     @property
     def native_value(self):

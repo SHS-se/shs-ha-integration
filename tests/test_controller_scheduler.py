@@ -530,6 +530,14 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
 
         self.hass.bus = SimpleNamespace(async_listen=listen)
         self.coordinator.async_add_control_listener = lambda action: lambda: None
+        battery_listeners = []
+
+        def add_battery_listener(action):
+            self.assertTrue(action._hass_callback)
+            battery_listeners.append(action)
+            return lambda: battery_listeners.remove(action)
+
+        self.coordinator.async_add_battery_listener = add_battery_listener
         entry = SimpleNamespace(async_on_unload=unload.append,
             async_create_background_task=lambda hass, work, name: asyncio.create_task(work))
         path = Path(__file__).parents[1] / 'custom_components/shs_energy/controller_events.py'
@@ -563,9 +571,11 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         fire('core_config', '')
         await self.drain()
         self.assertEqual(self.evaluations('battery'), 2)
+        self.assertEqual(len(battery_listeners), 1)
         for remove in unload:
             remove()
         self.assertFalse(listeners)
+        self.assertFalse(battery_listeners)
 
     async def test_battery_status_refresh_publishes_without_waking_other_controllers(self):
         import ast
@@ -576,7 +586,8 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'ShsStatusCoordinator')
         cls.bases = [ast.Name(id='Base', ctx=ast.Load())]
         cls.body = [node for node in cls.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and node.name in ('async_add_control_listener', 'async_update_listeners', 'async_battery_inputs_refresh')]
+                    and node.name in ('async_add_control_listener', 'async_update_listeners', 'async_battery_inputs_refresh',
+                                      'async_add_battery_listener', 'async_update_battery_listeners')]
 
         class Base:
             def async_update_listeners(self):
@@ -586,6 +597,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         exec(compile(ast.fix_missing_locations(ast.Module(body=[cls], type_ignores=[])), str(source), 'exec'), namespace)
         publisher = namespace['ShsStatusCoordinator']()
         publisher._control_listeners = set()
+        publisher._battery_listeners = set()
         publisher.status_updates = 0
         publisher._battery_inputs_lock = asyncio.Lock()
         publisher.hass = self.hass
@@ -593,17 +605,33 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         publisher.async_battery_planned_devices = AsyncMock(return_value=[])
         publisher.battery_live_inputs = SimpleNamespace(sample=AsyncMock())
         publisher.battery_runtime = SimpleNamespace(refresh=AsyncMock())
+        snapshots = []
+
+        def snapshot():
+            snapshots.append(True)
+            return {'state': 'verified', 'reason': f'refresh {len(snapshots)}'}
+
+        self.controller.battery_runtime = SimpleNamespace(snapshot=snapshot)
+        shown = {'battery': 0, 'pool': 0}
+        for device in shown:
+            self.controller.add_listener(lambda device=device: shown.__setitem__(device, shown[device] + 1),
+                                         lambda key, device=device: key == device)
         remove = publisher.async_add_control_listener(self.scheduler.coordinator_updated)
+        publisher.async_add_battery_listener(self.controller.publish_battery_status)
         await self.controller.async_start()
-        before = self.evaluations('pool')
+        before, published = self.evaluations('pool'), dict(shown)
         for _ in range(12):
             await publisher.async_battery_inputs_refresh()
             await self.drain()
-        self.assertEqual(publisher.status_updates, 12)
         self.assertEqual(publisher.battery_runtime.refresh.await_count, 12)
+        # Each refresh republishes battery status alone: no entity round, no evaluation.
+        self.assertEqual(publisher.status_updates, 0)
         self.assertEqual(self.evaluations('pool'), before)
+        self.assertEqual(shown, {'battery': published['battery'] + 12, 'pool': published['pool']})
+        self.assertEqual(self.controller.status['battery']['reason'], f'refresh {len(snapshots)}')
         publisher.async_update_listeners()
         await self.drain()
+        self.assertEqual(publisher.status_updates, 1)
         self.assertEqual(self.evaluations('pool'), before + 1)
         remove()
         publisher.async_update_listeners()

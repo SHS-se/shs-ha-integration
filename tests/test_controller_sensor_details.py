@@ -114,3 +114,38 @@ class SelectDetailsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attributes['plan_rejection'],rejection)
         self.assertEqual(attributes['accepted_reference_id'],'previous')
         self.assertIn('Waiting for a corrected plan',attributes['explanation'])
+
+
+class ControllerSensorSubscriptionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_battery_refreshes_and_device_reports_rewrite_only_their_own_sensor(self):
+        import ast
+        from controller import ScheduledController
+        source = Path(__file__).parents[1]/'custom_components'/'shs_energy'/'sensor.py'
+        cls = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.ClassDef) and n.name == 'ShsControllerSensor')
+        cls.bases = [ast.Name(id='Base', ctx=ast.Load())]
+        cls.body = [n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'async_added_to_hass']
+
+        class Base:
+            async def async_added_to_hass(self): pass
+            def async_on_remove(self, remove): self.removals.append(remove)
+            def async_write_ha_state(self): self.writes += 1
+
+        namespace = {'Base': Base}
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[cls], type_ignores=[])), str(source), 'exec'), namespace)
+        battery_listeners = []
+        coordinator = SimpleNamespace(async_add_battery_listener=lambda listener: battery_listeners.append(listener) or (lambda: None))
+        coordinator.controller = ScheduledController(None, coordinator, None, dict)
+        sensors = {}
+        for device in ('battery', 'ev', 'pool', 'devices'):
+            sensor = namespace['ShsControllerSensor'].__new__(namespace['ShsControllerSensor'])
+            sensor.device, sensor.coordinator, sensor.writes, sensor.removals = device, coordinator, 0, []
+            await sensor.async_added_to_hass()
+            sensors[device] = sensor
+        writes = lambda: {device: sensor.writes for device, sensor in sensors.items()}
+        for listener in battery_listeners: listener()
+        self.assertEqual(writes(), {'battery': 1, 'ev': 0, 'pool': 0, 'devices': 0})
+        coordinator.controller.report('battery', 'controlling')
+        coordinator.controller.report('pool', 'scheduled')
+        coordinator.controller.report('device:heater', 'verified')
+        self.assertEqual(writes(), {'battery': 1, 'ev': 0, 'pool': 1, 'devices': 1})
+        self.assertTrue(all(len(sensor.removals) == 1 for sensor in sensors.values()))
