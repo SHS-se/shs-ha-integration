@@ -192,3 +192,56 @@ bounded backlog cleanup, returning deleted content, late correction, reload,
 failed publication and cancellation during deletion. Full integration tests
 also run before committing. The profiler now retains caller chains for future
 investigation without installing an in-process profiler or changing controls.
+
+## Memory growth and the diagnostics download (beta.23)
+
+The user's `history (29).csv` covers whole-machine memory. After the 16:51 UTC
+restart on 18 September (beta.22), memory rose steadily from about 31% to 37% of
+15.7 GB by 07:48 UTC, roughly 0.9 GB. Three diagnostics downloads added brief
+3–5 point spikes. A read-only host check measured HA's Python process at 2.05 GB
+RSS, with a 2.85 GB high-water mark.
+
+Diagnostics export (38), taken at 07:39 UTC, was 338 MB of JSON. Of that,
+`battery_execution.execution_traces` held 97,609 traces (223 MB). Export (37), 14
+hours earlier, held 18,599. The reducer appends a trace for almost every event,
+about 4,600–7,400 an hour, and nothing removed them. Decoded locally, the traces
+held 256 MB of Python objects, about 2.6 KB each. The account held 93 MB, with
+267 admissions, 33,298 meter receipts and 13,850 observations. On disk, 105,775
+evidence page files (383 MB) remained, about 4,750 more each hour. Home
+Assistant's storage manager also records every Store key that is written or
+removed until it restarts. Each evidence page had its own Store, and each
+checkpoint wrote several new page keys.
+
+The download made one WebSocket message of the whole report on the event loop.
+The browser then parsed, restringified and gzipped it. By the V8 string limit
+(about 536 MB), the download would have failed outright within about a day.
+
+Changes in beta.23:
+
+- The reducer keeps the latest 8,192 traces. Once over the limit, the oldest
+  1,024 leave together, which is eight whole archive chunks. Restart loads only
+  those pages and decodes only those traces; decoding 97,609 had taken 3.6 s
+  locally.
+- The archive finds saved chunks by their first record, so trimming reuses every
+  remaining page. Collection removes the rest, 500 per checkpoint.
+- Evidence pages are written and read as files in the same storage layout,
+  without a Store per page. Writes are atomic and raise errors instead of logging
+  them. Removal unlinks a batch in one executor job.
+- The panel downloads the gzip file from an admin-only HTTP view with
+  `fetchWithAuth` and saves it without parsing. Under the controller lock, the
+  view serializes a snapshot of the live controller state. It shares the
+  verification journal's records instead of deep-copying them. The immutable
+  account, command journal and traces are encoded one record at a time and gzipped
+  (level 3) in a worker thread.
+
+A local Python 3.13 benchmark on export (38) measured 2.33 s of event-loop work
+for the old path. The browser work on the 338 MB JSON took another 3.2 s in
+Node: parse, stringify and gzip. The new path measured 0.10 s on the event loop
+and 0.93 s in the worker, producing 131 MB of JSON and a 13.1 MB file. These are
+M3 timings; expect roughly 2–2.5× on the N100.
+
+The account still grows with history. Between exports (37) and (38) it gained 56
+admissions, about 22,700 meter receipts and 9,800 observations, about 19 MB of
+JSON. Per-receipt O(meters) scans grow with it. The specification allows
+retention that preserves settled totals and the intervals open objectives need,
+but compaction changes the planner's history digest. That needs a design decision.

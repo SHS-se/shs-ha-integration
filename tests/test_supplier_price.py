@@ -235,8 +235,12 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn("await async_register_config_panel(hass)", INIT)
 
     def test_configuration_panel_websockets_require_an_admin(self) -> None:
-        self.assertEqual(CONFIG_PANEL.count("@websocket_api.require_admin"), 7)
+        self.assertEqual(CONFIG_PANEL.count("@websocket_api.require_admin"),
+                         CONFIG_PANEL.count("websocket_api.async_register_command("))
         self.assertNotIn("connection.require_admin", CONFIG_PANEL)
+        # The diagnostics file is an HTTP view; it has the same admin guard.
+        self.assertIn("    @require_admin\n    async def get(self, request", CONFIG_PANEL)
+        self.assertEqual(CONFIG_PANEL.count("register_view("), 1)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ if __package__:
     from .battery_conversion import conversion_model, windows_from_statistics
     from .battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
     from . import plan_execution as execution
-    from .runtime_json import encode_value, decode_value
+    from .runtime_json import decode_value, Records
     from .execution_archive import ExecutionArchive
     from .battery_live import native_surface, source_revision, planned_power_bindings
     from .battery_supply import SupplyScope, observe_supply
@@ -35,7 +35,7 @@ else:
     from battery_conversion import conversion_model, windows_from_statistics
     from battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
     import plan_execution as execution
-    from runtime_json import encode_value, decode_value
+    from runtime_json import decode_value, Records
     from execution_archive import ExecutionArchive
     from battery_live import native_surface, source_revision, planned_power_bindings
     from battery_supply import SupplyScope, observe_supply
@@ -203,6 +203,7 @@ class BatteryRuntime:
         return self._identity
 
     def snapshot(self, *, include_evidence=False):
+        """Current status; with evidence, the journals as immutable Records to encode later."""
         value={**self._status,'loss_model':self._model.wire() if self._model else None,'loss_evidence':self._fits,
             'runtime_reason':getattr(self,'_runtime_reason',None),'measurements':getattr(self,'_measurements',None),
             'writer_current':self.coordinator.battery_writer.is_current(self._grant,self.identity()),
@@ -213,7 +214,7 @@ class BatteryRuntime:
             value.update(mode=device_mode(self.controller.options(),'battery'), accounting_at_ms=accounting_at,
                 accounting=accounting)
             if include_evidence:
-                value.update(accounting_journal=encode_value(self._bootstrap),
+                value.update(accounting_journal=Records(self._bootstrap),
                     captured_replan=json.loads(self._bootstrap_captured) if self._bootstrap_captured else None)
             return self._plan_status(value, self._bootstrap_rejection, self._bootstrap.contract)
         state=self.host.state;group=state.groups[0];session=state.execution
@@ -225,9 +226,12 @@ class BatteryRuntime:
             assessment=asdict(session.assessment) if session.assessment else None,
             )
         if include_evidence:
-            value.update(accounting_journal=encode_value(session.account), command_journal=encode_value(group),
+            value.update(accounting_journal=Records(session.account), command_journal=Records(group),
                 captured_replan=json.loads(session.captured_feedback) if session.captured_feedback else None,
-                execution_traces=encode_value(session.traces),
+                execution_traces=Records(session.traces),
+                execution_trace_retention={'retained': len(session.traces), 'max_traces': rt.MAX_EXECUTION_TRACES,
+                    'removed_together': rt.TRACE_TRIM,
+                    'scope': 'Latest execution traces only; the accounting journal keeps the complete history.'},
                 execution_input=asdict(session.live) if session.live else None,
                 conversion_basis=state.authority.plant.conversion.wire() if state.authority else None)
         value['pending_commands']=[{'entity_id':a.step.key,'value':a.step.value,'stage':a.stage,

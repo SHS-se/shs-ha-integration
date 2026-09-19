@@ -96,17 +96,28 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         report = await diagnostics(None, entry)
         self.assertEqual(report['controller_metrics']['triggers']['timer']['skipped_busy'], 1)
         self.assertIn('network_traffic', report)
-        results = []
-        download = load_function('config_panel.py', 'websocket_download_verification', {
-            '_entry_from_message': lambda *args: entry, '_entry_state': lambda entry: 'loaded',
-            'controller_diagnostics': controller_diagnostics,
+        import gzip
+        from controller_diagnostics import gzip_report, report_parts, report_summary
+        workers = []
+
+        async def executor(function, *args):
+            workers.append(function)
+            return function(*args)
+        download = load_function('config_panel.py', '_controller_diagnostics_file', {
+            'controller_diagnostics': controller_diagnostics, 'report_parts': report_parts,
+            'report_summary': report_summary, 'gzip_report': gzip_report,
+            'json_bytes': lambda value: json.dumps(value).encode(),
             '_configuration_payload': AsyncMock(return_value={
                 'devices': [{'key': 'sensor.monitor', 'mode': 'monitoring'}],
                 'meter_inventory': [], 'configuration': fixture.options,
                 'operation': fixture.coordinator.operational_status, 'readiness': {},
             }),
         })
-        await download(None, SimpleNamespace(send_result=lambda _, value: results.append(value)), {'id': 1, 'config_entry': 'test'})
-        self.assertEqual(results[0]['attempts'], [])
-        self.assertEqual(results[0]['controller_metrics']['triggers'], report['controller_metrics']['triggers'])
-        self.assertEqual(results[0]['current']['devices'][0]['mode'], 'monitoring')
+        body, summary = await download(SimpleNamespace(async_add_executor_job=executor), entry)
+        self.assertEqual(workers, [gzip_report], 'encoding and compression run off the event loop')
+        result = json.loads(gzip.decompress(body))
+        self.assertEqual(result['attempts'], [])
+        self.assertEqual(result['controller_metrics']['triggers'], report['controller_metrics']['triggers'])
+        self.assertEqual(result['current']['devices'][0]['mode'], 'monitoring')
+        self.assertEqual(summary, {'devices': 1, 'runtime_evaluations': 0, 'verification_checks': 0, 'observation_samples': 0})
+        self.assertFalse(controller.lock.locked())

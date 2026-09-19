@@ -869,12 +869,15 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   async _downloadVerification() {
     try {
-      const data = await this._hass.callWS({ type: "shs_energy/verification/download", config_entry: this._entryId });
-      const stream = new Blob([JSON.stringify(data)], { type: "application/json" }).stream().pipeThrough(new CompressionStream("gzip"));
-      const blob = new Blob([await new Response(stream).arrayBuffer()], { type: "application/gzip" });
-      const url = URL.createObjectURL(blob);
+      // Home Assistant builds and compresses the file; the browser only saves it.
+      const response = await this._hass.fetchWithAuth(`/api/shs_energy/controller_diagnostics/${encodeURIComponent(this._entryId)}`);
+      if (!response.ok) throw new Error((await response.text()).trim() || `Controller diagnostics download failed (HTTP ${response.status}).`);
+      const summary = JSON.parse(response.headers.get("X-SHS-Diagnostics-Summary") || "null");
+      const url = URL.createObjectURL(await response.blob());
       const a = document.createElement("a"); a.href = url; a.download = "shs-controller-diagnostics.json.gz"; a.click(); URL.revokeObjectURL(url);
-      this._notice = `Downloaded controller diagnostics for ${data.current.devices.length} devices, with ${data.current_session.runtime_evaluations} evaluations, ${data.current_session.verification_checks} verification checks and ${data.current_session.observation_samples} observation samples this session. Earlier history is included separately.`;
+      this._notice = summary
+        ? `Downloaded controller diagnostics for ${summary.devices} devices, with ${summary.runtime_evaluations} evaluations, ${summary.verification_checks} verification checks and ${summary.observation_samples} observation samples this session. Earlier history is included separately.`
+        : "Downloaded controller diagnostics.";
     } catch (error) { this._error = this._errorMessage(error); }
     this._render();
   }
@@ -1173,7 +1176,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         return `<button class="slot ${active ? "running" : ""} ${slot.binding ? "" : "advisory"}" data-action="slot" data-index="${index}" data-schedule-action="${action}" aria-label="${this._escape(d.name + ', ' + this._time(slot.start) + ', ' + description + (slot.binding ? ', published prices' : ', estimated prices'))}" title="${this._escape(description)}"></button>`;
       }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Published prices" : "Estimated prices"}${this._schedulePrices(selected)}</h3><ul>${scheduledDevices.map(d => `<li>${this._escape(d.name)}: ${this._escape(this._scheduleCommand(d, selected).text)}${this._scheduleCommandDetail(d, selected)}</li>`).join("")}</ul></div>` : ""}` : `<p>${slots.length ? "No Planned devices match these filters." : "No actionable schedule is available. Details are in Status."}</p>`}
       <p>Slots show planned requests. Battery slots are forecasts; the current settings above reflect live measurements and conversion losses. Verification devices show hypothetical requests. Targets do not prove that heat, charging or power was delivered.</p></div>
-      <div class="card"><h2>Controller diagnostics</h2><p>Download every Included device, with its current mode, configuration, readings, plan and controller status. Retained runtime evaluations and real service calls are separate from simulated verification commands and coverage. Verification does not prove physical response. The file contains local entity IDs and configuration. Observations are sampled about once a minute in every mode, with up to 720 samples retained. Energy-counter differences are labelled as interval averages, with missing or stale readings identified. Current-session checks and coverage are summarised separately from older evidence. Repeated checks are grouped; up to 2,000 groups of each kind are retained. Downloads are gzip-compressed JSON.</p><button class="secondary" data-action="verification">Download controller diagnostics</button></div>
+      <div class="card"><h2>Controller diagnostics</h2><p>Download every Included device, with its current mode, configuration, readings, plan and controller status. Retained runtime evaluations and real service calls are separate from simulated verification commands and coverage. Verification does not prove physical response. The file contains local entity IDs and configuration. Observations are sampled about once a minute in every mode, with up to 720 samples retained. Energy-counter differences are labelled as interval averages, with missing or stale readings identified. Current-session checks and coverage are summarised separately from older evidence. Repeated checks are grouped; up to 2,000 groups of each kind are retained. Battery execution includes its complete accounting journal and its latest 8,192 execution traces. Downloads are gzip-compressed JSON.</p><button class="secondary" data-action="verification">Download controller diagnostics</button></div>
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
       <p class="muted">Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
       ${!devices.length ? '<p role="status">No devices match these filters.</p>' : ""}

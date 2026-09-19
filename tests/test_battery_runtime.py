@@ -15,6 +15,12 @@ from battery_runtime import digest
 from plan_execution import *
 
 
+def downloaded(value):
+    """A snapshot as the controller diagnostics file contains it."""
+    from controller_diagnostics import report_fragments, report_parts
+    dumps=lambda item:json.dumps(item,allow_nan=False).encode()
+    return json.loads(b''.join(report_fragments(report_parts(value,dumps),dumps)))
+
 class Store:
     def __init__(self):self.saved=None;self.writes=[]
     async def async_load(self):return deepcopy(self.saved)
@@ -626,7 +632,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
         r=Rig('control_verification');await r.start()
         try:
             await r.advance()
-            dump=r.runtime.snapshot(include_evidence=True)
+            dump=downloaded(r.runtime.snapshot(include_evidence=True))
             account=decode_value(dump['accounting_journal'],Account)
             self.assertEqual(feedback(account,r.now),dump['accounting'])
             self.assertEqual(r.calls,[])
@@ -815,7 +821,12 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
         r=Rig('control_verification');await r.start()
         try:
             for _ in range(4):await r.advance()
-            dump=r.runtime.snapshot(include_evidence=True)
+            from runtime_json import Records
+            raw=r.runtime.snapshot(include_evidence=True)
+            # The journals are encoded when the file is written, not on the event loop.
+            self.assertTrue(all(isinstance(raw[k],Records) for k in ('accounting_journal','command_journal','execution_traces')))
+            dump=downloaded(raw)
+            self.assertEqual(dump['execution_trace_retention']['retained'],len(dump['execution_traces']))
             result=replay({'battery_execution':dump})
             self.assertTrue(result['matches_recorded_results'],result['mismatches'])
             self.assertGreater(result['assessments_checked'],0)

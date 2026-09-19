@@ -87,8 +87,21 @@ A new controller dump contains a top-level `battery_execution` section with:
 - the full accounting journal and derived debt/credit, residuals and outcomes;
 - the captured replan payload and accepted reference identity;
 - timestamped evaluation inputs, receipt prefixes, assessments and conversion
-  models, including the inputs preceding native effects;
+  models, including the inputs preceding native effects (`execution_traces`);
 - pending commands, confirmations and the current physical command journal.
+
+Every battery refresh and command result adds an execution trace, about 5,000 an
+hour. Only the latest 8,192 are kept in memory, in `.storage` and in the dump;
+once over that limit the oldest 1,024 leave together, so roughly the last one to
+two hours remain. `execution_trace_retention` reports the count and limit. The
+accounting journal keeps its complete history, and replay checks the traces
+present. A configuration or mode change starts a new execution session with no
+traces; the account carries over.
+
+Home Assistant writes the file; the browser saves it without parsing it. Only a
+snapshot of the live controller state is serialized on the event loop. The
+immutable account, command journal and traces are encoded and compressed in a
+worker thread, one record at a time.
 
 Replay a new JSON or compressed JSON dump locally:
 

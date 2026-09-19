@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-import os
 from typing import Any
 
 import voluptuous as vol
@@ -53,6 +52,7 @@ from .configuration import (
 from .controller import ScheduledController
 from .battery_writer import BatteryWriterFence
 from .battery_runtime import BatteryRuntime, NativeReadbackPending
+from .execution_archive import PageFiles
 from .verification import VerificationJournal
 from .verification_storage import VerificationStorage
 from .configuration_schema import ConfigurationReader
@@ -74,20 +74,6 @@ async def _async_delayed_startup_optimisation_push(
     """Give entity providers time to start, then exchange once."""
     await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)
     await coordinator.async_replan_poll()
-
-
-def _evidence_pages(hass: HomeAssistant, prefix: str):
-    """List and remove this entry's execution evidence page files."""
-    async def list_pages() -> set[str]:
-        def scan() -> set[str]:
-            with os.scandir(hass.config.path(STORAGE_DIR)) as entries:
-                return {entry.name.removeprefix(prefix) for entry in entries if entry.name.startswith(prefix)}
-        return await hass.async_add_executor_job(scan)
-
-    async def remove_pages(keys: list[str]) -> None:
-        await asyncio.gather(*(Store(hass, 1, prefix + key).async_remove() for key in keys))
-
-    return list_pages, remove_pages
 
 
 def _entry_for_call(hass: HomeAssistant, call: ServiceCall) -> ConfigEntry:
@@ -224,11 +210,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     coordinator.controller = controller
     controller.metrics.performance = {'verification_storage': verification_store.metrics,
                                       'configuration_reads': options.metrics}
-    evidence = f"shs_energy.execution_evidence.{entry.entry_id}."
+    # Evidence pages are files named by content, not Stores: Home Assistant
+    # keeps every Store key it has written until restart.
+    evidence = PageFiles(hass.config.path(STORAGE_DIR), f"shs_energy.execution_evidence.{entry.entry_id}.",
+                         hass.async_add_executor_job, json_bytes, json_loads)
     coordinator.battery_runtime = BatteryRuntime(coordinator, controller,
         Store(hass, 1, f"shs_energy.battery_runtime.{entry.entry_id}"),
         lambda: int(datetime.now(timezone.utc).timestamp() * 1000),
-        lambda key: Store(hass, 1, evidence + key), _evidence_pages(hass, evidence))
+        evidence.store_for, (evidence.list, evidence.remove))
     coordinator.battery_writer = BatteryWriterFence(
         Store(hass, 1, f"shs_energy.battery_writer.{entry.entry_id}"), controller.lock,
         options,

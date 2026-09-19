@@ -3,21 +3,25 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from http import HTTPStatus
+import json
 import logging
 from pathlib import Path
 from typing import Any
 
+from aiohttp import web
 import voluptuous as vol
 
 from homeassistant.components import panel_custom, websocket_api
-from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.http import KEY_HASS, HomeAssistantView, StaticPathConfig, require_admin
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.json import json_bytes
 
 from . import const as shs_const
 from .api import ShsApiError
 from .api_contract import INTEGRATION_VERSION
-from .controller_diagnostics import controller_diagnostics
+from .controller_diagnostics import controller_diagnostics, gzip_report, report_parts, report_summary
 from .control_configuration import async_execution_devices, async_set_execution_mode
 from .configuration import (
     area_name_by_id,
@@ -530,18 +534,37 @@ async def websocket_control_permission(hass, connection, msg):
         connection.send_error(msg["id"], "control_permission_failed", str(err))
 
 
-@websocket_api.require_admin
-@websocket_api.websocket_command({vol.Required("type"): f"{shs_const.DOMAIN}/verification/download", vol.Required("config_entry"): str})
-@websocket_api.async_response
-async def websocket_download_verification(hass, connection, msg):
-    entry = _entry_from_message(hass, msg["config_entry"])
-    if entry is None or _entry_state(entry) != "loaded":
-        connection.send_error(msg["id"], "not_loaded", "The integration is not loaded")
-        return
+async def _controller_diagnostics_file(hass, entry):
+    """Gzip JSON and its summary. Only the live snapshot runs on the event loop."""
     controller = entry.runtime_data.controller
     async with controller.lock:
         panel = await _configuration_payload(hass, entry, refresh_roles=False)
-        connection.send_result(msg["id"], controller_diagnostics(controller, panel))
+        report = controller_diagnostics(controller, panel)
+        # The report shares live records: serialize it before the next await.
+        # Immutable battery journals are encoded with the compression instead.
+        parts = report_parts(report, json_bytes)
+        summary = report_summary(report)
+    return await hass.async_add_executor_job(gzip_report, parts, json_bytes), summary
+
+
+class ControllerDiagnosticsView(HomeAssistantView):
+    """The controller diagnostics as a file, so the browser never parses it."""
+
+    url = f"/api/{shs_const.DOMAIN}/controller_diagnostics/{{entry_id}}"
+    name = f"api:{shs_const.DOMAIN}:controller_diagnostics"
+
+    @require_admin
+    async def get(self, request: web.Request, entry_id: str) -> web.Response:
+        hass = request.app[KEY_HASS]
+        entry = _entry_from_message(hass, entry_id)
+        if entry is None or _entry_state(entry) != "loaded":
+            return web.Response(status=HTTPStatus.NOT_FOUND, text="The integration is not loaded")
+        body, summary = await _controller_diagnostics_file(hass, entry)
+        return web.Response(body=body, content_type="application/gzip", headers={
+            "Content-Disposition": 'attachment; filename="shs-controller-diagnostics.json.gz"',
+            "Cache-Control": "no-store",
+            "X-SHS-Diagnostics-Summary": json.dumps(summary),
+        })
 
 
 async def async_register_config_panel(hass: HomeAssistant) -> None:
@@ -565,7 +588,7 @@ async def async_register_config_panel(hass: HomeAssistant) -> None:
     )
     websocket_api.async_register_command(hass, websocket_get_status)
     websocket_api.async_register_command(hass, websocket_control_permission)
-    websocket_api.async_register_command(hass, websocket_download_verification)
+    hass.http.register_view(ControllerDiagnosticsView)
     websocket_api.async_register_command(hass, websocket_get_configuration)
     websocket_api.async_register_command(hass, websocket_discover_configuration)
     websocket_api.async_register_command(hass, websocket_save_configuration)

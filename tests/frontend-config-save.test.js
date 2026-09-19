@@ -785,34 +785,53 @@ test('subscription recovery clears the badge during an edit without replacing th
   assert.equal(renders, 0);
 });
 
-test('all-mode controller diagnostics download is compact gzip JSON with shared slot references', async () => {
-  const { gunzipSync } = require('node:zlib');
-  const data = { schema_version: 4, current_session: { runtime_evaluations: 0, verification_checks: 9, observation_samples: 1 }, current: { devices: [{ mode: 'monitoring' }, { mode: 'planning' }] }, evaluations: [], slots: { slot: { start: 'now' } }, attempts: [{ slot_id: 'slot', count: 9 }], coverage: [] };
+test('controller diagnostics download saves the gzip file Home Assistant built without parsing it', async () => {
+  const { gzipSync } = require('node:zlib');
+  const file = gzipSync(Buffer.from(JSON.stringify({ schema_version: 4, current: { devices: [] } })));
+  const summary = { devices: 2, runtime_evaluations: 0, verification_checks: 9, observation_samples: 1 };
   let blob;
   let clicked = false;
   let revoked;
+  let requested;
   const anchor = { click() { clicked = true; } };
   const downloadContext = loadPanel({ define() {}, get() {} });
   Object.assign(downloadContext, {
-    Blob, Response, CompressionStream,
     URL: { createObjectURL(value) { blob = value; return 'blob:verification'; }, revokeObjectURL(value) { revoked = value; } },
     document: { createElement(tag) { assert.equal(tag, 'a'); return anchor; } },
   });
   const panel = Object.create(downloadContext.Panel.prototype);
-  panel._entryId = 'entry';
+  panel._entryId = 'entry/1';
   panel._render = () => {};
-  panel._hass = { callWS: async payload => {
-    assert.equal(payload.type, 'shs_energy/verification/download');
-    return data;
-  } };
+  panel._hass = {
+    callWS: async () => { throw new Error('the download does not use the websocket'); },
+    fetchWithAuth: async path => {
+      requested = path;
+      return new Response(file, { headers: { 'Content-Type': 'application/gzip', 'X-SHS-Diagnostics-Summary': JSON.stringify(summary) } });
+    },
+  };
   await panel._downloadVerification();
   assert.equal(panel._error, undefined);
+  assert.equal(requested, '/api/shs_energy/controller_diagnostics/entry%2F1');
   assert.equal(anchor.download, 'shs-controller-diagnostics.json.gz');
   assert.match(panel._notice, /2 devices.*0 evaluations.*9 verification checks.*1 observation samples this session/);
   assert.equal(blob.type, 'application/gzip');
-  assert.equal(gunzipSync(Buffer.from(await blob.arrayBuffer())).toString(), JSON.stringify(data));
+  assert.deepEqual(Buffer.from(await blob.arrayBuffer()), file);
   assert.equal(clicked, true);
   assert.equal(revoked, 'blob:verification');
+
+  // A proxy that drops the summary header does not turn a saved file into an error.
+  panel._hass.fetchWithAuth = async () => new Response(file, { headers: { 'Content-Type': 'application/gzip' } });
+  await panel._downloadVerification();
+  assert.equal(panel._error, undefined);
+  assert.equal(panel._notice, 'Downloaded controller diagnostics.');
+
+  panel._notice = '';
+  clicked = false;
+  panel._hass.fetchWithAuth = async () => new Response('The integration is not loaded', { status: 404 });
+  await panel._downloadVerification();
+  assert.equal(panel._error, 'The integration is not loaded');
+  assert.equal(panel._notice, '');
+  assert.equal(clicked, false);
 });
 
 

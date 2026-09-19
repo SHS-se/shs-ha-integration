@@ -1,12 +1,14 @@
 """Lossless archive publication and replay beyond transport checkpoint limits."""
 import json
 from dataclasses import replace
+import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
-from execution_archive import ExecutionArchive, canonical, PAGE_BYTES
+from execution_archive import ExecutionArchive, PageFiles, canonical, PAGE_BYTES
 from home_runtime import ExecutionSession
 from plan_execution import Account, MeterReceipt, StateObservation, admit_plan, balance, measured, objective_history, record_meter
 from test_plan_execution import contract
@@ -67,6 +69,48 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
         root = await archive.save_session(newer)
         await archive.collect(limit=len(stores))
         self.assertEqual(await archive.load_session(root), newer)
+
+    async def test_dropping_the_oldest_trace_pages_reuses_every_remaining_page(self):
+        import execution_archive
+        from home_runtime import ExecutionTrace
+        stores = {}
+        async def list_pages(): return list(stores)
+        async def remove_pages(keys):
+            for key in keys: stores.pop(key, None)
+        archive = ExecutionArchive(lambda k: stores.setdefault(k, Store()), (list_pages, remove_pages))
+        # Full 128-trace chunks exceed a page, so each trace has its own item page.
+        trace = ExecutionTrace(0, 0, 0, 0, None, 'x' * 1_100, '[]', None, None, None)
+        traces = tuple(replace(trace, at_ms=i) for i in range(3 * 128 + 5))
+        first = await archive.save_session(ExecutionSession(traces=traces))
+        dropped = pages_of(stores, first)
+        added = replace(trace, at_ms=10 ** 6)
+        trimmed = ExecutionSession(traces=(*traces[128:], added))
+        with patch('execution_archive.encode_value', wraps=execution_archive.encode_value) as encode:
+            root = await archive.save_session(trimmed)
+        # Only the growing tail chunk is encoded again, never the retained full chunks.
+        self.assertEqual([call.args[0] for call in encode.call_args_list], [(*traces[384:], added)])
+        await archive.collect(limit=len(stores))
+        self.assertEqual(set(stores), pages_of(stores, root))
+        self.assertTrue(dropped - set(stores), "the oldest chunk's pages are removed")
+        self.assertEqual(await ExecutionArchive(lambda k: stores[k]).load_session(root), trimmed)
+
+    async def test_loading_reads_only_the_traces_the_runtime_retains(self):
+        import execution_archive
+        from home_runtime import ExecutionTrace
+        stores = {}
+        archive = ExecutionArchive(lambda k: stores.setdefault(k, Store()))
+        trace = ExecutionTrace(0, 0, 0, 0, None, 'x' * 1_100, '[]', None, None, None)
+        traces = tuple(replace(trace, at_ms=i) for i in range(1000))
+        session = ExecutionSession(captured_feedback='captured', traces=traces)
+        root = await archive.save_session(session)
+        read = []
+        with patch.object(execution_archive, 'MAX_EXECUTION_TRACES', 200):
+            restored = await ExecutionArchive(lambda k: read.append(k) or stores[k]).load_session(root)
+        self.assertEqual(restored, replace(session, traces=traces[-200:]))
+        # One page per retained trace plus the structure; older traces are neither
+        # read nor decoded, and their pages are later collected.
+        self.assertLess(len(read), 200 + 30)
+        self.assertLess(len(read), len(stores) // 4)
 
     async def test_incremental_save_does_not_reencode_unchanged_history(self):
         import execution_archive
@@ -149,6 +193,52 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
         root=await archive.save_session(rejected)
         self.assertEqual(await archive.load_session(root),rejected)
         self.assertEqual(await archive.load_session(old),session)
+
+
+class PageFileTests(unittest.IsolatedAsyncioTestCase):
+    prefix = 'shs_energy.execution_evidence.entry.'
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+
+    def files(self, dumps=lambda value: json.dumps(value).encode()):
+        async def run(function, *args):
+            return function(*args)
+        return PageFiles(self.directory.name, self.prefix, run, dumps, json.loads)
+
+    async def test_pages_are_home_assistant_storage_files_written_without_stores(self):
+        from home_runtime import ExecutionTrace
+        files = self.files()
+        archive = ExecutionArchive(files.store_for, (files.list, files.remove))
+        trace = ExecutionTrace(1, 0, 0, 0, None, 'x' * 140_000, '[]', None, None, None)
+        session = ExecutionSession(captured_feedback='captured', traces=(trace, replace(trace, at_ms=2)))
+        root = await archive.save_session(session)
+        self.assertEqual(await ExecutionArchive(files.store_for).load_session(root), session)
+        path = Path(self.directory.name, self.prefix + root)
+        stored = json.loads(path.read_text())
+        self.assertEqual({key: stored[key] for key in ('version', 'minor_version', 'key')},
+                         {'version': 1, 'minor_version': 1, 'key': self.prefix + root})
+        self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+        listed = await files.list()
+        self.assertEqual(listed, {name.removeprefix(self.prefix) for name in os.listdir(self.directory.name)})
+        self.assertEqual(listed, pages_of({key: key for key in listed}, root,
+                         lambda key: json.loads(Path(self.directory.name, self.prefix + key).read_text())['data']))
+        # Pages Home Assistant's Store wrote (indented) remain readable.
+        path.write_text(json.dumps(stored, indent=2))
+        self.assertEqual(await files.store_for(root).async_load(), stored['data'])
+        # Missing and unreadable pages are reported by the archive as missing or corrupt.
+        path.write_text('{')
+        with self.assertRaisesRegex(ValueError, 'missing or corrupt'):
+            await ExecutionArchive(files.store_for).load_session(root)
+        await files.remove([root, root])
+        self.assertIsNone(await files.store_for(root).async_load())
+
+    async def test_a_failed_write_raises_and_leaves_no_file(self):
+        files = self.files(dumps=lambda value: 'not bytes')
+        with self.assertRaises(TypeError):
+            await ExecutionArchive(files.store_for).save_session(ExecutionSession())
+        self.assertEqual(os.listdir(self.directory.name), [])
 
 
 def pages_of(stores, root, read=lambda store: store.value):

@@ -19,6 +19,39 @@ def encode_value(value):
     return value
 
 
+class Records:
+    """Immutable runtime records whose JSON is written later.
+
+    Records never change once created, so a report can hold them while its
+    mutable parts are serialized, and encode them afterwards in another thread.
+    """
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+
+def record_json(value, dumps):
+    """JSON fragments of `encode_value(value)`, encoding one sequence item at a time.
+
+    `dumps` returns compact JSON bytes. Only one record's encoded copy exists
+    at a time, however long the account or trace history is.
+    """
+    if isinstance(value, tuple):
+        yield b"["
+        for index, item in enumerate(value):
+            yield (b"," if index else b"") + dumps(encode_value(item))
+        yield b"]"
+    elif is_dataclass(value) and not isinstance(value, type):
+        yield b'{"type":' + dumps(type(value).__name__)
+        for field in fields(value):
+            yield b"," + dumps(field.name) + b":"
+            yield from record_json(getattr(value, field.name), dumps)
+        yield b"}"
+    else:
+        yield dumps(encode_value(value))
+
+
 @lru_cache(maxsize=64)
 def _hints(cls):
     return get_type_hints(cls)

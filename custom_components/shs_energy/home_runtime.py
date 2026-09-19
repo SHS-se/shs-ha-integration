@@ -545,6 +545,23 @@ class ExecutionAuthority:
             raise ValueError("configured scope/catalog/plant identity mismatch")
 
 
+# Traces are recent diagnostic evidence; the account keeps the complete
+# accounting record. Every battery refresh and command result adds a trace
+# (about 5,000 an hour), so only the latest are retained, in memory, on disk
+# and in downloads. The oldest leave in whole blocks of the archive's 128-trace
+# pages, so the pages of the traces that remain are reused unchanged.
+MAX_EXECUTION_TRACES = 8192
+TRACE_TRIM = 1024
+
+
+def retain_traces(traces):
+    """The latest traces; once over the limit, the oldest leave in TRACE_TRIM blocks."""
+    excess = len(traces) - MAX_EXECUTION_TRACES
+    if excess <= 0:
+        return traces
+    return traces[-(-excess // TRACE_TRIM) * TRACE_TRIM:]
+
+
 @dataclass(frozen=True)
 class ExecutionTrace:
     at_ms: int
@@ -1572,7 +1589,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 json.dumps([encode_value(e) for e in effects if not isinstance(e,Persist)],sort_keys=True,allow_nan=False),
                 session.live,session.assessment,
                 json.dumps(state.authority.plant.conversion.wire()) if state.authority.plant.conversion else None)
-            state=replace(state,execution=replace(session,traces=(*session.traces,trace)))
+            state=replace(state,execution=replace(session,traces=retain_traces((*session.traces,trace))))
     changed = _durable_view(state) != _durable_view(previous)
     state = replace(state, revision=previous.revision + int(changed), last_time_ms=max(previous.last_time_ms, now_ms))
     if changed:

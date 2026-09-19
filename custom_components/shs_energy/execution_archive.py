@@ -2,27 +2,31 @@
 
 Immutable pages are durable before the command checkpoint publishes their root.
 Crashes can leave unreferenced pages, never a checkpoint naming unfinished data.
-Full history is retained (and hydrated for pure replay); this bounds disk records,
-not the resident account or diagnostic download size. Each saved tree records the
-pages it reaches. Once the checkpoint on disk names a newer root, pages that only
-superseded trees reached are removed; the retained history stays in the new tree.
+The account's full history is retained (and hydrated for pure replay); execution
+traces are limited to the latest `MAX_EXECUTION_TRACES` by the runtime. Each saved
+tree records the pages it reaches. Once the checkpoint on disk names a newer root,
+pages that only superseded trees reached are removed; the retained history stays
+in the new tree.
 """
 import asyncio
+from contextlib import suppress
 from dataclasses import fields, replace
 from hashlib import sha256
 import json
 from itertools import islice
 from operator import is_
+import os
+import tempfile
 from typing import get_type_hints, get_args
 
 if __package__:
     from . import plan_execution as execution
-    from .home_runtime import ExecutionSession, ExecutionTrace
+    from .home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES
     from .home_runtime_checkpoint import upgrade_execution_session
     from .runtime_json import encode_value, decode_value
 else:
     import plan_execution as execution
-    from home_runtime import ExecutionSession, ExecutionTrace
+    from home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES
     from home_runtime_checkpoint import upgrade_execution_session
     from runtime_json import encode_value, decode_value
 
@@ -118,13 +122,19 @@ class ExecutionArchive:
         if self._removing is not None and not self._removing.done():
             await asyncio.wait((self._removing,))
 
-    async def get(self, key):
+    async def _load(self, key):
         if not isinstance(key,str) or len(key)!=64:
             raise ValueError('invalid execution archive identity')
         page = await self.store_for(key).async_load()
         if page is None or sha256(canonical(page)).hexdigest()!=key:
             raise ValueError('execution evidence page is missing or corrupt: '+key)
         self.saved.add(key)
+        return page
+
+    async def get(self, key):
+        return await self._value(await self._load(key))
+
+    async def _value(self, page):
         kind=page['kind']
         if kind=='value':return page['value']
         if kind=='object':return {k:await self.get(v) for k,v in page['fields'].items()}
@@ -133,6 +143,25 @@ class ExecutionArchive:
         if kind=='items':return children
         if kind=='text':return ''.join(children)
         raise ValueError('unknown execution evidence page kind')
+
+    async def _tail(self, key, count):
+        """The last `count` items of a stored list, reading only the pages that hold them."""
+        if count <= 0:
+            return []
+        page = await self._load(key)
+        kind = page['kind']
+        if kind == 'value' and isinstance(page['value'], list):
+            return page['value'][-count:]
+        if kind == 'items':
+            return [await self.get(child) for child in page['children'][-count:]]
+        if kind == 'list':
+            items = []
+            for child in reversed(page['children']):
+                if len(items) >= count:
+                    break
+                items[:0] = await self._tail(child, count - len(items))
+            return items
+        raise ValueError('execution evidence page is not a list')
 
     async def save_session(self, session):
         # Domain records and their tuples are immutable. Reuse pages by object
@@ -171,11 +200,16 @@ class ExecutionArchive:
 
     async def _save_sequence(self, value, previous):
         old_chunks = previous[2] if previous is not None else []
+        # Chunks are found by their first record, which the previous tree still
+        # holds. Dropping whole chunks from the front (the oldest traces) reuses
+        # every chunk that remains instead of re-encoding the shifted sequence;
+        # otherwise the chunk at the same position is compared item by item.
+        by_first = {id(chunk[0][0]): chunk for chunk in old_chunks}
         chunks = []
         reached = set()
         for index, start in enumerate(range(0, len(value), 128)):
             chunk = value[start:start + 128]
-            old = old_chunks[index] if index < len(old_chunks) else None
+            old = by_first.get(id(chunk[0])) or (old_chunks[index] if index < len(old_chunks) else None)
             if old is not None and len(old[0]) == len(chunk) and all(map(is_, old[0], chunk)):
                 chunks.append(old)
             else:
@@ -207,14 +241,97 @@ class ExecutionArchive:
         return value, key, chunks, frozenset(reached)
 
     async def load_session(self, key):
-        raw=upgrade_execution_session(await self.get(key))
+        raw=upgrade_execution_session(await self._session(key))
         if not isinstance(raw,dict) or raw.get('type')!='ExecutionSession':
             raise ValueError('archive does not contain an execution session')
         hydrated=read_account(raw['account'])
         captured=raw['captured_feedback']
-        traces=tuple(decode_value(v,ExecutionTrace) for v in raw['traces'])
+        traces=tuple(decode_value(v,ExecutionTrace) for v in raw['traces'][-MAX_EXECUTION_TRACES:])
         shell={**raw,'account':encode_value(execution.Account()),'captured_feedback':None,'traces':[]}
         return replace(decode_value(shell,ExecutionSession),account=hydrated,captured_feedback=captured,traces=traces)
+
+    async def _session(self, key):
+        """A stored session with only the traces the runtime retains.
+
+        Older archives kept every trace; loading only the latest avoids reading
+        and decoding the rest, whose pages are then removed as unreachable.
+        """
+        page = await self._load(key)
+        if page['kind'] != 'object' or 'traces' not in page['fields']:
+            return await self._value(page)
+        return {name: await (self._tail(ref, MAX_EXECUTION_TRACES) if name == 'traces' else self.get(ref))
+                for name, ref in page['fields'].items()}
+
+
+class PageFiles:
+    """Content-addressed page files, written and read directly.
+
+    Files keep Home Assistant's storage layout, so pages it wrote stay readable,
+    but bypass its Store: every page has a new key, and Home Assistant remembers
+    each key a Store writes or removes until it restarts. Writes replace the
+    file atomically and raise on failure. `run` runs a blocking call off the
+    event loop; `dumps` returns JSON bytes.
+    """
+    def __init__(self, directory, prefix, run, dumps, loads):
+        self.directory, self.prefix = directory, prefix
+        self.run, self.dumps, self.loads = run, dumps, loads
+
+    def store_for(self, key):
+        return _PageFile(self, key)
+
+    async def list(self):
+        return await self.run(self._list)
+
+    async def remove(self, keys):
+        await self.run(self._remove, list(keys))
+
+    def _path(self, key):
+        return os.path.join(self.directory, self.prefix + key)
+
+    def _list(self):
+        with os.scandir(self.directory) as entries:
+            return {entry.name.removeprefix(self.prefix) for entry in entries if entry.name.startswith(self.prefix)}
+
+    def _remove(self, keys):
+        for key in keys:
+            try:
+                os.unlink(self._path(key))
+            except FileNotFoundError:
+                pass
+
+    def _write(self, key, page):
+        data = self.dumps({'version': 1, 'minor_version': 1, 'key': self.prefix + key, 'data': page})
+        handle = tempfile.NamedTemporaryFile('wb', dir=self.directory, delete=False)
+        try:
+            with handle:
+                handle.write(data)
+                os.fchmod(handle.fileno(), 0o644)
+            os.replace(handle.name, self._path(key))
+        except BaseException:
+            with suppress(OSError):
+                os.unlink(handle.name)
+            raise
+
+    def _read(self, key):
+        try:
+            with open(self._path(key), 'rb') as handle:
+                data = self.loads(handle.read())
+        except FileNotFoundError:
+            return None
+        except ValueError:
+            return None  # Reported by the archive as a missing or corrupt page.
+        return data.get('data') if isinstance(data, dict) else None
+
+
+class _PageFile:
+    def __init__(self, files, key):
+        self.files, self.key = files, key
+
+    async def async_save(self, page):
+        await self.files.run(self.files._write, self.key, page)
+
+    async def async_load(self):
+        return await self.files.run(self.files._read, self.key)
 
 
 def read_account(account):

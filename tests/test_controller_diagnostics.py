@@ -196,6 +196,41 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         report = controller_diagnostics(self.controller, self.panel([{'key': 'pool', 'system': 'pool'}]))
         self.assertEqual(report['current_session']['current_configuration_coverage'], [])
 
+    async def test_download_writes_a_snapshot_without_copying_or_changing_the_journal(self):
+        import gzip
+        import json
+        from types import SimpleNamespace
+        from controller_diagnostics import gzip_report, report_parts
+        from home_runtime import ExecutionTrace
+        from runtime_json import Records, encode_value
+        self.options['device_modes']['$pool'] = 'control_verification'
+        await self.controller.async_start()
+        self.options['excluded_device_readings'] = ['sensor.excluded']
+        self.journal.samples.append({'at': 'now', 'session_id': self.journal.session_id, 'slot_id': 'slot',
+            'context_id': 'context', 'observations': {'sensor.excluded': {'state': '1'}, 'sensor.kept': {'state': '2'}},
+            'device_power': {'sensor.excluded': 1}, 'energy_intervals': {'sensor.excluded': {}},
+            'household': {'total': {'sources': ['sensor.excluded'], 'average_w': 5, 'difference_w': 1, 'quality': 'ok'}}})
+        self.journal.sample_contexts['context'] = {'devices': [{'key': 'sensor.excluded'}, {'key': 'sensor.kept'}]}
+        journal = deepcopy((self.journal.samples, self.journal.sample_contexts, self.journal.evaluations))
+        traces = tuple(ExecutionTrace(i, 0, 0, 0, None, '{}', '[]', None, None, None) for i in range(3))
+        self.controller.battery_runtime = SimpleNamespace(
+            snapshot=lambda include_evidence: {'state': 'verified', 'execution_traces': Records(traces)})
+        report = controller_diagnostics(self.controller, self.panel([{'key': 'pool', 'system': 'pool', 'name': 'Pool'}]))
+        expected = json.loads(json.dumps({**report, 'battery_execution': {'state': 'verified', 'execution_traces': encode_value(traces)}}))
+        dumps = lambda value: json.dumps(value).encode()
+        parts = report_parts(report, dumps)
+        # Only the immutable battery records remain to be encoded, in a worker thread.
+        self.assertEqual([type(part) for part in parts if not isinstance(part, bytes)], [Records])
+        self.journal.evaluations[0]['mode'] = 'changed after the snapshot'
+        written = json.loads(gzip.decompress(gzip_report(parts, dumps)))
+        self.assertEqual(written, expected)
+        self.assertEqual(written['samples'][-1]['observations'], {'sensor.kept': {'state': '2'}})
+        self.assertEqual(written['samples'][-1]['household']['total']['quality'], 'excluded_source')
+        self.assertEqual(written['sample_contexts']['context']['devices'], [{'key': 'sensor.kept'}])
+        self.assertTrue(all('verification_link_status' in row for row in written['evaluations']))
+        self.journal.evaluations[0]['mode'] = journal[2][0]['mode']
+        self.assertEqual((self.journal.samples, self.journal.sample_contexts, self.journal.evaluations), journal)
+
     async def test_passive_runtime_reason_names_the_mode(self):
         self.options['device_modes']['$ev'] = 'planning'
         await self.controller.async_start()

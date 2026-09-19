@@ -309,18 +309,21 @@ class VerificationJournal:
             item["total"] = len(item["expected"])
         return list(coverage.values())
 
-    def export(self):
+    def export(self, *, copy=True):
+        """The retained journal. Without `copy` it shares the journal's records:
+        treat it as read-only and serialize it before the next await."""
+        clone = deepcopy if copy else (lambda value: value)
         return {"schema_version": 4, "session_id": self.session_id, "exported_at": datetime.now(timezone.utc).isoformat(),
-                "lifecycle_events": deepcopy(self.events),
+                "lifecycle_events": clone(self.events),
                 "retention": {"max_lifecycle_events": MAX_LIFECYCLE_EVENTS, "max_groups": MAX_GROUPS,
                               "max_runtime_groups": MAX_GROUPS, "discarded_attempts": self.discarded,
                               "max_samples": MAX_SAMPLES, "sample_interval_seconds": 60, "discarded_samples": self.discarded_samples,
                               "sample_save_delay_seconds": SAMPLE_SAVE_DELAY_SECONDS},
                 "coverage_definition": "Successful command-generation branches for each configuration. Includes simulated handover. Does not prove physical response, all numeric values, failure paths or transitions between slots.",
-                "configurations": deepcopy(self.configurations), "slots": deepcopy(self.slots),
+                "configurations": clone(self.configurations), "slots": clone(self.slots),
                 "aggregation_definition": "Consecutive equivalent decisions per device, scoped to configuration and plan slot. at/observations/commands describe the first check; final_observations contains its last actual reads. last_at, last_observations and last_final_observations describe repeated checks; count is the number of represented checks. trigger names what woke the first check and last_trigger the latest; a different trigger alone does not start a new group. Verification never proves physical response; runtime results retain the controller's device-specific evidence.",
                 "runtime_definition": "Observed controller evaluations, including real service attempts and handover. Transport acceptance and setting readback do not by themselves prove physical delivery. No evaluations are invented for passive devices or periods before recording began. Simulation commands appear only in attempts; a runtime evaluation can include real release commands before verification.",
                 "measurement_definition": "Read-only samples of all non-excluded inventory devices, collected about once a minute without control evaluations. Raw sample timestamps, source reporting times, modes and active slots are retained. Counter deltas estimate average power between sample boundaries; source reporting delay limits alignment. source_interval_average_w uses the actual reporting interval. A reporting interval differing by over five seconds from the sample interval is excluded from household sums; reports before the active slot are excluded from plan comparisons. Missing, stale and reset readings are not zero. No interpolation across sessions, configuration changes or gaps over two minutes. Planned comparisons require the same active plan and slot at both boundaries. Household plan values may include hypothetical Planning and Control verification devices; differences do not by themselves identify a controller fault. These samples are not proof of a causal response to a command.",
-                "samples": deepcopy(self.samples), "sample_contexts": deepcopy(self.sample_contexts),
-                "coverage": self.coverage_for(self.attempts), "attempts": deepcopy(self.attempts),
-                "evaluations": deepcopy(self.evaluations)}
+                "samples": clone(self.samples), "sample_contexts": clone(self.sample_contexts),
+                "coverage": self.coverage_for(self.attempts), "attempts": clone(self.attempts),
+                "evaluations": clone(self.evaluations)}
