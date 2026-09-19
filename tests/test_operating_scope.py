@@ -1,4 +1,4 @@
-"""Mixed-mode plans preserve actual demand and never acquire authority by reuse."""
+"""Retained forecasts survive mode changes; local grants alone authorize writes."""
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
@@ -51,7 +51,7 @@ class ScopeTests(unittest.TestCase):
                 plan = {'operating_scope': scope, 'execution_plan': {'plan_id': 'real'}}
                 self.assertIs(scoped_plan(plan, self.options, 'device:pump'), plan)
                 self.options['device_modes']['pump'] = 'controlling'
-                self.assertIsNone(scoped_plan(plan, self.options, 'device:pump'))
+                self.assertIs(scoped_plan(plan, self.options, 'device:pump'), plan)
 
     def test_monitoring_owner_survives_plan_validation_status_and_timeline(self):
         from presentation import operational_status, timeline
@@ -69,9 +69,9 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'ready')
         self.assertTrue(timeline(plan, {'state': 'ready'}, options=options)['slots'])
         options['device_modes'][key] = 'controlling'
-        self.assertIsNone(scoped_plan(plan, options, 'battery'))
-        self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'unavailable')
-        self.assertEqual(timeline(plan, {'state': 'ready'}, options=options)['slots'], [])
+        self.assertIs(scoped_plan(plan, options, 'battery'), plan['execution_plan'])
+        self.assertTrue(operational_status(plan, 'live', [], now, options=options)['actionable'])
+        self.assertTrue(timeline(plan, {'state': 'ready'}, options=options)['slots'])
 
     def test_zero_is_observed_and_missing_or_old_quarters_are_not_zero(self):
         recent = {'start': (self.start-timedelta(minutes=15)).isoformat(), 'device_energy_kwh': {'heater': 0}}
@@ -85,12 +85,13 @@ class ScopeTests(unittest.TestCase):
         self.options['device_modes'].update({'$pool': 'controlling', 'pump': 'controlling'})
         self.assertEqual(self.scope()['external_demands'], {})
 
-    def test_scope_fences_other_devices_mode_changes_and_legacy_plans(self):
+    def test_retains_each_branch_after_other_devices_mode_changes(self):
         plan = {'operating_scope': self.scope(), 'execution_plan': {'plan_id': 'real'}}
         self.assertIs(scoped_plan(plan, self.options, 'battery'), plan['execution_plan'])
         self.assertIs(scoped_plan(plan, self.options, 'pool'), plan)
         self.options['device_modes']['$pool'] = 'controlling'
-        self.assertIsNone(scoped_plan(plan, self.options, 'battery'))
+        self.assertIs(scoped_plan(plan, self.options, 'battery'), plan['execution_plan'])
+        self.assertIs(scoped_plan(plan, self.options, 'pool'), plan)
         self.assertIsNone(scoped_plan({'schema_version': 8}, self.options, 'battery'))
 
     def test_explicit_monitoring_and_absent_monitoring_have_same_identity(self):
@@ -141,10 +142,13 @@ class ScopeTests(unittest.TestCase):
             select('battery'); select('pool')
         # Repeated lookups reuse each branch's verdict instead of re-checking the contract.
         self.assertEqual([id(candidate) for candidate in checked], [id(plan['execution_plan']), id(plan)])
+        coordinator._plan_configuration_changed = True
+        options['device_modes']['$pool'] = 'controlling'
+        self.assertIsNotNone(select('battery')[1])
+        self.assertIsNotNone(select('pool')[1])
         plan['execution_plan']['status'] = 'infeasible'
         self.assertIsNone(select('battery')[1])
-        options['device_modes']['$pool'] = 'controlling'
-        self.assertEqual(select('battery'), ({}, None))
+        self.assertIs(select('battery')[0], plan['execution_plan'])
 
     def test_runtime_status_uses_execution_feasibility_and_current_modes(self):
         from presentation import operational_status
@@ -154,9 +158,9 @@ class ScopeTests(unittest.TestCase):
         plan['execution_plan']['status'] = 'infeasible'
         self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'infeasible')
         options['device_modes']['$pool'] = 'controlling'
-        self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'unavailable')
+        self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'infeasible')
 
-    def test_timeline_keeps_live_and_verification_requests_and_fences_mode_changes(self):
+    def test_timeline_keeps_original_branches_after_mode_changes(self):
         from presentation import timeline
         plan = json.loads((Path(__file__).parent/'fixtures/schema-9-mixed-mode-plan.json').read_text())['plan']
         options = {'device_modes': plan['operating_scope']['modes']}
@@ -164,7 +168,8 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(display['slots'][0]['execution']['battery_command'], plan['execution_plan']['plans']['priority']['slots'][0]['battery_command'])
         self.assertEqual(display['slots'][0]['battery_command'], plan['plans']['priority']['slots'][0]['battery_command'])
         options = deepcopy(options); options['device_modes']['$pool'] = 'controlling'
-        self.assertEqual(timeline(plan, {'state': 'ready'}, options=options)['slots'], [])
+        self.assertEqual(timeline(plan, {'state': 'ready'}, options=options), display)
+        self.assertEqual(display['slots'][0]['execution_owners'], ['$battery'])
 
 
 class ScopeControllerTests(unittest.IsolatedAsyncioTestCase):
@@ -193,11 +198,11 @@ class ScopeControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(key in ('number.start', 'number.stop', 'switch.pool') for key, _ in self.calls))
         self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
 
-    async def test_entering_control_cannot_execute_cached_hypothetical_actions(self):
+    async def test_entering_control_executes_retained_schedule_with_explicit_permission(self):
         self.options['device_modes']['$pool'] = 'controlling'
         await self.controller.async_start()
-        self.assertEqual(self.calls, [])
-        self.assertFalse(self.controller.records)
+        self.assertIn(('number.charge_limit', .5), self.calls)
+        self.assertIn('pool', self.controller.records)
 
     async def test_scope_change_during_awaited_command_stops_remaining_optimisation_writes(self):
         original = self.hass.services.async_call

@@ -1066,7 +1066,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _scheduleSlot(device, slot) {
-    return device.mode === "controlling" && slot.execution ? slot.execution : slot;
+    const owner = device.system ? "$" + device.system : device.key;
+    return slot.execution_owners?.includes(owner) && slot.execution ? slot.execution : slot;
   }
 
   _controllerDetails(device) {

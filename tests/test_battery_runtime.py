@@ -627,6 +627,58 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         finish.set();await asyncio.wait_for(closing,1)
 
 class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mode_change_executes_retained_reference_despite_failed_replan_and_restart(self):
+        r=Rig('control_verification');await r.start()
+        try:
+            original=r.runtime.host.state.execution.account.contract
+            r.options['device_modes']['$battery']='controlling'
+            await r.runtime.capture_feedback(5000000,'mode_changed')
+            await r.runtime.reject_plan_response({'battery_execution':{'id':'failed','generation':1}},'HTTP 546')
+            for _ in range(4):await r.advance(1000)
+            self.assertEqual(r.runtime.host.state.execution.account.contract,original)
+            self.assertTrue(r.calls)
+            self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+            self.assertNotIn('not being changed',r.runtime.snapshot()['explanation']['status'])
+            await r.runtime.close()
+            restarted=Rig('controlling');restarted.now=r.now+1000
+            restarted.plan=deepcopy(r.plan)
+            restarted.rows=deepcopy(r.rows)
+            restarted.fence_store.saved=deepcopy(r.fence_store.saved)
+            restarted.store=r.store;restarted.runtime.store=r.store;restarted.runtime.archive=r.runtime.archive
+            r=restarted
+            for row in r.rows.values():row['last_reported']=iso(r.now)
+            await r.fence.open();await r.runtime.open()
+            for _ in range(4):await r.advance(1000)
+            self.assertEqual(r.runtime.host.state.execution.account.contract,original)
+            self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+            # Withdrawing permission still stops optimization writes immediately.
+            r.options['device_modes']['$battery']='control_verification'
+            for _ in range(4):await r.advance(1000)
+            self.assertEqual(r.runtime.snapshot()['state'],'verified',r.runtime.snapshot())
+            count=len(r.calls)
+            await r.advance(1000)
+            self.assertEqual(len(r.calls),count)
+        finally:await r.runtime.close()
+
+    async def test_handover_is_validated_before_replacing_a_controlling_reference(self):
+        r=Rig();await r.start()
+        try:
+            original=r.runtime.host.state.execution.account.contract
+            captured=await r.runtime.capture_feedback(5000000,'snapshot')
+            candidate=deepcopy(r.plan)
+            revised=replace(original,id='bad',generation=captured['generation'],
+                source_receipt=captured['source_receipt'],previous_contract_id=original.id,
+                objectives=(replace(original.objectives[0],target_mwh=original.objectives[0].target_mwh+100),))
+            candidate['battery_execution']=contract_wire(revised)
+            with self.assertRaisesRegex(ValueError,'explicit retained amendment'):
+                r.runtime.validate_plan_response(candidate)
+            await r.runtime.reject_plan_response(candidate,'Rejected objective amendment')
+            for _ in range(3):await r.advance(1000)
+            self.assertEqual(r.runtime.host.state.execution.account.contract,original)
+            self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+            self.assertEqual(r.plan['battery_execution']['id'],original.id)
+        finally:await r.runtime.close()
+
     async def test_verified_dump_replays_account_without_commands(self):
         from runtime_json import decode_value
         r=Rig('control_verification');await r.start()
@@ -846,7 +898,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             r.plan['battery_execution']=contract_wire(revised)
             await r.advance()
             dump=r.runtime.snapshot(include_evidence=True)
-            self.assertEqual(dump['state'],'fault')
+            self.assertEqual(dump['state'],'verified')
             self.assertEqual(dump['plan_status'],'rejected')
             self.assertEqual(dump['accepted_reference_id'],original.id)
             self.assertEqual(dump['plan_rejection']['contract_id'],'replacement')
@@ -864,7 +916,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             r=restarted
             await asyncio.wait_for(r.start(),3)
             self.assertEqual(r.runtime.snapshot()['plan_rejection'],dump['plan_rejection'])
-            self.assertEqual(r.runtime.snapshot()['state'],'fault')
+            self.assertEqual(r.runtime.snapshot()['state'],'verified')
             revised=replace(revised,dispositions=(Disposition(original.objectives[0].id,'retained',None,'Amend target'),))
             r.plan['battery_execution']=contract_wire(revised)
             await r.advance()

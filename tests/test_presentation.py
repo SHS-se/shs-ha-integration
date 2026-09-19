@@ -10,17 +10,36 @@ from planning import unplanned_services
 
 
 class PresentationTests(unittest.TestCase):
-    def test_mode_change_wait_is_not_a_missing_configuration(self):
+    def test_no_forecast_or_old_website_refresh_does_not_block_permission_correction(self):
+        from test_device_controls import _battery
+        from operating_modes import execution_mode_options
+        options={**self.options, **_battery(), 'device_modes':{'$battery':'control_verification'}}
+        choices={'home':{'battery':{'included':True}},'refreshed_at':(self.now-timedelta(days=3)).isoformat()}
+        status={'actionable':False,'reason':'No forecast schedule is available'}
+        def view():
+            return complete_device_views([],options,choices,status,None,{}, {},{},self.now)
+        options.pop('grid_power_entity')
+        self.assertIn('Signed grid power',view()[0]['permission']['reason'])
+        with self.assertRaisesRegex(ValueError,'Signed grid power'):
+            execution_mode_options(options,view(),'$battery','controlling')
+        options['grid_power_entity']='sensor.grid'
+        self.assertIsNone(view()[0]['permission']['reason'])
+        options=execution_mode_options(options,view(),'$battery','controlling')
+        self.assertEqual(options['device_modes']['$battery'],'controlling')
+        self.assertEqual(view()[0]['planning_support']['reason'],status['reason'])
+        self.assertFalse(view()[0]['execution_eligibility']['eligible'])
+
+    def test_mode_change_retains_actionable_schedule(self):
         from operating_modes import operating_mode_identity
         plan = deepcopy(self.plan)
         plan['operating_scope'] = {'modes': operating_mode_identity(self.options), 'device_owners': {}}
         options = {**self.options, 'device_modes': {'$battery': 'controlling'}}
         status = operational_status(plan, 'live', [], self.now, options=options)
-        self.assertEqual(status['state'], 'unavailable')
-        self.assertEqual(status['label'], 'Waiting for updated plan')
-        self.assertFalse(status['actionable'])
+        self.assertEqual(status['state'], 'ready')
+        self.assertIn('retained schedule', status['reason'])
+        self.assertTrue(status['actionable'])
         self.assertEqual(status['plan_id'], plan['plan_id'])
-        self.assertEqual(timeline(plan, status)['slots'], [])
+        self.assertTrue(timeline(plan, status)['slots'])
 
     def test_timeline_preserves_battery_intent_separately_from_forecast(self):
         fixture = json.loads((Path(__file__).parent / 'fixtures/schema-8-battery-plan.json').read_text())

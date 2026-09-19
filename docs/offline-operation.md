@@ -16,9 +16,12 @@ Battery export continues to require the published-price policy conditions.
 A failed status, tariff, price or planning request retains accepted cached data.
 The subscription sensor exposes the last successful status connection and latest
 connection error. Missing inputs for a new snapshot do not invalidate a cached
-plan. Changing control configuration retains the old plan for inspection but
-blocks commands until a matching replacement arrives. Invalid replacements are
-refused. Expired schedules remain inspectable and never execute beyond their end.
+plan. Mode and planning configuration changes request a new forecast while
+retaining the existing schedule for execution under current local permissions
+and equipment checks. Invalid or non-ready replacements are refused before
+replacing the cache. Expired schedules remain inspectable and never execute
+beyond their end. The [plan continuity and persistent fallback requirement](plan-continuity.md)
+describes the remaining work needed for continuous operation without forecast slots.
 
 One startup exchange follows the existing 60-second wait for HA entity providers.
 Subsequent exchanges use a 15-minute interval measured from integration setup,

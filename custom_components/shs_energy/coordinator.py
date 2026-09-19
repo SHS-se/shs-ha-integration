@@ -1262,9 +1262,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result = operational_status(self.optimisation_plan, options[OPT_PLANNING_MODE],
             self.optimisation_missing_inputs, datetime.now(timezone.utc), options=options,
             validate=self._plan_contract)
-        if self._plan_configuration_changed:
-            result.update(state="not_configured", label="Configuration changed",
-                reason="Device configuration changed; cached plan retained but requires replacement", actionable=False)
+        if self._plan_configuration_changed and result["actionable"]:
+            result.update(reason="Using the retained schedule while an updated plan is requested")
         result["recovering"] = self._recovering
         result["retry_at"] = None
         return result
@@ -3135,10 +3134,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 runtime=getattr(self,"battery_runtime",None)
                 try:
                     validate_plan_contract(returned_plan, dt_util.utcnow())
+                    if self.optimisation_plan and any(
+                        branch.get("status") != "ready"
+                        for branch in (returned_plan, returned_plan.get("execution_plan", returned_plan))
+                    ):
+                        raise OptimisationInputError("The replacement has no ready schedule; retaining the previous plan")
                     if runtime is not None:
                         try:
                             runtime.validate_plan_response(returned_plan)
-                        except ValueError as error:
+                        except (KeyError, TypeError, ValueError, OverflowError) as error:
                             raise OptimisationInputError(str(error)) from error
                 except OptimisationInputError as err:
                     plan_error = str(err)
@@ -3164,8 +3168,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if plan_error is not None:
                 # Keep whatever plan is already cached rather than replacing it
                 # with one that failed its contract, and say so loudly enough
-                # to be noticed: a refused plan means the executor is running
-                # on nothing, which used to show up only as a log line.
+                # to be noticed while the executor continues its previous plan.
                 self.last_optimisation_error = plan_error
                 self._sync_plan_refused_issue(plan_error)
                 stored["optimisation_pending_plan_ack"] = {
@@ -3237,8 +3240,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Select and validate the physical or hypothetical plan as one unit."""
         from .operating_modes import scoped_plan
         from .presentation import operational_status
-        if self._plan_configuration_changed:
-            return {}, None
         plan = scoped_plan(self.optimisation_plan, options, device)
         now = dt_util.utcnow()
         # Check the cached branch itself: the battery view below is a new object on

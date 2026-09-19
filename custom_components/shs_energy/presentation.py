@@ -46,14 +46,14 @@ def operational_status(plan, mode, missing, now, *, options=None, validate=valid
                     from operating_modes import operating_mode_identity
                 modes = operating_mode_identity(options, plan.get("operating_scope", {}).get("device_owners", {}).values())
                 scope_changed = plan.get("operating_scope", {}).get("modes") != modes
-                if not scope_changed and "controlling" in modes.values():
+                if "controlling" in plan.get("operating_scope", {}).get("modes", {}).values():
                     selected = plan["execution_plan"]
-            if scope_changed:
-                result.update(state="unavailable", label="Waiting for updated plan", reason="Waiting for a plan for the current device modes")
-            elif now >= valid_until:
+            if now >= valid_until:
                 result.update(state="expired", reason="The last plan has expired")
             elif selected["status"] != "ready":
                 result.update(state=selected["status"], reason=LABELS[selected["status"]])
+            elif scope_changed:
+                result.update(state="ready", reason="Using the retained schedule while an updated plan is requested", actionable=True)
             elif now >= datetime.fromisoformat(plan["binding_until"]):
                 result.update(state="ready", reason="Executing cached schedule using estimated prices", actionable=True)
             else:
@@ -68,17 +68,11 @@ def timeline(plan, status, *, command_preview=None, options=None):
     """Never expose an invalid/expired schedule as actionable instructions."""
     if status["state"] not in {"ready", "advisory_only"}:
         return {"capabilities": {}, "slots": [], "reason": status["reason"]}
-    if plan.get("schema_version") == 9 and options is not None:
-        if __package__:
-            from .operating_modes import operating_mode_identity
-        else:
-            from operating_modes import operating_mode_identity
-        if plan["operating_scope"]["modes"] != operating_mode_identity(options, plan["operating_scope"]["device_owners"].values()):
-            return {"capabilities": {}, "slots": [], "reason": "Waiting for a plan for the current device modes"}
     execution = timeline(plan["execution_plan"], status, command_preview=command_preview, options=options) if plan.get("execution_plan") else None
     return {"capabilities": deepcopy(plan.get("capabilities", {})), "slots": [
         {"start": slot["start"], "binding": slot["binding"],
-         **({"execution": {**execution["slots"][i], "capabilities": execution["capabilities"]}} if execution else {}),
+         **({"execution": {**execution["slots"][i], "capabilities": execution["capabilities"]},
+             "execution_owners": [owner for owner, mode in plan["operating_scope"]["modes"].items() if mode == "controlling"]} if execution else {}),
          "commands": deepcopy(slot.get("device_commands", {})),
          "battery_command": deepcopy(slot.get("battery_command")),
          "command_previews": command_preview(slot, plan=plan, options=options) if command_preview is not None else {},
@@ -169,11 +163,6 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         devices.append({"key": "$battery", "name": "House battery", "category": "battery", "system": "battery",
                         "planning_role": "controllable" if battery.get("included") else "base_load",
                         "planning_choice_at": battery.get("choice_at"), "mapping": {}, "fields": [], "mapping_status": "not_configured" if battery_control_errors({**options, "battery_control_enabled": True}) else "ready"})
-    refreshed = choices.get("refreshed_at")
-    try:
-        fresh = now - datetime.fromisoformat(refreshed) < timedelta(minutes=30)
-    except (TypeError, ValueError):
-        fresh = False
     active = next((slot for slot in (plan or {}).get("plans", {}).get("priority", {}).get("slots", [])
                    if datetime.fromisoformat(slot["start"]) <= now < datetime.fromisoformat(slot["start"]) + timedelta(minutes=15)), None) if status["actionable"] else None
     for device in devices:
@@ -190,8 +179,6 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
             reason = "Choose Planned on the website before enabling execution"
         elif key in options.get("excluded_device_readings", []):
             reason = "Include this device before enabling execution"
-        elif not fresh:
-            reason = "Refresh the website choices before enabling control"
         elif system == "battery":
             reason = "; ".join(battery_control_errors({**options, "battery_control_enabled": True})) or None
         elif system == "pool":
@@ -209,17 +196,6 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
             elif device.get("mapping_status") != "ready":
                 reason = "Complete this device's setup first"
         verification_reason = reason
-        if reason is None:
-            if not status["actionable"]:
-                reason = status["reason"]
-            elif system:
-                if not (plan or {}).get("capabilities", {}).get(system):
-                    reason = "Waiting for a plan for this device"
-            else:
-                commands = [slot.get("device_commands", {}).get(key) for slot in (plan or {}).get("plans", {}).get("priority", {}).get("slots", []) if slot.get("binding") and datetime.fromisoformat(slot["start"]) <= now < datetime.fromisoformat(slot["start"]) + timedelta(minutes=15)]
-                command = next((c for c in commands if c), None)
-                if not command or command.get("type") == "unavailable":
-                    reason = command.get("reason") if command else "Waiting for instructions for this device"
         mode = device_mode(options, controller_id)
         device["mode"] = mode
         device["permission"] = {"enabled": mode == "controlling", "reason": reason, "verification_reason": verification_reason, "controller_id": controller_id}
@@ -237,9 +213,9 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         device["planning_support"] = {"state": "available" if planning_reason is None else "unavailable",
                                       "reason": planning_reason, "path": system or "device_commands"}
         device["execution_reason"] = planning_reason
-        device["execution_eligibility"] = {"eligible": mode in {"controlling", "control_verification"} and reason is None,
+        device["execution_eligibility"] = {"eligible": mode in {"controlling", "control_verification"} and reason is None and planning_reason is None,
             "writes_permitted_by_mode": mode == "controlling", "verification_permitted_by_mode": mode == "control_verification",
-            "reason": "Inactive by operating mode" if mode in {"monitoring", "planning"} else reason}
+            "reason": "Inactive by operating mode" if mode in {"monitoring", "planning"} else reason or planning_reason}
         device["system_fields"] = system_fields(system) if system else []
         device["planning_fields"] = [field for field in device["system_fields"] if field["key"] in PLANNING_FIELDS]
         device["planning_system"] = mapped_planning_path(

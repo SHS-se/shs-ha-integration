@@ -269,10 +269,11 @@ class ExecutableRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'execution owner'):
             h.event(Requested(h.group.spec.id,h.group.mode_revision,h.group.desired))
 
-    def test_mode_change_requires_new_matching_plan(self):
+    def test_mode_change_keeps_verifying_the_accepted_plan_without_writes(self):
         h=Harness();h.offer();h.event(AuthorityChanged('battery','control_verification',2,None))
         self.assertIsNone(h.group.desired)
-        self.assertEqual(h.state.execution.status,'unavailable')
+        self.assertEqual(h.state.execution.status,'diagnostic_only')
+        self.assertEqual(h.state.execution.account.contract,h.contract)
 
     def test_legacy_journal_retires_policy_preserving_issued_effect_and_release(self):
         h=Harness();h.offer();h.prepare();h.durable()

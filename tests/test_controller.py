@@ -683,6 +683,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         plan={**self.coordinator.optimisation_plan,'plans':{'priority':{'slots':[
             {**self.slot,'start':str(i)} for i in range(288)]}}}
         plan['execution_plan']={**plan,'pool':{'stop_temperature_c':25}}
+        plan['operating_scope']={'modes':self.options['device_modes']}
         def forbidden(*args):self.fail('preview must not select and validate the full binding plan per quarter')
         self.coordinator.binding_plan_for=forbidden
         result=timeline(plan,{'state':'ready'},command_preview=self.controller.preview_commands,options=self.options)

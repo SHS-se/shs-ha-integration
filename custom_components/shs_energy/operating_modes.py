@@ -64,13 +64,17 @@ def operating_mode_identity(options, model_owners=()):
 
 
 def scoped_plan(plan, options, device):
-    """A hypothetical schedule never acquires live authority through a mode change."""
+    """Keep the device's retained forecast branch; current permission owns writes.
+
+    A mode change requests better forecasts, but cannot revoke existing ones.
+    Explicitly granting control can execute the schedule previously verified.
+    """
     if not isinstance(plan, dict):
         return None
     scope = plan.get("operating_scope")
-    if not isinstance(scope, dict) or scope.get("modes") != operating_mode_identity(options, scope.get("device_owners", {}).values()):
+    if not isinstance(scope, dict):
         return None
-    if device_mode(options, device) == "controlling":
+    if device_mode({"device_modes": scope["modes"]}, device) == "controlling":
         execution = plan.get("execution_plan")
         return execution if isinstance(execution, dict) else None
     return plan

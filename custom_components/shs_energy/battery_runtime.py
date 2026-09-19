@@ -244,7 +244,7 @@ class BatteryRuntime:
                 'discharge_limit_w':target[self._options['battery_discharge_limit_entity']]}
         if state.conditions and session.assessment and state.conditions.valid_until_ms>self.now():
             value['explanation']=execution.explain_execution(session.account,rt.execution_live(state,self.now()),
-                session.assessment,measured_battery_dc_w=getattr(self,'_measurements',{}).get('battery_dc_w'))
+                session.assessment,mode=group.mode,measured_battery_dc_w=getattr(self,'_measurements',{}).get('battery_dc_w'))
             if self._status['state']!='fault':
                 value['reason']=value['explanation']['status']
         if self.host._fault:
@@ -290,10 +290,12 @@ class BatteryRuntime:
         if rejection:
             # The accepted reference remains authoritative within its existing
             # permissions and lifetime. Rejection never authorises new actions.
-            if value['state'] != 'fault':
+            if accepted is None and value['state'] != 'fault':
                 value.update(state='fault',reason='A new battery plan could not be accepted.',
                     fix={'kind':'diagnostics'},retry_automatically=True,
                     next_step='Waiting for a corrected plan. Download controller diagnostics if this persists.')
+            value.setdefault('fix', {'kind':'diagnostics'})
+            value.setdefault('next_step', 'Using the previously accepted plan. Download diagnostics if planning failures persist.')
             if value.get('explanation'):
                 value['explanation']={**value['explanation'],
                     'plan':'Previously accepted plan: ' + value['explanation']['plan'],
@@ -347,17 +349,24 @@ class BatteryRuntime:
             return
         contract=execution.read_contract(wire)
         options=self.controller.options()
-        if contract.scope_revision!=digest(options) or contract.mode!=device_mode(options,'battery'):
-            raise ValueError('Battery plan belongs to a different local setup or operating mode')
         account=self.host.state.execution.account if self.host else self._bootstrap
         if account.contract and contract.id==account.contract.id:
             if contract!=account.contract:raise ValueError('Accepted battery reference was changed')
             return
+        if contract.scope_revision!=digest(options) or contract.mode!=device_mode(options,'battery'):
+            raise ValueError('Battery plan belongs to a different local setup or operating mode')
         anchor=next((r for r in account.requests if r.generation==contract.generation),None)
         if contract.generation!=account.requested_generation or anchor is None or anchor.source_receipt!=contract.source_receipt:
             raise ValueError('Battery plan belongs to a superseded request or different actuals prefix')
         if contract.previous_contract_id!=(account.contract.id if account.contract else None):
             raise ValueError('Battery plan does not acknowledge the accepted reference')
+        # Run the real handover checks before the new plan can replace the
+        # coordinator cache. This is a pure transition: no journal or commands.
+        now=self.now()
+        ratings=resolve_battery_quantities(options,self.coordinator._battery_entity_report)
+        soc=self.coordinator._battery_entity_report(options['battery_soc_entity'])
+        stored=round(float(soc['state']) / 100 * ratings['battery_capacity_kwh'] * 1e6)
+        execution.admit_plan(account,contract,now,execution.StateObservation(now,stored,'live_soc_at_validation',False))
 
     async def capture_feedback(self, stored_mwh, source, at_ms=None):
         async with self._lock:
@@ -453,7 +462,7 @@ class BatteryRuntime:
             return True
         self._releasing=True
         await self._record_counters(options)
-        await self._release('Waiting for a plan for the current device modes and settings')
+        await self._release('Rebinding battery control to the current settings')
         old=self.host.state.groups[0]
         if old.owned or old.attempts or old.release_pending:
             return False
@@ -478,7 +487,7 @@ class BatteryRuntime:
                      for k in ('control_override_entity','battery_control_override_entity'))
         if mode not in ('controlling','control_verification') or not slot or override or not options.get('battery_enabled',True) or '$battery' in options.get('excluded_device_readings',[]):
             self.coordinator._battery_native_context=None
-            await self._release('Waiting for a plan for the current device modes' if not slot and mode in ('controlling','control_verification') and not override else 'Battery is inactive or overridden')
+            await self._release('No current battery schedule is available' if not slot and mode in ('controlling','control_verification') and not override else 'Battery is inactive or overridden')
             return
         self._releasing=False
         self._options=options
@@ -528,10 +537,6 @@ class BatteryRuntime:
             BatteryOperation('supply','supply_house',0,dc),BatteryOperation('charge','grid_charge',cc,0),
             BatteryOperation('export','export',0,dc)]
         config=digest(options)
-        if contract.scope_revision!=config or contract.mode!=mode:
-            self._request_replan('execution_scope_changed')
-            await self._release('Waiting for a plan matching the current battery setup')
-            return
         if self._mode!=mode:
             self._mode_revision+=1
             self._mode=mode
@@ -822,7 +827,7 @@ class BatteryRuntime:
         accepted=self.host.state.execution.account.contract
         wire=plan.get('battery_execution')
         return bool(slot and accepted and wire and wire['id']==accepted.id
-                    and wire['scope_revision']==digest(options) and self.now()<accepted.valid_until_ms)
+                    and options==self._options and self.now()<accepted.valid_until_ms)
 
 
     async def _dispatch(self,effect):

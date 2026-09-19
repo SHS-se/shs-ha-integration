@@ -902,7 +902,7 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion) 
     return Assessment(operation, charge, discharge, nominal, extra, reason, recovery_state, remaining, replan, until)
 
 
-def explain_execution(account: Account, live: LiveState, assessment: Assessment, *, measured_battery_dc_w=None):
+def explain_execution(account: Account, live: LiveState, assessment: Assessment, *, mode, measured_battery_dc_w=None):
     """Content for the existing battery card, separate from its layout.
 
     Native requests never become statements of delivered power. The UI formats
@@ -916,7 +916,7 @@ def explain_execution(account: Account, live: LiveState, assessment: Assessment,
              "supply_house": "The plan is to use the battery to help power your home.",
              "export": "The plan is to sell energy from the battery to the grid."}
     status = "Following the plan"
-    if contract and contract.mode == "control_verification":
+    if mode == "control_verification":
         status = "Testing the plan; battery settings are not being changed"
     elif assessment.replan_reason:
         status = "A revised plan is needed"
@@ -948,7 +948,7 @@ def explain_execution(account: Account, live: LiveState, assessment: Assessment,
         next_action = "Ask the planner to account for the remaining energy need."
     elif assessment.recovery_state == "executing":
         next_action = ("In control mode, SHS would request extra charging to catch up."
-                       if contract and contract.mode == "control_verification" else
+                       if mode == "control_verification" else
                        "Extra charging is being requested to catch up. Energy readings will confirm the result.")
     elif assessment.recovery_state in ("authorised", "projected_feasible", "temporarily_limited"):
         next_action = "The plan allows extra charging to catch up when enough power is available."

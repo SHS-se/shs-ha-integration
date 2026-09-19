@@ -1139,9 +1139,8 @@ def _validate_execution(state, contract):
     a = state.authority
     if a is None or contract is None:
         raise ValueError("plan and local battery authority required")
-    group = _battery_group(state)
-    if contract.mode != group.mode or contract.scope_revision != a.config_revision:
-        raise ValueError("plan differs from current operating mode or supply scope")
+    # Forecast provenance is not current command authority. Local mode, scope,
+    # permissions and physical bounds are installed and checked independently.
     if contract.capacity_mwh != round(a.plant.capacity_kwh * 1e6):
         raise ValueError("plan differs from current battery capacity")
 

@@ -440,7 +440,7 @@ class ExecutionTests(unittest.TestCase):
         account = self.recovery_account()
         live = replace(self.live, at_ms=QUARTER // 2, stored_mwh=4_750_000)
         result = assess_execution(account, live, self.model)
-        card = explain_execution(account, live, result, measured_battery_dc_w=0)
+        card = explain_execution(account, live, result, mode='controlling', measured_battery_dc_w=0)
         self.assertIn("neither charging", card["now"])
         self.assertIn("being requested", card["next"])
         self.assertIn("0.50 kWh less", card["difference"])
@@ -448,7 +448,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_verification_card_does_not_claim_control(self):
         account = opening_account(replace(contract(), mode="control_verification"))
-        card = explain_execution(account, self.live, assess_execution(account, self.live, self.model))
+        card = explain_execution(account, self.live, assess_execution(account, self.live, self.model), mode='control_verification')
         self.assertIn("settings are not being changed", card["status"])
         self.assertIn("Waiting for a battery power reading", card["now"])
 
