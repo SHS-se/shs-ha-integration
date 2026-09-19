@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 from math import isfinite, sqrt
+from time import monotonic
 from typing import Any
 from uuid import uuid4
 
@@ -24,6 +25,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 from homeassistant.util.json import json_loads
 
+from .replan_listener import listen_for_replans
 from .battery_live import BatteryLiveInputs
 from .durable_record import DurableRecord
 from .operating_modes import device_mode, operating_mode_identity
@@ -263,6 +265,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.tariff_components: dict[str, dict[str, str]] = {}
         self._push_lock = asyncio.Lock()
+        self._replan_lock = asyncio.Lock()
         self._runtime_lock = asyncio.Lock()
         self._battery_native_context = None
         self._battery_inputs_lock = asyncio.Lock()
@@ -591,23 +594,42 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.async_request_refresh()
             status = await self.async_report_runtime()
             requested = status.get("pending_replan_request_id")
-            if requested == self._answered_replan_request_id:
-                requested = None
-            mode = resolved_options(self.hass, dict(self.entry.options))[OPT_PLANNING_MODE]
-            if mode != PLANNING_MODE_LIVE and requested:
-                await self._report_replan_failure(requested, "planning is turned off for this home in Home Assistant")
-                self._answered_replan_request_id = requested
-                requested = None
-            await self.async_optimisation_push(
-                force_plan=bool(requested), replan_request_id=requested
-            )
-            if requested:
-                if self.last_optimisation_error is not None:
-                    await self._report_replan_failure(requested, self.last_optimisation_error)
-                self._answered_replan_request_id = requested
+            answered = await self.async_answer_replan(requested) if requested else False
+            if not answered:
+                await self.async_optimisation_push(force_plan=False, replan_request_id=None)
         finally:
             self._recovering = False
             await self.async_report_runtime()
+
+    async def async_replan_listener(self) -> None:
+        """Keep an authenticated wakeup request open independently of quarter exchange."""
+        await listen_for_replans(
+            self.client.wait_for_replan,
+            self.async_answer_replan,
+            lambda error: _LOGGER.warning("Replan notification connection: %s", error),
+        )
+
+    async def async_answer_replan(self, requested: str) -> bool:
+        # Both the quarter poll and notification listener may see the same ID.
+        # Waiting here (and on the push lock) retains requests during an ingest.
+        async with self._replan_lock:
+            if requested == self._answered_replan_request_id:
+                return False
+            started = monotonic()
+            mode = resolved_options(self.hass, dict(self.entry.options))[OPT_PLANNING_MODE]
+            if mode != PLANNING_MODE_LIVE:
+                await self._report_replan_failure(requested, "planning is turned off for this home in Home Assistant")
+            else:
+                try:
+                    await self.async_optimisation_push(force_plan=True, replan_request_id=requested)
+                    if self.last_optimisation_error is not None:
+                        await self._report_replan_failure(requested, self.last_optimisation_error)
+                except Exception as error:
+                    await self._report_replan_failure(requested, str(error))
+                    raise
+            self._answered_replan_request_id = requested
+            _LOGGER.info("Requested replan %s completed in %.0f ms", requested, (monotonic() - started) * 1000)
+            return mode == PLANNING_MODE_LIVE
 
     async def _report_replan_failure(self, request_id: str, detail: str) -> None:
         """Tell the website why, tolerating a server that cannot be reached."""
@@ -2472,11 +2494,9 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         profile_start = profile_end - timedelta(
             days=OPTIMISATION_PROFILE_DAYS
         )
-        profile_actuals = await self._actual_quarters(
-            entities_by_category, profile_start, profile_end
-        )
-        device_profile_actuals = await self._device_actual_quarters(
-            devices, profile_start, profile_end
+        profile_actuals, device_profile_actuals = await asyncio.gather(
+            self._actual_quarters(entities_by_category, profile_start, profile_end),
+            self._device_actual_quarters(devices, profile_start, profile_end),
         )
         control_mappings = options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
         if not isinstance(control_mappings, dict):
@@ -2924,7 +2944,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 actuals = (
                     await self._actual_quarters(entities, start, complete_end)
                     if (entities.get("total_consumption") or entities.get("grid_import"))
-                    and start < complete_end
+                    and start < complete_end and replan_request_id is None
                     else []
                 )
                 if actuals and devices:
@@ -2966,7 +2986,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 try:
                     thermal_slots = await self._thermal_quarters(
                         thermal_options, devices, thermal_start, complete_end
-                    )
+                    ) if replan_request_id is None else []
                 except (HomeAssistantError, OptimisationInputError, ValueError) as err:
                     # A missing thermal sensor must never stop the electrical
                     # plan; the website reports the gap on its readiness panel.
@@ -2975,7 +2995,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 try:
                     pool_slots = (await self._pool_quarters(
                         thermal_options, thermal_start, complete_end
-                    )) if any(d.get("category") == "pool_heating" for d in devices) else []
+                    )) if replan_request_id is None and any(d.get("category") == "pool_heating" for d in devices) else []
                 except (HomeAssistantError, OptimisationInputError, ValueError) as err:
                     _LOGGER.debug("Pool observations unavailable: %s", err)
                     pool_slots = []
@@ -2998,9 +3018,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     elif mode == PLANNING_MODE_LIVE:
                         try:
                             options = self._optimisation_options()
+                            capture_started = monotonic()
                             snapshot = await self._build_optimisation_snapshot(
                                 options, entities, actuals, stored, devices
                             )
+                            _LOGGER.info("Replan %s fresh snapshot captured in %.0f ms", replan_request_id, (monotonic() - capture_started) * 1000)
                         except OptimisationInputError as err:
                             snapshot_error = str(err)
                             if not self.optimisation_missing_inputs:
@@ -3060,6 +3082,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     return
                 if dict(self.entry.options) != exchange_options:
                     raise OptimisationInputError("Configuration changed while preparing the exchange; retry with current participation")
+                ingest_started = monotonic()
                 result = await self.client.push_optimisation(
                     actuals,
                     snapshot,
@@ -3071,6 +3094,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     replan_request_id=replan_request_id,
                     equipment=self.equipment_presence(),
                 )
+                _LOGGER.info("Replan %s cloud ingest completed in %.0f ms", replan_request_id, (monotonic() - ingest_started) * 1000)
                 configuration = self._record_device_exchange(
                     stored, devices, result
                 )

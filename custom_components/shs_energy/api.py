@@ -17,6 +17,7 @@ from .api_contract import (
     API_VERSION,
     INTEGRATION_VERSION,
     MAX_REPLAN_ERROR_CHARS,
+    validate_server_contract,
     SUPPORTED_PLAN_SCHEMA_VERSIONS,
 )
 
@@ -205,6 +206,15 @@ class ShsApiClient:
         except ShsAuthError as err:
             # 401 here means the code was wrong/expired, not a token problem.
             raise ShsPairingError(str(err)) from err
+
+    async def wait_for_replan(self, after: str | None) -> str | None:
+        """Long wait with device authentication; the server wakes on a request."""
+        query = {"wait_for_replan": "true"}
+        if after is not None:
+            query["after"] = after
+        status = await self._request("GET", "integration-status?" + urlencode(query))
+        validate_server_contract(status)
+        return status.get("pending_replan_request_id")
 
     async def status(self) -> dict[str, Any]:
         """Fetch subscription status for the paired customer."""

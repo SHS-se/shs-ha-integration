@@ -27,7 +27,7 @@ PURE_MODULES = (
     "controller", "battery_live", "battery_writer", "battery_runtime", "battery_conversion",
     "presentation", "plan_execution", "battery_physical", "execution_archive",
     "api_contract", "durable_record", "verification_storage",
-    "const",
+    "const", "replan_listener",
     "device_controls",
     "device_commands",
     "migration",

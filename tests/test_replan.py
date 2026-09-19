@@ -94,7 +94,7 @@ class ReplanWiringTests(unittest.TestCase):
             COORDINATOR.index("async def async_replan_poll") :
             COORDINATOR.index("async def _prepared_device_inventory")
         ]
-        self.assertIn("force_plan=bool(requested), replan_request_id=requested", poll)
+        self.assertIn("force_plan=True, replan_request_id=requested", poll)
         self.assertIn("if self.last_optimisation_error is not None", poll)
         self.assertIn("_report_replan_failure", poll)
         # Planning switched off is not a fault and will never resolve itself,

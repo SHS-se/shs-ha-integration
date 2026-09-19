@@ -288,6 +288,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
             second=PRICE_REFRESH_SECOND,
         )
     )
+    entry.async_create_background_task(
+        hass, coordinator.async_replan_listener(), name="shs_energy_replan_notifications"
+    )
     # Relative to this integration's startup, not shared wall-clock quarters.
     entry.async_on_unload(
         async_track_time_interval(

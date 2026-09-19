@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 import unittest
+from time import monotonic
 from unittest.mock import AsyncMock
 import sys
 
@@ -18,7 +19,7 @@ from presentation import operational_status
 def coordinator_methods(namespace):
     tree = ast.parse((ROOT / 'coordinator.py').read_text())
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'ShsStatusCoordinator')
-    names = {'async_restore_plan', 'async_report_runtime', 'async_replan_poll', 'async_replan_after_mode_change'}
+    names = {'async_restore_plan', 'async_report_runtime', 'async_replan_poll', 'async_replan_after_mode_change', 'async_answer_replan'}
     methods = [n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name in names]
     exec(compile(ast.Module(body=methods, type_ignores=[]), 'coordinator.py', 'exec'), namespace)
     return type('RecoveryCoordinator', (), {name: namespace[name] for name in names})
@@ -27,18 +28,19 @@ def coordinator_methods(namespace):
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.now = datetime(2026, 9, 9, 10, tzinfo=timezone.utc)
-        namespace = dict(Any=Any, datetime=datetime, timedelta=timedelta,
+        namespace = dict(monotonic=monotonic, Any=Any, datetime=datetime, timedelta=timedelta,
             dt_util=SimpleNamespace(utcnow=lambda: self.now),
             resolved_options=lambda hass, options: options,
             OPT_PLANNING_MODE='planning_mode', PLANNING_MODE_LIVE='live',
             validate_server_contract=lambda status: None,
             ShsApiError=ValueError, ShsAuthError=PermissionError, ApiContractError=TypeError,
-            _LOGGER=SimpleNamespace(debug=lambda *args: None))
+            _LOGGER=SimpleNamespace(debug=lambda *args: None, info=lambda *args: None))
         self.c = coordinator_methods(namespace)()
         self.c.entry = SimpleNamespace(options={'planning_mode': 'live'})
         self.c.hass = None
         self.c._runtime_lock = asyncio.Lock()
         self.c._push_lock = asyncio.Lock()
+        self.c._replan_lock = asyncio.Lock()
         self.c._recovering = False
         self.c._answered_replan_request_id = None
         self.c.last_optimisation_error = None
@@ -111,6 +113,20 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.c.async_optimisation_push.assert_awaited_once_with(force_plan=True, replan_request_id='request')
         await self.c.async_replan_poll()
         self.c.async_optimisation_push.assert_awaited_with(force_plan=False, replan_request_id=None)
+
+    async def test_notification_and_poll_coalesce_the_same_request_while_busy(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        async def push(**kwargs):
+            entered.set()
+            await release.wait()
+        self.c.async_optimisation_push.side_effect = push
+        first = asyncio.create_task(self.c.async_answer_replan('request'))
+        await entered.wait()
+        second = asyncio.create_task(self.c.async_answer_replan('request'))
+        release.set()
+        self.assertEqual(await asyncio.gather(first, second), [True, False])
+        self.c.async_optimisation_push.assert_awaited_once_with(force_plan=True, replan_request_id='request')
 
     async def test_disabled_planning_reports_request_failure_but_still_exchanges_measurements(self):
         self.c.entry.options['planning_mode'] = 'disabled'
