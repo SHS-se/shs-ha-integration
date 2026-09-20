@@ -1,4 +1,4 @@
-"""Closed version-9 JSON for the offline runtime and conservative crash restoration."""
+"""Closed version-10 JSON for the offline runtime and conservative crash restoration."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -94,7 +94,7 @@ def _check_state(state):
 
 def encode_checkpoint(state: runtime.HomeState) -> bytes:
     _check_state(state)
-    data = json.dumps({"schema_version": 9, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    data = json.dumps({"schema_version": 10, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > MAX_BYTES:
         raise ValueError("checkpoint exceeds byte limit")
     return data
@@ -119,12 +119,62 @@ def decode_checkpoint(data: bytes) -> runtime.HomeState:
             group.update(desired=None, plan=None, transition_work=None, attempts=issued,
                 generation=group["generation"] + 1,
                 release_pending=group["release_pending"] or group["owned"] or bool(issued))
-        return _check_state(_decode(raw, runtime.HomeState))
-    if value["schema_version"] == 8:
-        value["state"]["execution"] = upgrade_execution_session(value["state"]["execution"])
-    elif value["schema_version"] != 9:
+        return _check_state(_decode(upgrade_native_catalog(raw), runtime.HomeState))
+    if value["schema_version"] in (8, 9):
+        if value["schema_version"] == 8:
+            value["state"]["execution"] = upgrade_execution_session(value["state"]["execution"])
+        value["state"] = upgrade_native_catalog(value["state"])
+    elif value["schema_version"] != 10:
         raise ValueError("unsupported checkpoint version/fields")
     return _check_state(_decode(value["state"], runtime.HomeState))
+
+
+def upgrade_native_catalog(raw):
+    """One-way upgrade of a persisted native vocabulary that predates `idle`.
+
+    Through schema 9 a single `hold` expressed both "keep the stored energy" and
+    "let the surplus reach the grid", using the inert mode with both ceilings
+    closed. That command is now `idle`, while `hold` and `supply_house` keep the
+    rated charge permission under the automatic mode. A journal written before
+    the split still names operations in retained requests, attempts and contract
+    rows, so rewrite its catalog rather than discarding an authority whose
+    writer fence and issued effects are still live.
+    """
+    authority = raw.get("authority")
+    if not isinstance(authority, dict) or not isinstance(authority.get("catalog"), dict):
+        return raw
+    catalog = authority["catalog"]
+    bindings = catalog["bindings"]
+    if not isinstance(bindings, list) or any(b["operation"]["operation"] == "idle" for b in bindings):
+        return raw
+    mode_key, charge_key = catalog["mode_key"], catalog["charge_key"]
+    charge_max = catalog["charge_max_w"]
+    # The mode that already runs the plant automatically is the one `hold` moves to.
+    automatic = next((dict(b["target"])[mode_key] for name in ("solar_charge", "self_consumption", "supply_house")
+                      for b in bindings if b["operation"]["operation"] == name), None)
+    if automatic is None:
+        raise ValueError("cannot upgrade a native catalog without an automatic mode")
+
+    def controls(target, changes):
+        return [[key, changes.get(key, value)] for key, value in target]
+
+    upgraded = []
+    for binding in bindings:
+        operation = binding["operation"]
+        name, charge = operation["operation"], operation["charge_limit_w"]
+        if name == "hold" and charge == 0:
+            # The old hold is exactly the new idle: inert mode, both ceilings closed.
+            upgraded.append({**binding, "operation": {**operation, "id": "idle", "operation": "idle"}})
+            upgraded.append({**binding,
+                "operation": {**operation, "id": "hold", "charge_limit_w": charge_max},
+                "target": controls(binding["target"], {mode_key: automatic, charge_key: charge_max})})
+        elif name == "supply_house" and charge == 0:
+            upgraded.append({**binding,
+                "operation": {**operation, "charge_limit_w": charge_max},
+                "target": controls(binding["target"], {charge_key: charge_max})})
+        else:
+            upgraded.append(binding)
+    return {**raw, "authority": {**authority, "catalog": {**catalog, "bindings": upgraded}}}
 
 
 def upgrade_execution_session(raw):

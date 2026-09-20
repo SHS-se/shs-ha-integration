@@ -346,10 +346,43 @@ class ExecutableRuntimeTests(unittest.TestCase):
         h.offer(replace(h.contract,id='obsolete'))
         self.assertIsNone(h.state.execution.plan_rejection)
 
+    def test_v9_journal_gains_idle_without_losing_its_writer_fence(self):
+        """A journal written before the split keeps its authority, fence and effects."""
+        h=Harness();h.offer();h.prepare();h.durable()
+        old=json.loads(encode_checkpoint(h.state));old['schema_version']=9
+        catalog=old['state']['authority']['catalog']
+        # Restore the schema-9 vocabulary: one `hold` closing both ceilings under
+        # the inert mode, and `supply_house` without a charge permission.
+        rebuilt=[]
+        for binding in catalog['bindings']:
+            name=binding['operation']['operation']
+            if name=='idle':
+                continue
+            if name=='hold':
+                binding={**binding,'operation':{**binding['operation'],'id':'hold','charge_limit_w':0},
+                         'target':native('Standby',0,0)}
+                binding={**binding,'target':[list(pair) for pair in binding['target']]}
+            elif name=='supply_house':
+                binding={**binding,'operation':{**binding['operation'],'charge_limit_w':0},
+                         'target':[[k,0 if k=='charge' else v] for k,v in binding['target']]}
+            rebuilt.append(binding)
+        catalog['bindings']=rebuilt
+        upgraded=decode_checkpoint(json.dumps(old))
+        operations={b.operation.operation:b for b in upgraded.authority.catalog.bindings}
+        self.assertEqual(dict(operations['idle'].target),{'mode':'Standby','charge':0,'discharge':0})
+        self.assertEqual(dict(operations['hold'].target),
+                         {'mode':'Maximum Self Consumption','charge':4000,'discharge':0})
+        self.assertEqual(dict(operations['supply_house'].target)['charge'],4000)
+        # The live fence and issued native effect survive the vocabulary change.
+        self.assertEqual(upgraded.groups[0].attempts,h.state.groups[0].attempts)
+        self.assertEqual(upgraded.groups[0].grant,h.state.groups[0].grant)
+        self.assertTrue(upgraded.groups[0].owned)
+        self.assertEqual(json.loads(encode_checkpoint(upgraded))['schema_version'],10)
+
     def test_v8_checkpoint_upgrade_preserves_account_and_issued_effects(self):
         h=Harness();h.offer();h.prepare();h.durable()
         old=json.loads(encode_checkpoint(h.state));old['schema_version']=8
         old['state']['execution'].pop('plan_rejection')
         upgraded=decode_checkpoint(json.dumps(old))
         self.assertEqual(upgraded,h.state)
-        self.assertEqual(json.loads(encode_checkpoint(upgraded))['schema_version'],9)
+        self.assertEqual(json.loads(encode_checkpoint(upgraded))['schema_version'],10)
