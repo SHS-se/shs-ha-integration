@@ -49,11 +49,14 @@ capture and automatic charge-timing changes remain in the
 [opportunity-cost design](battery-opportunity-cost.md).
 
 Mode names are user-configured hardware mappings. The baseline mode must provide
-native self-consumption without forced grid charging or battery export. A
-commissioned Command Charging (PV First) mapping can use solar with grid support
-for deliberate replenishment; the existing Grid First mapping is not silently
-changed. A combined charging ceiling does not express a guaranteed minimum grid
-charge plus unlimited additional solar capture. Physical source attribution is
+native self-consumption without forced grid charging or battery export. The
+**Command Charging (PV First)** mapping is required for forced charging with grid
+support for deliberate replenishment. Installation evidence and Phil's operating
+policy, recorded on 15 September in the [battery contract](battery-control-configuration.md),
+exclude Command Charging (Grid First): it curtails solar to charge from the grid.
+The previously documented Grid First mapping is superseded. A combined charging
+ceiling does not express a guaranteed minimum grid charge plus unlimited additional
+solar capture. Physical source attribution is
 not inferred from the plan or the mode name.
 
 Native regulation is confirmed using mode/limit readback and fresh measured
@@ -67,13 +70,21 @@ is planned intent, not evidence of the source or amount of delivered energy.
 
 ## Rollout
 
-The enclosing plan remains schema 8; the independently versioned battery command
-changes from 1 to 2. HA accepts only version 2 commands. Older integrations reject
-version 2, and the updated integration rejects version 1. Update both producer
-and integration and obtain a fresh plan before expecting battery execution.
-Existing fixed plans with version 1 commands must be rescinded and recreated;
-they are never silently widened or translated. The provider and consumer tests
-use the same regenerated planner fixtures.
+The enclosing plan schema and the independently versioned battery command move
+separately. Version 1 to 2 was a hard cut: HA accepted only version 2, older
+integrations rejected it, and version-1 fixed plans had to be rescinded.
+
+Version 3 splits `hold` into `hold` (keep stored energy, keep the rated charge
+permission, baseline mode) and `idle` (keep the stored energy and forgo the
+surplus, both ceilings closed, hold mode), and gives `supply_house` the rated
+charge permission as well. Because
+that changes what an existing operation name means, the integration accepts both
+2 and 3 and validates each command against the version it declares, so a
+schema-2 `hold` keeps closing both ceilings. **Install this integration before
+the producing server starts emitting version 3**; an integration that predates it
+rejects the whole plan. Fixed plans locked with version-2 commands are rescinded
+rather than translated, and a replan reference built from them is declined for one
+cycle. The provider and consumer tests use the same regenerated planner fixtures.
 
 No hardware mode mapping, operating permission or deployed installation is
 changed by these code changes. Broader reserve/headroom economics and reactive

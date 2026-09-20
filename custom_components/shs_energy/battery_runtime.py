@@ -58,9 +58,13 @@ OWNER='shs-household-battery'
 class NativeReadbackPending(Exception):
     """The provider has not published its configured controls during startup."""
 
-MODES={'hold':'Standby','grid_charge':'Command Charging (PV First)',
+# Only `idle` is inert: it neither spends stored energy nor absorbs surplus.
+# `hold` also declines to spend, but stays in the automatic mode so real surplus
+# is still absorbed rather than exported.
+MODES={'idle':'Standby','grid_charge':'Command Charging (PV First)',
        'export':'Command Discharging (PV First)','supply_house':'Maximum Self Consumption',
-       'solar_charge':'Maximum Self Consumption','self_consumption':'Maximum Self Consumption'}
+       'solar_charge':'Maximum Self Consumption','self_consumption':'Maximum Self Consumption',
+       'hold':'Maximum Self Consumption'}
 
 def stamp(value):
     parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
@@ -533,9 +537,9 @@ class BatteryRuntime:
         if (cc,dc)!=(ratings['battery_charge_max_w'],ratings['battery_discharge_max_w']):
             raise ValueError('native register range is below configured battery rating')
         cc,dc=floor(cc),floor(dc)
-        operations=[BatteryOperation('hold','hold',0,0),BatteryOperation('solar','solar_charge',cc,0),
-            BatteryOperation('supply','supply_house',0,dc),BatteryOperation('charge','grid_charge',cc,0),
-            BatteryOperation('export','export',0,dc)]
+        operations=[BatteryOperation('idle','idle',0,0),BatteryOperation('hold','hold',cc,0),
+            BatteryOperation('solar','solar_charge',cc,0),BatteryOperation('supply','supply_house',cc,dc),
+            BatteryOperation('charge','grid_charge',cc,0),BatteryOperation('export','export',0,dc)]
         config=digest(options)
         if self._mode!=mode:
             self._mode_revision+=1

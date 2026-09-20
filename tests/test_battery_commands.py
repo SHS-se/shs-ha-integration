@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
-from battery_commands import validate_battery_command
+from battery_commands import validate_battery_command, battery_mode_key
 
 
 class BatteryCommandTests(unittest.TestCase):
@@ -40,3 +40,50 @@ class BatteryCommandTests(unittest.TestCase):
                     allow_battery_export=bool(discharge))
                 with self.assertRaisesRegex(ValueError, 'ceilings disagree'):
                     validate_battery_command(slot)
+
+
+class SchemaThreeTests(unittest.TestCase):
+    """Schema 3 separates "do not spend stored energy" from "let surplus go to the grid"."""
+
+    def slot(self, operation, charge, discharge, *, charge_w=0, discharge_w=0, schema=3):
+        return {'battery_charge_w': charge_w, 'battery_discharge_w': discharge_w,
+                'battery_command': {'schema_version': schema, 'operation': operation,
+                                    'charge_limit_w': charge, 'discharge_limit_w': discharge,
+                                    'allow_grid_charge': operation == 'grid_charge',
+                                    'allow_battery_export': operation == 'export'}}
+
+    def test_retaining_stored_energy_keeps_the_rated_charge_permission(self):
+        for operation, discharge, discharge_w in (('hold', 0, 0), ('supply_house', 9600, 405.6)):
+            with self.subTest(operation=operation):
+                command = validate_battery_command(
+                    self.slot(operation, 8800, discharge, discharge_w=discharge_w))
+                self.assertEqual(command['charge_limit_w'], 8800)
+                self.assertEqual(battery_mode_key(command), 'battery_mode_baseline')
+
+    def test_only_idle_closes_the_charge_permission(self):
+        command = validate_battery_command(self.slot('idle', 0, 0))
+        self.assertEqual(battery_mode_key(command), 'battery_mode_idle')
+        for change in ({'charge_limit_w': 8800}, {'discharge_limit_w': 9600}):
+            with self.subTest(change=change):
+                slot = self.slot('idle', 0, 0)
+                slot['battery_command'].update(change)
+                with self.assertRaisesRegex(ValueError, 'zero'):
+                    validate_battery_command(slot)
+
+    def test_closing_the_charge_permission_needs_a_positive_ceiling_elsewhere(self):
+        for operation, discharge in (('hold', 0), ('supply_house', 9600)):
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(ValueError, 'positive charge ceiling'):
+                    validate_battery_command(self.slot(operation, 0, discharge, discharge_w=0))
+
+    def test_schema_two_keeps_its_own_meaning_of_hold(self):
+        command = validate_battery_command(self.slot('hold', 0, 0, schema=2))
+        self.assertEqual(battery_mode_key(command), 'battery_mode_idle')
+        with self.assertRaisesRegex(ValueError, 'zero charge ceiling'):
+            validate_battery_command(self.slot('hold', 8800, 0, schema=2))
+        with self.assertRaisesRegex(ValueError, 'unsupported battery operation'):
+            validate_battery_command(self.slot('idle', 0, 0, schema=2))
+
+    def test_unknown_command_schema_is_refused(self):
+        with self.assertRaisesRegex(ValueError, 'versioned battery operation'):
+            validate_battery_command(self.slot('hold', 8800, 0, schema=4))

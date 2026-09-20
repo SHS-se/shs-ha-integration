@@ -7,7 +7,7 @@ import json
 from typing import Literal, Optional, Union
 
 if __package__:
-    from .battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation
+    from .battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation, OPERATION_CEILINGS, CHARGE_PERMISSIONS
     from . import plan_execution as execution
     from .battery_supply import SupplyScope
     from .runtime_json import read_runtime_json, encode_value
@@ -17,7 +17,7 @@ if __package__:
         settle_and_prune, reconciled_actuals, validate_settlement,
     )
 else:
-    from battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation
+    from battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation, OPERATION_CEILINGS, CHARGE_PERMISSIONS
     import plan_execution as execution
     from battery_supply import SupplyScope
     from runtime_json import read_runtime_json, encode_value
@@ -458,9 +458,12 @@ class NativeCatalog:
         keys = {self.mode_key, self.charge_key, self.discharge_key}
         if len(keys) != 3 or not 0 < len(self.bindings) <= 12 or len({b.operation.id for b in self.bindings}) != len(self.bindings):
             raise ValueError("catalog needs unique surfaces and operation bindings")
+        # Only a deliberate decision to let surplus reach the grid closes the
+        # charge permission, and only the inert mode expresses it.
         modes = {"self_consumption": "Maximum Self Consumption", "solar_charge": "Maximum Self Consumption",
-                 "supply_house": "Maximum Self Consumption", "grid_charge": "Command Charging (PV First)",
-                 "export": "Command Discharging (PV First)", "hold": "Standby"}
+                 "supply_house": "Maximum Self Consumption", "hold": "Maximum Self Consumption",
+                 "grid_charge": "Command Charging (PV First)",
+                 "export": "Command Discharging (PV First)", "idle": "Standby"}
         for binding in self.bindings:
             op, target = binding.operation, dict(binding.target)
             if op.operation not in modes or set(target) != keys or target[self.mode_key] != modes[op.operation] or target[self.mode_key] not in self.mode_options:
@@ -469,11 +472,8 @@ class NativeCatalog:
             expected = (self.charge_max_w, self.discharge_max_w) if op.operation == "self_consumption" else (cc, dc)
             if op.operation == "self_consumption" and (cc, dc) != expected:
                 raise ValueError("self consumption must score the actual rated ceilings")
-            if op.operation == "solar_charge" and cc <= 0 or op.operation == "supply_house" and dc <= 0:
-                raise ValueError("automatic directional operation needs a ceiling")
-            if ((op.operation in ("solar_charge", "grid_charge") and dc != 0)
-                    or (op.operation in ("supply_house", "export") and cc != 0)
-                    or (op.operation == "hold" and (cc != 0 or dc != 0))):
+            required = OPERATION_CEILINGS.get(op.operation)
+            if required and any(bool(value > 0) is not needed for value, needed in zip((cc, dc), required)):
                 raise ValueError("native source semantics differ")
             for key, power, maximum in zip((self.charge_key, self.discharge_key), expected,
                                             (self.charge_max_w, self.discharge_max_w)):
@@ -1127,9 +1127,17 @@ def execution_live(state, now):
 
 
 def execution_binding(state, assessment):
+    """Sized requests carry the assessed power; permissions keep their catalog ceiling.
+
+    Under an automatic mode the plant regulates against real surplus and demand,
+    so writing an assessed charge ceiling would only re-forbid, one refresh late,
+    what the plant is already entitled to absorb.
+    """
     catalog = state.authority.catalog
     base = next(b for b in catalog.bindings if b.operation.operation == assessment.operation)
-    target = tuple((key, assessment.charge_dc_w if key == catalog.charge_key else
+    charge = (base.operation.charge_limit_w if assessment.operation in CHARGE_PERMISSIONS
+              else assessment.charge_dc_w)
+    target = tuple((key, charge if key == catalog.charge_key else
                     assessment.discharge_dc_w if key == catalog.discharge_key else value)
                    for key, value in base.target)
     return replace(base, target=target)

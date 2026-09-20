@@ -95,7 +95,7 @@ class ReferenceInterval:
                 _integer(value, minimum=None if key == "rounding_mwh" else 0)
         if self.end_ms <= self.start_ms:
             raise ValueError("reference interval must have positive duration")
-        if self.operation not in ("hold", "grid_charge", "solar_charge", "supply_house", "export"):
+        if self.operation not in ("hold", "idle", "grid_charge", "solar_charge", "supply_house", "export"):
             raise ValueError("unsupported nominal battery role")
         if self.target_kind not in ("stored_energy", "demand_following", "permission"):
             raise ValueError("target, forecast and permission must be distinguished")
@@ -117,7 +117,7 @@ class ReferenceInterval:
             raise ValueError("nominal electrical account does not conserve energy")
         if self.unserved_mwh > self.load_mwh:
             raise ValueError("unserved energy exceeds total demand")
-        if (self.operation == "hold" and (self.charge_ac_mwh or self.discharge_ac_mwh)
+        if (self.operation in ("hold", "idle") and (self.charge_ac_mwh or self.discharge_ac_mwh)
                 or self.operation in ("grid_charge", "solar_charge") and self.discharge_ac_mwh
                 or self.operation in ("supply_house", "export") and self.charge_ac_mwh):
             raise ValueError("nominal role contradicts directional flows")
@@ -767,12 +767,12 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion) 
     """Follow the accepted role; delegate no price comparison to the executor."""
     contract, now = account.contract, live.at_ms
     if contract is None or (row := contract.interval(now)) is None:
-        return Assessment("hold", 0, 0, 0, 0, "no_current_plan", "unavailable", None, "plan_required", now)
+        return Assessment("idle", 0, 0, 0, 0, "no_current_plan", "unavailable", None, "plan_required", now)
     until = min(row.end_ms, contract.valid_until_ms)
     if not live.available:
-        return Assessment("hold", 0, 0, 0, 0, "equipment_unavailable", "unavailable", None, "equipment_unavailable", until)
+        return Assessment("idle", 0, 0, 0, 0, "equipment_unavailable", "unavailable", None, "equipment_unavailable", until)
     if not 0 <= live.stored_mwh <= contract.capacity_mwh:
-        return Assessment("hold", 0, 0, 0, 0, "storage_limit", "unavailable", None, "state_outside_capacity", until)
+        return Assessment("idle", 0, 0, 0, 0, "storage_limit", "unavailable", None, "state_outside_capacity", until)
     nominal = extra = charge = discharge = 0
     operation, reason, recovery_state, replan, remaining = row.operation, "following_plan", "not_needed", None, None
     surplus = max(0.0, live.pv_w - live.house_w)
@@ -888,7 +888,9 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion) 
                     replan="local_storage_reserve_changed"
             elif discharge:
                 until = min(until, now + ceil((live.stored_mwh - reserve) * 3600 / discharge))
-    if not charge and not discharge:
+    # Falling to zero power is a decision about stored energy, not a decision to
+    # let surplus reach the grid: only the plan's own `idle` forgoes that.
+    if not charge and not discharge and operation != "idle":
         operation = "hold"
     # Replan from the same live responsibilities sent to the planner. Completed
     # forecasts/fulfilled objectives remain in the audit, but cannot demand a
@@ -911,6 +913,7 @@ def explain_execution(account: Account, live: LiveState, assessment: Assessment,
     contract = account.contract
     row = contract.interval(live.at_ms) if contract else None
     plans = {"hold": "The plan is to keep energy in the battery for later.",
+             "idle": "The plan is to keep the stored energy and send spare solar to the grid.",
              "grid_charge": "The plan is to charge the battery now for later use.",
              "solar_charge": "The plan is to store spare solar energy.",
              "supply_house": "The plan is to use the battery to help power your home.",

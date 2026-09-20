@@ -413,7 +413,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_expired_plan_has_no_recovery_authority(self):
         result = assess_execution(opening_account(), replace(self.live, at_ms=QUARTER), self.model)
-        self.assertEqual(result.operation, "hold")
+        self.assertEqual(result.operation, "idle")
         self.assertEqual(result.replan_reason, "plan_required")
 
     def test_soc_discrepancy_requests_replan_without_fabricating_meter_debt(self):

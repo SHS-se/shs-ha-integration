@@ -35,8 +35,9 @@ FIXTURES = Path(__file__).parent / 'fixtures'
 def load():
     plant=BatteryPlant(1,10,4000,4000,.95,.95,17000,13000,'discharged_storage',0)
     identity=ContextIdentity('battery','intent-1','plant-1','scope-1','external-1','tariff-1','pv-first-v1','catalog-1')
-    operations=(BatteryOperation('hold','hold',0,0),BatteryOperation('grid_charge','grid_charge',4000,0),
-        BatteryOperation('solar_charge','solar_charge',4000,0),BatteryOperation('supply_house','supply_house',0,4000),
+    operations=(BatteryOperation('idle','idle',0,0),BatteryOperation('hold','hold',4000,0),
+        BatteryOperation('grid_charge','grid_charge',4000,0),
+        BatteryOperation('solar_charge','solar_charge',4000,0),BatteryOperation('supply_house','supply_house',4000,4000),
         BatteryOperation('export','export',0,4000))
     return SimpleNamespace(summary=SimpleNamespace(plant=plant,identity=SimpleNamespace(context=identity),
         permissions=Permissions(True,True,True,3,True,0,'tariff-1'),operations=operations,
@@ -49,8 +50,9 @@ def native(mode='Standby', charge=0, discharge=0):
 
 def catalog_for(compiled):
     modes = {'self_consumption':'Maximum Self Consumption', 'solar_charge':'Maximum Self Consumption',
-             'supply_house':'Maximum Self Consumption', 'grid_charge':'Command Charging (PV First)',
-             'export':'Command Discharging (PV First)', 'hold':'Standby'}
+             'supply_house':'Maximum Self Consumption', 'hold':'Maximum Self Consumption',
+             'grid_charge':'Command Charging (PV First)',
+             'export':'Command Discharging (PV First)', 'idle':'Standby'}
     s = compiled.summary
     bindings = tuple(OperationBinding(op, native(modes[op.operation],
         s.plant.charge_max_w if op.operation == 'self_consumption' else op.charge_limit_w,
@@ -196,6 +198,38 @@ class ExecutableRuntimeTests(unittest.TestCase):
         self.assertEqual(h.state.execution.assessment.operation,'grid_charge')
         self.assertEqual(dict(h.group.desired.target)['charge'],2000)
         self.assertFalse(hasattr(h.state,'policy'))
+
+    def test_retaining_stored_energy_keeps_the_rated_charge_permission(self):
+        """`hold` declines to spend, so the plant may still absorb real surplus."""
+        h = Harness()
+        start, end = h.contract.intervals[0].start_ms, h.contract.intervals[0].end_ms
+        load = round(1000 * (end - start) / 3600)
+        row = ReferenceInterval(start, end, 5000000, 5000000, 'hold', 'permission', False, False,
+            4000, 0, False, 0, 0, 0, load, load, 0, 0, 0, 0)
+        h.offer(replace(h.contract, intervals=(row,), objectives=(
+            Objective('role', 'permission', start, end, 5000000, 'keep the role'),)))
+        self.assertEqual(h.state.execution.assessment.operation, 'hold')
+        self.assertEqual(h.state.execution.assessment.charge_dc_w, 0)
+        self.assertEqual(dict(h.group.desired.target),
+                         {'mode': 'Maximum Self Consumption', 'charge': 4000, 'discharge': 0})
+
+    def test_only_idle_closes_the_charge_permission(self):
+        h = Harness()
+        start, end = h.contract.intervals[0].start_ms, h.contract.intervals[0].end_ms
+        load = round(1000 * (end - start) / 3600)
+        row = ReferenceInterval(start, end, 5000000, 5000000, 'idle', 'permission', False, False,
+            0, 0, False, 0, 0, 0, load, load, 0, 0, 0, 0)
+        h.offer(replace(h.contract, intervals=(row,), objectives=(
+            Objective('role', 'permission', start, end, 5000000, 'let surplus export'),)))
+        self.assertEqual(h.state.execution.assessment.operation, 'idle')
+        self.assertEqual(dict(h.group.desired.target),
+                         {'mode': 'Standby', 'charge': 0, 'discharge': 0})
+
+    def test_sized_purchase_still_writes_its_assessed_ceiling(self):
+        h = Harness(); h.offer()
+        self.assertEqual(h.state.execution.assessment.operation, 'grid_charge')
+        self.assertEqual(dict(h.group.desired.target)['charge'],
+                         h.state.execution.assessment.charge_dc_w)
 
     def test_verification_assesses_without_request_or_writer_effect(self):
         h=Harness(mode='control_verification');h.offer()

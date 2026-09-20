@@ -21,7 +21,7 @@ try:
     from .operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
     from .verification import OPERATIONS, operation_name, evaluation_record, observation
     from .controller_metrics import ControllerMetrics, fingerprint, record_time
-    from .battery_commands import validate_battery_command, BATTERY_MODE_KEYS
+    from .battery_commands import validate_battery_command, battery_mode_key
     from .configuration_values import resolve_battery_quantities, resolve_quantity
     from .device_commands import actuator_targets, execution_setup_errors, validate_commands
     from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
@@ -30,7 +30,7 @@ except ImportError:  # Pure executor tests, without importing Home Assistant.
     from operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
     from verification import OPERATIONS, operation_name, evaluation_record, observation
     from controller_metrics import ControllerMetrics, fingerprint, record_time
-    from battery_commands import validate_battery_command, BATTERY_MODE_KEYS
+    from battery_commands import validate_battery_command, battery_mode_key
     from configuration_values import resolve_battery_quantities, resolve_quantity
     from device_commands import actuator_targets, execution_setup_errors, validate_commands
     from device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
@@ -762,7 +762,7 @@ class ScheduledController:
         if slot.get("battery_command"):
             try:
                 command = validate_battery_command(slot)
-                mode = options[BATTERY_MODE_KEYS[command["operation"]]]
+                mode = options[battery_mode_key(command)]
                 mode_entity = options["battery_mode_entity"]
                 if mode not in self.preview_state(mode_entity).attributes.get("options", []):
                     raise ValueError("Choose a supported battery mode in device setup")
@@ -798,7 +798,9 @@ class ScheduledController:
         charge, discharge = command["charge_limit_w"], command["discharge_limit_w"]
         if charge > limits["battery_charge_max_w"] or discharge > limits["battery_discharge_max_w"]:
             raise ValueError("planned battery ceiling exceeds the current rated power")
-        if operation not in ("self_consumption", "solar_charge") and ((discharge and soc <= limits["battery_min_soc"]) or (charge and soc >= 1)):
+        # A permission ceiling is not a request, so a full or empty pack does not
+        # contradict it; only a sized purchase or sale has to be deliverable.
+        if (operation in ("supply_house", "export") and soc <= limits["battery_min_soc"]) or (operation == "grid_charge" and soc >= 1):
             raise ValueError("battery SOC protection blocks the planned request")
         if operation == "export":
             price = slot.get("export_price_sek_per_kwh")
@@ -823,8 +825,7 @@ class ScheduledController:
         # Journal the mapping before the first write. Handover uses configured
         # rated sources, never arbitrary or sentinel pre-existing register values.
         await self.capture("battery", options, [])
-        mode_key = BATTERY_MODE_KEYS[operation]
-        mode = options[mode_key]
+        mode = options[battery_mode_key(command)]
         # Close both ceilings for a mode transition; do not interrupt an
         # unchanged request on every scheduler tick.
         if self.state(mode_entity).state != mode:

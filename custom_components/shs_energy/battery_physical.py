@@ -8,7 +8,18 @@ if __package__:
 else:
     from battery_conversion import Conversion
 RESPONSE_MODEL = "pv-first-v1"
-OPERATIONS = ("self_consumption", "solar_charge", "supply_house", "grid_charge", "export", "hold")
+OPERATIONS = ("self_consumption", "solar_charge", "supply_house", "grid_charge", "export", "hold", "idle")
+# True: the ceiling is a positive permission or sized request. False: it is closed.
+# `hold` and `supply_house` keep the rated charge permission: declining to spend
+# stored energy says nothing about absorbing surplus the plant produces anyway.
+OPERATION_CEILINGS = {
+    "solar_charge": (True, False), "grid_charge": (True, False), "hold": (True, False),
+    "supply_house": (True, True), "export": (False, True), "idle": (False, False),
+}
+# Operations whose charge ceiling is the plant's own permission rather than a
+# sized request: under the automatic mode the plant decides how much real
+# surplus to absorb, and the ceiling only states what it is allowed to take.
+CHARGE_PERMISSIONS = ("self_consumption", "solar_charge", "supply_house", "hold")
 
 def _num(value, minimum=-1e12, maximum=1e12):
     if type(value) not in (int, float) or not isfinite(value) or not minimum <= value <= maximum:
@@ -112,9 +123,8 @@ class BatteryOperation:
         c, d = self.charge_limit_w, self.discharge_limit_w
         _num(c, 0, 1e6)
         _num(d, 0, 1e6)
-        if ((self.operation in ("solar_charge", "grid_charge") and not (c > 0 and d == 0))
-                or (self.operation in ("supply_house", "export") and not (d > 0 and c == 0))
-                or (self.operation == "hold" and (c != 0 or d != 0))):
+        required = OPERATION_CEILINGS.get(self.operation)
+        if required and any(bool(value > 0) is not needed for value, needed in zip((c, d), required)):
             raise ValueError("operation contradicts its ceilings")
 
     @property
