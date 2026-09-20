@@ -45,8 +45,17 @@ def actuator_targets(mapping):
     return list(targets)
 
 
-def execution_setup_errors(mapping):
-    kind = mapping.get('control_type')
+def execution_setup_errors(mapping, contract=None):
+    """Whether a local executor can drive this mapping.
+
+    `contract` is what the executor actually runs, which is not always the
+    method the website shows: a pool heater is driven as one relay whether the
+    customer picked on/off, a setpoint or a chosen power. Passing it lets the
+    caller state that substitution instead of this function guessing from a
+    label it cannot interpret — which is what made saving a variable-power pool
+    fail with "this method is not supported for this device".
+    """
+    kind = contract or mapping.get('control_type')
     if kind not in ('setpoint', 'switch_schedule', 'permit_inhibit'):
         return ['this method is not supported for this device']
     if mapping.get('companion_actuator_entity_ids'):

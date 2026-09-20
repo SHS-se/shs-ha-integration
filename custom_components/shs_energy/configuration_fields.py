@@ -232,19 +232,121 @@ CONTROL_FIELDS["switch_schedule"] += (
 )
 
 
-def _control_fields(device: dict[str, Any]) -> tuple[dict[str, Any], ...]:
-    """Return the control contract, adding room inputs to on/off heaters."""
-    control_type = str(device.get("control_type") or "")
-    if device.get("system") == "pool" or device.get("planning_system") == "pool":
-        return ({**ACTUATOR_FIELD, "domains": ["switch", "input_boolean"]}, POWER_FIELD)
-    fields = CONTROL_FIELDS.get(control_type, ())
-    if (
-        is_room_thermal_control(control_type, str(device.get("category") or ""))
-        and control_type != "setpoint"
-    ):
+# Entities a planning path reads but never writes.
+#
+# An observation is not a control: it earns its place on the card because the
+# model needs it, not because anything commands it. Keeping them in their own
+# table is what stops the next one being added as another identity check.
+POOL_POWER_SETTING_FIELD = _field(
+    "power_setting_entity_id",
+    "Power setting",
+    "entity",
+    domains=("number", "input_number", "sensor"),
+    help_text=(
+        "Optional. The heat pump's own target output setting. SHS only reads this, "
+        "to learn how the pool's efficiency changes with it. Nothing writes to it, "
+        "and the plan does not choose it."
+    ),
+)
+
+OBSERVATION_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
+    "pool": (POOL_POWER_SETTING_FIELD,),
+}
+
+# What a path's own executor runs, whatever method the website shows.
+#
+# `execute_pool` commands one relay, and it always has. A pool heater the
+# website calls a setpoint has been driven that way for as long as there has
+# been a pool; that substitution used to be forged inside `mapping_report`,
+# which rewrote `control_type` and relabelled the report afterwards. Stating it
+# once, per path rather than per pairing, means the card, the persisted keys,
+# the entity checks and the executor all read the same answer — and a method
+# added to the website later cannot quietly arrive without one.
+PATH_CONTRACT: dict[str, str] = {
+    "pool": "switch_schedule",
+}
+
+# The domains each path's executor can actually command. The pool writes one
+# relay, so offering it a thermostat would promise something no code performs.
+PATH_ACTUATOR_DOMAINS: dict[str, list[str]] = {
+    "pool": ["switch", "input_boolean"],
+}
+
+# Which of the contract's fields a path's own executor actually reads.
+#
+# `execute_pool` commands one switch and takes the device's power for the
+# model; it has never honoured a minimum on/off time, and the pool's manual
+# override lives beside the pool card, not on the device. Offering those three
+# would be the same promise-without-code the domain narrowing above avoids.
+# A path absent from this table keeps its whole contract.
+PATH_CONTRACT_KEYS: dict[str, frozenset[str]] = {
+    "pool": frozenset({"actuator_entity_ids", "power"}),
+}
+
+
+def local_contract(control_type: str, path: str | None) -> str:
+    """The contract the local executor runs for this pairing."""
+    return PATH_CONTRACT.get(path or "", control_type)
+
+
+def planning_path_of(device: dict[str, Any]) -> str | None:
+    """The planning service this card is being drawn for.
+
+    Read, never re-derived. Callers set `planning_system` from
+    `mapped_planning_path`, which is the single routing authority, and `system`
+    is that same answer already resolved for the system cards.
+    """
+    for key in ("planning_system", "system"):
+        value = device.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def control_fields(
+    control_type: str, path: str | None, category: str = "",
+) -> tuple[dict[str, Any], ...]:
+    """Every field one card shows, from the contract rather than the identity."""
+    contract = local_contract(control_type, path)
+    fields = CONTROL_FIELDS.get(contract, ())
+    domains = PATH_ACTUATOR_DOMAINS.get(path or "")
+    if domains:
+        fields = tuple(
+            {**field, "domains": list(domains)}
+            if field["key"] == "actuator_entity_ids" else field
+            for field in fields
+        )
+    kept = PATH_CONTRACT_KEYS.get(path or "")
+    if kept is not None:
+        fields = tuple(field for field in fields if field["key"] in kept)
+    elif is_room_thermal_control(contract, category) and contract != "setpoint":
         fields = (OPTIONAL_TEMPERATURE_FIELD, *fields)
+    fields = (*fields, *OBSERVATION_FIELDS.get(path or "", ()))
     primary = {"actuator_entity_ids": 0, "control_entity_id": 0, "power": 1}
     return tuple(sorted(fields, key=lambda field: primary.get(field["key"], 2)))
+
+
+def mapping_keys(control_type: str) -> set[str]:
+    """Every key this method may persist, on any path it can be routed to.
+
+    Derived from the same catalogue the card renders, so a field cannot exist on
+    a card and be rejected on save — the drift that kept the pool's own settings
+    out of `MAPPING_KEYS` and forced a second hardcoded allowlist in migration.
+    """
+    return {"control_type", shs_const.ROOM_AREA_FIELD} | {
+        field["key"]
+        for path in (None, *OBSERVATION_FIELDS, *PATH_ACTUATOR_DOMAINS, "room")
+        for field in control_fields(control_type, path)
+    }
+
+
+def _control_fields(device: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """Return the control contract, adding room inputs to on/off heaters."""
+    return control_fields(
+        str(device.get("control_type") or ""),
+        planning_path_of(device),
+        str(device.get("category") or ""),
+    )
 
 
 def section_fields(section: dict[str, Any]) -> list[dict[str, Any]]:

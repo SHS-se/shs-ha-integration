@@ -76,6 +76,11 @@ _ENTITY_FIELDS_BY_CONTROL_TYPE: dict[str, tuple[str, ...]] = {
         "temperature_entity_id",
         "actuator_entity_ids",
         "companion_actuator_entity_ids",
+        # The pool's observed power setting. It reaches this contract because a
+        # pool heater is driven as a switch whatever the website calls it, and it
+        # is listed here so a deleted entity is reported rather than silently
+        # ignored — being read rather than written makes it no less a reference.
+        "power_setting_entity_id",
     ),
     "variable_power": ("control_entity_id",),
 }

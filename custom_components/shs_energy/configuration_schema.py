@@ -10,13 +10,13 @@ if __package__:
     from .configuration_values import resolve_quantity
     from .device_commands import execution_setup_errors
     from . import const as c
-    from .configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS
+    from .configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS, local_contract, mapping_keys
     from .device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_control_errors, mapped_planning_path
 else:
     from configuration_values import resolve_quantity
     from device_commands import execution_setup_errors
     import const as c
-    from configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS
+    from configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS, local_contract, mapping_keys
     from device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_control_errors, mapped_planning_path
 
 OPTION_FIELDS = {
@@ -29,10 +29,9 @@ OPTION_KEYS = frozenset(OPTION_FIELDS)
 METADATA_KEYS = frozenset({"configuration_reviewed_at", "discovery_evidence", "_migration_report"})
 PERSISTED_KEYS = OPTION_KEYS | METADATA_KEYS | {"device_control_mappings", "rooms", "automatic_setup", "forecast_resolution_minutes", "device_modes", "planning_admissions", "_device_inclusion_initialised"}
 ROOM_AREA_FIELD = c.ROOM_AREA_FIELD
-MAPPING_KEYS = {
-    kind: {field["key"] for field in fields} | {"control_type", ROOM_AREA_FIELD}
-    for kind, fields in CONTROL_FIELDS.items()
-}
+# Derived from the same catalogue the cards render, across every path a method
+# can be routed to, so a field cannot appear on a card and be rejected on save.
+MAPPING_KEYS = {kind: mapping_keys(kind) for kind in CONTROL_FIELDS}
 MAPPING_KEYS["switch_schedule"].add("temperature_entity_id")
 
 
@@ -341,7 +340,8 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
         if value is not None or (field["key"] in submitted and submitted[field["key"]] is None):
             mapping[field["key"]] = value
     if resolve_configuration(existing).get("device_modes", {}).get(key) in ("controlling", "control_verification"):
-        errors = execution_setup_errors(mapping)
+        errors = execution_setup_errors(
+            mapping, local_contract(kind, "pool" if pool else None))
         if errors:
             raise ValueError(f"{device['name']}: " + "; ".join(errors))
     if pool:

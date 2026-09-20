@@ -7,8 +7,10 @@ from typing import Any
 
 if __package__:
     from .configuration_schema import MAPPING_KEYS, OPTION_KEYS, PERSISTED_KEYS, ROOM_AREA_FIELD
+    from .configuration_fields import control_fields
 else:
     from configuration_schema import MAPPING_KEYS, OPTION_KEYS, PERSISTED_KEYS, ROOM_AREA_FIELD
+    from configuration_fields import control_fields
 
 ARCHIVE_KEY = "_legacy_configuration_archive"
 EV_FIELDS = {
@@ -188,7 +190,12 @@ def migrate_options(
                 report["imported"].add(f"{path}.{ROOM_AREA_FIELD}")
             else:
                 report["needs_attention"].add(f"{path}.{ROOM_AREA_FIELD}")
-        allowed = ({"control_type", "actuator_entity_ids", "power", "temperature_entity_id"}
+        # Derived from the pool's own contract rather than repeated here, so a
+        # field added to the card is carried through migration instead of being
+        # silently dropped as "removed" by a list nobody remembers to update.
+        allowed = ({"control_type", "temperature_entity_id",
+                    *(field["key"] for field in control_fields(
+                        draft.get("control_type") or "switch_schedule", "pool"))}
                    if pool_switch else MAPPING_KEYS.get(draft.get("control_type"), {"control_type"}))
         mappings[key] = {field: value for field, value in draft.items() if field in allowed}
         report["removed"].update(f"{path}.{field}" for field in set(raw) - allowed)
