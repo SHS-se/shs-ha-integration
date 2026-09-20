@@ -102,6 +102,59 @@ class PoolContractTests(unittest.TestCase):
                 self.assertEqual(local_contract(method, path), method)
 
 
+class RoutingTests(unittest.TestCase):
+    """`planning_path` is the single authority; the contract follows it."""
+
+    def test_a_pool_heater_with_a_power_dial_is_still_the_pool(self):
+        from device_controls import planning_path
+        self.assertEqual(planning_path("variable_power", "pool_heating"), "pool")
+        self.assertEqual(planning_path("switch_schedule", "pool_heating"), "pool")
+
+    def test_the_room_rule_still_wins_for_a_pool_room_floor_heater(self):
+        """A category must never imply a control contract.
+
+        A floor heater metered as `pool_heating` but asked to hold a setpoint
+        belongs to its room's heat model. Assuming otherwise once turned a
+        single bad pairing into a whole-plan failure.
+        """
+        from device_controls import planning_path
+        self.assertEqual(planning_path("setpoint", "pool_heating"), "room")
+        self.assertEqual(planning_path("switch_schedule", "heating"), "room")
+
+    def test_no_other_meter_gains_a_pool_route(self):
+        from device_controls import planning_path
+        for category in ("ev_charging", "hot_water", "property_energy", None):
+            self.assertNotEqual(
+                planning_path("variable_power", category), "pool", category,
+            )
+
+    def test_choosing_a_power_control_for_the_pool_saves(self):
+        """The exact failure, end to end along the chain it travels.
+
+        Website method -> planning_path -> local contract -> executor admission.
+        Before the routing row existed this returned None at step two, so the
+        device stopped being a pool device mid-edit and the executor was asked
+        about a method it has never run.
+        """
+        from device_controls import planning_path
+        mapping = {
+            "control_type": "variable_power",
+            "actuator_entity_ids": ["switch.pool_heater"],
+            "power": 8000,
+            "power_setting_entity_id": "number.desired_charge_power_pool_1",
+        }
+        path = planning_path("variable_power", "pool_heating")
+        self.assertEqual(path, "pool")
+        self.assertEqual(
+            execution_setup_errors(mapping, local_contract("variable_power", path)),
+            [],
+        )
+        self.assertEqual(
+            keys("variable_power", path),
+            ["actuator_entity_ids", "power", "power_setting_entity_id"],
+        )
+
+
 class DriftTests(unittest.TestCase):
     """The invariant the grounding found nothing enforcing."""
 

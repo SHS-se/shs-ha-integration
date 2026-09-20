@@ -131,6 +131,15 @@ def planning_path(control_type: str | None, category: str | None) -> str | None:
         return "room"
     if control_type == "switch_schedule" and category == "pool_heating":
         return "pool"
+    # A heat pump with its own power dial is still the pool's heater. Without
+    # this pair the routing returned None the moment the customer chose that
+    # method, so the device stopped being a pool device mid-edit: the card lost
+    # its "Pool room" heading, fell through to the generic number contract, and
+    # the save failed with "this method is not supported for this device".
+    # Still a declared pair, never a category default — a pool-room floor heater
+    # metered as pool_heating is caught by the room rule above and stays there.
+    if control_type == "variable_power" and category == "pool_heating":
+        return "pool"
     if control_type == "permit_inhibit" and category == "hot_water":
         return "boiler"
     if control_type == "variable_power" and category == "ev_charging":
