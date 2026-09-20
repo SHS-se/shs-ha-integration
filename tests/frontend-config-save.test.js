@@ -902,6 +902,34 @@ test('battery schedule describes source permission and intent instead of forecas
   assert.equal(panel._scheduleCommand(device, slot).text, 'No supported instruction');
 });
 
+test('schema 3 battery slots colour by what the pack is asked to do', () => {
+  const panel = makePanel();
+  panel._data.timeline = { capabilities: { battery: true } };
+  const device = { system: 'battery' };
+  const command = { schema_version: 3, operation: 'hold', charge_limit_w: 8800, discharge_limit_w: 0 };
+  const slot = { battery_charge_w: 0, battery_discharge_w: 0, battery_command: command };
+  // Holding and forgoing the surplus both leave the pack alone: idle colour.
+  assert.equal(panel._scheduleCommand(device, slot).action, 'idle');
+  assert.equal(panel._scheduleCommand(device, slot).text, 'Preserve charge · capture surplus');
+  command.operation = 'idle';
+  command.charge_limit_w = 0;
+  assert.equal(panel._scheduleCommand(device, slot).action, 'idle');
+  assert.equal(panel._scheduleCommand(device, slot).text, 'Preserve charge · export surplus');
+  for (const [operation, action] of [['solar_charge', 'charging'], ['grid_charge', 'charging'],
+                                     ['supply_house', 'discharging'], ['export', 'discharging']]) {
+    command.operation = operation;
+    command.charge_limit_w = 8800;
+    command.discharge_limit_w = 9600;
+    assert.equal(panel._scheduleCommand(device, slot).action, action, operation);
+    assert.equal(panel._scheduleCommand(device, slot).active, true, operation);
+  }
+  // A schema-2 hold kept the pack inert, and says so.
+  assert.equal(panel._scheduleCommand(device, { battery_command: { ...command, schema_version: 2, operation: 'hold' } }).text,
+    'Preserve battery');
+  assert.equal(panel._scheduleCommand(device, { battery_command: { ...command, schema_version: 4 } }).text,
+    'No supported instruction');
+});
+
 const scheduleFilterPanel = () => {
   const panel = makePanel();
   panel._data.operation = { state: 'ready', label: 'Ready', reason: 'Plan available', now: '2026-09-14T10:15:00Z' };

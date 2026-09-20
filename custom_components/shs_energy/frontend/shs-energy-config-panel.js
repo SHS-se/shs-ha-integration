@@ -1107,7 +1107,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (device.system && !(slot.capabilities || this._data.timeline?.capabilities)?.[device.system]) return result("No instruction");
     if (device.system === "battery") {
       const command = slot.battery_command;
-      if (!command || command.schema_version !== 2) return result("No supported instruction");
+      if (!command || ![2, 3].includes(command.schema_version)) return result("No supported instruction");
       const watts = value => `${Math.round(value)} W`;
       const labels = {
         self_consumption: "Solar capture and house supply",
@@ -1115,10 +1115,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
         grid_charge: `Charge up to ${watts(command.charge_limit_w)} · grid allowed`,
         supply_house: `Supply house up to ${watts(command.discharge_limit_w)}`,
         export: `Discharge up to ${watts(command.discharge_limit_w)} · export allowed`,
-        hold: "Preserve battery",
+        // Schema 2 held the battery inert; schema 3 keeps absorbing surplus while it holds.
+        hold: command.schema_version >= 3 ? "Preserve charge · capture surplus" : "Preserve battery",
+        idle: "Preserve charge · export surplus",
       };
+      // Neither hold nor idle requests anything of the pack, so both stay idle-coloured.
       return result(labels[command.operation] || "No supported instruction",
-        Boolean(labels[command.operation]) && command.operation !== "hold",
+        Boolean(labels[command.operation]) && !["hold", "idle"].includes(command.operation),
         { solar_charge: "charging", grid_charge: "charging", supply_house: "discharging", export: "discharging" }[command.operation] || "general");
     }
     if (device.system === "ev") return slot.ev_target_current_a > 0 ? result(`Charge ${slot.ev_target_current_a} A`, true, "charging") : result("Charging off");
