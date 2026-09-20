@@ -1486,8 +1486,19 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             shared_devices(devices, options), options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
             pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
         )
-        if not zones or start >= end:
+        if start >= end:
             return []
+        if not zones:
+            # No room is modelled here, but the pool still loses heat to the
+            # same air and its fit needs that series. Outdoor temperature is a
+            # home-level observation, so it is recorded on its own rather than
+            # riding along on zones this home does not have.
+            outdoor_only = await self._outdoor_temperature_quarters(
+                options, start, end
+            )
+            if not outdoor_only:
+                return []
+            return build_thermal_slots({}, outdoor_only)[-MAX_THERMAL_SLOTS_PER_PUSH:]
 
         temperature_entities = sorted(
             {zone["temperature_entity_id"] for zone in zones.values()}
@@ -1586,9 +1597,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         This is the training series for the pool's loss coefficient and its
         heat pump's COP against air temperature. Neither is asked for at
-        commissioning, and neither can be fitted without it — the pool heater's
-        energy and the outdoor forecast are already stored server-side, so the
-        water temperature is the only missing term.
+        commissioning, and neither can be fitted without it. The pool heater's
+        energy is already stored server-side; outdoor temperature is pushed by
+        ``_thermal_quarters``, which records it for a home with no room zones
+        too, because this fit is the one consumer that needs it without them.
         """
         entity_id = options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY)
         if not isinstance(entity_id, str) or not entity_id.strip():

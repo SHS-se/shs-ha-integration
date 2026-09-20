@@ -311,8 +311,15 @@ def build_thermal_slots(
             rows[slot][key] = observation
 
     slots: list[dict[str, Any]] = []
-    for slot, observations in sorted(rows.items()):
-        if not observations:
+    # Outdoor temperature is a home-level observation, so a quarter that has it
+    # is worth sending even when no room was modelled in it. The pool's loss and
+    # COP fit joins water temperature and heater energy against exactly this
+    # series, and a pool-only home has no zones to carry it: gating the row on
+    # zone observations left those homes with no outdoor history at all, and the
+    # fit then refused for want of samples it could never have had.
+    for slot in sorted(set(rows) | set(outdoor)):
+        observations = rows.get(slot, {})
+        if not observations and slot not in outdoor:
             continue
         payload: dict[str, Any] = {
             "start": slot.isoformat(),

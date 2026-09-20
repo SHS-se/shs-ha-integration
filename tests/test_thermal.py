@@ -203,6 +203,25 @@ class BuildSlotsTests(unittest.TestCase):
         slots = build_thermal_slots(zones, {})
         self.assertNotIn("outdoor_temperature_c", slots[0])
 
+    def test_outdoor_alone_is_a_complete_observation(self) -> None:
+        """A pool-only home has no zones, and still needs the air recorded.
+
+        The pool's loss and COP fit joins water temperature and heater energy
+        against this series. Gating the row on zone observations left homes
+        with no rooms carrying no outdoor history at all, so the fit refused
+        for want of samples it could never have had.
+        """
+        slots = build_thermal_slots({}, {START: 4.0, at(15): 3.5})
+        self.assertEqual([slot["start"] for slot in slots],
+                         [START.isoformat(), at(15).isoformat()])
+        self.assertEqual([slot["outdoor_temperature_c"] for slot in slots],
+                         [4.0, 3.5])
+        self.assertEqual(slots[0]["zone_observations"], {})
+
+    def test_a_quarter_with_neither_is_still_dropped(self) -> None:
+        zones = {"kitchen": {"room_temperature_c": {START: 21.0}, "actuator_duty": {}}}
+        self.assertEqual(build_thermal_slots(zones, {}), [])
+
 
 class ZoneInputTests(unittest.TestCase):
     def _device(self, **overrides: object) -> dict[str, object]:
