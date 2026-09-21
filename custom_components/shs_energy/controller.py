@@ -43,6 +43,8 @@ BATTERY_MAX_AGE_SECONDS = 120
 POOL_MAX_AGE_SECONDS = 15 * 60
 EV_MAX_AGE_SECONDS = 15 * 60
 POOL_GAP_SECONDS = 15
+# HA restarts and Nibe reconnects hide the pool switch for about a minute.
+POOL_SWITCH_GRACE_SECONDS = 5 * 60
 
 
 class ControlObservationError(ValueError):
@@ -53,6 +55,10 @@ class ControlObservationError(ValueError):
         self.unavailable = unavailable
         self.details = {"next_step": next_step,
                         "fix": {"kind": "entity", "entity_id": entity} if entity else {"kind": "device"}}
+
+
+class ActuatorUnavailableError(ControlObservationError):
+    """The entity SHS writes cannot be reached, so nothing can be sent or handed back yet."""
 
 
 @dataclass
@@ -216,6 +222,14 @@ class ScheduledController:
             self.verification_observations[entity] = observation(state)
         return checked_state(state, entity, max_age)
 
+    def actuator_state(self, entity):
+        try:
+            return self.state(entity)
+        except ControlObservationError as error:
+            if not error.unavailable:
+                raise
+            raise ActuatorUnavailableError(str(error), entity, error.details["next_step"], unavailable=True) from None
+
     def number(self, entity, *, max_age=None):
         return finite(self.state(entity, max_age=max_age).state)
 
@@ -299,7 +313,7 @@ class ScheduledController:
             self.battery_writer_fence.check_legacy(entity)
         self.check_authority()
         domain = entity.split(".")[0]
-        state = ((self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)) if getattr(self, "device", None) == "battery" and domain == "number" else self.state(entity)
+        state = ((self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)) if getattr(self, "device", None) == "battery" and domain == "number" else self.actuator_state(entity)
         if state is None:
             raise ValueError(f"{entity} is unavailable")
         if domain in ("number", "input_number"):
@@ -629,7 +643,7 @@ class ScheduledController:
                 for field, messages in fields.items()]}
             raise error
         entity = mapping["actuator_entity_ids"][0]
-        if reader(entity).state not in ("on", "off"):
+        if (read_state or self.actuator_state)(entity).state not in ("on", "off"):
             raise ValueError(f"{entity}: pool control must report on or off")
         target = (plan.get("pool") or {}).get("stop_temperature_c")
         if target is None:
@@ -653,6 +667,9 @@ class ScheduledController:
 
     async def execute_pool(self, options, slot):
         request, sources, fresh_until = self.pool_request(options, slot)
+        if self.scheduler is not None:
+            # The switch reports again, so no gap is left to escalate.
+            self.scheduler.device_deadline("pool", "switch_gap", None)
         entity = request["control_entity"]
         # Refuse shared targets before either controller can acquire ownership.
         for key, mapping in options.get("device_control_mappings", {}).items():
@@ -718,6 +735,32 @@ class ScheduledController:
         evidence.gap_until = deadline
         self.device_deadline("temperature_gap", deadline)
         return deadline
+
+    def report_pool_switch_gap(self, error, purpose=None, slot=None, plan=None):
+        """Wait out a restart or reconnect; only a long absence needs attention.
+
+        The switch's own state change starts the next evaluation, so SHS resumes
+        as soon as it reports. The deadline only escalates a switch that stays away.
+        """
+        now = datetime.now(timezone.utc)
+        # Consecutive reports of this gap share its start; any other outcome ends it.
+        previous = self.status.get("pool", {}).get("unavailable_since")
+        since = datetime.fromisoformat(previous) if previous else now
+        deadline = since + timedelta(seconds=POOL_SWITCH_GRACE_SECONDS)
+        if purpose is None:
+            purpose = ("hand the pool heater back" if self.records.get("pool", {}).get("restoration_pending")
+                       else "resume the plan")
+        details = {"retry_automatically": True, "unavailable_since": since.isoformat(),
+                   **({"plan_id": plan.get("plan_id"), "slot_start": slot["start"]} if slot and plan else {})}
+        if now < deadline:
+            if self.scheduler is not None:
+                self.scheduler.device_deadline("pool", "switch_gap", deadline)
+            self.report("pool", "pending", reason=f"{error.entity} is unavailable; "
+                        f"SHS will {purpose} as soon as it reports again.", **details)
+        else:
+            self.report("pool", "fault", reason=f"{error.entity} has been unavailable for more than "
+                        f"{POOL_SWITCH_GRACE_SECONDS // 60} minutes; SHS will {purpose} as soon as it reports again.",
+                        **details, **correction_details(error))
 
     def battery_measurement(self, options):
         """Direction comes from explicit observations, magnitude from either power sign."""
@@ -994,6 +1037,7 @@ class ScheduledController:
         self.records, self.overrides = {}, deepcopy(overrides)
         self.verifying, self.verification_commands, self.shadow = True, [], {}
         self.verification_observations = {}
+        gap = None
         try:
             result = (await self.execute_device(device, options, slot) if device.startswith("device:")
                       else await getattr(self, f"execute_{device}")(options, slot))
@@ -1015,6 +1059,8 @@ class ScheduledController:
         except Exception as err:
             attempt["reason"] = str(err)
             attempt.update(correction_details(err))
+            if device == "pool" and isinstance(err, ActuatorUnavailableError):
+                gap = err
         finally:
             attempt["commands"] = self.verification_commands
             attempt["observations"] = self.verification_observations
@@ -1023,6 +1069,9 @@ class ScheduledController:
         group_id = await self.verification.append(attempt)
         if self.diagnostic_evaluation is not None:
             self.diagnostic_evaluation["verification_group_id"] = group_id
+        if gap is not None:
+            self.report_pool_switch_gap(gap, "resume verification", slot, plan)
+            return
         limited = attempt.get("result", {}).get("state") == "limited"
         self.report(device, ("limited" if limited else "verified") if attempt["outcome"] == "verified" else "fault",
                     reason=attempt.get("reason") or attempt.get("handover_reason") or (attempt["result"]["reason"] if limited else "Commands logged; physical response and cross-slot transitions are not tested"),
@@ -1145,7 +1194,10 @@ class ScheduledController:
                 try:
                     await self.restore(device)
                 except Exception as err:
-                    self.report(device, "fault", reason=f"startup restoration: {err}")
+                    if device == "pool" and isinstance(err, ActuatorUnavailableError):
+                        self.report_pool_switch_gap(err)
+                    else:
+                        self.report(device, "fault", reason=f"startup restoration: {err}")
                 finally:
                     await self.finish_diagnostic_evaluation()
         if journal_error is not None:
@@ -1279,6 +1331,13 @@ class ScheduledController:
                                     **correction_details(err))
                         if self.scheduler is not None:
                             self.scheduler.request("plan_replaced")
+                        continue
+                    if device == "pool" and isinstance(err, ActuatorUnavailableError):
+                        # A handover now could not be sent, and queuing one flipped the
+                        # heater to its baseline and straight back once the switch
+                        # returned. One that is already required stays queued for then.
+                        self.failed.pop(device, None)
+                        self.report_pool_switch_gap(err, slot=slot, plan=plan)
                         continue
                     if device == "pool" and (deadline := self.hold_pool_gap(err, options, slot, plan)):
                         self.failed.pop(device, None)

@@ -30,7 +30,7 @@ LABELS = {
     "outdoor_sources_required": "Outdoor readings needed", "loaded": "Connected",
     "live": "Planning on", "configured": "Configured", "missing": "Missing",
     "baseline": "Own settings restored", "stopped": "Stopped", "limited": "At an operating limit",
-    "scheduled": "Following the schedule", "confirmed": "Measured power confirmed",
+    "scheduled": "Following the schedule", "confirmed": "Measured power confirmed", "pending": "Waiting to resume",
 }
 
 

@@ -197,8 +197,38 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.states['switch.pool'].state = 'unavailable'
         self.event('switch.pool')
         await self.drain()
-        self.assertTrue(self.controller.records['pool']['restoration_pending'])
+        # The switch has its own gap, which queues no handover it could not send.
         self.assertNotIn(('pool', 'temperature_gap'), self.scheduler.deadlines)
+        self.assertIn(('pool', 'switch_gap'), self.scheduler.deadlines)
+        self.assertNotIn('restoration_pending', self.controller.records['pool'])
+
+    async def test_pool_switch_gap_resumes_on_its_return_and_escalates_only_if_it_stays_away(self):
+        await self.start_live_pool()
+        self.slot['pool_w'] = 3300
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.pool'].state, 'on')
+        self.calls.clear()
+        self.states['switch.pool'].state = 'unavailable'
+        self.event('switch.pool')
+        await self.drain()
+        self.assertEqual(self.controller.status['pool']['state'], 'pending')
+        self.assertEqual(self.scheduler.deadlines[('pool', 'switch_gap')][0], self.now + timedelta(minutes=5))
+        # The Nibe returns a minute later; its own state change resumes the pool.
+        self.advance(60)
+        self.states['switch.pool'].state = 'on'
+        self.event('switch.pool')
+        await self.drain()
+        self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
+        self.assertNotIn(('pool', 'switch_gap'), self.scheduler.deadlines)
+        self.assertEqual(self.calls, [])
+        self.states['switch.pool'].state = 'unavailable'
+        self.event('switch.pool')
+        await self.drain()
+        self.advance(5 * 60)
+        await self.drain()
+        self.assertEqual(self.controller.status['pool']['state'], 'fault')
+        self.assertTrue(self.controller.status['pool']['retry_automatically'])
+        self.assertEqual(self.calls, [])
 
     async def test_pool_gap_does_not_cover_bad_units(self):
         await self.start_live_pool()
