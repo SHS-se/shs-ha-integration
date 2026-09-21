@@ -567,13 +567,18 @@ class ScheduledController:
             raise ValueError("planned EV current exceeds its slot envelope")
         await self.capture("ev", options, [entity, switch])
         if current == 0 or connected in ("off", "false", "disconnected") or soc >= target_soc:
+            reason = ("plan requests charging off" if current == 0 else
+                      "vehicle disconnected" if connected in ("off", "false", "disconnected") else
+                      "charge target reached")
             await self.command(switch, "off")
             return {"state": "stopped", "requested_current_a": current,
-                    "reason": "off slot, disconnected, or charge target reached"}
+                    "reason": "off slot, disconnected, or charge target reached",
+                    "decision": {"kind": "ev", "charging": False, "current_a": 0, "reason": reason}}
         await self.command(entity, current)
         await self.command(switch, "on")
         return {"state": "commanded", "requested_current_a": current,
-                "reason": "current and charge switch accepted; delivered power not inferred"}
+                "reason": "current and charge switch accepted; delivered power not inferred",
+                "decision": {"kind": "ev", "charging": True, "current_a": current}}
 
     def pool_temperature(self, entity, *, read_state=None):
         """Use the filtered temperature, but require reports from its raw source."""
@@ -642,7 +647,9 @@ class ScheduledController:
                   "The plan is pausing pool heating; the pool heater is off.")
         return {"device_key": key, "control_entity": entity, "requested_switch_state": "on" if on else "off",
                 "water_temperature_c": water, "stop_temperature_c": target,
-                "requested_power_w": slot["pool_w"], "reason": reason}, sources, fresh_until
+                "requested_power_w": slot["pool_w"], "reason": reason,
+                "decision": {"kind": "pool", "heating": on, "water_temperature_c": water,
+                             "stop_temperature_c": target}}, sources, fresh_until
 
     async def execute_pool(self, options, slot):
         request, sources, fresh_until = self.pool_request(options, slot)
@@ -841,7 +848,9 @@ class ScheduledController:
                           discharge <= 100 or measured < -100 if operation == "export" else True)
             return within and responding
         if self.verifying:
-            return {"state": "verified", "operation": operation, "physical_confirmation": "not_tested"}
+            return {"state": "verified", "operation": operation, "physical_confirmation": "not_tested",
+                    "decision": {"kind": "battery", "operation": operation,
+                                 "charge_limit_w": charge, "discharge_limit_w": discharge}}
         await self.confirm(delivered_within_ceiling, "battery did not confirm the requested operation and power ceilings within 15 seconds; check inverter control availability")
         measured = self.battery_measurement(options)
         requested = finite(slot["battery_charge_w"]) - finite(slot["battery_discharge_w"])
@@ -853,7 +862,9 @@ class ScheduledController:
                     "If those do not explain the difference, download diagnostics for controller/planner review.",
                     "fix": {"kind": "device"}} if limited else {}),
                 "operation": operation, "charge_limit_w": charge, "discharge_limit_w": discharge,
-                "forecast_power_w": requested, "measured_power_w": measured}
+                "forecast_power_w": requested, "measured_power_w": measured,
+                "decision": {"kind": "battery", "operation": operation,
+                             "charge_limit_w": charge, "discharge_limit_w": discharge}}
 
     async def execute_device(self, device, options, slot):
         key = device.removeprefix("device:")
@@ -962,7 +973,14 @@ class ScheduledController:
                 record.setdefault("transition_times", {})[entity] = now
             await self.command(entity, value)
         await self.save()
-        return {"state": "commanded", "reason": "actuator targets acknowledged; delivered heat or power is not inferred"}
+        if kind == "setpoint":
+            decision = {"kind": kind, "target_c": sorted(set(values.values()))}
+        elif kind == "switch_schedule":
+            decision = {"kind": kind, "on": command["on_seconds"] > 0}
+        else:
+            decision = {"kind": kind, "permitted": command["permitted"]}
+        return {"state": "commanded", "reason": "actuator targets acknowledged; delivered heat or power is not inferred",
+                "decision": decision}
 
     async def verify(self, device, options, slot, plan):
         if self.verification is None:
@@ -1011,7 +1029,7 @@ class ScheduledController:
                     plan_id=plan.get("plan_id"), slot_start=slot["start"], retry_automatically=True,
                     **{key: attempt[key] for key in ("next_step", "fix", "handover_pending") if key in attempt},
                     **{key: value for key, value in attempt.get("result", {}).items()
-                       if key in ("control_entity", "requested_switch_state", "water_temperature_c", "stop_temperature_c", "requested_power_w")},
+                       if key in ("control_entity", "requested_switch_state", "water_temperature_c", "stop_temperature_c", "requested_power_w", "decision")},
                     **({"decision_reason": attempt["result"]["reason"]} if device == "pool" and attempt.get("result") else {}))
 
     def begin_diagnostic_evaluation(self, device, options, slot, plan, trigger):

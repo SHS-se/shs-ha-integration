@@ -166,7 +166,7 @@ async def _configuration_payload(
             device["battery_writer"] = coordinator.battery_writer.snapshot()
             device["battery_runtime"] = coordinator.battery_runtime.snapshot()
             device["execution_status"] = {key: device["battery_runtime"].get(key)
-                for key in ("state", "reason", "fix", "next_step", "retry_automatically", "plan_status", "plan_rejection", "technical_error")}
+                for key in ("state", "reason", "fix", "next_step", "retry_automatically", "plan_status", "plan_rejection", "technical_error", "decision")}
         mapping = device.get("mapping", {})
         source_ids = [mapping.get("temperature_entity_id"), mapping.get("power")]
         if device.get("system"):

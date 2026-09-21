@@ -82,6 +82,8 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.slot['device_commands']['heater'] = {'type': 'setpoint', 'target_c': 21.4, 'minimum_c': 20, 'maximum_c': 23}
         await self.controller.async_start()
         self.assertEqual(float(self.states['number.target'].state), 21.5)
+        self.assertEqual(self.controller.status['device:heater']['decision'],
+                         {'kind': 'setpoint', 'target_c': [21.5]})
         mapping['setpoint_entity_id'] = 'number.missing'
         await self.controller.async_tick()
         self.assertEqual(float(self.states['number.target'].state), 20)

@@ -39,6 +39,9 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.assertEqual(self.calls, [])
         self.assertFalse(self.controller.records)
+        self.assertEqual(self.controller.status['battery']['decision'],
+                         {'kind': 'battery', 'operation': 'grid_charge',
+                          'charge_limit_w': 2000, 'discharge_limit_w': 0})
         self.assertIsNone(self.store.saved, 'verification must not persist restoration ownership')
         self.assertEqual(before, {key: (value.state, dict(value.attributes)) for key, value in self.states.items()})
         export = self.journal.export()
@@ -142,6 +145,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         status = self.controller.status['pool']
         self.assertEqual(status['state'], 'verified')
         self.assertEqual(status['requested_switch_state'], 'off')
+        self.assertEqual(status['decision']['heating'], False)
         self.assertIn('pausing', status['decision_reason'])
         self.assertEqual(self.calls, [])
 
@@ -223,6 +227,8 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row['outcome'], 'verified', row)
         commands = [c['data']['entity_id'] for c in row['commands'] if c['phase'] == 'plan']
         self.assertEqual(commands, ['number.current', 'switch.charge'])
+        self.assertEqual(self.controller.status['ev']['decision'],
+                         {'kind': 'ev', 'charging': True, 'current_a': 10})
         self.assertEqual(self.calls, [])
         self.slot['ev_target_current_a'] = 0
         await self.controller.async_tick()

@@ -193,6 +193,9 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['$battery'] = 'controlling'
         await self.controller.async_start()
         self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
+        self.assertEqual(self.controller.status['battery']['decision'],
+                         {'kind': 'battery', 'operation': 'grid_charge',
+                          'charge_limit_w': 2000, 'discharge_limit_w': 0})
         self.coordinator.current_plan_slot = None
         await self.controller.async_tick()
         self.assertEqual(float(self.states['number.charge_limit'].state), 8.8)
@@ -381,10 +384,15 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['$ev'] = 'controlling'
         await self.controller.async_start()
         self.assertEqual(self.calls, [('number.current', 10), ('switch.charge', 'on')])
+        self.assertEqual(self.controller.status['ev']['decision'],
+                         {'kind': 'ev', 'charging': True, 'current_a': 10})
         self.slot['ev_target_current_a'] = 0
         await self.controller.async_tick()
         self.assertEqual(self.calls[-1], ('switch.charge', 'off'))
         self.assertNotIn(('number.current', 0), self.calls)
+        self.assertEqual(self.controller.status['ev']['decision'],
+                         {'kind': 'ev', 'charging': False, 'current_a': 0,
+                          'reason': 'plan requests charging off'})
 
     async def test_disable_restores_and_other_devices_remain_disabled(self):
         self.options['device_modes']['$ev'] = 'controlling'
@@ -645,6 +653,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                         await self.controller.async_start()
                         expected = 'on' if scheduled and water < 30 else 'off'
                         self.assertEqual(self.states['switch.pool'].state, expected)
+                        self.assertEqual(self.controller.status['pool']['decision']['heating'], expected == 'on')
                         self.assertEqual(self.controller.records['pool']['originals'], {'switch.pool': initial})
                         self.assertTrue(all(entity == 'switch.pool' for entity, _ in self.calls))
                         self.options['device_modes']['$pool'] = 'monitoring'

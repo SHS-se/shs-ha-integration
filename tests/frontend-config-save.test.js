@@ -877,8 +877,8 @@ test('schedule keeps a compact plan ID without duplicated plan details', () => {
   const html = panel._renderSchedule();
   assert.match(html, /title="88eaa262-2201-431f-9c5e-3fe83c5b16d1">88eaa262<\/code>/);
   assert.doesNotMatch(html, /Plan details|Full plan ID|Published prices until|Plan valid until|every 15 minutes/);
-  assert.match(html, /class="slot running advisory"/);
-  assert.match(html, /Pool heater: Heat · 1952 W planned/);
+  assert.match(html, /class="slot running advisory selected"/);
+  assert.match(html, /Pool heater: Plan: Heat · 1952 W planned/);
   assert.doesNotMatch(html, /Advice only|future advice|Instructions until/);
 });
 
@@ -940,21 +940,26 @@ const scheduleFilterPanel = () => {
     { key: 'c', name: 'Test charger', category: 'ev_charging', mode: 'control_verification', included: true, planned: true },
     { key: 'd', name: 'Observed meter', category: 'household', mode: 'monitoring', included: false, planned: false },
   ];
-  panel._data.timeline = { slots: [{ start: '2026-09-14T10:15:00Z', binding: true, commands: {} }] };
+  panel._data.timeline = { slots: [{ start: '2026-09-14T10:15:00Z', duration_hours: .25,
+    load_w: 10800, binding: true, commands: {} }] };
   panel._choices = () => ''; panel._deviceFieldButtons = () => '';
   panel._selectedSlot = 0;
   return panel;
 };
 
-test('selected quarter heading shows the buy and sell prices it was planned on', () => {
+test('first quarter is selected by default and its heading includes prices and expected demand', () => {
   const panel = scheduleFilterPanel();
   const slot = panel._data.timeline.slots[0];
+  panel._selectedSlot = null;
   Object.assign(slot, { shadow_import_sek_per_kwh: 1.23456, shadow_export_sek_per_kwh: -0.004 });
-  assert.match(panel._renderSchedule(), /<h3>[^<]* · Published prices: Buy 1\.23 SEK\/kWh, Sell 0\.00 SEK\/kWh<\/h3>/);
+  let html = panel._renderSchedule();
+  assert.match(html, /<h3>[^<]* · Published prices: Buy 1\.23 SEK\/kWh, Sell 0\.00 SEK\/kWh · Expected house demand: 2\.7kWh<\/h3>/);
+  assert.match(html, /class="slot [^"]*selected"[^>]*aria-pressed="true"/);
+  assert.match(html, /Living heater: Plan: No instruction/);
   Object.assign(slot, { binding: false, shadow_export_sek_per_kwh: null });
-  assert.match(panel._renderSchedule(), /<h3>[^<]* · Estimated prices: Buy 1\.23 SEK\/kWh<\/h3>/);
+  assert.match(panel._renderSchedule(), /<h3>[^<]* · Estimated prices: Buy 1\.23 SEK\/kWh · Expected house demand: 2\.7kWh<\/h3>/);
   delete slot.shadow_import_sek_per_kwh;
-  assert.match(panel._renderSchedule(), /<h3>[^<]* · Estimated prices<\/h3>/);
+  assert.match(panel._renderSchedule(), /<h3>[^<]* · Estimated prices · Expected house demand: 2\.7kWh<\/h3>/);
 });
 
 test('schedule combines search, room, category and mode across timeline, details and cards', () => {
@@ -1004,25 +1009,32 @@ test('shared device filters keep Schedule and Devices selections independent', (
   assert.match(panel._renderDeviceFilters(panel._data.devices, true), /value="No room" selected/);
 });
 
-test('selected command detail shows mode and actuator limits with one shared renderer', () => {
+test('selected details append only controller decisions that differ from the plan', () => {
   const panel = scheduleFilterPanel();
-  const slot = { command_previews: { battery: { fields: [
-    { label: 'Mode', value: 'Maximum Self Consumption' },
-    { label: 'Charge limit', value: 8.8, unit: 'kW' },
-    { label: 'Discharge limit', value: 0, unit: 'kW' },
-  ] }, 'device:heater': { fields: [{ label: 'Target', value: 21.5000000001, unit: '°C' }] },
-  pool: { basis: 'current_readings', fields: [{ label: 'Start', value: 29.5, unit: '°C' }] } } };
-  assert.match(panel._scheduleCommandDetail({ system: 'battery' }, slot), /\| Mode: Maximum Self Consumption · Charge limit: 8.8 kW · Discharge limit: 0 kW/);
-  assert.match(panel._scheduleCommandDetail({ key: 'heater' }, slot), /Target: 21.5 °C/);
-  assert.match(panel._scheduleCommandDetail({ system: 'pool' }, slot), /\| Start: 29.5 °C/);
-  assert.match(panel._scheduleCommandDetail({ system: 'pool' }, slot), /title="Calculated from current readings; recalculated at execution"/);
-  assert.doesNotMatch(panel._scheduleCommandDetail({ system: 'battery' }, slot), /<small|<br|Intended/);
-  slot.command_previews.battery = { error: 'Missing <mode>' };
-  assert.match(panel._scheduleCommandDetail({ system: 'battery' }, slot), /Command preview unavailable: Missing &lt;mode&gt;/);
-  assert.equal(panel._scheduleCommandDetail({ key: 'missing' }, slot), '');
-  panel._data.timeline.slots[0].command_previews = slot.command_previews;
-  panel._data.timeline.slots[0].command_previews['device:a'] = { fields: [{ label: 'Target', value: 22, unit: '°C' }] };
-  assert.match(panel._renderSchedule(), /Living heater: No instruction<span class="command-detail muted"> \| Target: 22 °C/);
+  panel._data.timeline.capabilities = { battery: true, pool: true, ev: true };
+  const current = { start: '2026-09-14T10:15:00Z', duration_hours: .25 };
+  const batterySlot = { ...current, battery_command: { schema_version: 3, operation: 'supply_house',
+    charge_limit_w: 8800, discharge_limit_w: 9600, allow_grid_charge: false, allow_battery_export: false } };
+  const battery = { system: 'battery', mode: 'controlling', battery_runtime: { decision: {
+    kind: 'battery', operation: 'supply_house', charge_limit_w: 8800, discharge_limit_w: 2700 } } };
+  assert.match(panel._scheduleCommandDetail(battery, batterySlot), /Controller: Discharge limit 2700 W/);
+  battery.battery_runtime.decision.discharge_limit_w = 9600;
+  assert.equal(panel._scheduleCommandDetail(battery, batterySlot), '');
+
+  const pool = { system: 'pool', mode: 'control_verification', execution_status: {
+    slot_start: current.start, decision: { kind: 'pool', heating: false, water_temperature_c: 32 } } };
+  assert.match(panel._scheduleCommandDetail(pool, { ...current, pool_w: 1952 }), /Controller test: Heating off at 32 °C/);
+
+  const ev = { system: 'ev', mode: 'controlling', execution_status: {
+    slot_start: current.start, decision: { kind: 'ev', charging: false, current_a: 0, reason: 'vehicle disconnected' } } };
+  assert.match(panel._scheduleCommandDetail(ev, { ...current, ev_target_current_a: 10 }), /Controller: Charging off \(vehicle disconnected\)/);
+
+  const heater = { key: 'heater', mode: 'controlling', execution_status: {
+    slot_start: current.start, decision: { kind: 'setpoint', target_c: [21.5] } } };
+  assert.match(panel._scheduleCommandDetail(heater, { ...current, commands: {
+    heater: { type: 'setpoint', target_c: 21.4 } } }), /Controller: Hold 21.5 °C/);
+  assert.equal(panel._scheduleCommandDetail(heater, { ...current, start: '2026-09-14T10:30:00Z', commands: {
+    heater: { type: 'setpoint', target_c: 21.4 } } }), '');
 });
 
 test('schedule colours follow requested actions independently of device mode and forecast power', () => {
@@ -1057,8 +1069,8 @@ test('schedule action legend shares palette colours with slots and retains price
   panel._data.timeline.slots[0].binding = false;
   const html = panel._renderSchedule();
   assert.match(html, /aria-label="Requested action colours"/);
-  assert.match(html, /data-schedule-action="heating" aria-label="Living heater, .*Heating · On/);
-  assert.match(html, /class="slot running advisory"/);
+  assert.match(html, /data-schedule-action="heating"[^>]*aria-label="Living heater, .*Heating · On/);
+  assert.match(html, /class="slot running advisory selected"/);
   assert.match(html, /Striped: estimated prices/);
   const css = panel._styles();
   for (const [action, colour] of [['heating', '#f5a38a'], ['cooling', '#a8cfe8'], ['charging', '#9dc4ad'],
@@ -1077,7 +1089,7 @@ test('mixed-mode schedule keeps retained targets across permission changes', () 
       command_previews: { battery: { fields: [{ label: 'Charge limit', value: .5, unit: 'kW' }] } } } };
   assert.match(panel._scheduleCommand({ system: 'battery', mode: 'controlling' }, slot).text, /Charge up to 500 W/);
   assert.match(panel._scheduleCommand({ system: 'battery', mode: 'control_verification' }, slot).text, /Charge up to 500 W/);
-  assert.match(panel._scheduleCommandDetail({ system: 'battery', mode: 'controlling' }, slot), /0.5 kW/);
+  assert.equal(panel._scheduleCommandDetail({ system: 'battery', mode: 'controlling' }, slot), '');
   assert.equal(panel._scheduleCommand({ system: 'pool', mode: 'control_verification' }, slot).text, 'No heating requested');
   assert.equal(panel._scheduleCommand({ system: 'pool', mode: 'controlling' }, slot).text, 'No heating requested');
 });

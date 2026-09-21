@@ -78,7 +78,7 @@ def timeline(plan, status, *, command_preview=None, options=None):
          "command_previews": command_preview(slot, plan=plan, options=options) if command_preview is not None else {},
          # Shadow prices are what the planner valued each quarter at: the
          # published price where one exists, otherwise the server's estimate.
-         **{key: slot.get(key) for key in ("battery_charge_w", "battery_discharge_w", "ev_target_current_a", "pool_w",
+         **{key: slot.get(key) for key in ("duration_hours", "load_w", "battery_charge_w", "battery_discharge_w", "ev_target_current_a", "pool_w",
                                            "shadow_import_sek_per_kwh", "shadow_export_sek_per_kwh")}}
         for i, slot in enumerate(plan["plans"]["priority"]["slots"])
     ], "reason": None}

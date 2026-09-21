@@ -246,6 +246,10 @@ class BatteryRuntime:
             value['requested_settings']={'mode':target[self._options['battery_mode_entity']],
                 'charge_limit_w':target[self._options['battery_charge_limit_entity']],
                 'discharge_limit_w':target[self._options['battery_discharge_limit_entity']]}
+            if session.assessment:
+                value['decision']={'kind':'battery','operation':session.assessment.operation,
+                    'charge_limit_w':value['requested_settings']['charge_limit_w'],
+                    'discharge_limit_w':value['requested_settings']['discharge_limit_w']}
         if state.conditions and session.assessment and state.conditions.valid_until_ms>self.now():
             value['explanation']=execution.explain_execution(session.account,rt.execution_live(state,self.now()),
                 session.assessment,mode=group.mode,measured_battery_dc_w=getattr(self,'_measurements',{}).get('battery_dc_w'))

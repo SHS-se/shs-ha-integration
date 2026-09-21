@@ -1108,17 +1108,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (device.system === "battery") {
       const command = slot.battery_command;
       if (!command || ![2, 3].includes(command.schema_version)) return result("No supported instruction");
-      const watts = value => `${Math.round(value)} W`;
-      const labels = {
-        self_consumption: "Solar capture and house supply",
-        solar_charge: "Capture surplus · preserve",
-        grid_charge: `Charge up to ${watts(command.charge_limit_w)} · grid allowed`,
-        supply_house: `Supply house up to ${watts(command.discharge_limit_w)}`,
-        export: `Discharge up to ${watts(command.discharge_limit_w)} · export allowed`,
-        // Schema 2 held the battery inert; schema 3 keeps absorbing surplus while it holds.
-        hold: command.schema_version >= 3 ? "Preserve charge · capture surplus" : "Preserve battery",
-        idle: "Preserve charge · export surplus",
-      };
+      const labels = this._batteryCommandLabels(command);
       // Neither hold nor idle requests anything of the pack, so both stay idle-coloured.
       return result(labels[command.operation] || "No supported instruction",
         Boolean(labels[command.operation]) && !["hold", "idle"].includes(command.operation),
@@ -1139,18 +1129,87 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<div class="schedule-legend" aria-label="Requested action colours"><span class="muted">Requested action:</span>${Object.entries(SCHEDULE_ACTIONS).map(([action, { label }]) => `<span><i class="action-swatch" data-schedule-action="${action}" aria-hidden="true"></i>${label}</span>`).join("")}</div>`;
   }
 
+  _batteryCommandLabels(command) {
+    const watts = value => `${Math.round(value)} W`;
+    return {
+      self_consumption: "Solar capture and house supply",
+      solar_charge: "Capture surplus · preserve",
+      grid_charge: `Charge up to ${watts(command.charge_limit_w)} · grid allowed`,
+      supply_house: `Supply house up to ${watts(command.discharge_limit_w)}`,
+      export: `Discharge up to ${watts(command.discharge_limit_w)} · export allowed`,
+      // Schema 2 held the battery inert; schema 3 keeps absorbing surplus while it holds.
+      hold: command.schema_version >= 3 ? "Preserve charge · capture surplus" : "Preserve battery",
+      idle: "Preserve charge · export surplus",
+    };
+  }
+
+  _sameScheduleNumber(left, right) {
+    return Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) < 0.01;
+  }
+
+  _decisionMatchesPlan(device, slot, decision) {
+    if (decision.kind === "battery") {
+      const command = slot.battery_command;
+      return Boolean(command) && decision.operation === command.operation
+        && this._sameScheduleNumber(decision.charge_limit_w, command.charge_limit_w)
+        && this._sameScheduleNumber(decision.discharge_limit_w, command.discharge_limit_w);
+    }
+    if (decision.kind === "ev") {
+      const current = Number(slot.ev_target_current_a);
+      return Number.isFinite(current) && decision.charging === (current > 0)
+        && this._sameScheduleNumber(decision.current_a, current);
+    }
+    if (decision.kind === "pool") return decision.heating === (Number(slot.pool_w) > 0);
+    const command = slot.commands?.[device.key];
+    if (!command || decision.kind !== command.type) return false;
+    if (decision.kind === "setpoint") {
+      return Array.isArray(decision.target_c) && decision.target_c.length > 0
+        && decision.target_c.every(value => this._sameScheduleNumber(value, command.target_c));
+    }
+    if (decision.kind === "switch_schedule") return decision.on === (command.on_seconds > 0);
+    if (decision.kind === "permit_inhibit") return decision.permitted === command.permitted;
+    if (decision.kind === "variable_power") return this._sameScheduleNumber(decision.value, command.value) && decision.unit === command.unit;
+    return false;
+  }
+
+  _controllerDecisionText(device, slot, decision) {
+    const number = value => Number(value.toFixed(6));
+    if (decision.kind === "battery") {
+      const command = slot.battery_command;
+      if (!command || decision.operation !== command.operation) {
+        return this._batteryCommandLabels({ ...decision, schema_version: decision.schema_version || 3 })[decision.operation] || "Different battery request";
+      }
+      const changes = [];
+      if (!this._sameScheduleNumber(decision.charge_limit_w, command.charge_limit_w)) changes.push(`Charge limit ${Math.round(decision.charge_limit_w)} W`);
+      if (!this._sameScheduleNumber(decision.discharge_limit_w, command.discharge_limit_w)) changes.push(`Discharge limit ${Math.round(decision.discharge_limit_w)} W`);
+      return changes.join(" · ");
+    }
+    if (decision.kind === "ev") return decision.charging ? `Charge ${number(decision.current_a)} A` : `Charging off${decision.reason && decision.reason !== "plan requests charging off" ? ` (${decision.reason})` : ""}`;
+    if (decision.kind === "pool") return decision.heating ? "Heating on" : `Heating off${Number.isFinite(decision.water_temperature_c) ? ` at ${number(decision.water_temperature_c)} °C` : ""}`;
+    if (decision.kind === "setpoint") return `Hold ${(decision.target_c || []).map(number).join("/")} °C`;
+    if (decision.kind === "switch_schedule") return decision.on ? "On" : "Off";
+    if (decision.kind === "permit_inhibit") return decision.permitted ? "Allowed to run" : "Paused";
+    if (decision.kind === "variable_power") return `${number(decision.value)} ${decision.unit}`;
+    return "";
+  }
+
   _scheduleCommandDetail(device, slot) {
     slot = this._scheduleSlot(device, slot);
-    const preview = slot.command_previews?.[device.system || `device:${device.key}`];
-    if (!preview) return "";
-    if (preview.error) return `<span class="command-detail muted"> | Command preview unavailable: ${this._escape(preview.error)}</span>`;
-    const fields = (preview.fields || []).map(field => {
-      const value = typeof field.value === "number" ? Number(field.value.toFixed(6)) : field.value;
-      return `${field.label}: ${value}${field.unit ? ` ${field.unit}` : ""}`;
-    });
-    if (!fields.length) return "";
-    const note = preview.basis === "current_readings" ? ' title="Calculated from current readings; recalculated at execution"' : "";
-    return `<span class="command-detail muted"${note}> | ${this._escape(fields.join(" · "))}</span>`;
+    const status = device.execution_status || {};
+    const decision = device.system === "battery" ? device.battery_runtime?.decision || status.decision : status.decision;
+    if (!decision) return "";
+    const start = Date.parse(slot.start);
+    const durationHours = Number(slot.duration_hours);
+    const now = Date.parse(this._data.operation?.now);
+    const statusStart = Date.parse(status.slot_start);
+    const current = Number.isFinite(start) && Number.isFinite(durationHours) && durationHours > 0
+      && Number.isFinite(now) && start <= now && now < start + durationHours * 3600000;
+    if (Number.isFinite(statusStart) ? statusStart !== start : !current) return "";
+    if (this._decisionMatchesPlan(device, slot, decision)) return "";
+    const text = this._controllerDecisionText(device, slot, decision);
+    if (!text) return "";
+    const label = device.mode === "control_verification" ? "Controller test" : "Controller";
+    return `<span class="command-detail muted"> · ${label}: ${this._escape(text)}</span>`;
   }
 
   _schedulePrices(slot) {
@@ -1158,6 +1217,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const price = (label, value) => Number.isFinite(value) ? `${label} ${(Math.round(value * 100) / 100 || 0).toFixed(2)} SEK/kWh` : "";
     const prices = [price("Buy", slot.shadow_import_sek_per_kwh), price("Sell", slot.shadow_export_sek_per_kwh)].filter(Boolean);
     return prices.length ? `: ${prices.join(", ")}` : "";
+  }
+
+  _scheduleDemand(slot) {
+    if (!Number.isFinite(slot.load_w) || !Number.isFinite(slot.duration_hours) || slot.load_w < 0 || slot.duration_hours <= 0) return "";
+    const kwh = Math.round(slot.load_w * slot.duration_hours) / 1000;
+    return ` · Expected house demand: ${kwh.toFixed(1)}kWh`;
   }
 
   _renderSchedule() {
@@ -1170,16 +1235,17 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const scheduledDevices = devices;
     const start = Date.parse(slots[0]?.start), end = Date.parse(slots.at(-1)?.start) + 900000;
     const position = (now - start) / (end - start) * 100;
-    const selected = slots[this._selectedSlot];
+    const selectedIndex = Number.isInteger(this._selectedSlot) && slots[this._selectedSlot] ? this._selectedSlot : 0;
+    const selected = slots[selectedIndex];
     return `${this._renderScheduleFilters(allDevices)}<div class="card"><div class="status-heading"><h2>Your schedule</h2>${this._refreshError ? this._statusBadge("unavailable", "Status unconfirmed") : this._statusBadge(status.state, status.label)}</div>
       <p>${this._escape(this._refreshError ? "Current status could not be confirmed. The last received status may be stale." : status.reason)}</p>${status.plan_id ? `<p>Plan <code title="${this._escape(status.plan_id)}">${this._escape(status.plan_id.slice(0, 8))}</code> · Issued ${this._time(status.issued_at)}</p>` : ""}
       ${slots.length && scheduledDevices.length ? `<button class="text" data-action="horizon">${this._fullHorizon ? "Show next 24 hours" : "Show full available plan"}</button>${this._scheduleLegend()}<p class="muted">Solid: published prices · Striped: estimated prices · Red line: now. Select a quarter to inspect its requests.</p><div class="timeline-scroll"><div class="timeline"><div class="timeline-times"><span>${this._time(slots[0].start)}</span><span>${this._time(end)}</span></div>
       ${scheduledDevices.map(d => `<div class="timeline-row"><strong>${this._escape(d.name)}</strong><div class="timeline-track">${slots.map((slot, index) => {
         const { text, active, action } = this._scheduleCommand(d, slot);
         const description = `${SCHEDULE_ACTIONS[action].label} · ${text}`;
-        return `<button class="slot ${active ? "running" : ""} ${slot.binding ? "" : "advisory"}" data-action="slot" data-index="${index}" data-schedule-action="${action}" aria-label="${this._escape(d.name + ', ' + this._time(slot.start) + ', ' + description + (slot.binding ? ', published prices' : ', estimated prices'))}" title="${this._escape(description)}"></button>`;
-      }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Published prices" : "Estimated prices"}${this._schedulePrices(selected)}</h3><ul>${scheduledDevices.map(d => `<li>${this._escape(d.name)}: ${this._escape(this._scheduleCommand(d, selected).text)}${this._scheduleCommandDetail(d, selected)}</li>`).join("")}</ul></div>` : ""}` : `<p>${slots.length ? "No Planned devices match these filters." : "No actionable schedule is available. Details are in Status."}</p>`}
-      <p>Slots show planned requests. Battery slots are forecasts; the current settings above reflect live measurements and conversion losses. Verification devices show hypothetical requests. Targets do not prove that heat, charging or power was delivered.</p></div>
+        return `<button class="slot ${active ? "running" : ""} ${slot.binding ? "" : "advisory"} ${index === selectedIndex ? "selected" : ""}" data-action="slot" data-index="${index}" data-schedule-action="${action}" aria-pressed="${index === selectedIndex}" aria-label="${this._escape(d.name + ', ' + this._time(slot.start) + ', ' + description + (slot.binding ? ', published prices' : ', estimated prices'))}" title="${this._escape(description)}"></button>`;
+      }).join("")}${position >= 0 && position <= 100 ? `<span class="now-line" style="left:${position}%"></span>` : ""}</div></div>`).join("")}</div></div>${selected ? `<div aria-live="polite"><h3>${this._time(selected.start)} · ${selected.binding ? "Published prices" : "Estimated prices"}${this._schedulePrices(selected)}${this._scheduleDemand(selected)}</h3><ul>${scheduledDevices.map(d => `<li>${this._escape(d.name)}: Plan: ${this._escape(this._scheduleCommand(d, selected).text)}${this._scheduleCommandDetail(d, selected)}</li>`).join("")}</ul></div>` : ""}` : `<p>${slots.length ? "No Planned devices match these filters." : "No actionable schedule is available. Details are in Status."}</p>`}
+      <p>Details show the plan first and add a differing controller decision. Battery requests follow live demand within their limits. Controller tests are hypothetical. Requests do not prove delivery.</p></div>
       <div class="card"><h2>Controller diagnostics</h2><p>Download every Included device, with its current mode, configuration, readings, plan and controller status. Retained runtime evaluations and real service calls are separate from simulated verification commands and coverage. Verification does not prove physical response. The file contains local entity IDs and configuration. Observations are sampled about once a minute in every mode, with up to 720 samples retained. Energy-counter differences are labelled as interval averages, with missing or stale readings identified. Current-session checks and coverage are summarised separately from older evidence. Repeated checks are grouped; up to 2,000 groups of each kind are retained. Battery execution includes its complete accounting journal and its latest 8,192 execution traces. Downloads are gzip-compressed JSON.</p><button class="secondary" data-action="verification">Download controller diagnostics</button></div>
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
       <p class="muted">Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
@@ -1382,6 +1448,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       ${Object.entries(SCHEDULE_ACTIONS).map(([action, { colour }]) => `[data-schedule-action="${action}"] { --schedule-action-colour:${colour}; }`).join("\n")}
       .slot.running { background-color:var(--schedule-action-colour); }
       .slot.advisory { background-image:repeating-linear-gradient(45deg,transparent,transparent 2px,#4a556855 2px,#4a556855 4px); }
+      .slot.selected { box-shadow:inset 0 0 0 2px var(--primary-color); z-index:1; }
       .schedule-legend { display:flex; flex-wrap:wrap; gap:8px 16px; margin:12px 0; font-size:13px; }
       .schedule-legend > span { display:inline-flex; align-items:center; gap:6px; }
       .action-swatch { width:12px; height:12px; border-radius:3px; background:var(--schedule-action-colour); border:1px solid var(--divider-color); }

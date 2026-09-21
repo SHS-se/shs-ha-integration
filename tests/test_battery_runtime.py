@@ -125,7 +125,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 # Native readback follows the write; household reports are still fresh.
                 r.now+=1000
                 await r.runtime.refresh();await r.runtime.host.idle()
-                self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+                status=r.runtime.snapshot()
+                self.assertEqual(status['state'],'controlling',status)
+                self.assertEqual(status['decision']['operation'],status['assessment']['operation'])
+                self.assertEqual(status['decision']['charge_limit_w'],status['requested_settings']['charge_limit_w'])
+                self.assertEqual(status['decision']['discharge_limit_w'],status['requested_settings']['discharge_limit_w'])
                 self.assertEqual(r.rows['select.mode']['state'],'Command Charging (PV First)')
                 self.assertEqual(r.calls,initial_calls)
                 await r.advance(5000)
