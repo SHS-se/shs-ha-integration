@@ -1220,9 +1220,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _scheduleDemand(slot) {
-    if (!Number.isFinite(slot.load_w) || !Number.isFinite(slot.duration_hours) || slot.load_w < 0 || slot.duration_hours <= 0) return "";
-    const kwh = Math.round(slot.load_w * slot.duration_hours) / 1000;
-    return ` · Expected house demand: ${kwh.toFixed(1)}kWh`;
+    if (!Number.isFinite(slot.load_w) || slot.load_w < 0) return "";
+    return ` · Expected house demand: ${(slot.load_w / 1000).toFixed(2)} kW`;
   }
 
   _renderSchedule() {

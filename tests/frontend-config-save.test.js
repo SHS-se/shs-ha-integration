@@ -953,13 +953,26 @@ test('first quarter is selected by default and its heading includes prices and e
   panel._selectedSlot = null;
   Object.assign(slot, { shadow_import_sek_per_kwh: 1.23456, shadow_export_sek_per_kwh: -0.004 });
   let html = panel._renderSchedule();
-  assert.match(html, /<h3>[^<]* · Published prices: Buy 1\.23 SEK\/kWh, Sell 0\.00 SEK\/kWh · Expected house demand: 2\.7kWh<\/h3>/);
+  assert.match(html, /<h3>[^<]* · Published prices: Buy 1\.23 SEK\/kWh, Sell 0\.00 SEK\/kWh · Expected house demand: 10\.80 kW<\/h3>/);
   assert.match(html, /class="slot [^"]*selected"[^>]*aria-pressed="true"/);
   assert.match(html, /Living heater: Plan: No instruction/);
   Object.assign(slot, { binding: false, shadow_export_sek_per_kwh: null });
-  assert.match(panel._renderSchedule(), /<h3>[^<]* · Estimated prices: Buy 1\.23 SEK\/kWh · Expected house demand: 2\.7kWh<\/h3>/);
+  assert.match(panel._renderSchedule(), /<h3>[^<]* · Estimated prices: Buy 1\.23 SEK\/kWh · Expected house demand: 10\.80 kW<\/h3>/);
   delete slot.shadow_import_sek_per_kwh;
-  assert.match(panel._renderSchedule(), /<h3>[^<]* · Estimated prices · Expected house demand: 2\.7kWh<\/h3>/);
+  assert.match(panel._renderSchedule(), /<h3>[^<]* · Estimated prices · Expected house demand: 10\.80 kW<\/h3>/);
+});
+
+test('expected house demand uses the plan total instead of base load or partial-slot energy', () => {
+  const panel = scheduleFilterPanel();
+  Object.assign(panel._data.timeline.slots[0], {
+    duration_hours: 0.12280722222222222,
+    base_w: 1101.06,
+    load_w: 1133.32,
+    device_loads_w: { 'sensor.hot_water_energy': 32.26 },
+  });
+  const html = panel._renderSchedule();
+  assert.match(html, /Expected house demand: 1\.13 kW/);
+  assert.doesNotMatch(html, /Expected house demand: (?:1\.10 kW|0\.1kWh)/);
 });
 
 test('schedule combines search, room, category and mode across timeline, details and cards', () => {

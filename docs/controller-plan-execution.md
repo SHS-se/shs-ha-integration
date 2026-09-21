@@ -392,16 +392,17 @@ longer feasible. A credit is not itself an error, and a command is not completio
 
 The Schedule view is plan-first for every controller. It selects the first
 actionable quarter on initial load. The selected-quarter heading shows the
-expected total house demand in kWh, calculated from that slot's planned
-`load_w` and exact `duration_hours`; a partial first quarter MUST NOT be presented
-as a full 15-minute interval. Each device detail starts with **Plan** and its
-planned request. Append a compact **Controller** decision only for the current
-quarter and only when the latest decision differs from that request. Apply the
-same normalized comparison to battery, pool, EV and individual-device
-controllers. Label Verification results **Controller test**, because they are
-hypothetical. Native mappings, live limits and measurements MUST NOT be presented
-as if they were fields copied from the plan, and a requested setting remains
-distinct from delivered energy.
+expected total house demand in kW, sourced directly from that slot's planned
+`load_w`. This is the composed demand used by the plan: base load plus all
+scheduled device loads. The UI MUST NOT substitute `base_w` or convert the power
+to partial-slot energy using `duration_hours`. Each device detail starts with
+**Plan** and its planned request. Append a compact **Controller** decision only
+for the current quarter and only when the latest decision differs from that
+request. Apply the same normalized comparison to battery, pool, EV and
+individual-device controllers. Label Verification results **Controller test**,
+because they are hypothetical. Native mappings, live limits and measurements
+MUST NOT be presented as if they were fields copied from the plan, and a
+requested setting remains distinct from delivered energy.
 
 Replace the selected-continuation outlook with the accepted plan plus explicit
 recovery overlays and their provenance. Do not present an independent controller
