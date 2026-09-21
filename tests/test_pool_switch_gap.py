@@ -118,7 +118,7 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
         self.assertEqual(self.calls, [('switch.pool', 'on')])
 
-    async def test_an_unclean_restart_hands_back_once_the_switch_reports(self):
+    async def test_a_restart_with_journalled_ownership_resumes_without_a_flip(self):
         await self.controller.async_start()
         journal = self.store.saved
         restarted = ScheduledController(self.hass, self.coordinator, self.store, self.controller.options)
@@ -129,11 +129,12 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
         await restarted.async_start()
         status = restarted.status['pool']
         self.assertEqual(status['state'], 'pending', status)
-        self.assertIn('hand', status['reason'])
+        self.assertIn('resume the plan', status['reason'])
         self.switch('on')
         await restarted.async_tick()
-        self.assertEqual(self.calls, [('switch.pool', 'off'), ('switch.pool', 'on')])
+        self.assertEqual(self.calls, [], 'the heater kept its setting through the restart')
         self.assertEqual(restarted.status['pool']['state'], 'scheduled')
+        self.assertEqual(restarted.records['pool']['originals'], {'switch.pool': 'off'})
 
 
 class VerificationTests(unittest.IsolatedAsyncioTestCase):

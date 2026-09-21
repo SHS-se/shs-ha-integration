@@ -26,7 +26,7 @@ physical heat. A successful switch command does not prove heat delivery.
 request, sources, fresh_until = controller.pool_request(options, slot)
 await controller.capture("pool", options, [request["control_entity"]])
 await controller.command(request["control_entity"], request["requested_switch_state"])
-# On leaving control:
+# Only when the select leaves Controlling:
 await controller.restore("pool")
 ```
 
@@ -38,10 +38,13 @@ The existing controller lock and journal remain the sole command owner.
 
 Verification records proposed switch commands and simulated handover without
 writing or capturing real ownership. Entering Controlling captures the actual
-switch state before issuing a command. Leaving Controlling, changing the mapping,
-or losing plan authority restores that captured state: initially on returns to on;
-initially off returns to off. A mapping change restores the old entity before
-acquiring the new one. Restarts restore through the saved journal.
+switch state before issuing a command. Only leaving Controlling on the select
+restores that captured state: initially on returns to on; initially off returns
+to off. A restart, an unavailable switch or water reading, a lost plan and a fault
+all hold the switch where SHS last set it; SHS resumes the plan as soon as the
+reading returns (see [control continuity](control-continuity.md)). A changed switch
+mapping is refused until the select goes to Verification, which restores the old
+entity, and back to Controlling, which captures the new one.
 
 Old temperature-controller records are retired without restoring their number
 values. Any recorded on/off permission is restored, and the saved temperature

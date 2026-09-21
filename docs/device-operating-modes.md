@@ -47,7 +47,10 @@ Changing participation requests a fresh plan. Moving between planning,
 verification and controlling does not reload the integration or reset unrelated
 controllers. Leaving controlling first restores settings still owned by SHS;
 that handover can make real service calls and can remain pending on an error.
-Verification begins only after the previous ownership has been released.
+Verification begins only after the previous ownership has been released. Leaving
+Controlling on the select is the only release: restarts, unavailable or stale
+readings, missing plans and faults hold the last setting SHS sent (see
+[control continuity](control-continuity.md)).
 
 ## Warnings and correction
 
@@ -100,8 +103,8 @@ The schema-4 export separates current state, decisions and sampled measurements:
 - `evaluations`: actual controller evaluations, with mode, trigger, plan/slot,
   observations, outcome, ownership before/after, failure latch and exact real
   service attempts. Commands distinguish `called`, transport acceptance or
-  ambiguity, and setting readback. Real startup/shutdown and mode-exit handover
-  commands have `phase: handover`, even when the newly selected mode is passive.
+  ambiguity, and setting readback. Real mode-exit handover commands have
+  `phase: handover`, even when the newly selected mode is passive; restarts send none.
 - `attempts` and `coverage`: simulated Control verification command generation
   and its operation coverage. Hypothetical handover remains labelled separately;
   neither simulated commands nor successful register readback prove delivered
@@ -184,9 +187,9 @@ relay timing, or exclusive ownership against external automations. In particular
   behaviour after a shifted band. The temperature controls' lower limits can prevent full deferral.
 - Freshness checks still apply, including battery direction observations. A
   derived binary sensor that only reports on changes can become stale.
-- Restart, disable, expiry and mapping-change handovers rely on a running HA
-  process and reachable devices. There is no independent hardware watchdog in
-  this integration to release settings while HA is down.
+- A release (leaving Controlling on the select) relies on a running HA process
+  and a reachable device. Restarts, expiry and mapping changes release nothing,
+  so while HA is down every device keeps the last setting SHS sent.
 
 Review a representative file against its plan before selecting controlling,
 then commission physical response and handover on the installation. Keep the

@@ -20,7 +20,8 @@ plan. Mode and planning configuration changes request a new forecast while
 retaining the existing schedule for execution under current local permissions
 and equipment checks. Invalid or non-ready replacements are refused before
 replacing the cache. Expired schedules remain inspectable and never execute
-beyond their end. The [plan continuity and persistent fallback requirement](plan-continuity.md)
+beyond their end; devices then hold the last setting SHS sent until a new plan
+arrives or their select releases them ([control continuity](control-continuity.md)). The [plan continuity and persistent fallback requirement](plan-continuity.md)
 describes the remaining work needed for continuous operation without forecast slots.
 
 One startup exchange follows the existing 60-second wait for HA entity providers.

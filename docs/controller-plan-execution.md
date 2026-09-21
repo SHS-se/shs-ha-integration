@@ -59,6 +59,9 @@ The following requirements remain authoritative within their stated scope:
   proportional solar attribution remain explicit.
 - [Configuration error UX](configuration-error-ux.md): all known setup errors
   identify their fields and link to the actual editors.
+- [Control continuity](control-continuity.md): only the execution-mode select
+  releases control. Restarts, unavailable or stale readings, missing plans and
+  faults hold the last setting SHS sent.
 - Existing physical limits, native routing, command durability, single SHS writer,
   authority changes, transport reconciliation and approved release semantics.
   These mechanisms enforce a request; they do not choose its economic purpose.
@@ -334,7 +337,9 @@ contract against current permissions and state. It MUST NOT replay an elapsed
 slot, count snapshot-to-arrival energy twice, or discard that interval's variance.
 If the intervening change cannot be accommodated by its instructions, retain the
 applicable accepted contract and request an updated plan; no new permission is
-inferred. Expired or revoked authority follows the existing release protocol.
+inferred. Revoked authority, meaning the execution-mode select has left
+Controlling, follows the existing release protocol. An expired plan holds the
+last setting instead of releasing it.
 
 For comparable stored-energy references at the same activation instant:
 
@@ -361,8 +366,9 @@ Persist the accepted reference, objective dispositions, actuals cursors, outstan
 deviations, recovery progress and pending command effects together with their
 identities. Restart restores them without creating new energy, clearing debt,
 extending validity or resetting deadlines. Reconcile actual equipment state before
-new writes. Continue compatible authorised execution or follow the existing
-release protocol; do not add a parallel legacy economic-controller fallback.
+new writes. A restart never releases: continue compatible authorised execution,
+and hold the last setting when none is available. Do not add a parallel legacy
+economic-controller fallback.
 
 ## 7. Diagnostics and user-facing evidence
 

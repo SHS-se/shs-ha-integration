@@ -64,17 +64,6 @@ def planning_devices(devices, options):
     return deepcopy([device for device in devices if device["key"] not in excluded])
 
 
-def ownership_configuration(options, device):
-    """Unrelated mode choices do not release an existing device's ownership."""
-    result = deepcopy(options)
-    result["device_modes"] = {"owner": device_mode(options, device)}
-    result.pop("planning_mode", None)
-    result.pop("configuration_reviewed_at", None)
-    for system in ("battery", "pool", "ev"):
-        result.pop(system + "_control_enabled", None)
-    return result
-
-
 def operating_mode_identity(options, model_owners=()):
     """Include modeled monitoring owners and all explicit execution choices."""
     configured = options.get("device_modes", {})

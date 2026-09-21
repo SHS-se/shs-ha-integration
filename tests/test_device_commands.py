@@ -54,9 +54,11 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_expiry_and_schema_six_do_not_infer_commands_from_watts(self):
         await self.controller.async_start()
+        self.calls.clear()
         self.coordinator.optimisation_plan['schema_version'] = 6
         await self.controller.async_tick()
-        self.assertEqual(self.states['switch.heater'].state, 'on')
+        self.assertEqual(self.calls, [], 'no command is inferred, and none is handed back')
+        self.assertEqual(self.states['switch.heater'].state, 'off')
         self.assertEqual(self.controller.status['device:heater']['state'], 'idle')
 
     async def test_conflicting_owners_never_capture_or_write(self):
@@ -66,12 +68,13 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.controller.status['device:heater']['state'], 'fault')
 
-    async def test_maximum_inhibit_restores(self):
+    async def test_maximum_inhibit_permits_while_keeping_control(self):
         await self.controller.async_start()
         self.controller.records['device:heater']['inhibited_since'] = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertEqual(self.controller.status['device:heater']['state'], 'fault')
+        self.assertEqual(self.controller.status['device:heater']['state'], 'limited')
+        self.assertIn('device:heater', self.controller.records)
 
     async def test_setpoint_and_mapping_edit_restore_original_target(self):
         mapping = self.options['device_control_mappings']['heater']
@@ -86,8 +89,13 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
                          {'kind': 'setpoint', 'target_c': [21.5]})
         mapping['setpoint_entity_id'] = 'number.missing'
         await self.controller.async_tick()
-        self.assertEqual(float(self.states['number.target'].state), 20)
+        # A new target entity waits for the select; the old one keeps its setting meanwhile.
+        self.assertEqual(float(self.states['number.target'].state), 21.5)
         self.assertEqual(self.controller.status['device:heater']['state'], 'fault')
+        self.assertIn('Verification', self.controller.status['device:heater']['reason'])
+        self.options['device_modes']['heater'] = 'monitoring'
+        await self.controller.async_tick()
+        self.assertEqual(float(self.states['number.target'].state), 20)
 
     async def test_completed_service_without_state_update_is_commanded_not_measured(self):
         self.hass.services.async_call = AsyncMock()
@@ -108,11 +116,12 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
                 raise TimeoutError('service outcome unknown')
         self.hass.services.async_call = fail_after_effect
         await self.controller.async_start()
-        self.assertEqual(self.calls, [('switch.heater', 'off'), ('switch.heater', 'on')])
+        # The effect is held, not undone: a fault never hands the device back.
+        self.assertEqual(self.calls, [('switch.heater', 'off')])
         self.assertEqual(self.controller.status['device:heater']['state'], 'fault')
         self.assertIn('service outcome unknown', self.controller.status['device:heater']['reason'])
-        self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertNotIn('device:heater', self.controller.records)
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+        self.assertIn('device:heater', self.controller.records)
 
     async def test_bad_or_missing_device_command_rejected(self):
         models = self.coordinator.optimisation_plan['device_models']
@@ -160,11 +169,13 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.states['climate.heater'].attributes['temperature'],20)
 
-    async def test_lost_ownership_inventory_hands_back_control(self):
+    async def test_lost_ownership_inventory_holds_control(self):
         await self.controller.async_start()
         self.coordinator.async_cached_device_configuration.side_effect = ValueError('bad cache')
         await self.controller.async_tick()
-        self.assertEqual(self.states['switch.heater'].state,'on')
+        self.assertEqual(self.states['switch.heater'].state,'off')
+        self.assertIn('could not be read', self.controller.status['device:heater']['reason'])
+        self.assertIn('device:heater', self.controller.records)
 
     async def test_server_generated_schema_seven_fixture_validates_in_ha(self):
         import json
@@ -184,11 +195,16 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.heater'].state, 'on')
         self.assertFalse(self.controller.records)
 
-    async def test_stopping_control_does_not_require_a_live_actuator(self):
+    async def test_a_release_waits_for_a_missing_actuator_instead_of_marking_it_changed(self):
         await self.controller.async_start()
         del self.states['switch.heater']
         self.options['device_modes']['heater'] = 'monitoring'
         await self.controller.async_tick()
         self.assertFalse(self.controller.eligible('device:heater', self.options))
+        self.assertTrue(self.controller.records['device:heater']['restoration_pending'])
+        self.assertNotIn('device:heater', self.controller.overrides)
+        self.assertEqual(self.controller.status['device:heater']['state'], 'pending')
+        self.states['switch.heater'] = State('off')
+        await self.controller.async_tick()
         self.assertFalse(self.controller.records)
-        self.assertIn('device:heater', self.controller.overrides)
+        self.assertEqual(self.states['switch.heater'].state, 'on')

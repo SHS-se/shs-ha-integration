@@ -32,6 +32,9 @@ Verification means proposed optimization commands are logged, not sent. Leaving
 Controlling first fences new optimization writes and follows the existing approved
 release protocol. Pending release and effects of already-issued commands remain
 explicit; a selector change cannot retroactively turn those effects into simulation.
+Leaving Controlling is the only release: restarts, unavailable or stale readings,
+missing plans and faults hold the last setting SHS sent
+([control continuity](control-continuity.md)).
 
 Default inclusion for newly discovered equipment is not decided here. New Planned
 admission always defaults to Verification; a dormant controlling grant must never

@@ -1,7 +1,9 @@
 # Execution mode entities and controller details
 
 The integration publishes one configuration `select` for each Planned, Included
-device shown in the Schedule tab, including the house battery. Each is named
+device shown in the Schedule tab, including the house battery. A pool or vehicle
+member that runs with its system's owner, such as a pool pump switched with the
+heater, shares that owner's select and has none of its own. Each is named
 “<device name> execution mode” and belongs to the existing SHS integration device.
 The two options are displayed as **Verification** and **Controlling**.
 
@@ -10,6 +12,13 @@ panel. Controlling is rejected with the same explanation when setup, website
 choices or the current plan do not permit it. Switching an admitted device back
 to Verification remains possible when planning is unavailable. Changing mode
 requests a fresh plan and invokes the existing controller handover path.
+
+The select is the only release. Setting Verification hands the device back to the
+settings captured when SHS took control. Restarts, integration updates, unavailable
+or stale entities, missing plans and faults never do: the device keeps the last
+setting SHS sent until the select says otherwise. See
+[control continuity](control-continuity.md), which also lists the battery runtime's
+remaining exceptions.
 
 Automations use Home Assistant's `select.select_option` action. Select the actual
 entity created for your device; the ID below is an example:

@@ -260,13 +260,14 @@ Reactive surplus allocation and import shedding are not implemented.
   within 100 W or 10%, whichever is larger. Command and measurement signs are
   configured separately. Disable, expiry, source/authority loss, startup and
   orderly unload write zero then the configured baseline mode (default:
-  Maximum Self Consumption). Baseline mode acknowledgement and observed power
+  Maximum Self Consumption); the battery runtime does not yet follow
+  [control continuity](docs/control-continuity.md). Baseline mode acknowledgement and observed power
   are distinct; a register readback alone cannot prove physical handover.
 - **EV:** uses the planned device's reviewed current mapping and requires an
   explicit charging start/stop switch. Positive slots set supported amperes
   before starting; zero slots stop charging without writing an invalid 0 A.
-  Cable state and live SOC/charge target gate charging. Handover restores the
-  current and charging-switch state captured before execution.
+  Cable state and live SOC/charge target gate charging. Leaving Controlling
+  restores the current and charging-switch state captured before execution.
 - **Pool:** requires the mapped Celsius start/stop band and reviewed bounds.
   The installed band is captured before the first write. Heat slots use that
   band; off slots lower it below measured water temperature while preserving
@@ -277,16 +278,20 @@ Reactive surplus allocation and import shedding are not implemented.
   accepted band is not reported as delivered heat.
 
 Each device has an optional **manual override** entity: on releases scheduled
-control and suspends requests until it returns off. Unknown overrides also
-prevent execution. Source measurements must be available and reported within
+control and suspends requests until it returns off. An unknown override holds
+the device without releasing it. Source measurements must be available and reported within
 120 seconds. All commands are bounded by entity limits and supported steps.
 
 Execution runs at quarter boundaries, after plan updates, and every five
 seconds to check guards and expiry. Advisory quarters have no command authority.
-A per-device fault releases that device and is latched until a new plan, slot or
-configuration changes; it does not stop the other devices. Failed restoration
-is retained and retried. Ownership and original settings are persisted before
-writes so restart recovery uses the old entities even after mappings change.
+A per-device fault holds that device at the last setting SHS sent and is latched
+until a new plan, slot or configuration changes; it does not stop the other
+devices. Only the device's execution-mode select releases it: restarts, updates,
+unavailable or stale readings and missing plans never do (see
+[control continuity](docs/control-continuity.md)). A handover the select asks for
+while the device is unavailable is retained and completes when it returns.
+Ownership and original settings are persisted before writes, so a restart resumes
+control and a later release restores the original entities.
 
 The **Battery controller**, **EV controller** and **Pool controller** sensors
 show requests, reasons and faults. Battery `confirmed` means measured power
@@ -297,8 +302,9 @@ instructions, overrides and pending restoration.
 
 Before enabling a device, disable its previous automation/Node-RED command owner
 and review its local mappings. This release does not change live enable switches
-or commission hardware. An abrupt HA/machine outage cannot run restoration;
-the inverter's independent watchdog behaviour still requires physical testing.
+or commission hardware. Restarts and outages run no restoration: devices keep the
+last setting SHS sent. The inverter's independent watchdog behaviour still
+requires physical testing.
 
 ## Notes
 

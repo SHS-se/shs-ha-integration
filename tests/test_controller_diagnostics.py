@@ -119,21 +119,19 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(row['ownership_after'])
         self.assertEqual(self.journal.attempts, [])
 
-    async def test_shutdown_and_startup_handover_are_recorded(self):
+    async def test_restarts_record_no_handover_and_resume_ownership(self):
         self.options['device_modes']['$pool'] = 'controlling'
         self.slot['pool_w'] = 0
         await self.controller.async_start()
         ownership = deepcopy(self.store.saved)
         await self.controller.async_stop()
-        row = next(row for row in reversed(self.journal.evaluations) if row['device'] == 'pool')
-        self.assertEqual(row['trigger'], 'shutdown_handover')
-        self.assertEqual({c['phase'] for c in row['commands']}, {'handover'})
-        self.store.saved = ownership
+        self.assertEqual(self.store.saved, ownership, 'stopping leaves ownership journalled')
         controller = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), self.journal)
         await controller.async_start()
-        row = next(row for row in self.journal.evaluations if row['trigger'] == 'startup_handover')
-        self.assertEqual({c['phase'] for c in row['commands']}, {'handover'})
-        self.assertIsNone(row['ownership_after'])
+        triggers = {row['trigger'] for row in self.journal.evaluations}
+        self.assertFalse(triggers & {'shutdown_handover', 'startup_handover'})
+        self.assertFalse(any(c['phase'] == 'handover' for row in self.journal.evaluations for c in row['commands']))
+        self.assertEqual(controller.records['pool']['originals'], ownership['records']['pool']['originals'])
 
     async def test_export_filters_excluded_history_without_destroying_retained_evidence(self):
         self.options['device_modes']['$pool'] = 'control_verification'

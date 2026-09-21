@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 import logging
 from math import isfinite
@@ -18,7 +17,7 @@ from time import perf_counter
 
 try:
     from .api_contract import INTEGRATION_VERSION
-    from .operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
+    from .operating_modes import device_mode, EXECUTING_MODES
     from .verification import OPERATIONS, operation_name, evaluation_record, observation
     from .controller_metrics import ControllerMetrics, fingerprint, record_time
     from .battery_commands import validate_battery_command, battery_mode_key
@@ -27,7 +26,7 @@ try:
     from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
 except ImportError:  # Pure executor tests, without importing Home Assistant.
     from api_contract import INTEGRATION_VERSION
-    from operating_modes import device_mode, EXECUTING_MODES, ownership_configuration
+    from operating_modes import device_mode, EXECUTING_MODES
     from verification import OPERATIONS, operation_name, evaluation_record, observation
     from controller_metrics import ControllerMetrics, fingerprint, record_time
     from battery_commands import validate_battery_command, battery_mode_key
@@ -42,34 +41,30 @@ CONFIRM_SECONDS = 15
 BATTERY_MAX_AGE_SECONDS = 120
 POOL_MAX_AGE_SECONDS = 15 * 60
 EV_MAX_AGE_SECONDS = 15 * 60
-POOL_GAP_SECONDS = 15
-# HA restarts and Nibe reconnects hide the pool switch for about a minute.
-POOL_SWITCH_GRACE_SECONDS = 5 * 60
+# Restarts and reconnects hide an entity for about a minute; longer needs attention.
+OBSERVATION_GRACE_SECONDS = 5 * 60
+EXTERNAL_CHANGE = "Actuator changed outside SHS; set this device to Verification and back to Controlling to resume"
+INHIBIT_LIMIT = "Paused for its maximum of {:g} quarters, so it may run for a quarter before the plan can pause it again"
 
 
 class ControlObservationError(ValueError):
     """An unusable observation with a concrete inspection destination."""
-    def __init__(self, message, entity, next_step, *, unavailable=False):
+    def __init__(self, message, entity, next_step, *, unavailable=False, stale=False):
         super().__init__(message)
         self.entity = entity
         self.unavailable = unavailable
+        self.stale = stale
         self.details = {"next_step": next_step,
                         "fix": {"kind": "entity", "entity_id": entity} if entity else {"kind": "device"}}
+
+    @property
+    def transient(self):
+        """A reading interrupted by a restart or reconnect, which returns by itself."""
+        return self.unavailable or self.stale
 
 
 class ActuatorUnavailableError(ControlObservationError):
     """The entity SHS writes cannot be reached, so nothing can be sent or handed back yet."""
-
-
-@dataclass
-class PoolObservation:
-    """Evidence for briefly holding an accepted switch state through a reading gap."""
-    configuration: dict
-    slot_start: str
-    heating: bool
-    sources: dict[str, str | None]
-    fresh_until: datetime
-    gap_until: datetime | None = None
 
 
 class PlanChangedError(ValueError):
@@ -113,6 +108,7 @@ def checked_state(state, entity, max_age=None):
                 entity,
                 f"Check that this sensor and its source integration report at least every {max_age} seconds, "
                 "including while its value is unchanged.",
+                stale=True,
             )
     return state
 
@@ -163,11 +159,10 @@ class ScheduledController:
         self.overrides = {}
         self.requested_types = {}
         self.requested_systems = set()
+        self.requested_error = None
         self.metrics = ControllerMetrics(INTEGRATION_VERSION)
         self.scheduler = None
         self.observation_changed = asyncio.Event()
-        self.pool_observation: PoolObservation | None = None
-        self.write_attempted = False
         self.diagnostic_evaluation = None
         self.diagnostics_error = None
         self.diagnostics_failed_evaluations = 0
@@ -249,26 +244,61 @@ class ScheduledController:
             raise ValueError(f"{entity} must report SOC as % or a fraction")
         return value
 
-    def eligible(self, device, options):
+    def inactive_status(self, device, options):
+        """An explicit setting that takes this device out of SHS control, or None.
+
+        These are the only reasons SHS hands a device back: its execution-mode
+        select, the website or local choices that remove it from that select
+        (demotion, exclusion, a disabled system), a manual override the user
+        configured for the purpose, and an external change that stays latched
+        until the select leaves Controlling. An override entity that cannot be
+        read raises instead, so it holds rather than releases.
+        """
+        mode = device_mode(options, device)
+        if device in self.overrides:
+            return {"state": "overridden", "reason": self.overrides[device]}
+        if mode not in EXECUTING_MODES:
+            return {"state": mode, "reason": "Observing only; no SHS commands" if mode == "monitoring" else
+                    "Planning only; no SHS commands or command verification"}
+        known = self.requested_error is None
         if device.startswith("device:"):
             key = device.removeprefix("device:")
-            if key in options.get("excluded_device_readings", []):
-                return False
             mapping = options.get("device_control_mappings", {}).get(key, {})
-            if self.requested_types.get(key) != mapping.get("control_type") or device_mode(options, device) not in EXECUTING_MODES or device in self.overrides:
-                return False
+            if key in options.get("excluded_device_readings", []):
+                return {"state": "disabled", "reason": "Device readings are explicitly excluded"}
+            if known and self.requested_types.get(key) != mapping.get("control_type"):
+                return {"state": "disabled", "reason": "Device mapping does not match the requested control method"}
             override = mapping.get("control_override_entity")
-            return not override or self.state(override).state == "off"
-        if "$" + device in options.get("excluded_device_readings", []) or device not in self.requested_systems:
-            return False
-        if device_mode(options, device) not in EXECUTING_MODES:
-            return False
-        if not options.get(f"{device}_enabled", True):
-            return False
-        override = options.get(f"{device}_control_override_entity")
+        else:
+            if "$" + device in options.get("excluded_device_readings", []):
+                return {"state": "disabled", "reason": "Device is excluded from SHS"}
+            if known and device not in self.requested_systems:
+                return {"state": "disabled", "reason": "Device is not included in the household plan"}
+            if not options.get(f"{device}_enabled", True):
+                return {"state": "disabled", "reason": "Device is disabled in SHS configuration"}
+            override = options.get(f"{device}_control_override_entity")
         if override and self.state(override).state != "off":
+            return {"state": "overridden", "reason": "Configured manual override is active"}
+        return None
+
+    def hold_reason(self, device, options):
+        """Website choices that cannot be read hold the device; they never release it."""
+        if self.requested_error is not None:
+            return "The website's current choices could not be read"
+        return None
+
+    def eligible(self, device, options):
+        return self.inactive_status(device, options) is None and self.hold_reason(device, options) is None
+
+    def eligible_now(self, device, options):
+        try:
+            return self.eligible(device, options)
+        except ValueError:
             return False
-        return True
+
+    def holding(self, device, reason):
+        """Say that the device keeps the last setting SHS sent, when there is one."""
+        return f"{reason}; holding the last setting SHS sent" if device in self.records else reason
 
     def check_authority(self):
         if self.restoring:
@@ -383,7 +413,6 @@ class ScheduledController:
                     if self.scheduler is not None:
                         self.scheduler.device_deadline(self.device,"battery_headroom",datetime.now(timezone.utc)+timedelta(seconds=5))
                     raise ControlDeadlineError("Waiting for battery charging to release grid capacity")
-                self.write_attempted = True
                 self.command_times[entity] = datetime.now(timezone.utc)
                 command.update(called=True, transport="ambiguous")
                 await asyncio.wait_for(
@@ -458,9 +487,6 @@ class ScheduledController:
 
     async def restore(self, device):
         self.device = device
-        if device == "pool" and not self.verifying:
-            self.pool_observation = None
-            self.device_deadline("temperature_gap", None)
         record = self.records.get(device)
         if record is None:
             return
@@ -472,11 +498,15 @@ class ScheduledController:
             if device.startswith("device:"):
                 changed = set(record.get("externally_changed", []))
                 for entity, expected in record.get("last_commands", {}).items():
-                    if not self.verifying and not self.matches(entity, expected) and not self.matches(entity, original[entity]):
+                    if self.verifying:
+                        continue
+                    # Unavailable is unknown, never changed: the handover waits for it.
+                    self.actuator_state(entity)
+                    if not self.matches(entity, expected) and not self.matches(entity, original[entity]):
                         changed.add(entity)
                 if changed:
                     record["externally_changed"] = sorted(changed)
-                    self.overrides[device] = "Actuator changed externally; switch local control off and on to resume"
+                    self.overrides[device] = EXTERNAL_CHANGE
                     await self.save()
                 mapping = options["device_control_mappings"][device.removeprefix("device:")]
                 if mapping["control_type"] == "switch_schedule":
@@ -561,14 +591,14 @@ class ScheduledController:
         if len(targets) != 1:
             raise ValueError("EV requires one planned, reviewed current control")
         entity, low, high = targets.pop()
-        if self.state(entity).attributes.get("unit_of_measurement") != "A":
+        if self.actuator_state(entity).attributes.get("unit_of_measurement") != "A":
             raise ValueError("EV current control must use amperes")
         return entity, finite(low), finite(high)
 
     async def execute_ev(self, options, slot):
         entity, low, high = self.ev_mapping(options)
         switch = options.get("ev_charge_switch_entity")
-        self.state(switch)
+        self.actuator_state(switch)
         connected = self.state(options.get("ev_connected_entity"), max_age=EV_MAX_AGE_SECONDS).state
         if connected not in ("on", "off", "true", "false", "connected", "disconnected"):
             raise ValueError("EV connection state is not a supported boolean")
@@ -579,6 +609,7 @@ class ScheduledController:
             raise ValueError("planned EV current exceeds reviewed bounds")
         if not finite(slot["ev_min_current_a"]) <= current <= finite(slot["ev_max_current_a"]):
             raise ValueError("planned EV current exceeds its slot envelope")
+        self.check_targets("ev", [entity, switch])
         await self.capture("ev", options, [entity, switch])
         if current == 0 or connected in ("off", "false", "disconnected") or soc >= target_soc:
             reason = ("plan requests charging off" if current == 0 else
@@ -666,10 +697,7 @@ class ScheduledController:
                              "stop_temperature_c": target}}, sources, fresh_until
 
     async def execute_pool(self, options, slot):
-        request, sources, fresh_until = self.pool_request(options, slot)
-        if self.scheduler is not None:
-            # The switch reports again, so no gap is left to escalate.
-            self.scheduler.device_deadline("pool", "switch_gap", None)
+        request, _, _ = self.pool_request(options, slot)
         entity = request["control_entity"]
         # Refuse shared targets before either controller can acquire ownership.
         for key, mapping in options.get("device_control_mappings", {}).items():
@@ -677,90 +705,88 @@ class ScheduledController:
                 continue
             if device_mode(options, "device:" + key) in EXECUTING_MODES and entity in actuator_targets(mapping):
                 raise ValueError("another enabled device shares the pool actuator")
+        self.check_targets("pool", [entity])
         await self.capture("pool", options, [entity])
         await self.command(entity, request["requested_switch_state"])
-        if not self.verifying:
-            self.pool_observation = PoolObservation(
-                ownership_configuration(options, "pool"), slot["start"], finite(slot["pool_w"]) > 0, sources, fresh_until)
-            self.device_deadline("temperature_gap", None)
         return {"state": "scheduled", **request}
 
-    def hold_pool_gap(self, error, options, slot, plan):
-        """Suspend writes briefly for a missing temperature under unchanged authority."""
-        evidence = self.pool_observation
-        record = self.records.get("pool")
-        if (self.verifying or self.scheduler is None or self.write_attempted
-                or not isinstance(error, ControlObservationError) or not error.unavailable
-                or evidence is None or error.entity not in evidence.sources
-                or not record or record.get("restoration_pending") or not slot
-                or device_mode(options, "pool") != "controlling"
-                or evidence.configuration != ownership_configuration(options, "pool")
-                or evidence.slot_start != slot["start"]
-                or evidence.heating != (finite(slot["pool_w"]) > 0)):
-            return None
-        try:
-            self.check_authority()
-        except ValueError:
-            return None
-        now = datetime.now(timezone.utc)
-        # Available chain members must still be valid and have the same source.
-        # Read all members so recovery and source edits remain scheduler dependencies.
-        for entity, source in evidence.sources.items():
-            state = self.observed_state(entity)
-            if state is None or state.state in ("unknown", "unavailable"):
-                continue
-            if state.attributes.get("unit_of_measurement") != "°C":
-                return None
-            try:
-                finite(state.state)
-            except (ValueError, TypeError):
-                return None
-            entry = self.entity_registry.async_get(entity) if self.entity_registry is not None else None
-            actual_source = state.attributes.get("entity_id") if entry and entry.platform == "filter" else None
-            if actual_source != source:
-                return None
-            if source is None and not 0 <= (now - state.last_reported).total_seconds() < POOL_MAX_AGE_SECONDS:
-                return None
-        if not all(self.matches(entity, value) for entity, value in record.get("last_commands", {}).items()):
-            return None
-        try:
-            expiry = datetime.fromisoformat(plan["valid_until"].replace("Z", "+00:00"))
-            slot_end = datetime.fromisoformat(slot["start"].replace("Z", "+00:00")) + timedelta(minutes=15)
-        except (KeyError, ValueError, TypeError):
-            return None
-        deadline = min(evidence.gap_until or now + timedelta(seconds=POOL_GAP_SECONDS),
-                       evidence.fresh_until, slot_end, expiry)
-        if deadline <= now:
-            return None
-        evidence.gap_until = deadline
-        self.device_deadline("temperature_gap", deadline)
-        return deadline
+    def report_gap(self, device, error, purpose=None, slot=None, plan=None):
+        """Hold through a restart, reconnect or reading gap; only a long one needs attention.
 
-    def report_pool_switch_gap(self, error, purpose=None, slot=None, plan=None):
-        """Wait out a restart or reconnect; only a long absence needs attention.
-
-        The switch's own state change starts the next evaluation, so SHS resumes
-        as soon as it reports. The deadline only escalates a switch that stays away.
+        Nothing is written or handed back meanwhile, so the device keeps the last
+        setting SHS sent. The entity's own state change starts the next
+        evaluation, and SHS resumes as soon as it reports; the deadline only
+        escalates an entity that stays away.
         """
         now = datetime.now(timezone.utc)
         # Consecutive reports of this gap share its start; any other outcome ends it.
-        previous = self.status.get("pool", {}).get("unavailable_since")
+        previous = self.status.get(device, {}).get("unavailable_since")
         since = datetime.fromisoformat(previous) if previous else now
-        deadline = since + timedelta(seconds=POOL_SWITCH_GRACE_SECONDS)
+        deadline = since + timedelta(seconds=OBSERVATION_GRACE_SECONDS)
         if purpose is None:
-            purpose = ("hand the pool heater back" if self.records.get("pool", {}).get("restoration_pending")
-                       else "resume the plan")
+            purpose = "hand it back" if self.records.get(device, {}).get("restoration_pending") else "resume the plan"
+        hold = "SHS holds the last setting it sent and will" if device in self.records else "SHS will"
         details = {"retry_automatically": True, "unavailable_since": since.isoformat(),
                    **({"plan_id": plan.get("plan_id"), "slot_start": slot["start"]} if slot and plan else {})}
         if now < deadline:
             if self.scheduler is not None:
-                self.scheduler.device_deadline("pool", "switch_gap", deadline)
-            self.report("pool", "pending", reason=f"{error.entity} is unavailable; "
-                        f"SHS will {purpose} as soon as it reports again.", **details)
-        else:
-            self.report("pool", "fault", reason=f"{error.entity} has been unavailable for more than "
-                        f"{POOL_SWITCH_GRACE_SECONDS // 60} minutes; SHS will {purpose} as soon as it reports again.",
+                self.scheduler.device_deadline(device, "observation_gap", deadline)
+            self.report(device, "pending", reason=f"{error}. {hold} {purpose} as soon as it reports again.",
                         **details, **correction_details(error))
+        else:
+            self.report(device, "fault", reason=f"{error.entity or 'A required reading'} has not been usable for more than "
+                        f"{OBSERVATION_GRACE_SECONDS // 60} minutes ({error}). {hold} {purpose} as soon as it reports again.",
+                        **details, **correction_details(error))
+
+    def end_gap(self, device):
+        if self.scheduler is not None:
+            self.scheduler.device_deadline(device, "observation_gap", None)
+
+    def check_targets(self, device, targets):
+        """A new control entity is adopted through the select, never by a silent release."""
+        record = self.records.get(device)
+        if record is None:
+            return
+        # A pre-upgrade pool journal also named temperature settings, which are never written.
+        owned = {entity for entity in record["originals"]
+                 if device != "pool" or entity.split(".")[0] in ("switch", "input_boolean")}
+        if owned != set(targets):
+            raise ValueError("The control entity changed while this device was Controlling; set it to "
+                             "Verification and back to Controlling to apply the change")
+
+    def inhibit_limit(self, record, mapping, now):
+        """Once a paused device reaches its reviewed maximum pause, it may run for a quarter.
+
+        SHS enforces this itself and keeps control. It used to be a fault whose
+        handover to the device's own settings lasted until the plan changed.
+        """
+        forced = record.get("permit_forced_until")
+        if forced and now < datetime.fromisoformat(forced):
+            return datetime.fromisoformat(forced)
+        record.pop("permit_forced_until", None)
+        since = record.get("inhibited_since")
+        if not since or (now - datetime.fromisoformat(since)).total_seconds() < mapping["max_inhibit_slots"] * 900:
+            return None
+        until = now + timedelta(seconds=900)
+        record["permit_forced_until"] = until.isoformat()
+        return until
+
+    async def hold_inhibit_limit(self, device, options):
+        """Without a plan every setting is held, but a paused device still gets its permitted run."""
+        record = self.records.get(device)
+        mapping = options.get("device_control_mappings", {}).get(device.removeprefix("device:"), {})
+        if not device.startswith("device:") or not record or mapping.get("control_type") != "permit_inhibit":
+            return False
+        until = self.inhibit_limit(record, mapping, datetime.now(timezone.utc))
+        if until is None:
+            return False
+        for entity in actuator_targets(mapping):
+            await self.command(entity, "on")
+        record.pop("inhibited_since", None)
+        await self.save()
+        self.device_deadline("permitted_run", until)
+        self.report(device, "limited", reason=INHIBIT_LIMIT.format(mapping["max_inhibit_slots"]), retry_automatically=True)
+        return True
 
     def battery_measurement(self, options):
         """Direction comes from explicit observations, magnitude from either power sign."""
@@ -917,8 +943,8 @@ class ScheduledController:
         validate_commands(slot["device_commands"], models)
         command = slot["device_commands"][key]
         if command["type"] == "unavailable":
-            await self.restore(device)
-            return {"state": "unsupported", "reason": command["reason"]}
+            # A plan that cannot drive the device releases nothing; only the select does.
+            return {"state": "unsupported", "reason": self.holding(device, command["reason"])}
         if command["type"] != mapping["control_type"]:
             raise ValueError("the website command does not match the reviewed local method")
         errors = execution_setup_errors(mapping)
@@ -937,16 +963,21 @@ class ScheduledController:
         system_targets.update(pool_mapping.get("actuator_entity_ids", []))
         if set(targets) & system_targets:
             raise ValueError("actuator is assigned to a system controller")
+        self.check_targets(device, targets)
         record = self.records.get(device)
         if record:
+            for entity in record.get("last_commands", {}):
+                # Unavailable is unknown, never an external change.
+                self.actuator_state(entity)
             changed = [entity for entity, value in record.get("last_commands", {}).items() if not self.matches(entity, value)]
             if changed:
                 record["externally_changed"] = changed
-                self.overrides[device] = "Actuator changed externally; switch local control off and on to resume"
+                self.overrides[device] = EXTERNAL_CHANGE
                 await self.save()
                 await self.restore(device)
                 return {"state": "overridden", "reason": self.overrides[device]}
         values = {}
+        limited = None
         kind = command["type"]
         if kind == "setpoint":
             low = max(mapping["minimum_temperature_c"], command["minimum_c"])
@@ -974,10 +1005,10 @@ class ScheduledController:
             on = command["permitted"] if kind == "permit_inhibit" else command["on_seconds"] == 900
             values = {entity: "on" if on else "off" for entity in targets}
             now = datetime.now(timezone.utc)
-            if record and kind == "permit_inhibit" and not on:
-                since = record.get("inhibited_since")
-                if since and (now - datetime.fromisoformat(since)).total_seconds() >= mapping["max_inhibit_slots"] * 900:
-                    raise ValueError("maximum continuous inhibit reached")
+            if record and kind == "permit_inhibit" and not on and (limited := self.inhibit_limit(record, mapping, now)):
+                on = True
+                values = {entity: "on" for entity in targets}
+                self.device_deadline("permitted_run", limited)
             if kind == "switch_schedule" and not record:
                 for entity, value in values.items():
                     state = self.state(entity)
@@ -1004,7 +1035,7 @@ class ScheduledController:
         record = await self.capture(device, options, targets)
         now = datetime.now(timezone.utc).isoformat()
         if kind == "permit_inhibit":
-            if command["permitted"]:
+            if on:
                 record.pop("inhibited_since", None)
                 self.device_deadline("maximum_inhibit", None)
             else:
@@ -1021,7 +1052,10 @@ class ScheduledController:
         elif kind == "switch_schedule":
             decision = {"kind": kind, "on": command["on_seconds"] > 0}
         else:
-            decision = {"kind": kind, "permitted": command["permitted"]}
+            decision = {"kind": kind, "permitted": on}
+        if limited:
+            return {"state": "limited", "reason": INHIBIT_LIMIT.format(mapping["max_inhibit_slots"]),
+                    "decision": decision, "retry_automatically": True}
         return {"state": "commanded", "reason": "actuator targets acknowledged; delivered heat or power is not inferred",
                 "decision": decision}
 
@@ -1059,7 +1093,7 @@ class ScheduledController:
         except Exception as err:
             attempt["reason"] = str(err)
             attempt.update(correction_details(err))
-            if device == "pool" and isinstance(err, ActuatorUnavailableError):
+            if isinstance(err, ControlObservationError) and err.transient:
                 gap = err
         finally:
             attempt["commands"] = self.verification_commands
@@ -1070,8 +1104,9 @@ class ScheduledController:
         if self.diagnostic_evaluation is not None:
             self.diagnostic_evaluation["verification_group_id"] = group_id
         if gap is not None:
-            self.report_pool_switch_gap(gap, "resume verification", slot, plan)
+            self.report_gap(device, gap, "resume verification", slot, plan)
             return
+        self.end_gap(device)
         limited = attempt.get("result", {}).get("state") == "limited"
         self.report(device, ("limited" if limited else "verified") if attempt["outcome"] == "verified" else "fault",
                     reason=attempt.get("reason") or attempt.get("handover_reason") or (attempt["result"]["reason"] if limited else "Commands logged; physical response and cross-slot transitions are not tested"),
@@ -1143,29 +1178,6 @@ class ScheduledController:
             self.diagnostics_failed_samples += 1
             _LOGGER.warning("Cannot sample controller observations: %s", err)
 
-    def ineligible_status(self, device, options):
-        mode = device_mode(options, device)
-        if device in self.overrides:
-            return {"state": "overridden", "reason": self.overrides[device]}
-        if mode not in EXECUTING_MODES:
-            return {"state": mode, "reason": "Observing only; no SHS commands" if mode == "monitoring" else
-                    "Planning only; no SHS commands or command verification"}
-        if device.startswith("device:"):
-            key = device.removeprefix("device:")
-            if key in options.get("excluded_device_readings", []):
-                reason = "Device readings are explicitly excluded"
-            elif self.requested_types.get(key) != options.get("device_control_mappings", {}).get(key, {}).get("control_type"):
-                reason = "Device mapping does not match the requested control method"
-            else:
-                return {"state": "overridden", "reason": "Configured manual override is active"}
-        elif device not in self.requested_systems:
-            reason = "Device is not included in the household plan"
-        elif not options.get(device + "_enabled", True):
-            reason = "Device is disabled in SHS configuration"
-        else:
-            return {"state": "overridden", "reason": "Configured manual override is active"}
-        return {"state": "disabled", "reason": reason}
-
     async def async_start(self, *, reason="integration_load"):
         try:
             saved = await self.store.async_load() or {}
@@ -1184,22 +1196,8 @@ class ScheduledController:
             except Exception as err:
                 journal_error = str(err)
                 self.diagnostics_error = journal_error
-        async with self.lock:
-            for device in tuple(self.records):
-                if device == "battery" and getattr(self,"battery_runtime",None) is not None:
-                    continue
-                if journal_error is None:
-                    self.begin_diagnostic_evaluation(device, self.options(), self.coordinator.current_plan_slot,
-                        self.coordinator.optimisation_plan or {}, "startup_handover")
-                try:
-                    await self.restore(device)
-                except Exception as err:
-                    if device == "pool" and isinstance(err, ActuatorUnavailableError):
-                        self.report_pool_switch_gap(err)
-                    else:
-                        self.report(device, "fault", reason=f"startup restoration: {err}")
-                finally:
-                    await self.finish_diagnostic_evaluation()
+        # A restart hands nothing back. Journalled ownership resumes with its
+        # captured baseline, which only the select releases.
         if journal_error is not None:
             for device in DEVICES:
                 self.report(device, "fault", reason=f"cannot load verification journal: {journal_error}")
@@ -1237,10 +1235,11 @@ class ScheduledController:
             generic.update(key for key in self.records if key.startswith("device:"))
             if self.scheduler is not None:
                 self.scheduler.retain_devices(set(DEVICES) | generic)
-            previous_authority = (self.requested_types, self.requested_systems)
+            previous_authority = (self.requested_types, self.requested_systems, self.requested_error)
             if generic or any(device_mode(options, d) in EXECUTING_MODES for d in DEVICES) or self.records:
                 self.requested_types = {}
                 self.requested_systems = set()
+                self.requested_error = None
                 try:
                     requested = await self.coordinator.async_cached_device_configuration()
                     self.requested_types = {item["key"]: item.get("control_type") for item in requested}
@@ -1251,14 +1250,16 @@ class ScheduledController:
                 except Exception as err:
                     self.requested_types = {}
                     self.requested_systems = set()
-                    # Without current planning ownership, hand back all targets.
+                    # Without current website choices every device holds its last setting.
+                    self.requested_error = str(err)
                     _LOGGER.error("Cannot read device planning ownership: %s", err)
-            if previous_authority != (self.requested_types, self.requested_systems):
+            if previous_authority != (self.requested_types, self.requested_systems, self.requested_error):
                 # A shared ownership change or cache failure affects all owners,
                 # even if it was discovered during one device's sensor event.
                 devices = None
             for device in tuple(self.overrides):
-                if device_mode(options, device) not in EXECUTING_MODES:
+                # Leaving Controlling on the select clears an external-change latch.
+                if device_mode(options, device) != "controlling":
                     del self.overrides[device]
                     await self.save()
             # Hash shared inputs once, excluding unused future-plan slots.
@@ -1279,7 +1280,6 @@ class ScheduledController:
                 plan, slot = self.coordinator.binding_plan_for(device, options)
                 self.active_options, self.active_slot = deepcopy(options), deepcopy(slot)
                 self.active_plan_id = plan.get("plan_id")
-                self.write_attempted = False
                 if self.scheduler is not None:
                     self.scheduler.begin_device(device)
                 key = repr((options, plan.get("plan_id"), slot))
@@ -1291,17 +1291,30 @@ class ScheduledController:
                 self.begin_diagnostic_evaluation(device, options, slot, plan, trigger)
                 try:
                     record = self.records.get(device)
-                    if record and (record.get("restoration_pending") or ownership_configuration(record["options"], device) != ownership_configuration(options, device) or not slot or not self.eligible(device, options)):
+                    inactive = self.inactive_status(device, options)
+                    if record and (inactive or device_mode(options, device) != "controlling"):
+                        # The only handover: the select, or a setting that removes the device from it.
                         await self.restore(device)
-                    if not self.eligible(device, options):
+                        # The next attempt starts from the handed-back device, not the failed one.
                         self.failed.pop(device, None)
-                        self.report(device, **self.ineligible_status(device, options))
+                    elif record and record.get("restoration_pending"):
+                        # Returned to Controlling before the handover finished: control continues.
+                        del record["restoration_pending"]
+                        await self.save()
+                    if inactive:
+                        self.failed.pop(device, None)
+                        self.end_gap(device)
+                        self.report(device, **inactive)
+                        continue
+                    if hold := self.hold_reason(device, options):
+                        self.report(device, "idle", reason=self.holding(device, hold))
                         continue
                     supported = (plan.get("schema_version", 0) >= 7 and device.removeprefix("device:") in slot.get("device_commands", {})
                                  if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device))
                     if not slot or not supported:
-                        await self.restore(device)
-                        self.report(device, "idle", reason="no binding plan for this device")
+                        # A missing plan holds every setting, except a pause that reached its limit.
+                        if not await self.hold_inhibit_limit(device, options):
+                            self.report(device, "idle", reason=self.holding(device, "No current plan for this device"))
                         continue
                     if self.failed.get(device) == key:
                         continue
@@ -1313,6 +1326,7 @@ class ScheduledController:
                     result = (await self.execute_device(device, options, slot) if device.startswith("device:")
                               else await getattr(self, f"execute_{device}")(options, slot))
                     self.failed.pop(device, None)
+                    self.end_gap(device)
                     self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"))
                 except Exception as err:
                     if isinstance(err,ControlDeadlineError):
@@ -1322,7 +1336,7 @@ class ScheduledController:
                     if (isinstance(err, PlanChangedError)
                             and self.coordinator.current_plan_slot is not None
                             and self.coordinator.operational_status["actionable"]
-                            and self.options() == options and self.eligible(device, options)):
+                            and self.options() == options and self.eligible_now(device, options)):
                         # Replacement is not loss of ownership. Stop the stale
                         # sequence; the next evaluation reads actual settings
                         # and completes the new command from that state.
@@ -1332,31 +1346,21 @@ class ScheduledController:
                         if self.scheduler is not None:
                             self.scheduler.request("plan_replaced")
                         continue
-                    if device == "pool" and isinstance(err, ActuatorUnavailableError):
-                        # A handover now could not be sent, and queuing one flipped the
-                        # heater to its baseline and straight back once the switch
-                        # returned. One that is already required stays queued for then.
+                    if isinstance(err, ControlObservationError) and err.transient:
+                        # Nothing is written or handed back while an entity is away. A
+                        # handover the select already asked for stays queued for its return.
                         self.failed.pop(device, None)
-                        self.report_pool_switch_gap(err, slot=slot, plan=plan)
+                        self.report_gap(device, err, slot=slot, plan=plan)
                         continue
-                    if device == "pool" and (deadline := self.hold_pool_gap(err, options, slot, plan)):
-                        self.failed.pop(device, None)
-                        self.report(device, "limited", reason="water temperature unavailable; accepted band held without writes",
-                                    temperature_gap_until=deadline.isoformat(), retry_automatically=True,
-                                    **correction_details(err))
-                        continue
+                    # Faults never release control; the device keeps the last setting SHS sent.
                     # A new observation can repair this fault without a new plan.
                     retry = isinstance(err, ControlObservationError)
                     if retry:
                         self.failed.pop(device, None)
                     else:
                         self.failed[device] = key
-                    reason = str(err)
-                    try:
-                        await self.restore(device)
-                    except Exception as restore_error:
-                        reason += f"; restoration pending: {restore_error}"
-                    self.report(device, "fault", reason=reason, retry_automatically=retry, **correction_details(err))
+                    self.report(device, "fault", reason=self.holding(device, str(err)), retry_automatically=retry,
+                                **correction_details(err))
                 finally:
                     self.metrics.end_device()
                     if self.scheduler is not None:
@@ -1372,17 +1376,8 @@ class ScheduledController:
             self.scheduler.pause()
         try:
             async with self.lock:
-                for device in tuple(self.records):
-                    if device == "battery" and getattr(self,"battery_runtime",None) is not None:
-                        continue
-                    self.begin_diagnostic_evaluation(device, self.options(), self.coordinator.current_plan_slot,
-                        self.coordinator.optimisation_plan or {}, "shutdown_handover")
-                    try:
-                        await self.restore(device)
-                    except Exception as err:
-                        self.report(device, "fault", reason=f"restoration pending: {err}")
-                    finally:
-                        await self.finish_diagnostic_evaluation()
+                # Stopping is half of a restart: every device keeps the last setting
+                # SHS sent, and its journalled ownership resumes on the next start.
                 if self.verification is not None and self.initialized:
                     await self.verification.lifecycle(
                         "stop", INTEGRATION_VERSION,

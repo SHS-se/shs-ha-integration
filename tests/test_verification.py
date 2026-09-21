@@ -102,7 +102,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.states['sensor.battery_soc'].state = 'unavailable'
         await self.controller.async_start()
         await self.controller.async_tick(trigger='timer')
-        self.assertEqual(self.controller.status['battery']['state'], 'fault')
+        self.assertEqual(self.controller.status['battery']['state'], 'pending')
         self.assertEqual(self.controller.metrics.snapshot()['devices']['battery']['completed'], 2)
         self.assertIsNone(self.controller.metrics.active)
         self.assertEqual(self.calls, [])
@@ -123,14 +123,15 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.states['sensor.water'].last_reported = datetime.now(timezone.utc) - timedelta(minutes=16)
         await self.controller.async_start()
         status = self.controller.status['pool']
-        self.assertEqual(status['state'], 'fault')
+        self.assertEqual(status['state'], 'pending')
         self.assertTrue(status['retry_automatically'])
         self.assertEqual(status['fix'], {'kind': 'entity', 'entity_id': 'sensor.water'})
         self.assertIn('900 seconds', status['next_step'])
         self.assertIn(self.states['sensor.water'].last_reported.isoformat(), status['reason'])
         row = self.journal.export()['attempts'][0]
         self.assertEqual(row['fix'], status['fix'])
-        self.assertEqual(row['reason'], status['reason'])
+        # The status starts from the journalled reading and adds what SHS does meanwhile.
+        self.assertTrue(status['reason'].startswith(row['reason']))
         self.states['sensor.water'].last_reported = datetime.now(timezone.utc)
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'verified')
@@ -344,7 +345,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.states['sensor.raw_water'].last_reported -= timedelta(minutes=16)
         await self.controller.async_start()
         status = self.controller.status['pool']
-        self.assertEqual(status['state'], 'fault')
+        self.assertEqual(status['state'], 'pending')
         self.assertEqual(status['fix']['entity_id'], 'sensor.raw_water')
         self.assertIn('sensor.raw_water is stale', status['reason'])
         self.states['sensor.raw_water'].last_reported = datetime.now(timezone.utc)
@@ -359,12 +360,14 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                 old = self.states[entity].state
                 self.states[entity].state = 'unavailable'
                 await self.controller.async_tick()
-                self.assertEqual(self.controller.status['pool']['state'], 'fault')
+                self.assertEqual(self.controller.status['pool']['state'], 'pending')
                 self.assertEqual(self.controller.status['pool']['fix']['entity_id'], entity)
                 self.states[entity].state = old
+                await self.controller.async_tick()
         del self.states['sensor.raw_water']
         await self.controller.async_tick()
-        self.assertEqual(self.controller.status['pool']['state'], 'fault')
+        self.assertEqual(self.controller.status['pool']['state'], 'pending')
+        self.assertEqual(self.controller.status['pool']['fix']['entity_id'], 'sensor.raw_water')
 
     async def test_only_registered_filters_follow_source_attributes(self):
         self.configure_pool_filter()
@@ -391,7 +394,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertIn('no valid temperature source', self.controller.status['pool']['reason'])
 
-    async def test_live_filter_source_failure_restores_and_recovers_in_same_slot(self):
+    async def test_live_filter_source_failure_holds_and_recovers_in_same_slot(self):
         self.configure_pool_filter()
         self.options['device_modes']['$pool'] = 'controlling'
         self.slot['pool_w'] = 0
@@ -399,7 +402,8 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.pool'].state, 'off')
         self.states['sensor.raw_water'].last_reported -= timedelta(minutes=16)
         await self.controller.async_tick()
-        self.assertEqual(self.controller.status['pool']['state'], 'fault')
+        self.assertEqual(self.controller.status['pool']['state'], 'pending')
+        self.assertIn('pool', self.controller.records)
         self.assertEqual(float(self.states['number.stop'].state), 30)
         self.states['sensor.raw_water'].last_reported = datetime.now(timezone.utc)
         await self.controller.async_tick()
