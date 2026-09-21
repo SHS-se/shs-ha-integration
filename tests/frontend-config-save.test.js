@@ -69,8 +69,8 @@ test('device save refreshes shared sources and preserves unrelated unsaved edits
   panel._render = () => {};
   const updated = { ...mapping, temperature_entity_id: 'sensor.new' };
   panel._data = { devices: [{ key: 'a', name: 'Heater' }] };
-  const response = { mapping_status: 'ready', panel: { devices: [{ key: 'a', name: 'Heater' }],
-    configuration: { device_control_mappings: { a: updated, b: updated, c: updated } } } };
+  const response = { mapping_status: 'ready',
+    configuration: { device_control_mappings: { a: updated, b: updated, c: updated } } };
   panel._hass = { callWS: async () => response };
   await panel._saveDevice('a');
   assert.equal(panel._error, '');
@@ -1404,4 +1404,71 @@ test('HA object errors remain readable when loading and polling configuration', 
   await panel._poll();
   assert.equal(panel._error, '');
   assert.equal(panel._refreshError, '');
+});
+
+test('save, reload and replan retain the displayed schedule and drafts until fresh data arrives', async () => {
+  const panel = splitPanel();
+  panel._data.sections = [{ fields: [{ key: 'pool_heating_energy_entities' }] }];
+  panel._data.timeline = { plan_id: 'old-plan' };
+  panel._data.operation = { state: 'ready' };
+  panel._data.attention = [];
+  panel._savedDraft.pool_heating_energy_entities = ['sensor.pool_heater_energy'];
+  panel._draft.pool_heating_energy_entities = ['sensor.pool_heater_energy', 'sensor.pool_pump_energy'];
+  panel._draft.pool_volume_m3 = 60; // unrelated device draft
+  const oldData = panel._data;
+  const calls = [];
+  panel._hass = { callWS: async message => {
+    calls.push(message.type);
+    return message.type.endsWith('/save') ? { saved: true, refreshing: true } : { refreshing: true };
+  } };
+  await panel._save();
+  assert.equal(panel._refreshing, true);
+  assert.equal(panel._data, oldData);
+  assert.match(panel._refreshBanner(), /role="status".*spinner.*Refresh in progress/);
+  assert.match(panel._renderDevice(panel._data.devices[0], 'planning'), /data-action="save-device"[^>]*disabled/);
+  await panel._saveDevice('pool', 'planning');
+  await panel._save();
+  assert.deepEqual(calls, ['shs_energy/config/save']);
+  await panel._poll();
+  assert.equal(panel._data, oldData);
+  assert.equal(panel._draft.pool_volume_m3, 60);
+  assert.equal(panel._refreshError, '');
+  panel._hass.callWS = async () => ({ ...oldData, timeline: { plan_id: 'new-plan' }, configuration: panel._savedDraft });
+  await panel._poll();
+  assert.equal(panel._refreshing, false);
+  assert.equal(panel._data.timeline.plan_id, 'new-plan');
+  assert.equal(panel._draft.pool_volume_m3, 60);
+  assert.equal(panel._refreshBanner(), '');
+  assert.doesNotMatch(panel._renderDevice(panel._data.devices[0], 'planning'), /data-action="save-device"[^>]*disabled/);
+});
+
+test('a real reload failure ends progress and provides a readable correction', async () => {
+  const panel = splitPanel();
+  panel._refreshing = true;
+  const previous = panel._data;
+  panel._hass = { callWS: async () => { throw { code: 'not_loaded', message: 'The integration is not loaded' }; } };
+  await panel._poll();
+  assert.equal(panel._refreshing, false);
+  assert.equal(panel._refreshError, 'The integration is not loaded');
+  assert.equal(panel._data, previous);
+});
+
+test('polling updates the progress banner and save locks without replacing the active editor', async () => {
+  const panel = splitPanel();
+  panel._draft.pool_volume_m3 = 60;
+  const progress = { innerHTML: '' };
+  const save = { dataset: { action: 'save-device', deviceKey: 'pool', section: 'planning' },
+    closest: () => ({ querySelector: () => ({ textContent: '' }) }) };
+  panel.shadowRoot = { activeElement: { tagName: 'INPUT' },
+    querySelector: selector => selector === '[data-refresh-progress]' ? progress : null,
+    querySelectorAll: selector => selector === 'button[data-action]' ? [save] : [] };
+  panel._render = () => { throw new Error('Must not replace the editor'); };
+  panel._hass = { callWS: async () => ({ refreshing: true }) };
+  await panel._poll();
+  assert.equal(save.disabled, true);
+  assert.match(progress.innerHTML, /Refresh in progress/);
+  panel._hass.callWS = async () => panel._data;
+  await panel._poll();
+  assert.equal(save.disabled, false);
+  assert.equal(progress.innerHTML, '');
 });

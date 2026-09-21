@@ -23,6 +23,7 @@ from homeassistant.helpers.json import json_bytes
 from homeassistant.util.json import json_loads
 from homeassistant.helpers import entity_registry as er
 
+from .refresh import set_reloading
 from .api import ShsApiClient
 from .controller_events import attach_controller_events
 from .config_panel import async_apply_configuration, async_register_config_panel
@@ -314,14 +315,20 @@ async def _async_options_updated(
 ) -> None:
     if not entry.runtime_data.options_update_requires_reload():
         return
-    # A full reload ensures changed entity mappings are reflected by all
-    # platforms before the next recorder aggregation.
-    if not await hass.config_entries.async_reload(entry.entry_id):
-        return
-    reloaded = hass.config_entries.async_get_entry(entry.entry_id)
-    coordinator = getattr(reloaded, "runtime_data", None)
-    if coordinator is not None:
+    # Keep progress outside runtime_data: HA replaces it during this reload.
+    set_reloading(hass, entry, True)
+    coordinator = entry.runtime_data
+    try:
+        await coordinator.async_report_runtime()
+        if not await hass.config_entries.async_reload(entry.entry_id):
+            coordinator.last_optimisation_error = "The integration could not reload its configuration"
+            return
+        reloaded = hass.config_entries.async_get_entry(entry.entry_id)
+        coordinator = reloaded.runtime_data
         await coordinator.async_optimisation_push(force_plan=True)
+    finally:
+        set_reloading(hass, entry, False)
+        await coordinator.async_report_runtime()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:

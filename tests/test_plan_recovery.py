@@ -1,6 +1,7 @@
 """Exercise the coordinator's actual lifecycle methods at its HA boundary."""
 import ast
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -13,6 +14,7 @@ import sys
 
 ROOT = Path(__file__).parents[1] / 'custom_components/shs_energy'
 sys.path.append(str(ROOT))
+from refresh import refresh_in_progress
 from presentation import operational_status
 
 
@@ -28,7 +30,7 @@ def coordinator_methods(namespace):
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.now = datetime(2026, 9, 9, 10, tzinfo=timezone.utc)
-        namespace = dict(monotonic=monotonic, Any=Any, datetime=datetime, timedelta=timedelta,
+        namespace = dict(refresh_in_progress=refresh_in_progress, monotonic=monotonic, Any=Any, datetime=datetime, timedelta=timedelta,
             dt_util=SimpleNamespace(utcnow=lambda: self.now),
             resolved_options=lambda hass, options: options,
             OPT_PLANNING_MODE='planning_mode', PLANNING_MODE_LIVE='live',
@@ -37,7 +39,9 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             _LOGGER=SimpleNamespace(debug=lambda *args: None, info=lambda *args: None))
         self.c = coordinator_methods(namespace)()
         self.c.entry = SimpleNamespace(options={'planning_mode': 'live'})
-        self.c.hass = None
+        self.c.hass = SimpleNamespace(data={})
+        self.c.entry.entry_id = "entry"
+        self.c.entry.runtime_data = self.c
         self.c._runtime_lock = asyncio.Lock()
         self.c._push_lock = asyncio.Lock()
         self.c._replan_lock = asyncio.Lock()

@@ -19,6 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.json import json_bytes
 
 from . import const as shs_const
+from .refresh import refresh_in_progress, set_reloading
 from .api import ShsApiError
 from .api_contract import INTEGRATION_VERSION
 from .controller_diagnostics import controller_diagnostics, gzip_report, report_parts, report_summary
@@ -298,6 +299,8 @@ async def async_apply_configuration(
         options[shs_const.OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(
             timezone.utc
         ).isoformat()
+    if entry.runtime_data.options_update_requires_reload(options):
+        set_reloading(hass, entry, True)
     hass.config_entries.async_update_entry(entry, options=options)
     if "excluded_device_readings" in incoming and _entry_state(entry) == "loaded":
         coordinator = entry.runtime_data
@@ -355,15 +358,22 @@ async def async_apply_device_mapping(
         options[shs_const.OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(
             timezone.utc
         ).isoformat()
+    reload_required = entry.runtime_data.options_update_requires_reload(options)
+    set_reloading(hass, entry, True)
     hass.config_entries.async_update_entry(entry, options=options)
-    # The saved mapping's status is already in `report`; the replan only
-    # refreshes the plan behind it. Awaiting it here made Save sit for the
-    # length of a full statistics sweep before the card could answer.
-    entry.async_create_background_task(
-        hass,
-        entry.runtime_data.async_optimisation_push(force_plan=True),
-        name=f"{shs_const.DOMAIN}_replan_after_mapping_save",
-    )
+    # A reload owns its replan. Mapping-only saves replan on this coordinator.
+    if not reload_required:
+        async def replan_saved_mapping():
+            try:
+                await entry.runtime_data.async_optimisation_push(force_plan=True)
+            finally:
+                set_reloading(hass, entry, False)
+                await entry.runtime_data.async_report_runtime()
+
+        entry.async_create_background_task(
+            hass, replan_saved_mapping(),
+            name=f"{shs_const.DOMAIN}_replan_after_mapping_save",
+        )
     return report
 
 
@@ -388,6 +398,9 @@ async def websocket_get_configuration(
             msg["id"],
             {"requires_entry_selection": True, "entries": _entries(hass)},
         )
+        return
+    if refresh_in_progress(hass, entry):
+        connection.send_result(msg["id"], {"refreshing": True, "entry_id": entry.entry_id})
         return
     if _entry_state(entry) != "loaded":
         connection.send_error(msg["id"], "not_loaded", "The integration is not loaded")
@@ -449,6 +462,11 @@ async def websocket_save_configuration(
     if entry is None:
         connection.send_error(msg["id"], "not_found", "SHS Energy entry not found")
         return
+    if refresh_in_progress(hass, entry):
+        connection.send_error(msg["id"], "refresh_in_progress", "Refresh in progress. Wait before saving again.")
+        return
+    writes = hass.data.setdefault("shs_energy_configuration_writes", set())
+    writes.add(entry.entry_id)
     try:
         options = await async_apply_configuration(
             hass, entry, dict(msg["configuration"])
@@ -456,10 +474,13 @@ async def websocket_save_configuration(
     except (TypeError, ValueError) as err:
         connection.send_error(msg["id"], "invalid_configuration", str(err))
         return
+    finally:
+        writes.discard(entry.entry_id)
     connection.send_result(
         msg["id"],
         {
             "saved": True,
+            "refreshing": True,
             "configuration_reviewed_at": options.get(
                 shs_const.OPT_CONFIGURATION_REVIEWED_AT
             ),
@@ -488,6 +509,11 @@ async def websocket_save_device_configuration(
     if entry is None:
         connection.send_error(msg["id"], "not_found", "SHS Energy entry not found")
         return
+    if refresh_in_progress(hass, entry):
+        connection.send_error(msg["id"], "refresh_in_progress", "Refresh in progress. Wait before saving again.")
+        return
+    writes = hass.data.setdefault("shs_energy_configuration_writes", set())
+    writes.add(entry.entry_id)
     try:
         report = await async_apply_device_mapping(
             hass,
@@ -496,11 +522,13 @@ async def websocket_save_device_configuration(
             dict(msg["mapping"]) if msg["mapping"] is not None else None,
             msg["configuration"],
         )
-        panel = await _configuration_payload(hass, entry, refresh_roles=False)
+        configuration = resolved_options(hass, dict(entry.options))
     except (ShsApiError, TypeError, ValueError) as err:
         connection.send_error(msg["id"], "invalid_device_mapping", str(err))
         return
-    connection.send_result(msg["id"], {"saved": True, **report, "panel": panel})
+    finally:
+        writes.discard(entry.entry_id)
+    connection.send_result(msg["id"], {"saved": True, **report, "configuration": configuration, "refreshing": True})
 
 
 @websocket_api.require_admin
@@ -508,6 +536,9 @@ async def websocket_save_device_configuration(
 @websocket_api.async_response
 async def websocket_get_status(hass, connection, msg):
     entry = _entry_from_message(hass, msg["config_entry"])
+    if entry is not None and refresh_in_progress(hass, entry):
+        connection.send_result(msg["id"], {"refreshing": True, "entry_id": entry.entry_id})
+        return
     if entry is None or _entry_state(entry) != "loaded":
         connection.send_error(msg["id"], "not_loaded", "The integration is not loaded")
         return
@@ -524,6 +555,9 @@ async def websocket_get_status(hass, connection, msg):
 @websocket_api.async_response
 async def websocket_control_permission(hass, connection, msg):
     entry = _entry_from_message(hass, msg["config_entry"])
+    if entry is not None and refresh_in_progress(hass, entry):
+        connection.send_error(msg["id"], "refresh_in_progress", "Refresh in progress. Wait before changing device mode.")
+        return
     if entry is None or _entry_state(entry) != "loaded":
         connection.send_error(msg["id"], "not_loaded", "The integration is not loaded")
         return

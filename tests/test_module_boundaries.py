@@ -52,7 +52,7 @@ HOME_ASSISTANT_MODULES = (
     "__init__",
     "config_flow",
     "config_panel", "control_configuration", "select",
-    "configuration",
+    "configuration", "refresh",
     "coordinator",
     "diagnostics",
     "sensor",

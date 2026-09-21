@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timedelta, timezone
 import hashlib
 import json
@@ -25,6 +26,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 from homeassistant.util.json import json_loads
 
+from .refresh import refresh_in_progress
 from .replan_listener import listen_for_replans
 from .battery_live import BatteryLiveInputs
 from .durable_record import DurableRecord
@@ -562,7 +564,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "reason": operation["reason"][:1000],
                     "binding_until": operation["binding_until"],
                     "valid_until": operation["valid_until"],
-                    "recovering": self._recovering,
+                    "recovering": refresh_in_progress(self.hass, self.entry),
                     "retry_at": operation["retry_at"],
                     "last_error": (self.last_optimisation_error or "")[:1000] or None,
                 })
@@ -920,14 +922,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             },
         )
 
-    def options_update_requires_reload(self) -> bool:
-        """Apply mapping-only option changes live; reload for everything else."""
-        current = dict(self.entry.options)
+    def options_update_requires_reload(self, options: dict[str, Any] | None = None) -> bool:
+        """Check proposed options, or consume an applied update when omitted."""
+        current = dict(self.entry.options if options is None else options)
         keys = set(self._loaded_options) | set(current)
         changed = {
             key for key in keys if self._loaded_options.get(key) != current.get(key)
         }
-        self._loaded_options = current
+        if options is None:
+            self._loaded_options = current
         live_keys = {
             OPT_CONFIGURATION_REVIEWED_AT,
             OPT_DEVICE_CONTROL_MAPPINGS,
@@ -1264,7 +1267,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             validate=self._plan_contract)
         if self._plan_configuration_changed and result["actionable"]:
             result.update(reason="Using the retained schedule while an updated plan is requested")
-        result["recovering"] = self._recovering
+        result["recovering"] = refresh_in_progress(self.hass, self.entry)
         result["retry_at"] = None
         return result
 
@@ -2896,6 +2899,15 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         stored.pop("optimisation_pending_plan_ack", None)
         return True
 
+    @asynccontextmanager
+    async def _planning_exchange(self):
+        try:
+            async with self._push_lock:
+                await self.async_report_runtime()
+                yield
+        finally:
+            await self.async_report_runtime()
+
     async def async_optimisation_push(
         self,
         _now: datetime | None = None,
@@ -2910,7 +2922,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         produces. It travels with the snapshot rather than alone: only a
         generated plan settles a request.
         """
-        async with self._push_lock:
+        async with self._planning_exchange():
             stored = await self._store.async_load() or {}
             if await self._retry_pending_plan_ack(stored):
                 await self._store.async_save(stored)
@@ -3231,7 +3243,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if await self._retry_pending_plan_ack(stored):
                 await self._store.async_save(stored)
             self.async_update_listeners()
-        await self.async_report_runtime()
         await self.async_battery_inputs_refresh()
 
     @property

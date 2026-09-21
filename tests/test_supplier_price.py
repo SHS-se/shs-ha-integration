@@ -161,7 +161,7 @@ class SensorWiringTests(unittest.TestCase):
             COORDINATOR.index("async def async_report_device_mapping")
         ]
         self.assertIn("async_optimisation_push(force_plan=True)", refresh)
-        self.assertIn('"panel": panel', CONFIG_PANEL)
+        self.assertIn('"configuration": configuration, "refreshing": True', CONFIG_PANEL)
         self.assertIn("options_update_requires_reload()", INIT)
         live_update = COORDINATOR[
             COORDINATOR.index("def options_update_requires_reload") :

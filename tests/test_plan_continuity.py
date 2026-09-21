@@ -1,6 +1,7 @@
 """Run the real coordinator exchange/cache boundary with fake HA and cloud ports."""
 import ast
 import asyncio
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
@@ -14,6 +15,7 @@ from unittest.mock import AsyncMock, Mock
 
 ROOT = Path(__file__).parents[1] / 'custom_components/shs_energy'
 sys.path.append(str(ROOT))
+from refresh import refresh_in_progress
 import const
 from optimisation import OptimisationInputError, validate_plan_contract, optimisation_plan_due, quarter_start
 from test_battery_runtime import Store
@@ -26,12 +28,12 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
         self.now=datetime.fromisoformat(fixture['validation_time'])
         tree=ast.parse((ROOT/'coordinator.py').read_text())
         cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='ShsStatusCoordinator')
-        names={'async_optimisation_push','async_restore_plan','operational_status','binding_plan_for'}
+        names={'_planning_exchange','async_optimisation_push','async_restore_plan','operational_status','binding_plan_for'}
         methods=[n for n in cls.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name in names]
         for method in methods:
             for node in ast.walk(method):
                 if isinstance(node,ast.ImportFrom):node.level=0
-        namespace={**vars(const),'Any':Any,'datetime':datetime,'timedelta':timedelta,'timezone':timezone,
+        namespace={'asynccontextmanager':asynccontextmanager,'refresh_in_progress':refresh_in_progress,**vars(const),'Any':Any,'datetime':datetime,'timedelta':timedelta,'timezone':timezone,
             'monotonic':monotonic,'dt_util':SimpleNamespace(utcnow=lambda:self.now),
             'resolved_options':lambda hass,options:options,'_LOGGER':Mock(),
             'OptimisationInputError':OptimisationInputError,'validate_plan_contract':validate_plan_contract,
@@ -48,7 +50,7 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
         c=self.c
         c._store=Store();c._store.saved={'optimisation_plan':deepcopy(self.plan)}
         c.entry=SimpleNamespace(options={'planning_mode':'live','device_modes':deepcopy(self.plan['operating_scope']['modes'])})
-        c.hass=None;c._push_lock=asyncio.Lock();c._recovering=False
+        c.hass=SimpleNamespace(data={});c.entry.entry_id='entry';c.entry.runtime_data=c;c._push_lock=asyncio.Lock();c._recovering=False
         c._plan_configuration_changed=False;c._plan_contract=validate_plan_contract
         c.optimisation_plan=self.plan;c.optimisation_missing_inputs=[]
         c.last_optimisation_error=None;c.supplier_prices=[]
