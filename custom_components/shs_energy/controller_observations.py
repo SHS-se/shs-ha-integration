@@ -6,11 +6,11 @@ import re
 
 if __package__:
     from .configuration_fields import _configuration_sections, _control_fields, POWER_FIELD, OPTIONAL_TEMPERATURE_FIELD
-    from .operating_modes import device_mode, system_device_keys
+    from .operating_modes import device_mode, system_device_keys, system_member_keys
     from .verification import observation
 else:
     from configuration_fields import _configuration_sections, _control_fields, POWER_FIELD, OPTIONAL_TEMPERATURE_FIELD
-    from operating_modes import device_mode, system_device_keys
+    from operating_modes import device_mode, system_device_keys, system_member_keys
     from verification import observation
 
 SAMPLE_SECONDS = 60
@@ -44,7 +44,7 @@ def diagnostic_inventory(devices, meters, options):
     rows = {row["key"]: {**deepcopy(row), "inventory_origin": "device_inventory"} for row in devices}
     for meter in meters:
         rows.setdefault(meter["key"], {**deepcopy(meter), "inventory_origin": "meter_inventory"})
-    owners = system_device_keys(list(rows.values()), options)
+    owners = {**system_member_keys(list(rows.values()), options), **system_device_keys(list(rows.values()), options)}
     excluded = set(options.get("excluded_device_readings", []))
     for key, row in rows.items():
         identity = row.get("permission", {}).get("controller_id") or row.get("system") or owners.get(key) or "device:" + key

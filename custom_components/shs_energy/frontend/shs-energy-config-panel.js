@@ -1015,6 +1015,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _choices(device, section = "schedule") {
     const permission = device.permission;
+    if (device.system_member) {
+      // A member shares its system owner's grant; a second selector would imply its own.
+      const owner = this._data.devices.find(d => d.system === device.system_member);
+      const mode = Object.fromEntries(DEVICE_MODES)[device.mode] || this._label(device.mode);
+      return section === "schedule" ? `<div class="choices"><div class="choice-row"><span>Device mode</span><span data-mode="${this._escape(device.mode)}">${this._escape(mode)}</span>
+      <small>Runs with ${this._escape(owner?.name || "its system")}. Choose Verification or Controlling there.</small></div></div>` : `<div class="choices"></div>`;
+    }
     const disabled = Boolean(this._refreshing || this._saving || this._savingDeviceKey);
     const blocked = value => value === "controlling" && (this._refreshError || this._deviceDirty(device.key) || permission.reason);
     return `<div class="choices">
@@ -1100,7 +1107,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _scheduleSlot(device, slot) {
-    const owner = device.system ? "$" + device.system : device.key;
+    const system = device.system || device.system_member;
+    const owner = system ? "$" + system : device.key;
     return slot.execution_owners?.includes(owner) && slot.execution ? slot.execution : slot;
   }
 
@@ -1138,7 +1146,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
     slot = this._scheduleSlot(device, slot);
     const deviceAction = { heating: "heating", cooling: "cooling", hot_water: "heating", pool_heating: "heating", ev_charging: "charging" }[device.category] || "general";
     const result = (text, active = false, action = deviceAction) => ({ text, active, action: active ? action : "idle" });
-    if (device.system && !(slot.capabilities || this._data.timeline?.capabilities)?.[device.system]) return result("No instruction");
+    const system = device.system || device.system_member;
+    if (system && !(slot.capabilities || this._data.timeline?.capabilities)?.[system]) return result("No instruction");
+    // A member runs with its system; its own device command was never executable.
+    if (device.system_member === "pool") return slot.pool_w > 0 ? result("Runs with pool heating", true, "heating") : result("No heating requested");
+    if (device.system_member === "ev") return slot.ev_target_current_a > 0 ? result("Runs with vehicle charging", true, "charging") : result("Charging off");
     if (device.system === "battery") {
       const command = slot.battery_command;
       if (!command || ![2, 3].includes(command.schema_version)) return result("No supported instruction");

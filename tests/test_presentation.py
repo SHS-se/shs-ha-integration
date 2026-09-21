@@ -295,6 +295,47 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(pool['planning_support'], {'state': 'available', 'reason': None, 'path': 'pool'})
         self.assertFalse(pool['execution_eligibility']['writes_permitted_by_mode'])
 
+    def test_a_planned_pool_pump_is_shown_as_part_of_the_pool(self):
+        # The fixture plan models these two keys; its commands must name exactly them.
+        self.options.update(pool_enabled=True, pool_water_temperature_entity='sensor.water',
+                            device_modes={'$pool': 'control_verification', 'relay': 'control_verification'})
+        self.plan['capabilities']['pool'] = True
+        heater = deepcopy(self.device)
+        heater.update(key='thermostat', statistic_id='thermostat', name='Pool heater', category='pool_heating')
+        heater['mapping']['temperature_entity_id'] = 'sensor.water'
+        pump = {**deepcopy(self.device), 'key': 'relay', 'statistic_id': 'relay', 'name': 'Pool pump',
+                'category': 'pool_heating', 'control_type': 'switch_schedule',
+                'mapping': {'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.pump']}}
+        unavailable = {'type': 'unavailable', 'reason': 'No executable planning model for this device'}
+        for slot in self.plan['plans']['priority']['slots']:
+            slot['device_commands']['relay'] = unavailable
+        # The stale controller of its own must not surface once the pump belongs to the pool.
+        controllers = {'pool': {'state': 'verified', 'reason': 'Commands logged'},
+                       'device:relay': {'state': 'fault', 'reason': unavailable['reason']}}
+        views = complete_device_views([heater, pump], self.options, self.choices,
+            operational_status(self.plan, 'live', [], self.now), self.plan, controllers, {}, {}, self.now)
+        pool = next(d for d in views if d.get('system') == 'pool')
+        member = next(d for d in views if d['key'] == 'relay')
+        self.assertEqual(pool['key'], heater['key'])
+        self.assertNotIn('system_member', pool)
+        self.assertIsNone(member.get('system'))
+        self.assertEqual(member['system_member'], 'pool')
+        self.assertEqual(member['permission']['controller_id'], 'pool')
+        self.assertIsNone(member['permission']['reason'])
+        self.assertEqual(member['mode'], 'control_verification')
+        self.assertEqual(member['execution_status']['state'], 'verified')
+        self.assertEqual(member['planning_support'], {'state': 'available', 'reason': None, 'path': 'pool'})
+        self.assertIsNone(member['execution_reason'])
+        self.assertEqual(member['system_fields'], [])
+        self.assertEqual(member['planning_system'], 'pool')
+        # A Monitoring meter on the pool path is background consumption, not a member.
+        pump['planning_role'] = 'base_load'
+        monitored = next(d for d in complete_device_views([heater, pump], self.options, self.choices,
+            operational_status(self.plan, 'live', [], self.now), self.plan, controllers, {}, {}, self.now)
+            if d['key'] == 'relay')
+        self.assertNotIn('system_member', monitored)
+        self.assertEqual(monitored['permission']['controller_id'], 'device:relay')
+
     def test_mapping_readiness_does_not_imply_executable_or_mode_eligibility(self):
         self.options['device_modes'] = {self.device['key']: 'planning'}
         device = self.view()[0]

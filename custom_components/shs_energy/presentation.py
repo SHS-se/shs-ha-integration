@@ -138,15 +138,16 @@ def equipment_present(options, system, devices, configured_keys=()):
 def complete_device_views(devices, options, choices, status, plan, controllers, entity_names, area_names, now, configured_keys=()):
     """Augment one inventory with website choice, setup owner and local permission."""
     if __package__:
-        from .operating_modes import device_mode, system_device_keys
+        from .operating_modes import device_mode, system_device_keys, system_member_keys
     else:
-        from operating_modes import device_mode, system_device_keys
+        from operating_modes import device_mode, system_device_keys, system_member_keys
     devices = deepcopy(devices)
     for device in devices:
         key = device.get("statistic_id") or device["key"]
         device["name"] = device_name(entity_names.get(key) or device.get("name") or key)
         device["room_name"] = area_names.get(device.get("mapping", {}).get("room_area_id")) or device.get("mapping_summary", {}).get("room_name") or "No room"
     owners = system_device_keys(devices, options)
+    members = system_member_keys(devices, options)
     for system in ("ev", "pool"):
         category = {"ev": "ev_charging", "pool": "pool_heating"}[system]
         if not equipment_present(options, system, devices, configured_keys):
@@ -173,12 +174,19 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         planned = included and device.get("planning_role") == "controllable"
         device["included"] = included
         device["planned"] = planned
-        controller_id = system or "device:" + key
+        # A Planned member runs with its system's owner and shares its grant.
+        member = None if system or not planned else members.get(key)
+        if member:
+            device["system_member"] = member
+        controller_id = system or member or "device:" + key
         reason = None
         if not planned:
             reason = "Choose Planned on the website before enabling execution"
         elif key in options.get("excluded_device_readings", []):
             reason = "Include this device before enabling execution"
+        elif member:
+            # Its actuator is never driven, so its own setup cannot block the system.
+            reason = None
         elif system == "battery":
             reason = "; ".join(battery_control_errors({**options, "battery_control_enabled": True})) or None
         elif system == "pool":
@@ -206,12 +214,12 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         command = (active or {}).get("device_commands", {}).get(key)
         if not status["actionable"]:
             planning_reason = status["reason"]
-        elif system:
-            planning_reason = None if active and (plan or {}).get("capabilities", {}).get(system) else "Waiting for a plan for this device"
+        elif system or member:
+            planning_reason = None if active and (plan or {}).get("capabilities", {}).get(system or member) else "Waiting for a plan for this device"
         else:
             planning_reason = command.get("reason") if command and command.get("type") == "unavailable" else None if command else "Waiting for instructions for this device"
         device["planning_support"] = {"state": "available" if planning_reason is None else "unavailable",
-                                      "reason": planning_reason, "path": system or "device_commands"}
+                                      "reason": planning_reason, "path": system or member or "device_commands"}
         device["execution_reason"] = planning_reason
         device["execution_eligibility"] = {"eligible": mode in {"controlling", "control_verification"} and reason is None and planning_reason is None,
             "writes_permitted_by_mode": mode == "controlling", "verification_permitted_by_mode": mode == "control_verification",

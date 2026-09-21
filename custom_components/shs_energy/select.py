@@ -63,7 +63,8 @@ class ExecutionModeEntities:
                 devices = await async_execution_devices(self.hass, self.entry, include_suggestions=False)
                 if self.closed:
                     return
-                wanted = {d['key']: d for d in devices if d['planned']}
+                # A system member shares its owner's grant, and so its select.
+                wanted = {d['key']: d for d in devices if d['planned'] and not d.get('system_member')}
                 registry = er.async_get(self.hass)
                 for key in set(self.entities) - wanted.keys():
                     entity = self.entities.pop(key)

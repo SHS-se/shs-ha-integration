@@ -248,6 +248,22 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
         choices['home']['battery']['included']=False
         await r.manager.refresh();self.assertFalse(r.manager.entities)
 
+    async def test_a_system_member_has_no_select_and_cannot_be_granted_a_mode(self):
+        r=Rig()
+        # The select a pool pump received while it was wrongly its own controller.
+        stale='home_execution_mode_sensor.pool_pump_energy'
+        r.registry.rows['select.pool_pump']=SimpleNamespace(entity_id='select.pool_pump',unique_id=stale,
+            domain='select',platform=const.DOMAIN,config_entry_id='home')
+        r.devices.append({'key':'sensor.pool_pump_energy','name':'Pool pump','system':None,'system_member':'pool',
+            'planned':True,'permission':{'reason':None,'controller_id':'pool'}})
+        await r.manager.refresh()
+        self.assertEqual(set(r.manager.entities),{'$battery','sensor.heater'})
+        self.assertNotIn('select.pool_pump',r.registry.rows)
+        before=deepcopy(r.entry.options)
+        with self.assertRaisesRegex(ValueError,'Pool pump runs with the pool heater'):
+            await r.shared.async_set_execution_mode(r.hass,r.entry,'sensor.pool_pump_energy','controlling')
+        self.assertEqual(r.entry.options,before);self.assertEqual(r.ticks,0)
+
     async def test_first_inventory_applies_same_inclusion_defaults_before_exposing_entities(self):
         from configuration_schema import initialise_device_inclusion
         r=Rig()

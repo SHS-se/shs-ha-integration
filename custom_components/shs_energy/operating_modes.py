@@ -6,6 +6,7 @@ MODES = ("control_verification", "controlling")
 # reader is also used for releasing already-issued effects after migration.
 WIRE_MODES = ("monitoring", "planning", *MODES)
 EXECUTING_MODES = {"control_verification", "controlling"}
+SYSTEM_NAMES = {"pool": "pool heater", "ev": "vehicle charger"}
 
 
 def device_mode(options, device):
@@ -19,21 +20,42 @@ def device_mode(options, device):
     return mode
 
 
-def system_device_keys(devices, options):
-    """The single card owning each physical pool/EV controller."""
+def _system_candidates(devices, options):
+    """Each pool/EV system's devices, its actuator owner first."""
     if __package__:
         from .device_controls import mapped_planning_path
     else:
         from device_controls import mapped_planning_path
-    owners = {}
+    result = {}
     for system in ("pool", "ev"):
         candidates = [device for device in devices if mapped_planning_path(
             device, device.get("mapping", options.get("device_control_mappings", {}).get(device["key"], {})),
             options.get("pool_water_temperature_entity")) == system]
         candidates.sort(key=lambda d: (d.get("control_type") != "setpoint", d["key"]))
-        if candidates:
-            owners[candidates[0]["key"]] = system
-    return owners
+        result[system] = candidates
+    return result
+
+
+def system_device_keys(devices, options):
+    """The single card owning each physical pool/EV controller."""
+    return {candidates[0]["key"]: system
+            for system, candidates in _system_candidates(devices, options).items() if candidates}
+
+
+def system_member_keys(devices, options):
+    """Every Planned device a pool/EV system runs, keyed to that system.
+
+    The planner sizes a system's service from all of its members and splits the
+    planned power between them, but its executor drives only the owner's
+    actuator. A pool pump that the installation switches with the heater is
+    therefore part of the pool's physical group: admitted, scheduled and granted
+    control with it. As a controller of its own it was verified against a device
+    command the planner never produces, and the pool's controlled power left out
+    the pump's share.
+    """
+    return {device["key"]: system
+            for system, candidates in _system_candidates(devices, options).items() for device in candidates
+            if device.get("planning_role") == "controllable"}
 
 
 def planning_devices(devices, options):
@@ -89,7 +111,7 @@ def reconcile_admissions(options, devices, home):
     """
     result = deepcopy(options)
     excluded = set(options.get("excluded_device_readings", []))
-    owners = system_device_keys(devices, options)
+    owners = system_member_keys(devices, options)
     groups = {}
     for device in devices:
         if device["key"] in excluded or device.get("planning_role") != "controllable":
@@ -116,6 +138,10 @@ def execution_mode_options(options, devices, device_key, mode):
     device = next((d for d in devices if d['key'] == device_key), None)
     if device is None or not device['planned']:
         raise ValueError("Only Planned, Included devices have execution permission")
+    if device.get('system_member'):
+        # Its grant is the system's; a key of its own would admit a second controller.
+        raise ValueError(f"{device['name']} runs with the {SYSTEM_NAMES[device['system_member']]}; "
+                         "choose Verification or Controlling there")
     if mode == 'controlling' and device['permission']['reason']:
         raise ValueError(device['permission']['reason'])
     owner = '$' + device['system'] if device.get('system') else device_key

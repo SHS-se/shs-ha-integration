@@ -722,11 +722,11 @@ def build_operating_scope(options, devices, device_models, device_actuals, horiz
     observed running state persists through the planning horizon.
     """
     if __package__:
-        from .operating_modes import operating_mode_identity, system_device_keys
+        from .operating_modes import operating_mode_identity, system_member_keys
     else:
-        from operating_modes import operating_mode_identity, system_device_keys
+        from operating_modes import operating_mode_identity, system_member_keys
     from math import isfinite
-    owners = system_device_keys(devices, options)
+    owners = system_member_keys(devices, options)
     model_owners = {model["key"]: "$" + owners[model["key"]] if model["key"] in owners else model["key"]
                     for model in device_models}
     modes = operating_mode_identity(options, model_owners.values())

@@ -859,6 +859,36 @@ test('schedule uses the same system instruction for its colour and detail', () =
   assert.equal(panel._scheduleCommand(pool, slot).active, false);
 });
 
+test('a pool pump runs with the pool: no selector of its own, pool schedule, one attention item', () => {
+  const panel = makePanel();
+  panel._data.timeline = { capabilities: { pool: true } };
+  const fault = { state: 'fault', reason: 'Water temperature is stale', retry_automatically: true };
+  const heater = { key: 'sensor.pool_heater_energy', name: 'Pool heater', system: 'pool', included: true, planned: true,
+    mode: 'control_verification', execution_status: fault, permission: { enabled: false, reason: null, controller_id: 'pool' } };
+  const pump = { key: 'sensor.pool_pump_energy', name: 'Pool pump', system_member: 'pool', included: true, planned: true,
+    mode: 'control_verification', execution_status: fault, permission: { enabled: false, reason: null, controller_id: 'pool' } };
+  panel._data.devices = [heater, pump];
+  const choices = panel._choices(pump);
+  assert.doesNotMatch(choices, /<select/);
+  assert.match(choices, /Verification/);
+  assert.match(choices, /Runs with Pool heater\. Choose Verification or Controlling there\./);
+  assert.match(panel._choices(heater), /<select/);
+  assert.equal(panel._choices(pump, 'controls'), '<div class="choices"></div>');
+  // Its own command was never executable; the pool's request is what it follows.
+  const slot = { pool_w: 2072, commands: { 'sensor.pool_pump_energy': { type: 'unavailable', reason: 'No executable planning model for this device' } } };
+  const running = panel._scheduleCommand(pump, slot);
+  assert.equal(running.text, 'Runs with pool heating');
+  assert.equal(running.active, true);
+  assert.equal(running.action, 'heating');
+  assert.equal(panel._scheduleCommand(pump, { ...slot, pool_w: 0 }).text, 'No heating requested');
+  assert.equal(panel._scheduleCommand(pump, { pool_w: 0, execution_owners: ['$pool'], execution: { pool_w: 2072 } }).text, 'Runs with pool heating');
+  panel._data.timeline.capabilities.pool = false;
+  assert.equal(panel._scheduleCommand(pump, slot).text, 'No instruction');
+  const items = panel._attention().filter(item => item.key === 'controller:pool');
+  assert.equal(items.length, 1);
+  assert.match(items[0].title, /^Pool heater: /);
+});
+
 test('schedule keeps a compact plan ID without duplicated plan details', () => {
   const panel = makePanel();
   panel._data.operation = {
