@@ -26,8 +26,10 @@ jobs:
     timeout-minutes: 15
     # The Release workflow pushes its own "Release <version>" commit. Pushes
     # made with GITHUB_TOKEN do not start new workflow runs, but this guard
-    # means a future switch to a PAT still cannot create a publish loop.
-    if: ${{ !startsWith(github.event.head_commit.message, 'Release ') }}
+    # means a future switch to a PAT still cannot create a publish loop. It
+    # matches the bot identity release.yml commits as, not the message: code
+    # commits start with a verb too, and "Release control only when..." is one.
+    if: ${{ github.event.head_commit.author.email != '41898282+github-actions[bot]@users.noreply.github.com' }}
 
     steps:
       - name: Require the default branch
