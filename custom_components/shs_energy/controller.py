@@ -880,7 +880,7 @@ class ScheduledController:
             raise ValueError("battery SOC protection blocks the planned request")
         if operation == "export":
             price = slot.get("export_price_sek_per_kwh")
-            if not options.get("battery_export_enabled") or not slot.get("binding") or price is None or finite(price) < finite(options["battery_export_min_price_sek_per_kwh"]):
+            if not slot.get("binding") or price is None or finite(price) < finite(options["battery_export_min_price_sek_per_kwh"]):
                 raise ValueError("battery export is not permitted at this price")
             reserve = finite(options["battery_export_reserve_soc"])
             end = datetime.fromisoformat(slot["start"].replace("Z", "+00:00")) + timedelta(minutes=15)

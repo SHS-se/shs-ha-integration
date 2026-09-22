@@ -136,7 +136,6 @@ OPT_BATTERY_TARGET_SOC = "battery_target_soc"
 OPT_BATTERY_TARGET_IS_HARD = "battery_target_is_hard"
 OPT_BATTERY_CHARGE_EFFICIENCY = "battery_charge_efficiency"
 OPT_BATTERY_DISCHARGE_EFFICIENCY = "battery_discharge_efficiency"
-OPT_BATTERY_EXPORT_ENABLED = "battery_export_enabled"
 OPT_BATTERY_EXPORT_RESERVE_SOC = "battery_export_reserve_soc"
 OPT_BATTERY_EXPORT_MIN_PRICE = "battery_export_min_price_sek_per_kwh"
 

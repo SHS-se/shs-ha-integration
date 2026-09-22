@@ -348,13 +348,22 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertIn('did not confirm the requested operation', self.controller.status['battery']['reason'])
 
-    async def test_export_checks_live_permission_price_and_reserve(self):
+    async def test_export_ignores_removed_disabled_checkbox(self):
+        self.options['battery_export_enabled'] = False
+        self.options['device_modes']['$battery'] = 'controlling'
+        self.slot.update(battery_charge_w=0, battery_discharge_w=3000,
+                         battery_command=battery_command('export', 0, 3000))
+        await self.controller.async_start()
+        await self.controller.async_tick()
+        self.assertTrue(self.calls)
+        self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
+
+    async def test_export_checks_live_price_and_reserve(self):
         await self.controller.async_start()
         self.options['device_modes']['$battery'] = 'controlling'
         self.slot.update(battery_charge_w=0, battery_discharge_w=3000,
                          battery_command=battery_command('export', 0, 3000))
-        for updates, message in (({'battery_export_enabled': False}, 'not permitted'),
-                                 ({'battery_export_enabled': True, 'battery_export_min_price_sek_per_kwh': 4}, 'not permitted'),
+        for updates, message in (({'battery_export_min_price_sek_per_kwh': 4}, 'not permitted'),
                                  ({'battery_export_min_price_sek_per_kwh': 2.5, 'battery_export_reserve_soc': .8}, 'reserved charge')):
             self.options.update(updates)
             await self.controller.async_tick()

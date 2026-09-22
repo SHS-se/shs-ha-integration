@@ -552,7 +552,7 @@ class BatteryRuntime:
             'conversion':self._model.revision,'operations':[asdict(o) for o in operations]})
         identity=ContextIdentity('battery',contract.plan_id,str(capacity),config,config,
             contract.model_revision,'pv-first-dc-v2',catalog_revision)
-        permissions=Permissions(True,True,bool(options.get('battery_export_enabled')),
+        permissions=Permissions(True,True,True,
             contract.export_reserve_mwh/1e6,True,0,contract.model_revision)
         plant=BatteryPlant(ratings['battery_min_soc']*capacity,capacity,cc,dc,
             options['battery_charge_efficiency'],options['battery_discharge_efficiency'],

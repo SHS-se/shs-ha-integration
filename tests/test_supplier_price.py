@@ -213,9 +213,8 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn('" does not exist"', issue_sync)
         self.assertIn('" is unavailable"', issue_sync)
 
-    def test_battery_export_preference_reaches_the_planner_snapshot(self) -> None:
+    def test_battery_export_is_allowed_and_limits_reach_the_planner_snapshot(self) -> None:
         for option in (
-            "OPT_BATTERY_EXPORT_ENABLED",
             "OPT_BATTERY_EXPORT_RESERVE_SOC",
             "OPT_BATTERY_EXPORT_MIN_PRICE",
         ):
@@ -223,7 +222,9 @@ class SensorWiringTests(unittest.TestCase):
                 self.assertIn(option, SCHEMA)
                 self.assertIn(option, FIELDS)
                 self.assertIn(option, COORDINATOR)
-        self.assertIn('"battery_export_enabled"', COORDINATOR)
+        self.assertIn('"battery_export_enabled": battery is not None', COORDINATOR)
+        self.assertNotIn("OPT_BATTERY_EXPORT_ENABLED", FIELDS)
+        self.assertNotIn("OPT_BATTERY_EXPORT_ENABLED", SCHEMA)
         self.assertIn('"battery_export_reserve_soc"', COORDINATOR)
         self.assertIn(
             '"battery_export_min_price_sek_per_kwh"', COORDINATOR

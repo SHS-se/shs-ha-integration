@@ -24,6 +24,14 @@ def save(existing, key, mapping):
 
 
 class ConfigurationReaderTests(unittest.TestCase):
+    def test_removed_export_toggle_is_not_an_editor_or_runtime_option(self):
+        from configuration_schema import OPTION_KEYS
+        self.assertNotIn("battery_export_enabled", OPTION_KEYS)
+        for value in (False, True):
+            self.assertNotIn("battery_export_enabled", resolve_configuration({"battery_export_enabled": value}))
+            migrated, _ = migrate_options({"battery_export_enabled": value})
+            self.assertNotIn("battery_export_enabled", migrated)
+
     def test_revision_location_changes_and_private_copies(self):
         from configuration_schema import ConfigurationReader
         source = {'rooms': {'room': {'temperature_entity_id': 'sensor.old'}},

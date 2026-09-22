@@ -78,9 +78,7 @@ def configuration_defaults(latitude: float, longitude: float) -> dict[str, Any]:
         c.OPT_BATTERY_TARGET_IS_HARD: False,
         c.OPT_BATTERY_CHARGE_EFFICIENCY: 0.95,
         c.OPT_BATTERY_DISCHARGE_EFFICIENCY: 0.95,
-        # Export from storage is an explicit customer preference. It is
-        # advisory until a separately reviewed battery executor exists.
-        c.OPT_BATTERY_EXPORT_ENABLED: False,
+        # Export is allowed; selling price and remaining charge still apply.
         c.OPT_BATTERY_EXPORT_RESERVE_SOC: 0.8,
         c.OPT_BATTERY_EXPORT_MIN_PRICE: 2.5,
         # Commanding the battery stays off until the response, sign and
@@ -230,6 +228,7 @@ def resolve_configuration(options, latitude=0.0, longitude=0.0):
     """Produce a detached runtime view from current records and shared defaults."""
     resolved = configuration_defaults(latitude, longitude)
     resolved.update(deepcopy(options))
+    resolved.pop("battery_export_enabled", None)
     if __package__:
         from .operating_modes import device_mode
     else:

@@ -111,6 +111,15 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_old_disabled_export_setting_does_not_block_export_authority(self):
+        r=Rig('control_verification')
+        self.assertFalse(r.options['battery_export_enabled'])
+        try:
+            await r.start()
+            self.assertTrue(r.runtime.host.state.authority.permissions.battery_export_allowed)
+        finally:
+            await r.runtime.close()
+
     async def test_command_readback_does_not_make_house_reports_out_of_order(self):
         r=Rig();original=r.controller.hass.services.async_call
         async def delayed(domain,name,data,blocking):

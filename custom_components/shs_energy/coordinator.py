@@ -79,7 +79,6 @@ from .const import (
     OPT_BATTERY_TARGET_IS_HARD,
     OPT_BATTERY_CHARGE_EFFICIENCY,
     OPT_BATTERY_DISCHARGE_EFFICIENCY,
-    OPT_BATTERY_EXPORT_ENABLED,
     OPT_BATTERY_EXPORT_MIN_PRICE,
     OPT_BATTERY_EXPORT_RESERVE_SOC,
     OPT_GRID_IMPORT_LIMIT_W,
@@ -2021,7 +2020,6 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 OPT_BATTERY_TARGET_IS_HARD,
                 OPT_BATTERY_CHARGE_EFFICIENCY,
                 OPT_BATTERY_DISCHARGE_EFFICIENCY,
-                OPT_BATTERY_EXPORT_ENABLED,
                 OPT_BATTERY_EXPORT_RESERVE_SOC,
                 OPT_BATTERY_EXPORT_MIN_PRICE,
                 OPT_TERMINAL_SOC_MIN,
@@ -2811,9 +2809,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     parse_number(options[OPT_TERMINAL_ENERGY_VALUE], OPT_TERMINAL_ENERGY_VALUE)
                     if battery else 0
                 ),
-                "battery_export_enabled": (
-                    bool(options[OPT_BATTERY_EXPORT_ENABLED]) if battery else False
-                ),
+                "battery_export_enabled": battery is not None,
                 "battery_export_reserve_soc": (
                     parse_number(
                         options[OPT_BATTERY_EXPORT_RESERVE_SOC],
