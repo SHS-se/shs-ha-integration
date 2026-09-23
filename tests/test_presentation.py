@@ -295,6 +295,20 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(pool['planning_support'], {'state': 'available', 'reason': None, 'path': 'pool'})
         self.assertFalse(pool['execution_eligibility']['writes_permitted_by_mode'])
 
+    def test_a_pool_left_out_for_its_reading_says_why(self):
+        self.options.update(pool_enabled=True, pool_water_temperature_entity='sensor.water',
+                            device_modes={'$pool': 'control_verification'})
+        self.device.update(key='thermostat', category='pool_heating')
+        self.device['mapping']['temperature_entity_id'] = 'sensor.water'
+        self.plan['capabilities']['pool'] = False
+        self.plan['measurement_issues'] = [{
+            'device': 'pool', 'field': 'water_temperature_c', 'entity_id': 'sensor.water', 'value': 500,
+            'reason': 'The pool reported a water temperature of 500 °C, outside −5–60 °C.', 'detected_by': 'planner'}]
+        pool = next(d for d in self.view() if d.get('system') == 'pool')
+        self.assertEqual(pool['planning_support']['reason'],
+                         'Left out of the current plan: The pool reported a water temperature of 500 °C, outside −5–60 °C.')
+        self.assertFalse(pool['execution_eligibility']['eligible'])
+
     def test_a_planned_pool_pump_is_shown_as_part_of_the_pool(self):
         # The fixture plan models these two keys; its commands must name exactly them.
         self.options.update(pool_enabled=True, pool_water_temperature_entity='sensor.water',

@@ -530,6 +530,13 @@ class BatteryRuntime:
             raise ValueError('Battery plan changed while readings were collected')
         contract_wire=plan.get('battery_execution')
         if contract_wire is None:
+            left_out=next((issue for issue in plan.get('measurement_issues') or []
+                           if isinstance(issue,dict) and issue.get('device')=='battery'),None)
+            if left_out:
+                # The plan left the battery out for its readings. A replan cannot
+                # include it until they are real; the server recommends one then.
+                await self._release(f"The current plan leaves the battery out: {left_out.get('reason')}")
+                return
             await self._release('Waiting for the planner to provide battery execution instructions')
             self._request_replan('execution_contract_required')
             return

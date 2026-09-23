@@ -69,7 +69,10 @@ from .const import (
     OPT_PV_FORECAST_LONGITUDE,
     OPT_BATTERY_ENABLED,
     OPT_BATTERY_SOC_ENTITY,
+    OPT_EV_CONNECTED_ENTITY,
+    OPT_EV_ENABLED,
     OPT_EV_SOC_ENTITY,
+    OPT_POOL_ENABLED,
     OPT_GRID_EXPORT_POWER_ENTITY,
     OPT_BATTERY_CAPACITY_KWH,
     OPT_BATTERY_CHARGE_MAX_W,
@@ -137,6 +140,7 @@ from .optimisation import (
     utc_slots,
     validate_plan_contract,
 )
+from .measurements import device_measurement_issues
 from .planning import (
     build_device_models,
     build_services,
@@ -2335,6 +2339,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         options: dict[str, Any],
         horizon: list[datetime],
         device_models: list[dict[str, Any]],
+        ev_capacity_kwh: float | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any] | None]:
         """Inject Home Assistant's clock and entity reads into pure planning."""
         return build_services(
@@ -2343,6 +2348,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             device_models,
             read_entity=self._entity_payload,
             local_tz=dt_util.DEFAULT_TIME_ZONE,
+            ev_capacity_kwh=ev_capacity_kwh,
         )
 
     @staticmethod
@@ -2411,6 +2417,29 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         captured = dt_util.utcnow()
         horizon = utc_slots(captured, OPTIMISATION_HORIZON_HOURS)
         horizon_end = horizon[-1] + timedelta(minutes=15)
+        # A reading that is unavailable or could not be real leaves out only
+        # its own device: switched off for this snapshot exactly as the
+        # customer's own switch would, and named in `measurement_issues`.
+        # Setup warnings keep reading the configured options.
+        configured = dict(options)
+        configured_off = disabled_store_paths(options)
+        measurement_issues = device_measurement_issues(
+            options,
+            self.hass.states.get,
+            captured,
+            battery=bool(
+                options.get(OPT_BATTERY_SOC_ENTITY)
+                and options.get(OPT_BATTERY_ENABLED, True)
+                and "$battery" not in options.get("excluded_device_readings", [])
+                and stored.get("home_planning_configuration", {}).get("battery", {}).get("included") is True
+            ),
+            pool=bool(options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY)) and "pool" not in configured_off,
+            ev=bool(options.get(OPT_EV_CONNECTED_ENTITY)) and "ev" not in configured_off,
+            devices=devices,
+            known_ev_capacity_kwh=stored.get("ev_capacity_kwh"),
+        )
+        for device in {issue["device"] for issue in measurement_issues}:
+            options[{"battery": OPT_BATTERY_ENABLED, "pool": OPT_POOL_ENABLED, "ev": OPT_EV_ENABLED}[device]] = False
 
         pv_entities = [
             self._entity_payload(entity_id)
@@ -2547,7 +2576,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             options,
             horizon,
             device_models,
+            stored.get("ev_capacity_kwh"),
         )
+        if ev_battery and 1 <= ev_battery["capacity_kwh"] <= 500:
+            # Remembered for a later reading at 0 %, when none can be derived.
+            stored["ev_capacity_kwh"] = ev_battery["capacity_kwh"]
 
         if self.tariff_catalog is None:
             raise OptimisationInputError(
@@ -2618,7 +2651,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             })
 
         battery_soc = (
-            normalized_fraction(battery_entity["state"], OPT_BATTERY_SOC_ENTITY)
+            normalized_fraction(
+                battery_entity["state"], OPT_BATTERY_SOC_ENTITY,
+                battery_entity["attributes"].get("unit_of_measurement"),
+            )
             if battery_entity else None
         )
         valid_pv = max(pv) + timedelta(minutes=15)
@@ -2679,8 +2715,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             stored.get("optimisation_device_configuration", {}),
         )
         self._sync_unplanned_service_issue()
-        self._sync_battery_control_issue(options, included=stored.get("home_planning_configuration", {}).get("battery", {}).get("included") is True)
-        self._sync_pool_control_issue(options, included=capabilities["pool"])
+        self._sync_battery_control_issue(configured, included=stored.get("home_planning_configuration", {}).get("battery", {}).get("included") is True)
+        self._sync_pool_control_issue(
+            configured, included="pool" in planned_paths and "pool" not in disabled_store_paths(configured),
+        )
         base_source_categories = (
             "total_consumption", "grid_import", "grid_export",
             "solar_production", "battery_charge", "battery_discharge",
@@ -2830,6 +2868,8 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "services": services,
             "service_requirement_sample_days": service_samples,
         }
+        if measurement_issues:
+            snapshot["measurement_issues"] = measurement_issues
         from .planning import build_operating_scope
         snapshot["operating_scope"] = build_operating_scope(
             options, scope_devices, device_models, device_profile_actuals, horizon

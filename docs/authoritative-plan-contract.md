@@ -49,3 +49,41 @@ difference of the **rolling four-quarter totals** exceeds 6 kWh. Missing quarter
 break the sequence. Pack warnings compare measured energy against the accepted
 plan's state at capture time and trigger above 4 kWh. No threshold requests a
 solve. Expiry recommends a manual replan and leaves the original endpoint intact.
+
+## Measured state and impossible readings
+
+Implemented in `marginal-value-planner-v43`.
+
+A store bound limits what a schedule does to a store, not where the store may
+be. A car above its charge limit, a pool warmed past its stop temperature, a
+pack below a cut-off raised after it discharged, and configured battery targets
+below a live cut-off are planned as they are. Only charge that raises a store
+further above its ceiling, or discharge that lowers it further below its floor,
+is infeasible; the trajectory carries the measured state rather than moving it to
+the bound. This applies equally to the auction, the independent scorer, cost
+refinement and replan continuity.
+
+A reading no device can produce isolates that device alone: a state of charge
+or charge limit outside 0–100 %, a car capacity outside 1–500 kWh derived from
+its usable energy, or a pool water temperature outside −5–60 °C. The device
+leaves the plan exactly as a disabled capability does, and its historical load
+remains household demand. Home Assistant also leaves out a device whose reading
+is unavailable, non-numeric or impossible and reports it in the snapshot's
+`measurement_issues`. The plan publishes the complete list in
+`measurement_issues`; the website Plan page and the Home Assistant panel both
+show it. Configuration errors remain setup failures and are not isolated. When
+a left-out device reports usable readings again, ingest recommends a manual
+replan (`measurement_recovered_<device>`), because plans are kept between price
+releases.
+
+In this integration `measurements.py` checks each device's readings before the
+snapshot is built and switches off only the affected store for that snapshot,
+exactly as the customer's own store switch would. Setup warnings keep reading
+the configured options. The panel names the devices the current plan leaves
+out, with a link to each source entity, and the affected device's status says
+why it has no plan. A battery left out is handed back until a plan includes it;
+no replan is requested, because the server recommends one once its reading is
+real again. A percentage unit decides how a state of charge is scaled, so a car
+at 1 % is not read as full; an empty car is planned with the battery size last
+derived from its own readings; a departure outside the horizon, already past or
+unset leaves that plan without one.

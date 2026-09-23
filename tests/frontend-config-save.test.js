@@ -1516,3 +1516,19 @@ test('shared replan reasons are expandable, timestamped, escaped, and removed on
   panel._data.replan_recommendations = [];
   assert.equal(panel._renderReplanRecommendations(), '');
 });
+
+test('devices the plan leaves out for their readings are named with their source entity', () => {
+  const panel = Object.create(context.Panel.prototype);
+  panel._data = {measurement_issues: [
+    {device: 'ev', field: 'soc', entity_id: 'sensor.car_soc', value: 1.05, reason: 'The car reported a state of charge of 105%, <outside> 0–100%.', detected_by: 'planner'},
+    {device: 'pool', field: 'water_temperature_c', entity_id: null, value: 'unavailable', reason: "The pool's water temperature is unavailable.", detected_by: 'home_assistant'},
+  ]};
+  const html = panel._renderMeasurementIssues();
+  assert.match(html, /Left out of this plan: sensor readings could not be used/);
+  assert.match(html, /the rest of the home is planned as usual/);
+  assert.match(html, /&lt;outside&gt;/);
+  assert.match(html, /data-action="inspect-entity" data-entity-id="sensor.car_soc"/);
+  assert.equal((html.match(/inspect-entity/g) || []).length, 1);
+  panel._data.measurement_issues = [];
+  assert.equal(panel._renderMeasurementIssues(), '');
+});

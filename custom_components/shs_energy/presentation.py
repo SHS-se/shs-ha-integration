@@ -215,7 +215,11 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         if not status["actionable"]:
             planning_reason = status["reason"]
         elif system or member:
-            planning_reason = None if active and (plan or {}).get("capabilities", {}).get(system or member) else "Waiting for a plan for this device"
+            left_out = [issue.get("reason") for issue in (plan or {}).get("measurement_issues") or []
+                        if isinstance(issue, dict) and issue.get("device") == (system or member)]
+            planning_reason = (None if active and (plan or {}).get("capabilities", {}).get(system or member)
+                               else "Left out of the current plan: " + " ".join(left_out) if left_out
+                               else "Waiting for a plan for this device")
         else:
             planning_reason = command.get("reason") if command and command.get("type") == "unavailable" else None if command else "Waiting for instructions for this device"
         device["planning_support"] = {"state": "available" if planning_reason is None else "unavailable",

@@ -12,7 +12,7 @@
       "boiler": false,
       "ev": false
     },
-    "model_version": "marginal-value-planner-v42",
+    "model_version": "marginal-value-planner-v43",
     "decision_diagnostics_version": 2,
     "plan_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
     "snapshot_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
@@ -23,6 +23,7 @@
     "slot_minutes": 15,
     "status": "ready",
     "validation_errors": [],
+    "measurement_issues": [],
     "sources": {
       "pv": {
         "provider": "home_assistant_entity",
@@ -271,6 +272,60 @@
         "expected_draw_kwh": 0
       }
     },
+    "resolved_value_stores": [
+      {
+        "key": "pool",
+        "curve": {
+          "unit": "celsius",
+          "points": [
+            {
+              "at": 25,
+              "sek_per_unit": 80
+            },
+            {
+              "at": 28,
+              "sek_per_unit": 30
+            },
+            {
+              "at": 30,
+              "sek_per_unit": 8
+            },
+            {
+              "at": 31,
+              "sek_per_unit": 0
+            }
+          ]
+        },
+        "initial_state": 26.3,
+        "max_state": 31,
+        "units_per_kwh": 0.05528531228015321,
+        "reference_sek_per_kwh": 0.1
+      },
+      {
+        "key": "battery",
+        "curve": {
+          "unit": "kwh",
+          "points": [
+            {
+              "at": 2.712,
+              "sek_per_unit": 2.8
+            },
+            {
+              "at": 2.722,
+              "sek_per_unit": 0.045
+            },
+            {
+              "at": 17.176,
+              "sek_per_unit": 0.045
+            }
+          ]
+        },
+        "initial_state": 8.136,
+        "max_state": 17.176,
+        "units_per_kwh": 0.95,
+        "reference_sek_per_kwh": 0.1
+      }
+    ],
     "policy": {
       "battery_end_of_solar_target_soc": 0.8,
       "battery_target_is_hard": false,
@@ -6437,7 +6492,7 @@
         "boiler": false,
         "ev": false
       },
-      "model_version": "marginal-value-planner-v42",
+      "model_version": "marginal-value-planner-v43",
       "decision_diagnostics_version": 2,
       "plan_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
       "snapshot_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
@@ -6448,6 +6503,7 @@
       "slot_minutes": 15,
       "status": "ready",
       "validation_errors": [],
+      "measurement_issues": [],
       "sources": {
         "pv": {
           "provider": "home_assistant_entity",
@@ -6696,6 +6752,60 @@
           "expected_draw_kwh": 0
         }
       },
+      "resolved_value_stores": [
+        {
+          "key": "pool",
+          "curve": {
+            "unit": "celsius",
+            "points": [
+              {
+                "at": 25,
+                "sek_per_unit": 80
+              },
+              {
+                "at": 28,
+                "sek_per_unit": 30
+              },
+              {
+                "at": 30,
+                "sek_per_unit": 8
+              },
+              {
+                "at": 31,
+                "sek_per_unit": 0
+              }
+            ]
+          },
+          "initial_state": 26.3,
+          "max_state": 31,
+          "units_per_kwh": 0.05528531228015321,
+          "reference_sek_per_kwh": 0.1
+        },
+        {
+          "key": "battery",
+          "curve": {
+            "unit": "kwh",
+            "points": [
+              {
+                "at": 2.712,
+                "sek_per_unit": 2.8
+              },
+              {
+                "at": 2.722,
+                "sek_per_unit": 0.045
+              },
+              {
+                "at": 17.176,
+                "sek_per_unit": 0.045
+              }
+            ]
+          },
+          "initial_state": 8.136,
+          "max_state": 17.176,
+          "units_per_kwh": 0.95,
+          "reference_sek_per_kwh": 0.1
+        }
+      ],
       "policy": {
         "battery_end_of_solar_target_soc": 0.8,
         "battery_target_is_hard": false,

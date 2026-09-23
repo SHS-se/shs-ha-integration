@@ -43,6 +43,7 @@ try:  # pragma: no cover - exercised by both import paths
     from .optimisation import (
         OptimisationInputError,
         REMEDY_DEFECT,
+        REMEDY_WAITING,
         build_device_load_model,
         discrete_current_control,
         normalized_fraction,
@@ -80,6 +81,7 @@ except ImportError:  # The test suite imports these helpers as flat modules,
     from optimisation import (  # type: ignore[no-redef]
         OptimisationInputError,
         REMEDY_DEFECT,
+        REMEDY_WAITING,
         build_device_load_model,
         discrete_current_control,
         normalized_fraction,
@@ -155,8 +157,13 @@ def build_services(
     *,
     read_entity: EntityReader,
     local_tz: tzinfo,
+    ev_capacity_kwh: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any] | None]:
-    """Build the deferrable services, their sample counts and EV battery state."""
+    """Build the deferrable services, their sample counts and EV battery state.
+
+    ``ev_capacity_kwh`` is the battery size last derived from the car's own
+    readings, used while it reports no charge to derive one from.
+    """
     first = horizon[0]
     end = horizon[-1] + timedelta(minutes=15)
 
@@ -361,9 +368,14 @@ def build_services(
             "Vehicle charge-limit entity",
         )
         soc_payload = read_entity(soc_id)
-        soc = normalized_fraction(soc_payload["state"], OPT_EV_SOC_ENTITY)
+        soc = normalized_fraction(
+            soc_payload["state"], OPT_EV_SOC_ENTITY,
+            soc_payload["attributes"].get("unit_of_measurement"),
+        )
+        target_payload = read_entity(target_id)
         target = normalized_fraction(
-            read_entity(target_id)["state"], OPT_EV_TARGET_SOC_ENTITY
+            target_payload["state"], OPT_EV_TARGET_SOC_ENTITY,
+            target_payload["attributes"].get("unit_of_measurement"),
         )
         remaining_entity = required_entity(
             OPT_EV_ENERGY_REMAINING_ENTITY,
@@ -372,20 +384,31 @@ def build_services(
         remaining = parse_number(
             read_entity(remaining_entity)["state"], remaining_entity
         )
-        if soc <= 0:
+        # An empty car is realistic state, not an error: its battery size is
+        # the one last derived from a reading with charge in it. The snapshot
+        # builder leaves the car out when no such reading exists yet.
+        if soc > 0 and remaining > 0:
+            capacity = remaining / soc
+        elif ev_capacity_kwh:
+            capacity = ev_capacity_kwh
+        else:
             raise OptimisationInputError(
-                "vehicle SOC must be above zero to derive usable battery capacity"
+                "vehicle battery size cannot be derived while it reports no charge"
             )
-        if remaining <= 0:
-            raise OptimisationInputError(
-                f"{remaining_entity} must report positive usable energy"
-            )
-        capacity = remaining / soc
 
         departure: datetime | None = None
+        departure_raw: Any = None
         departure_entity = options.get(OPT_EV_DEPARTURE_ENTITY)
         if isinstance(departure_entity, str) and departure_entity:
-            departure_raw = read_entity(departure_entity)["state"]
+            try:
+                departure_raw = read_entity(departure_entity)["state"]
+            except OptimisationInputError as err:
+                # An unset or unavailable departure is no departure; a
+                # missing entity is still the setup error it was.
+                if err.remedy != REMEDY_WAITING:
+                    raise
+                departure_raw = None
+        if departure_raw not in (None, "", "unknown", "unavailable"):
             try:
                 departure = datetime.fromisoformat(
                     str(departure_raw).replace("Z", "+00:00")
@@ -399,10 +422,10 @@ def build_services(
                     f"{OPT_EV_DEPARTURE_ENTITY} timestamp must include a timezone"
                 )
             departure = departure.astimezone(timezone.utc)
+            # A departure already past, or beyond this horizon, is a realistic
+            # schedule: this plan simply has no departure inside it.
             if departure <= first or departure > end:
-                raise OptimisationInputError(
-                    "EV departure must fall inside the 72-hour horizon"
-                )
+                departure = None
 
         ev_battery = {
             "name": str(

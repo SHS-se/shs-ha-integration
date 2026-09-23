@@ -309,14 +309,46 @@ class EvServiceTests(unittest.TestCase):
         self.assertEqual(control["current_step_a"], 1)
         self.assertEqual(control["max_current_a"], 16)
 
-    def test_a_departure_outside_the_horizon_is_refused(self) -> None:
-        self.states["sensor.departure"] = {
-            "state": (HORIZON[-1] + timedelta(days=2)).isoformat(),
-            "attributes": {},
-        }
-        with self.assertRaises(OptimisationInputError) as caught:
-            self.plan({**self.options, "ev_departure_entity": "sensor.departure"})
-        self.assertIn("inside the 72-hour horizon", str(caught.exception))
+    def test_a_departure_outside_the_horizon_leaves_this_plan_without_one(self) -> None:
+        """A departure next week, or one already past, is a realistic schedule."""
+        for state in (
+            (HORIZON[-1] + timedelta(days=2)).isoformat(),
+            (HORIZON[0] - timedelta(hours=3)).isoformat(),
+            "unknown",
+        ):
+            with self.subTest(departure=state):
+                self.states["sensor.departure"] = {"state": state, "attributes": {}}
+                services, _samples, battery = self.plan(
+                    {**self.options, "ev_departure_entity": "sensor.departure"}
+                )
+                self.assertIsNone(battery["departure"])
+                self.assertEqual(
+                    datetime.fromisoformat(services[0]["deadline"]),
+                    HORIZON[-1] + timedelta(minutes=15),
+                )
+
+    def test_a_percentage_state_of_charge_is_read_by_its_unit(self) -> None:
+        """A car at 1 % was read as full when the value alone set the scale."""
+        self.states["sensor.soc"] = {"state": "1", "attributes": {"unit_of_measurement": "%"}}
+        self.states["sensor.energy_remaining"]["state"] = "0.75"
+        _services, _samples, battery = self.plan(self.options)
+        self.assertEqual(battery["soc"], 0.01)
+        self.assertEqual(battery["capacity_kwh"], 75)
+
+    def test_an_empty_car_is_planned_with_its_known_battery_size(self) -> None:
+        self.states["sensor.soc"]["state"] = "0"
+        self.states["sensor.energy_remaining"]["state"] = "0"
+        services, _samples, battery = build_services(
+            self.options, HORIZON, [self.charger],
+            read_entity=lambda entity_id: self.states[entity_id],
+            local_tz=timezone.utc, ev_capacity_kwh=75.8,
+        )
+        self.assertEqual(battery["soc"], 0)
+        self.assertEqual(battery["capacity_kwh"], 75.8)
+        self.assertAlmostEqual(services[0]["required_kwh"], 0.8 * 75.8 / 0.92, places=3)
+        # Without an earlier reading the builder leaves the car out first.
+        with self.assertRaises(OptimisationInputError):
+            self.plan(self.options)
 
 
 class ServiceRoutingTests(unittest.TestCase):

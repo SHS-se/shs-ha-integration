@@ -18,8 +18,10 @@ from zoneinfo import ZoneInfo
 
 try:  # pragma: no cover - package in HA, flat module in the pure test suite
     from .api_contract import SNAPSHOT_SCHEMA_VERSION, SUPPORTED_PLAN_SCHEMA_VERSIONS
+    from .measurements import fraction
 except ImportError:
     from api_contract import SNAPSHOT_SCHEMA_VERSION, SUPPORTED_PLAN_SCHEMA_VERSIONS
+    from measurements import fraction
 
 SLOT_SECONDS = 900
 SLOT_HOURS = 0.25
@@ -256,14 +258,15 @@ def discrete_current_control(
     }
 
 
-def normalized_fraction(raw: Any, label: str) -> float:
-    """Accept an explicitly fractional or percentage state and normalize it."""
-    value = parse_number(raw, label)
-    if 0 <= value <= 1:
-        return value
-    if 1 < value <= 100:
-        return value / 100
-    raise OptimisationInputError(f"{label} must be 0..1 or 0..100 percent")
+def normalized_fraction(raw: Any, label: str, unit: Any = None) -> float:
+    """Accept an explicitly fractional or percentage state and normalize it.
+
+    A ``%`` unit decides the scale, so a car at 1 % is not read as full.
+    """
+    value = fraction(parse_number(raw, label), unit)
+    if value is None or not 0 <= value <= 1:
+        raise OptimisationInputError(f"{label} must be 0..1 or 0..100 percent")
+    return value
 
 
 def state_is_on(raw: Any) -> bool:

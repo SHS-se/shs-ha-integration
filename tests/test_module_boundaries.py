@@ -40,6 +40,7 @@ PURE_MODULES = (
     "configuration_values",
     "configuration_fields",
     "optimisation",
+    "measurements",
     "planning",
     "readings",
     "supplier",

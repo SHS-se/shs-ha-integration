@@ -111,6 +111,24 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_plan_that_leaves_the_battery_out_says_why_and_requests_no_replan(self):
+        async def run(issues):
+            r=Rig();del r.plan['battery_execution']
+            if issues:r.plan['measurement_issues']=issues
+            await r.fence.open();await r.runtime.open();await r.runtime.refresh()
+            if r.runtime._replan_task:await r.runtime._replan_task
+            try:return r.runtime.snapshot()['reason'],r.replans
+            finally:await r.runtime.close()
+        reason='The home battery reported a state of charge of 130%, outside 0–100%.'
+        status,replans=await run([{'device':'battery','field':'soc','entity_id':'sensor.soc','value':1.3,
+                                   'reason':reason,'detected_by':'planner'}])
+        self.assertEqual(status,'The current plan leaves the battery out: '+reason)
+        # Replanning cannot include it until the reading is real; the server recommends one then.
+        self.assertEqual(replans,[])
+        status,replans=await run(None)
+        self.assertEqual(status,'Waiting for the planner to provide battery execution instructions')
+        self.assertEqual(len(replans),1)
+
     async def test_old_disabled_export_setting_does_not_block_export_authority(self):
         r=Rig('control_verification')
         self.assertFalse(r.options['battery_export_enabled'])

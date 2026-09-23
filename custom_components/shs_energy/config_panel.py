@@ -184,6 +184,8 @@ async def _configuration_payload(
         "labels": LABELS,
         "operation": operation,
         "replan_recommendations": getattr(coordinator, "replan_recommendations", []),
+        # The same list the website shows: devices this plan leaves out.
+        "measurement_issues": [issue for issue in (plan or {}).get("measurement_issues") or [] if isinstance(issue, dict)],
         "timeline": timeline(plan, operation, command_preview=coordinator.controller.preview_commands, options=options),
         "website_url": shs_const.website_url(entry.data[shs_const.CONF_BASE_URL], "/portal/energy-modeling?tab=devices"),
         "configured_keys": list(entry.options),
