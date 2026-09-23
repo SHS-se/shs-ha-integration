@@ -1,5 +1,12 @@
 # Mixed-mode execution (0.8.0-beta.92)
 
+> **Superseded, 23 September 2026.** Switching a device between Verification
+> and Controlling must not change the plan: it changes only which writer is
+> authorised, requests no plan and recommends no replan. One schedule serves
+> every mode, and a plan or battery reference captured under either mode is
+> accepted under the other. See the
+> [authoritative plan contract](authoritative-plan-contract.md).
+
 ## Next participation contract — 15 September 2026
 
 Schema 9 below remains dated implementation evidence. Its four local modes are replaced in the agreed design by HA inclusion, website planning and HA Verification/Controlling authority. Verification devices remain separately Planned but external in the executable demand model. Base consumption excludes all Planned devices; execution external demand adds those without effective authority once. Explicit battery supply scope selects accounting demand independently of whether each Planned device is physically controlled.

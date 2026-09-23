@@ -21,7 +21,7 @@ from presentation import operational_status
 def coordinator_methods(namespace):
     tree = ast.parse((ROOT / 'coordinator.py').read_text())
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'ShsStatusCoordinator')
-    names = {'async_restore_plan', 'async_report_runtime', 'async_replan_poll', 'async_replan_after_mode_change', 'async_answer_replan'}
+    names = {'async_restore_plan', 'async_report_runtime', 'async_replan_poll', 'async_answer_replan'}
     methods = [n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name in names]
     exec(compile(ast.Module(body=methods, type_ignores=[]), 'coordinator.py', 'exec'), namespace)
     return type('RecoveryCoordinator', (), {name: namespace[name] for name in names})
@@ -59,29 +59,6 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.c.operational_status = {'now': self.now.isoformat(), 'plan_id': None,
             'state': 'ready' if ready else 'unavailable', 'reason': 'test',
             'binding_until': None, 'valid_until': None, 'actionable': ready, 'retry_at': None}
-
-    async def test_mode_change_reports_wait_before_exchange_and_failure_afterwards(self):
-        self.c.optimisation_plan = {'plan_id': 'retained'}
-        async def failed_exchange(**kwargs):
-            self.assertEqual(self.c.client.report_runtime.await_count, 1)
-            self.c.last_optimisation_error = 'invalid pool configuration report'
-            raise RuntimeError('exchange failed')
-        self.c.async_optimisation_push.side_effect = failed_exchange
-        with self.assertRaisesRegex(RuntimeError, 'exchange failed'):
-            await self.c.async_replan_after_mode_change()
-        reports = [call.args[0] for call in self.c.client.report_runtime.await_args_list]
-        self.assertEqual([r['state'] for r in reports], ['unavailable', 'unavailable'])
-        self.assertEqual(reports[-1]['last_error'], 'invalid pool configuration report')
-        self.assertEqual(self.c.optimisation_plan['plan_id'], 'retained')
-
-    async def test_mode_change_reports_replacement_ready_after_success(self):
-        async def replacement(**kwargs):
-            self.assertEqual(self.c.client.report_runtime.await_args.args[0]['state'], 'unavailable')
-            self.set_status(True)
-        self.c.async_optimisation_push.side_effect = replacement
-        await self.c.async_replan_after_mode_change()
-        self.c.async_optimisation_push.assert_awaited_once_with(force_plan=True)
-        self.assertEqual(self.c.client.report_runtime.await_args.args[0]['state'], 'ready')
 
     async def test_each_interval_exchanges_even_with_a_healthy_cached_plan(self):
         self.set_status(True)

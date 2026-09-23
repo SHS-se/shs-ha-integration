@@ -11,7 +11,7 @@ import unittest
 sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
 from battery_runtime import BatteryRuntime, exact_start, iso, stamp
 from battery_writer import BatteryWriterFence
-from battery_runtime import digest
+from battery_runtime import digest, plan_scope
 from plan_execution import *
 
 
@@ -84,12 +84,12 @@ class Rig:
             round(2000*(end-start)/3600),0,0,round(1000*(end-start)/3600),round(2000*(end-start)/3600)+round(1000*(end-start)/3600),0,0,0,0)
         row=replace(row,rounding_mwh=row.import_mwh-row.load_mwh-row.charge_ac_mwh)
         contract=ExecutionContract('c'+str(generation),self.plan['plan_id'],generation,self.options['device_modes']['$battery'],
-            digest(self.options),'configured-95','stored_energy_mwh',10000000,0,10000000,0,end,0,previous,
+            plan_scope(self.options),'configured-95','stored_energy_mwh',10000000,0,10000000,0,end,0,previous,
             (row,), (Objective('charge:'+str(end),'stored_energy',start,end,row.stored_end_mwh,'Charge now'),),(),())
         self.plan['battery_execution']=contract_wire(contract)
 
     async def start(self):
-        self.plan['battery_execution']['scope_revision']=digest(self.options)
+        self.plan['battery_execution']['scope_revision']=plan_scope(self.options)
         await self.fence.open();await self.runtime.open();await self.runtime.refresh()
         if self.runtime.host:await asyncio.wait_for(self.runtime.host.idle(),2)
     async def advance(self,millis=20000):
@@ -783,6 +783,30 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(captured['previous_contract_id'],original.contract.id)
         finally:await r.runtime.close()
 
+    async def test_a_plan_captured_under_either_mode_is_accepted_under_the_other(self):
+        """Verification and Controlling change who may write, never the plan."""
+        for captured_in,accepted_in in (('control_verification','controlling'),('controlling','control_verification')):
+            with self.subTest(captured=captured_in,accepted=accepted_in):
+                r=Rig(captured_in);await r.start()
+                try:
+                    original=r.runtime.host.state.execution.account.contract
+                    feedback=await r.runtime.capture_feedback(5000000,'snapshot')
+                    # The mode changes, and so does another device's, while the plan is solved.
+                    r.options['device_modes']['$battery']=accepted_in
+                    r.options['device_modes']['sensor.pool']='controlling'
+                    r.options['configuration_reviewed_at']='2026-09-23T15:00:00+00:00'
+                    self.assertEqual(plan_scope(r.options),feedback['scope_revision'])
+                    candidate=deepcopy(r.plan)
+                    revised=replace(original,id='next',generation=feedback['generation'],mode=captured_in,
+                        source_receipt=feedback['source_receipt'],previous_contract_id=original.id)
+                    candidate['battery_execution']=contract_wire(revised)
+                    r.runtime.validate_plan_response(candidate)
+                    # A changed setup still belongs to a different plan.
+                    r.options['battery_capacity_kwh']=12
+                    with self.assertRaisesRegex(ValueError,'different local setup'):
+                        r.runtime.validate_plan_response(candidate)
+                finally:await r.runtime.close()
+
     async def test_mode_change_without_matching_plan_preserves_account_and_rebinds(self):
         for capture_first in (False, True):
             with self.subTest(capture_first=capture_first):
@@ -804,7 +828,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
                     feedback=await r.runtime.capture_feedback(5000000,'new_mode')
                     self.assertIsNone(r.runtime.host)
                     self.assertEqual(feedback['previous_contract_id'],original.contract.id)
-                    self.assertEqual(feedback['scope_revision'],digest(r.options))
+                    self.assertEqual(feedback['scope_revision'],plan_scope(r.options))
                     saved=await r.runtime.archive.load_session(r.store.saved['execution_root'])
                     self.assertEqual(saved.account,r.runtime._bootstrap)
                     self.assertEqual(r.calls,[])

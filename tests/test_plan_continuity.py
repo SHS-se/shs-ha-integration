@@ -74,8 +74,7 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.c.operational_status['actionable'],self.c.operational_status)
         self.assertIsNotNone(self.c.binding_plan_for('battery',self.c.entry.options)[1])
 
-    async def test_failed_request_after_mode_change_retains_schedule_through_restore(self):
-        self.c.entry.options['device_modes']['$pool']='controlling'
+    async def test_failed_request_after_configuration_change_retains_schedule_through_restore(self):
         self.c._plan_configuration_changed=True
         self.c._store.saved['plan_configuration_changed']=True
         self.c.client.push_optimisation.side_effect=RuntimeError('Planning worker returned HTTP 546')

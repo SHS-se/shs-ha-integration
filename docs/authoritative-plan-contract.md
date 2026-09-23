@@ -23,7 +23,9 @@ new published price release, after value curves are regenerated. Explicit manual
 replanning remains available on Plan. Other former triggers recommend replanning
 through shared persistent warnings, with reason and event time, in both UIs.
 A completed replan clears the recommendations it addresses. Verification/control
-mode transitions change writer authority only, not the schedule.
+mode transitions change writer authority only, not the schedule: they request no
+plan and recommend no replan, and a plan or battery reference captured under
+either mode is accepted and executed under the other.
 
 Realistic state above a desired target is not infeasibility. Invalid measurements
 must be isolated to the affected device and explained; they must not discard

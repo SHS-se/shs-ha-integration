@@ -23,6 +23,7 @@ if __package__:
     from .execution_archive import ExecutionArchive
     from .battery_live import native_surface, source_revision, planned_power_bindings
     from .battery_supply import SupplyScope, observe_supply
+    from .configuration_schema import METADATA_KEYS
     from .configuration_values import resolve_battery_quantities
     from .energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
     from .device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
@@ -39,6 +40,7 @@ else:
     from execution_archive import ExecutionArchive
     from battery_live import native_surface, source_revision, planned_power_bindings
     from battery_supply import SupplyScope, observe_supply
+    from configuration_schema import METADATA_KEYS
     from configuration_values import resolve_battery_quantities
     from energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
     from device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
@@ -74,6 +76,15 @@ def stamp(value):
 
 def digest(value):
     return sha256(json.dumps(value,sort_keys=True,allow_nan=False).encode()).hexdigest()
+
+def plan_scope(options):
+    """The local setup a battery plan is captured for, without writer authority.
+
+    Verification and Controlling change only who may write, never the plan, so a
+    plan or reference captured under one mode stays valid under the other. The
+    review timestamp and other metadata describe no equipment either.
+    """
+    return digest({k:v for k,v in options.items() if k!='device_modes' and k not in METADATA_KEYS})
 
 def exact_start(slot):
     return stamp(slot['start'])+900000-round(slot['duration_hours']*3600000)
@@ -361,8 +372,8 @@ class BatteryRuntime:
         if account.contract and contract.id==account.contract.id:
             if contract!=account.contract:raise ValueError('Accepted battery reference was changed')
             return
-        if contract.scope_revision!=digest(options) or contract.mode!=device_mode(options,'battery'):
-            raise ValueError('Battery plan belongs to a different local setup or operating mode')
+        if contract.scope_revision!=plan_scope(options):
+            raise ValueError('Battery plan belongs to a different local setup')
         anchor=next((r for r in account.requests if r.generation==contract.generation),None)
         if contract.generation!=account.requested_generation or anchor is None or anchor.source_receipt!=contract.source_receipt:
             raise ValueError('Battery plan belongs to a superseded request or different actuals prefix')
@@ -385,14 +396,14 @@ class BatteryRuntime:
         """Persist the request generation and freeze its evidence before network I/O."""
         if self.host:
             state=await self.host.accept(rt.ReplanRequested(
-                execution.StateObservation(at_ms if at_ms is not None else self.now(),stored_mwh,source),digest(self.controller.options())))
+                execution.StateObservation(at_ms if at_ms is not None else self.now(),stored_mwh,source),plan_scope(self.controller.options())))
             return json.loads(state.execution.captured_feedback)
         else:
             self._bootstrap=execution.observe_state(self._bootstrap,
                 execution.StateObservation(at_ms if at_ms is not None else self.now(),stored_mwh,source))
             self._bootstrap=execution.request_replan(self._bootstrap)
             captured=execution.planner_feedback(self._bootstrap,self.now())
-            captured.update(scope_revision=digest(self.controller.options()),reason=getattr(self,'_runtime_reason',None),pending_effects=[])
+            captured.update(scope_revision=plan_scope(self.controller.options()),reason=getattr(self,'_runtime_reason',None),pending_effects=[])
             self._bootstrap_captured=json.dumps(captured)
             await self._persist_bootstrap()
             return captured

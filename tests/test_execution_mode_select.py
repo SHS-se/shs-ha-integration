@@ -60,7 +60,7 @@ class Rig:
             '$battery': 'control_verification', 'sensor.heater': 'control_verification'}},
             data={const.CONF_DEVICE_TOKEN_ID: 'token'}, async_create_background_task=self.background)
         self.entry.runtime_data = SimpleNamespace(controller=SimpleNamespace(async_tick=self.tick),
-            async_replan_after_mode_change=self.mode_replan, async_battery_inputs_refresh=self.refresh_battery, async_update_listeners=self.notify,
+            async_optimisation_push=self.replan, async_battery_inputs_refresh=self.refresh_battery, async_update_listeners=self.notify,
             async_add_battery_listener=self.add_battery_listener)
         self.hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=self.update_entry))
         self.shared = load_adapter('control_configuration.py', {'datetime': datetime, 'timezone': timezone,
@@ -89,7 +89,6 @@ class Rig:
     def notify_battery(self):
         for listener in list(self.battery_listeners): listener()
     async def refresh_battery(self): self.battery_refreshes += 1
-    async def mode_replan(self): await self.replan(force_plan=True)
     async def tick(self):
         assert self.battery_refreshes > self.ticks
         self.ticks += 1
@@ -149,17 +148,18 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('select.old',r.registry.rows)
         self.assertIn('sensor.keep',r.registry.rows)
 
-    async def test_automation_and_panel_use_same_persistence_and_replan(self):
+    async def test_automation_and_panel_use_same_persistence_and_never_replan(self):
+        # Verification and Controlling change who may write, never the plan:
+        # no exchange or replan follows a mode change.
         r=Rig();await r.manager.refresh();entity=r.manager.entities['$battery']
         await entity.async_select_option('controlling');await r.drain()
         self.assertEqual(entity.current_option,'controlling')
         self.assertEqual(r.entry.options['device_modes']['sensor.heater'],'control_verification')
-        self.assertEqual(r.replans,[{'force_plan':True}]);self.assertEqual(r.ticks,1)
+        self.assertEqual(r.replans,[]);self.assertEqual(r.ticks,1)
         await r.shared.async_set_execution_mode(r.hass,r.entry,'$battery','control_verification');await r.drain()
         self.assertEqual(entity.current_option,'control_verification')
-        self.assertEqual(len(r.replans),2)
         await entity.async_select_option('control_verification');await r.drain()
-        self.assertEqual(len(r.replans),2)
+        self.assertEqual(r.replans,[]);self.assertEqual(r.ticks,2)
         self.assertEqual(entity._attr_entity_category,'config')
 
     async def test_blocked_control_then_setup_correction_then_exclusion(self):

@@ -11,7 +11,10 @@ The entity uses the same permission checks and saved setting as the configuratio
 panel. Controlling is rejected with the same explanation when setup, website
 choices or the current plan do not permit it. Switching an admitted device back
 to Verification remains possible when planning is unavailable. Changing mode
-requests a fresh plan and invokes the existing controller handover path.
+never changes the plan and requests no new one: Verification and Controlling
+decide only whether SHS writes the retained schedule, through the existing
+controller handover path. A plan or battery reference captured under either mode
+is accepted and executed under the other.
 
 The select is the only release. Setting Verification hands the device back to the
 settings captured when SHS took control. Restarts, integration updates, unavailable
