@@ -800,7 +800,7 @@ class BatteryRuntime:
             while self._replan_pending and not self._closed and not self._closing:
                 self._replan_pending=False
                 try:
-                    await self.coordinator.async_optimisation_push(force_plan=True)
+                    await self.coordinator.async_optimisation_push(force_plan=True, replan_reason=f"Battery controller: {self._runtime_reason}. Consider a manual replan.")
                 except Exception as error:
                     self._record_fault('replan',str(error))
                     return  # The existing coordinator retry/poll owns transport retry.

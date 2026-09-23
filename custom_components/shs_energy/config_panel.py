@@ -183,6 +183,7 @@ async def _configuration_payload(
     return {
         "labels": LABELS,
         "operation": operation,
+        "replan_recommendations": getattr(coordinator, "replan_recommendations", []),
         "timeline": timeline(plan, operation, command_preview=coordinator.controller.preview_commands, options=options),
         "website_url": shs_const.website_url(entry.data[shs_const.CONF_BASE_URL], "/portal/energy-modeling?tab=devices"),
         "configured_keys": list(entry.options),

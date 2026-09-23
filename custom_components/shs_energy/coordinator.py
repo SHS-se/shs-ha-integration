@@ -246,6 +246,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.optimisation_plan: dict[str, Any] | None = None
         self._plan_contract = PlanContractCache(lambda: self.optimisation_plan)
         self._plan_configuration_changed = False
+        self.replan_recommendations: list[dict[str, str]] = []
         self.last_optimisation_push: str | None = None
         self.last_optimisation_attempt: str | None = None
         self._answered_replan_request_id: str | None = None
@@ -483,6 +484,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         stored = await self._store.async_load() or {}
         self.optimisation_plan = stored.get("optimisation_plan")
+        self.replan_recommendations = stored.get("replan_recommendations", [])
         self._plan_configuration_changed = stored.get("plan_configuration_changed", False)
         self.last_optimisation_push = stored.get("last_optimisation_push")
         self.last_optimisation_attempt = stored.get("last_optimisation_attempt")
@@ -568,6 +570,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "last_error": (self.last_optimisation_error or "")[:1000] or None,
                 })
                 validate_server_contract(status)
+                self.replan_recommendations = status.get("replan_recommendations", [])
                 self.last_runtime_report = dt_util.utcnow().isoformat()
                 self.last_runtime_error = None
                 return status
@@ -1265,7 +1268,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.optimisation_missing_inputs, datetime.now(timezone.utc), options=options,
             validate=self._plan_contract)
         if self._plan_configuration_changed and result["actionable"]:
-            result.update(reason="Using the retained schedule while an updated plan is requested")
+            result.update(reason="Using the retained schedule; configuration changed, so a manual replan is recommended")
         result["recovering"] = refresh_in_progress(self.hass, self.entry)
         result["retry_at"] = None
         return result
@@ -2910,6 +2913,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         *,
         force_plan: bool = False,
         replan_request_id: str | None = None,
+        replan_reason: str | None = None,
     ) -> None:
         """Upload completed quarters and refresh or retry the rolling plan.
 
@@ -3111,8 +3115,11 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     pool_slots,
                     device_inventory_complete=True,
                     replan_request_id=replan_request_id,
+                    replan_recommendation=(replan_reason or "Integration configuration or controller conditions changed. Review the retained schedule and consider a manual replan.")
+                        if force_plan and replan_request_id is None else None,
                     equipment=self.equipment_presence(),
                 )
+                self.replan_recommendations = stored["replan_recommendations"] = result.get("replan_recommendations", [])
                 _LOGGER.info("Replan %s cloud ingest completed in %.0f ms", replan_request_id, (monotonic() - ingest_started) * 1000)
                 configuration = self._record_device_exchange(
                     stored, devices, result
@@ -3217,7 +3224,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # request. Never expose it after a role/control change; the
                 # next exchange replans using the new effective base split.
                 self._plan_configuration_changed = stored["plan_configuration_changed"] = True
-                self.last_optimisation_error = "device configuration changed; replan pending"
+                self.last_optimisation_error = "device configuration changed; manual replan recommended"
                 if returned_plan:
                     stored["optimisation_pending_plan_ack"] = {
                         "plan": acknowledgement_plan,

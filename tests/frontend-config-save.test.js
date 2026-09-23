@@ -1502,3 +1502,17 @@ test('polling updates the progress banner and save locks without replacing the a
   assert.equal(save.disabled, false);
   assert.equal(progress.innerHTML, '');
 });
+
+
+test('shared replan reasons are expandable, timestamped, escaped, and removed on server clear', () => {
+  const panel = Object.create(context.Panel.prototype);
+  panel._time = value => value;
+  panel._data = {replan_recommendations: [{key: 'integration_change', reason: 'Battery <changed>', occurred_at: '2026-09-23T09:00:00Z'}]};
+  const html = panel._renderReplanRecommendations();
+  assert.match(html, /Manual replan recommended/);
+  assert.match(html, /<details><summary>Reasons and times/);
+  assert.match(html, /Battery &lt;changed&gt;/);
+  assert.match(html, /2026-09-23T09:00:00Z/);
+  panel._data.replan_recommendations = [];
+  assert.equal(panel._renderReplanRecommendations(), '');
+});

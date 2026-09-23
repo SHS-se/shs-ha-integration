@@ -1381,6 +1381,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
       ${values.migration ? `<details class="card compact"><summary>Configuration upgrade</summary>${[["imported", "Settings carried forward"], ["removed", "Old fields removed"], ["needs_attention", "Setup gaps found at upgrade"]].map(([key, label]) => `<h3>${label}</h3><ul>${(values.migration[key] || []).map(name => `<li>${this._escape(name)}</li>`).join("")}</ul>`).join("")}</details>` : ""}`;
   }
 
+  _renderReplanRecommendations() {
+    const reasons = this._data.replan_recommendations || [];
+    if (!reasons.length) return "";
+    return `<aside class="card alert warning" role="status"><h2>Manual replan recommended</h2><p>The current schedule is retained. Use Replan now on the website’s Plan tab to change it.</p><details><summary>Reasons and times</summary><ul>${reasons.map(r => `<li>${this._escape(r.reason)} · ${this._time(r.occurred_at)}</li>`).join("")}</ul></details></aside>`;
+  }
+
   _renderBody() {
     if (this._tab === "energy") return this._renderEnergy();
     if (this._tab === "devices") return this._renderDevices();
@@ -1451,7 +1457,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
           <div data-refresh-progress>${this._refreshBanner()}</div>
           ${this._error ? `<div class="alert error"><strong>Could not save or refresh</strong><span>${this._escape(this._error)}</span></div>` : ""}
           ${this._notice ? `<div class="alert notice"><span>${this._escape(this._notice)}</span></div>` : ""}
-          ${this._renderBody()}
+          ${this._renderReplanRecommendations()}${this._renderBody()}
         </section>
         <footer aria-live="polite"><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling.</span></footer>
         ${this._renderDatalist()}

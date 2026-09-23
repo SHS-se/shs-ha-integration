@@ -179,11 +179,12 @@ def optimisation_plan_due(
     force: bool = False,
     retry_after_error: bool = False,
 ) -> bool:
-    """Request a new schedule when the local exchange reaches another quarter.
+    """Send a fresh snapshot when the local exchange reaches another quarter.
 
     The caller runs at startup and on a relative 15-minute interval. Comparing
     quarter buckets tolerates the server's generation time without skipping an
-    exchange. A missed request never invalidates the cached schedule.
+    exchange. The server only solves on new prices or a manual request.
+    A missed request never invalidates the cached schedule.
     """
     if now.tzinfo is None:
         raise OptimisationInputError(

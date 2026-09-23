@@ -28,3 +28,24 @@ mode transitions change writer authority only, not the schedule.
 Realistic state above a desired target is not infeasibility. Invalid measurements
 must be isolated to the affected device and explained; they must not discard
 otherwise valid household planning. Targets and sensor validity are distinct.
+
+## Replan recommendations
+
+Quarterly telemetry exchanges do not authorize a new solve. Ingest compares the
+published price rows with those recorded for the accepted plan; new publication
+or an outstanding manual request permits the next solve. Elapsed quarters simply
+leave the remaining original horizon shorter. Forecast padding never identifies
+a new price release. The original validity endpoint does not move.
+
+The current row owns recommendation reasons and occurrence times. Both UIs read
+that state. Curve/settings and planning configuration writes append a reason;
+integration events which previously forced a solve submit a recommendation.
+A successful plan publication clears reasons that predate its solve; an event
+that occurred during the solve remains visible. A failed solve clears nothing.
+
+Compare four consecutive completed quarters entirely covered by the accepted
+plan. Warn when each quarter differs by more than 50%, or when the absolute
+difference of the **rolling four-quarter totals** exceeds 6 kWh. Missing quarters
+break the sequence. Pack warnings compare measured energy against the accepted
+plan's state at capture time and trigger above 4 kWh. No threshold requests a
+solve. Expiry recommends a manual replan and leaves the original endpoint intact.
