@@ -120,7 +120,7 @@ class ScopeTests(unittest.TestCase):
             lambda p: p['operating_scope']['external_demands'].clear(),
             lambda p: p['operating_scope']['device_owners'].update(pool_heater=[]),
             lambda p: p['operating_scope']['external_demands']['pool_heater']['forecast_w_by_slot'].__setitem__(0, float('nan')),
-            lambda p: p['execution_plan']['capabilities'].update(pool=True),
+            lambda p: p['execution_plan']['capabilities'].update(pool=False),
         ):
             broken = deepcopy(plan); mutate(broken)
             with self.assertRaises(OptimisationInputError): validate_plan_contract(broken, now)

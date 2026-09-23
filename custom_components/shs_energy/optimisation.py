@@ -1074,16 +1074,11 @@ def validate_plan_contract(
         if any(execution.get(key) != plan.get(key) for key in
                ("plan_id", "snapshot_id", "issued_at", "valid_until", "binding_until", "timezone", "mode")):
             raise OptimisationInputError("execution plan identity or horizon differs")
-        execution_models = execution.get("device_models")
-        if (not isinstance(execution_models, list)
-                or any(not isinstance(m, dict) or not isinstance(m.get("key"), str) for m in execution_models)
-                or {m["key"] for m in execution_models} != live):
-            raise OptimisationInputError("execution plan contains devices outside live control")
-        if from_modes["$battery"] != "controlling" and execution.get("battery") is not None:
-            raise OptimisationInputError("execution plan includes a hypothetical battery")
-        for system in ("battery", "pool", "ev"):
-            if from_modes["$" + system] != "controlling" and execution.get("capabilities", {}).get(system):
-                raise OptimisationInputError("execution plan enables a hypothetical system")
+        # Execution and both UIs must consume the same selected household plan.
+        # Local mode grants authorize writes; they do not select another solve.
+        if any(execution.get(key) != plan.get(key) for key in
+               ("device_models", "capabilities", "battery", "pool", "ev_battery", "plans")):
+            raise OptimisationInputError("displayed schedule differs from execution plan")
         validate_plan_contract(execution, now, require_recent_issue=require_recent_issue)
         starts = [slot["start"] for slot in execution["plans"]["priority"]["slots"]]
         for scenario in ("baseline", "priority", "cost"):
