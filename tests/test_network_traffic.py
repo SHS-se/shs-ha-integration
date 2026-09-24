@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).parents[1] / "custom_components/shs_energy"
 sys.path.append(str(ROOT))
@@ -44,13 +45,13 @@ class ApiTrafficTests(unittest.IsolatedAsyncioTestCase):
             or isinstance(node, ast.Import) and any(a.name == "aiohttp" for a in node.names)
         )]
         ns = {"aiohttp": SimpleNamespace(ClientError=ClientError, ContentTypeError=ClientError,
-                ClientTimeout=lambda **kwargs: None),
+                ClientTimeout=lambda **kwargs: SimpleNamespace(**kwargs)),
               "NetworkTraffic": NetworkTraffic, "API_VERSION": 1, "INTEGRATION_VERSION": "test",
               "MAX_REPLAN_ERROR_CHARS": 1000, "SUPPORTED_PLAN_SCHEMA_VERSIONS": {6}}
         exec(compile(tree, "api.py", "exec"), ns)
         self.api = ns
 
-    async def call(self, status=200, payload=None, interrupted=False):
+    async def call(self, status=200, payload=None, interrupted=False, path="integration-status"):
         if payload is None:
             payload = {"api_version": 1, "ok": True, "data": {"name": "å"}, "request_id": "test"}
         raw = json.dumps(payload, ensure_ascii=False).encode()
@@ -69,12 +70,15 @@ class ApiTrafficTests(unittest.IsolatedAsyncioTestCase):
                 return payload
         response = Response()
         response.status = status
-        client = self.api["ShsApiClient"](SimpleNamespace(request=lambda *a, **kw: response), "https://example", "secret")
+        def request(*args, **kwargs):
+            self.last_timeout = kwargs["timeout"].total
+            return response
+        client = self.api["ShsApiClient"](SimpleNamespace(request=request), "https://example", "secret")
         if status >= 400 or interrupted or not payload.get("ok"):
             with self.assertRaises(self.api["ShsApiError"]):
-                await client.status()
+                await client._request("POST", path)
         else:
-            self.assertEqual(await client.status(), payload["data"])
+            self.assertEqual(await client._request("POST", path), payload["data"])
         return client.traffic.snapshot()["total"], len(raw)
 
     async def test_success_measures_actual_decoded_utf8_body(self):
@@ -94,6 +98,42 @@ class ApiTrafficTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(total["responses_unmeasured"], 1)
         self.assertEqual(total["responses_measured"], 0)
         self.assertEqual(total["failed_requests"], 1)
+
+    async def test_planning_has_time_for_server_deadline_without_extending_other_requests(self):
+        await self.call()
+        self.assertEqual(self.last_timeout, 30)
+        await self.call(path="energy-optimisation-ingest")
+        self.assertEqual(self.last_timeout, 150)
+
+    async def test_pending_planning_continues_identical_payload_until_ready(self):
+        client = self.api["ShsApiClient"](None, "https://example", "secret")
+        ready = {"plan": {"plan_id": "finished"}, "actual_slots_accepted": 1}
+        client._request = AsyncMock(side_effect=[
+            {"pending": True, "retry_after_ms": 1000},
+            {"pending": True, "retry_after_ms": 2345}, ready,
+        ])
+        with patch.object(self.api["asyncio"], "sleep", new_callable=AsyncMock) as sleep:
+            result = await client.push_optimisation([{"start_ts": "quarter"}],
+                {"snapshot_id": "frozen"}, replan_request_id="manual")
+        self.assertEqual(result, ready)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2.345])
+        calls = client._request.call_args_list
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0], calls[1])
+        self.assertEqual(calls[1], calls[2])
+        self.assertEqual(calls[0].kwargs["json_body"]["replan_request_id"], "manual")
+
+    async def test_pending_planning_does_not_retry_failed_or_invalid_responses(self):
+        for invalid in [-1, float("nan"), True, "1", None]:
+            client = self.api["ShsApiClient"](None, "https://example", "secret")
+            client._request = AsyncMock(return_value={"pending": True, "retry_after_ms": invalid})
+            with self.assertRaisesRegex(self.api["ShsApiError"], "continuation delay"):
+                await client.push_optimisation([], {"snapshot_id": "frozen"})
+            self.assertEqual(client._request.await_count, 1)
+        client._request = AsyncMock(side_effect=self.api["ShsApiError"]("worker failed"))
+        with self.assertRaisesRegex(self.api["ShsApiError"], "worker failed"):
+            await client.push_optimisation([], {"snapshot_id": "frozen"})
+        self.assertEqual(client._request.await_count, 1)
 
 
 if __name__ == "__main__":

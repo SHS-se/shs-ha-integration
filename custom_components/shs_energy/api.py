@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from time import monotonic
 from typing import Any
 from urllib.parse import urlencode
@@ -24,6 +25,9 @@ from .api_contract import (
 _LOGGER = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
+# The final household solve has a 120-second server deadline. Cost-curve
+# batches use explicit pending replies and do not hold this connection open.
+PLANNING_REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=150)
 
 
 class ShsApiError(Exception):
@@ -100,7 +104,7 @@ class ShsApiClient:
                 f"{self._base_url}/{path}",
                 json=json_body,
                 headers=headers,
-                timeout=REQUEST_TIMEOUT,
+                timeout=PLANNING_REQUEST_TIMEOUT if path == "energy-optimisation-ingest" else REQUEST_TIMEOUT,
             ) as resp:
                 status = resp.status
                 # aiohttp caches this decompressed body; json() reuses it.
@@ -333,11 +337,25 @@ class ShsApiClient:
             # produces a plan. The server refuses the pair without one.
             if replan_request_id is not None:
                 body["replan_request_id"] = replan_request_id
-        return await self._request(
-            "POST",
-            "energy-optimisation-ingest",
-            json_body=body,
-        )
+        while True:
+            result = await self._request(
+                "POST",
+                "energy-optimisation-ingest",
+                json_body=body,
+            )
+            if result.get("pending") is not True:
+                return result
+            delay = result.get("retry_after_ms")
+            if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay < 0:
+                raise ShsApiError(
+                    "planning response has an invalid continuation delay",
+                    code="invalid_response_envelope",
+                    path="energy-optimisation-ingest",
+                )
+            # This is continuation of accepted work, not a retry of a failure.
+            # Keep the exact snapshot and replan identity until it completes.
+            await asyncio.sleep(delay / 1000)
+
 
     async def acknowledge_optimisation_plan(
         self,
