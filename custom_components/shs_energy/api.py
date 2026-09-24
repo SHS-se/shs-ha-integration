@@ -234,6 +234,17 @@ class ShsApiClient:
             raise ShsApiError("Website did not confirm storing the current HA status")
         return result
 
+    async def request_replan(self) -> str:
+        """Queue the same household request used by the website button."""
+        result = await self._request(
+            "POST", "integration-status",
+            json_body={"api_version": API_VERSION, "request_replan": True},
+        )
+        request_id = result.get("replan_request_id")
+        if not isinstance(request_id, str) or not request_id:
+            raise ShsApiError("Website did not confirm the replan request")
+        return request_id
+
     async def report_replan_failure(
         self, replan_request_id: str, error: str
     ) -> dict[str, Any]:

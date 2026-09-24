@@ -108,3 +108,39 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError('Planner unavailable')
         self.assertEqual(states, [True, False])
         self.assertFalse(refresh_in_progress(self.hass, self.entry))
+
+class ManualReplanTests(unittest.IsolatedAsyncioTestCase):
+    async def test_queues_authenticated_request_and_waits_for_existing_answer_path(self):
+        coordinator = SimpleNamespace(client=SimpleNamespace(request_replan=AsyncMock(return_value='request')),
+            async_answer_replan=AsyncMock(), last_optimisation_error=None)
+        entry = SimpleNamespace(runtime_data=coordinator, options={})
+        payload = AsyncMock(return_value={'replan_recommendations': []})
+        ns = load_functions('config_panel.py', {'websocket_replan'}, {
+            '_entry_from_message': lambda *_: entry, '_entry_state': lambda _: 'loaded',
+            'refresh_in_progress': lambda *_: False, 'resolved_options': lambda *_: {'mode': 'live'},
+            'shs_const': SimpleNamespace(OPT_PLANNING_MODE='mode', PLANNING_MODE_LIVE='live'),
+            '_configuration_payload': payload, 'ShsApiError': ValueError,
+        })
+        connection = SimpleNamespace(send_error=Mock(), send_result=Mock())
+        await ns['websocket_replan'](None, connection, {'id': 1, 'config_entry': 'entry'})
+        coordinator.client.request_replan.assert_awaited_once()
+        coordinator.async_answer_replan.assert_awaited_once_with('request')
+        connection.send_result.assert_called_once_with(1, {'replan_recommendations': []})
+        coordinator.last_optimisation_error = 'Cannot build plan'
+        await ns['websocket_replan'](None, connection, {'id': 2, 'config_entry': 'entry'})
+        connection.send_error.assert_called_with(2, 'replan_failed', 'Cannot build plan')
+        ns['resolved_options'] = lambda *_: {'mode': 'off'}
+        coordinator.client.request_replan.reset_mock()
+        await ns['websocket_replan'](None, connection, {'id': 3, 'config_entry': 'entry'})
+        coordinator.client.request_replan.assert_not_awaited()
+        connection.send_error.assert_called_with(3, 'replan_failed', 'Planning is turned off for this home in Home Assistant')
+
+    async def test_client_queues_a_manual_request_and_requires_confirmation(self):
+        ns = load_functions('api.py', {'request_replan'}, {'API_VERSION': 1, 'ShsApiError': ValueError})
+        client = SimpleNamespace(_request=AsyncMock(return_value={'replan_request_id': 'request'}))
+        self.assertEqual(await ns['request_replan'](client), 'request')
+        client._request.assert_awaited_once_with('POST', 'integration-status',
+            json_body={'api_version': 1, 'request_replan': True})
+        client._request.return_value = {}
+        with self.assertRaisesRegex(ValueError, 'did not confirm'):
+            await ns['request_replan'](client)

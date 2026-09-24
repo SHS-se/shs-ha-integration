@@ -195,7 +195,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _refreshBanner() {
-    return this._refreshing ? `<div class="alert notice refresh-progress" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>Refresh in progress. Showing the previous plan and status. Saving is available when the refresh finishes.</span></div>` : "";
+    return this._refreshing && !this._replanning ? `<div class="alert notice refresh-progress" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>Refresh in progress. Showing the previous plan and status. Saving is available when the refresh finishes.</span></div>` : "";
   }
 
   _recordSavedFields(configuration) {
@@ -613,6 +613,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (action === "inspect-entity") this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: button.dataset.entityId }, bubbles: true, composed: true }));
     if (action === "download") this._download();
     if (action === "verification") this._downloadVerification();
+    else if (action === "replan") this._replan();
     else if (action === "horizon") { this._fullHorizon = !this._fullHorizon; this._render(); }
     else if (action === "schedule-mode") { this._scheduleMode = button.dataset.mode; this._render(); }
     else if (action === "clear-schedule-filters") {
@@ -849,7 +850,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _canPoll() {
     return this._entryId && !this._loading && !this._saving && !this._savingDeviceKey
-      && !document.hidden;
+      && !this._replanning && !document.hidden;
   }
 
   async _poll(refreshRoles = false) {
@@ -877,6 +878,26 @@ class ShsEnergyConfigPanel extends HTMLElement {
       if (this._editing() || this._dirty) this._updateAttentionUI();
       else this._render();
     } finally { this._polling = false; }
+  }
+
+  async _replan() {
+    if (this._replanning || this._refreshing) return;
+    this._replanning = true;
+    this._refreshing = true;
+    this._replanError = "";
+    this._pollRevision = (this._pollRevision || 0) + 1;
+    this._render();
+    try {
+      const data = await this._hass.callWS({ type: "shs_energy/config/replan", config_entry: this._entryId });
+      this._mergePanel(data);
+    } catch (error) {
+      this._replanError = this._errorMessage(error);
+    } finally {
+      this._replanning = false;
+      this._refreshing = false;
+      this._renderBackground();
+      this.shadowRoot?.querySelector('[data-action="replan"]')?.focus();
+    }
   }
 
   async _control(key, mode) {
@@ -1389,8 +1410,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _renderReplanRecommendations() {
     const reasons = this._data.replan_recommendations || [];
-    if (!reasons.length) return "";
-    return `<aside class="card alert warning" role="status"><h2>Manual replan recommended</h2><p>The current schedule is retained. Use Replan now on the website’s Plan tab to change it.</p><details><summary>Reasons and times</summary><ul>${reasons.map(r => `<li>${this._escape(r.reason)} · ${this._time(r.occurred_at)}</li>`).join("")}</ul></details></aside>`;
+    if (!reasons.length && !this._replanning && !this._replanError) return "";
+    return `<aside class="card${this._replanning ? "" : " alert warning"}" data-replan>
+      <div class="status-heading"><h2>${this._replanning ? "Energy plan" : "Manual replan recommended"}</h2>
+        <button type="button" class="secondary replan-button" data-action="replan" aria-busy="${Boolean(this._replanning)}" ${this._replanning || this._refreshing ? "disabled" : ""}>${this._replanning ? '<span class="spinner" aria-hidden="true"></span>Replanning…' : "Replan now"}</button></div>
+      ${this._replanning ? "" : `<p>The current schedule is retained. Replan with fresh measurements to update it.</p><details><summary>Reasons and times</summary><ul>${reasons.map(r => `<li>${this._escape(r.reason)} · ${this._time(r.occurred_at)}</li>`).join("")}</ul></details>`}
+      ${this._replanError ? `<p role="alert">Could not replan: ${this._escape(this._replanError)}</p>` : ""}</aside>`;
   }
 
   _renderBody() {
@@ -1638,7 +1663,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .entry-list button { display:flex; justify-content:space-between; padding:16px; border:1px solid var(--divider-color); border-radius:10px; background:var(--secondary-background-color); color:var(--primary-text-color); }
       footer { position:fixed; bottom:0; left:0; right:0; min-height:48px; padding:10px 24px; display:flex; justify-content:space-between; gap:16px; align-items:center; border-top:1px solid var(--divider-color); background:var(--card-background-color); color:var(--secondary-text-color); font-size:13px; z-index:5; }
       .center { min-height:100vh; display:grid; place-content:center; justify-items:center; color:var(--secondary-text-color); }
-      .refresh-progress .spinner { width:16px; height:16px; flex:none; border-width:2px; }
+      [data-replan] .status-heading { flex-wrap:wrap; }
+      .replan-button { display:inline-flex; align-items:center; gap:8px; min-height:44px; }
+      .replan-button .spinner, .refresh-progress .spinner { width:16px; height:16px; flex:none; border-width:2px; }
       @media (prefers-reduced-motion: reduce) { .spinner { animation:none !important; } }
       .spinner { width:36px; height:36px; border:3px solid var(--divider-color); border-top-color:var(--primary-color); border-radius:50%; animation:spin .8s linear infinite; }
       @keyframes spin { to { transform:rotate(360deg); } }

@@ -1532,3 +1532,46 @@ test('devices the plan leaves out for their readings are named with their source
   panel._data.measurement_issues = [];
   assert.equal(panel._renderMeasurementIssues(), '');
 });
+
+test('manual replan keeps one busy action, clears warnings and merges the updated plan', async () => {
+  const panel = Object.create(context.Panel.prototype);
+  panel._entryId = 'home-entry';
+  panel._data = { replan_recommendations: [{reason: 'Measurements changed', occurred_at: '2026-09-24T12:00:00Z'}] };
+  panel._render = () => {};
+  panel._renderBackground = () => {};
+  panel._time = value => value;
+  let finish;
+  let calls = 0;
+  panel._hass = { callWS: message => {
+    assert.equal(message.type, 'shs_energy/config/replan');
+    assert.equal(message.config_entry, 'home-entry');
+    calls++;
+    return new Promise(resolve => { finish = resolve; });
+  } };
+  let merged;
+  panel._mergePanel = data => { merged = data; panel._data = data; };
+  assert.match(panel._renderReplanRecommendations(), /Replan now/);
+  const pending = panel._replan();
+  assert.match(panel._renderReplanRecommendations(), /aria-busy="true"/);
+  assert.match(panel._renderReplanRecommendations(), /class="spinner"/);
+  assert.doesNotMatch(panel._renderReplanRecommendations(), /Measurements changed|Manual replan recommended/);
+  await panel._replan();
+  assert.equal(calls, 1);
+  finish({replan_recommendations: []});
+  await pending;
+  assert.deepEqual(merged, {replan_recommendations: []});
+  assert.equal(panel._replanning, false);
+  assert.equal(panel._renderReplanRecommendations(), '');
+});
+
+test('manual replan failure is readable and allows retry', async () => {
+  const panel = Object.create(context.Panel.prototype);
+  panel._data = { replan_recommendations: [] };
+  panel._render = () => {};
+  panel._renderBackground = () => {};
+  panel._hass = { callWS: async () => { throw new Error('Planning unavailable'); } };
+  await panel._replan();
+  assert.equal(panel._replanning, false);
+  assert.match(panel._renderReplanRecommendations(), /Could not replan: Planning unavailable/);
+  assert.match(panel._renderReplanRecommendations(), /aria-busy="false"/);
+});

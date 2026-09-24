@@ -571,6 +571,32 @@ async def websocket_control_permission(hass, connection, msg):
         connection.send_error(msg["id"], "control_permission_failed", str(err))
 
 
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{shs_const.DOMAIN}/config/replan", vol.Required("config_entry"): str})
+@websocket_api.async_response
+async def websocket_replan(hass, connection, msg):
+    """Request fresh measurements and wait for the existing replan path."""
+    entry = _entry_from_message(hass, msg["config_entry"])
+    if entry is None or _entry_state(entry) != "loaded":
+        connection.send_error(msg["id"], "not_loaded", "The integration is not loaded")
+        return
+    if refresh_in_progress(hass, entry):
+        connection.send_error(msg["id"], "refresh_in_progress", "Wait for the current refresh to finish.")
+        return
+    try:
+        coordinator = entry.runtime_data
+        options = resolved_options(hass, dict(entry.options))
+        if options[shs_const.OPT_PLANNING_MODE] != shs_const.PLANNING_MODE_LIVE:
+            raise ShsApiError("Planning is turned off for this home in Home Assistant")
+        request_id = await coordinator.client.request_replan()
+        await coordinator.async_answer_replan(request_id)
+        if coordinator.last_optimisation_error:
+            raise ShsApiError(coordinator.last_optimisation_error)
+        connection.send_result(msg["id"], await _configuration_payload(hass, entry, refresh_roles=False))
+    except Exception as err:
+        connection.send_error(msg["id"], "replan_failed", str(err))
+
+
 async def _controller_diagnostics_file(hass, entry):
     """Gzip JSON and its summary. Only the live snapshot runs on the event loop."""
     controller = entry.runtime_data.controller
@@ -624,6 +650,7 @@ async def async_register_config_panel(hass: HomeAssistant) -> None:
         config_panel_domain=shs_const.DOMAIN,
     )
     websocket_api.async_register_command(hass, websocket_get_status)
+    websocket_api.async_register_command(hass, websocket_replan)
     websocket_api.async_register_command(hass, websocket_control_permission)
     hass.http.register_view(ControllerDiagnosticsView)
     websocket_api.async_register_command(hass, websocket_get_configuration)
