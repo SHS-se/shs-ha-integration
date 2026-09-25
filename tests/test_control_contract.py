@@ -35,7 +35,7 @@ class PoolContractTests(unittest.TestCase):
         returning "pool" the moment the method changed — which is why choosing
         a power control moved the card's header to "No room".
         """
-        expected = ["actuator_entity_ids", "power", "power_setting_entity_id"]
+        expected = ["actuator_entity_ids", "power", "power_setting_entity_id", "minimum_on_seconds"]
         for method in CONTROL_FIELDS:
             self.assertEqual(keys(method, "pool"), expected, method)
 
@@ -46,7 +46,7 @@ class PoolContractTests(unittest.TestCase):
         )
         self.assertEqual(actuator["domains"], ["switch", "input_boolean"])
         # execute_pool has never honoured these, so the card must not offer them.
-        for absent in ("minimum_on_seconds", "minimum_off_seconds",
+        for absent in ("minimum_off_seconds",
                        "control_override_entity"):
             self.assertNotIn(absent, keys("switch_schedule", "pool"))
 
@@ -151,7 +151,7 @@ class RoutingTests(unittest.TestCase):
         )
         self.assertEqual(
             keys("variable_power", path),
-            ["actuator_entity_ids", "power", "power_setting_entity_id"],
+            ["actuator_entity_ids", "power", "power_setting_entity_id", "minimum_on_seconds"],
         )
 
 
@@ -207,22 +207,22 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(
             keys("switch_schedule", "room", "heating"),
             ["actuator_entity_ids", "power", "temperature_entity_id",
-             "control_override_entity", "minimum_on_seconds", "minimum_off_seconds"],
+             "control_override_entity", "minimum_off_seconds", "minimum_on_seconds"],
         )
         self.assertEqual(
             keys("variable_power", "ev"),
-            ["control_entity_id", "power", "minimum_value", "maximum_value"],
+            ["control_entity_id", "power", "minimum_value", "maximum_value", "minimum_on_seconds"],
         )
         self.assertEqual(
             keys("permit_inhibit", "boiler"),
             ["actuator_entity_ids", "power", "max_inhibit_slots",
-             "control_override_entity"],
+             "control_override_entity", "minimum_on_seconds"],
         )
 
     def test_an_unrouted_device_keeps_its_plain_contract(self):
         self.assertEqual(
             keys("switch_schedule", None),
-            [field["key"] for field in CONTROL_FIELDS["switch_schedule"]],
+            [field["key"] for field in CONTROL_FIELDS["switch_schedule"]] + ["minimum_on_seconds"],
         )
 
 

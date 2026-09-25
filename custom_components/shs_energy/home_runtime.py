@@ -1514,6 +1514,10 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 group = replace(group, mode=event.mode, mode_revision=event.revision, authority_confirmed=True,
                                 release=release, release_pending=pending,
                                 desired=None if changed and not _is_battery(state, group) else group.desired)
+                if event.mode == "control_verification":
+                    # Permission withdrawal leaves the equipment exactly as it is.
+                    group = replace(group, owned=False, release_pending=False, attempts=(),
+                                    plan=None, transition_work=None, desired=None)
         elif isinstance(event, Requested):
             if _is_battery(state, group):
                 raise ValueError("direct request cannot overwrite the scoped battery execution owner")

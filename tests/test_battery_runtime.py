@@ -319,7 +319,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             r.options['device_modes']['$battery']='control_verification'
             await r.runtime.refresh();await r.runtime.host.idle()
             for _ in range(3):await r.advance(1000)
-            self.assertTrue(any(c[2].get('option')=='Maximum Self Consumption' for c in r.calls),r.calls)
+            self.assertEqual(r.calls, [])
             self.assertFalse(r.runtime.host.state.groups[0].release_pending,r.runtime.snapshot())
             self.assertFalse(r.runtime.snapshot()['fault_history'])
         finally:await r.runtime.close()
@@ -863,21 +863,23 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('physical battery group',attributes['explanation'])
         finally:await r.runtime.close()
 
-    async def test_withdrawing_control_releases_before_retiring_old_configuration(self):
+    async def test_verification_retires_ownership_without_changing_hardware(self):
         r=Rig();await r.start()
         try:
             for _ in range(4):await r.advance()
             original=r.runtime.host.state.execution.account.contract
+            previous_mode=r.rows['select.mode']['state']
+            calls=deepcopy(r.calls)
             r.options['device_modes']['$battery']='control_verification'
             r.coordinator.binding_plan_for=lambda device,options: ({},None)
             await r.runtime.refresh()
-            # Pending native work must remain journalled until release is confirmed.
-            self.assertIsNotNone(r.runtime.host)
+            self.assertEqual(r.calls,calls)
+            self.assertIsNone(r.runtime.host)
             for _ in range(40):
                 await r.advance(10000)
                 if r.runtime.host is None:break
             self.assertIsNone(r.runtime.host,r.runtime.snapshot())
-            self.assertEqual(r.rows['select.mode']['state'],'Maximum Self Consumption')
+            self.assertEqual(r.rows['select.mode']['state'],previous_mode)
             self.assertEqual(r.runtime._bootstrap.contract,original)
             calls=deepcopy(r.calls)
             await r.advance()

@@ -111,10 +111,10 @@ class GenericDeviceTests(Continuity):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.status(controller)['state'], 'commanded', self.status(controller))
         self.assertEqual(controller.records['device:heater']['originals'], {'switch.heater': 'on'})
-        # The baseline captured before the restart is still what a release returns to.
+        # Verification relinquishes ownership without restoring the baseline.
         self.options['device_modes']['heater'] = 'control_verification'
         await controller.async_tick()
-        self.assertEqual(self.calls, [('switch.heater', 'on')])
+        self.assertEqual(self.calls, [])
         self.assertNotIn('device:heater', controller.records)
 
     async def test_a_restart_before_the_switch_reports_waits_for_it(self):
@@ -264,15 +264,15 @@ class PoolTests(Continuity):
         self.assertEqual(self.calls, [], 'neither switch is touched')
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.pool', 'off')], 'the old switch is handed back')
+        self.assertEqual(self.calls, [], 'verification leaves the old switch untouched')
         self.options['device_modes']['$pool'] = 'controlling'
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.pool', 'off'), ('switch.new_pool', 'on')])
+        self.assertEqual(self.calls, [('switch.new_pool', 'on')])
 
     async def test_only_the_select_hands_the_heater_back(self):
         await self.start()
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.pool', 'off')])
+        self.assertEqual(self.calls, [])
         self.assertNotIn('pool', self.controller.records)
         self.assertEqual(self.controller.status['pool']['state'], 'verified', self.controller.status['pool'])

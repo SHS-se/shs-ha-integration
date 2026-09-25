@@ -18,6 +18,7 @@ from time import perf_counter
 try:
     from .api_contract import INTEGRATION_VERSION
     from .operating_modes import device_mode, EXECUTING_MODES
+    from .minimum_run import MinimumRuns, RunStateUnavailable, minimum_run_errors
     from .verification import OPERATIONS, operation_name, evaluation_record, observation
     from .controller_metrics import ControllerMetrics, fingerprint, record_time
     from .battery_commands import validate_battery_command, battery_mode_key
@@ -27,6 +28,7 @@ try:
 except ImportError:  # Pure executor tests, without importing Home Assistant.
     from api_contract import INTEGRATION_VERSION
     from operating_modes import device_mode, EXECUTING_MODES
+    from minimum_run import MinimumRuns, RunStateUnavailable, minimum_run_errors
     from verification import OPERATIONS, operation_name, evaluation_record, observation
     from controller_metrics import ControllerMetrics, fingerprint, record_time
     from battery_commands import validate_battery_command, battery_mode_key
@@ -144,6 +146,7 @@ class ScheduledController:
         self.store = store
         self.options = options
         self.records: dict[str, dict] = {}
+        self.runs = MinimumRuns()
         self.status = {device: {"state": "disabled"} for device in DEVICES}
         self.listeners = set()
         self.lock = asyncio.Lock()
@@ -302,6 +305,8 @@ class ScheduledController:
 
     def check_authority(self):
         if self.restoring:
+            if not self.verifying and device_mode(self.options(), self.device) == "control_verification":
+                raise ValueError("control relinquished to verification during restoration")
             return
         options = self.options()
         if options != self.active_options or self.closed:
@@ -338,7 +343,33 @@ class ScheduledController:
         if not self.eligible(self.device, options):
             raise ValueError("control disabled or manually overridden")
 
+    def validate_minimum_run_configuration(self):
+        options = self.records.get(self.device, {}).get("options") if self.restoring else self.options()
+        options = options or self.options()
+        models = {model["key"]: model for model in (self.coordinator.optimisation_plan or {}).get("device_models", [])}
+        fields = []
+        for key, mapping in options.get("device_control_mappings", {}).items():
+            path = mapped_planning_path(models.get(key, {}), mapping, options.get("pool_water_temperature_entity"))
+            owner = path if path in ("pool", "ev") else "device:" + key
+            if owner != self.device:
+                continue
+            for field, messages in minimum_run_errors(mapping).items():
+                fields.append({"scope": "mapping", "device_key": key, "key": field, "message": "; ".join(messages)})
+        if fields:
+            error = ControlObservationError("; ".join(field["message"] for field in fields), None,
+                                            "Correct the highlighted minimum run time setting.")
+            error.details["fix"] = {"kind": "fields", "fields": fields}
+            raise error
+
+    def minimum_run_deadline(self, entity, value, now):
+        try:
+            return self.runs.blocked_until(entity, value, self.hass.states.get, now)
+        except RunStateUnavailable as err:
+            raise ActuatorUnavailableError(str(err), err.entity,
+                "Wait for the device's enabled state to return.", unavailable=True) from err
+
     async def command(self, entity, value):
+        self.validate_minimum_run_configuration()
         if self.battery_writer_fence is not None and not self.verifying:
             self.battery_writer_fence.check_legacy(entity)
         self.check_authority()
@@ -381,7 +412,15 @@ class ScheduledController:
             equal = state.state == value
         else:
             raise ValueError(f"{entity}: unsupported actuator domain")
-        command = {"at": datetime.now(timezone.utc).isoformat(), "phase": "handover" if self.restoring else "plan",
+        now = datetime.now(timezone.utc)
+        if not self.verifying:
+            self.runs.observe(self.hass.states.get, now)
+        if not equal:
+            release = self.minimum_run_deadline(entity, value, now)
+            if release:
+                self.device_deadline("minimum_run:" + entity, release)
+                raise ControlDeadlineError(f"Minimum run time keeps the device on until {release.isoformat()}")
+        command = {"at": now.isoformat(), "phase": "handover" if self.restoring else "plan",
                    "domain": domain, "service": service, "data": {"entity_id": entity, **data},
                    "value": value, "observed_value": state.state}
         if self.verifying:
@@ -399,6 +438,7 @@ class ScheduledController:
         command.update(called=False, transport="not_sent", settings_confirmation="not_checked")
         if self.diagnostic_evaluation is not None:
             self.diagnostic_evaluation["commands"].append(command)
+        prepared = {}
         try:
             record = self.records.get(getattr(self, "device", ""))
             if record is not None and not self.restoring:
@@ -413,6 +453,15 @@ class ScheduledController:
                     if self.scheduler is not None:
                         self.scheduler.device_deadline(self.device,"battery_headroom",datetime.now(timezone.utc)+timedelta(seconds=5))
                     raise ControlDeadlineError("Waiting for battery charging to release grid capacity")
+                # Persist the start before the service can activate hardware.
+                prepared = self.runs.prepare_start(entity, value, self.hass.states.get, datetime.now(timezone.utc))
+                if self.runs.dirty:
+                    await self.save()
+                self.check_authority()
+                release = self.minimum_run_deadline(entity, value, datetime.now(timezone.utc))
+                if release:
+                    self.device_deadline("minimum_run:" + entity, release)
+                    raise ControlDeadlineError(f"Minimum run time keeps the device on until {release.isoformat()}")
                 self.command_times[entity] = datetime.now(timezone.utc)
                 command.update(called=True, transport="ambiguous")
                 await asyncio.wait_for(
@@ -421,9 +470,15 @@ class ScheduledController:
                     ), timeout=CONFIRM_SECONDS,
                 )
                 command["transport"] = "accepted"
+                self.runs.observe(self.hass.states.get, datetime.now(timezone.utc), entity=entity)
+                if self.runs.dirty:
+                    await self.save()
             # Service completion records an accepted setting. Ordinary readings
             # and explicit device workflows assess the physical response.
         except (Exception, asyncio.CancelledError) as err:
+            if prepared and not command["called"]:
+                self.runs.cancel_unsent_start(prepared, self.hass.states.get, datetime.now(timezone.utc))
+                await self.save()
             command["error"] = str(err) or type(err).__name__
             raise
         finally:
@@ -472,8 +527,20 @@ class ScheduledController:
     async def save(self):
         if self.verifying:
             return
+        run_revision = self.runs.revision
         await self.store.async_save({"records": self.records, "overrides": self.overrides,
-                                     "retired_pool_temperature_settings": self.retired_pool_temperature_settings})
+                                     "retired_pool_temperature_settings": self.retired_pool_temperature_settings,
+                                     "runs": deepcopy(self.runs.records)})
+        self.runs.saved_revision = run_revision
+
+    async def minimum_run_snapshot(self, options, models):
+        async with self.lock:
+            now = datetime.now(timezone.utc)
+            self.runs.configure(options, models, now)
+            self.runs.observe(self.hass.states.get, now)
+            if self.runs.dirty:
+                await self.save()
+            return self.runs.snapshot(now)
 
     async def capture(self, device, options, entities):
         if device in self.records:
@@ -515,7 +582,7 @@ class ScheduledController:
                         at = record.get("transition_times", {}).get(entity)
                         last = record.get("last_commands", {}).get(entity)
                         if at and last != value and entity not in record.get("externally_changed", []):
-                            minimum = mapping.get("minimum_on_seconds" if last == "on" else "minimum_off_seconds")
+                            minimum = mapping.get("minimum_off_seconds") if last == "off" else None
                             if minimum is not None and (now - datetime.fromisoformat(at)).total_seconds() < minimum:
                                 self.device_deadline("minimum_run:" + entity,
                                                      datetime.fromisoformat(at) + timedelta(seconds=minimum))
@@ -1013,7 +1080,7 @@ class ScheduledController:
                 for entity, value in values.items():
                     state = self.state(entity)
                     if state.state != value:
-                        minimum = mapping.get("minimum_on_seconds" if state.state == "on" else "minimum_off_seconds")
+                        minimum = mapping.get("minimum_off_seconds") if state.state == "off" else None
                         if minimum is None or minimum == 0:
                             continue
                         at = getattr(state, "last_changed", None)
@@ -1027,7 +1094,7 @@ class ScheduledController:
                     previous = record.get("last_commands", {}).get(entity)
                     changed_at = record.get("transition_times", {}).get(entity)
                     if changed_at and previous != value:
-                        minimum = mapping.get("minimum_on_seconds" if previous == "on" else "minimum_off_seconds")
+                        minimum = mapping.get("minimum_off_seconds") if previous == "off" else None
                         if minimum is not None and (now - datetime.fromisoformat(changed_at)).total_seconds() < minimum:
                             self.device_deadline("minimum_run:" + entity,
                                                  datetime.fromisoformat(changed_at) + timedelta(seconds=minimum))
@@ -1090,6 +1157,9 @@ class ScheduledController:
                 attempt.update(next_step="Review the handover commands and original values in the verification file. "
                                "Resolve rejected controls before enabling Controlling.", fix={"kind": "device"})
                 attempt.update(correction_details(err))
+        except ControlDeadlineError as err:
+            attempt.update(outcome="verified", reason=str(err),
+                           result={"state": "limited", "reason": str(err)})
         except Exception as err:
             attempt["reason"] = str(err)
             attempt.update(correction_details(err))
@@ -1181,6 +1251,7 @@ class ScheduledController:
     async def async_start(self, *, reason="integration_load"):
         try:
             saved = await self.store.async_load() or {}
+            runs = MinimumRuns(saved.get("runs"))
         except Exception as err:
             for device in DEVICES:
                 self.report(device, "fault", reason=f"cannot load restoration journal: {err}")
@@ -1188,6 +1259,7 @@ class ScheduledController:
         self.retired_pool_temperature_settings = saved.get("retired_pool_temperature_settings", {})
         self.records = saved.get("records", {})
         self.overrides = saved.get("overrides", {})
+        self.runs = runs
         journal_error = None
         if self.verification is not None:
             try:
@@ -1235,6 +1307,7 @@ class ScheduledController:
             generic.update(key for key in self.records if key.startswith("device:"))
             if self.scheduler is not None:
                 self.scheduler.retain_devices(set(DEVICES) | generic)
+            requested = []
             previous_authority = (self.requested_types, self.requested_systems, self.requested_error)
             if generic or any(device_mode(options, d) in EXECUTING_MODES for d in DEVICES) or self.records:
                 self.requested_types = {}
@@ -1262,6 +1335,12 @@ class ScheduledController:
                 if device_mode(options, device) != "controlling":
                     del self.overrides[device]
                     await self.save()
+            self.runs.configure(options, requested, datetime.now(timezone.utc))
+            self.runs.observe(self.hass.states.get, datetime.now(timezone.utc))
+            if self.runs.dirty:
+                await self.save()
+            if self.scheduler is not None:
+                self.scheduler.watch_runs()
             # Hash shared inputs once, excluding unused future-plan slots.
             metrics_context = fingerprint({
                 "options": options, "slot": slot,
@@ -1292,8 +1371,13 @@ class ScheduledController:
                 try:
                     record = self.records.get(device)
                     inactive = self.inactive_status(device, options)
+                    if record and device_mode(options, device) == "control_verification":
+                        # Relinquishing permission must never change the hardware.
+                        del self.records[device]
+                        self.failed.pop(device, None)
+                        await self.save()
+                        record = None
                     if record and (inactive or device_mode(options, device) != "controlling"):
-                        # The only handover: the select, or a setting that removes the device from it.
                         await self.restore(device)
                         # The next attempt starts from the handed-back device, not the failed one.
                         self.failed.pop(device, None)
@@ -1376,6 +1460,8 @@ class ScheduledController:
             self.scheduler.pause()
         try:
             async with self.lock:
+                if self.runs.dirty:
+                    await self.save()
                 # Stopping is half of a restart: every device keeps the last setting
                 # SHS sent, and its journalled ownership resumes on the next start.
                 if self.verification is not None and self.initialized:

@@ -477,6 +477,10 @@ class BatteryRuntime:
             return True
         self._releasing=True
         await self._record_counters(options)
+        if device_mode(options,'battery')=='control_verification':
+            self._mode_revision+=1
+            await self.host.accept(rt.AuthorityChanged(self.host.state.groups[0].spec.id,
+                'control_verification',self._mode_revision,None))
         await self._release('Rebinding battery control to the current settings')
         old=self.host.state.groups[0]
         if old.owned or old.attempts or old.release_pending:
@@ -508,7 +512,8 @@ class BatteryRuntime:
         self._options=options
         if mode=='control_verification' and 'battery' in self.controller.records:
             async with self.controller.lock:
-                await self.controller.restore('battery')
+                del self.controller.records['battery']
+                await self.controller.save()
         if battery_measurement_errors(options):
             raise BatteryMeasurementConfigurationError(options)
         self._devices=await self.coordinator.async_battery_planned_devices()

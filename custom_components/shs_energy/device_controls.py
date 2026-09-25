@@ -270,6 +270,13 @@ def mapping_errors(
         return ["the saved mapping belongs to a different control type"]
 
     errors: list[str] = []
+    if __package__:
+        from .minimum_run import minimum_run_errors
+    else:
+        from minimum_run import minimum_run_errors
+    for field, messages in minimum_run_errors(mapping).items():
+        for message in messages:
+            _field_error(errors, field_errors, message, field)
     if mapping.get("companion_actuator_entity_ids"):
         _field_error(errors, field_errors, "configure combined switching in Home Assistant using one control entity", "companion_actuator_entity_ids")
     actuators = mapping.get("actuator_entity_ids")

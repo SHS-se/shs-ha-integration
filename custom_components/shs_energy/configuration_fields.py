@@ -227,7 +227,6 @@ CONTROL_FIELDS["setpoint"] += (
     _field("maximum_temperature_c", "Highest allowed target", "number", unit="°C", minimum=5, maximum=35),
 )
 CONTROL_FIELDS["switch_schedule"] += (
-    _field("minimum_on_seconds", "Minimum continuous on time", "number", unit="s", minimum=0, maximum=900, help_text="Optional. Leave unset for no minimum on time."),
     _field("minimum_off_seconds", "Minimum continuous off time", "number", unit="s", minimum=0, maximum=900, help_text="Optional. Leave unset for no minimum off time."),
 )
 
@@ -272,13 +271,7 @@ PATH_ACTUATOR_DOMAINS: dict[str, list[str]] = {
     "pool": ["switch", "input_boolean"],
 }
 
-# Which of the contract's fields a path's own executor actually reads.
-#
-# `execute_pool` commands one switch and takes the device's power for the
-# model; it has never honoured a minimum on/off time, and the pool's manual
-# override lives beside the pool card, not on the device. Offering those three
-# would be the same promise-without-code the domain narrowing above avoids.
-# A path absent from this table keeps its whole contract.
+# Path-specific fields. Shared execution settings are appended after filtering.
 PATH_CONTRACT_KEYS: dict[str, frozenset[str]] = {
     "pool": frozenset({"actuator_entity_ids", "power"}),
 }
@@ -308,7 +301,9 @@ def control_fields(
 ) -> tuple[dict[str, Any], ...]:
     """Every field one card shows, from the contract rather than the identity."""
     contract = local_contract(control_type, path)
-    fields = CONTROL_FIELDS.get(contract, ())
+    if contract not in CONTROL_FIELDS:
+        return ()
+    fields = CONTROL_FIELDS[contract]
     domains = PATH_ACTUATOR_DOMAINS.get(path or "")
     if domains:
         fields = tuple(
@@ -321,7 +316,10 @@ def control_fields(
         fields = tuple(field for field in fields if field["key"] in kept)
     elif is_room_thermal_control(contract, category) and contract != "setpoint":
         fields = (OPTIONAL_TEMPERATURE_FIELD, *fields)
-    fields = (*fields, *OBSERVATION_FIELDS.get(path or "", ()))
+    fields = (*fields, *OBSERVATION_FIELDS.get(path or "", ()),
+        _field("minimum_on_seconds", "Minimum run time", "number", unit="min",
+               minimum=0, step=1, scale=1 / 60,
+               help_text="Optional. Once enabled, SHS keeps the device running for at least this long, even after replanning or restarting. Verification leaves the device unchanged."))
     primary = {"actuator_entity_ids": 0, "control_entity_id": 0, "power": 1}
     return tuple(sorted(fields, key=lambda field: primary.get(field["key"], 2)))
 

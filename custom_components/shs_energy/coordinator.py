@@ -2860,6 +2860,10 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "services": services,
             "service_requirement_sample_days": service_samples,
         }
+        run_constraints = await self.controller.minimum_run_snapshot(options, device_models)
+        for model in device_models:
+            if model["key"] in run_constraints:
+                model["minimum_run"] = run_constraints[model["key"]]
         if measurement_issues:
             snapshot["measurement_issues"] = measurement_issues
         from .planning import build_operating_scope

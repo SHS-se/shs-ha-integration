@@ -29,7 +29,7 @@ PURE_MODULES = (
     "api_contract", "durable_record", "verification_storage",
     "const", "replan_listener",
     "device_controls",
-    "device_commands",
+    "device_commands", "minimum_run",
     "migration",
     "network_traffic",
     "controller_metrics", "resource_profiling",

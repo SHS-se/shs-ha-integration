@@ -1,6 +1,11 @@
 """Schema-7 executable decisions and local capability validation."""
 from math import isfinite
 
+if __package__:
+    from .minimum_run import minimum_run_errors
+else:
+    from minimum_run import minimum_run_errors
+
 
 def numeric(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value)
@@ -56,6 +61,8 @@ def execution_setup_errors(mapping, contract=None):
     fail with "this method is not supported for this device".
     """
     kind = contract or mapping.get('control_type')
+    if errors := minimum_run_errors(mapping):
+        return [message for messages in errors.values() for message in messages]
     if kind not in ('setpoint', 'switch_schedule', 'permit_inhibit'):
         return ['this method is not supported for this device']
     if mapping.get('companion_actuator_entity_ids'):
@@ -80,6 +87,6 @@ def execution_setup_errors(mapping, contract=None):
     else:
         if any(t.split('.')[0] not in ('switch', 'input_boolean') for t in targets):
             return ['choose an on/off switch']
-        if kind == 'switch_schedule' and any(mapping.get(k) is not None and (not numeric(mapping[k]) or not 0 <= mapping[k] <= 900) for k in ('minimum_on_seconds', 'minimum_off_seconds')):
-            return ['minimum on and off times must be between 0 and 900 seconds when specified']
+        if kind == 'switch_schedule' and any(mapping.get(k) is not None and (not numeric(mapping[k]) or not 0 <= mapping[k] <= 900) for k in ('minimum_off_seconds',)):
+            return ['minimum off time must be between 0 and 900 seconds when specified']
     return []

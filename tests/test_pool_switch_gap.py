@@ -93,20 +93,17 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'pending')
 
-    async def test_a_handover_required_during_the_gap_completes_when_it_returns(self):
+    async def test_verification_during_a_gap_relinquishes_without_restoring(self):
         await self.controller.async_start()
         self.calls.clear()
         self.switch('unavailable')
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_tick()
-        status = self.controller.status['pool']
-        self.assertEqual(status['state'], 'pending', status)
-        self.assertIn('hand', status['reason'])
-        self.assertTrue(self.controller.records['pool']['restoration_pending'])
+        self.assertNotIn('pool', self.controller.records)
         self.switch('on')
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.pool', 'off')])
-        self.assertNotIn('pool', self.controller.records)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.states['switch.pool'].state, 'on')
 
     async def test_a_clean_restart_waits_for_the_switch_instead_of_faulting(self):
         self.switch('unavailable')

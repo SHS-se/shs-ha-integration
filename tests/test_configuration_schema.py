@@ -83,7 +83,7 @@ class CurrentConfigurationTests(unittest.TestCase):
 
     def test_supplied_switch_timings_still_require_valid_values(self):
         for key in ("minimum_on_seconds", "minimum_off_seconds"):
-            for value in (-1, 901, "60", True, float("nan")):
+            for value in (-1, "60", True, float("nan"), *([901] if key == "minimum_off_seconds" else [])):
                 with self.subTest(key=key, value=value):
                     self.assertTrue(execution_setup_errors({"control_type": "switch_schedule",
                         "actuator_entity_ids": ["switch.heater"], key: value}))

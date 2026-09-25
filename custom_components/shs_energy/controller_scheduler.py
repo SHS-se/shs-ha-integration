@@ -105,7 +105,12 @@ class ControllerScheduler:
         stats = self.controller.metrics.scheduling
         stats[kind + "_events"] += 1
         self.controller.observation_changed.set()
+        run_revision = self.controller.runs.revision
+        self.controller.runs.observe(lambda target: state if target == entity else self.controller.hass.states.get(target),
+                                     self.now(), entity=entity, received=kind == "state_change")
         affected = {device for device, entities in self.dependencies.items() if entity in entities}
+        affected.update(binding["owner"] for binding in self.controller.runs.bindings.values()
+                        if entity in (binding["source"], binding["temperature"], *binding["targets"]))
         recovered = set()
         for device in affected:
             key = (device, entity)
@@ -116,7 +121,7 @@ class ControllerScheduler:
                     recovered.add(device)
         # An unchanged report refreshes deadlines and wakes an active confirmer,
         # but does not need a new full decision unless a stale source recovered.
-        targets = affected if kind != "state_report" else recovered
+        targets = affected if kind != "state_report" or self.controller.runs.revision != run_revision else recovered
         if targets:
             self.request("state_report" if kind == "state_report" else "state_change", targets)
 
@@ -131,11 +136,15 @@ class ControllerScheduler:
             self.freshness.pop((device, entity), None)
             self.stale.discard((device, entity))
             self.cancel((device, "freshness:" + entity))
-        in_use = set().union(*self.dependencies.values())
+        in_use = set().union(*self.dependencies.values()) | self.controller.runs.entities
         for entity in set(self.watchers) - in_use:
             self.watchers.pop(entity)()
         if not self.controller.records.get(device, {}).get("restoration_pending"):
             self.cancel((device, "restoration_retry"))
+
+    def watch_runs(self):
+        for entity in self.controller.runs.entities - self.watchers.keys():
+            self.watchers[entity] = self.subscribe(entity, self.entity_event)
 
     def retain_devices(self, devices):
         for device in set(self.dependencies) - devices:

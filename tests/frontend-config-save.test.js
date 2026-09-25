@@ -1575,3 +1575,48 @@ test('manual replan failure is readable and allows retry', async () => {
   assert.match(panel._renderReplanRecommendations(), /Could not replan: Planning unavailable/);
   assert.match(panel._renderReplanRecommendations(), /aria-busy="false"/);
 });
+
+for (const kind of ['setpoint', 'switch_schedule', 'permit_inhibit', 'variable_power']) {
+  test(`${kind} minimum run time is optional, addable, saved in seconds and removable`, async () => {
+    const panel = splitPanel();
+    const device = panel._data.devices[0];
+    const field = {key: 'minimum_on_seconds', label: 'Minimum run time', kind: 'number', unit: 'min', minimum: 0, scale: 1 / 60};
+    device.control_type = kind;
+    device.fields = [...device.fields, field];
+    for (const draft of [panel._draft, panel._savedDraft]) draft.device_control_mappings.pool.control_type = kind;
+    let html = panel._renderDevice(device);
+    assert.match(html, /Add minimum run time/);
+    assert.doesNotMatch(html, /data-field-key="minimum_on_seconds"/);
+    panel._added.add('mapping:pool:minimum_on_seconds');
+    html = panel._renderDevice(device);
+    assert.match(html, /data-field-key="minimum_on_seconds"/);
+    panel._setField('mapping', field.key, '60', field, 'pool');
+    assert.equal(panel._draft.device_control_mappings.pool.minimum_on_seconds, 3600);
+    let sent;
+    panel._hass = {callWS: async payload => { sent = payload; return {mapping_status: 'ready'}; }};
+    await panel._saveDevice('pool', 'controls');
+    assert.equal(sent.mapping.minimum_on_seconds, 3600);
+    assert.match(panel._renderDevice(device), /data-field-key="minimum_on_seconds"[^>]*value="60"/);
+    panel._draft.device_control_mappings.pool.minimum_on_seconds = null;
+    panel._added.delete('mapping:pool:minimum_on_seconds');
+    await panel._saveDevice('pool', 'controls');
+    assert.equal(sent.mapping.minimum_on_seconds, null);
+    assert.match(panel._renderDevice(device), /Add minimum run time/);
+  });
+}
+
+test('invalid minimum runtime opens its actual device editor and highlights the field', () => {
+  const panel = splitPanel();
+  const device = panel._data.devices[0];
+  device.fields.push({key:'minimum_on_seconds', label:'Minimum run time', kind:'number', unit:'min', scale:1/60});
+  const field = {scope:'mapping', device_key:'pool', key:'minimum_on_seconds', message:'Minimum run time must be zero or greater'};
+  panel._data.attention = [{key:'pool_setup', title:'Pool setup needs attention', severity:'warning', fix:{kind:'fields', fields:[field]}}];
+  assert.equal(panel._fieldProblems(field.key, 'mapping', 'pool').length, 1);
+  assert.match(panel._renderDevice(device), /aria-invalid="true"[^>]*data-field-key="minimum_on_seconds"/);
+  panel.shadowRoot = {querySelectorAll: () => []};
+  panel._openField('mapping:pool:minimum_on_seconds');
+  assert.equal(panel._tab, 'devices');
+  assert.ok(panel._added.has('mapping:pool:minimum_on_seconds'));
+  panel._data.attention = [];
+  assert.equal(panel._fieldProblems(field.key, 'mapping', 'pool').length, 0);
+});
