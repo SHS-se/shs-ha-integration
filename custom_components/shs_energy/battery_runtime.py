@@ -19,8 +19,7 @@ if __package__:
     from .battery_conversion import conversion_model, windows_from_statistics
     from .battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
     from . import plan_execution as execution
-    from .runtime_json import decode_value, Records
-    from .execution_archive import ExecutionArchive
+    from .runtime_json import Records
     from .resource_profiling import ResourceProfiler
     from .battery_live import native_surface, source_revision, planned_power_bindings
     from .battery_supply import SupplyScope, observe_supply
@@ -37,8 +36,7 @@ else:
     from battery_conversion import conversion_model, windows_from_statistics
     from battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
     import plan_execution as execution
-    from runtime_json import decode_value, Records
-    from execution_archive import ExecutionArchive
+    from runtime_json import Records
     from resource_profiling import ResourceProfiler
     from battery_live import native_surface, source_revision, planned_power_bindings
     from battery_supply import SupplyScope, observe_supply
@@ -119,14 +117,13 @@ def power(report, *, source, now_ms, signed=False):
 class BatteryRuntime:
     """All commands use HomeHost and one durable writer fence.
 
-    Construction receives the existing coordinator/controller, and two stores.
+    Construction receives the coordinator/controller and transactional execution storage.
     History/calibration reads are ports on the coordinator; tests use the same
     composition with an in-memory state table and real fake service boundary.
     """
-    def __init__(self,coordinator,controller,store,now_ms,archive_store_for,archive_pages=None):
+    def __init__(self,coordinator,controller,store,now_ms):
         self.coordinator,self.controller,self.store,self.now=coordinator,controller,store,now_ms
         self.profiler=ResourceProfiler()
-        self.archive=ExecutionArchive(archive_store_for,archive_pages,profiler=self.profiler)
         self.host=None;self.adapter=None;self._grant=None;self._identity=None
         self._lock=asyncio.Lock();self._observe_lock=asyncio.Lock();self._closed=False;self._closing=False
         self._options=None;self._devices=[];self._model=None;self._fits={};self._model_sources=None
@@ -143,27 +140,22 @@ class BatteryRuntime:
         controller.battery_runtime=self
 
     async def open(self):
-        value=await self.store.async_load()
-        if value is not None:
-            if value.get('schema') not in ('battery-runtime-v2','battery-runtime-v3'):
+        restored=await self.store.load()
+        if restored is not None:
+            value, session = restored
+            if value.get('schema') != 'battery-runtime-v4':
                 raise ValueError('invalid battery runtime journal')
             if __package__:
                 from .home_runtime_checkpoint import decode_checkpoint
             else:
                 from home_runtime_checkpoint import decode_checkpoint
-            if value['schema']=='battery-runtime-v3':
-                self._bootstrap=decode_value(value['account'],execution.Account) if value['account'] is not None else execution.Account()
             if value['checkpoint'] is None:
-                if value.get('execution_root'):
-                    session=await self.archive.load_session(value['execution_root'])
-                    self._bootstrap=session.account
-                    self._bootstrap_rejection=session.plan_rejection
-                    self._bootstrap_captured=session.captured_feedback
+                self._bootstrap=session.account
+                self._bootstrap_rejection=session.plan_rejection
+                self._bootstrap_captured=session.captured_feedback
                 return
             checkpoint=value['checkpoint'].encode()
-            state=decode_checkpoint(checkpoint)
-            if value.get("execution_root"):
-                state=replace(state,execution=await self.archive.load_session(value["execution_root"]))
+            state=replace(decode_checkpoint(checkpoint),execution=session)
             self._options,self._devices=value['options'],value['devices']
             self._model_sources,self._ratings=value['model_sources'],value['ratings']
             group=state.groups[0];authority=state.authority
@@ -313,7 +305,7 @@ class BatteryRuntime:
         return {**{name:len(getattr(account,name)) for name in
                    ('meters','observations','admissions','requests','reconciliations')},
                 'receipt':account.receipt, 'traces':len(session.traces) if session else 0,
-                **self.archive.resource_counts(),
+                **self.store.resource_counts(),
                 **(self.host.resource_counts() if self.host else {'queued_events':0,'active_effects':0})}
 
     def _plan_status(self, value, rejection, accepted):
@@ -355,26 +347,11 @@ class BatteryRuntime:
             self.coordinator.async_update_listeners()
 
     async def _persist_bootstrap(self):
-        with self.profiler.measure('archive_save'):
-            root=await self.archive.save_session(rt.ExecutionSession(account=self._bootstrap,
-                captured_feedback=self._bootstrap_captured,plan_rejection=self._bootstrap_rejection))
-        await self.store.async_save({'schema':'battery-runtime-v3','checkpoint':None,
-            'execution_root':root,
-            'account':None,'options':None,'devices':[],'model_sources':None,'ratings':None})
-        await self._collect_evidence(root)
-
-    async def _collect_evidence(self,root):
-        """Remove evidence pages that the checkpoint on disk no longer names."""
-        try:
-            # The store logs write failures instead of raising them. Only a
-            # checkpoint read back with this root proves older roots are superseded.
-            durable=await self.store.async_load()
-            if (durable or {}).get('execution_root')==root:
-                with self.profiler.measure('archive_collect'):
-                    await self.archive.collect()
-        except Exception as error:
-            # Cleanup never stops battery control; unremoved pages wait for later.
-            self._record_fault('archive',f'Evidence cleanup failed: {type(error).__name__}: {error}')
+        session=rt.ExecutionSession(account=self._bootstrap,
+            captured_feedback=self._bootstrap_captured,plan_rejection=self._bootstrap_rejection)
+        with self.profiler.measure('checkpoint_save'):
+            await self.store.save({'schema':'battery-runtime-v4','checkpoint':None,
+                'options':None,'devices':[],'model_sources':None,'ratings':None},session)
 
     def validate_plan_response(self,plan):
         """Reject stale response identity before replacing the coordinator's cache."""
@@ -440,13 +417,10 @@ class BatteryRuntime:
             _check_state(state)
             shell=replace(state,execution=rt.ExecutionSession())
             checkpoint=encode_checkpoint(shell).decode()
-        with self.profiler.measure('archive_save'):
-            root=await self.archive.save_session(state.execution)
         with self.profiler.measure('checkpoint_save'):
-            await self.store.async_save({'schema':'battery-runtime-v3','checkpoint':checkpoint,
-                'execution_root':root,'account':None,'options':self._options,'devices':self._devices,
-                'model_sources':self._model_sources,'ratings':self._ratings})
-        await self._collect_evidence(root)
+            await self.store.save({'schema':'battery-runtime-v4','checkpoint':checkpoint,
+                'options':self._options,'devices':self._devices,
+                'model_sources':self._model_sources,'ratings':self._ratings},state.execution)
 
     def _report(self,group,reason):
         if reason not in ('meter_recorded','duplicate_meter_sample','stale_meter_sample'):

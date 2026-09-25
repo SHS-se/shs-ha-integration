@@ -25,7 +25,7 @@ PURE_MODULES = (
     "home_runtime", "home_runtime_checkpoint", "energy_ledger", "runtime_json",
     "battery_supply", "home_host", "battery_native_adapter",
     "controller", "battery_live", "battery_writer", "battery_runtime", "battery_conversion",
-    "presentation", "plan_execution", "battery_physical", "execution_archive",
+    "presentation", "plan_execution", "battery_physical", "execution_storage", "execution_migration",
     "api_contract", "durable_record", "verification_storage",
     "const", "replan_listener",
     "device_controls",

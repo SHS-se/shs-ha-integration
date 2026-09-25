@@ -548,8 +548,8 @@ class ExecutionAuthority:
 # Traces are recent diagnostic evidence; the account keeps the complete
 # accounting record. Every battery refresh and command result adds a trace
 # (about 5,000 an hour), so only the latest are retained, in memory, on disk
-# and in downloads. The oldest leave in whole blocks of the archive's 128-trace
-# pages, so the pages of the traces that remain are reused unchanged.
+# and in downloads. Trim in batches to avoid repeatedly copying the bounded
+# immutable window; the database deletes the same oldest rows in its commit.
 MAX_EXECUTION_TRACES = 8192
 TRACE_TRIM = 1024
 

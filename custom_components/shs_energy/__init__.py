@@ -55,7 +55,8 @@ from .configuration import (
 from .controller import ScheduledController
 from .battery_writer import BatteryWriterFence
 from .battery_runtime import BatteryRuntime, NativeReadbackPending
-from .execution_archive import PageFiles
+from .execution_storage import ExecutionStorage
+from .execution_migration import LegacyExecution
 from .verification import VerificationJournal
 from .verification_storage import VerificationStorage
 from .configuration_schema import ConfigurationReader
@@ -228,14 +229,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     coordinator.controller = controller
     controller.metrics.performance = {'verification_storage': verification_store.metrics,
                                       'configuration_reads': options.metrics}
-    # Evidence pages are files named by content, not Stores: Home Assistant
-    # keeps every Store key it has written until restart.
-    evidence = PageFiles(hass.config.path(STORAGE_DIR), f"shs_energy.execution_evidence.{entry.entry_id}.",
-                         hass.async_add_executor_job, json_bytes, json_loads)
-    coordinator.battery_runtime = BatteryRuntime(coordinator, controller,
-        Store(hass, 1, f"shs_energy.battery_runtime.{entry.entry_id}"),
-        lambda: int(datetime.now(timezone.utc).timestamp() * 1000),
-        evidence.store_for, (evidence.list, evidence.remove))
+    execution_store = ExecutionStorage(
+        hass.config.path(STORAGE_DIR, f"shs_energy.execution.{entry.entry_id}.sqlite"),
+        hass.async_add_executor_job,
+        LegacyExecution(hass.config.path(STORAGE_DIR), entry.entry_id,
+            Store(hass, 1, f"shs_energy.battery_runtime.{entry.entry_id}"),
+            hass.async_add_executor_job))
+    coordinator.battery_runtime = BatteryRuntime(coordinator, controller, execution_store,
+        lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
     coordinator.battery_writer = BatteryWriterFence(
         Store(hass, 1, f"shs_energy.battery_writer.{entry.entry_id}"), controller.lock,
         options,

@@ -21,9 +21,9 @@ class ResourceMetricsTests(unittest.TestCase):
         self.assertEqual(profiler.operations['reduce']['wall_ms'], 2000)
         self.assertEqual(profiler.operations['reduce']['failures'], 1)
         with patch('resource_profiling.thread_time', side_effect=AssertionError('CPU across await')):
-            with profiler.measure('archive_save'):
+            with profiler.measure('checkpoint_save'):
                 pass
-        self.assertEqual(profiler.operations['archive_save']['cpu_ms'], 0)
+        self.assertEqual(profiler.operations['checkpoint_save']['cpu_ms'], 0)
 
     def test_samples_are_bounded_detached_and_include_growth_counters(self):
         profiler = ResourceProfiler()

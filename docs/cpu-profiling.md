@@ -1,6 +1,6 @@
 # CPU, memory and I/O investigation
 
-## Built-in resource diagnostics (beta.45)
+## Built-in resource diagnostics
 
 The native HA diagnostics download and the controller gzip download include
 `resource_profiling`. The admin-only `shs_energy.profile_resources` action returns
@@ -10,25 +10,32 @@ connector, call that action or read native diagnostics at
 
 The profiler belongs to one integration load and retains 120 one-minute samples
 (two hours), with cumulative operation timings, current process memory and
-account/archive/queue counts. It never retains individual input events. Reload
+account/storage/queue counts. It never retains individual input events. Reload
 starts a new session. Save a report before restarting when comparing a growing
 process. Look at changes in the counters between samples, not just lifetime totals.
 
-- `operations`: synchronous reducer, accounting-view, checkpoint-encoding and
-  archive-page encoding/hash CPU time; archive save, checkpoint save, archive
-  collection and refresh wall time. `cpu_measured=false` means CPU is **not
-  measured**, not that an operation used no CPU. Awaited spans cannot attribute
-  CPU to SHS because other coroutines run while they are suspended. These spans
-  overlap and must not be added. Archive encoding counts page serialization and
-  hashing; it is not every part of archive traversal or domain encoding.
+- `operations`: synchronous reducer, accounting-view and checkpoint-encoding CPU
+  time; checkpoint save and refresh wall time. `cpu_measured=false` means CPU is
+  **not measured**, not that an operation used no CPU. Awaited spans cannot
+  attribute CPU to SHS because other coroutines run while they are suspended.
+  These spans overlap and must not be added. The old archive encode/save/collect
+  spans were removed with the page writer.
 - `process`: current RSS, lifetime RSS peak, swap, thread count and cumulative
   process CPU. `cpu_percent_one_core` is the interval CPU rate (100% = one core).
   These include all integrations; current RSS and the lifetime peak are distinct.
   Process-file reads run in the executor. Read failures appear as an explicit
   error rather than a zero memory measurement.
-- `retained`: account meter/observation/admission counts, trace count, archive
-  known/reachable pages, queued events and active effects. Counts are not byte
-  estimates. Their slopes identify growing owners without walking the heap.
+- `retained`: account meter/observation/admission counts, trace count, queued
+  events and active effects. `storage_*` adds committed row counts, appended and
+  deleted rows, commits/failures, worker commit CPU, wall time, database bytes,
+  revision and pending legacy cleanup. JSON encoded bytes exclude typed SQL
+  columns and are not physical write bytes. Account counts still describe full
+  in-memory history; SQLite does not yet make that history disk-only.
+
+The [storage design](execution-storage-design.md) describes the one-way SQLite
+migration and the remaining bounded-account work. Use
+`scripts/benchmark-execution-storage.py <diagnostics.json.gz>` for a local import,
+restart and single-record append benchmark.
 
 For allocation source lines, explicitly start a short capture:
 

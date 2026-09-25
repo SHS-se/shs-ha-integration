@@ -40,7 +40,9 @@ store that discards writes:
 
 These isolate serialization and hashing, not disk I/O, total runtime refresh cost,
 or the HA machine's CPU. The first save still serializes the history. Reproduce
-with Python 3.13 and `scripts/benchmark-execution-archive.py <diagnostics.json.gz>`.
+with Python 3.13 and the then-current `scripts/benchmark-execution-archive.py <diagnostics.json.gz>`.
+That page-store benchmark was retired with the SQLite migration; current storage
+measurements use `scripts/benchmark-execution-storage.py`.
 
 Regression coverage verifies that battery status updates still refresh entities
 without running other controllers, shared updates still run them, and archive

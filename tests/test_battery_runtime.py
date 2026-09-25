@@ -26,6 +26,18 @@ class Store:
     async def async_load(self):return deepcopy(self.saved)
     async def async_save(self,value):self.saved=deepcopy(value);self.writes.append(deepcopy(value))
 
+class ExecutionStore(Store):
+    def __init__(self):
+        super().__init__()
+        from home_runtime import ExecutionSession
+        self.session=ExecutionSession()
+    async def load(self):
+        return (deepcopy(self.saved),self.session) if self.saved is not None else None
+    async def save(self, value, session):
+        await self.async_save(value)
+        self.session=session
+    def resource_counts(self):return {}
+
 class Rig:
     def __init__(self,mode='controlling'):
         self.now=60000;self.calls=[];self.options={'device_modes':{'$battery':mode},'battery_enabled':True,
@@ -44,10 +56,11 @@ class Rig:
             entity='sensor.'+key;self.options['entities_'+key]=[entity];row(entity,100,'kWh',state_class='total_increasing')
         self.plan={'plan_id':'p','snapshot_id':'s','valid_until':iso(900000),'binding_until':iso(900000),'battery_supply_scope':{'kind':'whole_house'},
                    'plans':{'priority':{'slots':[{'start':iso(0),'duration_hours':(900000-10000)/3600000}]}}}
-        self.store=Store();self.fence_store=Store()
+        self.store=ExecutionStore();self.fence_store=Store()
         async def service(domain,name,data,blocking):
             self.calls.append((domain,name,data.copy()))
-            assert self.store.saved is not None,'command preceded durable checkpoint'
+            assert (self.store.saved is not None if isinstance(self.store, ExecutionStore)
+                    else self.store._revision > 0),'command preceded durable checkpoint'
             assert self.fence_store.saved['owner']=='runtime'
             self.rows[data['entity_id']]['state']=str(data.get('value',data.get('option')))
             self.rows[data['entity_id']]['last_reported']=iso(self.now)
@@ -73,9 +86,7 @@ class Rig:
         self.coordinator.async_optimisation_push=replan
         self.plan['grid']={'import_limit_w':10000,'export_limit_w':10000}
         self.install_contract()
-        self.archive_stores={}
-        self.runtime=BatteryRuntime(self.coordinator,self.controller,self.store,lambda:self.now,
-            lambda key:self.archive_stores.setdefault(key,Store()))
+        self.runtime=BatteryRuntime(self.coordinator,self.controller,self.store,lambda:self.now)
         self.fence=BatteryWriterFence(self.fence_store,self.controller.lock,self.controller.options,lambda:self.now,self.runtime.identity)
         self.coordinator.battery_writer=self.fence
     def install_contract(self, generation=0, previous=None, start=10000, end=900000):
@@ -335,41 +346,6 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(r.runtime.snapshot()['fault_history'])
         finally:await r.runtime.close()
 
-    def collect_pages(self,r):
-        removed=[]
-        async def list_pages():return set(r.archive_stores)
-        async def remove_pages(keys):
-            for key in keys:
-                r.archive_stores.pop(key);removed.append(key)
-        r.runtime.archive.pages=(list_pages,remove_pages)
-        return removed
-    async def test_checkpoints_remove_superseded_evidence_and_a_restart_loads_what_remains(self):
-        from execution_archive import ExecutionArchive
-        from test_execution_archive import pages_of
-        r=Rig();removed=self.collect_pages(r);await r.start()
-        try:
-            for _ in range(5):await r.advance()
-            root=r.store.saved['execution_root']
-            self.assertTrue(removed)
-            self.assertEqual(set(r.archive_stores),pages_of(r.archive_stores,root,lambda store:store.saved))
-            restored=await ExecutionArchive(lambda key:r.archive_stores[key]).load_session(root)
-            self.assertEqual(restored,r.runtime.archive._session_cache[0])
-        finally:await r.runtime.close()
-    async def test_evidence_is_kept_while_the_checkpoint_on_disk_names_an_older_root(self):
-        from test_execution_archive import pages_of
-        r=Rig();removed=self.collect_pages(r);await r.start()
-        try:
-            durable=pages_of(r.archive_stores,r.store.saved['execution_root'],lambda store:store.saved)
-            save=r.store.async_save
-            async def lost(value):pass  # Home Assistant logs a failed write and returns.
-            r.store.async_save=lost;count=len(removed)
-            for _ in range(3):await r.advance()
-            self.assertEqual(len(removed),count)
-            self.assertLessEqual(durable,set(r.archive_stores))
-            r.store.async_save=save
-            await r.advance()
-            self.assertGreater(len(removed),count)
-        finally:await r.runtime.close()
     async def test_snapshot_readers_share_one_live_account_view(self):
         import battery_runtime as module
         from unittest.mock import patch
@@ -605,7 +581,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 restarted=Rig();restarted.now=r.now+25*3600000;restarted.rows=deepcopy(r.rows)
                 for row in restarted.rows.values():row['last_reported']=iso(restarted.now)
                 restarted.store.saved=deepcopy(r.store.saved)
-                restarted.archive_stores.update(r.archive_stores)
+                restarted.store.session=r.store.session
                 if old_participants:
                     state=decode_checkpoint(restarted.store.saved['checkpoint'].encode())
                     scope=state.authority.scope
@@ -631,7 +607,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         from battery_runtime import NativeReadbackPending
         r=Rig();await r.start();await r.runtime.close()
         restarted=Rig();restarted.store.saved=deepcopy(r.store.saved)
-        restarted.archive_stores.update(r.archive_stores)
+        restarted.store.session=r.store.session
         restarted.fence_store.saved=deepcopy(r.fence_store.saved)
         await restarted.fence.open()
         missing=restarted.rows.pop('select.mode')
@@ -675,7 +651,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             restarted.plan=deepcopy(r.plan)
             restarted.rows=deepcopy(r.rows)
             restarted.fence_store.saved=deepcopy(r.fence_store.saved)
-            restarted.store=r.store;restarted.runtime.store=r.store;restarted.runtime.archive=r.runtime.archive
+            restarted.store=r.store;restarted.runtime.store=r.store
             r=restarted
             for row in r.rows.values():row['last_reported']=iso(r.now)
             await r.fence.open();await r.runtime.open()
@@ -728,7 +704,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
         r=Rig('control_verification');await r.start()
         try:
             captured=await r.runtime.capture_feedback(5000000,'snapshot')
-            saved=await r.runtime.archive.load_session(r.store.saved['execution_root'])
+            saved=r.store.session
             self.assertEqual(json.loads(saved.captured_feedback),captured)
             await r.advance()
             self.assertEqual(json.loads(r.runtime.host.state.execution.captured_feedback),captured)
@@ -829,7 +805,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsNone(r.runtime.host)
                     self.assertEqual(feedback['previous_contract_id'],original.contract.id)
                     self.assertEqual(feedback['scope_revision'],plan_scope(r.options))
-                    saved=await r.runtime.archive.load_session(r.store.saved['execution_root'])
+                    saved=r.store.session
                     self.assertEqual(saved.account,r.runtime._bootstrap)
                     self.assertEqual(r.calls,[])
                     async def changed_history(entities,start,end,with_attributes):
@@ -856,7 +832,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             await r.runtime.close()
             restarted=Rig('controlling')
             restarted.store.saved=deepcopy(r.store.saved)
-            restarted.runtime.archive=r.runtime.archive
+            restarted.store.session=r.store.session
             restarted.install_contract(feedback['generation'],previous=original.id)
             restarted.plan['battery_execution']['source_receipt']=feedback['source_receipt']
             async def new_history(entities,start,end,with_attributes):
@@ -961,13 +937,13 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('previously accepted',dump['display']['plan_warning'])
             self.assertIn('Previously accepted plan',dump['explanation']['plan'])
             self.assertNotIn('Continue with the current plan',dump['explanation']['next'])
-            saved=await r.runtime.archive.load_session(r.store.saved['execution_root'])
+            saved=r.store.session
             self.assertEqual(saved.plan_rejection.contract_id,'replacement')
             self.assertEqual(dump['fix'],{'kind':'diagnostics'})
             await r.runtime.close()
             restarted=Rig('control_verification');restarted.now=r.now+1000
             for row in restarted.rows.values():row['last_reported']=iso(restarted.now)
-            restarted.runtime.store=r.store;restarted.runtime.archive=r.runtime.archive
+            restarted.runtime.store=r.store
             r=restarted
             await asyncio.wait_for(r.start(),3)
             self.assertEqual(r.runtime.snapshot()['plan_rejection'],dump['plan_rejection'])
@@ -991,7 +967,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('no accepted battery plan',dump['display']['plan_warning'])
         restarted=Rig('control_verification')
         restarted.runtime.store=r.store
-        restarted.runtime.archive=r.runtime.archive
+        restarted.store.session=r.store.session
         try:
             await restarted.runtime.open()
             self.assertEqual(restarted.runtime.snapshot()['plan_status'],'rejected')
@@ -1014,7 +990,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             restarted=Rig('control_verification');restarted.now=r.now+1000
             for row in restarted.rows.values():row['last_reported']=iso(restarted.now)
             restarted.store.saved=deepcopy(r.store.saved)
-            restarted.archive_stores.update(r.archive_stores)
+            restarted.store.session=r.store.session
             r=restarted
             await asyncio.wait_for(r.start(),3)
             self.assertGreater(r.runtime.host.state.conditions_revision,before)

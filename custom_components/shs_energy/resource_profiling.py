@@ -28,9 +28,8 @@ class ResourceProfiler:
     CPU belongs only to synchronous sections. An awaited operation is wall time
     only because other coroutines run on that same thread while it is suspended.
     """
-    OPERATIONS = ('reduce', 'accounting_view', 'checkpoint_encode', 'archive_encode',
-                  'archive_save', 'checkpoint_save', 'archive_collect', 'refresh')
-    ASYNC_OPERATIONS = frozenset(('archive_save', 'checkpoint_save', 'archive_collect', 'refresh'))
+    OPERATIONS = ('reduce', 'accounting_view', 'checkpoint_encode', 'checkpoint_save', 'refresh')
+    ASYNC_OPERATIONS = frozenset(('checkpoint_save', 'refresh'))
 
     def __init__(self):
         self.started_at = datetime.now(timezone.utc).isoformat()
@@ -87,7 +86,9 @@ class ResourceProfiler:
             'elapsed_seconds': monotonic() - self.started,
             'basis': 'CPU is current-thread time in synchronous sections; async spans report wall time only. '
                      'Spans may overlap and must not be added. Process gauges include every integration. '
-                     'Retained counts are record counts, not byte estimates. Samples: latest 120, once per minute. '
+                     'Retained counts are record counts, not byte estimates. Storage worker CPU measures commits; '
+                     'storage encoded bytes count JSON only, excluding typed SQL columns and physical disk writes. '
+                     'Samples: latest 120, once per minute. '
                      'All profiler history resets on integration reload.',
             'operations': deepcopy(self.operations), 'retained': retained,
             'samples': deepcopy(list(self.samples)), 'allocations': deepcopy(self.allocations)}
