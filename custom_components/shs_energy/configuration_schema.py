@@ -35,11 +35,14 @@ MAPPING_KEYS = {kind: mapping_keys(kind) for kind in CONTROL_FIELDS}
 MAPPING_KEYS["switch_schedule"].add("temperature_entity_id")
 
 
-def validate_mapping_keys(mapping):
+def validate_mapping_keys(mapping, *, pool=False):
     control_type = mapping.get("control_type")
     if control_type not in MAPPING_KEYS:
         raise ValueError("unsupported control type")
-    unknown = set(mapping) - MAPPING_KEYS[control_type]
+    # Pool mappings persist the shared water source as planner routing metadata,
+    # regardless of the device model's control type. It is not a device editor.
+    allowed = MAPPING_KEYS[control_type] | ({"temperature_entity_id"} if pool else set())
+    unknown = set(mapping) - allowed
     if unknown:
         raise ValueError("unknown device fields: " + ", ".join(sorted(unknown)))
 
@@ -323,12 +326,12 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
     if submitted is None:
         stored.pop(key, None)
         return result
-    validate_mapping_keys(submitted)
     kind = device["control_type"]
     if submitted.get("control_type") != kind:
         raise ValueError(f"{device['name']}: configuration belongs to a different control type")
     pool = (device.get("system") == "pool" or device.get("planning_system") == "pool"
             or mapped_planning_path(device, submitted, existing.get("pool_water_temperature_entity")) == "pool")
+    validate_mapping_keys(submitted, pool=pool)
     if pool:
         device = {**device, "system": "pool"}
     mapping = {"control_type": kind}

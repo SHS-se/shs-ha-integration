@@ -69,6 +69,39 @@ class CurrentConfigurationTests(unittest.TestCase):
             'power': 2000, 'temperature_entity_id': 'sensor.water'})
         self.assertNotIn('rooms', saved)
 
+    def test_every_pool_control_type_can_resave_shared_temperature_and_minimum_runtime(self):
+        states = {'sensor.water': {'state': '29', 'attributes': {'unit_of_measurement': '°C'}},
+                  'sensor.new_water': {'state': '28', 'attributes': {'unit_of_measurement': '°C'}},
+                  'switch.pool': {'state': 'on', 'attributes': {}}}
+        for kind in ('variable_power', 'permit_inhibit', 'switch_schedule', 'setpoint'):
+            with self.subTest(kind=kind):
+                device = {'control_type': kind, 'category': 'pool_heating', 'system': 'pool', 'name': 'Pool'}
+                def save_pool(options, mapping):
+                    return save_device(options, 'pool', mapping, device, states.get,
+                        entity_names={key: key for key in states}, area_names={}, entity_area_ids={})
+                options = {'pool_water_temperature_entity': 'sensor.water'}
+                options = save_pool(options, {'control_type': kind,
+                    'actuator_entity_ids': ['switch.pool'], 'power': 2000})
+                mapping = deepcopy(options['device_control_mappings']['pool'])
+                self.assertEqual(mapping['temperature_entity_id'], 'sensor.water')
+                mapping['minimum_on_seconds'] = 240 * 60
+                options = save_pool(options, mapping)
+                self.assertEqual(options['device_control_mappings']['pool']['minimum_on_seconds'], 14400)
+                # The shared editor remains authoritative when an old device draft is saved.
+                options['pool_water_temperature_entity'] = 'sensor.new_water'
+                options = save_pool(options, mapping)
+                saved = options['device_control_mappings']['pool']
+                self.assertEqual(saved['temperature_entity_id'], 'sensor.new_water')
+                self.assertEqual(saved['minimum_on_seconds'], 14400)
+                self.assertEqual(save_pool(options, saved)['device_control_mappings']['pool'], saved)
+                with self.assertRaisesRegex(ValueError, 'unknown device fields: unexpected'):
+                    save_pool(options, {**saved, 'unexpected': True})
+
+    def test_non_pool_variable_power_still_rejects_unrelated_temperature_field(self):
+        from configuration_schema import validate_mapping_keys
+        with self.assertRaisesRegex(ValueError, 'unknown device fields: temperature_entity_id'):
+            validate_mapping_keys({'control_type': 'variable_power', 'temperature_entity_id': 'sensor.water'})
+
     def test_switch_timings_are_optional_in_every_mode(self):
         device = {"control_type": "switch_schedule", "category": "household", "name": "Heater"}
         for mode in ("monitoring", "planning", "control_verification", "controlling"):
