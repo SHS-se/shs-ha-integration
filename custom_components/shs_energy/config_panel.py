@@ -603,6 +603,8 @@ async def _controller_diagnostics_file(hass, entry):
     async with controller.lock:
         panel = await _configuration_payload(hass, entry, refresh_roles=False)
         report = controller_diagnostics(controller, panel)
+        runtime = entry.runtime_data.battery_runtime
+        report['resource_profiling'] = runtime.profiler.snapshot(runtime.resource_counts())
         # The report shares live records: serialize it before the next await.
         # Immutable battery journals are encoded with the compression instead.
         parts = report_parts(report, json_bytes)

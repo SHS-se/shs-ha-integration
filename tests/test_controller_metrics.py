@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from controller_metrics import ControllerMetrics
+from resource_profiling import ResourceProfiler
 
 
 class MetricsTests(unittest.TestCase):
@@ -78,7 +79,9 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
             client=SimpleNamespace(traffic=SimpleNamespace(snapshot=lambda: {'requests': 0})),
             battery_live_inputs=SimpleNamespace(snapshot=lambda: {"control_authority": False}),
             battery_writer=SimpleNamespace(snapshot=lambda: {"owner": "legacy"}),
-            battery_runtime=SimpleNamespace(snapshot=lambda: {"state":"pending"}),
+            battery_runtime=SimpleNamespace(snapshot=lambda: {"state":"pending"},
+                profiler=ResourceProfiler(),
+                resource_counts=lambda: {'meters':123}),
             battery_policy_exchange=SimpleNamespace(snapshot=lambda: {'state': 'blocked', 'control_authority': False})))
 
         def load_function(file, name, namespace):
@@ -96,6 +99,7 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         report = await diagnostics(None, entry)
         self.assertEqual(report['controller_metrics']['triggers']['timer']['skipped_busy'], 1)
         self.assertIn('network_traffic', report)
+        self.assertEqual(report['resource_profiling']['retained']['meters'], 123)
         import gzip
         from controller_diagnostics import gzip_report, report_parts, report_summary
         workers = []
@@ -118,6 +122,7 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         result = json.loads(gzip.decompress(body))
         self.assertEqual(result['attempts'], [])
         self.assertEqual(result['controller_metrics']['triggers'], report['controller_metrics']['triggers'])
+        self.assertEqual(result['resource_profiling']['retained']['meters'], 123)
         self.assertEqual(result['current']['devices'][0]['mode'], 'monitoring')
         self.assertEqual(summary, {'devices': 1, 'runtime_evaluations': 0, 'verification_checks': 0, 'observation_samples': 0})
         self.assertFalse(controller.lock.locked())

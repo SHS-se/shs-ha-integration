@@ -15,14 +15,25 @@ import sys
 import time
 
 
-def process_counters(pid):
-    root = Path('/proc') / str(pid)
+def process_counters(pid, proc_root=Path('/proc')):
+    root = proc_root / str(pid)
     # comm may contain spaces or parentheses; fields after it begin at field 3.
     fields = (root / 'stat').read_text().rsplit(')', 1)[1].split()
     io = {key: int(value) for key, value in
           (line.split(':', 1) for line in (root / 'io').read_text().splitlines())}
     return {'cpu_seconds': (int(fields[11]) + int(fields[12])) / os.sysconf('SC_CLK_TCK'),
             **io}
+
+
+def process_memory(pid, proc_root=Path('/proc')):
+    """Current residency is a gauge; high water is never reported as current use."""
+    status = dict(line.split(':', 1) for line in
+                  (proc_root / str(pid) / 'status').read_text().splitlines())
+    fields = {'rss_bytes': 'VmRSS', 'rss_anonymous_bytes': 'RssAnon',
+              'rss_file_bytes': 'RssFile', 'rss_shared_bytes': 'RssShmem',
+              'rss_high_water_bytes': 'VmHWM', 'swap_bytes': 'VmSwap'}
+    return {**{key: int(status[field].split()[0]) * 1024 for key, field in fields.items()},
+            'threads': int(status['Threads'])}
 
 
 def sample(seconds, interval_ms):
@@ -44,9 +55,18 @@ def sample(seconds, interval_ms):
     callers = Counter()
     started_at = datetime.now(timezone.utc).isoformat()
     before = process_counters(pid)
+    memory_before = process_memory(pid)
+    resources = []
     start = time.monotonic()
+    next_resource = start
     attempts = successful = empty = shs_samples = 0
     while time.monotonic() - start < seconds:
+        current = time.monotonic()
+        if current >= next_resource:
+            resources.append({'elapsed_seconds': current - start,
+                              'process_cpu_seconds': process_counters(pid)['cpu_seconds'],
+                              **process_memory(pid)})
+            next_resource = current + 1
         attempts += 1
         try:
             threads = unwinder.get_stack_trace()
@@ -72,6 +92,7 @@ def sample(seconds, interval_ms):
         time.sleep(interval_ms / 1000)
     elapsed = time.monotonic() - start
     after = process_counters(pid)
+    memory_after = process_memory(pid)
     delta = {key: after[key] - value for key, value in before.items()}
     return {
         'started_at': started_at, 'elapsed_seconds': elapsed, 'pid': pid,
@@ -80,6 +101,10 @@ def sample(seconds, interval_ms):
         'process_cpu_percent_one_core': 100 * delta['cpu_seconds'] / elapsed,
         'process_cpu_percent_machine': 100 * delta['cpu_seconds'] / elapsed / os.cpu_count(),
         'process_io_delta': delta,
+        'process_memory_before': memory_before,
+        'process_memory_after': memory_after,
+        'process_rss_change_bytes': memory_after['rss_bytes'] - memory_before['rss_bytes'],
+        'resource_samples': resources,
         'sampling': {'attempts': attempts, 'successful_reads': successful, 'empty_reads': empty,
                      'failed_reads': dict(errors), 'shs_stack_samples': shs_samples,
                      'interval_ms': interval_ms},
@@ -91,6 +116,8 @@ def sample(seconds, interval_ms):
             'Stacks sample main-thread wall time, including blocking/idle waits; they are not CPU percentages. '
             'Inclusive counts overlap and must not be added. Failed/empty reads are not idle evidence. '
             'Process CPU and I/O include all HA integrations and threads, excluding child processes. '
+            'RSS is current process-resident memory; high water is the process lifetime peak, not current use. '
+            'Resource samples are collected at most once per second; they do not attribute memory to SHS. '
             'rchar/wchar count file API bytes including cache; read_bytes/write_bytes count storage I/O '
             'charged by the kernel to this process. Installed version may differ until HA restarts.'),
     }

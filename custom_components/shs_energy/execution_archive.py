@@ -24,11 +24,13 @@ if __package__:
     from .home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES
     from .home_runtime_checkpoint import upgrade_execution_session
     from .runtime_json import encode_value, decode_value
+    from .resource_profiling import ResourceProfiler
 else:
     import plan_execution as execution
     from home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES
     from home_runtime_checkpoint import upgrade_execution_session
     from runtime_json import encode_value, decode_value
+    from resource_profiling import ResourceProfiler
 
 PAGE_BYTES = 128_000
 # Pages removed after one checkpoint; an old backlog drains over later ones.
@@ -44,7 +46,7 @@ def _page_key(name):
 
 
 class ExecutionArchive:
-    def __init__(self, store_for, pages=None):
+    def __init__(self, store_for, pages=None, *, profiler=None):
         """`pages` is (list, remove) for this archive's page files; without it nothing is removed."""
         self.store_for = store_for
         self.pages = pages
@@ -52,10 +54,16 @@ class ExecutionArchive:
         self._session_cache = None
         self._listed = False
         self._removing = None
+        self.profiler = profiler if profiler is not None else ResourceProfiler()
+
+    def resource_counts(self):
+        return {'archive_known_pages':len(self.saved),
+                'archive_reachable_pages':len(self._session_cache[3]) if self._session_cache else 0}
 
     async def _page(self, page, reached=None):
-        encoded=canonical(page)
-        key=sha256(encoded).hexdigest()
+        with self.profiler.measure('archive_encode'):
+            encoded=canonical(page)
+            key=sha256(encoded).hexdigest()
         if key not in self.saved:
             await self.store_for(key).async_save(page)
             self.saved.add(key)

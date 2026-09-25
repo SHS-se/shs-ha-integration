@@ -19,4 +19,6 @@ async def async_get_config_entry_diagnostics(
         "battery_writer": entry.runtime_data.battery_writer.snapshot(),
         "battery_runtime": entry.runtime_data.battery_runtime.snapshot(),
         "controller_metrics": entry.runtime_data.controller.metrics.snapshot(),
+        "resource_profiling": entry.runtime_data.battery_runtime.profiler.snapshot(
+            entry.runtime_data.battery_runtime.resource_counts()),
     }

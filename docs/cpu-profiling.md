@@ -1,4 +1,129 @@
-# CPU and I/O investigation
+# CPU, memory and I/O investigation
+
+## Built-in resource diagnostics (beta.45)
+
+The native HA diagnostics download and the controller gzip download include
+`resource_profiling`. The admin-only `shs_energy.profile_resources` action returns
+the same report without building the complete accounting export. Through the HA
+connector, call that action or read native diagnostics at
+`diagnostics_data_path="data.resource_profiling"`.
+
+The profiler belongs to one integration load and retains 120 one-minute samples
+(two hours), with cumulative operation timings, current process memory and
+account/archive/queue counts. It never retains individual input events. Reload
+starts a new session. Save a report before restarting when comparing a growing
+process. Look at changes in the counters between samples, not just lifetime totals.
+
+- `operations`: synchronous reducer, accounting-view, checkpoint-encoding and
+  archive-page encoding/hash CPU time; archive save, checkpoint save, archive
+  collection and refresh wall time. `cpu_measured=false` means CPU is **not
+  measured**, not that an operation used no CPU. Awaited spans cannot attribute
+  CPU to SHS because other coroutines run while they are suspended. These spans
+  overlap and must not be added. Archive encoding counts page serialization and
+  hashing; it is not every part of archive traversal or domain encoding.
+- `process`: current RSS, lifetime RSS peak, swap, thread count and cumulative
+  process CPU. `cpu_percent_one_core` is the interval CPU rate (100% = one core).
+  These include all integrations; current RSS and the lifetime peak are distinct.
+  Process-file reads run in the executor. Read failures appear as an explicit
+  error rather than a zero memory measurement.
+- `retained`: account meter/observation/admission counts, trace count, archive
+  known/reachable pages, queued events and active effects. Counts are not byte
+  estimates. Their slopes identify growing owners without walking the heap.
+
+For allocation source lines, explicitly start a short capture:
+
+```yaml
+action: shs_energy.profile_resources
+data:
+  allocation_seconds: 30
+```
+
+Call again with no `allocation_seconds` after 30 seconds. `allocations` reports
+the top 20 process allocation locations, top 20 SHS locations, traced memory and
+tracer overhead. It measures allocations made **after tracing starts** that are
+still alive at the end; it cannot attribute older objects. Tracing is process-wide
+and adds overhead, so it is off by default and limited to 1–300 seconds. Another
+active tracer causes an explicit refusal. Snapshot analysis runs in a worker;
+only its bounded summary is retained. Completion, errors and unload release this
+profiler's tracer. An existing tracer owned elsewhere is left alone.
+
+For CPU call stacks or older retained memory, combine this with the external
+sampler below and a local account benchmark:
+
+```sh
+python3 scripts/benchmark-account.py '/path/to/shs-controller-diagnostics.json.gz' --memory
+```
+
+The benchmark loads the immutable account locally, distinguishes cold index
+construction from warmed-up operations, and optionally estimates deduplicated
+reachable Python-object bytes. It reports counts/timings, never sensor values.
+Use the same export and Python version to compare revisions. The estimate is
+neither RSS nor peak memory, and the benchmark itself may require substantial RAM.
+
+## 25 September 2026 investigation
+
+`history (34).csv` contains whole-machine CPU and memory, from 31 August to
+25 September. UTC time-weighted daily CPU was 13.29% on 1 September, 29.93% on
+23 September and 26.88% on the partial 25 September day. Memory was 24.37%,
+42.87% and 44.75% respectively. These sensors alone do not attribute usage.
+
+The HA connector confirmed loaded beta.44, an approximately 79-second integration
+setup, and a warning that the battery execution-mode selector took 1.485 seconds
+to update. A 30-second external sample at 08:43 UTC measured HA Python at 19.35%
+of four-core capacity. Of 1,482 stack reads, 1,186 succeeded and 352 contained SHS;
+296 failed. Repeated `MeterIndex` construction, `Account.__post_init__` validation,
+`BatteryRuntime._meter` scans and accounting-view scans were prominent. Samples
+are wall-time observations, not per-function CPU percentages. Other integration
+work also appears in the profile.
+
+Today's controller export (50) holds 256,284 meter receipts, 109,594 state
+observations and 795 admitted contracts. Full account evidence is reloaded after
+restart, explaining why restarting does not remove its footprint or repeated
+history-processing cost. This is retained application state, not proof that all
+whole-machine memory growth is an SHS leak. The external sampler now includes
+one-second RSS/CPU gauges as well as before/after RSS, lifetime peak and swap.
+
+Beta.45 keeps exactly the existing journal/wire format and evidence:
+
+- Account transitions validate newly received evidence and preserve the already
+  validated immutable prefix. Public construction and restoration still validate
+  the full history.
+- Meter indexes survive unrelated observation/request updates. New receipts copy
+  one stream's arrays and extend prefix sums. Late corrections recalculate the
+  affected suffix; earlier snapshots retain their original answers.
+- Meter source-time predecessor/same-time lookup is indexed. Event identities,
+  observation lookup and physical binding checks avoid repeated full-history
+  scans. Live objective definitions and acknowledged-receipt summaries are reused;
+  objective outcomes still recalculate against current evidence and time.
+- High-volume records use slots and share repeated vocabulary strings. Unique
+  receipts and historical observations are not deleted or treated as redundant.
+
+On the same real export with local Python 3.13, medians of seven warmed-up calls:
+
+| Operation | beta.44 | beta.45 |
+| --- | ---: | ---: |
+| Live accounting view | 30.91 ms | 0.60 ms |
+| Append state observation | 25.83 ms | 0.55 ms |
+| Duplicate meter receipt | 3.19 ms | 0.005 ms |
+| Append meter receipt | 49.55 ms | 4.19 ms |
+| Account reachable objects after warm-up | 408.35 MiB | 277.09 MiB |
+
+Cold hydration remained about nine seconds locally. First-use indexes have
+construction costs; the warmed-up figures do not hide or replace those costs.
+These are local measurements, not post-deployment whole-host improvements.
+
+### Remaining scaling limit
+
+Full audit history is still resident and grows. Tuple append and copying one
+stream's index arrays still scale with retained history; late corrections can
+recalculate a long suffix. This release materially reduces recurring CPU and
+memory overhead, but it does **not** establish a fixed lifetime RAM limit.
+Lossless bounded-RAM operation requires archive-backed history **and** historical
+indexes with bounded page caches, a prepared-evidence boundary for the pure
+reducer, consistent export snapshots and crash-safe migration. Arbitrarily
+trimming meters, observations or objectives would change accounting semantics
+and is not a substitute. The new collection slopes and allocation captures make
+that remaining growth visible and attributable.
 
 ## Read-only host sampling
 

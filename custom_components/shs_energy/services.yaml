@@ -1,3 +1,30 @@
+profile_resources:
+  name: Profile integration resources
+  description: >-
+    Return bounded CPU timing, memory, retained-history and queue diagnostics.
+    Administrator access is required. Optionally start a timed process-wide Python
+    allocation capture. Tracing adds overhead and is off by default. Call again
+    without allocation_seconds to read the result after the capture finishes.
+    Existing tracing owned by another profiler is never replaced.
+  fields:
+    entry_id:
+      name: Configuration entry ID
+      description: Required only when more than one SHS Energy entry exists.
+      selector:
+        text:
+    allocation_seconds:
+      name: Allocation capture duration
+      description: Zero reads diagnostics only; 1–300 starts an allocation capture.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: seconds
+          mode: box
+  response:
+    optional: false
+
 discover_configuration:
   name: Discover energy configuration
   description: >-

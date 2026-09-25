@@ -21,6 +21,7 @@ if __package__:
     from . import plan_execution as execution
     from .runtime_json import decode_value, Records
     from .execution_archive import ExecutionArchive
+    from .resource_profiling import ResourceProfiler
     from .battery_live import native_surface, source_revision, planned_power_bindings
     from .battery_supply import SupplyScope, observe_supply
     from .configuration_schema import METADATA_KEYS
@@ -38,6 +39,7 @@ else:
     import plan_execution as execution
     from runtime_json import decode_value, Records
     from execution_archive import ExecutionArchive
+    from resource_profiling import ResourceProfiler
     from battery_live import native_surface, source_revision, planned_power_bindings
     from battery_supply import SupplyScope, observe_supply
     from configuration_schema import METADATA_KEYS
@@ -123,7 +125,8 @@ class BatteryRuntime:
     """
     def __init__(self,coordinator,controller,store,now_ms,archive_store_for,archive_pages=None):
         self.coordinator,self.controller,self.store,self.now=coordinator,controller,store,now_ms
-        self.archive=ExecutionArchive(archive_store_for,archive_pages)
+        self.profiler=ResourceProfiler()
+        self.archive=ExecutionArchive(archive_store_for,archive_pages,profiler=self.profiler)
         self.host=None;self.adapter=None;self._grant=None;self._identity=None
         self._lock=asyncio.Lock();self._observe_lock=asyncio.Lock();self._closed=False;self._closing=False
         self._options=None;self._devices=[];self._model=None;self._fits={};self._model_sources=None
@@ -203,7 +206,7 @@ class BatteryRuntime:
         ports=HostPorts(self._persist,self._dispatch,self._observe,self._confirm,self._transition,self._renew,self._report,self.now,self._persist_state)
         # Apply current scheduling limits on restart without extending any
         # previously prepared or issued attempt's persisted effect window.
-        self.host=HomeHost(replace(state,limits=RUNTIME_LIMITS),ports)
+        self.host=HomeHost(replace(state,limits=RUNTIME_LIMITS),ports,self.profiler)
         await self.host.start(resume=checkpoint is not None)
 
     def identity(self):
@@ -294,12 +297,24 @@ class BatteryRuntime:
         """
         now=self.now()
         if include_evidence:
-            return now,execution.feedback(account,now)
+            with self.profiler.measure('accounting_view'):
+                return now,execution.feedback(account,now)
         cached=self._live_accounting
         if cached is not None and cached[0] is account and 0<=now-cached[1]<ACCOUNTING_REUSE_MS:
             return cached[1],cached[2]
-        self._live_accounting=(account,now,execution.live_feedback(account,now))
+        with self.profiler.measure('accounting_view'):
+            self._live_accounting=(account,now,execution.live_feedback(account,now))
         return now,self._live_accounting[2]
+
+    def resource_counts(self):
+        """Cheap gauges: never traverse or serialize the retained evidence."""
+        session=self.host.state.execution if self.host else None
+        account=session.account if session else self._bootstrap
+        return {**{name:len(getattr(account,name)) for name in
+                   ('meters','observations','admissions','requests','reconciliations')},
+                'receipt':account.receipt, 'traces':len(session.traces) if session else 0,
+                **self.archive.resource_counts(),
+                **(self.host.resource_counts() if self.host else {'queued_events':0,'active_effects':0})}
 
     def _plan_status(self, value, rejection, accepted):
         value.update(plan_status='rejected' if rejection else 'accepted' if accepted else 'awaiting_plan',
@@ -340,8 +355,9 @@ class BatteryRuntime:
             self.coordinator.async_update_listeners()
 
     async def _persist_bootstrap(self):
-        root=await self.archive.save_session(rt.ExecutionSession(account=self._bootstrap,
-            captured_feedback=self._bootstrap_captured,plan_rejection=self._bootstrap_rejection))
+        with self.profiler.measure('archive_save'):
+            root=await self.archive.save_session(rt.ExecutionSession(account=self._bootstrap,
+                captured_feedback=self._bootstrap_captured,plan_rejection=self._bootstrap_rejection))
         await self.store.async_save({'schema':'battery-runtime-v3','checkpoint':None,
             'execution_root':root,
             'account':None,'options':None,'devices':[],'model_sources':None,'ratings':None})
@@ -354,7 +370,8 @@ class BatteryRuntime:
             # checkpoint read back with this root proves older roots are superseded.
             durable=await self.store.async_load()
             if (durable or {}).get('execution_root')==root:
-                await self.archive.collect()
+                with self.profiler.measure('archive_collect'):
+                    await self.archive.collect()
         except Exception as error:
             # Cleanup never stops battery control; unremoved pages wait for later.
             self._record_fault('archive',f'Evidence cleanup failed: {type(error).__name__}: {error}')
@@ -419,12 +436,16 @@ class BatteryRuntime:
             from .home_runtime_checkpoint import encode_checkpoint, _check_state
         else:
             from home_runtime_checkpoint import encode_checkpoint, _check_state
-        _check_state(state)
-        root=await self.archive.save_session(state.execution)
-        shell=replace(state,execution=rt.ExecutionSession())
-        await self.store.async_save({'schema':'battery-runtime-v3','checkpoint':encode_checkpoint(shell).decode(),
-            'execution_root':root,'account':None,'options':self._options,'devices':self._devices,
-            'model_sources':self._model_sources,'ratings':self._ratings})
+        with self.profiler.measure('checkpoint_encode'):
+            _check_state(state)
+            shell=replace(state,execution=rt.ExecutionSession())
+            checkpoint=encode_checkpoint(shell).decode()
+        with self.profiler.measure('archive_save'):
+            root=await self.archive.save_session(state.execution)
+        with self.profiler.measure('checkpoint_save'):
+            await self.store.async_save({'schema':'battery-runtime-v3','checkpoint':checkpoint,
+                'execution_root':root,'account':None,'options':self._options,'devices':self._devices,
+                'model_sources':self._model_sources,'ratings':self._ratings})
         await self._collect_evidence(root)
 
     def _report(self,group,reason):
@@ -447,7 +468,8 @@ class BatteryRuntime:
             return
         async with self._lock:
             try:
-                await self._refresh()
+                with self.profiler.measure('refresh'):
+                    await self._refresh()
                 self._last_error=None
             except Exception as error:
                 self._last_error=f'{type(error).__name__}: {error}'
@@ -674,12 +696,10 @@ class BatteryRuntime:
         if not isfinite(value) or value<0:
             raise ValueError(f'{entity}: invalid cumulative energy reading')
         total=round(value)
-        previous=[m for m in self.host.state.execution.account.meters if m.stream==entity]
         # Same-time changes are corrections; older source time is valid evidence.
         # A forward-time counter decrease marks a physical reset, not negative use.
-        last=max((m for m in previous if m.source_at_ms<at),key=lambda m:(m.source_at_ms,m.receipt),default=None)
+        same,last=self.host.state.execution.account.meter_index.neighbours(entity,at)
         epoch=(int(last.epoch)+int(at>last.source_at_ms and total<last.total_mwh)) if last else 0
-        same=next((m for m in reversed(previous) if m.source_at_ms==at),None)
         if same and same.total_mwh==total:
             return
         event_id=digest({'entity':entity,'at':at,'total':total,'source_event':event_id})
@@ -926,6 +946,7 @@ class BatteryRuntime:
         if self._closed or self._closing:
             return
         self._closing=True
+        await self.profiler.close()
         async with self._lock:
             await self._close(release=release)
 

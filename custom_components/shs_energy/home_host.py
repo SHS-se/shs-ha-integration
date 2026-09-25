@@ -13,9 +13,11 @@ from typing import Awaitable, Callable, Optional
 if __package__:
     from . import home_runtime as runtime
     from .home_runtime_checkpoint import encode_checkpoint, restore_checkpoint, restore_state
+    from .resource_profiling import ResourceProfiler
 else:
     import home_runtime as runtime
     from home_runtime_checkpoint import encode_checkpoint, restore_checkpoint, restore_state
+    from resource_profiling import ResourceProfiler
 
 
 class DispatchRejected(Exception):
@@ -42,7 +44,7 @@ class HomeHost:
     grant validation and starting the transport must share the event-loop turn.
     The external arbiter must fence the old writer before confirming a grant.
     """
-    def __init__(self, state: runtime.HomeState, ports: HostPorts):
+    def __init__(self, state: runtime.HomeState, ports: HostPorts, profiler=None):
         self.state = state
         self.ports = ports
         self._queue = asyncio.Queue()
@@ -52,6 +54,7 @@ class HomeHost:
         self._closed = False
         self._runner = None
         self._fault = None
+        self.profiler = profiler if profiler is not None else ResourceProfiler()
 
     async def start(self, checkpoint: Optional[bytes] = None, *, resume=False):
         if self._runner is not None or self._closed:
@@ -79,7 +82,8 @@ class HomeHost:
         while True:
             event, completion = await self._queue.get()
             try:
-                state, effects = runtime.reduce_home(self.state, event, self.ports.now_ms())
+                with self.profiler.measure('reduce'):
+                    state, effects = runtime.reduce_home(self.state, event, self.ports.now_ms())
                 self.state = state
                 await self._effects(effects)
                 if self._fault is not None:
@@ -194,6 +198,9 @@ class HomeHost:
             if not pending and self._queue.empty():
                 return
             await asyncio.gather(*pending)
+
+    def resource_counts(self):
+        return {'queued_events': self._queue.qsize(), 'active_effects': len(self._work)}
 
     async def close(self):
         self._closed = True

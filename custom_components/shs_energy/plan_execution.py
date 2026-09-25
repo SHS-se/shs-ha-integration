@@ -13,6 +13,7 @@ from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass, replace
 from fractions import Fraction
 from math import ceil, isfinite
+from sys import intern
 from typing import Optional
 
 if __package__:
@@ -66,7 +67,7 @@ class Bounds:
         return Bounds(self.low + other.low, None if self.high is None or other.high is None else self.high + other.high)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ReferenceInterval:
     start_ms: int
     end_ms: int
@@ -90,6 +91,10 @@ class ReferenceInterval:
     rounding_mwh: int
 
     def __post_init__(self):
+        for name in ('operation', 'target_kind'):
+            value = getattr(self, name)
+            if isinstance(value, str):
+                object.__setattr__(self, name, intern(value))
         for key, value in asdict(self).items():
             if key.endswith("_ms") or key.endswith("_mwh") or key.endswith("_w"):
                 _integer(value, minimum=None if key == "rounding_mwh" else 0)
@@ -273,7 +278,7 @@ def contract_wire(contract):
     return {"schema": SCHEMA, **value}
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class MeterReceipt:
     event_id: str
     stream: str
@@ -294,6 +299,12 @@ class MeterReceipt:
             _integer(value, minimum=0)
         if (self.boundary, self.direction) not in (("battery_dc", "charge"), ("battery_dc", "discharge"), ("grid_ac", "import"), ("grid_ac", "export")):
             raise ValueError("explicit supported meter boundary/direction required")
+        # These labels repeat for every receipt. Intern only vocabulary, never
+        # unique event identities; the audit values and wire format are unchanged.
+        for name in ('stream', 'direction', 'boundary', 'epoch', 'physical_id'):
+            value = getattr(self, name)
+            if isinstance(value, str):
+                object.__setattr__(self, name, intern(value))
 
 
 class MeterIndex:
@@ -303,6 +314,7 @@ class MeterIndex:
         for row in receipts:
             streams.setdefault((row.direction,row.stream),{})[row.source_at_ms]=row
         self.streams={}
+        self.by_stream={}
         for (direction,stream), latest in streams.items():
             rows=sorted(latest.values(),key=lambda r:r.source_at_ms)
             energy=[0];unknown=[0]
@@ -310,7 +322,50 @@ class MeterIndex:
                 valid=a.epoch==b.epoch and b.total_mwh>=a.total_mwh
                 energy.append(energy[-1]+(b.total_mwh-a.total_mwh if valid else 0))
                 unknown.append(unknown[-1]+int(not valid))
-            self.streams.setdefault(direction,[]).append((rows,[r.source_at_ms for r in rows],energy,unknown))
+            indexed = (rows,[r.source_at_ms for r in rows],energy,unknown)
+            self.streams.setdefault(direction,[]).append(indexed)
+            self.by_stream[stream] = indexed
+
+    def neighbours(self, stream, at_ms):
+        """Latest correction at this source instant and its strict predecessor."""
+        indexed = self.by_stream.get(stream)
+        if indexed is None:
+            return None, None
+        rows, times, _, _ = indexed
+        position = bisect_left(times, at_ms)
+        return (rows[position] if position < len(rows) and times[position] == at_ms else None,
+                rows[position - 1] if position else None)
+
+    def appended(self, receipt):
+        """Copy one stream's arrays; preserve older immutable account views.
+
+        Normal arrivals extend prefix sums without re-sorting/recalculating the
+        old prefix. A late insertion/correction recalculates the affected suffix.
+        """
+        old = self.by_stream.get(receipt.stream)
+        if old is None:
+            indexed = ([receipt], [receipt.source_at_ms], [0], [0])
+        else:
+            rows, times, energy, unknown = (list(values) for values in old)
+            position = bisect_left(times, receipt.source_at_ms)
+            if position < len(times) and times[position] == receipt.source_at_ms:
+                rows[position] = receipt
+            else:
+                rows.insert(position, receipt)
+                times.insert(position, receipt.source_at_ms)
+                energy.insert(position, 0)
+                unknown.insert(position, 0)
+            for index in range(max(1, position), len(rows)):
+                left, right = rows[index - 1:index + 1]
+                valid = left.epoch == right.epoch and right.total_mwh >= left.total_mwh
+                energy[index] = energy[index - 1] + (right.total_mwh - left.total_mwh if valid else 0)
+                unknown[index] = unknown[index - 1] + int(not valid)
+            indexed = (rows, times, energy, unknown)
+        result = object.__new__(MeterIndex)
+        result.by_stream = {**self.by_stream, receipt.stream: indexed}
+        result.streams = dict(self.streams)
+        result.streams[receipt.direction] = [item for item in self.streams.get(receipt.direction, ()) if item is not old] + [indexed]
+        return result
 
     def measure(self,direction,start,end):
         if end<start:raise ValueError("reversed accounting interval")
@@ -359,7 +414,7 @@ class Admission:
             raise ValueError("admission lies outside contract validity")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class StateObservation:
     at_ms: int
     stored_mwh: int
@@ -368,6 +423,7 @@ class StateObservation:
 
     def __post_init__(self):
         _integer(self.at_ms, minimum=0); _integer(self.stored_mwh, minimum=0); _text(self.source)
+        object.__setattr__(self, 'source', intern(self.source))
 
 
 @dataclass(frozen=True)
@@ -400,6 +456,28 @@ class StateReconciliation:
         if (self.prior_flow_debt_low_mwh is not None and self.prior_flow_debt_high_mwh is not None
                 and self.prior_flow_debt_low_mwh > self.prior_flow_debt_high_mwh):
             raise ValueError("inverted pre-reconciliation flow bounds")
+
+
+class _Lookup:
+    """An immutable sharded lookup shared by successive journal snapshots."""
+    __slots__ = ('buckets',)
+
+    def __init__(self, pairs):
+        buckets = tuple({} for _ in range(256))
+        for key, value in pairs:
+            buckets[hash(key) % 256][key] = value
+        self.buckets = buckets
+
+    def get(self, key, default=None):
+        return self.buckets[hash(key) % 256].get(key, default)
+
+    def appended(self, key, value):
+        index = hash(key) % 256
+        buckets = list(self.buckets)
+        buckets[index] = {**buckets[index], key: value}
+        result = object.__new__(_Lookup)
+        result.buckets = tuple(buckets)
+        return result
 
 
 @dataclass(frozen=True)
@@ -437,6 +515,26 @@ class Account:
     def meter_index(self):
         return MeterIndex(self.meters)
 
+    @cached_property
+    def _meter_events(self):
+        return _Lookup((row.event_id, row) for row in self.meters)
+
+    @cached_property
+    def _observed_at(self):
+        return _Lookup((row.at_ms, row) for row in self.observations)
+
+    @cached_property
+    def _measured_at(self):
+        return _Lookup((row.at_ms, row) for row in self.observations if row.measured)
+
+    @cached_property
+    def _meter_bindings(self):
+        return {row.stream: (row.boundary, row.direction, row.physical_id) for row in self.meters}
+
+    @cached_property
+    def _physical_meters(self):
+        return frozenset((row.stream, row.boundary, row.direction, row.physical_id) for row in self.meters)
+
     def anchor(self, at_ms):
         return next((r.observation for r in reversed(self.reconciliations) if r.at_ms <= at_ms), self.opening)
 
@@ -449,10 +547,49 @@ class Account:
         return self.observations[-1] if self.observations else None
 
 
+def _evolve(account, **changes):
+    """Internal validated transitions extend an already validated prefix.
+
+    Public construction/replace and archive restore still validate the complete
+    journal. The four transitions below validate their new evidence and handover
+    before using this helper; no caller-selectable validation switch exists.
+    Derived read models are shared only while their evidence is unchanged.
+    """
+    for name in ('receipt', 'requested_generation'):
+        if name in changes:
+            _integer(changes[name], minimum=0)
+    result = object.__new__(Account)
+    result.__dict__.update(account.__dict__)
+    result.__dict__.update(changes)
+    if 'meters' in changes:
+        receipt = changes['meters'][-1]
+        result.__dict__['meter_index'] = account.meter_index.appended(receipt)
+        result.__dict__['_meter_events'] = account._meter_events.appended(receipt.event_id, receipt)
+        result.__dict__['_meter_bindings'] = {**account._meter_bindings,
+            receipt.stream: (receipt.boundary, receipt.direction, receipt.physical_id)}
+        result.__dict__['_physical_meters'] = account._physical_meters | {
+            (receipt.stream, receipt.boundary, receipt.direction, receipt.physical_id)}
+        if '_summary' in account.__dict__:
+            acknowledged, prior, count, earliest = account.__dict__['_summary']
+            late = receipt.source_at_ms <= prior.get(receipt.stream, -1)
+            result.__dict__['_summary'] = (acknowledged, prior, count + int(late),
+                min(earliest, receipt.source_at_ms) if late and earliest is not None
+                else receipt.source_at_ms if late else earliest)
+    if 'observations' in changes:
+        observation = changes['observations'][-1]
+        result.__dict__['_observed_at'] = account._observed_at.appended(observation.at_ms, observation)
+        if observation.measured:
+            result.__dict__['_measured_at'] = account._measured_at.appended(observation.at_ms, observation)
+    if 'admissions' in changes:
+        result.__dict__.pop('_summary', None)
+        result.__dict__.pop('_live_catalog', None)
+    return result
+
+
 def request_replan(account):
     """Reserve a local generation before sending; network results carry it back."""
     generation = account.requested_generation + 1
-    return replace(account, requested_generation=generation,
+    return _evolve(account, requested_generation=generation,
                    requests=(RequestAnchor(generation, account.receipt),))
 
 
@@ -460,22 +597,23 @@ def observe_state(account, observation):
     # Source time never decides receipt order. Interval time remains provenance.
     if account.observed == observation:
         return account
-    return replace(account, receipt=account.receipt + 1, observations=(*account.observations, observation))
+    return _evolve(account, receipt=account.receipt + 1, observations=(*account.observations, observation))
 
 
 def record_meter(account, *, event_id, stream, direction, boundary, epoch, source_at_ms, total_mwh, physical_id=None):
     receipt = MeterReceipt(event_id, stream, direction, boundary, epoch, source_at_ms, total_mwh, account.receipt + 1, physical_id)
-    existing = next((r for r in account.meters if r.event_id == event_id), None)
+    existing = account._meter_events.get(event_id)
     if existing:
         if replace(existing, receipt=receipt.receipt) != receipt:
             raise ValueError("one meter event identity cannot describe conflicting evidence")
         return account
-    previous = [r for r in account.meters if r.stream == stream]
-    if previous and (previous[-1].boundary, previous[-1].direction) != (boundary, direction):
+    previous = account._meter_bindings.get(stream)
+    if previous and previous[:2] != (boundary, direction):
         raise ValueError("meter mapping changes need a distinct physical stream")
-    if any(r.stream != stream and r.boundary == boundary and r.direction == direction and r.physical_id == physical_id for r in account.meters):
+    if any(key != stream and (bound, flow, physical) == (boundary, direction, physical_id)
+           for key, bound, flow, physical in account._physical_meters):
         raise ValueError("one declared physical boundary cannot be counted twice")
-    return replace(account, receipt=receipt.receipt, meters=(*account.meters, receipt))
+    return _evolve(account, receipt=receipt.receipt, meters=(*account.meters, receipt))
 
 
 def admit_plan(account, contract, at_ms, observation):
@@ -529,7 +667,7 @@ def admit_plan(account, contract, at_ms, observation):
                 if not any(d.objective_id == objective.id and d.outcome == "retained" for d in contract.dispositions):
                     raise ValueError("changed objective target needs an explicit retained amendment")
     number = account.receipt + 1
-    return replace(account, receipt=number, opening=account.opening or observation, reconciliations=reconciliations,
+    return _evolve(account, receipt=number, opening=account.opening or observation, reconciliations=reconciliations,
                    observations=(*account.observations, observation),
                    admissions=(*account.admissions, Admission(contract, at_ms, amendment, number)))
 
@@ -560,7 +698,7 @@ def balance(account, at_ms):
     origin = anchor.stored_mwh
     lo = None if charge.high is None else reference - origin - charge.high + discharge.low
     hi = None if discharge.high is None else reference - origin - charge.low + discharge.high
-    observation = next((o for o in reversed(account.observations) if o.at_ms == at_ms), None)
+    observation = account._observed_at.get(at_ms)
     state_debt = reference - observation.stored_mwh if observation else None
     return Balance(reference, charge, discharge, lo, hi, state_debt,
                    None if lo is None or state_debt is None else lo - state_debt,
@@ -569,7 +707,7 @@ def balance(account, at_ms):
 
 def _measured_observations(account):
     """The last measured state observation at each instant."""
-    return {observation.at_ms: observation for observation in account.observations if observation.measured}
+    return account._measured_at
 
 
 def _objective_outcome(account, objective, closed_at_ms, at_ms, observed):
@@ -628,18 +766,7 @@ def objective_history(account, at_ms):
 
 def _live_objectives(account, at_ms):
     """Live responsibilities by reference: each admitted objective is visited once, only live rows copied."""
-    latest, closed_at, responsibility = {}, {}, {}
-    for admission in account.admissions:
-        if admission.at_ms > at_ms:
-            continue
-        for objective in admission.contract.objectives:
-            latest[objective.id] = objective
-        for disposition in admission.contract.dispositions:
-            if disposition.objective_id not in latest:
-                raise KeyError(disposition.objective_id)
-            responsibility[disposition.objective_id] = disposition.outcome
-            if disposition.outcome in ("incorporated", "retired"):
-                closed_at.setdefault(disposition.objective_id, admission.at_ms)
+    latest, closed_at, responsibility = _objective_catalog(account, at_ms)
     observed = _measured_observations(account)
     rows = []
     for objective_id, objective in latest.items():
@@ -654,6 +781,28 @@ def _live_objectives(account, at_ms):
     return rows, len(latest)
 
 
+def _objective_catalog(account, at_ms):
+    current = not account.admissions or at_ms >= account.admissions[-1].at_ms
+    if current and '_live_catalog' in account.__dict__:
+        return account.__dict__['_live_catalog']
+    latest, closed_at, responsibility = {}, {}, {}
+    for admission in account.admissions:
+        if admission.at_ms > at_ms:
+            continue
+        for objective in admission.contract.objectives:
+            latest[objective.id] = objective
+        for disposition in admission.contract.dispositions:
+            if disposition.objective_id not in latest:
+                raise KeyError(disposition.objective_id)
+            responsibility[disposition.objective_id] = disposition.outcome
+            if disposition.outcome in ("incorporated", "retired"):
+                closed_at.setdefault(disposition.objective_id, admission.at_ms)
+    result = latest, closed_at, responsibility
+    if current:
+        account.__dict__['_live_catalog'] = result
+    return result
+
+
 def feedback(account, at_ms):
     return {"generation": account.requested_generation, "source_receipt": account.receipt,
             "previous_contract_id": account.contract.id if account.contract else None,
@@ -666,14 +815,17 @@ def feedback(account, at_ms):
 def _receipt_summary(account):
     """Receipts since the accepted reference, including late evidence for earlier source times."""
     acknowledged=account.contract.source_receipt if account.contract else 0
-    prior_times={}
-    for row in account.meters:
-        if row.receipt<=acknowledged:
-            prior_times[row.stream]=max(prior_times.get(row.stream,0),row.source_at_ms)
-    late=[r for r in account.meters if r.receipt>acknowledged and r.source_at_ms<=prior_times.get(r.stream,-1)]
+    if '_summary' not in account.__dict__:
+        prior_times={}
+        for row in account.meters:
+            if row.receipt<=acknowledged:
+                prior_times[row.stream]=max(prior_times.get(row.stream,0),row.source_at_ms)
+        late=[r for r in account.meters if r.receipt>acknowledged and r.source_at_ms<=prior_times.get(r.stream,-1)]
+        account.__dict__['_summary'] = (acknowledged, prior_times, len(late),
+            min((r.source_at_ms for r in late),default=None))
+    _, _, count, earliest = account.__dict__['_summary']
     return {'through_receipt':account.receipt,'previously_acknowledged_receipt':acknowledged,
-        'late_evidence_count':len(late),
-        'earliest_amended_source_ms':min((r.source_at_ms for r in late),default=None)}
+        'late_evidence_count':count, 'earliest_amended_source_ms':earliest}
 
 
 def planner_feedback(account,at_ms):

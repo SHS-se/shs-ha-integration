@@ -19,11 +19,13 @@ from homeassistant.helpers.event import (
 )
 
 from homeassistant.helpers.storage import STORAGE_DIR, Store
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.json import json_bytes
 from homeassistant.util.json import json_loads
 from homeassistant.helpers import entity_registry as er
 
 from .refresh import set_reloading
+from .resource_profiling import process_resources
 from .api import ShsApiClient
 from .controller_events import attach_controller_events
 from .config_panel import async_apply_configuration, async_register_config_panel
@@ -163,6 +165,21 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
         }),
         supports_response=SupportsResponse.ONLY,
     )
+    async def profile_resources(call: ServiceCall) -> dict[str, Any]:
+        entry = _entry_for_call(hass, call)
+        coordinator = getattr(entry, 'runtime_data', None)
+        if coordinator is None:
+            raise ValueError('SHS Energy is not loaded for that entry')
+        runtime = coordinator.battery_runtime
+        seconds = call.data.get('allocation_seconds', 0)
+        if seconds:
+            runtime.profiler.start_allocations(seconds, hass.async_add_executor_job)
+        return runtime.profiler.snapshot(runtime.resource_counts())
+
+    async_register_admin_service(hass, DOMAIN, 'profile_resources', profile_resources,
+        schema=vol.Schema({vol.Optional('entry_id'):str,
+            vol.Optional('allocation_seconds', default=0):vol.All(vol.Coerce(int),vol.Range(min=0,max=300))}),
+        supports_response=SupportsResponse.ONLY)
     return True
 
 
@@ -261,6 +278,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         await stop_controller()
         raise
     scheduler.coordinator_updated()
+    async def sample_resources(_now=None):
+        runtime = coordinator.battery_runtime
+        if runtime._closed:
+            return
+        try:
+            process = await hass.async_add_executor_job(process_resources)
+        except Exception as error:
+            process = {'error':f'{type(error).__name__}: {error}'}
+        runtime.profiler.sample(process, runtime.resource_counts())
+
+    entry.async_on_unload(async_track_time_interval(hass, sample_resources, timedelta(minutes=1)))
+    entry.async_create_background_task(hass, sample_resources(), name='shs_energy_resource_sample')
     entry.async_on_unload(async_track_time_interval(
         hass, coordinator.async_battery_inputs_refresh, timedelta(seconds=5)))
     entry.async_create_background_task(hass, coordinator.async_battery_inputs_refresh(),
