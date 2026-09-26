@@ -7,6 +7,15 @@ This decision supersedes the older two-line planning/permission card proposal, u
 See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
 Documentation only; replacement implementation and coordinated rollout remain pending.
 
+Historical migration/implementation record from September 2026, not a competing
+controller specification. Dated commands, test counts, permissions, locks and
+startup behaviour below describe those phases. Current behaviour is in the
+[README](../README.md); the [13 September target design](https://github.com/SHS-se/smart-home-solutions/blob/main/docs/energy-optimisation/reactive-controls.md)
+governs future economics, external-writer reconciliation and restart continuity.
+Its latest revision retires minimum-on/off commissioning fields and SHS run locks;
+any such fields in the historical phases below describe current/older code, not
+the target design. No rollout is requested here.
+
 Prepared 8 September 2026 against repository commit `dd17660` and a read-only inspection of the installed `0.8.0-beta.20` integration. Phases 0–4 are implemented. Phase 4 was implemented before Phase 3; Phase 3 builds on it. Phase 5's beta rollout and live persistence checks are verified; physical commissioning remains open. The screenshots are evidence of the interface, not instructions to execute.
 
 ## Intended outcome

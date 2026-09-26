@@ -53,6 +53,19 @@ Export-only power, energy totals, and forecasts do not satisfy the signed-grid o
 instantaneous-power requirements. With no included battery, these shared fields
 remain optional. Minimum continuous on/off times remain optional in every mode.
 
+## Measurement issues are not configuration errors
+
+A reading that is unavailable, not a number, stale (the battery's state of charge)
+or physically impossible is a source problem, not a setup failure. It leaves only
+its own device out of the snapshot and the plan, exactly as that store's switch
+would; the rest of the home is planned as usual. The plan's `measurement_issues`
+name each reading. The panel shows them above every tab with **Inspect source
+entity** for each sensor, and the affected device's planning status says why it
+has no plan. Do not route these to setup fields or block unrelated readiness. A
+missing or mistyped entity, or a sensor with the wrong unit, remains a
+configuration error with its field targets. When the reading recovers, the server
+recommends a manual replan, because plans are kept between price releases.
+
 ## Required regression coverage
 
 Configuration changes must test the entire correction path, not just exception

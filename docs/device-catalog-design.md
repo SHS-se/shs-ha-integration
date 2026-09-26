@@ -7,6 +7,16 @@ The catalog provides capabilities, mappings and physical-owner groups; it does n
 See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
 Documentation only; replacement implementation and coordinated rollout remain pending.
 
+Status: incremental catalogue proposal and dated implementation notes. Schema-8
+battery execution is already implemented. The [13 September runtime design](https://github.com/SHS-se/smart-home-solutions/blob/main/docs/energy-optimisation/reactive-controls.md)
+supersedes earlier target budget, priority and routine-restart requirements.
+The later feedback also rejects SHS commissioning minimum-runtime fields and
+a technical lock on HA entities. While Controlling, SHS owns supported device
+controls and automatically corrects overwritable external drift. Users leave
+Controlling or request through SHS intent controls to change its operation.
+Current implementation details remain dated evidence;
+current schema-8 handover remains an implementation fact until replaced.
+
 Status: incremental design, started 11 September 2026. This is a new requirements
 record, not a revival of the rolled-back catalog design or approval to implement
 a catalog. Add decisions as concrete device cases become understood.
@@ -211,8 +221,9 @@ repair the previous contents just to let SHS replace them.
 Continue to validate the commands SHS sends: units, non-negative values, supported
 bounds/step and the battery's rated limits still apply. Removing the pre-read
 barrier does not mean replaying arbitrary old register contents during handover.
-The prior snapshot-and-restore design therefore needs revision as part of the
-controller implementation, rather than merely deleting its sentinel check.
+The schema-8 implementation has replaced prior-register restoration with the
+rated-source policy below; deleting a sentinel check alone would not have
+corrected the old design.
 
 Approved handover policy (confirmed by Phil on 11 September 2026): return to
 **Maximum Self Consumption** and set both ceilings from the configured rated-power
@@ -234,7 +245,9 @@ express the necessary distinctions:
 - Normal self-consumption, solar-only charging and house supply without battery
   export use the established self-consumption behavior, with ceilings expressing
   which flows are permitted.
-- Grid-assisted charging uses the documented command-charging behavior.
+- Forced/grid-assisted charging uses **Command Charging (PV First)**. Grid First
+  curtails solar in favour of grid charging on the reference installation and is
+  excluded from normal operation.
 - Deliberate battery export uses Command Discharging (PV First), only when the
   plan explicitly permits battery export. ESS First remains excluded.
 - Hold is explicit; a zero net-power value must not implicitly choose between
@@ -246,8 +259,8 @@ must be enforced during planning and conveyed to the controller; a mode selectio
 added after optimization cannot repair a plan that ignored those restrictions.
 
 Outstanding physical observations are engineering validation work, not requests
-for more customer configuration: Standby during surplus PV, Grid First with
-surplus PV, self-consumption with a zero discharge ceiling, transition timing,
+for more customer configuration: Standby during surplus PV, broader PV First
+forced-charging conditions, self-consumption with a zero discharge ceiling, transition timing,
 write rejection/read-only operation, and behavior when Home Assistant stops.
 Implement and test the contract with explicit expectations, then verify those
 expectations on the installation before describing every operation as proven.

@@ -1,5 +1,12 @@
 # Battery execution policy binding
 
+> **Replacement contract required — 17 September 2026.**
+> [Plan execution and deviation accounting](controller-plan-execution.md) supersedes
+> the economic policy binding below. Its plan reference, recovery authority and
+> accounting handover replace continuation-based selection in a new versioned
+> contract. Existing authority and command-effect requirements remain applicable;
+> this historical wire format is not a compatibility requirement.
+
 ## Additional binding identity — 15 September 2026
 
 Battery supply scope, solar attribution and acknowledged participation revisions join the policy binding identity. A same-watts request with different eligible demand is not semantically identical. Recheck the same scope and physical-owner authority before dispatch; retain already-issued effects and durable proof boundaries. The current binding implementation described below is not evidence that these new fields are implemented.

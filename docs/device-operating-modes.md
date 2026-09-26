@@ -2,7 +2,7 @@
 
 ## Replacement participation model — 15 September 2026
 
-The four-mode selector and local planning override below are implementation history, not the target design. Included/Excluded belongs to HA Devices; Monitoring/Planned belongs to the website; only Planned equipment appears on HA Schedule, with Verification or Controlling. New Planned admission defaults to Verification. Verification consumption remains external demand for live planning even though the device stays Planned on the chart. Remove the duplicate plan-inclusion/review/Website-link rows.
+The four-mode selector and local planning override below are implementation history, not the target design. Included/Excluded belongs to HA Devices; Monitoring/Planned belongs to the website; only Planned equipment appears on HA Schedule, with Verification or Controlling. New Planned admission defaults to Verification. Verification and Controlling are planned identically: the mode decides only whether SHS writes the schedule ([authoritative plan contract](authoritative-plan-contract.md)). Remove the duplicate plan-inclusion/review/Website-link rows.
 
 See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
 Documentation only; replacement implementation and coordinated rollout remain pending.
@@ -17,6 +17,19 @@ Documentation only; replacement implementation and coordinated rollout remain pe
 The remaining four-mode descriptions are a dated implementation record. They do
 not define the replacement user choices. Proportional solar allocation and explicit
 battery supply scope are defined in the linked specification.
+
+Target-design update, 14 September: the [14 September architecture review and battery release gates](controller-architecture-review.md)
+now proposes explicit real versus hypothetical execution scope, requested versus
+effective authority, entry/release/rapid-change behaviour, isolated verification
+and battery-first coexistence. These requirements are in scope for battery
+deployment; the implementation record below still describes the current controller.
+
+Status: current implemented UI/execution behaviour, checked 13 September 2026.
+The [target household runtime](https://github.com/SHS-se/smart-home-solutions/blob/main/docs/energy-optimisation/reactive-controls.md) separately specifies curve-valued
+allocation and routine-restart continuation; those features are not implemented here. The later revision removes target
+minimum-runtime configuration and adds mode-owned full control with automatic
+external-drift correction and bounded retries; current
+behaviour below is retained as implementation evidence.
 
 Each equipment card has one mode selector on Schedule. Devices contains setup fields only:
 
@@ -43,14 +56,32 @@ disabled global planner never becomes live through migration; existing live
 planning and authorised current controllers preserve their modes. Retired,
 incompatible controller permissions remain disabled.
 
-Changing participation requests a fresh plan. Moving between planning,
-verification and controlling does not reload the integration or reset unrelated
-controllers. Leaving controlling first restores settings still owned by SHS;
+Changing participation recommends a manual replan; plans otherwise change only
+on a new price release. Moving between Verification and Controlling changes
+neither the plan nor its recommendations, and does not reload the integration or
+reset unrelated controllers. Leaving controlling first restores settings still owned by SHS;
 that handover can make real service calls and can remain pending on an error.
 Verification begins only after the previous ownership has been released. Leaving
 Controlling on the select is the only release: restarts, unavailable or stale
 readings, missing plans and faults hold the last setting SHS sent (see
 [control continuity](control-continuity.md)).
+
+## Target authority and remaining mode design
+
+The latest authority correction changes the target, not the current implementation
+record above. Controlling (also called Control) owns the supported device controls;
+external changes do not override SHS intent. Monitoring, Planning and Control
+verification grant no optimisation writes. Their hypothetical actions cannot
+count as physical delivery or released headroom for devices under live control.
+
+Leaving Controlling fences new optimisation commands immediately. The existing
+approved handover may still write while release is pending, and late effects from
+already-issued commands remain accounted for. A mode selection must not falsely
+report completed release. The review linked above proposes battery-first
+replacement semantics for mixed-mode planning, shared-control admission, mode
+entry/rapid changes, release failures and verification isolation. These still need
+implementation and end-to-end tests; wider shared thermal control remains deferred. See the canonical
+[authority and mode questions](https://github.com/SHS-se/smart-home-solutions/blob/main/docs/energy-optimisation/control-reconciliation.md#operating-modes-handover-and-restart).
 
 ## Warnings and correction
 
@@ -75,7 +106,7 @@ device warning without removing unrelated issues.
 
 Stale or unavailable observations identify the source entity and offer a Home
 Assistant inspection button. Freshness errors include the last report time and
-the controller's maximum age of 120 seconds; the source must report regularly
+the applicable maximum age (battery 120 seconds, EV/pool 900 seconds); sources must report regularly
 even when its value stays unchanged. Verification retries on each scheduler
 tick. These messages do not bypass freshness checks or enable live control.
 
@@ -146,8 +177,9 @@ be compared with that slot's forecast. This prevents delayed reports becoming
 false one-minute power spikes. Every configured source in a household category must be
 usable before summing it. A fixed configured power rating is not a measurement.
 Planned comparisons require the same plan and slot at both interval boundaries.
-Household forecasts may include hypothetical Planning/Verification devices, so a
-measured difference alone does not establish a controller fault. Actual power
+Household forecasts include the planned requests of Verification devices, which
+SHS does not send, so a measured difference alone does not establish a controller
+fault. Actual power
 attribution still depends on correct metering and reviewed device mappings.
 
 This is bounded diagnostic evidence, not a complete sensor history or a durable
@@ -192,8 +224,17 @@ relay timing, or exclusive ownership against external automations. In particular
   so while HA is down every device keeps the last setting SHS sent.
 
 Review a representative file against its plan before selecting controlling,
-then commission physical response and handover on the installation. Keep the
-local equipment's safety protections active.
+then commission physical response and handover on the installation. Keep native
+equipment protection active. Current generic relay setup includes minimum-on/off
+fields and SHS delays; the target retires those settings/locks and observes native
+availability instead. Current conflict handling is not uniform across device
+paths. In the replacement, Controlling grants SHS complete operational authority
+over the supported device surface. Unexpected/external settings are overwritable
+drift: reconcile and automatically reassert current SHS intent, with bounded
+adapter-supported retries for ambiguous delivery. Do not suspend control or
+require explicit resume because of an external edit. Users act through SHS
+controls or leave Controlling before operating elsewhere. Native equipment
+protections still apply; no global action mutex is needed.
 
 ## Pool temperature setup
 
@@ -203,5 +244,7 @@ current start/stop values define the normal heating band. During deferral SHS
 lowers that band, preserving its width and respecting both entities' reported
 minimum, maximum and step. Both targets are validated before either is written.
 Heating requests and handover restore the captured normal band; SHS never
-invents a warmer target. Config-entry migration 13 removes the retired duplicate
+invents a warmer target in this interim adapter. Future authorised pool preheat
+comes from the trajectory and editable curve, not a new duplicate band setting.
+Config-entry migration 13 removes the retired duplicate
 bounds while retaining the selected controls and operating modes.

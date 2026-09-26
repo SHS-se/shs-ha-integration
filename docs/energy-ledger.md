@@ -1,5 +1,13 @@
 # Actual energy ledger
 
+> **Current accounting authority — 17 September 2026.**
+> [Plan execution and deviation accounting](controller-plan-execution.md) defines
+> the replacement controller's actuals, reference, debt/credit and reconciliation
+> contract. The implementation record below does not override it. In particular,
+> source-timestamp rejection/ordering rules below are superseded by the
+> [constraint requirements](constraint-requirements.md): process receipt order and
+> retain uncertain evidence without rejecting a later update merely for source time.
+
 ## Scope is not source measurement — 15 September 2026
 
 Record the supply-scope and participation identity with decision evidence without resetting physical energy accounting. Scope controls the amount permitted to offset eligible demand; it does not prove which appliance received battery electrons. Excluded consumption remains in aggregate meters. Keep gross consumption, solar and battery flows separate, subtract PV once, and label any per-device source/cost attribution as accounting rather than direct measurement.

@@ -1,5 +1,12 @@
 # Device participation and explicit battery supply intent
 
+> **Controller ownership update — 17 September 2026.**
+> Participation, source attribution and supply-scope requirements below remain in
+> force. [Plan execution and deviation accounting](controller-plan-execution.md)
+> supersedes references to the controller independently selecting future economics.
+> The planner chooses economic intent; the controller follows actual eligible
+> demand under that intent and accounts for deviations and authorised recovery.
+
 **Agreed design, 15 September 2026; production command wiring implemented 16 September.** This is the
 normative decision for device terminology, configuration ownership, mixed-mode
 accounting, chart membership and battery house-supply scope. It supersedes
@@ -75,7 +82,7 @@ is a separate storage flow, not an appliance consumption band.
 | Base consumption / chart **Base load** `B` | `H − P`: Monitoring, Excluded and unattributed consumption |
 | Net house demand `N` | `H − PV` |
 | Net base demand | `B − PV` |
-| External demand for live planning `U` | `B` plus Planned consumption not under effective physical control |
+| Uncontrolled demand in execution `U` | `B` plus Planned consumption SHS does not currently control (Verification, or control not yet effective); measured for execution accounting, never a planning input |
 
 The user's solar-subtracted “total house load” and “base load” correspond to the
 net quantities above. Always say **net** when solar has been subtracted; do not
@@ -107,24 +114,29 @@ silently rewrite the provenance of an old plan or measured comparison.
 
 ## Mixed-mode physical scope
 
-A Verification device is Planned for an individual hypothetical schedule and chart,
-but is **external demand** for live execution. Its proposed start/stop or setpoint
-cannot count as delivered energy, removed load or released headroom. The same
-applies to requested control whose physical authority has not become effective.
+Verification and Controlling never change the plan (user requirement,
+23 September 2026; [authoritative plan contract](authoritative-plan-contract.md)).
+Every Planned device is planned in the one selected schedule whatever its mode;
+the mode decides only whether SHS sends that schedule's requests. A Verification
+device's requests are logged, not sent, so for execution its measured consumption
+is **uncontrolled demand**: its proposed start/stop or setpoint cannot count as
+delivered energy, removed load or released headroom, and the difference from the
+plan is a recorded deviation. The same applies to requested control whose physical
+authority has not become effective.
 
 Example: base consumption 1 kW, a Verification pool pump drawing 2 kW, a Controlling
 EV drawing 0.8 kW and solar 0.4 kW gives external consumption 3 kW and actual net
 house demand 3.4 kW. Logging “stop pump” does not subtract its actual 2 kW.
 
 The command interface contains only Planned equipment. The measurement/accounting
-interface still sees the whole household. The hypothetical plan may optimize all
-Planned devices; the executable projection may vary only effectively controlled
-physical groups. External current demand uses measurements where valid; future
-external demand needs forecasts. No mode name predicts an appliance's run duration.
+interface still sees the whole household. The plan optimizes all Planned devices;
+execution sends requests only to effectively controlled physical groups and
+measures everything else. No mode name predicts an appliance's run duration.
 
-Base consumption and external demand are distinct concepts. A legacy numerical
-base-load field may carry their sum inside an adapter, but public terminology,
-provenance and new contracts must preserve the distinction and count it once.
+Base consumption and uncontrolled demand are distinct concepts and each is counted
+once. The snapshot's `operating_scope.external_demands` still reports each
+non-Controlling device's forecast for compatibility, but the planner no longer
+folds it into the base-load forecast or solves a separate per-mode projection.
 
 ## Explicit battery house-supply scope
 
@@ -145,7 +157,7 @@ Supported semantic forms are:
 These forms describe one canonical selector, not overlapping permission flags.
 Whole house follows the revision-bound household membership, not a frozen list of
 visible chart bands. A selected Planned device may be in Verification: its actual
-consumption can be eligible even though its hypothetical schedule is not executable.
+consumption can be eligible even though SHS does not send its planned requests.
 Monitoring or Excluded devices cannot be individually selected; they remain in base.
 Physical-owner mappings prevent double counting shared equipment.
 

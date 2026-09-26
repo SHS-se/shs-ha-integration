@@ -17,7 +17,10 @@ rename them as another admissibility range, or replace them with a different
 prediction-based gate without an explicit user requirement.
 
 The controller uses measured instantaneous consumption, solar production and
-battery state to evaluate available actions using the planner's economic advice.
+battery state to execute the planner's strategy under the
+[plan-execution and deviation-accounting specification](controller-plan-execution.md).
+The planner owns economic decisions and recovery authority. Energy deviations
+are accounted for; they are not new forecast-validity gates or grid-use caps.
 An ordinary difference between forecast and measurement calls for a different
 action when appropriate; it must not cause the controller to give up solely
 because the prediction was wrong. Unmodelled appliances remain part of measured
@@ -27,6 +30,14 @@ Process events in the order received. Our own locally generated revisions may
 track that order and identify superseded work. Timestamps from devices or other
 sources must not be used to infer event ordering or reject a later received
 update as time going backwards.
+
+User requirement, 23 September 2026: realistic measured state beyond a desired
+target — a car above its charge limit, a pool warmer than its stop temperature,
+a pack below a raised cut-off, an empty car, a departure beyond the horizon — is
+neither infeasibility nor invalid input. A reading no device can produce isolates
+only its own device and is named for both interfaces; it never discards otherwise
+valid household planning. See
+[measured state and impossible readings](authoritative-plan-contract.md#measured-state-and-impossible-readings).
 
 Configured equipment limits, user permissions and explicitly required data or
 command checks retain their stated purpose. Do not turn them into a general

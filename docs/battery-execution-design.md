@@ -1,8 +1,15 @@
 # Battery execution policy and mixed-mode ownership
 
+> **Superseded controller design — 17 September 2026.**
+> [Plan execution and deviation accounting](controller-plan-execution.md) replaces
+> the economic selector, continuation-policy requirement and decision architecture
+> below. This document remains historical design/implementation evidence. Physical
+> command, authority and reconciliation requirements survive where consistent with
+> the replacement; retaining their current implementation is not required.
+
 ## Required scope extension — 15 September 2026
 
-Extend the existing compiler, current-response evaluator and sole-writer host/adapter with revision-bound explicit battery supply scope and its solar-attribution convention. The current software policy below does not yet carry that extension. Feed aligned measured gross demand and PV separately; enforce eligible house supply and physical native routing while retaining remaining-time C + V ranking. Derive mixed-mode membership from HA inclusion, website planning and HA authority; Verification remains external demand. The v35 rating-wide shortcut is superseded as target policy.
+Extend the existing compiler, current-response evaluator and sole-writer host/adapter with revision-bound explicit battery supply scope and its solar-attribution convention. The current software policy below does not yet carry that extension. Feed aligned measured gross demand and PV separately; enforce eligible house supply and physical native routing while retaining remaining-time C + V ranking. Derive mixed-mode membership from HA inclusion, website planning and HA authority. The plan is the same in every mode; a Verification device's requests are logged, not sent, so execution treats its measured draw as uncontrolled demand ([authoritative plan contract](authoritative-plan-contract.md)). The v35 rating-wide shortcut is superseded as target policy.
 
 See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
 Documentation only; replacement implementation and coordinated rollout remain pending.
@@ -78,12 +85,14 @@ const result = compileBatteryExecutionPolicy({
   exact quantum, response evidence and model/config identity. Synthetic evidence
   is labelled and cannot be used as commissioning evidence.
 - Other participants are external real demand. External evidence must cover their
-  actual and unresolved possible effects once. Conditional plans have a different
-  type/tag and cannot enter the executable projection.
+  actual and unresolved possible effects once. Logged Verification requests are
+  never sent and cannot count as delivered.
 - One durable grant names the SHS owner, epoch and control/config identity.
   Requested mode, release-contract revision and grant confirmation are separate.
-  Every local mode and mode revision must match the execution scope; a mode change
-  needs a newly identified scope and corresponding policy before optimisation.
+  Every local mode and mode revision is bound into the execution authority. A
+  mode change rebinds that authority (release or take-over) but keeps the accepted
+  plan and battery reference: they are mode-independent, and a reference captured
+  under either mode is accepted under the other (23 September 2026).
   Expired observations of execution conditions withdraw the active operation.
   Entry, exit, release failure, rapid re-entry and restart derive effective status
   from these facts. A mode selector alone never establishes exclusivity.
@@ -218,6 +227,16 @@ The policy operation contains **ceilings**, not imposed physical watts. The loca
 | hold | Standby | 0 | 0 |
 
 Require a local binding for every operation. Exclude Command Charging (Grid First), implicit PV curtailment and forced export for `supply_house`. Targets must already lie on the local actuator quantum; reject mismatches so scoring and issued ceiling cannot diverge through silent rounding. Catalog matching uses exact supplied surface keys/options, not hardcoded generic HA entity names.
+
+Installation evidence, 15 September: Phil confirms that Standby stops battery
+charge/discharge while PV supplies the house and exports the remainder. In
+`history (17).csv`, Standby was selected at 08:43:30.534 UTC and self-consumption
+restored at 08:45:48.458 UTC. During the settled Standby period PV remained
+2.438–2.564 kW, with 2.079–2.244 kW export. This resolves the concern that Standby
+necessarily suppresses PV on this installation. The CSV has no battery-power
+channel; zero battery flow is the user's direct observation. Charge/discharge
+registers remained 8.8/9.6 kW, so this is evidence of mode behaviour, not a replay
+of the new adapter's complete zero-ceiling transition sequence.
 
 Physical automatic saturation is only at configured capacity/cutoff. `export_reserve_kwh` is an **economic/source permission guard**, distinct from cutoff. An export alternative is ineligible if export permission or price eligibility is false, observed export tariff is below the configured minimum, state is at/below reserve, or the predicted response crosses reserve before the boundary. Do not shorten an export segment at reserve and assume the inverter stops there; without a commissioned native reserve register, that would fabricate an actuator capability. House supply may consume below export reserve down to physical cutoff.
 

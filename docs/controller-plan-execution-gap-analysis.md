@@ -84,7 +84,10 @@ and who is authorised to change their timing.
    devices' physical schedule. HA selects a branch by operating mode
    ([mode selection][H-modes], 66–76). Execution `base_w` can include external
    device demand folded into fixed demand ([scope projection][B-scope], 53–115);
-   it is not necessarily the UI's canonical Base category.
+   it is not necessarily the UI's canonical Base category. Resolved 23 September
+   2026: both branches carry the same selected schedule, the per-mode projection
+   was removed, and the branch choice no longer changes what is executed or
+   verified.
 
 The new design needs a conserved nominal reference and declared attribution where
 supply scope requires it. It does not need to pretend that individual electrons

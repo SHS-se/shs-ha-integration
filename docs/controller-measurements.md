@@ -7,6 +7,10 @@ Record HA inclusion, website planning role, requested/effective HA authority and
 See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
 Documentation only; replacement implementation and coordinated rollout remain pending.
 
+Status: current session-metrics collection. These in-memory counters are not
+the persistent energy/operation journal or latency evidence required by the
+[target household runtime](https://github.com/SHS-se/smart-home-solutions/blob/main/docs/energy-optimisation/reactive-controls.md).
+
 Keep devices in **Control verification** while collecting the baseline. Install
 the beta and let it run across several battery and pool slots, then download
 either Home Assistant integration diagnostics or the controller diagnostics download.
@@ -59,6 +63,10 @@ retained. Live hardware write volume is not inferred from dry-run commands.
 
 ## Event-driven control
 
+Current implementation record: the relay timer and restoration retry behaviour
+below remains in shipped code; the target retires SHS runtime locks and replaces
+generic timeout restoration with outcome-based reconciliation.
+
 The scheduler subscribes to the actual entity dependencies read by each device,
 including unavailable entities and raw sources of Filter sensors. Changed values,
 attributes and registry entries schedule only affected devices. Unchanged reports
@@ -77,3 +85,12 @@ Only failed real handover keeps the existing five-second retry interval: service
 availability may recover without a state event. That timer exists only while
 restoration is pending. Verification's hypothetical handovers do not arm it.
 Website API exchange intervals and device integrations' own polling are unchanged.
+
+## Target reconciliation measurements
+
+The target has no global action mutex; measure short reducer time separately from
+per-group transport/reconciliation latency. Include operating mode and release
+progress, control drift/reassertion, pending late-effect age, retry pacing/failure
+and durability queue delay. A timeout counter alone cannot show whether a command
+was sent or whether a retry converged to the current request. External changes
+are overwritable while Controlling. These are future requirements, not current counters.

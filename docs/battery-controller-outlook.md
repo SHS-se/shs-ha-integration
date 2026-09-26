@@ -1,5 +1,11 @@
 # Battery controller outlook
 
+> **Replacement explanation contract — 17 September 2026.**
+> [Plan execution and deviation accounting](controller-plan-execution.md) replaces
+> the selected-continuation outlook with the accepted plan, measured difference,
+> recovery instructions and their evidence. The description below records the
+> earlier implementation; it is not the target controller explanation.
+
 The battery card shows one compact forecast row below the current live settings.
 It shows the first future charging and discharging quarters in the controller's
 selected continuation, expected battery power, household consumption and solar

@@ -2,7 +2,7 @@
 
 ## Updated battery release requirements — 15 September 2026
 
-The latest agreement replaces the four-mode target with three separately owned participation facts and adds explicit battery house-supply scope. The v35 rating-wide correction is not the final policy. Release gates now include metadata exclusion, immutable role/scope identity, Verification external demand, graph partition, aligned subgroup observations, solar attribution and native scope enforcement, as well as existing C + V and single-writer gates. Earlier test counts and completion claims below do not establish this new scope.
+The latest agreement replaces the four-mode target with three separately owned participation facts and adds explicit battery house-supply scope. The v35 rating-wide correction is not the final policy. Release gates now include metadata exclusion, immutable role/scope identity, mode-independent planning (Verification changes only writer authority), graph partition, aligned subgroup observations, solar attribution and native scope enforcement, as well as existing C + V and single-writer gates. Earlier test counts and completion claims below do not establish this new scope.
 
 See the [agreed participation and battery supply specification](device-participation-and-battery-supply.md).
 Documentation only; replacement implementation and coordinated rollout remain pending.
@@ -464,17 +464,16 @@ a notification delivery framework is not.
 | Gate | Required evidence | Current result |
 | --- | --- | --- |
 | Core recovery | Valid retry checkpoints, bounded transition-job recovery, continued accounting through policy loss and commissioned overload relief | Passed in offline scope; all four reproduced defects fixed, native relief evidence still belongs to the physical adapter gate |
-| Executable policy | Versioned native-response profile, bounded supported cells, accepted numerical evidence, generated hostile-wire fixtures and actual-context dispatch checks | Open; diagnostic coverage and exact synthetic binding only |
+| Executable policy | Versioned native-response profile, bounded supported cells, accepted numerical evidence, generated hostile-wire fixtures and actual-context dispatch checks | Software complete in beta.91; installation coverage and economic quality remain to measure |
 | Physical adapter | Tested native routing, source permissions, readback, transitions, late effects, relief, handover and supported HA outage behaviour | Open; no commissioned adapter for the new runtime |
 | Live host | Ordered durable writes, atomic dispatch fencing, bounded effects, revision recovery, restart/remap traces and failure recovery | Open; no live ports |
-| Mixed modes/coexistence | Tested execution projection, lifecycle states, isolated verification and exactly one battery writer | Open; proposal above, no end-to-end implementation |
+| Mixed modes/coexistence | Tested execution projection, lifecycle states, isolated verification and exactly one battery writer | Software scope/grant/recovery protocol complete in beta.91; live writer cutover remains open |
 | End-to-end verification | Actual provider-to-HA path, captured inputs, measured coverage, counterfactual error, max-size/performance tests on supported HA hardware | Open; current checks are offline/local |
 | Battery enablement | Compatible deployed provider/consumer, fresh plan and mappings, scoped physical commissioning record, observed successful release/recovery | Not established by this review |
 
-The four pure-runtime recovery fixes and their failure/crash traces are complete.
-Next define the executable battery profile and mixed-mode execution scope with
-provider/consumer fixtures; keep unsupported/diagnostic profiles non-executable.
-Build the host and adapter against that contract in an isolated replay/verification
+The four pure-runtime recovery fixes, executable battery profile and mixed-mode
+software execution scope are complete, including provider/consumer fixtures.
+Next build the live host and adapter against that contract in a replay/verification
 harness, including the overload-reduction counterexample. Only then wire the new
 battery owner into HA, verify it with live writes disabled, and perform the scoped
 physical commissioning needed before enabling normal control. Do not deploy first
@@ -512,3 +511,52 @@ The overnight configuration's PV First mapping was correct; older Grid First
 physical-response records do not justify retaining that mode. This resolves the
 mapping question from the overnight-data review, while broader native transition,
 recovery and outage commissioning remain separate release gates.
+
+
+## Installation evidence and live-test scope, 15 September
+
+`history (17).csv` records Maximum Self Consumption → Standby at
+08:43:30.534 UTC, then back to Maximum Self Consumption at 08:45:48.458 UTC.
+During the settled Standby window (08:43:40–08:45:40 UTC), PV was
+2.438–2.564 kW and grid export 2.079–2.244 kW. Export returned to zero in the
+first recorded sample after restoring self-consumption, at 08:45:53.243 UTC.
+Phil confirms battery flow stops in Standby, with PV serving load and surplus
+exported. The CSV itself has no battery-power channel and asynchronously reported
+power channels do not establish an exact instantaneous energy balance. This
+closes the Standby/PV-suppression question for this installation. It does not
+supply a general maximum command delay or prove the new adapter's full sequence:
+the charge/discharge registers remained at 8.8/9.6 kW throughout this manual test.
+
+A read-only HA check at approximately 08:50 UTC found beta.89 installed, battery
+and pool in Control Verification, EV in Planning, battery export disabled, and
+PV First configured for forced charging. The plan was ready with no validation
+errors, and the battery controller reported verified. Verification explicitly
+excludes physical response and cross-slot transition testing.
+
+Selecting Controlling in that installation runs `ScheduledController`. Beta.91
+adds the pure execution runtime but does not replace that live owner. Its new
+mixed-demand admission, grant fencing and restart protocol are not active in
+beta.89, nor are they activated merely by installing beta.91. In particular, the
+existing `execute_battery` path checks battery ratings/SOC/permissions but has no
+new-runtime live aggregate-headroom admission for unexpected EV/other demand.
+
+The new CSV identifies no additional Standby code defect. A supervised trial of
+the existing controller can collect further physical evidence, with the active
+battery request and actual household headroom checked first and export remaining
+disabled. It is not a test of the new runtime. Testing that runtime in Controlling
+requires its live policy/event/meter/journal/transport integration and common
+legacy/new writer exclusion first. No mode, entity, deployment or installed
+version was changed by this assessment.
+
+
+At 08:52:41 UTC the active and next two quarters requested `solar_charge`:
+Maximum Self Consumption, 8.8 kW charge ceiling, zero discharge, no grid-charge
+permission and no battery-export permission. Actual EV draw was zero, household
+load approximately 0.41 kW, and grid import/export zero in the subsequent snapshot.
+The next operation change in that plan was `grid_charge` at 09:30 UTC (11:30
+Stockholm), initially at 438.97 W; replanning can change it earlier. This supports
+a short supervised solar-charging trial of the existing controller, checking
+actual battery direction/ceilings and release back to verification. No additional
+Standby fix is identified as a prerequisite for that narrow trial. Broader forced
+operation or a test of the new runtime still needs the separate implementation
+and physical evidence described above.

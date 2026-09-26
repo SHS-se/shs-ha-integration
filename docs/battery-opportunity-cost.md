@@ -1,5 +1,11 @@
 # Battery charge timing from actual state
 
+> **Superseded controller objective — 17 September 2026.**
+> [Plan execution and deviation accounting](controller-plan-execution.md) replaces
+> the local economic comparison and the statement below that deviations create no
+> energy debt. The planner now owns charge timing and recovery authority. Historical
+> observations remain evidence; they do not prescribe the replacement controller.
+
 ## Supply scope is now an agreed product requirement — 15 September 2026
 
 The user explicitly selected battery accounting scopes: None, Whole house, Base only, Selected Planned devices, and Base plus selected devices. This supersedes the earlier suggestion that beneficiary accounting could remain outside this work. Scope bounds feasible house supply; it does not replace C + V with a forecast ceiling, rated-power permission, energy entitlement or recovery-to-planned-SOC rule. The implemented v35 correction recorded below is superseded as target policy. Solar attribution and measurement validity are part of the scope contract.
@@ -63,7 +69,9 @@ these docs does not change that deployment boundary.
 The September 15 export demonstrates why these issues must remain separate:
 
 - The mixed-mode execution plan includes the running pool and pump; its current
-  load is about 2.72 kW versus 0.67 kW in the hypothetical preview.
+  load is about 2.72 kW versus 0.67 kW in the hypothetical preview. (Those two
+  per-mode schedules were replaced on 23 September 2026 by one schedule for every
+  mode.)
 - It was captured at 14:53 Stockholm with 37.6% SOC; the later reading was 38.2%.
   That instant does not demonstrate a charge shortfall. The completed 14:30
   history quarter reported about 30.2%, which is a different observation basis.
@@ -126,7 +134,7 @@ That comparison does not establish how many additional kWh are needed. Neither
 4. HA evaluates the bounded policy inside its validity and domain. Stale,
    mismatched or uncovered state requests renewal and follows the existing
    ownership/release protocol. It cannot authorise a heuristic top-up or extrapolate
-   an unsupported future value. Mode changes still invalidate execution scope.
+   an unsupported future value. A mode change rebinds writer authority; it keeps the accepted plan and battery reference.
 5. Future economics stays server-owned. There is one HA request writer, no parallel
    local optimiser and no overlay that forces recovery toward a planned SOC.
 
@@ -134,7 +142,7 @@ That comparison does not establish how many additional kWh are needed. Neither
 
 | Module | Knowledge it owns |
 |---|---|
-| HA snapshot builder / `operating-scope.ts` | Participation and external demand counted exactly once |
+| HA snapshot builder / `operating-scope.ts` | Participation counted exactly once; operating-scope validation only, since the plan does not depend on modes |
 | `energy-optimisation.ts` | Currently deployed forecast-based replanning and battery valuation |
 | `battery-policy.ts` / `household-score.ts` | Bounded counterfactual future search and authoritative cost/physics scoring |
 | `battery-execution-policy.ts` | Published operation family, continuation witnesses, domains and compile limits |

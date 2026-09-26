@@ -457,8 +457,9 @@ The accepted operation supplies eligible household demand. An unexpected applian
 increases net demand; the battery follows it within actual capability and scope.
 The extra discharge creates a measured debt relative to the forecast. The controller
 does not freeze at forecast watts or buy energy immediately just to cancel the
-debt. It uses the planner's authorised recovery route or requests a new plan if
-the remaining energy jeopardises later service.
+debt. It uses the planner's authorised recovery route or recommends a manual
+replan if the remaining energy jeopardises later service; plans are otherwise
+rebuilt only for a new price release ([authoritative plan contract](authoritative-plan-contract.md)).
 
 ## 9. Domain boundary and implementation sketch
 

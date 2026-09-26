@@ -1,5 +1,14 @@
 # Smart Home Solutions Energy — Home Assistant integration
 
+## Replacement controller specification — 17 September 2026
+
+[Plan execution and deviation accounting](docs/controller-plan-execution.md) is
+the normative replacement controller design. The planner owns economic strategy;
+the controller follows it, accounts for measured debt/credit and recovers only
+within explicit planner authority. It supersedes conflicting economic-controller
+requirements below and in earlier design documents. A complete implementation
+rewrite is permitted. This documentation change does not change installed control.
+
 ## Agreed design; implementation pending — 15 September 2026
 
 HA Devices owns Included/Excluded; the website owns Monitoring/Planned; HA Schedule shows only Planned equipment with Verification (default) or Controlling. Device-specific metadata as well as readings must stop on exclusion. The replacement battery policy communicates an explicit house-supply scope, evaluates measured demand and future cost, and supersedes the v35 rating-wide permission shortcut. The implementation descriptions below retain their deployed-version scope.
@@ -7,7 +16,13 @@ HA Devices owns Included/Excluded; the website owns Monitoring/Planned; HA Sched
 See the [agreed participation and battery supply specification](docs/device-participation-and-battery-supply.md).
 Documentation only; replacement implementation and coordinated rollout remain pending.
 
-Upgrading to `0.8.0-beta.27`: read the [four-page configuration release notes](docs/releases/0.8.0-beta.26.md) and [rollout checks](docs/releases/0.8.0-beta.27.md). Deploy the website database/API changes first. Config-entry version 4 prevents earlier builds from loading the upgraded entry.
+Controller status, 14 September 2026: see the
+[architecture review and battery release gates](docs/controller-architecture-review.md)
+for completed offline stages, current recovery gaps and the mixed-mode design.
+The new runtime is not connected to live control; the review does not recommend
+turning battery Controlling back on.
+
+Historical config-entry migration (`0.8.0-beta.27`): read the [four-page configuration release notes](docs/releases/0.8.0-beta.26.md) and [rollout checks](docs/releases/0.8.0-beta.27.md). Deploy the website database/API changes first. Config-entry version 4 prevents earlier builds from loading the upgraded entry.
 
 Pushes privacy-bounded energy data from Home Assistant to your
 [Smart Home Solutions](https://prod-smart-home-solutions.pages.dev) portal. It
@@ -37,10 +52,19 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
   controllable. Solar, battery, pool, water heating and EV planning are
   independent capabilities; a home without any of them is still a valid
   integration and can use price-led planning for the equipment it does have.
-- **Optional scheduled control**: a website-selected device with a complete
-  local mapping is included in the plan automatically. Battery, EV and pool
-  execution have independent switches, all off by default, on Schedule.
-  With control enabled, the integration executes the current binding plan.
+- **Optional scheduled control**: a device Planned on the website with a
+  complete local mapping is included in the plan automatically. Its Schedule
+  select chooses Verification (the default: requests are logged, not sent) or
+  Controlling (requests are sent). The mode never changes the plan: both use the
+  same schedule, and switching requests no new plan or replan.
+  Controlling executes accepted slots until their explicit `valid_until`,
+  subject to local guards; `binding_until` marks published-price coverage.
+- **One bad reading affects one device**: a reading that is unavailable, not a
+  number or physically impossible (a state of charge outside 0–100%, a pool
+  outside −5–60 °C, negative remaining energy) leaves only that device out of the
+  plan; the rest of the home is planned as usual, and the panel and the website
+  name the reading. Realistic state, such as a car above its charge limit, an
+  empty car or a battery below a raised cut-off, is planned as it is.
 - **Website-only example**: the portal can render a promotional scenario from
   fixed numbers bundled with the website. Home Assistant cannot create or
   upload demo data, and the ingestion database accepts live plans only.
@@ -50,8 +74,12 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
   backfilled automatically (up to 30 days) after downtime.
 - **Quarter-hour exchange**: every completed quarter the integration accepts
   only three complete HA 5-minute statistic buckets and sums them into one
-  15-minute row. It refreshes the rolling 72-hour plan before expiry and
-  retries on the next quarter after a failed attempt. Per-second states and
+  15-minute row. A scheduled exchange uploads the quarter and a fresh snapshot
+  and reports runtime. The server re-solves only for a new published price
+  release or a manual replan from the website, so an accepted plan otherwise
+  runs its original horizon; other changes show a replan recommendation. Failed
+  attempts retry through later exchanges. Accepted local slot changes do not require a network call.
+  Per-second states and
   raw recorder rows never leave HA.
 - **Forecast truth**: PV is an explicit timestamped Home Assistant source.
   Supplier import and export are distinct server-calculated series based on
@@ -74,7 +102,8 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
   monthly results are returned to the portal. A changed tariff catalogue
   triggers recalculation from the earliest published version for which HA has
   recorder statistics.
-- **Subscription aware**: the integration polls subscription and tariff status hourly. If the
+- **Subscription aware**: the integration refreshes subscription and tariff status
+  through its exchanges; the coordinator has no hourly polling interval. If the
   subscription lapses, pushing pauses and a repair issue appears
   in HA; it clears automatically on renewal.
 
@@ -111,16 +140,17 @@ directory and restart.
 
 Each controllable-device card is saved independently. A card changes to
 **Ready** only after Home Assistant validates the mapping and the SHS server
-acknowledges it. Saving a card immediately rebuilds and publishes the electrical
-plan, then refreshes every readiness summary on the page; it never waits for
-the next quarter-hour exchange. Opening the configuration page or pressing
-**Refresh website roles** also forces a fresh plan while live planning is
-enabled. The top-level back arrow returns to Home Assistant's integration page;
+acknowledges it. Saving a card publishes its mapping and refreshes every
+readiness summary on the page without waiting for the next quarter-hour
+exchange. Because plans change only on a new price release or a manual replan,
+the save sends a fresh snapshot and records a replan recommendation instead of
+rebuilding the plan; use **Replan now** on the website's Plan tab to apply it at
+once. **Refresh website roles** does the same when the website's roles changed. The top-level back arrow returns to Home Assistant's integration page;
 the header Save/Discard actions remain for the non-device configuration tabs.
 Leaving with unsaved edits requires confirmation. The website's **Example**
 view is independent of this integration.
 
-Heating comfort is configured by **Home Assistant room**, not by Energy
+Current shipped scheduling: heating comfort is configured by **Home Assistant room**, not by Energy
 Dashboard meter or entity name. A setpoint mapping selects the room-temperature
 sensor and every heater/climate actuator that can serve it. The integration
 derives the room from each controlled actuator's entity area or parent device
@@ -132,11 +162,13 @@ quarter means the room must already be at its Comfort temperature when that
 quarter begins; the planner may preheat during preceding blue Setback quarters
 and stagger recovery across rooms.
 
-Planned-control cards contain only facts needed by the planned schedule:
+Current planned-control cards contain the following setup. The target design below
+retires SHS minimum-on/off fields and replaces ordinary hard comfort targets with
+curve-valued intent; those changes are not implemented here:
 
 - a switch schedule has its actuator(s), optional companion actuator(s), one
-  optional Power field (a W/kW entity or reviewed watts), and an optional
-  minimum run;
+  optional Power field (a W/kW entity or reviewed watts), and current generic
+  minimum-on/off settings;
 - a setpoint schedule has its measured temperature, optional direct setpoint,
   controlled heater/climate actuator(s), optional companion actuator(s), and
   optional Power field; its room is derived from the controlled actuators, and
@@ -246,65 +278,102 @@ staff overrides are returned by the backend on the next exchange.
 
 ## Scheduled controller
 
-The controller operates supported devices from the accepted priority plan.
-Open Configure → Schedule: each device has the same **Include in the plan**
-summary, chosen on the website, and **Let SHS operate it** switch, chosen here.
-Equipment presence and entity setup are in Devices. New control permissions
-default to off.
-Reactive surplus allocation and import shedding are not implemented.
+Current implementation, checked 13 September 2026: supported devices execute
+locally accepted plans. Configure → Schedule selects each device's participation:
+Monitoring, Planning, Control verification or Controlling. Equipment mappings
+are on Devices; new control permissions default to off. See
+[operating modes](docs/device-operating-modes.md).
 
-- **Battery:** uses the mapped mode, signed W/kW target and measured power.
-  Mode changes are acknowledged before power is written; reversals do not
-  stage through zero. SOC limits and reviewed charge/discharge ratings gate
-  requests. Measurement must reach the requested power within 15 seconds and
-  within 100 W or 10%, whichever is larger. Command and measurement signs are
-  configured separately. Disable, expiry, source/authority loss, startup and
-  orderly unload write zero then the configured baseline mode (default:
-  Maximum Self Consumption); the battery runtime does not yet follow
-  [control continuity](docs/control-continuity.md). Baseline mode acknowledgement and observed power
-  are distinct; a register readback alone cannot prove physical handover.
-- **EV:** uses the planned device's reviewed current mapping and requires an
-  explicit charging start/stop switch. Positive slots set supported amperes
-  before starting; zero slots stop charging without writing an invalid 0 A.
-  Cable state and live SOC/charge target gate charging. Leaving Controlling
-  restores the current and charging-switch state captured before execution.
-- **Pool:** requires the mapped Celsius start/stop band and reviewed bounds.
-  The installed band is captured before the first write. Heat slots use that
-  band; off slots lower it below measured water temperature while preserving
-  hysteresis width and reviewed bounds. An optional accessory permission is
-  enabled on heat slots. Handover restores the captured band and permission.
-  A lower bound that prevents deferral is reported as `limited`. The Nibe's
-  thermostat and shared-compressor controls retain physical ownership: an
-  accepted band is not reported as delivered heat.
+The future joint economic allocator and durable restart continuation are design
+work, not current runtime features. Their canonical specification is the
+[household control design](https://github.com/SHS-se/smart-home-solutions/blob/main/docs/energy-optimisation/reactive-controls.md).
 
-Each device has an optional **manual override** entity: on releases scheduled
-control and suspends requests until it returns off. An unknown override holds
-the device without releasing it. Source measurements must be available and reported within
-120 seconds. All commands are bounded by entity limits and supported steps.
+- **Battery:** schema 8 carries explicit operations and separate non-negative
+  ESS charge/discharge ceilings, with grid-charge and export permissions.
+  Transitions close both ceilings before changing mode. The controller checks
+  settings and fresh physical power/direction; a ceiling is not an exact-power
+  promise. Forced operations need the expected response. Current autonomous
+  operation may deliver less than forecast and report `limited`. Handover uses
+  Maximum Self Consumption and fresh configured rated-power limits. See the
+  implemented [battery contract](docs/battery-control-configuration.md).
+- **EV:** uses reviewed supported current steps and a charging start/stop switch.
+  Positive slots set amperes before starting; zero slots stop without writing
+  invalid 0 A. Cable state and live SOC/target gate actual charging. The backend
+  already plans EV charging while unplugged; projected SOC is conditional on
+  that charging occurring. Handover restores the captured current and switch state.
+- **Pool:** captures the installed Celsius start/stop band. Heat slots use that
+  band; deferral lowers it below measured temperature within reviewed bounds,
+  preserving hysteresis. Handover restores the captured band and permission.
+  A limiting lower bound is reported as `limited`. The thermostat and shared
+  compressor still determine delivered heat; an accepted band is not a meter.
 
-Execution runs at quarter boundaries, after plan updates, and every five
-seconds to check guards and expiry. Advisory quarters have no command authority.
-A per-device fault holds that device at the last setting SHS sent and is latched
-until a new plan, slot or configuration changes; it does not stop the other
-devices. Only the device's execution-mode select releases it: restarts, updates,
-unavailable or stale readings and missing plans never do (see
-[control continuity](docs/control-continuity.md)). A handover the select asks for
-while the device is unavailable is retained and completes when it returns.
-Ownership and original settings are persisted before writes, so a restart resumes
-control and a later release restores the original entities.
+Mapped manual overrides release scheduled authority; unknown override state
+prevents execution. Current source freshness windows are 120 seconds for battery
+and 900 seconds for EV/pool. Entity limits and supported steps bound commands.
 
-The **Battery controller**, **EV controller** and **Pool controller** sensors
-show requests, reasons and faults. Battery `confirmed` means measured power
-matched; EV `commanded` and pool `scheduled` only mean actuator settings were
-accepted. The existing planned-request sensors remain available. The **Devices
-controller** sensor reports room and hot-water execution, including unsupported
-instructions, overrides and pending restoration.
+Execution responds to scoped state events, accepted-plan changes, local quarter
+boundaries and one-shot confirmation/guard/expiry deadlines. Unchanged reports
+can refresh observation age without a full decision. This is not a periodic
+five-second whole-controller poll. The accepted plan can continue through later
+slots to `valid_until`, subject to guards. Per-device faults and pending
+restoration remain observable; failed restoration is retained for retry.
 
-Before enabling a device, disable its previous automation/Node-RED command owner
-and review its local mappings. This release does not change live enable switches
-or commission hardware. Restarts and outages run no restoration: devices keep the
-last setting SHS sent. The inverter's independent watchdog behaviour still
-requires physical testing.
+Ownership and original mappings/settings are journalled before writes. **Startup
+and orderly unload hand nothing back:** pool, EV and generic devices keep the last
+setting SHS sent and resume from the journal (see
+[control continuity](docs/control-continuity.md)); the battery runtime still
+hands over. The target design replaces routine restart/reload cycling with
+checkpoint, reconciliation and adoption of unchanged valid requests. Disable,
+genuine expiry and relinquished authority still require appropriate handover.
+
+Controller sensors expose requests, reasons and faults. Battery confirmation
+uses mode-aware physical evidence; EV `commanded` and pool `scheduled` indicate
+accepted actuator settings, not delivered energy. The Devices controller sensor
+covers room/hot-water execution and pending restoration. Current service and
+confirmation waits have timeouts but can delay other SHS decisions under the
+shared execution lock. Current non-observation failures latch against the
+plan/slot and hold the last setting; a new plan/slot clears the latch, and only
+the select releases the device.
+The target uses a short synchronous event-loop reducer for SHS bookkeeping,
+with asynchronous actuator groups and no global action mutex. It assumes users
+and other automations can write HA entities. While Controlling, SHS has full
+authority over the supported device surface and automatically reconciles/reasserts
+its current request over external changes. No external-change hold or explicit
+resume is required. Ambiguous commands may be retried under bounded adapter
+repeat/ordering rules; possible effects and retry pacing survive replans/restarts. See
+[shared-entity reconciliation](https://github.com/SHS-se/smart-home-solutions/blob/main/docs/energy-optimisation/control-reconciliation.md).
+
+Room ranking in the target follows editable temperature-value curves and total
+household consequences, not a permanent room priority. There is no planner
+or commissioning minimum-runtime setting in the target: economic run length
+and a soft heat-pump start cost are separate from native equipment protection.
+Current generic relay minimum-on/off configuration and enforcement still exist;
+the target explicitly retires those fields and SHS runtime locks. The current schedule UI's
+comfort targets remain current implementation, pending that model change.
+
+The replacement design has no fixed slot grid energy budgets: additional grid
+energy remains an economic option under real limits. It includes deliberate
+economically useful battery drawdown to leave capacity for intermittent PV peaks,
+with native fast buffering instead of mode changes for every cloud. It adds
+bounded transient sensor degradation and visible control faults. Unplugged but
+planned EV charging is one example of how future notifications could work; the
+notification framework is out of scope and needs a full specification later.
+Desired charging remains independent of current cable/location; actual execution
+and achieved service stay separate. These additions are target work.
+Direct room +/- and charge-by-time API/entity design is deferred to a later
+user-control discussion; these requests must use the same versioned intent owner.
+
+Review mappings and competing automations before enabling the current controller;
+its external-change handling is not yet uniform across devices. The target
+corrects external user/automation changes while Controlling. Users request via
+SHS controls or leave Controlling for Monitoring, Planning or Control verification
+to operate elsewhere. Planning is the same in every mode; Verification and
+Controlling change only whether SHS writes. Detailed transition behaviour remains
+to be specified; logged verification actions never supply real headroom.
+This documentation update enables no controls or hardware
+writes. An abrupt HA/machine outage cannot execute handover; equipment watchdog
+behaviour still requires physical evidence. No independent higher battery backup
+reserve is promised for that outage.
 
 ## Notes
 
