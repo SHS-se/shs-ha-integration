@@ -127,3 +127,15 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('through',result)
         finish.set()
         self.assertEqual(await task,{'rows':[]})
+
+
+class ConfiguredObservationTests(unittest.TestCase):
+    def test_top_level_controls_meters_quantities_forecasts_and_mappings(self):
+        from shs_core.controller_inputs import configured_entity_ids
+        options = {'battery_mode_entity':'select.mode','battery_charge_limit_entity':'number.charge',
+            'battery_discharge_limit_entity':'number.discharge','battery_capacity_kwh':'sensor.capacity',
+            'entities_grid_import':['sensor.import'],'pv_forecast_entities':['sensor.forecast'],
+            'device_control_mappings':{'sensor.appliance':{'power_entity_id':'sensor.power','actuator_entity_ids':['switch.appliance']}},
+            'device_modes':{'$battery':'controlling'},'numeric':3,'label':'A readable name'}
+        self.assertEqual(configured_entity_ids(options),{'select.mode','number.charge','number.discharge',
+            'sensor.capacity','sensor.import','sensor.forecast','sensor.appliance','sensor.power','switch.appliance'})

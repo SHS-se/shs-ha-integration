@@ -17,7 +17,7 @@ from homeassistant.util.json import json_loads
 from .configuration import (area_name_by_id, async_energy_dashboard_inventory, entity_area_id_by_id,
                             entity_display_name_by_id, resolved_options)
 from .coordinator import RecorderSource
-from .migration import mapped_entity_ids
+from .shs_core.controller_inputs import configured_entity_ids
 from .shs_core.api_contract import INTEGRATION_VERSION
 from .shs_core.battery_gateway import BatteryGateway
 from .shs_core.battery_runtime import power
@@ -90,10 +90,10 @@ class HomeAssistantSource:
         async with self.update_lock:
             if self.closed:
                 return
-            self.entities = mapped_entity_ids(self.options())
+            self.entities = configured_entity_ids(self.options())
             for record in self.service.physical.ownership.records.values():
                 self.entities.update(record['originals'])
-                self.entities.update(mapped_entity_ids(record['options']))
+                self.entities.update(configured_entity_ids(record['options']))
             # Queue the canonical configuration and its initial source values in
             # one callback turn before acknowledging the new revision.
             context = self.context()
