@@ -331,7 +331,7 @@ class GatewayJournal:
             return {'activation': activation_id, 'receipt': receipt}
 
     def load_record(self, name):
-        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration'):
+        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue'):
             raise ValueError('Unknown physical gateway record')
         with closing(self.connect(readonly=True)) as db:
             self._owner(db)
@@ -340,7 +340,7 @@ class GatewayJournal:
             return json.loads(row[0]) if row else None
 
     def save_record(self, name, value):
-        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration') or type(value) is not dict:
+        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue') or type(value) is not dict:
             raise ValueError('Invalid physical gateway record')
         if name == 'ownership':
             decode_ownership(value)

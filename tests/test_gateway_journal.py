@@ -23,6 +23,16 @@ class GatewayTests(unittest.TestCase):
         self.addCleanup(self.gateway.close)
         self.session = self.gateway.begin(IDENTITY, 'app')['session']
 
+    def test_entity_catalogue_survives_real_journal_restart(self):
+        self.assertIsNone(self.gateway.load_record('entity_catalogue'))
+        value = {'schema': 1, 'sensors': [], 'devices': [], 'app_url': '/app/shs'}
+        self.gateway.save_record('entity_catalogue', value)
+        self.gateway.close()
+        self.gateway.open()
+        self.assertEqual(self.gateway.load_record('entity_catalogue'), value)
+        with self.assertRaises(ValueError):
+            self.gateway.save_record('arbitrary_record', value)
+
     def test_observation_and_run_ownership_commit_together(self):
         ownership = {'records':{},'runs':{'device':{'active':True}}}
         ordinal = self.gateway.record('observation',{'entity_id':'switch.device','state':'on'},ownership)
