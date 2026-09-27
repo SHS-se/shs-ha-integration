@@ -110,6 +110,27 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
         await self.store.save(META, updated)
         self.assertEqual(self.query('SELECT COUNT(*) FROM meters')[0][0], len(updated.account.meters))
 
+    async def test_gateway_processing_checkpoint_and_accounting_commit_together(self):
+        from gateway_fixture import IDENTITY
+        from shs_core.receipt_inbox import processing_checkpoint
+        original = session()
+        partial = processing_checkpoint(IDENTITY, 12, 1, complete=False)
+        metadata = dict(META, gateway_processing=partial)
+        await self.store.save(metadata, original)
+        corrected = record_meter(original.account, event_id='gateway:12:2', stream='charge', direction='charge',
+                                 boundary='battery_dc', epoch='meter', source_at_ms=0, total_mwh=50)
+        updated = replace(original, account=corrected)
+        completed = dict(META, gateway_processing=processing_checkpoint(IDENTITY, 12, 2, complete=True))
+        with database(self.path) as db:
+            db.execute("CREATE TRIGGER fail_checkpoint BEFORE INSERT ON head BEGIN SELECT RAISE(ABORT, 'disk full'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            await self.store.save(completed, updated)
+        self.assertEqual(await ExecutionStorage(self.path, asyncio.to_thread).load(), (metadata, original))
+        with database(self.path) as db:
+            db.execute('DROP TRIGGER fail_checkpoint')
+        await self.store.save(completed, updated)
+        self.assertEqual(await ExecutionStorage(self.path, asyncio.to_thread).load(), (completed, updated))
+
     async def test_stale_owner_and_rewritten_history_are_rejected(self):
         original = session()
         await self.store.save(META, original)

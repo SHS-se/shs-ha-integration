@@ -215,3 +215,59 @@ remains in diagnostic history, but current battery execution recovered and its
 runtime reason cleared. A supplier-cost price lookup warning was also logged;
 these checks do not claim historical diagnostics are empty. No export, source
 fence or live ownership transfer occurred during this extraction.
+
+## Durable gateway transport foundation
+
+Integration beta.57/app beta.9 package the first protocol-2 transport components.
+They are **not registered or activated in the live composition** yet. The current
+observer endpoint remains protocol 1. This release cannot be used to justify
+fencing the live source or transferring control.
+
+`seed_gateway(imported, ha_storage, require_core_stopped=...)` verifies the dormant
+import, checks that Core is stopped, takes the source process lease, and compares
+sealed command history and captured ownership against the export. It creates a
+new gateway SQLite database bound to the exact entry, migration, export digest and
+release pair. Repeating the same seed is idempotent. Partial or conflicting seeds
+are retained and rejected. Imported prepared commands become uncertain historical
+evidence; no imported command becomes a dispatch queue and the source stays sealed.
+
+`GatewayJournal` persists connection generations, revocation, configuration
+revisions, arrival-ordered observations, delivery acknowledgements and activation
+evidence. Each reconnect revokes the previous session and records a coverage gap;
+a delayed close from the old socket cannot revoke its replacement. Snapshots are
+consistent database reads and cannot acknowledge delivery. The local activation
+commit is idempotent for a lost response, but is deliberately absent from the wire
+protocol until the real physical-reconciliation validator exists. A recorded
+activation is historical evidence, not sufficient authority for a new session.
+
+`GatewayStream` captures copied observations synchronously in callback order and
+persists them with one worker. Its bounded queue fails closed on exhaustion;
+failed storage prevents queued responses from being published. Source timestamps
+remain provenance, including equal timestamps and decreasing timestamps. Cancelled
+connect requests settle before their new session is revoked.
+
+`GatewayClient` uses the HA WebSocket authentication/result envelope and the closed
+`GatewayConnection` protocol. The separate-process test fixture exercises this
+protocol with real sockets and SQLite; it is not an HA installation test. The final
+companion still needs to register the authenticated HA endpoint and attach source
+callbacks. Receipt storage in `ReceiptInbox` commits before delivery acknowledgement.
+Lost replies require an explicit new connection; there is no silent session reuse.
+
+Delivery is separate from processing. `processing_checkpoint` produces metadata
+for the existing `ExecutionStorage` transaction, which atomically commits domain
+state, accounting and partial-receipt progress. Tests prove rollback and reopen
+consistency. Wiring deterministic receipt sub-events into the actual runtime
+consumer remains unfinished; this foundation does not yet claim end-to-end
+at-least-once processing.
+
+The next implementation boundary is the semantic device gateway: captured originals,
+minimum-run obligations, admitted battery transitions, and permission/session checks
+immediately before physical dispatch. After that, compose dormant runtime loading,
+receipt consumption, projections, physical reconciliation and activation. Only the
+complete replacement passing those tests can precede the one-off live cutover.
+
+Local validation for this foundation passed 1,009 integration tests, 39 app tests,
+93 configuration frontend checks and six desktop/mobile browser scenarios. The
+app metadata check confirms that the existing SHS icon bytes remain identical in
+the integration, app-store assets and web interface. No live export, source fence,
+gateway seed, app activation or HA restart was performed for this foundation.

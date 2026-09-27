@@ -21,6 +21,7 @@ sys.path.append(str(PACKAGE))
 
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
+    "shs_core.gateway_journal", "shs_core.gateway_stream", "shs_core.receipt_inbox",
     "shs_core.household", "shs_core.household_ports", "app_projection", "shs_core.native_commands", "shs_core.controller_inputs", "shs_core.device_ownership", "shs_core.command_journal", "shs_core.command_transport",
     "shs_core.battery_commands", "shs_core.operating_modes", "shs_core.verification",
     "shs_core.home_runtime", "shs_core.home_runtime_checkpoint", "shs_core.energy_ledger", "shs_core.runtime_json",
