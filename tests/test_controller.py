@@ -9,6 +9,7 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from controller import ScheduledController
+from command_fixture import command_transport
 from configuration_schema import resolve_configuration
 
 
@@ -127,7 +128,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                 for sensor in ('sensor.battery_power', 'binary_sensor.charging', 'binary_sensor.discharging'):
                     self.states[sensor].last_reported = datetime.now(timezone.utc)
         self.hass = SimpleNamespace(states=SimpleNamespace(get=self.states.get), services=SimpleNamespace(async_call=call))
-        self.controller = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options))
+        self.controller = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), command_transport=command_transport())
         self.controller.device = "battery"
         # Timeouts are exercised as refusal rather than sleeping in a test.
         async def confirm(predicate, error):
@@ -311,7 +312,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.states['sensor.rated_charge'].state = '8.5'
         self.options['device_modes']['$battery'] = 'planning'
-        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options))
+        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), command_transport=command_transport())
         await other.async_start()
         self.assertEqual(self.states['select.mode'].state, 'Baseline')
         self.assertEqual(float(self.states['number.charge_limit'].state), 8.5)
@@ -448,7 +449,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.options['device_modes']['$pool'] = 'planning'
         self.options['rooms'] = {'office': {'temperature_entity_id': 'sensor.new'}}
-        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: resolve_configuration(self.options))
+        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: resolve_configuration(self.options), command_transport=command_transport())
         await other.async_start()
         self.assertEqual(float(self.states['number.start'].state), 29.5)
         self.assertEqual(float(self.states['number.stop'].state), 30)
@@ -692,7 +693,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.controller.status['pool']['state'], 'fault')
         self.assertEqual(self.controller.records['pool']['originals'], {'switch.pool': 'off'})
-        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: resolve_configuration(self.options))
+        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: resolve_configuration(self.options), command_transport=command_transport())
         self.options['device_modes']['$pool'] = 'monitoring'
         await other.async_start()
         self.assertEqual(self.calls, [('switch.pool', 'off')], 'the released switch is the one SHS owned')

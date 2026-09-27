@@ -14,8 +14,10 @@ from math import isfinite
 from typing import Any
 from types import SimpleNamespace
 from time import perf_counter
+from uuid import uuid4
 
 try:
+    from .shs_core.command_journal import Command, NativeAction
     from .api_contract import INTEGRATION_VERSION
     from .operating_modes import device_mode, EXECUTING_MODES
     from .minimum_run import MinimumRuns, RunStateUnavailable, minimum_run_errors
@@ -26,6 +28,7 @@ try:
     from .device_commands import actuator_targets, execution_setup_errors, validate_commands
     from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
 except ImportError:  # Pure executor tests, without importing Home Assistant.
+    from shs_core.command_journal import Command, NativeAction
     from api_contract import INTEGRATION_VERSION
     from operating_modes import device_mode, EXECUTING_MODES
     from minimum_run import MinimumRuns, RunStateUnavailable, minimum_run_errors
@@ -134,7 +137,8 @@ def battery_limit_value(entity, watts, state):
 class ScheduledController:
     """HA adapter supplied by the caller, so execution is behaviour-testable."""
 
-    def __init__(self, hass, coordinator, store, options, verification=None, *, entity_registry=None):
+    def __init__(self, hass, coordinator, store, options, verification=None, *, command_transport, entity_registry=None):
+        self.command_transport = command_transport
         self.verification = verification
         self.entity_registry = entity_registry
         self.verifying = False
@@ -457,18 +461,27 @@ class ScheduledController:
                 prepared = self.runs.prepare_start(entity, value, self.hass.states.get, datetime.now(timezone.utc))
                 if self.runs.dirty:
                     await self.save()
-                self.check_authority()
-                release = self.minimum_run_deadline(entity, value, datetime.now(timezone.utc))
-                if release:
-                    self.device_deadline("minimum_run:" + entity, release)
-                    raise ControlDeadlineError(f"Minimum run time keeps the device on until {release.isoformat()}")
-                self.command_times[entity] = datetime.now(timezone.utc)
-                command.update(called=True, transport="ambiguous")
-                await asyncio.wait_for(
-                    self.hass.services.async_call(
-                        domain, service, {"entity_id": entity, **data}, blocking=True,
-                    ), timeout=CONFIRM_SECONDS,
-                )
+                def authorize():
+                    self.check_authority()
+                    if self.battery_writer_fence is not None:
+                        self.battery_writer_fence.check_legacy(entity)
+                    release = self.minimum_run_deadline(entity, value, datetime.now(timezone.utc))
+                    if release:
+                        self.device_deadline("minimum_run:" + entity, release)
+                        raise ControlDeadlineError(f"Minimum run time keeps the device on until {release.isoformat()}")
+
+                def sent():
+                    self.command_times[entity] = datetime.now(timezone.utc)
+                    command.update(called=True, transport="ambiguous")
+
+                async def send(domain, service, data):
+                    await self.hass.services.async_call(domain, service, data, blocking=True)
+
+                command["command_id"] = "controller:" + uuid4().hex
+                request = Command(command["command_id"], "controller", self.device, command["phase"],
+                    NativeAction(entity, service, next(iter(data.values())) if data else None))
+                await self.command_transport.execute(request, authorize=authorize, send=send,
+                    timeout=CONFIRM_SECONDS, on_sent=sent)
                 command["transport"] = "accepted"
                 self.runs.observe(self.hass.states.get, datetime.now(timezone.utc), entity=entity)
                 if self.runs.dirty:

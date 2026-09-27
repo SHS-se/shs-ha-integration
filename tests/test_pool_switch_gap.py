@@ -9,6 +9,7 @@ from unittest.mock import patch
 import unittest
 import test_controller as fixtures
 from controller import ScheduledController
+from command_fixture import command_transport
 from verification import VerificationJournal
 
 
@@ -118,7 +119,7 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_restart_with_journalled_ownership_resumes_without_a_flip(self):
         await self.controller.async_start()
         journal = self.store.saved
-        restarted = ScheduledController(self.hass, self.coordinator, self.store, self.controller.options)
+        restarted = ScheduledController(self.hass, self.coordinator, self.store, self.controller.options, command_transport=command_transport())
         restarted.confirm = self.controller.confirm
         self.store.saved = journal
         self.calls.clear()

@@ -11,7 +11,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import (
     async_track_time_change,
@@ -24,6 +24,9 @@ from homeassistant.helpers.json import json_bytes
 from homeassistant.util.json import json_loads
 from homeassistant.helpers import entity_registry as er
 
+from .api_contract import INTEGRATION_VERSION
+from .shs_core.command_journal import CommandJournal, entry_paths, process_lease, SourceFenced, WriterActive
+from .shs_core.command_transport import CommandTransport
 from .refresh import set_reloading
 from .shs_core.resource_profiling import process_resources
 from .api import ShsApiClient
@@ -207,6 +210,15 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
     """Set up the current configuration; migration is owned by the entry hook."""
+    journal_path, lease_path = entry_paths(hass.config.path(STORAGE_DIR), entry.entry_id)
+    try:
+        await hass.async_add_executor_job(process_lease, lease_path)
+        journal = await hass.async_add_executor_job(CommandJournal(journal_path).open, INTEGRATION_VERSION)
+    except SourceFenced as error:
+        raise ConfigEntryError(str(error)) from error
+    except WriterActive as error:
+        raise ConfigEntryNotReady(str(error)) from error
+    transport = CommandTransport(journal, hass.async_add_executor_job)
     client = ShsApiClient(
         async_get_clientsession(hass),
         entry.data[CONF_BASE_URL],
@@ -224,7 +236,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
         options,
         VerificationJournal(verification_store,
                             Store(hass, 1, f"shs_energy.verification_samples.{entry.entry_id}")),
-        entity_registry=er.async_get(hass),
+        command_transport=transport, entity_registry=er.async_get(hass),
     )
     coordinator.controller = controller
     controller.metrics.performance = {'verification_storage': verification_store.metrics,
@@ -254,10 +266,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     entry.async_on_unload(coordinator.battery_writer.close)
 
     async def stop_controller(_event=None):
+        await transport.stopping()
         coordinator.battery_live_inputs.close()
         try:
             await coordinator.battery_runtime.close(release=True)
             await controller.async_stop()
+            await transport.stopped()
         finally:
             coordinator.battery_writer.close()
 
@@ -363,10 +377,12 @@ async def _async_options_updated(
 
 async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
     """Unload a config entry."""
+    await entry.runtime_data.controller.command_transport.stopping()
     await entry.runtime_data.battery_runtime.close(release=True)
     entry.runtime_data.battery_live_inputs.close()
     try:
         await entry.runtime_data.controller.async_stop()
+        await entry.runtime_data.controller.command_transport.stopped()
     finally:
         entry.runtime_data.battery_writer.close()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

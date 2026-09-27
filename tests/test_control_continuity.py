@@ -11,6 +11,7 @@ import unittest
 import test_controller as fixtures
 from test_controller import State
 from controller import ScheduledController
+from command_fixture import command_transport
 from verification import VerificationJournal
 
 
@@ -35,7 +36,7 @@ class Continuity(unittest.IsolatedAsyncioTestCase):
 
     def restarted(self):
         """A new process, as after an HA restart or an integration update."""
-        controller = ScheduledController(self.hass, self.coordinator, self.store, self.controller.options)
+        controller = ScheduledController(self.hass, self.coordinator, self.store, self.controller.options, command_transport=command_transport())
         controller.confirm = self.controller.confirm
         controller.verification = VerificationJournal(fixtures.Store(), fixtures.Store())
         controller.device = 'battery'

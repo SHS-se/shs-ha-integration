@@ -1,3 +1,12 @@
+# 0.1.0-beta.4
+
+Bundle preparation companion 0.9.0-beta.52 with durable command outcomes for all
+actuators and a process-lifetime migration fence. Verify the existing shutdown
+sample flush before recording a clean stop. Add
+a verified cold-export worker for the eventual one-off cutover. The integration
+remains the controller; do not export the live household until the app runtime
+and importer are ready. Existing SHS branding is unchanged.
+
 # 0.1.0-beta.3
 
 Package the shared runtime/accounting and SQLite readers independently of Home

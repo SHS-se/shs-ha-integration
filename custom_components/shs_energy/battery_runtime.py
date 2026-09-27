@@ -13,6 +13,8 @@ import json
 from math import floor, isfinite
 
 if __package__:
+    from .shs_core.command_journal import Command, NativeAction
+    from .shs_core.command_transport import CommandNotSent
     from .shs_core import home_runtime as rt
     from .shs_core.home_host import HomeHost, HostPorts, DispatchRejected
     from .shs_core.battery_native_adapter import SigenAdapter
@@ -30,6 +32,8 @@ if __package__:
     from .operating_modes import device_mode
     from .presentation import battery_status_text
 else:
+    from shs_core.command_journal import Command, NativeAction
+    from shs_core.command_transport import CommandNotSent
     from shs_core import home_runtime as rt
     from shs_core.home_host import HomeHost, HostPorts, DispatchRejected
     from shs_core.battery_native_adapter import SigenAdapter
@@ -863,16 +867,25 @@ class BatteryRuntime:
         # Share the household command lock. Recheck all authority after waiting;
         # then start the HA call without another intervening await.
         async with self.controller.lock:
-            if self.host._fault or not self._can_send(effect) or not rt.authorize_send(self.host.state,effect,self.now()):
-                raise DispatchRejected('battery writer or request changed')
+            def authorize():
+                if self.host._fault or not self._can_send(effect) or not rt.authorize_send(self.host.state,effect,self.now()):
+                    raise DispatchRejected('battery writer or request changed')
+            authorize()
             entity,value=effect.key,effect.value
             if entity==self._options['battery_mode_entity']:
-                call=self.controller.hass.services.async_call('select','select_option',{'entity_id':entity,'option':value},blocking=True)
+                action=NativeAction(entity,'select_option',value)
             else:
                 field='charge' if entity==self._options['battery_charge_limit_entity'] else 'discharge'
                 limit=self._surface['limits'][field]
-                call=self.controller.hass.services.async_call('number','set_value',{'entity_id':entity,'value':value/(1000 if limit['unit']=='kW' else 1)},blocking=True)
-            await asyncio.wait_for(call,75)
+                action=NativeAction(entity,'set_value',value/(1000 if limit['unit']=='kW' else 1))
+            identity=f'battery:{effect.grant.owner_id}:{effect.grant.epoch}:{effect.group_id}:{effect.attempt_id}'
+            request=Command(identity,'battery',effect.group_id,'battery',action)
+            async def send(domain,service,data):
+                await self.controller.hass.services.async_call(domain,service,data,blocking=True)
+            try:
+                await self.controller.command_transport.execute(request,authorize=authorize,send=send,timeout=75)
+            except CommandNotSent as error:
+                raise DispatchRejected(str(error)) from error
 
     def before_external_command(self,device):
         """Reserve unknown pending demand before another adapter changes a load.

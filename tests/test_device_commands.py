@@ -7,6 +7,7 @@ import unittest
 import test_controller as fixtures
 State = fixtures.State
 from controller import ScheduledController
+from command_fixture import command_transport
 from device_commands import validate_commands
 
 
@@ -47,7 +48,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['device:heater']['state'], 'overridden')
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options))
+        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), command_transport=command_transport())
         await other.async_start()
         self.assertEqual(other.status['device:heater']['state'], 'overridden')
         self.assertEqual(self.states['switch.heater'].state, 'on')

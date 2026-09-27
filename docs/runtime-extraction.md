@@ -95,9 +95,9 @@ immutability. Existing accounting, late-correction and controller tests still ru
 ## Remaining work
 
 Coordinator/cloud/tariff work and non-battery decision policy still need extraction.
-The all-device authority journal, coordinated export barrier, JSON inventory and
-import, post-export evidence, gateway, activation and HA entity projection remain
-prerequisites to actual cutover. The app cannot yet control devices. Old unreferenced
+The durable local command journal and cold exporter are now implemented in
+[the next preparation milestone](command-export-design.md). Target import, remote
+gateway, activation and HA entity projection remain prerequisites to actual cutover. The app cannot yet control devices. Old unreferenced
 files (`battery_policy_delivery`, `control_agreement`) found during live inventory
 are preserved, not silently imported. No source cleanup is part of this milestone.
 

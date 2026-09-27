@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import unittest
 sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
 from battery_runtime import BatteryRuntime, exact_start, iso, stamp
+from command_fixture import command_transport
 from battery_writer import BatteryWriterFence
 from battery_runtime import digest, plan_scope
 from shs_core.plan_execution import *
@@ -65,7 +66,7 @@ class Rig:
             self.rows[data['entity_id']]['state']=str(data.get('value',data.get('option')))
             self.rows[data['entity_id']]['last_reported']=iso(self.now)
         async def restore(device):self.controller.records.pop(device,None)
-        self.controller=SimpleNamespace(options=lambda:deepcopy(self.options),lock=asyncio.Lock(),records={},
+        self.controller=SimpleNamespace(command_transport=command_transport(),options=lambda:deepcopy(self.options),lock=asyncio.Lock(),records={},
             restore=restore,hass=SimpleNamespace(services=SimpleNamespace(async_call=service)))
         self.readbacks=0
         async def readback(entities):
@@ -261,6 +262,26 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             await r.start()
             self.assertTrue(rejected)
             self.assertEqual(r.calls,[])
+        finally:await r.runtime.close()
+
+    async def test_permission_change_during_durable_prepare_prevents_service_call(self):
+        import sqlite3
+        from contextlib import closing
+        r=Rig()
+        transport=r.controller.command_transport
+        async def executor(fn,*args):
+            result=await asyncio.to_thread(fn,*args)
+            if fn==transport.journal.prepare:
+                r.options['device_modes']['$battery']='control_verification'
+            return result
+        transport.executor=executor
+        try:
+            await r.start()
+            self.assertEqual(r.calls,[])
+            with closing(sqlite3.connect(transport.journal.path)) as db:
+                outcomes=[row[0] for row in db.execute('SELECT status FROM commands')]
+            self.assertTrue(outcomes)
+            self.assertEqual(set(outcomes),{'not_sent'})
         finally:await r.runtime.close()
 
     async def test_confirmed_registers_finish_transition_without_timeout_waits(self):

@@ -6,6 +6,7 @@ from unittest.mock import patch
 import unittest
 import test_controller as fixtures
 from controller import ScheduledController
+from command_fixture import command_transport
 from minimum_run import MinimumRuns, minimum_run_errors
 from verification import VerificationJournal
 from configuration_fields import control_fields
@@ -129,6 +130,20 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         for state in self.states.values():
             state.last_updated = state.last_reported = Clock.value
 
+    async def test_revocation_during_command_prepare_cancels_unsent_minimum_run(self):
+        import asyncio
+        transport=self.controller.command_transport
+        async def executor(fn,*args):
+            result=await asyncio.to_thread(fn,*args)
+            if fn==transport.journal.prepare:
+                self.options['device_modes']['$pool']='control_verification'
+            return result
+        transport.executor=executor
+        await self.controller.async_start()
+        self.assertEqual(self.calls,[])
+        self.assertIsNone(self.controller.runs.release_at('pool'))
+        self.assertEqual(self.states['switch.pool'].state,'off')
+
     async def test_switching_to_verification_while_start_is_saved_prevents_the_write(self):
         save = self.store.async_save
         async def change_mode(value):
@@ -174,7 +189,7 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status['pool']['state'], 'pending')
         await self.controller.async_stop()
         self.assertEqual(self.calls, [])
-        restarted = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options))
+        restarted = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), command_transport=command_transport())
         await restarted.async_start()
         self.assertEqual(self.calls, [])
         self.assertEqual(restarted.runs.records['pool']['since'], since)

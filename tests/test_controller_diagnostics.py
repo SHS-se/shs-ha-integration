@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 import unittest
 import test_controller as fixtures
 from controller import ScheduledController
+from command_fixture import command_transport
 from controller_diagnostics import controller_diagnostics
 from verification import VerificationJournal
 
@@ -119,6 +120,14 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(row['ownership_after'])
         self.assertEqual(self.journal.attempts, [])
 
+    async def test_shutdown_flushes_pending_observation_samples(self):
+        await self.controller.async_start()
+        from unittest.mock import AsyncMock
+        original=self.journal.flush_samples
+        self.journal.flush_samples=AsyncMock(wraps=original)
+        await self.controller.async_stop()
+        self.journal.flush_samples.assert_awaited_once()
+
     async def test_restarts_record_no_handover_and_resume_ownership(self):
         self.options['device_modes']['$pool'] = 'controlling'
         self.slot['pool_w'] = 0
@@ -126,7 +135,7 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         ownership = deepcopy(self.store.saved)
         await self.controller.async_stop()
         self.assertEqual(self.store.saved, ownership, 'stopping leaves ownership journalled')
-        controller = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), self.journal)
+        controller = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), self.journal, command_transport=command_transport())
         await controller.async_start()
         triggers = {row['trigger'] for row in self.journal.evaluations}
         self.assertFalse(triggers & {'shutdown_handover', 'startup_handover'})

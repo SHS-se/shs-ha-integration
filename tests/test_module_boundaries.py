@@ -21,7 +21,7 @@ sys.path.append(str(PACKAGE))
 
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
-    "app_projection",
+    "app_projection", "shs_core.command_journal", "shs_core.command_transport",
     "battery_commands", "operating_modes", "verification",
     "shs_core.home_runtime", "shs_core.home_runtime_checkpoint", "shs_core.energy_ledger", "shs_core.runtime_json",
     "shs_core.battery_supply", "shs_core.home_host", "shs_core.battery_native_adapter",

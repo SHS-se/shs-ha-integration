@@ -4,7 +4,9 @@ Status: accepted architecture, 27 September 2026. The first installable observat
 release is implemented; see [the app documentation](../apps/shs_energy/DOCS.md).
 The first shared-core extraction and read-only snapshot rehearsal are implemented;
 see [runtime-extraction.md](runtime-extraction.md). Full runtime extraction, durable
-command handover and actual data migration below remain planned.
+remote command handover and actual data migration below remain planned. The durable
+local command boundary and cold exporter are implemented; see
+[command-export-design.md](command-export-design.md).
 The user selected Home Assistant OS first. The cloud planner remains in its present service. UI details are
 in [app-ui-design.md](app-ui-design.md).
 
@@ -406,30 +408,32 @@ export/fence correctly. A new installation with no old SHS data skips this phase
 | State | Durable fact and action |
 | --- | --- |
 | `Prepared` | Supported source loaded; migration ID and complete inventory fixed; app has no authority |
-| `Fenced` | All old SHS writer paths denied under the shared authority boundary; pause scheduling, cloud/config mutations; settle in-flight work or classify uncertainty |
-| `Exported` | Consistent immutable export at recorded receipt/config barrier; later observations are spooled by the preparation bridge |
+| `Fenced` | Core has stopped cleanly; process lease excludes every old writer; durable source authority denies later setup |
+| `Exported` | Immutable cold export passes logical comparison; shutdown observation gap is explicit, with no preparation spool |
 | `Imported` | Data transformed into app staging; no dispatch capability |
 | `Verified` | Reopened destination passes schema/integrity and logical parity checks; gateway state import and app checkpoints agree |
 | `Activated` | Final companion loaded and exact pair verified; gateway durably binds migration ID, export digest and new owner epoch to the app checkpoint |
 | `Complete` | App records activation proof, reconnect/readback reconciles obligations, stable HA entities confirmed; source cleanup is separately recorded |
 
-The fence is persisted before any source store is declared frozen. Acquire/drain
-every SHS command path, not only the battery lock. Permission revocations received
-during migration still take effect; other configuration edits are explicitly held
-until activation so they cannot invalidate the export unnoticed. Continue collecting
-observations and uncertainty records through the preparation bridge.
+The one-off migration uses a cold export, superseding the original online drain
+and spool proposal. Stop Core gracefully, confirm its actual process state, acquire
+the process-lifetime SHS lease, preflight all stores, then persist the irreversible
+fence before capturing the export. The preparation release flushes verification
+samples during shutdown. No source controller resumes after sealing. Repeat the
+same migration ID to produce another private export attempt after failure.
 
-Use SQLite's [backup API](https://www.sqlite.org/backup.html) for database snapshots;
-coordinate JSON saves and every database writer under the export barrier. A backup
-of one database alone does not make a multi-store snapshot coherent. Never copy a
-live SQLite main file while ignoring its journal/WAL.
+Use SQLite's [backup API](https://www.sqlite.org/backup.html) for each database and
+copy the enumerated JSON stores while the source is quiescent. A backup of one
+live database alone is not a coherent household export. The app writes the verified
+manifest last. Unknown entry-scoped sources stop export for explicit review.
 
-Transfer large exports as bounded authenticated chunks, verified against the
-manifest, into a staging directory. Keep the export snapshot and retired app-owned
-source stores unchanged after export. Canonical HA configuration/permission journals
-and gateway observation/uncertainty evidence remain writable: replay their subsequent
-deltas and reconcile their latest revisions before activation. An imported snapshot
-must never restore a permission that the user revoked during migration.
+The selected configuration snapshot is private. HA remains canonical for permission
+and binding changes after Core restarts; activation must reread it, never restore
+revoked permissions from the export. Record the shutdown observation gap instead
+of manufacturing continuous observations. Obtain fresh physical readback and
+reconcile preserved uncertain effects before dispatch. No observation spool or
+configuration-edit queue is part of this one-off preparation path.
+
 Reopen staging and compare accounting balances, exact receipt order, active contracts
 and objectives, upload cursors, controller/restoration state, minimum-run deadlines
 and unresolved effects. Preserve planner digest semantics. Historical plan IDs can
@@ -441,7 +445,7 @@ the app reads/persists that token before issuing an intent. A lost reply is reso
 by reading durable migration status, never by electing a second owner. Final
 companion replacement/restart occurs with the migration fence already durable.
 
-Before new dispatch, obtain current observations, replay post-export receipts and
+Before new dispatch, obtain current observations, account for the shutdown gap and
 reconcile existing uncertain commands. Retain the configured modes and minimum-run
 obligations; imported settings do not newly grant control. Command ambiguity is
 preserved even if the source application thought its last service call succeeded.
