@@ -128,7 +128,7 @@ class ExecutionModeSelect(SelectEntity):
 
     @property
     def current_option(self):
-        mode = device_mode(self.entry.options, self.device['permission']['controller_id'])
+        mode = device_mode(self.entry.runtime_data.resolved_options(), self.device['permission']['controller_id'])
         return mode if mode in MODES else None
 
     @property

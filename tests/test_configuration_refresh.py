@@ -62,31 +62,6 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(refresh_in_progress(self.hass,self.entry))
         self.hass.config_entries.async_reload.assert_not_awaited()
 
-    async def test_progress_responses_retain_clients_and_block_other_saves(self):
-        names = {'websocket_get_configuration', 'websocket_get_status',
-            'websocket_save_configuration', 'websocket_save_device_configuration',
-            'websocket_control_permission'}
-        ns = load_functions('config_panel.py', names, {
-            '_entry_from_message': lambda *_: self.entry,
-            '_entry_state': lambda entry: entry.state,
-            'refresh_in_progress': refresh_in_progress,
-        })
-        set_reloading(self.hass, self.entry, True)
-        self.entry.state = 'not_loaded'
-        for name in names:
-            with self.subTest(name=name):
-                connection = SimpleNamespace(send_error=Mock(), send_result=Mock())
-                await ns[name](self.hass, connection, {'id': 1, 'config_entry': 'entry'})
-                if name.startswith('websocket_get'):
-                    connection.send_result.assert_called_once_with(1, {'refreshing': True, 'entry_id': 'entry'})
-                    connection.send_error.assert_not_called()
-                else:
-                    self.assertEqual(connection.send_error.call_args.args[1], 'refresh_in_progress')
-        set_reloading(self.hass, self.entry, False)
-        connection = SimpleNamespace(send_error=Mock(), send_result=Mock())
-        await ns['websocket_get_configuration'](self.hass, connection, {'id': 1, 'config_entry': 'entry'})
-        self.assertEqual(connection.send_error.call_args.args[1], 'not_loaded')
-
     async def test_exchange_reports_busy_then_idle_even_when_it_fails(self):
         ns = load_functions('shs_core/household.py', {'_planning_exchange'}, {'asynccontextmanager': asynccontextmanager})
         states = []
@@ -101,29 +76,6 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(refresh_in_progress(self.hass, self.entry))
 
 class ManualReplanTests(unittest.IsolatedAsyncioTestCase):
-    async def test_queues_authenticated_request_and_waits_for_existing_answer_path(self):
-        coordinator = SimpleNamespace(async_replan=AsyncMock(), last_optimisation_error=None)
-        entry = SimpleNamespace(runtime_data=coordinator, options={})
-        payload = AsyncMock(return_value={'replan_recommendations': []})
-        ns = load_functions('config_panel.py', {'websocket_replan'}, {
-            '_entry_from_message': lambda *_: entry, '_entry_state': lambda _: 'loaded',
-            'refresh_in_progress': lambda *_: False, 'resolved_options': lambda *_: {'mode': 'live'},
-            'shs_const': SimpleNamespace(OPT_PLANNING_MODE='mode', PLANNING_MODE_LIVE='live'),
-            '_configuration_payload': payload, 'ShsApiError': ValueError,
-        })
-        connection = SimpleNamespace(send_error=Mock(), send_result=Mock())
-        await ns['websocket_replan'](None, connection, {'id': 1, 'config_entry': 'entry'})
-        coordinator.async_replan.assert_awaited_once()
-        connection.send_result.assert_called_once_with(1, {'replan_recommendations': []})
-        coordinator.last_optimisation_error = 'Cannot build plan'
-        await ns['websocket_replan'](None, connection, {'id': 2, 'config_entry': 'entry'})
-        connection.send_error.assert_called_with(2, 'replan_failed', 'Cannot build plan')
-        ns['resolved_options'] = lambda *_: {'mode': 'off'}
-        coordinator.async_replan.reset_mock()
-        await ns['websocket_replan'](None, connection, {'id': 3, 'config_entry': 'entry'})
-        coordinator.async_replan.assert_not_awaited()
-        connection.send_error.assert_called_with(3, 'replan_failed', 'Planning is turned off for this home in Home Assistant')
-
     async def test_client_queues_a_manual_request_and_requires_confirmation(self):
         ns = load_functions('shs_core/api.py', {'request_replan'}, {'API_VERSION': 1, 'ShsApiError': ValueError})
         client = SimpleNamespace(_request=AsyncMock(return_value={'replan_request_id': 'request'}))

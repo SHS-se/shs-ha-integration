@@ -31,11 +31,11 @@ def schedule(plan, operation):
 
 
 def attention_links(items, entry_id):
-    """Carry every structured correction target to its existing HA editor."""
+    """Carry every structured correction target to the app editor."""
     result = deepcopy(items)
     for item in result:
         for field in item.get("fix", {}).get("fields", []):
-            field["url"] = "/shs-energy?" + urlencode({
+            field["url"] = "#settings?" + urlencode({
                 "config_entry": entry_id, "field": field["key"],
                 "scope": field.get("scope", "configuration"),
                 "device": field.get("device_key", ""),

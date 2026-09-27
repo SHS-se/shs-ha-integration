@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).parents[1] / 'custom_components' / 'shs_energy'
 sys.path.append(str(ROOT))
@@ -64,8 +64,21 @@ class Rig:
             async_add_battery_listener=self.add_battery_listener)
         self.hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=self.update_entry))
         self.shared = load_adapter('control_configuration.py', {'datetime': datetime, 'timezone': timezone,
-            'shs_const': const, 'execution_mode_options': execution_mode_options})
-        # Exercise the real shared mode action; only its cached inventory port is fake.
+            'deepcopy':deepcopy, 'GatewayConflict':RuntimeError, 'uuid4':__import__('uuid').uuid4})
+        self.entry.runtime_data.resolved_options = lambda:self.entry.options
+        self.entry.runtime_data.projection = {'configuration':{'revision':1},'execution_devices':self.devices}
+        async def request_app(operation, body):
+            assert operation == 'configuration' and body['operation'] == 'control'
+            edit=body['body']
+            assert edit['expected_revision']==self.entry.runtime_data.projection['configuration']['revision']
+            options=execution_mode_options(self.entry.options,self.devices,edit['device_key'],edit['mode'])
+            if options != self.entry.options:
+                self.entry.options=options
+                self.entry.runtime_data.projection['configuration']['revision']+=1
+                await self.refresh_battery();await self.tick()
+            return {'revision':self.entry.runtime_data.projection['configuration']['revision']}
+        self.entry.runtime_data.service=SimpleNamespace(request_app=request_app)
+
         self.shared.async_set_execution_mode.__globals__['async_execution_devices'] = self.get_devices
         self.adapter = load_adapter('select.py', {'asyncio': asyncio, 'callback': lambda fn: fn,
             'SelectEntity': Entity, 'EntityCategory': SimpleNamespace(CONFIG='config'),
@@ -219,14 +232,14 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
         r.hass.states=SimpleNamespace(async_all=lambda:[])
         raw={'key':'sensor.heater','name':'Heater','planning_role':'controllable','control_type':'switch_schedule'}
         choices={'devices':[raw],'home':{'battery':{'included':True}},'refreshed_at':datetime.now(timezone.utc).isoformat()}
-        namespace=r.shared.execution_device_views.__globals__
-        namespace.update(resolved_options=lambda hass,options:options,
-            entity_display_name_by_id=lambda hass:{},area_name_by_id=lambda hass:{},entity_area_id_by_id=lambda hass:{},
-            suggest_device_control_mapping=lambda *args:{},apply_planner_support=apply_planner_support,
-            mapping_report=mapping_report,is_room_thermal_control=is_room_thermal_control,mapped_planning_path=mapped_planning_path,
-            _control_fields=_control_fields,complete_device_views=complete_device_views)
-        suggestions = Mock(return_value={'power': 'sensor.suggested_power'})
-        namespace['suggest_device_control_mapping'] = suggestions
+        from shs_core.configuration_view import execution_device_views
+        from shs_core.discovery import DiscoveryCatalog
+        catalog=DiscoveryCatalog({}, {}, 59, 18)
+        context=dict(entity_names={},area_names={},entity_areas={})
+        r.shared.execution_device_views=lambda hass,entry,choices,**kw: execution_device_views(catalog,context,entry.options,choices,entry.runtime_data,**kw)
+        suggestions=Mock(return_value={'power':'sensor.suggested_power'})
+        patcher=patch('shs_core.configuration_view.suggest_device_control_mapping',suggestions)
+        patcher.start();self.addCleanup(patcher.stop)
         full = r.shared.execution_device_views(r.hass, r.entry, choices)
         suggestions.assert_called_once()
         suggestions.reset_mock()
@@ -264,15 +277,10 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
             await r.shared.async_set_execution_mode(r.hass,r.entry,'sensor.pool_pump_energy','controlling')
         self.assertEqual(r.entry.options,before);self.assertEqual(r.ticks,0)
 
-    async def test_first_inventory_applies_same_inclusion_defaults_before_exposing_entities(self):
-        from shs_core.configuration_schema import initialise_device_inclusion
+    async def test_inventory_is_projected_without_mutating_ha_settings(self):
         r=Rig()
-        module=load_adapter('control_configuration.py', {'initialise_device_inclusion':initialise_device_inclusion})
-        def views(hass,entry,choices,**kwargs):
-            return [{'key':'$battery','mapping_status':'not_configured',
-                'planned':'$battery' not in entry.options.get('excluded_device_readings',[])}]
-        module.async_execution_devices.__globals__['execution_device_views']=views
-        result=await module.async_execution_devices(r.hass,r.entry,{'devices':[]})
-        self.assertFalse(result[0]['planned'])
-        self.assertEqual(r.entry.options['excluded_device_readings'],['$battery'])
-        self.assertTrue(r.entry.runtime_data._plan_configuration_changed)
+        before=deepcopy(r.entry.options)
+        result=await r.shared.async_execution_devices(r.hass,r.entry)
+        result[0]['planned']=False
+        self.assertEqual(r.entry.options,before)
+        self.assertTrue(r.devices[0]['planned'])

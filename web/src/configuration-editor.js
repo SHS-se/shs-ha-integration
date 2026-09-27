@@ -1,4 +1,4 @@
-const TABS = [["energy", "Energy"], ["devices", "Devices"], ["schedule", "Schedule"], ["status", "Status"]];
+const TABS = [["energy", "Energy & planning"], ["devices", "Devices"]];
 const DEVICE_MODES = [["control_verification", "Verification"], ["controlling", "Controlling"]];
 const SCHEDULE_ACTIONS = {
   heating: { label: "Heating", colour: "#f5a38a" },
@@ -9,19 +9,19 @@ const SCHEDULE_ACTIONS = {
   idle: { label: "Idle / no request", colour: "var(--secondary-background-color)" },
 };
 const MAPPINGS_KEY = "device_control_mappings";
-const FRONTEND_VERSION = new URL(import.meta.url).searchParams.get("v");
-const PANEL_ELEMENT = `shs-energy-config-panel-${FRONTEND_VERSION.replaceAll(".", "-")}`;
+const FRONTEND_VERSION = "app-configuration-v1";
+const PANEL_ELEMENT = "shs-configuration-editor";
 
 class ShsEnergyConfigPanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._hass = undefined;
+    this._backend = undefined;
     this._panel = undefined;
     this._data = undefined;
     this._draft = undefined;
     this._savedDraft = undefined;
-    this._tab = "schedule";
+    this._tab = "energy";
     this._search = "";
     this._room = "";
     this._category = "";
@@ -39,7 +39,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._error = "";
     this._notice = "";
     this._entryId = new URLSearchParams(window.location.search).get("config_entry");
-    this._linkedField = new URLSearchParams(window.location.search);
+    this._linkedField = new URLSearchParams(window.location.hash.split("?")[1] || window.location.search);
     this._boundClick = (event) => this._onClick(event);
     this._boundChange = (event) => this._onChange(event);
     this._boundInput = (event) => this._onChange(event);
@@ -50,9 +50,20 @@ class ShsEnergyConfigPanel extends HTMLElement {
     };
   }
 
-  set hass(value) {
-    this._hass = value;
-    // Home Assistant sets hass on every state change. A failed load waits for
+  set dark(value) { this._dark = Boolean(value); if (this._data) this._renderBackground(); }
+
+  async _request(message) {
+    const result = await this._backend.request({ ...message,
+      expected_revision: this._data?.revision, request_id: crypto.randomUUID() });
+    if (result?.revision && ["save", "save_device"].includes(message.action) && this._data) {
+      this._data.revision = result.revision;
+    }
+    return result;
+  }
+
+  set backend(value) {
+    this._backend = value;
+    // A failed load waits for
     // Try again instead of retrying behind the spinner and hiding its error.
     if (this.isConnected && !this._data && !this._loading && !this._error) {
       this._load(true);
@@ -72,7 +83,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       if (this._refreshing || Date.now() - (this._lastPollAt || 0) >= 30000) this._poll();
     }, 1000);
     this._render();
-    if (this._hass && !this._data && !this._loading) {
+    if (this._backend && !this._data && !this._loading) {
       this._load(true);
     }
   }
@@ -101,7 +112,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _label(value) { return this._data?.labels?.[value] || "Not available"; }
 
   _time(value) {
-    return value ? new Date(value).toLocaleString(this._hass?.locale?.language || undefined, { dateStyle: "medium", timeStyle: "short" }) : "Not yet";
+    return value ? new Date(value).toLocaleString(this._data?.locale?.language || undefined, { dateStyle: "medium", timeStyle: "short" }) : "Not yet";
   }
 
   _generalFields() {
@@ -151,11 +162,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
     for (const value of [error?.message, error?.error?.message, error?.error, error?.code]) {
       if (typeof value === "string" && value.trim()) return value;
     }
-    return "Home Assistant could not complete the request. Please retry; if it continues, check the Home Assistant logs.";
+    return "The SHS app could not complete the request. Please retry; if it continues, check the app logs.";
   }
 
   async _load(refreshRoles) {
-    if (!this._hass || this._loading) return;
+    if (!this._backend || this._loading) return;
     if (refreshRoles && !this._data) {
       // Paint the local configuration before waiting for website requests or
       // the planning lock. Reuse polling's editor and stale-response guards.
@@ -167,12 +178,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._error = "";
     this._render();
     const message = {
-      type: "shs_energy/config/get",
+      action: "get",
       refresh_roles: refreshRoles,
     };
     if (this._entryId) message.config_entry = this._entryId;
     try {
-      const data = await this._hass.callWS(message);
+      const data = await this._request(message);
       if (this._acceptRefresh(data)) return;
       this._mergePanel(data);
       this._deviceErrors = {};
@@ -263,8 +274,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._render();
     const configuration = this._clone(this._patch(this._generalFields()));
     try {
-      const result = await this._hass.callWS({
-        type: "shs_energy/config/save",
+      const result = await this._request({
+        action: "save",
         config_entry: this._entryId,
         configuration,
       });
@@ -308,8 +319,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
       mapping.temperature_entity_id = this._draft.pool_water_temperature_entity;
     }
     try {
-      const result = await this._hass.callWS({
-        type: "shs_energy/config/save_device",
+      const result = await this._request({
+        action: "save_device",
         config_entry: this._entryId,
         device_key: deviceKey,
         mapping,
@@ -372,8 +383,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._notice = "";
     this._render();
     try {
-      const result = await this._hass.callWS({
-        type: "shs_energy/config/discover",
+      const result = await this._request({
+        action: "discover",
         config_entry: this._entryId,
       });
       const sources = this._data.sections.filter(s => s.tab === "energy" && s.id !== "sharing").flatMap(s => s.fields);
@@ -413,7 +424,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       window.history.back();
       return;
     }
-    window.location.assign("/config/integrations/integration/shs_energy");
+    window.location.hash = "overview";
   }
 
   _mapping(deviceKey, create = false) {
@@ -584,7 +595,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       }
     }
     this._notice = "";
-    if (event.type === "input") this._updateSaveState();
+    if (event.type === "input" || (element instanceof HTMLInputElement && ["text", "number"].includes(element.type))) this._updateSaveState();
     else this._render();
   }
 
@@ -614,7 +625,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _sortedDevices(section = "controls") {
     return [...this._data.devices].sort((a, b) =>
-      this._deviceTitle(a, section).localeCompare(this._deviceTitle(b, section), this._hass?.locale?.language, { sensitivity: "base", numeric: true }) || a.key.localeCompare(b.key));
+      this._deviceTitle(a, section).localeCompare(this._deviceTitle(b, section), this._data?.locale?.language, { sensitivity: "base", numeric: true }) || a.key.localeCompare(b.key));
   }
 
   _onClick(event) {
@@ -624,7 +635,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (!action) return;
     if (action === "edit-field") this._openField(button.dataset.fieldToken);
     if (action === "view-status") this._openStatus(button.dataset.issueKey);
-    if (action === "inspect-entity") this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: button.dataset.entityId }, bubbles: true, composed: true }));
+    if (action === "inspect-entity") {
+      this._inspectedEntity = button.dataset.entityId; this._render();
+      this.shadowRoot.querySelector("dialog")?.showModal();
+    }
+    if (action === "close-inspector") { this.shadowRoot.querySelector("dialog")?.close(); this._inspectedEntity = null; }
     if (action === "download") this._download();
     if (action === "verification") this._downloadVerification();
     else if (action === "replan") this._replan();
@@ -773,7 +788,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const key = this._escape(field.key);
     const label = this._escape(field.label);
     const sensor = typeof value === "string" && value.startsWith("sensor.");
-    const entityUnit = sensor ? (this._hass?.states?.[value]?.attributes?.unit_of_measurement ?? this._data?.entities?.find(e => e.entity_id === value)?.unit ?? "") : null;
+    const entityUnit = sensor ? (this._data?.entities?.find(e => e.entity_id === value)?.unit ?? "") : null;
     const helpText = sensor && ["power", "quantity"].includes(field.kind) ? "Uses the selected sensor's reported unit." : field.help;
     const help = helpText ? `<div class="field-help">${this._escape(helpText)}</div>` : "";
     const token = `${scope}:${deviceKey}:${field.key}`;
@@ -787,7 +802,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       control = `<label class="switch"><input type="checkbox" ${common} ${value ? "checked" : ""}><span></span></label>`;
     } else if (field.kind === "battery_mode") {
       const modeEntity = this._draft?.battery_mode_entity;
-      const options = this._hass?.states?.[modeEntity]?.attributes?.options || [];
+      const options = this._data?.entities?.find(e => e.entity_id === modeEntity)?.options || [];
       control = `<select ${common}><option value="">Select a mode…</option>${value && !options.includes(value) ? `<option selected disabled value="${this._escape(value)}">Unavailable option: ${this._escape(value)}</option>` : ""}${options.map(option => `<option value="${this._escape(option)}" ${option === value ? "selected" : ""}>${this._escape(option)}</option>`).join("")}</select>`;
     } else if (field.kind === "select") {
       control = `<select ${common}>
@@ -874,13 +889,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const revision = this._pollRevision;
     const entryId = this._entryId;
     try {
-      const data = await this._hass.callWS({ type: "shs_energy/config/get", config_entry: entryId, refresh_roles: refreshRoles });
+      const data = await this._request({ action: "get", config_entry: entryId, refresh_roles: refreshRoles });
       if (!this._canPoll() || revision !== this._pollRevision || entryId !== this._entryId) return;
       if (this._acceptRefresh(data)) {
         this._renderBackground();
         return;
       }
-      if (this._editing() || this._dirty) this._data = { ...data, configuration: this._data.configuration };
+      if (this._editing() || this._dirty) this._data = { ...data, configuration: this._data.configuration, revision: this._data.revision };
       else this._mergePanel(data);
       this._refreshError = "";
       if (this._editing() || this._dirty) this._updateAttentionUI();
@@ -902,7 +917,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._pollRevision = (this._pollRevision || 0) + 1;
     this._render();
     try {
-      const data = await this._hass.callWS({ type: "shs_energy/config/replan", config_entry: this._entryId });
+      const data = await this._request({ action: "replan", config_entry: this._entryId });
       this._mergePanel(data);
     } catch (error) {
       this._replanError = this._errorMessage(error);
@@ -919,7 +934,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._pollRevision = (this._pollRevision || 0) + 1;
     this._savingDeviceKey = key; this._error = ""; this._render();
     try {
-      const data = await this._hass.callWS({ type: "shs_energy/config/control", config_entry: this._entryId, device_key: key, mode });
+      const data = await this._request({ action: "control", config_entry: this._entryId, device_key: key, mode });
       this._mergePanel(data);
       this._notice = "Device mode saved: " + this._label(mode) + ".";
     } catch (error) { this._error = this._errorMessage(error); }
@@ -937,8 +952,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   async _downloadVerification() {
     try {
-      // Home Assistant builds and compresses the file; the browser only saves it.
-      const response = await this._hass.fetchWithAuth(`/api/shs_energy/controller_diagnostics/${encodeURIComponent(this._entryId)}`);
+      // The app builds and compresses the file; the browser only saves it.
+      const response = await this._backend.download();
       if (!response.ok) throw new Error((await response.text()).trim() || `Controller diagnostics download failed (HTTP ${response.status}).`);
       const summary = JSON.parse(response.headers.get("X-SHS-Diagnostics-Summary") || "null");
       const url = URL.createObjectURL(await response.blob());
@@ -1037,7 +1052,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const excluded = [...this._draft.excluded_device_readings];
     this._saving = true; this._render();
     try {
-      await this._hass.callWS({ type: "shs_energy/config/save", config_entry: this._entryId,
+      await this._request({ action: "save", config_entry: this._entryId,
         configuration: { excluded_device_readings: excluded } });
       this._savedDraft.excluded_device_readings = excluded;
       await this._load(false);
@@ -1154,8 +1169,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _batteryOutlook(device) {
     const explanation = device.battery_runtime?.explanation;
     if (!explanation || this._refreshError) return '<p class="muted battery-outlook">Waiting for a current battery plan and measurements.</p>';
-    const locale = this._hass?.locale?.language || this._hass?.language;
-    const timeZone = this._hass?.locale?.time_zone === "local" ? undefined : this._hass?.config?.time_zone;
+    const locale = this._data?.locale?.language;
+    const timeZone = this._data?.locale?.timezone;
     const deadline = explanation.deadline_ms == null ? "" : ` Aim to finish by ${new Date(explanation.deadline_ms).toLocaleString(locale, { timeZone, hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" })}.`;
     return `<p class="muted battery-outlook">${this._escape(explanation.plan)}<br>${this._escape(explanation.difference)}<br>${this._escape(explanation.next + deadline)}</p>`;
   }
@@ -1443,6 +1458,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<main class="shell"><header class="topbar"><button type="button" class="icon-button" data-action="back" aria-label="Back">←</button><div><h1>SHS Energy configuration</h1><p>Select the Home Assistant connection to configure.</p></div></header><section class="content"><div class="card entry-list">${(this._data.entries || []).map((entry) => `<button type="button" data-action="select-entry" data-entry-id="${this._escape(entry.entry_id)}"><strong>${this._escape(entry.title)}</strong><span>${this._escape(entry.state)}</span></button>`).join("") || "No SHS Energy entries are installed."}</div></section></main>`;
   }
 
+  _entityInspector() {
+    const id=this._inspectedEntity, entity=this._data.entities.find(row=>row.entity_id===id);
+    return `<dialog aria-label="Source entity"><h2>${this._escape(entity?.name||id)}</h2><p>${this._escape(id)}</p><p>${this._escape(entity?.state??"Unavailable")} ${this._escape(entity?.unit||"")}</p><p>Last update: ${this._escape(entity?.last_updated||"Unknown")}</p><a href="/history?entity_id=${encodeURIComponent(id)}" target="_top">Open history in Home Assistant</a><p><button data-action="close-inspector">Close</button></p></dialog>`;
+  }
+
   _renderDatalist() {
     if (!this._data?.entities) return "";
     const options = (entities) => entities
@@ -1468,7 +1488,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     for (const node of this.shadowRoot.querySelectorAll("details[data-open-key]")) {
       if (node.open) this._expanded.add(node.dataset.openKey); else this._expanded.delete(node.dataset.openKey);
     }
-    if (!this._hass || (this._loading && !this._data)) {
+    if (!this._backend || (this._loading && !this._data)) {
       this.shadowRoot.innerHTML = `${this._styles()}<div class="center"><div class="spinner"></div><p>Loading SHS Energy configuration…</p></div>`;
       return;
     }
@@ -1489,7 +1509,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       <main class="shell">
         <header class="topbar">
           <button type="button" class="icon-button" data-action="back" aria-label="Back">←</button>
-          <div class="title"><h1>SHS Energy configuration</h1><p>${this._escape(this._data.entry.title)} · ${this._escape(this._data.entry.state)}</p></div>
+          <div class="title"><h2>Energy and device settings</h2><p>${this._data.state === "pending" ? "Waiting for Home Assistant to apply changes" : "Settings are applied"}</p></div>
           <div class="toolbar">
             <button type="button" class="secondary" data-action="refresh" ${this._loading || this._refreshing ? "disabled" : ""}>${this._loading ? "Refreshing…" : "Refresh website choices"}</button>
             <button type="button" class="secondary" data-action="discover" ${this._loading ? "disabled" : ""}>Review sources from HA Energy</button>
@@ -1505,6 +1525,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
           ${this._renderMeasurementIssues()}${this._renderReplanRecommendations()}${this._renderBody()}
         </section>
         <footer aria-live="polite"><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling.</span></footer>
+        ${this._inspectedEntity ? this._entityInspector() : ""}
         ${this._renderDatalist()}
       </main>`;
     const fields = [...this.shadowRoot.querySelectorAll("input,select")];
@@ -1515,12 +1536,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _styles() {
     return `<style>
-      :host { display:block; min-height:100%; color:var(--primary-text-color); background:var(--primary-background-color); font-family:var(--paper-font-body1_-_font-family, system-ui, sans-serif); }
+      :host { --primary-text-color:var(--text); --secondary-text-color:var(--muted); --primary-background-color:var(--bg); --secondary-background-color:var(--tint); --card-background-color:var(--surface); --divider-color:var(--line); --primary-color:var(--primary); --error-color:var(--error); --success-color:var(--good); --warning-color:#a96a15; --info-color:var(--primary); --disabled-color:var(--line); --disabled-text-color:var(--muted); --text-primary-color:var(--surface); display:block; min-height:100%; color:var(--primary-text-color); background:var(--primary-background-color); font-family:var(--paper-font-body1_-_font-family, system-ui, sans-serif); }
       * { box-sizing:border-box; }
       button, input, select { font:inherit; }
       button { cursor:pointer; }
       button:disabled { cursor:default; opacity:.48; }
-      .shell { min-height:100vh; }
+      .shell { min-height:0; margin-bottom:24px; border:1px solid var(--divider-color); border-radius:14px; overflow:clip; }
       button:focus-visible, summary:focus-visible, a:focus-visible { outline:3px solid var(--primary-color); outline-offset:3px; }
       .switch input:focus-visible + span { outline:3px solid var(--primary-color); outline-offset:3px; }
       .switch input:disabled + span { opacity:.45; }
@@ -1618,10 +1639,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
       input[type=text], input[type=number], input[type=time], select { width:100%; min-height:48px; padding:10px 12px; border:1px solid var(--divider-color); border-radius:10px; color:var(--primary-text-color); background:var(--secondary-background-color); outline:none; }
       /* SHS Silver/Slate, Sky/Nordic Blue, Amber, and Sage/Forest.
          Amber and Forest are darkened for readable text on light surfaces. */
-      [data-mode="monitoring"] { color:${this._hass?.themes?.darkMode ? "#a2aec0" : "#4a5568"}; }
-      [data-mode="planning"] { color:${this._hass?.themes?.darkMode ? "#a8cfe8" : "#2c5f8d"}; }
-      [data-mode="control_verification"] { color:${this._hass?.themes?.darkMode ? "#f6c573" : "#855e20"}; }
-      [data-mode="controlling"] { color:${this._hass?.themes?.darkMode ? "#9dc4ad" : "#416853"}; }
+      [data-mode="monitoring"] { color:${this._dark ? "#a2aec0" : "#4a5568"}; }
+      [data-mode="planning"] { color:${this._dark ? "#a8cfe8" : "#2c5f8d"}; }
+      [data-mode="control_verification"] { color:${this._dark ? "#f6c573" : "#855e20"}; }
+      [data-mode="controlling"] { color:${this._dark ? "#9dc4ad" : "#416853"}; }
       option[data-mode] { background:var(--secondary-background-color); }
       option[data-mode]:disabled { color:var(--disabled-text-color); }
       input:focus, select:focus { border-color:var(--primary-color); box-shadow:0 0 0 1px var(--primary-color); }
@@ -1675,7 +1696,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .empty { text-align:center; padding:48px 24px; }
       .entry-list { display:flex; flex-direction:column; gap:10px; }
       .entry-list button { display:flex; justify-content:space-between; padding:16px; border:1px solid var(--divider-color); border-radius:10px; background:var(--secondary-background-color); color:var(--primary-text-color); }
-      footer { position:fixed; bottom:0; left:0; right:0; min-height:48px; padding:10px 24px; display:flex; justify-content:space-between; gap:16px; align-items:center; border-top:1px solid var(--divider-color); background:var(--card-background-color); color:var(--secondary-text-color); font-size:13px; z-index:5; }
+      footer { position:static; min-height:48px; padding:10px 24px; display:flex; justify-content:space-between; gap:16px; align-items:center; border-top:1px solid var(--divider-color); background:var(--card-background-color); color:var(--secondary-text-color); font-size:13px; z-index:5; }
       .center { min-height:100vh; display:grid; place-content:center; justify-items:center; color:var(--secondary-text-color); }
       [data-replan] .status-heading { flex-wrap:wrap; }
       .replan-button { display:inline-flex; align-items:center; gap:8px; min-height:44px; }

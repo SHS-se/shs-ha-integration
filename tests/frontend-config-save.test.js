@@ -2,31 +2,22 @@ const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { test } = require('node:test');
 const vm = require('node:vm');
-const frontendVersion = JSON.parse(readFileSync('custom_components/shs_energy/manifest.json', 'utf8')).version;
-const frontendSource = readFileSync('custom_components/shs_energy/frontend/shs-energy-config-panel.js', 'utf8');
+const frontendVersion = 'app-configuration-v1';
+const frontendSource = readFileSync('web/src/configuration-editor.js', 'utf8');
 const loadPanel = (registry, version = frontendVersion) => {
-  const context = vm.createContext({ URL, HTMLElement: class {}, customElements: registry });
+  const context = vm.createContext({ URL, crypto: {randomUUID: () => "test-request"}, HTMLElement: class {}, customElements: registry });
   const moduleUrl = `https://ha.example/shs_energy_frontend/shs-energy-config-panel.js?v=${version}`;
   vm.runInContext(frontendSource.replaceAll('import.meta.url', JSON.stringify(moduleUrl)) + '\nglobalThis.Panel = ShsEnergyConfigPanel;', context);
   return context;
 };
 const context = loadPanel({ define() {}, get() {} });
 
-test('an open session loads the new panel instead of reusing a previously registered class', () => {
-  const oldPanel = class {};
-  const elements = new Map([['shs-energy-config-panel-v3', oldPanel]]);
-  const registry = {
-    get: name => elements.get(name),
-    define: (name, element) => { assert.equal(elements.has(name), false); elements.set(name, element); },
-  };
-  const previous = loadPanel(registry, '0.8.0-beta.29');
-  const updated = loadPanel(registry);
-  const name = `shs-energy-config-panel-${frontendVersion.replaceAll('.', '-')}`;
-  assert.equal(elements.get(name), updated.Panel);
-  assert.notEqual(elements.get(name), previous.Panel);
-  assert.equal(elements.get('shs-energy-config-panel-v3'), oldPanel);
-  loadPanel(registry); // Re-importing the same release does not redefine it.
-  assert.equal(elements.get(name), updated.Panel);
+test('the editor registers once per app page', () => {
+  const elements = new Map();
+  const registry = {get: name => elements.get(name), define: (name, value) => elements.set(name, value)};
+  const first = loadPanel(registry);
+  loadPanel(registry);
+  assert.equal(elements.get('shs-configuration-editor'), first.Panel);
 });
 
 test('saving retains disabled equipment settings and excludes metadata and mappings', async () => {
@@ -37,7 +28,7 @@ test('saving retains disabled equipment settings and excludes metadata and mappi
   panel._entryId = 'entry';
   panel._render = () => {};
   let sent;
-  panel._hass = { callWS: async (payload) => { sent = JSON.parse(JSON.stringify(payload)); } };
+  panel._backend = { request: async (payload) => { sent = JSON.parse(JSON.stringify(payload)); } };
   await panel._save();
   assert.deepEqual(sent.configuration, { ev_enabled: false, ev_charge_efficiency: 0.95 });
   assert.equal(panel._draft.device_control_mappings.car.power, 1000);
@@ -52,7 +43,7 @@ test('general saves omit unchanged resolved defaults', async () => {
   panel._entryId = 'entry';
   panel._render = () => {};
   let sent;
-  panel._hass = { callWS: async (payload) => { sent = payload; } };
+  panel._backend = { request: async (payload) => { sent = payload; } };
   await panel._save();
   assert.deepEqual(JSON.parse(JSON.stringify(sent.configuration)), { ev_enabled: false });
 });
@@ -71,7 +62,7 @@ test('device save refreshes shared sources and preserves unrelated unsaved edits
   panel._data = { devices: [{ key: 'a', name: 'Heater' }] };
   const response = { mapping_status: 'ready',
     configuration: { device_control_mappings: { a: updated, b: updated, c: updated } } };
-  panel._hass = { callWS: async () => response };
+  panel._backend = { request: async () => response };
   await panel._saveDevice('a');
   assert.equal(panel._error, '');
   assert.deepEqual(Object.keys(panel._deviceErrors), []);
@@ -97,7 +88,7 @@ test('clearing a populated source sends an explicit deletion', async () => {
   const panel = makePanel(); panel._entryId = 'entry';
   panel._data.sections = [{ fields: [{ key: 'weather' }] }];
   panel._savedDraft.weather = 'weather.home';
-  let sent; panel._hass = { callWS: async message => { sent = message; } };
+  let sent; panel._backend = { request: async message => { sent = message; } };
   await panel._save(); assert.equal(sent.configuration.weather, null);
 });
 
@@ -166,12 +157,12 @@ test('Status renders counted warnings and affected fields above collapsed diagno
 
   // Exercise the full panel, including its tab badge, rather than only the
   // attention helper: the original regression left that helper disconnected.
-  panel._hass = {};
+  panel._backend = {};
   panel._data.entry = { title: 'Test home', state: 'loaded' };
   panel._data.entities = [];
   panel.shadowRoot = { querySelectorAll: () => [], innerHTML: '' };
   context.Panel.prototype._render.call(panel);
-  assert.match(panel.shadowRoot.innerHTML, /aria-label="2 items to fix">2<\/span>/);
+  assert.match(panel._renderStatus(), /2 items need attention/);
   assert.equal((panel.shadowRoot.innerHTML.match(/class="attention-item warning"/g) || []).length, 2);
 
   panel._data.attention = [];
@@ -184,7 +175,7 @@ test('system fields are saved with their device and excluded from general saves'
   panel._data.sections = [{ fields: [{ key: 'battery_capacity_kwh' }, { key: 'grid_import_limit_w' }] }];
   panel._savedDraft.battery_capacity_kwh = 10; panel._draft.battery_capacity_kwh = 12;
   assert.equal(panel._configurationDirty, false); assert.equal(panel._deviceDirty('$battery'), true);
-  let sent; panel._hass = { callWS: async m => { sent = m; return { mapping_status: 'ready' }; } };
+  let sent; panel._backend = { request: async m => { sent = m; return { mapping_status: 'ready' }; } };
   await panel._saveDevice('$battery');
   assert.equal(sent.configuration.battery_capacity_kwh, 12); assert.equal(sent.mapping, null);
   assert.equal(panel._deviceDirty('$battery'), false);
@@ -195,7 +186,7 @@ test('discovery changes sources only, retaining pending source and device edits'
   panel._data.sections = [{ tab: 'energy', fields: [{ key: 'weather' }, { key: 'grid' }] }];
   panel._savedDraft = { weather: 'weather.old', grid: ['sensor.old'], battery_capacity_kwh: 10, device_control_mappings: {} };
   panel._draft = { ...panel._savedDraft, weather: 'weather.pending', battery_capacity_kwh: 12 };
-  panel._hass = { callWS: async () => ({ configuration: { weather: 'weather.suggested', grid: ['sensor.new'], battery_capacity_kwh: 18 } }) };
+  panel._backend = { request: async () => ({ configuration: { weather: 'weather.suggested', grid: ['sensor.new'], battery_capacity_kwh: 18 } }) };
   await panel._discover();
   assert.equal(panel._draft.weather, 'weather.pending');
   assert.equal(panel._draft.battery_capacity_kwh, 12);
@@ -204,7 +195,7 @@ test('discovery changes sources only, retaining pending source and device edits'
 
 test('status shows automatic recovery and delivery failures without claiming readiness', () => {
   const panel = Object.create(context.Panel.prototype);
-  panel._hass = {};
+  panel._backend = {};
   panel._data = { operation: { state: 'unavailable', label: 'Unavailable', reason: 'Waiting for a plan', recovering: true },
     diagnostics: { last_optimisation_error: 'Planner unavailable', last_runtime_error: 'offline' },
     readiness: {}, portal: {}, devices: [], attention: [], labels: {} };
@@ -266,7 +257,7 @@ test('saving Planning preserves unsaved Controls and sends only planning propert
   panel._draft.pool_water_temperature_entity = 'sensor.other';
   panel._draft.device_control_mappings.pool.actuator_entity_ids = ['switch.other'];
   let sent;
-  panel._hass = { callWS: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
+  panel._backend = { request: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
   await panel._saveDevice('pool', 'planning');
   assert.deepEqual(JSON.parse(JSON.stringify(sent.configuration)), { pool_volume_m3: 60 });
   assert.deepEqual(JSON.parse(JSON.stringify(sent.mapping.actuator_entity_ids)), ['switch.pool']);
@@ -281,7 +272,7 @@ test('saving Controls and cancelling Planning retain edits in the other section'
   panel._draft.pool_volume_m3 = 60;
   panel._draft.pool_permission_entity = 'switch.other';
   let sent;
-  panel._hass = { callWS: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
+  panel._backend = { request: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
   await panel._saveDevice('pool', 'controls');
   assert.deepEqual(JSON.parse(JSON.stringify(sent.configuration)), { pool_permission_entity: 'switch.other' });
   assert.equal(panel._deviceDirty('pool', 'planning'), true);
@@ -301,7 +292,7 @@ test('one pool water selector updates the heater mapping when Controls is saved'
   }
   panel._draft.pool_water_temperature_entity = 'sensor.new_water';
   let sent;
-  panel._hass = { callWS: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
+  panel._backend = { request: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
   await panel._saveDevice('pool', 'controls');
   assert.equal(sent.configuration.pool_water_temperature_entity, 'sensor.new_water');
   assert.equal(sent.mapping.temperature_entity_id, 'sensor.new_water');
@@ -329,7 +320,7 @@ for (const outcome of ['success', 'error']) {
     panel._render = () => { if (panel._data) renders++; };
     panel._updateAttentionUI = () => {};
     const requests = [];
-    panel._hass = { callWS: message => {
+    panel._backend = { request: message => {
       requests.push(message.refresh_roles);
       if (!message.refresh_roles) return Promise.resolve(local);
       assert.equal(panel._loading, false);
@@ -359,10 +350,10 @@ test('a failed load stays on screen instead of retrying behind the spinner on ea
   panel.isConnected = true;
   panel.shadowRoot = { innerHTML: '', activeElement: null, querySelectorAll: () => [] };
   let requests = 0;
-  const hass = { callWS: async () => { requests++; throw new Error("'control_type'"); } };
-  panel.hass = hass;
+  const hass = { request: async () => { requests++; throw new Error("'control_type'"); } };
+  panel.backend = hass;
   await new Promise(resolve => setTimeout(resolve));
-  panel.hass = hass; panel.hass = hass;
+  panel.backend = hass; panel.backend = hass;
   assert.match(panel.shadowRoot.innerHTML, /Configuration could not be loaded/);
   assert.match(panel.shadowRoot.innerHTML, /control_type/);
   await new Promise(resolve => setTimeout(resolve));
@@ -372,7 +363,7 @@ test('a failed load stays on screen instead of retrying behind the spinner on ea
 test('opening waits for entry selection before refreshing website choices', async () => {
   const panel = makePanel(); panel._data = undefined;
   const requests = [];
-  panel._hass = { callWS: async message => {
+  panel._backend = { request: async message => {
     requests.push(message.refresh_roles);
     return { requires_entry_selection: true, entries: [] };
   } };
@@ -385,7 +376,7 @@ test('explicit website refresh still requests fresh choices', async () => {
   panel._data.entry = { entry_id: 'entry' };
   panel._data.configuration = panel._draft;
   const requests = [];
-  panel._hass = { callWS: async message => { requests.push(message.refresh_roles); return panel._data; } };
+  panel._backend = { request: async message => { requests.push(message.refresh_roles); return panel._data; } };
   await panel._load(true);
   assert.deepEqual(requests, [true]);
 });
@@ -408,7 +399,7 @@ test('typing records the draft before blur without rebuilding the input', () => 
 test('polling refreshes every tab and retains drafts and focused editors', async () => {
   const panel = splitPanel();
   let requests = 0;
-  panel._hass = { callWS: async () => { requests++; return panel._data; } };
+  panel._backend = { request: async () => { requests++; return panel._data; } };
   for (const tab of ['energy', 'devices']) { panel._tab = tab; await panel._poll(); }
   panel._tab = 'schedule';
   panel._draft.pool_volume_m3 = 60;
@@ -429,7 +420,7 @@ for (const outcome of ['success', 'error']) {
     const request = deferred();
     let renders = 0;
     panel._render = () => renders++;
-    panel._hass = { callWS: () => request.promise };
+    panel._backend = { request: () => request.promise };
     const polling = panel._poll();
     panel._tab = 'devices';
     panel.shadowRoot = { activeElement: { tagName: 'INPUT', value: 'unsaved typing' }, querySelector: () => null, querySelectorAll: () => [] };
@@ -446,7 +437,7 @@ test('general save acknowledges only submitted values, retaining subsequent edit
   const panel = makePanel(); panel._entryId = 'entry';
   panel._data.sections = [{ fields: [{ key: 'weather' }] }];
   panel._savedDraft.weather = 'weather.old'; panel._draft.weather = 'weather.sent';
-  const request = deferred(); panel._hass = { callWS: () => request.promise };
+  const request = deferred(); panel._backend = { request: () => request.promise };
   const saving = panel._save();
   panel._draft.weather = 'weather.newer';
   request.resolve({}); await saving;
@@ -459,7 +450,7 @@ test('device save retains newer field and mapping edits while acknowledging the 
   const panel = splitPanel();
   panel._draft.pool_permission_entity = 'switch.sent';
   panel._draft.device_control_mappings.pool.actuator_entity_ids = ['switch.sent'];
-  const request = deferred(); panel._hass = { callWS: () => request.promise };
+  const request = deferred(); panel._backend = { request: () => request.promise };
   const saving = panel._saveDevice('pool', 'controls');
   panel._draft.pool_permission_entity = 'switch.newer';
   panel._draft.device_control_mappings.pool.actuator_entity_ids = ['switch.newer'];
@@ -474,7 +465,7 @@ test('device save retains newer field and mapping edits while acknowledging the 
 test('a poll started before a save cannot restore the old saved configuration', async () => {
   const panel = splitPanel(); panel._tab = 'status';
   const request = deferred();
-  panel._hass = { callWS: message => message.type.endsWith('/get') ? request.promise : Promise.resolve({ mapping_status: 'ready' }) };
+  panel._backend = { request: message => message.action.endsWith('get') ? request.promise : Promise.resolve({ mapping_status: 'ready' }) };
   const polling = panel._poll();
   panel._draft.pool_volume_m3 = 60;
   await panel._saveDevice('pool', 'planning');
@@ -514,7 +505,7 @@ for (const [name, controlType] of [['Pool pump', 'switch_schedule'], ['Pool heat
     panel._onChange({ type: 'input', target: input });
     assert.equal(panel._deviceDirty('pool', 'controls'), true);
     let sent;
-    panel._hass = { callWS: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
+    panel._backend = { request: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
     await panel._saveDevice('pool', 'controls');
     assert.equal(sent.mapping.power, 'sensor.pool_power');
     assert.equal(panel._savedDraft.device_control_mappings.pool.power, 'sensor.pool_power');
@@ -545,7 +536,7 @@ for (const controlType of ['setpoint', 'switch_schedule', 'permit_inhibit']) {
     });
     panel._onChange({ type: 'input', target: input });
     let sent;
-    panel._hass = { callWS: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
+    panel._backend = { request: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
     await panel._saveDevice('pool', 'controls');
     assert.deepEqual(Array.from(sent.mapping.actuator_entity_ids), ['switch.combined']);
     input.value = '';
@@ -597,7 +588,7 @@ test('sensor quantities display sensor units and literal quantities display inpu
 test('battery modes come from actual selector options and keep invalid saved values visible', () => {
   const panel = Object.create(context.Panel.prototype);
   panel._draft = { battery_mode_entity: 'select.ems' };
-  panel._hass = { states: { 'select.ems': { attributes: { options: ['Standby', 'Maximum Self Consumption'] } } } };
+  panel._data = {entities:[{entity_id:'select.ems',options:['Standby','Maximum Self Consumption']}]};
   const field = { key: 'battery_mode_baseline', label: 'Baseline mode', kind: 'battery_mode' };
   const html = panel._renderField(field, 'Maximum Self Consumption');
   assert.match(html, /<select/);
@@ -775,7 +766,7 @@ test('subscription recovery clears the badge during an edit without replacing th
   const input = { tagName: 'INPUT', value: 'sensor.partially_typed' };
   const badge = { innerHTML: '', classList: { toggle() {} } };
   panel.shadowRoot = { activeElement: input, querySelector: () => badge, querySelectorAll: () => [] };
-  panel._hass = { callWS: async () => ({ ...panel._data, attention: [], configuration: { pool_volume_m3: 80 } }) };
+  panel._backend = { request: async () => ({ ...panel._data, attention: [], configuration: { pool_volume_m3: 80 } }) };
   await panel._poll();
   assert.equal(panel._attentionForTab('status').length, 0);
   assert.equal(badge.innerHTML, 'Status');
@@ -802,16 +793,16 @@ test('controller diagnostics download saves the gzip file Home Assistant built w
   const panel = Object.create(downloadContext.Panel.prototype);
   panel._entryId = 'entry/1';
   panel._render = () => {};
-  panel._hass = {
-    callWS: async () => { throw new Error('the download does not use the websocket'); },
-    fetchWithAuth: async path => {
-      requested = path;
+  panel._backend = {
+    request: async () => { throw new Error('the download does not use the websocket'); },
+    download: async () => {
+      requested = 'app';
       return new Response(file, { headers: { 'Content-Type': 'application/gzip', 'X-SHS-Diagnostics-Summary': JSON.stringify(summary) } });
     },
   };
   await panel._downloadVerification();
   assert.equal(panel._error, undefined);
-  assert.equal(requested, '/api/shs_energy/controller_diagnostics/entry%2F1');
+  assert.equal(requested, 'app');
   assert.equal(anchor.download, 'shs-controller-diagnostics.json.gz');
   assert.match(panel._notice, /2 devices.*0 evaluations.*9 verification checks.*1 observation samples this session/);
   assert.equal(blob.type, 'application/gzip');
@@ -820,14 +811,14 @@ test('controller diagnostics download saves the gzip file Home Assistant built w
   assert.equal(revoked, 'blob:verification');
 
   // A proxy that drops the summary header does not turn a saved file into an error.
-  panel._hass.fetchWithAuth = async () => new Response(file, { headers: { 'Content-Type': 'application/gzip' } });
+  panel._backend.download = async () => new Response(file, { headers: { 'Content-Type': 'application/gzip' } });
   await panel._downloadVerification();
   assert.equal(panel._error, undefined);
   assert.equal(panel._notice, 'Downloaded controller diagnostics.');
 
   panel._notice = '';
   clicked = false;
-  panel._hass.fetchWithAuth = async () => new Response('The integration is not loaded', { status: 404 });
+  panel._backend.download = async () => new Response('The integration is not loaded', { status: 404 });
   await panel._downloadVerification();
   assert.equal(panel._error, 'The integration is not loaded');
   assert.equal(panel._notice, '');
@@ -1179,7 +1170,7 @@ test('failed inclusion saves restore the toggle and explanation', async () => {
   const panel = splitPanel();
   panel._savedDraft.excluded_device_readings = [];
   panel._draft.excluded_device_readings = ['pool'];
-  panel._hass = { callWS: async () => { throw new Error('Save failed'); } };
+  panel._backend = { request: async () => { throw new Error('Save failed'); } };
   await panel._saveInclusion();
   assert.equal(panel._error, 'Save failed');
   assert.match(panel._renderDevice(panel._data.devices[0]), /data-share="pool"[^>]*checked/);
@@ -1310,7 +1301,7 @@ const controllerExplanation = () => ({
 
 test('battery card explains plan, difference and next action using the home timezone', () => {
   const panel = Object.create(context.Panel.prototype);
-  panel._hass = {language: 'en-GB', config: {time_zone: 'Europe/Stockholm'}};
+  panel._backend = {language: 'en-GB', config: {time_zone: 'Europe/Stockholm'}};
   const html = panel._batteryOutlook({battery_runtime: {explanation: controllerExplanation()}});
   assert.equal((html.match(/<p /g) || []).length, 1);
   assert.match(html, /charge the battery now for later use/);
@@ -1430,15 +1421,15 @@ test('HA object errors remain readable when loading and polling configuration', 
   assert.equal(panel._errorMessage({ code: 'timeout' }), 'timeout');
   assert.doesNotMatch(panel._errorMessage({}), /object Object/);
   panel._data = panel._draft = panel._savedDraft = undefined;
-  panel._hass = { callWS: async () => { throw { error: { message: 'The integration is restarting' } }; } };
+  panel._backend = { request: async () => { throw { error: { message: 'The integration is restarting' } }; } };
   await panel._load(false);
   assert.equal(panel._error, 'The integration is restarting');
   assert.equal(panel._loading, false);
   panel._entryId = 'entry';
-  panel._hass = { callWS: async () => { throw { code: 'timeout' }; } };
+  panel._backend = { request: async () => { throw { code: 'timeout' }; } };
   await panel._poll();
   assert.equal(panel._refreshError, 'timeout');
-  panel._hass = { callWS: async () => ({ entry: { entry_id: 'entry' }, configuration: {}, devices: [] }) };
+  panel._backend = { request: async () => ({ entry: { entry_id: 'entry' }, configuration: {}, devices: [] }) };
   await panel._load(false);
   await panel._poll();
   assert.equal(panel._error, '');
@@ -1456,9 +1447,9 @@ test('save, reload and replan retain the displayed schedule and drafts until fre
   panel._draft.pool_volume_m3 = 60; // unrelated device draft
   const oldData = panel._data;
   const calls = [];
-  panel._hass = { callWS: async message => {
-    calls.push(message.type);
-    return message.type.endsWith('/save') ? { saved: true, refreshing: true } : { refreshing: true };
+  panel._backend = { request: async message => {
+    calls.push(message.action);
+    return message.action.endsWith('/save') ? { saved: true, refreshing: true } : { refreshing: true };
   } };
   await panel._save();
   assert.equal(panel._refreshing, true);
@@ -1467,12 +1458,12 @@ test('save, reload and replan retain the displayed schedule and drafts until fre
   assert.match(panel._renderDevice(panel._data.devices[0], 'planning'), /data-action="save-device"[^>]*disabled/);
   await panel._saveDevice('pool', 'planning');
   await panel._save();
-  assert.deepEqual(calls, ['shs_energy/config/save']);
+  assert.deepEqual(calls, ['save']);
   await panel._poll();
   assert.equal(panel._data, oldData);
   assert.equal(panel._draft.pool_volume_m3, 60);
   assert.equal(panel._refreshError, '');
-  panel._hass.callWS = async () => ({ ...oldData, timeline: { plan_id: 'new-plan' }, configuration: panel._savedDraft });
+  panel._backend.request = async () => ({ ...oldData, timeline: { plan_id: 'new-plan' }, configuration: panel._savedDraft });
   await panel._poll();
   assert.equal(panel._refreshing, false);
   assert.equal(panel._data.timeline.plan_id, 'new-plan');
@@ -1485,7 +1476,7 @@ test('a real reload failure ends progress and provides a readable correction', a
   const panel = splitPanel();
   panel._refreshing = true;
   const previous = panel._data;
-  panel._hass = { callWS: async () => { throw { code: 'not_loaded', message: 'The integration is not loaded' }; } };
+  panel._backend = { request: async () => { throw { code: 'not_loaded', message: 'The integration is not loaded' }; } };
   await panel._poll();
   assert.equal(panel._refreshing, false);
   assert.equal(panel._refreshError, 'The integration is not loaded');
@@ -1502,11 +1493,11 @@ test('polling updates the progress banner and save locks without replacing the a
     querySelector: selector => selector === '[data-refresh-progress]' ? progress : null,
     querySelectorAll: selector => selector === 'button[data-action]' ? [save] : [] };
   panel._render = () => { throw new Error('Must not replace the editor'); };
-  panel._hass = { callWS: async () => ({ refreshing: true }) };
+  panel._backend = { request: async () => ({ refreshing: true }) };
   await panel._poll();
   assert.equal(save.disabled, true);
   assert.match(progress.innerHTML, /Refresh in progress/);
-  panel._hass.callWS = async () => panel._data;
+  panel._backend.request = async () => panel._data;
   await panel._poll();
   assert.equal(save.disabled, false);
   assert.equal(progress.innerHTML, '');
@@ -1551,8 +1542,8 @@ test('manual replan keeps one busy action, clears warnings and merges the update
   panel._time = value => value;
   let finish;
   let calls = 0;
-  panel._hass = { callWS: message => {
-    assert.equal(message.type, 'shs_energy/config/replan');
+  panel._backend = { request: message => {
+    assert.equal(message.action, 'replan');
     assert.equal(message.config_entry, 'home-entry');
     calls++;
     return new Promise(resolve => { finish = resolve; });
@@ -1578,7 +1569,7 @@ test('manual replan failure is readable and allows retry', async () => {
   panel._data = { replan_recommendations: [] };
   panel._render = () => {};
   panel._renderBackground = () => {};
-  panel._hass = { callWS: async () => { throw new Error('Planning unavailable'); } };
+  panel._backend = { request: async () => { throw new Error('Planning unavailable'); } };
   await panel._replan();
   assert.equal(panel._replanning, false);
   assert.match(panel._renderReplanRecommendations(), /Could not replan: Planning unavailable/);
@@ -1602,7 +1593,7 @@ for (const kind of ['setpoint', 'switch_schedule', 'permit_inhibit', 'variable_p
     panel._setField('mapping', field.key, '60', field, 'pool');
     assert.equal(panel._draft.device_control_mappings.pool.minimum_on_seconds, 3600);
     let sent;
-    panel._hass = {callWS: async payload => { sent = payload; return {mapping_status: 'ready'}; }};
+    panel._backend = {request: async payload => { sent = payload; return {mapping_status: 'ready'}; }};
     await panel._saveDevice('pool', 'controls');
     assert.equal(sent.mapping.minimum_on_seconds, 3600);
     assert.match(panel._renderDevice(device), /data-field-key="minimum_on_seconds"[^>]*value="60"/);

@@ -13,6 +13,7 @@ from aiohttp import ClientSession, ClientTimeout, ClientError, web
 
 from .companion import install
 from .storage import Diagnostics
+from shs_wire.protocol import PROTOCOL
 
 LOGGER = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class Dashboard:
                 except (TypeError,ValueError):pass
             entry['measurements'][name] = dict(value=measured,unit=unit,entity_id=entity,
                 observed_at=row['last_reported'] if row else None)
-        self.snapshot = dict(protocol=self.manifest['protocol'],integration_version=self.manifest['integration_version'],
+        self.snapshot = dict(protocol=PROTOCOL,integration_version=engine.gateway.connected['contract']['companion_version'],
             sampled_at=datetime.now(timezone.utc).isoformat(),entries=[entry])
         self.control_owner = 'SHS app'
         self.connection = {'state':'connected','message':'App runtime active; connected to the Home Assistant gateway'}
@@ -86,7 +87,7 @@ class Dashboard:
                 await asyncio.sleep(5)
                 continue
             self.engine = AppEngine(selected['path'],self.session,self.supervisor+'/core/websocket',self.token,
-                paired_release=pair,publish=self.publish_runtime)
+                paired_release=pair,publish=self.publish_runtime,app_url='/app/'+self.app_info['slug'])
             try:
                 await self.engine.run()
             except asyncio.CancelledError:
@@ -125,6 +126,7 @@ class Dashboard:
             self.system = {**self.system, "error": "Diagnostic storage failed: " + str(exception)}
 
     async def run(self):
+        self.app_info = (await self.get('/addons/self/info'))['data']
         async def sample():
             while True:
                 await self.resources()
@@ -138,7 +140,7 @@ class Dashboard:
 
     def payload(self):
         return {"app_version": self.version, "required_companion": self.manifest["integration_version"],
-                "protocol": self.manifest["protocol"], "connection": self.connection,
+                "protocol": PROTOCOL, "connection": self.connection,
                 "snapshot": self.snapshot, "system": self.system, "companion": self.companion,
                 "app_slug": self.app_info.get("slug") if self.app_info else None,
                 "sidebar_enabled": self.app_info.get("ingress_panel") if self.app_info else None,
@@ -161,7 +163,38 @@ def create_app(observer, static, *, trusted_peer="172.30.32.2"):
         return web.json_response(observer.payload(), headers={"Cache-Control": "no-store"})
     async def index(request):
         return web.FileResponse(static / "index.html", headers={"Cache-Control": "no-cache"})
+    def engine():
+        value = observer.engine
+        if value is None or value.closed or not value.started or not value.gateway.connected:
+            raise web.HTTPServiceUnavailable(text='SHS is reconnecting. Wait for the app to become ready before editing settings.')
+        return value
+
+    async def configuration(request):
+        if request.content_type != 'application/json' or request.headers.get('Sec-Fetch-Site') in ('cross-site','same-site'):
+            raise web.HTTPForbidden(text='Configuration changes must originate in the SHS app')
+        runtime = engine()
+        try:
+            body = await request.json()
+            if type(body) is not dict:
+                raise ValueError('Configuration request must be an object')
+            result = await runtime.editor.action(request.match_info['action'],body)
+            await runtime.project()
+            return web.json_response(result,headers={'Cache-Control':'no-store'})
+        except (ValueError,TypeError,KeyError) as error:
+            return web.json_response(dict(code='invalid_configuration',message=str(error),
+                field_errors=getattr(error,'field_errors',{}),configuration=runtime.configuration.status()),
+                status=409,headers={'Cache-Control':'no-store'})
+
+    async def diagnostics(request):
+        from .downloads import controller_download
+        content,summary = await controller_download(engine())
+        return web.Response(body=content,content_type='application/gzip',headers={
+            'Content-Disposition':'attachment; filename="shs-controller-diagnostics.json.gz"',
+            'X-SHS-Diagnostics-Summary':json.dumps(summary),'Cache-Control':'no-store'})
+
     app.router.add_get("/api/state", state)
+    app.router.add_post('/api/configuration/{action}',configuration)
+    app.router.add_get('/api/diagnostics/controller.json.gz',diagnostics)
     app.router.add_get("/", index)
     app.router.add_static("/", static, show_index=False)
     return app

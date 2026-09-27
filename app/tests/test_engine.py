@@ -27,6 +27,7 @@ from shs_core.native_commands import NativeExecutor
 from shs_core.configuration_schema import resolve_configuration
 from shs_core.command_journal import CommandJournal
 from shs_core.household_ports import HomeFacts
+from shs_core.execution_configuration import ExecutionConfiguration
 
 
 class InProcessClient:
@@ -76,12 +77,22 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         async def send(*args):self.native_calls.append(args)
         async def request(operation,body):
             if operation=='credentials':return self.entry['data']
-            if operation=='inventory':return []
+            if operation=='catalog':return dict(context=self.context,states={},preferences={})
             if operation in ('states','statistics'):return {}
+            if operation == 'configure': return await self.configuration.install(body)
             raise AssertionError('unexpected source request '+operation)
         source = SimpleNamespace(options=lambda:resolve_configuration(self.entry['options'],59,18),
             physical_controls=lambda:{},request=request,publish=lambda value:None)
         self.service = GatewayService(self.stream,identity,source)
+        self.context = dict(home=dict(latitude=59,longitude=18,language='en',timezone='Europe/Stockholm',temperature_unit='°C'),
+            entity_ids=[],entity_names={},area_names={},entity_areas={},platforms={})
+        async def capture():
+            await self.service.configuration_changed(dict(self.context,options=self.configuration.options(),
+                configuration_authority={k:self.configuration.value[k] for k in ('revision','digest')}))
+        self.configuration = ExecutionConfiguration(GatewayRecord(self.stream,'execution_configuration'),
+            self.service.invalidate_configuration,capture)
+        await self.configuration.load(self.entry['options'])
+        source.options = lambda:resolve_configuration(self.configuration.options(),59,18)
         native_journal = GatewayCommands(self.stream)
         native = NativeExecutor(CommandTransport(native_journal,native_journal.execute),lambda e:None,lambda:'°C',send)
         self.service.physical = DeviceGateway(ControllerInputs(lambda e:None,lambda:'°C',lambda e:None),source.options,
@@ -92,9 +103,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             session=self.service.session,context=self.service.context)
         await self.service.physical.load()
         await self.service.battery.open()
-        await self.service.configuration_changed(dict(options=self.entry['options'],
-            home=dict(latitude=59,longitude=18,language='en',timezone='Europe/Stockholm',temperature_unit='°C'),
-            entity_ids=[],entity_names={},area_names={},entity_areas={},platforms={}))
+        await capture()
         InProcessClient.service = self.service
         self.patcher = patch('shs_app.engine.GatewayClient',InProcessClient)
         self.patcher.start()

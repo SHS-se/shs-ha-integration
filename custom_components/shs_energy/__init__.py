@@ -14,9 +14,10 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.service import async_register_admin_service
 
 from .refresh import set_reloading
-from .config_panel import async_apply_configuration, async_register_config_panel
+from .config_panel import async_register_config_panel
+from .control_configuration import configuration_request
 from .shs_core.const import CONFIGURABLE_CATEGORIES, CONFIG_ENTRY_VERSION, PRICE_BACKFILL_MAX_DAYS, OPT_AUTOMATIC_SETUP, OPT_DISCOVERY_EVIDENCE, OPT_PLANNING_MODE, OPT_PREFIX_ENTITIES, DOMAIN
-from .configuration import async_discover_configuration, entity_area_id
+from .configuration import entity_area_id
 from .migration import mapped_entity_ids, migrate_options
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SELECT]
@@ -66,19 +67,15 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
 
     async def discover(call: ServiceCall) -> dict[str, Any]:
         entry = _entry_for_call(hass, call)
-        discovery = await async_discover_configuration(
-            hass, dict(entry.options)
-        )
+        discovery = await configuration_request(entry, 'discover', {})
         return _configuration_response(
             discovery["configuration"], discovery
         )
 
     async def apply(call: ServiceCall) -> dict[str, Any]:
         entry = _entry_for_call(hass, call)
-        options = await async_apply_configuration(
-            hass, entry, dict(call.data["configuration"])
-        )
-        return _configuration_response(options)
+        await configuration_request(entry, 'save', {'configuration':dict(call.data['configuration'])})
+        return _configuration_response(entry.runtime_data.service.source.configuration.options())
 
     hass.services.async_register(
         DOMAIN,

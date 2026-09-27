@@ -128,9 +128,9 @@ class GatewayService:
         await self.physical.maintain_obligations()
 
 
-APP_REQUESTS = frozenset(('refresh', 'refresh_devices', 'cached_devices', 'cached_home', 'cached_planning',
-    'cached_exchange', 'report_mapping', 'replan', 'backfill_prices', 'profile', 'diagnostics', 'verification',
-    'configuration_changed', 'tick', 'optimisation', 'runtime_report', 'diagnostics_chunk', 'diagnostics_done'))
+APP_REQUESTS = frozenset(('configuration', 'refresh', 'refresh_devices', 'cached_devices', 'cached_home', 'cached_planning',
+    'cached_exchange', 'report_mapping', 'replan', 'backfill_prices', 'profile',
+    'configuration_changed', 'tick', 'optimisation', 'runtime_report'))
 
 FIELDS = {
     'source': {'operation', 'body'},

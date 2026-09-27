@@ -23,6 +23,7 @@ sys.path.append(str(PACKAGE))
 PURE_MODULES = (
     "gateway_wire",
     "shs_wire.protocol", "shs_core.native_records", "shs_core.native_readings",
+    "shs_core.execution_configuration", "shs_core.discovery", "shs_core.configuration_view",
     "shs_core.gateway_service", "shs_core.runtime_projection",
     "shs_core.battery_gateway",
     "shs_core.device_port",
@@ -60,7 +61,6 @@ PURE_MODULES = (
 # Thin by design: they wire Home Assistant to the modules above.
 HOME_ASSISTANT_MODULES = (
     "gateway", "gateway_projection",
-    "app_api",
     "__init__",
     "config_flow",
     "config_panel", "control_configuration", "select",

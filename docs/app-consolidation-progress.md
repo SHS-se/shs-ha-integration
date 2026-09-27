@@ -62,3 +62,20 @@ storage. App restart tests change both release version and core hash and retain 
 activation. Schema tests reject unsupported/foreign state without rewriting it.
 This stage is not yet deployed; packaging/UI/configuration changes follow before
 the coordinated companion update.
+
+## Stage 2 — app settings and downloads
+
+Canonical settings and credentials now live in the private app record. Desired
+and applied revisions separate persistence from HA acknowledgement; browser edits,
+cloud admission and HA mode entities use that writer. HA retains a durable native
+replica and removes its old options and cloud token after adoption. Discovery and
+configuration views run in the app. The existing editor is part of the hashed app
+bundle; the integration cogwheel redirects to it. Controller downloads are served
+and compressed by the app, without WebSocket chunk transport.
+
+Validation: 1,031 integration tests, 58 app tests, 93 editor tests and eight desktop/
+mobile browser checks passed. Removed tests of deleted HA editor endpoints were
+replaced by app configuration acknowledgement/conflict/recovery coverage and browser
+save checks. Browser testing caught and fixed a blur redraw dropping the Save click.
+Branding and mobile layout inspected. This stage remains undeployed while storage
+and the remaining native projection boundary are completed.

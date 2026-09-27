@@ -81,23 +81,13 @@ class BatteryQuantityTests(unittest.TestCase):
 
 class BatteryDiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_discovery_keeps_sensor_ids_and_matches_friendly_names(self):
-        # Exercise the actual HA adapter with only its IO dependencies injected.
-        tree = ast.parse((ROOT / 'configuration.py').read_text())
-        names = {'async_discover_configuration', '_entity_id', '_first_state', '_state_text',
-                 '_number', '_attribute_number', '_as_kwh', '_as_watts'}
-        nodes = [ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')], level=0)]
-        nodes += [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in names]
-        ns = {k: getattr(const, k) for k in dir(const) if k.startswith('OPT_')}
-        ns.update(CONFIGURABLE_CATEGORIES=const.CONFIGURABLE_CATEGORIES, isfinite=isfinite, resolved_options=lambda hass, existing: resolve_configuration(existing),
-                  async_get_manager=AsyncMock(return_value=SimpleNamespace(data={'energy_sources': []})),
-                  _energy_dashboard_inventory=lambda *_: [])
-        exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])), 'configuration.py', 'exec'), ns)
+        from shs_core.discovery import DiscoveryCatalog, discover_configuration
         for renamed in (False, True):
             with self.subTest(renamed=renamed):
                 states = [SimpleNamespace(entity_id=('sensor.renamed_' + key if renamed else entity), state=value,
                           attributes={'friendly_name': entity.replace('_', ' '), 'unit_of_measurement': unit})
                           for key, (entity, value, unit) in SOURCES.items()]
                 hass = SimpleNamespace(states=SimpleNamespace(async_all=lambda: states))
-                result = await ns['async_discover_configuration'](hass, {})
+                result = discover_configuration(DiscoveryCatalog({row.entity_id:row for row in states},{'energy_sources':[]},59,18), {})
                 for key, state in zip(SOURCES, states):
                     self.assertEqual(result['configuration'][key], state.entity_id)

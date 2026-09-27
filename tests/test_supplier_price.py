@@ -47,13 +47,7 @@ CONFIG_PANEL = (
     / "shs_energy"
     / "config_panel.py"
 ).read_text(encoding="utf-8")
-CONFIG_PANEL_FRONTEND = (
-    Path(__file__).parents[1]
-    / "custom_components"
-    / "shs_energy"
-    / "frontend"
-    / "shs-energy-config-panel.js"
-).read_text(encoding="utf-8")
+CONFIG_PANEL_FRONTEND = (Path(__file__).parents[1] / "web/src/configuration-editor.js").read_text()
 CONSTANTS = (
     Path(__file__).parents[1]
     / "custom_components"
@@ -152,29 +146,11 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn('data-action="save-device"', CONFIG_PANEL_FRONTEND)
         self.assertIn("Save setup", CONFIG_PANEL_FRONTEND)
 
-    def test_device_card_save_replans_and_refreshes_readiness_immediately(self) -> None:
-        save = CONFIG_PANEL[
-            CONFIG_PANEL.index("async def async_apply_device_mapping") :
-            CONFIG_PANEL.index("async def websocket_get_configuration")
-        ]
-        self.assertIn("async_optimisation_push(force_plan=True)", save)
-        refresh = COORDINATOR[
-            COORDINATOR.index("async def async_refresh_device_configuration") :
-            COORDINATOR.index("async def async_report_device_mapping")
-        ]
-        self.assertIn("async_optimisation_push(force_plan=True)", refresh)
-        self.assertIn('"configuration": configuration, "refreshing": True', CONFIG_PANEL)
-        self.assertIn("options_update_requires_reload()", ENGINE)
-        live_update = COORDINATOR[
-            COORDINATOR.index("def options_update_requires_reload") :
-            COORDINATOR.index("def optimisation_input_gap_is_transient")
-        ]
-        self.assertIn("OPT_DEVICE_CONTROL_MAPPINGS", live_update)
-
-    def test_panel_asset_uses_a_new_component_and_cache_key(self) -> None:
-        self.assertIn('FRONTEND_ASSET_VERSION = INTEGRATION_VERSION', CONFIG_PANEL)
-        self.assertIn('PANEL_ELEMENT = f"shs-energy-config-panel-{FRONTEND_ASSET_VERSION.replace(\'.\', \'-\')}"', CONFIG_PANEL)
-        self.assertIn("?v={FRONTEND_ASSET_VERSION}", CONFIG_PANEL)
+    def test_app_owns_editors_and_replans(self):
+        editor = (Path(__file__).parents[1]/'app/shs_app/configuration_editor.py').read_text()
+        self.assertIn('async_optimisation_push(force_plan=True)',editor)
+        self.assertIn('self.engine.configuration.commit',editor)
+        self.assertIn("webcomponent_name='shs-app-link'",CONFIG_PANEL)
 
     def test_setpoint_room_is_derived_instead_of_edited(self) -> None:
         fields = FIELDS[
@@ -224,18 +200,17 @@ class SensorWiringTests(unittest.TestCase):
 
     def test_integration_cogwheel_opens_the_full_page_panel(self) -> None:
         self.assertNotIn("OptionsFlow", CONFIG_FLOW)
-        self.assertIn("config_panel_domain=shs_const.DOMAIN", CONFIG_PANEL)
+        self.assertIn("config_panel_domain=DOMAIN", CONFIG_PANEL)
         self.assertIn("await async_register_config_panel(hass)", INIT)
 
     def test_configuration_panel_websockets_require_an_admin(self) -> None:
         self.assertEqual(CONFIG_PANEL.count("@websocket_api.require_admin"),
                          CONFIG_PANEL.count("websocket_api.async_register_command("))
         self.assertNotIn("connection.require_admin", CONFIG_PANEL)
-        # The diagnostics file is an HTTP view; it has the same admin guard.
-        self.assertIn("    @require_admin\n    async def get(self, request", CONFIG_PANEL)
-        self.assertEqual(CONFIG_PANEL.count("register_view("), 2)
-        app_view = (Path(__file__).parents[1] / "custom_components/shs_energy/app_api.py").read_text()
-        self.assertIn("    @require_admin\n    async def get(self, request", app_view)
+        self.assertNotIn('register_view(',CONFIG_PANEL)
+        server = (Path(__file__).parents[1]/'app/shs_app/server.py').read_text()
+        self.assertIn("'/api/diagnostics/controller.json.gz'",server)
+
 
 
 if __name__ == "__main__":

@@ -33,7 +33,7 @@ class AppProjectionTests(unittest.TestCase):
         result = attention_links(source, "entry with spaces")
         self.assertEqual(len(result[0]["fix"]["fields"]), 4)
         for field in result[0]["fix"]["fields"]:
-            query = parse_qs(urlparse(field["url"]).query)
+            query = parse_qs(field["url"].split("?",1)[1])
             self.assertEqual(query["field"], [field["key"]])
             self.assertEqual(query["config_entry"], ["entry with spaces"])
         self.assertNotIn("url", source[0]["fix"]["fields"][0])

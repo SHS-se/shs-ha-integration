@@ -34,6 +34,8 @@ from .records import RecordStore
 from .projection import display_plan
 from .sources import ObservationMirror, RemoteHistory
 from .upgrades import open_runtime_schema
+from .configuration import Configuration
+from .configuration_editor import ConfigurationEditor
 
 
 def encode(value):
@@ -53,10 +55,11 @@ class OwnershipView:
 
 
 class AppEngine:
-    def __init__(self, root, session, url, token, *, paired_release, publish):
+    def __init__(self, root, session, url, token, *, paired_release, publish, app_url=None):
         self.root = regular_path(root)
         self.http, self.url, self.token = session, url, token
         self.paired_release, self.publish_ui = paired_release, publish
+        self.app_url = app_url
         self.tasks = set()
         self.timers = set()
         self.wake_projection = asyncio.Event()
@@ -74,7 +77,8 @@ class AppEngine:
         self.cached = {}
         self.started = False
         self.consume_lock = asyncio.Lock()
-        self.download = None
+        self.configuration = None
+        self.editor = ConfigurationEditor(self)
         self.record_stores = []
 
     def spawn(self, work, name='shs_app_work'):
@@ -119,16 +123,15 @@ class AppEngine:
         snapshot = await self.gateway.snapshot()
         self.mirror.install_snapshot(snapshot)
         history = RemoteHistory(self.gateway)
-        credentials = await history.source('credentials',{})
-        async def admit(expected, admitted):
-            await history.source('admit',dict(expected=expected,admitted=admitted))
-            # The acknowledgement only returns after canonical persistence and
-            # receipt capture. Policy reads the same admitted value immediately.
-            self.mirror.context['options'] = deepcopy(admitted)
-        ports = HouseholdPorts(self.mirror.home,self.mirror.options,admit,self.mirror.read,
+        self.configuration = Configuration(self.root,self.identity,
+            lambda body:history.source('configure',body))
+        await self.configuration.load(dict(snapshot['configuration']['configuration_authority'],
+            options=snapshot['configuration']['options']),lambda:history.source('credentials',{}))
+        credentials = self.configuration.credentials()
+        ports = HouseholdPorts(self.mirror.home,self.configuration.options,self.configuration.admit,self.mirror.read,
             lambda:set(self.mirror.context['entity_ids']),lambda:self.mirror.context['entity_names'],
             lambda:self.mirror.context['area_names'],lambda:self.mirror.context['entity_areas'],
-            lambda:history.source('inventory',{}),self.mirror.report,history,
+            self.editor.inventory,self.mirror.report,history,
             lambda:datetime.now(timezone.utc),lambda:False,self.repair,self.wake_projection.set,self.spawn)
         entry = self.identity['entry_id']
         stores = self.root/'stores'
@@ -249,6 +252,11 @@ class AppEngine:
         self.cached = dict(devices=await h.async_cached_device_configuration(),home=await h.async_cached_home_configuration(),
             planning=await h.async_cached_planning_configuration(),exchange=await h.async_cached_exchange_status())
         value = runtime_projection(h,self.cached,self.repairs)
+        value['app_url'] = self.app_url
+        value['configuration'] = self.configuration.status()
+        value['execution_devices'] = [{key:deepcopy(device.get(key)) for key in
+            ('key','name','planned','system_member','permission','mode')}
+            for device in await self.editor.devices(self.cached['planning'],include_suggestions=False)]
         value['values']['optimisation_plan'] = display_plan(value['values']['optimisation_plan'])
         await self.gateway.project(value)
         self.publish_ui(value)
@@ -288,7 +296,10 @@ class AppEngine:
         h, op, body = self.household, request['operation'], request['body']
         result, error = None, None
         try:
-            if op == 'refresh': result = await h.async_request_refresh()
+            if op == 'configuration':
+                result = await self.editor.action(body['operation'],body['body'])
+                if body['operation'] == 'control': result = {'revision':result['revision']}
+            elif op == 'refresh': result = await h.async_request_refresh()
             elif op == 'refresh_devices': result = await h.async_refresh_device_configuration()
             elif op == 'cached_devices': result = await h.async_cached_device_configuration()
             elif op == 'cached_home': result = await h.async_cached_home_configuration()
@@ -309,8 +320,6 @@ class AppEngine:
                 result = await self.controller.async_tick()
             elif op == 'optimisation': result = await h.async_optimisation_push(force_plan=body['force_plan'])
             elif op == 'runtime_report': result = await h.async_report_runtime()
-            elif op in ('diagnostics','diagnostics_chunk','diagnostics_done'):
-                result = await self.diagnostic_download(op,body)
             elif op == 'profile':
                 seconds = body.get('allocation_seconds',0)
                 if seconds: self.battery.profiler.start_allocations(seconds,asyncio.to_thread)
@@ -323,28 +332,6 @@ class AppEngine:
         except Exception as exception:
             error = str(exception)
         await self.gateway.call('reply',{'request_id':request['id'],'result':result,'error':error})
-
-    async def diagnostic_download(self,operation,body):
-        from base64 import b64encode
-        from hashlib import sha256
-        from shs_core.controller_diagnostics import controller_diagnostics, report_parts, report_summary, gzip_report
-        if operation == 'diagnostics':
-            async with self.controller.lock:
-                report = controller_diagnostics(self.controller,body['panel'])
-                report['resource_profiling'] = self.battery.profiler.snapshot(self.battery.resource_counts())
-                parts, summary = report_parts(report,encode), report_summary(report)
-            content = await asyncio.to_thread(gzip_report,parts,encode)
-            self.download = dict(id=uuid4().hex,content=content)
-            return dict(id=self.download['id'],bytes=len(content),sha256=sha256(content).hexdigest(),summary=summary)
-        if self.download is None or body['id'] != self.download['id']:
-            raise ValueError('Diagnostic download no longer exists; request it again')
-        if operation == 'diagnostics_done':
-            self.download = None
-            return {}
-        offset = body['offset']
-        if type(offset) is not int or not 0 <= offset < len(self.download['content']):
-            raise ValueError('Invalid diagnostic download position')
-        return {'data':b64encode(self.download['content'][offset:offset+512*1024]).decode()}
 
     async def calendar(self):
         last_quarter = None

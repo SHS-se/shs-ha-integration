@@ -30,7 +30,6 @@ from .shs_core.const import (
     PLANNING_MODE_DISABLED,
     backend_attributes,
 )
-from .configuration import resolved_options
 from .shs_core.operating_modes import device_mode
 from .shs_core.presentation import controller_explanation
 from .shs_core.optimisation import OptimisationInputError, validate_plan_contract
@@ -173,9 +172,7 @@ class ShsOptimisationStatusSensor(ShsBaseSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         plan = self.coordinator.optimisation_plan or {}
         return {
-            "mode": resolved_options(
-                self.hass, dict(self.coordinator.entry.options)
-            )[OPT_PLANNING_MODE],
+            "mode": self.coordinator.resolved_options()[OPT_PLANNING_MODE],
             "plan_id": plan.get("plan_id"),
             "model_version": plan.get("model_version"),
             "issued_at": plan.get("issued_at"),
@@ -188,7 +185,7 @@ class ShsOptimisationStatusSensor(ShsBaseSensor):
             **backend_attributes(self.coordinator.entry.data[CONF_BASE_URL]),
             "actual_slots_accepted": self.coordinator.last_actual_slots_accepted,
             "actuals_accepted_until": self.coordinator.actuals_accepted_until,
-            "configuration_reviewed_at": self.coordinator.entry.options.get(
+            "configuration_reviewed_at": self.coordinator.resolved_options().get(
                 OPT_CONFIGURATION_REVIEWED_AT
             ),
             "capabilities": plan.get("capabilities", {}),
@@ -220,7 +217,7 @@ class ShsReactiveSurplusSensor(ShsBaseSensor):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        entity_id = self.coordinator.entry.options.get(
+        entity_id = self.coordinator.resolved_options().get(
             OPT_GRID_EXPORT_POWER_ENTITY
         )
         if entity_id:
@@ -281,7 +278,7 @@ class ShsPlanRequestSensor(ShsBaseSensor):
             "slot_start": slot.get("start"),
             "binding": slot.get("binding"),
             "plan_status": plan.get("status"),
-            "advisory_only": self.coordinator.entry.options.get("device_modes", {}).get("$" + self.device) != "controlling",
+            "advisory_only": self.coordinator.resolved_options().get("device_modes", {}).get("$" + self.device) != "controlling",
         }
         if self.device == "ev":
             attributes.update({
@@ -323,7 +320,7 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
         return None
 
     def _current_entity(self) -> str | None:
-        mappings = resolved_options(self.hass, dict(self.coordinator.entry.options)).get(
+        mappings = self.coordinator.resolved_options().get(
             OPT_DEVICE_CONTROL_MAPPINGS, {}
         )
         entities: set[str] = set()
@@ -354,7 +351,7 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
         planner enforces when it builds the EV service: EV charging meters must
         share one variable-power entity and one range.
         """
-        mappings = resolved_options(self.hass, dict(self.coordinator.entry.options)).get(
+        mappings = self.coordinator.resolved_options().get(
             OPT_DEVICE_CONTROL_MAPPINGS, {}
         )
         ranges: set[tuple[float, float]] = set()
@@ -405,7 +402,7 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
                 "current_step_a", current_attributes.get("step")
             ),
             "current_entity": current_entity,
-            "advisory_only": self.coordinator.entry.options.get("device_modes", {}).get("$ev") != "controlling",
+            "advisory_only": self.coordinator.resolved_options().get("device_modes", {}).get("$ev") != "controlling",
         }
 
 

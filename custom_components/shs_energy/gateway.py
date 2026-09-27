@@ -8,13 +8,14 @@ from pathlib import Path
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
+from homeassistant.components.energy import async_get_manager
 from homeassistant.const import EVENT_STATE_CHANGED, EVENT_STATE_REPORTED, EVENT_CORE_CONFIG_UPDATE
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.json import json_bytes
 from homeassistant.util.json import json_loads
 
-from .configuration import (area_name_by_id, async_energy_dashboard_inventory, entity_area_id_by_id,
+from .configuration import (area_name_by_id, entity_area_id_by_id,
                             entity_display_name_by_id, resolved_options)
 from .recorder_source import RecorderSource
 from .gateway_wire import ProjectionAssembly, filter_sources
@@ -29,6 +30,7 @@ from .shs_core.device_gateway import DeviceGateway
 from .shs_core.gateway_journal import GatewayJournal, GatewayConflict
 from .shs_core.gateway_service import GatewayService, AppConnection
 from .shs_core.gateway_stream import GatewayCommands, GatewayOperations, GatewayRecord, GatewayStream
+from .shs_core.execution_configuration import ExecutionConfiguration
 from .shs_core.native_commands import NativeExecutor
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,6 +52,7 @@ class HomeAssistantSource:
         self.closed = False
         self.update_lock = asyncio.Lock()
         self.last_context = None
+        self.configuration = None
 
     def report(self, entity, state=None, kind='state_report'):
         state = self.hass.states.get(entity) if state is None else state
@@ -62,12 +65,13 @@ class HomeAssistantSource:
             event_id=state.context.id if state else None, kind=kind))
 
     def options(self):
-        return resolved_options(self.hass, dict(self.entry.options))
+        return resolved_options(self.hass, self.configuration.options())
 
     def context(self):
         h = self.hass
         registry = er.async_get(h)
-        return wire(dict(options=dict(self.entry.options),
+        return wire(dict(options=self.configuration.options(),
+            configuration_authority={key:self.configuration.value[key] for key in ('revision','digest')},
             home=dict(latitude=h.config.latitude, longitude=h.config.longitude, language=h.config.language,
                       timezone=h.config.time_zone, temperature_unit=h.config.units.temperature_unit),
             observed_entities=sorted(self.entities), entity_ids=[s.entity_id for s in h.states.async_all()], entity_names=entity_display_name_by_id(h),
@@ -114,22 +118,36 @@ class HomeAssistantSource:
             self.service.configuration_pending = False
 
     async def request(self, operation, body):
-        fields = {'credentials':set(), 'inventory':set(), 'admit':{'expected','admitted'},
+        fields = {'credentials':set(),
+            'catalog':set(),
+            'configure':{'expected_revision','revision','options','digest'},
             'statistics':{'start','end','entities','period','units','kinds'},
             'states':{'start','end','entities','with_attributes'}, 'forecast':{'entity'}}
         if operation not in fields or type(body) is not dict or set(body) != fields[operation]:
             raise ValueError('Unsupported source request')
         if operation == 'credentials':
             return dict(self.entry.data)
-        if operation == 'inventory':
-            return wire(await async_energy_dashboard_inventory(self.hass))
-        if operation == 'admit':
-            if dict(self.entry.options) != body['expected']:
-                raise GatewayConflict('Home settings changed during admission')
-            self.invalidate()
-            self.hass.config_entries.async_update_entry(self.entry, options=body['admitted'])
-            await self.refresh_configuration()
-            return {'options':dict(self.entry.options), 'configuration_revision':self.service.configuration_revision}
+        if operation == 'catalog':
+            manager = await async_get_manager(self.hass)
+            attributes = {'friendly_name','unit_of_measurement','device_class','state_class',
+                'min','max','step','options','hvac_modes','min_temp','max_temp','target_temp_step'}
+            states = {}
+            for state in self.hass.states.async_all():
+                selected = {key:value for key,value in state.attributes.items() if key in attributes}
+                # Discovery needs presence of a PV forecast, not its full history.
+                if state.attributes.get('watts'):
+                    selected['watts'] = {'available':True}
+                states[state.entity_id] = dict(entity_id=state.entity_id,state=state.state,
+                    attributes=selected,last_updated=state.last_updated.isoformat())
+            return wire(dict(context=self.context(),states=states,
+                preferences=manager.data or manager.default_preferences()))
+        if operation == 'configure':
+            result = await self.configuration.install(body)
+            marker = {'settings_owner':'app'}
+            data = {key:value for key,value in self.entry.data.items() if key != 'device_token'}
+            if dict(self.entry.options) != marker or data != dict(self.entry.data):
+                self.hass.config_entries.async_update_entry(self.entry, options=marker, data=data)
+            return result
         if operation == 'forecast':
             return wire(await self.history.hourly_forecast(body['entity']))
         start, end = (datetime.fromisoformat(body[key]) for key in ('start','end'))
@@ -218,6 +236,9 @@ async def open_gateway(hass, entry):
     source = HomeAssistantSource(hass, entry)
     service = GatewayService(stream, identity, source)
     source.service = service
+    source.configuration = ExecutionConfiguration(GatewayRecord(stream,'execution_configuration'),
+        source.invalidate, source.refresh_configuration)
+    await source.configuration.load(dict(entry.options))
     async def send(domain, action, data):
         await hass.services.async_call(domain, action, data, blocking=True)
     commands = GatewayCommands(stream)

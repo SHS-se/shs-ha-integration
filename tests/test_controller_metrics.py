@@ -110,25 +110,15 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         async def executor(function, *args):
             workers.append(function)
             return function(*args)
-        download = load_function('config_panel.py', '_controller_diagnostics_file', {
-            'controller_diagnostics': controller_diagnostics, 'report_parts': report_parts,
-            'report_summary': report_summary, 'gzip_report': gzip_report,
-            'json_bytes': lambda value: json.dumps(value).encode(),
-            '_configuration_payload': AsyncMock(return_value={
-                'devices': [{'key': 'sensor.monitor', 'mode': 'monitoring'}],
-                'meter_inventory': [], 'configuration': fixture.options,
-                'operation': fixture.coordinator.operational_status, 'readiness': {},
-            }),
-        })
         sys.path.append(str(Path(__file__).parents[1]/'app'))
-        from shs_app.engine import AppEngine
+        from shs_app.downloads import controller_download
         from unittest.mock import patch
-        app = SimpleNamespace(controller=controller,battery=entry.runtime_data.battery_runtime,download=None)
-        async def request(operation,body):
-            return await AppEngine.diagnostic_download(app,operation,body)
-        entry.runtime_data.service = SimpleNamespace(request_app=request)
-        with patch('shs_app.engine.asyncio.to_thread',executor):
-            body, summary = await download(None, entry)
+        app=SimpleNamespace(controller=controller,battery=entry.runtime_data.battery_runtime,
+            editor=SimpleNamespace(view=AsyncMock(return_value={
+                'devices':[{'key':'sensor.monitor','mode':'monitoring'}], 'meter_inventory':[],
+                'configuration':fixture.options,'operation':fixture.coordinator.operational_status,'readiness':{}})))
+        with patch('shs_app.downloads.asyncio.to_thread',executor):
+            body,summary=await controller_download(app)
         self.assertEqual(workers, [gzip_report], 'encoding and compression run off the event loop')
         result = json.loads(gzip.decompress(body))
         self.assertEqual(result['attempts'], [])

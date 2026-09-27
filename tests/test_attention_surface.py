@@ -20,10 +20,10 @@ from pathlib import Path
 import unittest
 
 PACKAGE = Path(__file__).parents[1] / "custom_components" / "shs_energy"
-CONFIG_PANEL = (PACKAGE / "config_panel.py").read_text(encoding="utf-8")
+CONFIG_PANEL = (PACKAGE.parents[1] / "app/shs_app/configuration_view.py").read_text(encoding="utf-8")
 COORDINATOR = (PACKAGE / "shs_core/household.py").read_text(encoding="utf-8")
 FRONTEND = (
-    PACKAGE / "frontend" / "shs-energy-config-panel.js"
+    PACKAGE.parents[1] / "web/src/configuration-editor.js"
 ).read_text(encoding="utf-8")
 CONST = (PACKAGE / "shs_core/const.py").read_text(encoding="utf-8")
 

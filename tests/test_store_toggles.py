@@ -26,7 +26,7 @@ CONFIG_PANEL = (PACKAGE / "shs_core/configuration_fields.py").read_text(encoding
 CONFIGURATION = (PACKAGE / "shs_core/configuration_schema.py").read_text(encoding="utf-8")
 COORDINATOR = (PACKAGE / "shs_core/household.py").read_text(encoding="utf-8")
 FRONTEND = (
-    PACKAGE / "frontend" / "shs-energy-config-panel.js"
+    PACKAGE.parents[1] / "web/src/configuration-editor.js"
 ).read_text(encoding="utf-8")
 
 from shs_core import const  # noqa: E402
