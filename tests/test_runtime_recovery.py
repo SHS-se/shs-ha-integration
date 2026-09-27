@@ -6,18 +6,18 @@ import unittest
 from test_home_runtime import Harness, controls, synthetic_steps
 from test_home_runtime_execution import Harness as PolicyHarness
 from test_energy_ledger import spec, sample
-from energy_ledger import (
+from shs_core.energy_ledger import (
     EnergyBounds, CounterSample, create_ledger, record_sample, mark_actuals,
     actuals_since, start_settlement, record_actuals, settle_and_prune,
     reconciled_actuals,
 )
-from home_runtime import (
+from shs_core.home_runtime import (
     Envelope, Guard, Step, ReliefRule, FrameObserved,
     Proposed, TransitionFailed, TransitionJob, TransitionFailure, NeedTransition,
     JournalDurable, TransportResult, Tick, Send, WakeAt, MeterObserved,
     LedgerPruned, reservation, reduce_home,
 )
-from home_runtime_checkpoint import encode_checkpoint, decode_checkpoint, restore_checkpoint
+from shs_core.home_runtime_checkpoint import encode_checkpoint, decode_checkpoint, restore_checkpoint
 
 
 class RetryPreparationTests(unittest.TestCase):
@@ -265,8 +265,8 @@ class ReliefTests(unittest.TestCase):
 
 class SettlementTests(unittest.TestCase):
     def test_execution_actuals_survive_expiry_and_restart_without_replan(self):
-        from home_runtime import CounterReceived
-        from plan_execution import MeterReceipt, measured
+        from shs_core.home_runtime import CounterReceived
+        from shs_core.plan_execution import MeterReceipt, measured
         h=PolicyHarness();h.offer();start=h.now
         for revision in range(261):
             h.event(CounterReceived(MeterReceipt(str(revision),'charge','charge','battery_dc','0',

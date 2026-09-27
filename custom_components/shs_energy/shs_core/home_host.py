@@ -10,14 +10,9 @@ import asyncio
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
-if __package__:
-    from . import home_runtime as runtime
-    from .home_runtime_checkpoint import encode_checkpoint, restore_checkpoint, restore_state
-    from .resource_profiling import ResourceProfiler
-else:
-    import home_runtime as runtime
-    from home_runtime_checkpoint import encode_checkpoint, restore_checkpoint, restore_state
-    from resource_profiling import ResourceProfiler
+from . import home_runtime as runtime
+from .home_runtime_checkpoint import encode_checkpoint, restore_checkpoint, restore_state
+from .resource_profiling import ResourceProfiler
 
 
 class DispatchRejected(Exception):

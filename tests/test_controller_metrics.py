@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from controller_metrics import ControllerMetrics
-from resource_profiling import ResourceProfiler
+from shs_core.resource_profiling import ResourceProfiler
 
 
 class MetricsTests(unittest.TestCase):

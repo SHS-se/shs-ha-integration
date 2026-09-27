@@ -7,20 +7,20 @@ import unittest
 from unittest.mock import patch
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
-from resource_profiling import ResourceProfiler
+from shs_core.resource_profiling import ResourceProfiler
 
 
 class ResourceMetricsTests(unittest.TestCase):
     def test_sync_cpu_failures_and_async_wall_have_distinct_meanings(self):
         profiler = ResourceProfiler()
-        with patch('resource_profiling.monotonic', side_effect=[10, 12]), \
-                patch('resource_profiling.thread_time', side_effect=[3, 3.25]):
+        with patch('shs_core.resource_profiling.monotonic', side_effect=[10, 12]), \
+                patch('shs_core.resource_profiling.thread_time', side_effect=[3, 3.25]):
             with self.assertRaises(ValueError), profiler.measure('reduce'):
                 raise ValueError('bad event')
         self.assertEqual(profiler.operations['reduce']['cpu_ms'], 250)
         self.assertEqual(profiler.operations['reduce']['wall_ms'], 2000)
         self.assertEqual(profiler.operations['reduce']['failures'], 1)
-        with patch('resource_profiling.thread_time', side_effect=AssertionError('CPU across await')):
+        with patch('shs_core.resource_profiling.thread_time', side_effect=AssertionError('CPU across await')):
             with profiler.measure('checkpoint_save'):
                 pass
         self.assertEqual(profiler.operations['checkpoint_save']['cpu_ms'], 0)

@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
-from verification_storage import VerificationStorage
+from shs_core.verification_storage import VerificationStorage
 from verification import VerificationJournal, evaluation_record
 
 

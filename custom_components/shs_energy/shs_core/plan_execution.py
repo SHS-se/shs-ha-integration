@@ -16,12 +16,8 @@ from math import ceil, isfinite
 from sys import intern
 from typing import Optional
 
-if __package__:
-    from .battery_conversion import Conversion
-    from .battery_supply import proportional_supply
-else:
-    from battery_conversion import Conversion
-    from battery_supply import proportional_supply
+from .battery_conversion import Conversion
+from .battery_supply import proportional_supply
 
 SCHEMA = "battery-plan-execution-v1"
 

@@ -7,8 +7,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
-import plan_execution as e
-from runtime_json import encode_value
+from shs_core import plan_execution as e
+from shs_core.runtime_json import encode_value
 from execution_migration import read_account
 from test_plan_execution import opening_account, meter, contract
 

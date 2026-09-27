@@ -7,13 +7,13 @@ import subprocess
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
-from home_runtime import (
+from shs_core.home_runtime import (
     Envelope, Guard, Request, Step, GroupSpec, Limits, Observation, Frame, create_home,
     Observed, FrameObserved, AuthorityChanged, Requested, Proposed, JournalDurable,
     JournalFailed, TransportResult, Tick, Persist, Send, NeedTransition, Observe,
     reduce_home, reservation, WriterIdentity, WriterGrant, GrantConfirmed, authorize_send,
 )
-from home_runtime_checkpoint import encode_checkpoint, decode_checkpoint, restore_checkpoint, decode_event, event_json
+from shs_core.home_runtime_checkpoint import encode_checkpoint, decode_checkpoint, restore_checkpoint, decode_event, event_json
 
 
 def controls(mode="hold", charge=0, discharge=0):
@@ -407,8 +407,8 @@ class HomeRuntimeTests(unittest.TestCase):
         self.assertEqual(final.groups[0].attempts, ())
 
     def test_meter_actuals_never_confirm_commands_or_release_reservations(self):
-        from energy_ledger import create_ledger, MeterSpec, CounterSample, EnergyBounds
-        from home_runtime import MeterObserved
+        from shs_core.energy_ledger import create_ledger, MeterSpec, CounterSample, EnergyBounds
+        from shs_core.home_runtime import MeterObserved
         h = Harness(); h.request(target=controls("hold", 1000, 0)); h.propose(); h.durable()
         ledger = create_ledger("actuals", "v1", (MeterSpec("charge", "battery", "AC", "charge", None),))
         h.state = replace(h.state, ledger=ledger)

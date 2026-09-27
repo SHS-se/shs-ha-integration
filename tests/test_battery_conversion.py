@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 import unittest
 sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
-from battery_conversion import Curve, Conversion, LossWindow, fit_branch, conversion_model, windows_from_statistics
+from shs_core.battery_conversion import Curve, Conversion, LossWindow, fit_branch, conversion_model, windows_from_statistics
 
 class ConversionTests(unittest.TestCase):
     def test_tiny_commands_cannot_erase_installation_overhead(self):

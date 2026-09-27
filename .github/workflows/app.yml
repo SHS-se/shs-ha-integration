@@ -25,7 +25,8 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: pip install -r app/requirements.txt PyYAML==6.0.3
       - run: python scripts/check-app.py
-      - run: PYTHONPATH=app python -m unittest discover -s app/tests -v
+      - run: python scripts/build-companion.py /tmp/shs-bundle
+      - run: PYTHONPATH=app:/tmp/shs-bundle/core python -m unittest discover -s app/tests -v
       - run: python -m unittest discover -s tests
       - run: node --test tests/frontend-config-save.test.js
       - run: npm ci --no-fund --no-audit && npm run build && npx playwright install --with-deps chromium && npm test

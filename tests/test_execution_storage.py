@@ -13,11 +13,11 @@ import unittest
 from unittest.mock import patch
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
-from execution_storage import ExecutionStorage
+from shs_core.execution_storage import ExecutionStorage
 from execution_migration import LegacyExecution, canonical
-from home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES, retain_traces
-from plan_execution import Account, MeterReceipt, StateObservation, admit_plan, balance, objective_history, record_meter, request_replan
-from runtime_json import encode_value
+from shs_core.home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES, retain_traces
+from shs_core.plan_execution import Account, MeterReceipt, StateObservation, admit_plan, balance, objective_history, record_meter, request_replan
+from shs_core.runtime_json import encode_value
 from test_plan_execution import contract
 
 META = dict(schema='battery-runtime-v4', checkpoint=None, options=None, devices=[], model_sources=None, ratings=None)
@@ -89,7 +89,7 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
         original = session(1000)
         await self.store.save(META, original)
         before = self.store.metrics['rows_appended']
-        with patch('execution_storage.encode_value', wraps=encode_value) as encoder:
+        with patch('shs_core.execution_storage.encode_value', wraps=encode_value) as encoder:
             await self.store.save(META, replace(original, status='new'))
         self.assertEqual(self.store.metrics['rows_appended'], before)
         self.assertFalse(any(isinstance(call.args[0], MeterReceipt) for call in encoder.call_args_list))

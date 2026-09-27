@@ -12,7 +12,7 @@ sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
 from battery_runtime import BatteryRuntime, exact_start, iso, stamp
 from battery_writer import BatteryWriterFence
 from battery_runtime import digest, plan_scope
-from plan_execution import *
+from shs_core.plan_execution import *
 
 
 def downloaded(value):
@@ -29,7 +29,7 @@ class Store:
 class ExecutionStore(Store):
     def __init__(self):
         super().__init__()
-        from home_runtime import ExecutionSession
+        from shs_core.home_runtime import ExecutionSession
         self.session=ExecutionSession()
     async def load(self):
         return (deepcopy(self.saved),self.session) if self.saved is not None else None
@@ -207,7 +207,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         finally:await r.runtime.close()
 
     async def test_invalid_capture_rejects_all_measurements_atomically(self):
-        import home_runtime as rt
+        from shs_core import home_runtime as rt
         r=Rig();await r.start()
         try:
             r.runtime._last_capture=None
@@ -243,7 +243,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         finally:await r.runtime.close()
 
     async def test_permission_change_while_waiting_for_household_lock_prevents_service_call(self):
-        from home_host import DispatchRejected
+        from shs_core.home_host import DispatchRejected
         r=Rig();original=r.runtime._dispatch;rejected=[]
         async def withdrawn(effect):
             await r.controller.lock.acquire()
@@ -508,7 +508,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         finally:await r.runtime.close()
 
     async def test_pending_other_load_rejects_queued_battery_write(self):
-        from home_host import DispatchRejected
+        from shs_core.home_host import DispatchRejected
         r=Rig();captured=[]
         original=r.runtime._dispatch
         async def queued(effect):captured.append(effect);raise DispatchRejected('test transport queue')
@@ -542,7 +542,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         finally:await r.runtime.close()
 
     async def test_expired_policy_releases_even_when_exchange_has_no_policy(self):
-        from home_runtime import Tick
+        from shs_core.home_runtime import Tick
         r=Rig();await r.start()
         try:
             for _ in range(4):await r.advance()
@@ -571,8 +571,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         finally:await r.runtime.close()
 
     async def test_restart_recovers_native_commands_without_cloud_or_pool_readings(self):
-        from home_runtime import Tick, ScopeParticipant
-        from home_runtime_checkpoint import decode_checkpoint, encode_checkpoint
+        from shs_core.home_runtime import Tick, ScopeParticipant
+        from shs_core.home_runtime_checkpoint import decode_checkpoint, encode_checkpoint
         for old_participants in (False,True):
             with self.subTest(old_participants=old_participants):
                 r=Rig();r.add_pool();await r.start()
@@ -687,7 +687,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
         finally:await r.runtime.close()
 
     async def test_verified_dump_replays_account_without_commands(self):
-        from runtime_json import decode_value
+        from shs_core.runtime_json import decode_value
         r=Rig('control_verification');await r.start()
         try:
             await r.advance()
@@ -956,7 +956,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
         r=Rig('control_verification');await r.start()
         try:
             for _ in range(4):await r.advance()
-            from runtime_json import Records
+            from shs_core.runtime_json import Records
             raw=r.runtime.snapshot(include_evidence=True)
             # The journals are encoded when the file is written, not on the event loop.
             self.assertTrue(all(isinstance(raw[k],Records) for k in ('accounting_journal','command_journal','execution_traces')))

@@ -16,8 +16,8 @@ from time import perf_counter, process_time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'custom_components' / 'shs_energy'))
 from execution_migration import read_account
-from execution_storage import ExecutionStorage
-from home_runtime import ExecutionSession
+from shs_core.execution_storage import ExecutionStorage
+from shs_core.home_runtime import ExecutionSession
 
 
 async def benchmark(report, repeats):

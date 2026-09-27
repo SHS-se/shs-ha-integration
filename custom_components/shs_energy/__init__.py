@@ -25,7 +25,7 @@ from homeassistant.util.json import json_loads
 from homeassistant.helpers import entity_registry as er
 
 from .refresh import set_reloading
-from .resource_profiling import process_resources
+from .shs_core.resource_profiling import process_resources
 from .api import ShsApiClient
 from .controller_events import attach_controller_events
 from .config_panel import async_apply_configuration, async_register_config_panel
@@ -55,10 +55,10 @@ from .configuration import (
 from .controller import ScheduledController
 from .battery_writer import BatteryWriterFence
 from .battery_runtime import BatteryRuntime, NativeReadbackPending
-from .execution_storage import ExecutionStorage
+from .shs_core.execution_storage import ExecutionStorage
 from .execution_migration import LegacyExecution
 from .verification import VerificationJournal
-from .verification_storage import VerificationStorage
+from .shs_core.verification_storage import VerificationStorage
 from .configuration_schema import ConfigurationReader
 from .coordinator import ShsStatusCoordinator
 from .migration import mapped_entity_ids, migrate_options

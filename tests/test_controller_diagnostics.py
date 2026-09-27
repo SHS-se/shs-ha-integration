@@ -199,8 +199,8 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         import json
         from types import SimpleNamespace
         from controller_diagnostics import gzip_report, report_parts
-        from home_runtime import ExecutionTrace
-        from runtime_json import Records, encode_value
+        from shs_core.home_runtime import ExecutionTrace
+        from shs_core.runtime_json import Records, encode_value
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_start()
         self.options['excluded_device_readings'] = ['sensor.excluded']

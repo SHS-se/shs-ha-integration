@@ -11,9 +11,9 @@ import json
 from math import isfinite
 
 if __package__:
-    from .battery_supply import SupplyScope, observe_supply
+    from .shs_core.battery_supply import SupplyScope, observe_supply
 else:
-    from battery_supply import SupplyScope, observe_supply
+    from shs_core.battery_supply import SupplyScope, observe_supply
 
 
 POWER_OPTIONS = ("house_consumption_power_entity", "solar_production_power_entity", "battery_power_measurement_entity", "grid_power_entity")

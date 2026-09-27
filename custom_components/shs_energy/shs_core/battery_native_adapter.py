@@ -2,10 +2,7 @@
 from collections import deque
 from dataclasses import dataclass
 
-if __package__:
-    from .home_runtime import NativeCatalog, NeedTransition, Proposed, Step, ReliefRule
-else:
-    from home_runtime import NativeCatalog, NeedTransition, Proposed, Step, ReliefRule
+from .home_runtime import NativeCatalog, NeedTransition, Proposed, Step, ReliefRule
 
 
 @dataclass(frozen=True)
@@ -80,10 +77,7 @@ class SigenAdapter:
     conversion: object
 
     def envelope(self, controls):
-        if __package__:
-            from .home_runtime import Envelope
-        else:
-            from home_runtime import Envelope
+        from .home_runtime import Envelope
         values = dict(controls)
         mode = values[self.catalog.mode_key]
         return Envelope(self.conversion.grid_charge.input(min(values[self.catalog.charge_key],self.catalog.charge_max_w))

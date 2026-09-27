@@ -14,11 +14,11 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / 'custom_components' / 'shs_energy'))
-from battery_conversion import Conversion
+from shs_core.battery_conversion import Conversion
 from execution_migration import read_account
-from home_runtime import ExecutionTrace
-from plan_execution import LiveState, assess_execution, feedback
-from runtime_json import decode_value
+from shs_core.home_runtime import ExecutionTrace
+from shs_core.plan_execution import LiveState, assess_execution, feedback
+from shs_core.runtime_json import decode_value
 
 
 def replay(value):

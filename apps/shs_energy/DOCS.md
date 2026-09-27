@@ -79,3 +79,10 @@ the explicit companion installation option. Keep this option off after installat
 Resource counters come from Supervisor and reset on container restart. Filesystem
 free space is shared storage, not a private disk allocation. Database statistics cover
 the app’s own database; the existing integration databases have not moved.
+
+## Migration preparation
+
+The shared accounting/runtime core is now packaged in the app. An operator can
+run the [read-only snapshot rehearsal](../../docs/runtime-extraction.md) to check
+existing SQLite data. This does not transfer control or migrate JSON state. HA
+remains the sole controller until the gateway and coordinated cutover are ready.

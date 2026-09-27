@@ -11,15 +11,15 @@ from pathlib import Path
 from typing import get_type_hints, get_args
 
 if __package__:
-    from . import plan_execution as execution
-    from .home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES
-    from .home_runtime_checkpoint import upgrade_execution_session, decode_checkpoint
-    from .runtime_json import encode_value, decode_value
+    from .shs_core import plan_execution as execution
+    from .shs_core.home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES
+    from .shs_core.home_runtime_checkpoint import upgrade_execution_session, decode_checkpoint
+    from .shs_core.runtime_json import encode_value, decode_value
 else:
-    import plan_execution as execution
-    from home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES
-    from home_runtime_checkpoint import upgrade_execution_session, decode_checkpoint
-    from runtime_json import encode_value, decode_value
+    from shs_core import plan_execution as execution
+    from shs_core.home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES
+    from shs_core.home_runtime_checkpoint import upgrade_execution_session, decode_checkpoint
+    from shs_core.runtime_json import encode_value, decode_value
 
 
 def canonical(value):

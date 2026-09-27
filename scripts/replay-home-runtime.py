@@ -8,8 +8,8 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "custom_components" / "shs_energy"))
-from home_runtime import JournalDurable, Persist, reduce_home, reservation, Send, authorize_send
-from home_runtime_checkpoint import (
+from shs_core.home_runtime import JournalDurable, Persist, reduce_home, reservation, Send, authorize_send
+from shs_core.home_runtime_checkpoint import (
     MAX_BYTES, decode_checkpoint, decode_event, effects_json, encode_checkpoint,
     read_runtime_json, restore_checkpoint,
 )

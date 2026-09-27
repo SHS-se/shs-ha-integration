@@ -15,7 +15,7 @@ from time import perf_counter, thread_time
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / 'custom_components/shs_energy'))
 from execution_migration import read_account
-import plan_execution as execution
+from shs_core import plan_execution as execution
 
 
 def reachable_bytes(value):

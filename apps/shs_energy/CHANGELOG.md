@@ -1,3 +1,10 @@
+# 0.1.0-beta.3
+
+Package the shared runtime/accounting and SQLite readers independently of Home
+Assistant. Add a one-off read-only database rehearsal tool with integrity and
+accounting checks. The integration remains the sole controller; this release
+does not activate data migration. Bundled companion: 0.9.0-beta.51.
+
 # 0.1.0-beta.2
 
 Keep companion staging and backups outside Home Assistant's integration discovery

@@ -2,8 +2,8 @@
 from dataclasses import replace
 import unittest
 from test_home_runtime_execution import Harness
-from home_runtime import NeedTransition, Step, Guard
-from battery_native_adapter import CommissionedAdapter
+from shs_core.home_runtime import NeedTransition, Step, Guard
+from shs_core.battery_native_adapter import CommissionedAdapter
 
 
 class NativeAdapterTests(unittest.TestCase):

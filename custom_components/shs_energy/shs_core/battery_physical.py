@@ -3,10 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from math import isfinite
 from typing import Optional
-if __package__:
-    from .battery_conversion import Conversion
-else:
-    from battery_conversion import Conversion
+from .battery_conversion import Conversion
 RESPONSE_MODEL = "pv-first-v1"
 OPERATIONS = ("self_consumption", "solar_charge", "supply_house", "grid_charge", "export", "hold", "idle")
 # True: the ceiling is a positive permission or sized request. False: it is closed.

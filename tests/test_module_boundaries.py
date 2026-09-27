@@ -23,17 +23,17 @@ sys.path.append(str(PACKAGE))
 PURE_MODULES = (
     "app_projection",
     "battery_commands", "operating_modes", "verification",
-    "home_runtime", "home_runtime_checkpoint", "energy_ledger", "runtime_json",
-    "battery_supply", "home_host", "battery_native_adapter",
-    "controller", "battery_live", "battery_writer", "battery_runtime", "battery_conversion",
-    "presentation", "plan_execution", "battery_physical", "execution_storage", "execution_migration",
-    "api_contract", "durable_record", "verification_storage",
+    "shs_core.home_runtime", "shs_core.home_runtime_checkpoint", "shs_core.energy_ledger", "shs_core.runtime_json",
+    "shs_core.battery_supply", "shs_core.home_host", "shs_core.battery_native_adapter",
+    "controller", "battery_live", "battery_writer", "battery_runtime", "shs_core.battery_conversion",
+    "presentation", "shs_core.plan_execution", "shs_core.battery_physical", "shs_core.execution_storage", "execution_migration",
+    "api_contract", "durable_record", "shs_core.verification_storage",
     "const", "replan_listener",
     "device_controls",
     "device_commands", "minimum_run",
     "migration",
     "network_traffic",
-    "controller_metrics", "resource_profiling",
+    "controller_metrics", "shs_core.resource_profiling",
     "controller_diagnostics",
     "controller_observations",
     "controller_scheduler",
@@ -77,7 +77,7 @@ class ModuleBoundaryTests(unittest.TestCase):
     def test_no_pure_module_reaches_for_home_assistant(self) -> None:
         for name in PURE_MODULES:
             with self.subTest(module=name):
-                source = (PACKAGE / f"{name}.py").read_text(encoding="utf-8")
+                source = (PACKAGE / (name.replace(".", "/") + ".py")).read_text(encoding="utf-8")
                 offenders = [
                     f"line {number}: {line.strip()}"
                     for number, line in enumerate(source.splitlines(), start=1)
@@ -98,7 +98,7 @@ class ModuleBoundaryTests(unittest.TestCase):
         Narrowing a plain value parameter is a different, harmless thing, so
         only parameters actually used as functions are guarded.
         """
-        for path in sorted(PACKAGE.glob("*.py")):
+        for path in sorted(PACKAGE.rglob("*.py")):
             for fn in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
@@ -130,7 +130,8 @@ class ModuleBoundaryTests(unittest.TestCase):
 
     def test_the_module_lists_still_describe_the_package(self) -> None:
         listed = set(PURE_MODULES) | set(HOME_ASSISTANT_MODULES) | {"api"}
-        actual = {path.stem for path in PACKAGE.glob("*.py")}
+        actual = {str(path.relative_to(PACKAGE).with_suffix("")).replace("/", ".") for path in PACKAGE.rglob("*.py")}
+        listed.add("shs_core.__init__")
         self.assertEqual(
             actual - listed,
             set(),

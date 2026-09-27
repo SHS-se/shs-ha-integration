@@ -5,12 +5,12 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
-from plan_execution import (Account, Bounds, Disposition, ExecutionContract, MeterReceipt,
+from shs_core.plan_execution import (Account, Bounds, Disposition, ExecutionContract, MeterReceipt,
     Objective, Recovery, ReferenceInterval, StateObservation, admit_plan, balance,
     contract_wire, feedback, measured, objective_history, observe_state, read_contract,
     record_meter, request_replan)
-from plan_execution import LiveState, assess_execution, explain_execution, capture_replan
-from battery_conversion import Conversion, Curve
+from shs_core.plan_execution import LiveState, assess_execution, explain_execution, capture_replan
+from shs_core.battery_conversion import Conversion, Curve
 
 QUARTER = 900_000
 
@@ -274,7 +274,7 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(objective_history(account, QUARTER)[0]["outcome"], "changed_before_deadline")
 
     def test_checkpoint_roundtrip_preserves_evidence_and_unknowns(self):
-        from runtime_json import encode_value, decode_value
+        from shs_core.runtime_json import encode_value, decode_value
         import json
         account = opening_account()
         account = meter(account, "charge", QUARTER * 2, 1_000_000)
@@ -290,7 +290,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_handover_requests_only_objectives_still_sent_to_the_planner(self):
         from unittest.mock import patch
-        from plan_execution import planner_feedback
+        from shs_core.plan_execution import planner_feedback
         cases = [('demand_following', 100, 0, None, 'forecast_complete', None),
                  ('stored_energy', 100, 5_000_000, 5_000_000, 'fulfilled', None),
                  ('stored_energy', 100, 5_500_000, 5_000_000, 'missed', 'objective_missed'),
@@ -309,7 +309,7 @@ class ExecutionTests(unittest.TestCase):
                 self.assertEqual(history[0]['outcome'], outcome)
                 feedback_ids = {row['objective']['id'] for row in planner_feedback(account, 150)['objectives']}
                 self.assertEqual('old' in feedback_ids, reason is not None)
-                with patch('plan_execution.objective_history', side_effect=AssertionError('full audit rebuilt')):
+                with patch('shs_core.plan_execution.objective_history', side_effect=AssertionError('full audit rebuilt')):
                     result = assess_execution(account, replace(self.live, at_ms=150, stored_mwh=second.stored_at(150)), self.model)
                 self.assertEqual(result.replan_reason, reason)
                 self.assertEqual(objective_history(account, 150), history, 'full audit evidence is retained')
@@ -486,7 +486,7 @@ class BasisReconciliationTests(unittest.TestCase):
         self.assertEqual(decision.replan_reason,'local_storage_reserve_changed')
 
     def test_live_feedback_is_planner_feedback_without_the_settled_digest(self):
-        from plan_execution import live_feedback, planner_feedback
+        from shs_core.plan_execution import live_feedback, planner_feedback
         account = opening_account()
         account = meter(account, "charge", QUARTER, 400_000)
         account = meter(account, "discharge", QUARTER, 0)
@@ -523,7 +523,7 @@ class BasisReconciliationTests(unittest.TestCase):
 
     def test_planner_feedback_omits_repeated_history_but_acknowledges_its_revision(self):
         import json
-        from plan_execution import Admission, planner_feedback
+        from shs_core.plan_execution import Admission, planner_feedback
         base=contract()
         admissions=tuple(Admission(replace(base,id=f'c{i}',generation=i,
             previous_contract_id=f'c{i-1}' if i else None),0,0,i+1) for i in range(1000))

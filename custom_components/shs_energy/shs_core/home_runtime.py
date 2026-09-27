@@ -6,26 +6,15 @@ from math import isfinite
 import json
 from typing import Literal, Optional, Union
 
-if __package__:
-    from .battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation, OPERATION_CEILINGS, CHARGE_PERMISSIONS
-    from . import plan_execution as execution
-    from .battery_supply import SupplyScope
-    from .runtime_json import read_runtime_json, encode_value
-    from .energy_ledger import (
-        EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, SettledActuals,
-        actuals_since, record_actuals, prune_ledger, start_settlement,
-        settle_and_prune, reconciled_actuals, validate_settlement,
-    )
-else:
-    from battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation, OPERATION_CEILINGS, CHARGE_PERMISSIONS
-    import plan_execution as execution
-    from battery_supply import SupplyScope
-    from runtime_json import read_runtime_json, encode_value
-    from energy_ledger import (
-        EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, SettledActuals,
-        actuals_since, record_actuals, prune_ledger, start_settlement,
-        settle_and_prune, reconciled_actuals, validate_settlement,
-    )
+from .battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation, OPERATION_CEILINGS, CHARGE_PERMISSIONS
+from . import plan_execution as execution
+from .battery_supply import SupplyScope
+from .runtime_json import read_runtime_json, encode_value
+from .energy_ledger import (
+    EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, SettledActuals,
+    actuals_since, record_actuals, prune_ledger, start_settlement,
+    settle_and_prune, reconciled_actuals, validate_settlement,
+)
 
 Value = Union[str, float, int]
 Controls = tuple[tuple[str, Value], ...]

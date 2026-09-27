@@ -13,36 +13,36 @@ import json
 from math import floor, isfinite
 
 if __package__:
-    from . import home_runtime as rt
-    from .home_host import HomeHost, HostPorts, DispatchRejected
-    from .battery_native_adapter import SigenAdapter
-    from .battery_conversion import conversion_model, windows_from_statistics
-    from .battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
-    from . import plan_execution as execution
-    from .runtime_json import Records
-    from .resource_profiling import ResourceProfiler
+    from .shs_core import home_runtime as rt
+    from .shs_core.home_host import HomeHost, HostPorts, DispatchRejected
+    from .shs_core.battery_native_adapter import SigenAdapter
+    from .shs_core.battery_conversion import conversion_model, windows_from_statistics
+    from .shs_core.battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
+    from .shs_core import plan_execution as execution
+    from .shs_core.runtime_json import Records
+    from .shs_core.resource_profiling import ResourceProfiler
     from .battery_live import native_surface, source_revision, planned_power_bindings
-    from .battery_supply import SupplyScope, observe_supply
+    from .shs_core.battery_supply import SupplyScope, observe_supply
     from .configuration_schema import METADATA_KEYS
     from .configuration_values import resolve_battery_quantities
-    from .energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
+    from .shs_core.energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
     from .device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
     from .operating_modes import device_mode
     from .presentation import battery_status_text
 else:
-    import home_runtime as rt
-    from home_host import HomeHost, HostPorts, DispatchRejected
-    from battery_native_adapter import SigenAdapter
-    from battery_conversion import conversion_model, windows_from_statistics
-    from battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
-    import plan_execution as execution
-    from runtime_json import Records
-    from resource_profiling import ResourceProfiler
+    from shs_core import home_runtime as rt
+    from shs_core.home_host import HomeHost, HostPorts, DispatchRejected
+    from shs_core.battery_native_adapter import SigenAdapter
+    from shs_core.battery_conversion import conversion_model, windows_from_statistics
+    from shs_core.battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
+    from shs_core import plan_execution as execution
+    from shs_core.runtime_json import Records
+    from shs_core.resource_profiling import ResourceProfiler
     from battery_live import native_surface, source_revision, planned_power_bindings
-    from battery_supply import SupplyScope, observe_supply
+    from shs_core.battery_supply import SupplyScope, observe_supply
     from configuration_schema import METADATA_KEYS
     from configuration_values import resolve_battery_quantities
-    from energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
+    from shs_core.energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
     from device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
     from operating_modes import device_mode
     from presentation import battery_status_text
@@ -146,9 +146,9 @@ class BatteryRuntime:
             if value.get('schema') != 'battery-runtime-v4':
                 raise ValueError('invalid battery runtime journal')
             if __package__:
-                from .home_runtime_checkpoint import decode_checkpoint
+                from .shs_core.home_runtime_checkpoint import decode_checkpoint
             else:
-                from home_runtime_checkpoint import decode_checkpoint
+                from shs_core.home_runtime_checkpoint import decode_checkpoint
             if value['checkpoint'] is None:
                 self._bootstrap=session.account
                 self._bootstrap_rejection=session.plan_rejection
@@ -410,9 +410,9 @@ class BatteryRuntime:
 
     async def _persist_state(self,state):
         if __package__:
-            from .home_runtime_checkpoint import encode_checkpoint, _check_state
+            from .shs_core.home_runtime_checkpoint import encode_checkpoint, _check_state
         else:
-            from home_runtime_checkpoint import encode_checkpoint, _check_state
+            from shs_core.home_runtime_checkpoint import encode_checkpoint, _check_state
         with self.profiler.measure('checkpoint_encode'):
             _check_state(state)
             shell=replace(state,execution=rt.ExecutionSession())

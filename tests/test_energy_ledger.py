@@ -7,15 +7,15 @@ import subprocess
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
-from energy_ledger import (
+from shs_core.energy_ledger import (
     EnergyBounds, MeterSpec, CounterSample, create_ledger, record_sample,
     prune_ledger, mark_actuals, mark_retained_actuals, actuals_since,
 )
-from home_runtime import (
+from shs_core.home_runtime import (
     create_home, GroupSpec, Envelope, Limits, MeterObserved, LedgerPruned,
     reduce_home, Persist, Send,
 )
-from home_runtime_checkpoint import encode_checkpoint, decode_checkpoint, restore_checkpoint
+from shs_core.home_runtime_checkpoint import encode_checkpoint, decode_checkpoint, restore_checkpoint
 
 HOUR = 3600000
 

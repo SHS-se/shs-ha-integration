@@ -4,9 +4,9 @@ from __future__ import annotations
 from copy import deepcopy
 
 if __package__:
-    from .home_runtime import WriterGrant, WriterIdentity
+    from .shs_core.home_runtime import WriterGrant, WriterIdentity
 else:
-    from home_runtime import WriterGrant, WriterIdentity
+    from shs_core.home_runtime import WriterGrant, WriterIdentity
 
 
 class BatteryWriterFence:

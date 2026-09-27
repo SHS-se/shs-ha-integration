@@ -2,7 +2,9 @@
 
 Status: accepted architecture, 27 September 2026. The first installable observation
 release is implemented; see [the app documentation](../apps/shs_energy/DOCS.md).
-Runtime extraction, durable command handover and data migration below remain planned.
+The first shared-core extraction and read-only snapshot rehearsal are implemented;
+see [runtime-extraction.md](runtime-extraction.md). Full runtime extraction, durable
+command handover and actual data migration below remain planned.
 The user selected Home Assistant OS first. The cloud planner remains in its present service. UI details are
 in [app-ui-design.md](app-ui-design.md).
 

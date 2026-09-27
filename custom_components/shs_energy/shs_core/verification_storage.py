@@ -15,6 +15,38 @@ from time import perf_counter, thread_time
 SECTIONS = ('attempts', 'evaluations', 'configurations', 'slots')
 
 
+def _decode_verification(db):
+    db.execute('BEGIN')
+    version = db.execute('PRAGMA user_version').fetchone()[0]
+    if version == 0:
+        return None  # Initialization transaction never committed.
+    if version != 1:
+        raise ValueError(f'Unsupported verification database version: {version}')
+    state = db.execute('SELECT revision FROM journal_state WHERE id=1').fetchone()
+    if state is None:
+        raise ValueError('Verification database has no committed state')
+    records = {(section, key): (json.loads(payload), ordinal)
+               for section, key, ordinal, payload in db.execute(
+                   'SELECT section, key, ordinal, payload FROM records ORDER BY ordinal')}
+    metadata = {key: json.loads(payload) for key, payload in
+                db.execute('SELECT key, payload FROM metadata')}
+    return state[0], records, metadata
+
+
+def read_verification_snapshot(path):
+    """Read committed records without legacy import or journal mutation."""
+    path = Path(path).resolve(strict=True)
+    db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
+    try:
+        db.execute('PRAGMA query_only=ON')
+        result = _decode_verification(db)
+        if result is None:
+            raise ValueError('Verification snapshot has no committed state')
+        return result
+    finally:
+        db.close()
+
+
 class VerificationStorage:
     def __init__(self, path, run_blocking, legacy_store, encode):
         self.path = Path(path)
@@ -63,22 +95,9 @@ class VerificationStorage:
             return None
         db = self._connect()
         try:
-            version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version == 0:
-                return None  # Initialization transaction never committed.
-            if version != 1:
-                raise ValueError(f'Unsupported verification database version: {version}')
-            state = db.execute('SELECT revision FROM journal_state WHERE id=1').fetchone()
-            if state is None:
-                raise ValueError('Verification database has no committed state')
-            records = {(section, key): (json.loads(payload), ordinal)
-                       for section, key, ordinal, payload in db.execute(
-                           'SELECT section, key, ordinal, payload FROM records ORDER BY ordinal')}
-            metadata = {key: json.loads(payload) for key, payload in
-                        db.execute('SELECT key, payload FROM metadata')}
+            return _decode_verification(db)
         finally:
             db.close()
-        return state[0], records, metadata
 
     async def async_load(self):
         async with self._lock:

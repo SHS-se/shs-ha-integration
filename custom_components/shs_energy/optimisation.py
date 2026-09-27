@@ -1049,9 +1049,9 @@ def validate_plan_contract(
         if "battery_execution" in plan:
             try:
                 if __package__:
-                    from .plan_execution import read_contract
+                    from .shs_core.plan_execution import read_contract
                 else:
-                    from plan_execution import read_contract
+                    from shs_core.plan_execution import read_contract
                 contract = read_contract(plan["battery_execution"])
                 if contract.plan_id != plan.get("plan_id") or contract.mode != from_modes.get("$battery"):
                     raise ValueError("battery execution identity or mode differs from the plan")

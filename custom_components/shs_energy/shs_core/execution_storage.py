@@ -13,15 +13,11 @@ import json
 from pathlib import Path
 import sqlite3
 from time import perf_counter, thread_time
+from typing import NamedTuple
 
-if __package__:
-    from . import plan_execution as execution
-    from .home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES
-    from .runtime_json import encode_value, decode_value
-else:
-    import plan_execution as execution
-    from home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES
-    from runtime_json import encode_value, decode_value
+from . import plan_execution as execution
+from .home_runtime import ExecutionSession, ExecutionTrace, MAX_EXECUTION_TRACES
+from .runtime_json import encode_value, decode_value
 
 HISTORIES = ('meters', 'observations', 'admissions', 'reconciliations')
 TABLES = (*HISTORIES, 'traces')
@@ -49,6 +45,75 @@ def _shell(session):
     value = {field.name: encode_value(getattr(session, field.name))
              for field in fields(ExecutionSession) if field.name not in ('account', 'traces')}
     return dict(value, type='ExecutionSession', account=account, traces=[])
+
+
+class ExecutionSnapshot(NamedTuple):
+    metadata: dict
+    session: ExecutionSession
+    revision: int
+    trace_start: int
+    cleanup_pending: int
+    database_bytes: int
+
+
+def _version(db):
+    version = db.execute('PRAGMA user_version').fetchone()[0]
+    if version == 0:
+        if db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone():
+            raise ValueError('Unversioned execution database contains tables')
+    elif version != 1:
+        raise ValueError(f'Unsupported execution database version: {version}')
+    return version
+
+def _decode_execution(db, size):
+    if _version(db) == 0:
+        return None  # A first/import transaction was never committed.
+    db.execute('BEGIN')
+    row = db.execute('SELECT revision, metadata, session, cleanup_pending, counts FROM head WHERE id=1').fetchone()
+    if row is None:
+        raise ValueError('Execution database has no committed checkpoint')
+    revision, metadata, shell, cleanup, counts = row
+    if cleanup not in (0, 1, 2):
+        raise ValueError('Invalid execution migration state')
+    counts = json.loads(counts)
+    for name in TABLES:
+        count, first, last = db.execute(f'SELECT COUNT(*),MIN(ordinal),MAX(ordinal) FROM {name}').fetchone()
+        if count != counts[name] or (count and last - first + 1 != count) or (count and name != 'traces' and first != 0):
+            raise ValueError(f'Execution {name} differs from its committed count')
+    raw = json.loads(shell)
+    captured = raw['captured_feedback']
+    if captured is not None and not isinstance(captured, str):
+        raise ValueError('Invalid captured planning request')
+    base = replace(decode_value({**raw, 'captured_feedback':None}, ExecutionSession), captured_feedback=captured)
+    # Decode one record at a time: never build a second full JSON tree.
+    meters = tuple(execution.MeterReceipt(*row) for row in db.execute(
+        'SELECT event_id,stream,direction,boundary,epoch,source_at_ms,total_mwh,receipt,physical_id FROM meters ORDER BY ordinal'))
+    observations = tuple(execution.StateObservation(a, b, c, bool(d)) for a, b, c, d in db.execute(
+        'SELECT at_ms,stored_mwh,source,measured FROM observations ORDER BY ordinal'))
+    histories = {name: tuple(decode_value(json.loads(row[0]), kind) for row in db.execute(
+        f'SELECT payload FROM {name} ORDER BY ordinal')) for name, kind in
+        (('admissions', execution.Admission), ('reconciliations', execution.StateReconciliation))}
+    traces = tuple(decode_value(json.loads(row[0]), ExecutionTrace) for row in db.execute(
+        'SELECT payload FROM traces ORDER BY ordinal'))
+    if len(traces) > MAX_EXECUTION_TRACES:
+        raise ValueError('Execution database exceeds trace retention')
+    trace_start = db.execute('SELECT COALESCE(MIN(ordinal),0) FROM traces').fetchone()[0]
+    account = replace(base.account, meters=meters, observations=observations, **histories)
+    return ExecutionSnapshot(json.loads(metadata), replace(base, account=account, traces=traces), revision, trace_start, cleanup, size)
+
+
+def read_execution_snapshot(path):
+    """Read an existing committed snapshot; never import, write or clean up."""
+    path = Path(path).resolve(strict=True)
+    db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
+    try:
+        db.execute('PRAGMA query_only=ON')
+        result = _decode_execution(db, path.stat().st_size)
+        if result is None:
+            raise ValueError('Execution snapshot has no committed checkpoint')
+        return result
+    finally:
+        db.close()
 
 
 class ExecutionStorage:
@@ -92,54 +157,12 @@ class ExecutionStorage:
                 if task.cancelled():
                     raise
 
-    def _version(self, db):
-        version = db.execute('PRAGMA user_version').fetchone()[0]
-        if version == 0:
-            if db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone():
-                raise ValueError('Unversioned execution database contains tables')
-        elif version != 1:
-            raise ValueError(f'Unsupported execution database version: {version}')
-        return version
-
     def _read(self):
         if not self.path.exists():
             return None
         db = self._connect()
         try:
-            if self._version(db) == 0:
-                return None  # A first/import transaction was never committed.
-            db.execute('BEGIN')
-            row = db.execute('SELECT revision, metadata, session, cleanup_pending, counts FROM head WHERE id=1').fetchone()
-            if row is None:
-                raise ValueError('Execution database has no committed checkpoint')
-            revision, metadata, shell, cleanup, counts = row
-            if cleanup not in (0, 1, 2):
-                raise ValueError('Invalid execution migration state')
-            counts = json.loads(counts)
-            for name in TABLES:
-                count, first, last = db.execute(f'SELECT COUNT(*),MIN(ordinal),MAX(ordinal) FROM {name}').fetchone()
-                if count != counts[name] or (count and last - first + 1 != count) or (count and name != 'traces' and first != 0):
-                    raise ValueError(f'Execution {name} differs from its committed count')
-            raw = json.loads(shell)
-            captured = raw['captured_feedback']
-            if captured is not None and not isinstance(captured, str):
-                raise ValueError('Invalid captured planning request')
-            base = replace(decode_value({**raw, 'captured_feedback':None}, ExecutionSession), captured_feedback=captured)
-            # Decode one record at a time: never build a second full JSON tree.
-            meters = tuple(execution.MeterReceipt(*row) for row in db.execute(
-                'SELECT event_id,stream,direction,boundary,epoch,source_at_ms,total_mwh,receipt,physical_id FROM meters ORDER BY ordinal'))
-            observations = tuple(execution.StateObservation(a, b, c, bool(d)) for a, b, c, d in db.execute(
-                'SELECT at_ms,stored_mwh,source,measured FROM observations ORDER BY ordinal'))
-            histories = {name: tuple(decode_value(json.loads(row[0]), kind) for row in db.execute(
-                f'SELECT payload FROM {name} ORDER BY ordinal')) for name, kind in
-                (('admissions', execution.Admission), ('reconciliations', execution.StateReconciliation))}
-            traces = tuple(decode_value(json.loads(row[0]), ExecutionTrace) for row in db.execute(
-                'SELECT payload FROM traces ORDER BY ordinal'))
-            if len(traces) > MAX_EXECUTION_TRACES:
-                raise ValueError('Execution database exceeds trace retention')
-            trace_start = db.execute('SELECT COALESCE(MIN(ordinal),0) FROM traces').fetchone()[0]
-            account = replace(base.account, meters=meters, observations=observations, **histories)
-            return json.loads(metadata), replace(base, account=account, traces=traces), revision, trace_start, cleanup, self.path.stat().st_size
+            return _decode_execution(db, self.path.stat().st_size)
         finally:
             db.close()
 
@@ -220,7 +243,7 @@ class ExecutionStorage:
         db = self._connect()
         try:
             db.execute('BEGIN IMMEDIATE')
-            if self._version(db) == 0:
+            if _version(db) == 0:
                 for statement in SCHEMA:
                     db.execute(statement)
             row = db.execute('SELECT revision FROM head WHERE id=1').fetchone()

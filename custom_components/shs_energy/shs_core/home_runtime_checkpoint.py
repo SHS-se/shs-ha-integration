@@ -4,12 +4,8 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 
-if __package__:
-    from . import home_runtime as runtime
-    from .runtime_json import MAX_BYTES, encode_value as _encode, decode_value as _decode, read_runtime_json
-else:
-    import home_runtime as runtime
-    from runtime_json import MAX_BYTES, encode_value as _encode, decode_value as _decode, read_runtime_json
+from . import home_runtime as runtime
+from .runtime_json import MAX_BYTES, encode_value as _encode, decode_value as _decode, read_runtime_json
 
 
 def _check_state(state):

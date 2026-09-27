@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import AsyncMock
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
 from battery_writer import BatteryWriterFence
-from home_runtime import WriterIdentity
+from shs_core.home_runtime import WriterIdentity
 import test_controller as fixtures
 
 

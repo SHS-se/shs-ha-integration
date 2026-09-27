@@ -10,15 +10,15 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
-from battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation
-from battery_supply import SupplyScope
+from shs_core.battery_physical import ExecutionConditions, ContextIdentity, Permissions, BatteryPlant, BatteryOperation
+from shs_core.battery_supply import SupplyScope
 from types import SimpleNamespace
-from battery_conversion import Conversion, Curve
-from plan_execution import *
-from home_runtime import ReplanRequested, CounterReceived
-from energy_ledger import (MeterSpec, CounterSample, EnergyBounds, create_ledger, mark_actuals,
+from shs_core.battery_conversion import Conversion, Curve
+from shs_core.plan_execution import *
+from shs_core.home_runtime import ReplanRequested, CounterReceived
+from shs_core.energy_ledger import (MeterSpec, CounterSample, EnergyBounds, create_ledger, mark_actuals,
                            reconciled_actuals)
-from home_runtime import (
+from shs_core.home_runtime import (
     OperationBinding, NativeCatalog, ScopeParticipant, ExecutionScope, ExecutionAuthority,
     AuthorityInstalled, ConditionsObserved, ExecutionPlanOffered, ExternalDemand, WriterIdentity,
     WriterGrant, GrantConfirmed, GrantRevoked, ReleaseApproved, AuthorityChanged, Requested,
@@ -27,7 +27,7 @@ from home_runtime import (
     LedgerPruned, Persist, Send, NeedPlan, NeedTransition, create_home, reduce_home,
     reservation, authorize_send,
 )
-from home_runtime_checkpoint import encode_checkpoint, decode_checkpoint, restore_checkpoint, event_json
+from shs_core.home_runtime_checkpoint import encode_checkpoint, decode_checkpoint, restore_checkpoint, event_json
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 
@@ -162,7 +162,7 @@ class Harness:
 
 class ExecutableRuntimeTests(unittest.TestCase):
     def test_only_the_latest_traces_are_retained_in_whole_archive_pages(self):
-        from home_runtime import MAX_EXECUTION_TRACES, TRACE_TRIM, ExecutionTrace, retain_traces
+        from shs_core.home_runtime import MAX_EXECUTION_TRACES, TRACE_TRIM, ExecutionTrace, retain_traces
         # The archive stores traces 128 to a page; trimming whole pages keeps the rest reusable.
         self.assertEqual((MAX_EXECUTION_TRACES % 128, TRACE_TRIM % 128), (0, 0))
         full = tuple(range(MAX_EXECUTION_TRACES))

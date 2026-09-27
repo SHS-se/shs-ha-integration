@@ -4,16 +4,16 @@ from pathlib import Path
 import sys
 import unittest
 sys.path.append(str(Path(__file__).parents[1]/'custom_components/shs_energy'))
-from home_host import HomeHost, HostPorts, DispatchRejected
-from home_runtime import ExecutionPlanOffered, Proposed, Step, Guard, Observed, Observation, TransportResult
-from home_runtime_checkpoint import decode_checkpoint, encode_checkpoint
+from shs_core.home_host import HomeHost, HostPorts, DispatchRejected
+from shs_core.home_runtime import ExecutionPlanOffered, Proposed, Step, Guard, Observed, Observation, TransportResult
+from shs_core.home_runtime_checkpoint import decode_checkpoint, encode_checkpoint
 from test_home_runtime_execution import Harness
 
 
 class HomeHostTests(unittest.IsolatedAsyncioTestCase):
     def test_service_completion_advances_once_without_register_confirmation(self):
         from dataclasses import replace
-        from home_runtime import Tick
+        from shs_core.home_runtime import Tick
         h=Harness();h.offer();h.prepare();h.durable()
         attempt=h.group.attempts[0]
         measured=h.group.observation
@@ -36,7 +36,7 @@ class HomeHostTests(unittest.IsolatedAsyncioTestCase):
             if fail_persist: raise OSError('disk unavailable')
             durable.append(data)
         async def dispatch(send):
-            from home_runtime import authorize_send
+            from shs_core.home_runtime import authorize_send
             if not grant or not authorize_send(host.state,send,h.now):
                 raise DispatchRejected('permission changed')
             saved=decode_checkpoint(durable[-1])
@@ -133,7 +133,7 @@ class HomeHostTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_hung_adapter_is_cancelled_and_retried_without_writing(self):
         from dataclasses import replace
-        from home_runtime import Tick
+        from shs_core.home_runtime import Tick
         host,h,writes,_,reports=await self.make_host()
         host.state=replace(host.state,limits=replace(host.state.limits,transition_timeout_ms=10))
         original=host.ports.transition
@@ -168,7 +168,7 @@ class HomeHostTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_delayed_proposal_cannot_restore_revoked_authority(self):
         from dataclasses import replace
-        from home_runtime import GrantRevoked
+        from shs_core.home_runtime import GrantRevoked
         host,h,writes,_,_=await self.make_host()
         original=host.ports.transition
         entered=asyncio.Event();finish=asyncio.Event()

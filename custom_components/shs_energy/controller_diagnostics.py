@@ -10,14 +10,14 @@ if __package__:
     from .verification import observation, evaluation_record, VerificationJournal
     from .api_contract import INTEGRATION_VERSION
     from .configuration_fields import _control_fields, POWER_FIELD, OPTIONAL_TEMPERATURE_FIELD
-    from .runtime_json import Records, record_json
+    from .shs_core.runtime_json import Records, record_json
 else:
     from controller_observations import diagnostic_inventory, observation_entities, field_entities
     from presentation import execution_view
     from verification import observation, evaluation_record, VerificationJournal
     from api_contract import INTEGRATION_VERSION
     from configuration_fields import _control_fields, POWER_FIELD, OPTIONAL_TEMPERATURE_FIELD
-    from runtime_json import Records, record_json
+    from shs_core.runtime_json import Records, record_json
 
 # JSON fragments reach zlib in batches of this size. Compression releases the
 # GIL, so the event loop keeps running beside the worker thread.
