@@ -63,3 +63,28 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
             document = json.loads(gzip.decompress(gzip_report(report_parts(value, dumps), dumps)))
             self.assertEqual(len(document['execution_traces']), 1)
             self.assertEqual(document['execution_trace_retention']['max_age_days'], 3)
+
+    async def test_empty_sub_event_keeps_durable_cursor_until_complete_receipt(self):
+        from copy import deepcopy
+        from shs_core.receipt_inbox import processing_checkpoint
+        rig = Rig()
+        runtime = AppBatteryRuntime(rig.coordinator, rig.controller, rig.store, lambda: rig.now)
+        rig.runtime = runtime
+        self.addAsyncCleanup(runtime.close, release=False)
+        await runtime.open()
+        await runtime.refresh()
+        await runtime.host.idle()
+        state = runtime.host.state
+        await runtime._persist_state(state)
+        before = deepcopy(rig.store.saved)
+        partial = processing_checkpoint(IDENTITY, 1, 0, complete=False)
+        complete = processing_checkpoint(IDENTITY, 1, 1, complete=True)
+        await runtime._persist_received(state, partial)
+        # A restart sees the previous durable cursor, so no effect can be lost.
+        self.assertEqual(rig.store.saved, before)
+        await runtime._persist_received(state, complete)
+        self.assertEqual(rig.store.saved['gateway_processing'], complete)
+        changed = replace(state, revision=state.revision+1)
+        partial = processing_checkpoint(IDENTITY, 2, 0, complete=False)
+        await runtime._persist_received(changed, partial)
+        self.assertEqual(rig.store.saved['gateway_processing'], partial)

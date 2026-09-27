@@ -1,5 +1,5 @@
 name: SHS Energy
-version: 0.1.0-beta.19
+version: 0.1.0-beta.20
 slug: shs_energy
 description: Your energy plan, controller insights and system diagnostics
 url: https://github.com/SHS-se/shs-ha-integration/tree/main/apps/shs_energy

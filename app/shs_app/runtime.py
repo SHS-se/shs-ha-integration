@@ -5,6 +5,19 @@ from shs_core.home_runtime import TRACE_RETENTION_MS
 
 
 class AppBatteryRuntime(BatteryRuntime):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._durable_state = None
+
+    async def _save_state(self, state, processing):
+        # An empty counter sub-event changes only the in-memory replay cursor.
+        # The complete receipt still commits its source mirror and cursor. A
+        # crash here resumes the preceding receipt and safely repeats the no-op.
+        if processing and not processing['complete'] and state is self._durable_state:
+            return
+        await super()._save_state(state, processing)
+        self._durable_state = state
+
     def snapshot(self, *, include_evidence=False):
         # Operational facts remain in indexed storage. A routine diagnostics
         # download must not reconstruct or serialize their lifetime archive on
