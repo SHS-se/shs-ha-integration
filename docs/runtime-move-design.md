@@ -272,7 +272,7 @@ app metadata check confirms that the existing SHS icon bytes remain identical in
 the integration, app-store assets and web interface. No live export, source fence,
 gateway seed, app activation or HA restart was performed for this foundation.
 
-## Final app ownership composition (beta.58 / app beta.10)
+## Final app ownership composition (beta.58 / app beta.11)
 
 The final composition replaces HA's policy runtime with `GatewayService`,
 `DeviceGateway` and `BatteryGateway`. HA retains canonical configuration, source

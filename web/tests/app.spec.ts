@@ -5,6 +5,7 @@ test('branded ingress dashboard, navigation, schedule inspection and themes',asy
   await page.goto('./');
   await expect(page.getByRole('heading',{name:'A clearer view of your energy'})).toBeVisible();
   await expect(page.getByText('3.79 kW')).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Your app is running the home'})).toBeVisible();
   await expect(page.locator('.brand img')).toHaveJSProperty('naturalWidth',512);
   await page.screenshot({path:`test-results/${info.project.name}-overview.png`,fullPage:true});
   await page.getByRole('link',{name:'Schedule',exact:true}).click();
