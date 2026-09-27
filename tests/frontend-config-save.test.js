@@ -1301,7 +1301,7 @@ const controllerExplanation = () => ({
 
 test('battery card explains plan, difference and next action using the home timezone', () => {
   const panel = Object.create(context.Panel.prototype);
-  panel._backend = {language: 'en-GB', config: {time_zone: 'Europe/Stockholm'}};
+  panel._data = {locale: {language: 'en-GB', timezone: 'Europe/Stockholm'}};
   const html = panel._batteryOutlook({battery_runtime: {explanation: controllerExplanation()}});
   assert.equal((html.match(/<p /g) || []).length, 1);
   assert.match(html, /charge the battery now for later use/);

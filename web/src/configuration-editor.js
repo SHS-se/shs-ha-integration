@@ -112,7 +112,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _label(value) { return this._data?.labels?.[value] || "Not available"; }
 
   _time(value) {
-    return value ? new Date(value).toLocaleString(this._data?.locale?.language || undefined, { dateStyle: "medium", timeStyle: "short" }) : "Not yet";
+    return value ? new Date(value).toLocaleString(this._data?.locale?.language || undefined, { timeZone: this._data?.locale?.timezone, dateStyle: "medium", timeStyle: "short" }) : "Not yet";
   }
 
   _generalFields() {
