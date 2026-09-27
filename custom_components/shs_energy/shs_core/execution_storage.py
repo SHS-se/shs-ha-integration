@@ -271,11 +271,15 @@ class ExecutionStorage:
             db.execute('INSERT OR REPLACE INTO head VALUES (1,?,?,?,?,?)',
                        (self._revision + 1, metadata_json, shell, int(cleanup_pending),
                         _json({name:len(session.traces if name=='traces' else getattr(session.account,name)) for name in TABLES})))
+            self._additional_checkpoint(db,metadata,session)
             db.execute('PRAGMA user_version=1')
             db.commit()
         finally:
             db.close()
         return sum(map(len, appended.values())), dropped, encoded_bytes, (thread_time() - started) * 1000, self.path.stat().st_size
+
+    def _additional_checkpoint(self,db,metadata,session):
+        """Composition hook: additional app facts share the domain transaction."""
 
     async def save(self, metadata, session):
         async with self._lock:

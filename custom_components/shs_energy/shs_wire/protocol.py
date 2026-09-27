@@ -8,7 +8,7 @@ PROTOCOL = 3
 CAPABILITIES = frozenset({
     'ordered-receipts-v1', 'native-devices-v1', 'native-battery-v1',
     'source-queries-v1', 'entity-projection-v1', 'app-requests-v1',
-    'app-configuration-v1',
+    'app-configuration-v1', 'processed-receipt-retirement-v1',
 })
 
 

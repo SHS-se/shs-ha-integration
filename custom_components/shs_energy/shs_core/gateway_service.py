@@ -184,7 +184,7 @@ class AppConnection(GatewayConnection):
                 service.connection = self
                 return await super()._dispatch(value)
             service.require_socket()
-            if op in ('receipts', 'ack_delivery', 'snapshot'):
+            if op in ('receipts', 'ack_delivery', 'ack_processed', 'snapshot'):
                 return await super()._dispatch(value)
             if (set(value) != {'id', 'operation', 'body'} or type(value['id']) is not int
                     or type(body) is not dict or op not in FIELDS or set(body) != FIELDS[op]):

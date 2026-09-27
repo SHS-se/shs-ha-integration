@@ -32,6 +32,20 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.gateway.load_record('ownership'),ownership)
         self.assertEqual(self.gateway.snapshot(self.session)['through'],ordinal)
 
+    def test_processed_retirement_preserves_watermark_and_rejects_old_consumers(self):
+        page=self.gateway.read(self.session,0)
+        through=page['through']
+        with self.assertRaises(GatewayConflict):self.gateway.acknowledge_processed(self.session,through)
+        self.gateway.acknowledge_delivery(self.session,through)
+        self.gateway.acknowledge_processed(self.session,through)
+        self.assertEqual(self.gateway.snapshot(self.session)['through'],through)
+        with self.assertRaises(GatewayConflict):self.gateway.read(self.session,0)
+        self.assertEqual(self.gateway.read(self.session,through)['receipts'],[])
+        self.gateway.close();self.gateway.open()
+        session=self.gateway.begin(IDENTITY,'restart')['session']
+        page=self.gateway.read(session,through)
+        self.assertEqual(page['receipts'][0]['ordinal'],through+1)
+
     def test_seed_preserves_uncertain_history_without_a_command_queue(self):
         with closing(self.gateway.connect(readonly=True)) as db:
             self.assertEqual([tuple(r) for r in db.execute('SELECT command_id,source_status,status FROM inherited_commands ORDER BY ordinal')],
@@ -137,6 +151,17 @@ class InboxTests(unittest.TestCase):
     def page(self, *ordinals):
         return dict(receipts=[dict(ordinal=i, kind='observation', payload={'entity_id':'sensor.power', 'value':i}) for i in ordinals],
                     through=ordinals[-1], high=ordinals[-1])
+
+    def test_retirement_survives_restart_without_reusing_ordinals(self):
+        self.inbox.receive(self.page(1,2))
+        self.inbox.retire(2)
+        self.inbox.close();self.inbox.open()
+        self.assertEqual(self.inbox.progress(),dict(floor=2,high=2,retained=0))
+        self.assertEqual(self.inbox.after(2),[])
+        with self.assertRaises(GatewayConflict):self.inbox.after(0)
+        self.inbox.receive(self.page(3))
+        self.assertEqual([r['ordinal'] for r in self.inbox.after(2)],[3])
+        with self.assertRaises(GatewayConflict):self.inbox.retire(4)
 
     def test_durable_delivery_reopen_duplicate_and_distinct_processing_checkpoint(self):
         page = self.page(1, 2)

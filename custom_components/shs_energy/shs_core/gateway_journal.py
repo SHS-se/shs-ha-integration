@@ -64,7 +64,7 @@ class GatewayJournal:
         db.execute('PRAGMA busy_timeout=5000')
         if not readonly:
             db.execute('PRAGMA synchronous=FULL')
-        if db.execute('PRAGMA user_version').fetchone()[0] != 1:
+        if db.execute('PRAGMA user_version').fetchone()[0] not in (1,2):
             db.close()
             raise ValueError('Unsupported gateway journal')
         db.execute('BEGIN' if readonly else 'BEGIN IMMEDIATE')
@@ -141,7 +141,10 @@ class GatewayJournal:
     def _append(db, kind, value):
         if kind not in RECEIPT_KINDS:
             raise ValueError('Unknown gateway receipt kind')
-        return db.execute('INSERT INTO receipts(kind,payload) VALUES (?,?)', (kind, encoded(value))).lastrowid
+        ordinal = db.execute('SELECT high+1 FROM transport').fetchone()[0]
+        db.execute('INSERT INTO receipts VALUES (?,?,?)',(ordinal,kind,encoded(value)))
+        db.execute('UPDATE transport SET high=? WHERE id=1',(ordinal,))
+        return ordinal
 
     def open(self):
         if self.lease is not None:
@@ -149,6 +152,10 @@ class GatewayJournal:
         lease = WriterLease(str(self.path)+'.lock')
         try:
             with closing(self.connect()) as db, db:
+                if db.execute('PRAGMA user_version').fetchone()[0] == 1:
+                    db.execute('CREATE TABLE transport (id INTEGER PRIMARY KEY CHECK(id=1), floor INTEGER NOT NULL, high INTEGER NOT NULL)')
+                    db.execute('INSERT INTO transport SELECT 1,0,coalesce(max(ordinal),0) FROM receipts')
+                    db.execute('PRAGMA user_version=2')
                 old = db.execute('SELECT boot,session FROM authority').fetchone()
                 self.boot = uuid4().hex
                 db.execute("UPDATE sessions SET status='revoked' WHERE status='connected'")
@@ -250,7 +257,9 @@ class GatewayJournal:
             raise ValueError('Invalid receipt page size')
         with closing(self.connect()) as db, db:
             self._session(db, session)
-            high = db.execute('SELECT coalesce(max(ordinal),0) FROM receipts').fetchone()[0]
+            high = db.execute('SELECT high FROM transport').fetchone()[0]
+            if after < db.execute('SELECT floor FROM transport').fetchone()[0]:
+                raise GatewayConflict('Receipt cursor precedes the processed gateway prefix')
             if after > high:
                 raise GatewayConflict('Receipt cursor is ahead of the gateway')
             rows = db.execute('SELECT * FROM receipts WHERE ordinal>? ORDER BY ordinal LIMIT ?', (after, limit)).fetchall()
@@ -267,11 +276,22 @@ class GatewayJournal:
             db.execute('UPDATE sessions SET delivered=? WHERE id=?', (through, session))
             return through
 
+    def acknowledge_processed(self, session, through):
+        cursor(through)
+        with closing(self.connect()) as db, db:
+            _,current=self._session(db,session)
+            floor=db.execute('SELECT floor FROM transport').fetchone()[0]
+            if through < floor or through > current['delivered']:
+                raise GatewayConflict('Processing acknowledgement is outside delivered receipts')
+            db.execute('UPDATE transport SET floor=? WHERE id=1',(through,))
+            db.execute('DELETE FROM receipts WHERE ordinal<=?',(through,))
+            return through
+
     def snapshot(self, session):
         with closing(self.connect(readonly=True)) as db:
             authority, _ = self._session(db, session)
             config = db.execute('SELECT payload FROM configuration').fetchone()
-            return {'through': db.execute('SELECT coalesce(max(ordinal),0) FROM receipts').fetchone()[0],
+            return {'through': db.execute('SELECT high FROM transport').fetchone()[0],
                     'configuration_revision': authority['configuration_revision'],
                     'configuration': json.loads(config[0]) if config else None,
                     'observations': {r['entity']: {'receipt': r['receipt'], 'value': json.loads(r['payload'])} for r in db.execute('SELECT * FROM latest')},
@@ -302,7 +322,7 @@ class GatewayJournal:
                 raise GatewayConflict('Migration already activated with another identity')
             if not row['configuration_revision'] or row['configuration_revision'] != proof['configuration_revision']:
                 raise GatewayConflict('Configuration changed before activation')
-            high = db.execute('SELECT coalesce(max(ordinal),0) FROM receipts').fetchone()[0]
+            high = db.execute('SELECT high FROM transport').fetchone()[0]
             if proof['through'] > high or current['delivered'] < proof['through']:
                 raise GatewayConflict('Reconcile and durably receive the declared receipt prefix before activation')
             receipt = self._append(db, 'activation', {'activation': activation_id, 'proof_sha256': digest(proof)})

@@ -36,7 +36,7 @@ class ReceiptInbox:
                     os.fsync(directory)
                 finally:
                     os.close(directory)
-            with closing(self._connect()) as db:
+            with closing(self._connect(upgrade=True)) as db, db:
                 if json.loads(db.execute('SELECT payload FROM identity').fetchone()[0]) != self.identity:
                     raise GatewayConflict('Inbox belongs to another migration or release pair')
             self.lease = lease
@@ -45,15 +45,20 @@ class ReceiptInbox:
             lease.close()
             raise
 
-    def _connect(self):
+    def _connect(self, *, upgrade=False):
         if self.path.is_symlink() or not self.path.is_file():
             raise ValueError('Receipt inbox must be a regular file')
         db = sqlite3.connect(self.path.resolve(strict=True).as_uri() + '?mode=rw', uri=True)
         db.execute('PRAGMA synchronous=FULL')
-        if db.execute('PRAGMA user_version').fetchone()[0] != 1:
+        version = db.execute('PRAGMA user_version').fetchone()[0]
+        if version not in ((1,2) if upgrade else (2,)):
             db.close()
             raise ValueError('Unsupported receipt inbox schema')
         db.execute('BEGIN IMMEDIATE')
+        if version == 1:
+            db.execute('CREATE TABLE progress (id INTEGER PRIMARY KEY CHECK(id=1), floor INTEGER NOT NULL, high INTEGER NOT NULL)')
+            db.execute('INSERT INTO progress SELECT 1,0,coalesce(max(ordinal),0) FROM receipts')
+            db.execute('PRAGMA user_version=2')
         return db
 
     def close(self):
@@ -69,7 +74,7 @@ class ReceiptInbox:
     def through(self):
         self._require_open()
         with closing(self._connect()) as db:
-            return db.execute('SELECT coalesce(max(ordinal),0) FROM receipts').fetchone()[0]
+            return db.execute('SELECT high FROM progress').fetchone()[0]
 
     def receive(self, page):
         """Commit the entire contiguous page before allowing a delivery ACK."""
@@ -80,7 +85,7 @@ class ReceiptInbox:
         if page['through'] > page['high']:
             raise ValueError('Invalid gateway high-water mark')
         with closing(self._connect()) as db, db:
-            high = db.execute('SELECT coalesce(max(ordinal),0) FROM receipts').fetchone()[0]
+            high = db.execute('SELECT high FROM progress').fetchone()[0]
             last = None
             for row in page['receipts']:
                 if type(row) is not dict or set(row) != {'ordinal', 'kind', 'payload'} or row['kind'] not in RECEIPT_KINDS or type(row['payload']) is not dict:
@@ -97,6 +102,7 @@ class ReceiptInbox:
                 elif ordinal == high+1:
                     db.execute('INSERT INTO receipts VALUES (?,?)', (ordinal, content))
                     high = ordinal
+                    db.execute('UPDATE progress SET high=? WHERE id=1',(high,))
                 else:
                     raise GatewayConflict('Missing receipt prefix')
             if (last is not None and last != page['through']) or page['through'] > high:
@@ -109,10 +115,31 @@ class ReceiptInbox:
         if type(limit) is not int or not 1 <= limit <= 4096:
             raise ValueError('Invalid receipt page size')
         with closing(self._connect()) as db:
-            high = db.execute('SELECT coalesce(max(ordinal),0) FROM receipts').fetchone()[0]
+            high = db.execute('SELECT high FROM progress').fetchone()[0]
+            floor = db.execute('SELECT floor FROM progress').fetchone()[0]
+            if through < floor:
+                raise GatewayConflict('Consumer checkpoint precedes the retired inbox prefix')
             if through > high:
                 raise GatewayConflict('Consumer checkpoint is ahead of its durable inbox')
             return [json.loads(row[0]) for row in db.execute('SELECT payload FROM receipts WHERE ordinal>? ORDER BY ordinal LIMIT ?', (through, limit))]
+
+    def retire(self, completed):
+        """Only the execution store's completed mirror checkpoint authorizes this."""
+        self._require_open()
+        cursor(completed)
+        with closing(self._connect()) as db, db:
+            floor,high=db.execute('SELECT floor,high FROM progress').fetchone()
+            if not floor <= completed <= high:
+                raise GatewayConflict('Invalid completed inbox prefix')
+            db.execute('UPDATE progress SET floor=? WHERE id=1',(completed,))
+            db.execute('DELETE FROM receipts WHERE ordinal<=?',(completed,))
+        return completed
+
+    def progress(self):
+        self._require_open()
+        with closing(self._connect()) as db:
+            floor,high=db.execute('SELECT floor,high FROM progress').fetchone()
+            return dict(floor=floor,high=high,retained=high-floor)
 
 
 def processing_checkpoint(identity, receipt, sub_event, *, complete):

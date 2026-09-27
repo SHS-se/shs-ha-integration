@@ -41,7 +41,7 @@ class GatewayStream:
     async def call(self, operation, *args):
         if not self.accepting or self.failure:
             raise GatewayConflict('Receipt stream unavailable; reconnect after recovery')
-        if operation not in ('begin', 'disconnect', 'read', 'acknowledge_delivery', 'snapshot',
+        if operation not in ('begin', 'disconnect', 'read', 'acknowledge_delivery', 'acknowledge_processed', 'snapshot',
                              'load_record', 'save_record', 'prepare_command', 'finish_command', 'admit_route', 'read_route', 'begin_operation', 'finish_operation', 'command_outcome', 'activate', 'resume'):
             raise ValueError('Unsupported gateway operation')
         future = asyncio.get_running_loop().create_future()
@@ -126,7 +126,7 @@ class GatewayConnection:
         if type(value) is not dict or set(value) != {'id', 'operation', 'body'} or type(value['id']) is not int or value['id'] < 1 or type(value['body']) is not dict:
             raise ValueError('Malformed gateway request')
         op, body = value['operation'], value['body']
-        fields = {'connect': {'identity', 'instance'}, 'receipts': {'after', 'limit'}, 'ack_delivery': {'through'}, 'snapshot': set()}
+        fields = {'connect': {'identity', 'instance'}, 'receipts': {'after', 'limit'}, 'ack_delivery': {'through'}, 'ack_processed':{'through'}, 'snapshot': set()}
         if type(op) is not str or op not in fields or set(body) != fields[op]:
             raise ValueError('Unsupported gateway request')
         if op == 'connect':
@@ -138,6 +138,7 @@ class GatewayConnection:
             if self.session is None:
                 raise GatewayConflict('Connect the exact migration/release pair first')
             if op == 'receipts': result = await self.stream.call('read', self.session, body['after'], body['limit'])
+            elif op == 'ack_processed': result = {'processed': await self.stream.call('acknowledge_processed', self.session, body['through'])}
             elif op == 'ack_delivery': result = {'delivered': await self.stream.call('acknowledge_delivery', self.session, body['through'])}
             else: result = await self.stream.call('snapshot', self.session)
         return {'id': value['id'], 'result': result}

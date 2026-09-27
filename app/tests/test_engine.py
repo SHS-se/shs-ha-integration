@@ -129,6 +129,8 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.published[-1]['schema'],1)
         first = engine.activation['activation_id']
         consumed = engine.battery._processing['receipt']
+        self.assertEqual(engine.inbox.progress()['floor'],consumed)
+        self.assertEqual(engine.battery.store.source_checkpoint['receipt'],consumed)
         await engine.close()
         self.assertEqual(CommandJournal(self.journal_path).state()['owner'],'fenced')
         replacement = self.engine()

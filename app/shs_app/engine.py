@@ -35,6 +35,7 @@ from .projection import display_plan
 from .sources import ObservationMirror, RemoteHistory
 from .upgrades import open_runtime_schema
 from .configuration import Configuration
+from .checkpoint_storage import CheckpointStorage
 from .configuration_editor import ConfigurationEditor
 
 
@@ -153,7 +154,7 @@ class AppEngine:
         h.controller = controller
         controller.metrics.performance = {'verification_storage':verification_store.metrics}
         path = stores/f'shs_energy.execution.{entry}.sqlite'
-        self.battery = h.battery_runtime = AppBatteryRuntime(h,controller,ExecutionStorage(path,asyncio.to_thread),
+        self.battery = h.battery_runtime = AppBatteryRuntime(h,controller,CheckpointStorage(path,asyncio.to_thread,self.mirror),
             lambda:int(datetime.now(timezone.utc).timestamp()*1000))
         self.writer = h.battery_writer = RemoteBattery(self.gateway,self.battery,self.battery.now)
         self.battery.physical = self.writer
@@ -162,7 +163,7 @@ class AppEngine:
         await h.async_restore_plan()
         await self.battery.load()
         self.battery.reconcile()
-        self.checkpoint_digest = await asyncio.to_thread(file_digest,path)
+        self.checkpoint_digest = await asyncio.to_thread(self.battery.store.checkpoint_digest)
         self.scheduler = ControllerScheduler(controller,self.mirror.subscribe,self.at,self.spawn)
         h.async_add_control_listener(self.scheduler.coordinator_updated)
         h.async_add_battery_listener(controller.publish_battery_status)
@@ -196,8 +197,17 @@ class AppEngine:
         # point reach accounting one receipt at a time, even after a partial commit.
         checkpoint = self.battery._processing
         through = checkpoint['receipt']-int(not checkpoint['complete']) if checkpoint else 0
-        self.mirror.rows = {}
-        cursor = 0
+        saved=self.battery.store.source_checkpoint
+        if saved is None:
+            # Explicit one-time upgrade from the original transport archive.
+            self.mirror.rows = {}
+            cursor = 0
+        else:
+            self.mirror.context=deepcopy(saved['context'])
+            self.mirror.rows=deepcopy(saved['rows'])
+            self.mirror.revision=saved['receipt']
+            cursor=saved['receipt']
+            if cursor!=through: raise GatewayConflict('Source checkpoint does not match completed execution')
         while cursor < through:
             rows = await asyncio.to_thread(self.inbox.after,cursor)
             if not rows:
@@ -239,6 +249,11 @@ class AppEngine:
                     self.wake_projection.set()
                     if self.household.options_update_requires_reload():
                         self.spawn(self.household.async_optimisation_push(force_plan=True),'shs_app_configuration_replan')
+        saved=self.battery.store.source_checkpoint
+        if saved is not None:
+            completed=saved['receipt']
+            await asyncio.to_thread(self.inbox.retire,completed)
+            await self.gateway.call('ack_processed',{'through':completed})
         return cursor
 
     async def receipts(self):

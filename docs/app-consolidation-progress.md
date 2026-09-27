@@ -79,3 +79,21 @@ replaced by app configuration acknowledgement/conflict/recovery coverage and bro
 save checks. Browser testing caught and fixed a blur redraw dropping the Save click.
 Branding and mobile layout inspected. This stage remains undeployed while storage
 and the remaining native projection boundary are completed.
+
+## Stage 3 — atomic source checkpoints and transport retirement
+
+The execution transaction now stores the completed source mirror using changed
+source rows and a context checkpoint. Partial receipt commits retain their
+predecessor mirror. Startup restores that checkpoint, while the first upgrade
+reconstructs it once from the old inbox. Reconciliation hashes the compact
+checkpoint rather than the complete execution database.
+
+Inbox and gateway schema upgrades add explicit floor/high watermarks. Only completed
+execution progress authorizes retirement; delivery acknowledgements alone cannot
+prune. Ordinals remain monotonic even when every transport receipt has been retired.
+A reader behind the floor fails explicitly. The sealed migration source remains
+untouched.
+
+Validation: 1,033 integration tests and 59 app tests passed, including interrupted
+partial/complete checkpoint writes, retirement followed by restart, unchanged app
+activation and rejection of unprocessed acknowledgements. Not deployed yet.
