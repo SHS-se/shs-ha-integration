@@ -122,6 +122,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         await engine.close()
         self.assertEqual(CommandJournal(self.journal_path).state()['owner'],'fenced')
         replacement = self.engine()
+        replacement.paired_release = dict(self.pair,app_version='app-only-fix')
         await replacement.load()
         await replacement.activate()
         self.assertEqual(replacement.activation['activation_id'],first)

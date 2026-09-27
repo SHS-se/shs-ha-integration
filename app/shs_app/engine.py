@@ -31,6 +31,7 @@ from .migration_export import file_digest
 from .migration_import import verify_import, regular_path
 from .physical_ports import RemoteDevices, RemoteBattery
 from .records import RecordStore
+from .projection import display_plan
 from .sources import ObservationMirror, RemoteHistory
 
 
@@ -73,6 +74,7 @@ class AppEngine:
         self.started = False
         self.consume_lock = asyncio.Lock()
         self.download = None
+        self.record_stores = []
 
     def spawn(self, work, name='shs_app_work'):
         task = asyncio.create_task(work, name=name)
@@ -99,10 +101,17 @@ class AppEngine:
         self.lease = await asyncio.to_thread(WriterLease, self.root/'runtime.lock')
         self.proof = json.loads((self.root/'import.json').read_bytes())
         self.identity = validate_identity({key:self.proof[key] for key in ('entry_id','migration_id','export_sha256','pair')})
-        if self.identity['pair'] != self.paired_release:
-            raise GatewayConflict('App binary differs from the imported migration pair')
         self.marker = RecordStore(self.root/'activation.json')
         self.activation = await self.marker.async_load()
+        # The migration identity records its original app release. App-only
+        # fixes may resume it when the protocol and exact companion core remain
+        # identical; cold imports still require the complete original pair.
+        expected = self.identity['pair']
+        compatible = expected == self.paired_release or (self.activation is not None and
+            self.activation.get('state') == 'active' and
+            all(expected[key] == self.paired_release[key] for key in ('protocol','integration_version','core_sha256')))
+        if not compatible:
+            raise GatewayConflict('App binary differs from the imported migration pair')
         if self.activation is None:
             await asyncio.to_thread(verify_import,self.root,self.proof)
         elif self.activation['identity'] != self.identity:
@@ -126,7 +135,10 @@ class AppEngine:
             lambda:datetime.now(timezone.utc),lambda:False,self.repair,self.wake_projection.set,self.spawn)
         entry = self.identity['entry_id']
         stores = self.root/'stores'
-        record = lambda prefix:RecordStore(stores/f'shs_energy.{prefix}{entry}')
+        def record(prefix):
+            store = RecordStore(stores/f'shs_energy.{prefix}{entry}')
+            self.record_stores.append(store)
+            return store
         client = ShsApiClient(self.http,credentials[CONF_BASE_URL],credentials[CONF_DEVICE_TOKEN])
         h = self.household = Household(ports,client,
             store=DurableRecord(record(''),encode,json.loads),battery_inputs_store=record('battery_live_inputs.'))
@@ -240,6 +252,7 @@ class AppEngine:
         self.cached = dict(devices=await h.async_cached_device_configuration(),home=await h.async_cached_home_configuration(),
             planning=await h.async_cached_planning_configuration(),exchange=await h.async_cached_exchange_status())
         value = runtime_projection(h,self.cached,self.repairs)
+        value['values']['optimisation_plan'] = display_plan(value['values']['optimisation_plan'])
         await self.gateway.call('projection',{'value':value})
         self.publish_ui(value)
 
@@ -377,6 +390,7 @@ class AppEngine:
         await asyncio.gather(*self.tasks,return_exceptions=True)
         if self.battery: await self.battery.close(release=False)
         if self.controller: await self.controller.async_stop()
+        for store in self.record_stores: await store.async_close()
         if self.household: self.household.battery_live_inputs.close()
         if self.gateway: await self.gateway.close()
         if self.inbox: await asyncio.to_thread(self.inbox.close)

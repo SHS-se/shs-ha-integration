@@ -55,3 +55,16 @@ class RecordTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.store.async_save({})
         self.assertEqual(self.path.read_text(), '{}')
+
+    async def test_delayed_batch_uses_latest_data_and_flush_cancels_pending_timer(self):
+        data = {'sample':1}
+        self.store.async_delay_save(lambda:dict(data),.01)
+        data['sample'] = 2
+        self.store.async_delay_save(lambda:dict(data),.01)
+        await asyncio.sleep(.03)
+        await self.store.async_close()
+        self.assertEqual(await self.store.async_load(),{'sample':2})
+        self.store.async_delay_save(lambda:{'old_delayed':True},.01)
+        await self.store.async_save({'clean_stop':True})
+        await asyncio.sleep(.03)
+        self.assertEqual(await self.store.async_load(),{'clean_stop':True})

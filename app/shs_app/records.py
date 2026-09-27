@@ -2,6 +2,7 @@
 import asyncio
 from copy import deepcopy
 import json
+import logging
 import os
 from pathlib import Path
 import tempfile
@@ -15,6 +16,10 @@ class RecordStore:
         self.path = Path(path)
         self.executor = executor
         self.lock = asyncio.Lock()
+        self.delayed = None
+        self.data_func = None
+        self.writes = set()
+        self.failure = None
 
     def _read(self):
         if self.path.is_symlink():
@@ -50,7 +55,40 @@ class RecordStore:
         finally:
             os.close(directory)
 
+    def async_delay_save(self, data_func, delay):
+        self.data_func = data_func
+        if self.delayed is not None:
+            return
+        def write():
+            self.delayed = None
+            callback, self.data_func = self.data_func, None
+            task = asyncio.create_task(self._save(callback()))
+            self.writes.add(task)
+            def completed(task):
+                self.writes.discard(task)
+                if not task.cancelled() and (error := task.exception()) is not None:
+                    self.failure = error
+                    logging.getLogger(__name__).error('Delayed record write failed for %s: %s',self.path.name,error)
+            task.add_done_callback(completed)
+        self.delayed = asyncio.get_running_loop().call_later(delay,write)
+
     async def async_save(self, data):
+        if self.delayed is not None:
+            self.delayed.cancel()
+            self.delayed, self.data_func = None, None
+        await self._save(data)
+
+    async def async_close(self):
+        if self.delayed is not None:
+            data = self.data_func()
+            await self.async_save(data)
+        await asyncio.gather(*tuple(self.writes))
+        if self.failure:
+            raise self.failure
+
+    async def _save(self, data):
+        if self.failure:
+            raise self.failure
         snapshot = deepcopy(data)
         async with self.lock:
             await settled(self.executor, self._write, snapshot)
