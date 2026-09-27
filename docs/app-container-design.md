@@ -1,6 +1,11 @@
 # SHS Home Assistant OS app: architecture and migration
 
-Status: accepted architecture, 27 September 2026. The first installable observation
+Current status: runtime cutover completed on 27 September 2026; see the final live
+evidence in [runtime-move-design.md](runtime-move-design.md). The approved next phase
+is [app consolidation](app-consolidation-requirements.md), including app-owned
+configuration, retained HA entity controls and independent app updates.
+
+Historical design status: accepted architecture, 27 September 2026. The first installable observation
 release is implemented; see [the app documentation](../apps/shs_energy/DOCS.md).
 The first shared-core extraction and read-only snapshot rehearsal are implemented;
 see [runtime-extraction.md](runtime-extraction.md). Full runtime extraction, durable

@@ -1,7 +1,9 @@
 # Runtime move and cutover
 
-Status: implementation in progress, 27 September 2026. The preparation release
-remains the sole live owner until the complete replacement passes its gates.
+Status: live cutover complete, 27 September 2026. The app owns the runtime; the
+source integration runtime is fenced. Final evidence is recorded below. Earlier
+sections document the implementation stages. Next work is defined in
+[app consolidation requirements](app-consolidation-requirements.md).
 
 ## Usage
 
