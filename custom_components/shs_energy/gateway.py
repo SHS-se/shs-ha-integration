@@ -17,6 +17,7 @@ from homeassistant.util.json import json_loads
 from .configuration import (area_name_by_id, async_energy_dashboard_inventory, entity_area_id_by_id,
                             entity_display_name_by_id, resolved_options)
 from .coordinator import RecorderSource
+from .gateway_wire import ProjectionAssembly, filter_sources, validate_release
 from .shs_core.controller_inputs import configured_entity_ids
 from .shs_core.api_contract import INTEGRATION_VERSION
 from .shs_core.battery_gateway import BatteryGateway
@@ -68,7 +69,7 @@ class HomeAssistantSource:
         return wire(dict(options=dict(self.entry.options),
             home=dict(latitude=h.config.latitude, longitude=h.config.longitude, language=h.config.language,
                       timezone=h.config.time_zone, temperature_unit=h.config.units.temperature_unit),
-            entity_ids=[s.entity_id for s in h.states.async_all()], entity_names=entity_display_name_by_id(h),
+            observed_entities=sorted(self.entities), entity_ids=[s.entity_id for s in h.states.async_all()], entity_names=entity_display_name_by_id(h),
             area_names=area_name_by_id(h), entity_areas=entity_area_id_by_id(h),
             platforms={entity:item.platform for entity in self.entities if (item:=registry.async_get(entity))}))
 
@@ -94,6 +95,9 @@ class HomeAssistantSource:
             for record in self.service.physical.ownership.records.values():
                 self.entities.update(record['originals'])
                 self.entities.update(configured_entity_ids(record['options']))
+            registry = er.async_get(self.hass)
+            self.entities = filter_sources(self.entities, self.hass.states.get,
+                lambda entity: item.platform if (item := registry.async_get(entity)) else None)
             # Queue the canonical configuration and its initial source values in
             # one callback turn before acknowledging the new revision.
             context = self.context()
@@ -164,6 +168,11 @@ class HomeAssistantSource:
             physical = self.service.physical
             physical.observation_changed.set()
             state = event.data.get('new_state')
+            if state and state.attributes.get('entity_id') and er.async_get(self.hass).async_get(entity):
+                discovered = filter_sources({entity}, self.hass.states.get,
+                    lambda key: item.platform if (item := er.async_get(self.hass).async_get(key)) else None)
+                if discovered - self.entities:
+                    metadata_changed(event)
             physical.ownership.runs.observe(lambda target:state if target==entity else self.hass.states.get(target),
                 datetime.now(timezone.utc),entity=entity,received=kind=='state_change')
             if physical.ownership.runs.dirty:
@@ -189,8 +198,9 @@ async def open_gateway(hass, entry):
     journal = GatewayJournal(path)
     def read_identity():
         with closing(journal.connect(readonly=True)) as db:
-            return json.loads(db.execute('SELECT seed FROM authority').fetchone()[0])['identity']
-    identity = await hass.async_add_executor_job(read_identity)
+            row = db.execute('SELECT seed,activation FROM authority').fetchone()
+            return json.loads(row[0])['identity'], row[1] is not None
+    identity, activated = await hass.async_add_executor_job(read_identity)
     def core_digest():
         from hashlib import sha256
         root = Path(__file__).parent/'shs_core'
@@ -199,7 +209,7 @@ async def open_gateway(hass, entry):
         return sha256(json.dumps(files,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
     if identity['pair']['core_sha256'] != await hass.async_add_executor_job(core_digest):
         raise GatewayConflict('The installed companion core differs from the paired app')
-    if identity['entry_id'] != entry.entry_id or identity['pair']['integration_version'] != INTEGRATION_VERSION:
+    if identity['entry_id'] != entry.entry_id or (not activated and identity['pair']['integration_version'] != INTEGRATION_VERSION):
         raise GatewayConflict('The installed companion differs from the seeded migration release')
     await hass.async_add_executor_job(journal.open)
     stream = GatewayStream(journal, hass.async_add_executor_job)
@@ -250,7 +260,9 @@ async def websocket_gateway(hass, connection, msg):
             service = hass.data.get(GATEWAYS,{}).get(entry)
             if service is None:
                 raise GatewayConflict('The SHS gateway is not loaded for this entry')
+            validate_release(msg['body'].get('release'), service.identity, INTEGRATION_VERSION)
             peer = sockets[connection] = AppConnection(service)
+            peer.projection_assembly = ProjectionAssembly()
             @callback
             def disconnected():
                 sockets.pop(connection,None)
@@ -259,7 +271,18 @@ async def websocket_gateway(hass, connection, msg):
             connection.subscriptions['shs_energy_gateway'] = disconnected
         if peer is None:
             raise GatewayConflict('Connect the paired SHS app first')
-        result = await peer.request({key:msg[key] for key in ('id','operation','body')})
+        request = {key:msg[key] for key in ('id','operation','body')}
+        if request['operation'] == 'connect':
+            request['body'] = {key:value for key,value in request['body'].items() if key != 'release'}
+        elif request['operation'] == 'projection_chunk':
+            if peer.closed or peer.service.connection is not peer or not peer.service.active:
+                raise GatewayConflict('Projection belongs to an inactive socket')
+            value = peer.projection_assembly.receive(request['body'])
+            if value is None:
+                connection.send_result(msg['id'], {'received':request['body']['index']})
+                return
+            request.update(operation='projection',body={'value':value})
+        result = await peer.request(request)
         connection.send_result(msg['id'],result['result'])
     except (ValueError, KeyError, TypeError, RuntimeError) as error:
         stale = peer is None or peer.closed or peer.service.connection is not peer

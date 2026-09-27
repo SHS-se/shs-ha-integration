@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from shs_core.api import ShsApiClient
-from shs_core.battery_runtime import BatteryRuntime
+from .runtime import AppBatteryRuntime
 from shs_core.command_journal import WriterLease
 from shs_core.const import CONF_BASE_URL, CONF_DEVICE_TOKEN, PLAN_EXCHANGE_INTERVAL_MINUTES, OPTIMISATION_STARTUP_DELAY_SECONDS, PUSH_TIME_HOUR, PUSH_TIME_MINUTE
 from shs_core.controller import ScheduledController
@@ -79,7 +79,11 @@ class AppEngine:
     def spawn(self, work, name='shs_app_work'):
         task = asyncio.create_task(work, name=name)
         self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
+        def completed(task):
+            self.tasks.discard(task)
+            if not task.cancelled() and (error := task.exception()) is not None:
+                logging.getLogger(__name__).error('App task %s failed: %s',task.get_name(),error)
+        task.add_done_callback(completed)
         return task
 
     def at(self, when, action):
@@ -109,7 +113,7 @@ class AppEngine:
         expected = self.identity['pair']
         compatible = expected == self.paired_release or (self.activation is not None and
             self.activation.get('state') == 'active' and
-            all(expected[key] == self.paired_release[key] for key in ('protocol','integration_version','core_sha256')))
+            all(expected[key] == self.paired_release[key] for key in ('protocol','core_sha256')))
         if not compatible:
             raise GatewayConflict('App binary differs from the imported migration pair')
         if self.activation is None:
@@ -117,7 +121,7 @@ class AppEngine:
         elif self.activation['identity'] != self.identity:
             raise GatewayConflict('Runtime activation belongs to another migration')
         self.inbox = await asyncio.to_thread(ReceiptInbox(self.root/'receipts.sqlite', self.identity).open)
-        self.gateway = GatewayClient(self.http,self.url,self.token,self.identity,self.inbox)
+        self.gateway = GatewayClient(self.http,self.url,self.token,self.identity,self.inbox,paired_release=self.paired_release)
         await self.gateway.connect()
         snapshot = await self.gateway.snapshot()
         self.mirror.install_snapshot(snapshot)
@@ -153,7 +157,7 @@ class AppEngine:
         h.controller = controller
         controller.metrics.performance = {'verification_storage':verification_store.metrics}
         path = stores/f'shs_energy.execution.{entry}.sqlite'
-        self.battery = h.battery_runtime = BatteryRuntime(h,controller,ExecutionStorage(path,asyncio.to_thread),
+        self.battery = h.battery_runtime = AppBatteryRuntime(h,controller,ExecutionStorage(path,asyncio.to_thread),
             lambda:int(datetime.now(timezone.utc).timestamp()*1000))
         self.writer = h.battery_writer = RemoteBattery(self.gateway,self.battery,self.battery.now)
         self.battery.physical = self.writer
@@ -253,7 +257,7 @@ class AppEngine:
             planning=await h.async_cached_planning_configuration(),exchange=await h.async_cached_exchange_status())
         value = runtime_projection(h,self.cached,self.repairs)
         value['values']['optimisation_plan'] = display_plan(value['values']['optimisation_plan'])
-        await self.gateway.call('projection',{'value':value})
+        await self.gateway.project(value)
         self.publish_ui(value)
 
     async def projections(self):

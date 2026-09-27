@@ -31,7 +31,7 @@ from shs_core.household_ports import HomeFacts
 
 class InProcessClient:
     service = None
-    def __init__(self,session,url,token,identity,inbox):
+    def __init__(self,session,url,token,identity,inbox,paired_release=None):
         self.identity,self.inbox = identity,inbox
         self.peer = AppConnection(self.service)
         self.connected = None
@@ -41,6 +41,7 @@ class InProcessClient:
         return (await self.peer.request({'id':self.number,'operation':operation,'body':body}))['result']
     async def connect(self):
         self.connected = await self.call('connect',{'identity':self.identity,'instance':'app'})
+    async def project(self,value):return await self.call('projection',{'value':value})
     async def snapshot(self):return await self.call('snapshot',{})
     async def receive(self):
         page = await self.call('receipts',{'after':self.inbox.through(),'limit':256})
@@ -122,7 +123,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         await engine.close()
         self.assertEqual(CommandJournal(self.journal_path).state()['owner'],'fenced')
         replacement = self.engine()
-        replacement.paired_release = dict(self.pair,app_version='app-only-fix')
+        replacement.paired_release = dict(self.pair,app_version='app-fix',integration_version='transport-fix')
         await replacement.load()
         await replacement.activate()
         self.assertEqual(replacement.activation['activation_id'],first)

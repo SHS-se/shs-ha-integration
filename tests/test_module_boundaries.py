@@ -21,6 +21,7 @@ sys.path.append(str(PACKAGE))
 
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
+    "gateway_wire",
     "shs_core.gateway_service", "shs_core.runtime_projection",
     "shs_core.battery_gateway",
     "shs_core.device_port",

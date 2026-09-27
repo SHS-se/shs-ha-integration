@@ -1,5 +1,7 @@
 """Authenticated, multiplexed HA gateway client with durable delivery receipts."""
 import asyncio
+import json
+from hashlib import sha256
 from uuid import uuid4
 
 import aiohttp
@@ -9,8 +11,10 @@ from shs_core.gateway_journal import GatewayConflict, GatewayRejected, validate_
 
 
 class GatewayClient:
-    def __init__(self, session, url, token, identity, inbox, *, instance=None, executor=asyncio.to_thread):
+    def __init__(self, session, url, token, identity, inbox, *, instance=None, executor=asyncio.to_thread, paired_release=None):
         self.http, self.url, self.token = session, url, token
+        self.paired_release = paired_release
+        self.publishing = asyncio.Lock()
         self.identity, self.inbox = validate_identity(identity), inbox
         self.instance = instance or uuid4().hex
         self.executor = executor
@@ -35,7 +39,10 @@ class GatewayClient:
             if (await socket.receive_json()).get('type') != 'auth_ok':
                 raise GatewayConflict('Gateway authentication rejected')
             self.reader = asyncio.create_task(self._read(socket))
-            self.connected = await self._call('connect',{'identity':self.identity,'instance':self.instance})
+            body = {'identity':self.identity,'instance':self.instance}
+            if self.paired_release is not None:
+                body['release'] = self.paired_release
+            self.connected = await self._call('connect',body)
             return self.connected
         except BaseException:
             await self.close()
@@ -84,6 +91,15 @@ class GatewayClient:
 
     async def call(self, operation, body):
         return await self._call(operation,body)
+
+    async def project(self, value):
+        content = json.dumps(value,separators=(',',':'),allow_nan=False)
+        digest, transfer = sha256(content.encode()).hexdigest(), uuid4().hex
+        async with self.publishing:
+            for index, offset in enumerate(range(0,len(content),256*1024)):
+                chunk = content[offset:offset+256*1024]
+                await self._call('projection_chunk',dict(transfer=transfer,index=index,
+                    last=offset+len(chunk)==len(content),data=chunk,sha256=digest))
 
     async def receive(self, limit=256):
         async with self.receiving:

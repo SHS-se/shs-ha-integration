@@ -7,6 +7,8 @@ import sys
 from aiohttp import web
 from shs_core.gateway_journal import GatewayJournal
 from shs_core.gateway_stream import GatewayConnection, GatewayStream
+sys.path.append(str(Path(__file__).parents[2]/'custom_components/shs_energy'))
+from gateway_wire import ProjectionAssembly
 
 
 async def serve():
@@ -21,6 +23,7 @@ async def serve():
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         connection = GatewayConnection(stream)
+        projection = ProjectionAssembly()
         try:
             await ws.send_json({'type':'auth_required'})
             auth = await ws.receive_json()
@@ -33,7 +36,14 @@ async def serve():
                 request_id = value['id']
                 assert value.pop('type') == 'shs_energy/gateway'
                 try:
-                    result = await connection.request(value)
+                    if value['operation'] == 'projection_chunk':
+                        await connection.request(dict(value,operation='snapshot',body={}))
+                        assembled = projection.receive(value['body'])
+                        if assembled is not None:
+                            flag.with_name('projection.json').write_text(json.dumps(assembled))
+                        result = {'id':request_id,'result':{}}
+                    else:
+                        result = await connection.request(value)
                     reply = dict(type='result', success=True, **result)
                 except ValueError as error:
                     reply = dict(id=request_id, type='result', success=False, error={'message':str(error)})

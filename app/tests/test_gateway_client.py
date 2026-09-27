@@ -1,5 +1,6 @@
 """Real socket/process separation and commit-before-ACK verification."""
 import asyncio
+import json
 from contextlib import closing
 from pathlib import Path
 import sqlite3
@@ -116,3 +117,10 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         second = await self.client.connect()
         self.assertGreater(second['generation'], first['generation'])
         await self.client.receive()
+
+    async def test_large_projection_crosses_default_four_megabyte_socket_limit(self):
+        await self.client.connect()
+        value = {'plan':'å'*(5*1024*1024)}
+        await self.client.project(value)
+        self.assertEqual(json.loads((self.root/'projection.json').read_text()),value)
+        self.assertIsNone((await self.client.snapshot())['activation'])

@@ -169,6 +169,7 @@ def create_app(observer, static, *, trusted_peer="172.30.32.2"):
 
 async def main():
     logging.basicConfig(level=logging.INFO)
+    logging.getLogger('shs_core.controller').setLevel(logging.WARNING)
     data, bundle = Path("/data"), Path("/opt/shs/companion")
     observer = Dashboard(data, bundle, token=os.environ["SUPERVISOR_TOKEN"])
     options = json.loads((data / "options.json").read_text())
