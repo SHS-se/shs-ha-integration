@@ -165,14 +165,17 @@ class ExecutableRuntimeTests(unittest.TestCase):
         from shs_core.home_runtime import MAX_EXECUTION_TRACES, TRACE_TRIM, ExecutionTrace, retain_traces
         # The archive stores traces 128 to a page; trimming whole pages keeps the rest reusable.
         self.assertEqual((MAX_EXECUTION_TRACES % 128, TRACE_TRIM % 128), (0, 0))
-        full = tuple(range(MAX_EXECUTION_TRACES))
+        from collections import namedtuple
+        Trace=namedtuple('Trace','at_ms')
+        full = tuple(Trace(i) for i in range(MAX_EXECUTION_TRACES))
         self.assertIs(retain_traces(full), full)
-        self.assertEqual(retain_traces((*full, 'new')), (*full[TRACE_TRIM:], 'new'))
-        history = tuple(range(97_609))  # a session saved before traces were limited
+        self.assertEqual(retain_traces((*full, Trace(MAX_EXECUTION_TRACES))), (*full[TRACE_TRIM:], Trace(MAX_EXECUTION_TRACES)))
+        history = tuple(Trace(i) for i in range(97_609))  # a session saved before traces were limited
         kept = retain_traces(history)
         self.assertEqual(kept[-1], history[-1])
         self.assertTrue(MAX_EXECUTION_TRACES - TRACE_TRIM < len(kept) <= MAX_EXECUTION_TRACES)
         self.assertEqual((len(history) - len(kept)) % TRACE_TRIM, 0)
+        self.assertEqual(retain_traces((Trace(0),Trace(4*86400000))), (Trace(4*86400000),))
         # The reducer applies the same limit as each evaluation adds its trace.
         h=Harness(mode='control_verification');h.offer()
         old=ExecutionTrace(0,0,0,0,None,'{}','[]',None,None,None)

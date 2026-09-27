@@ -97,3 +97,26 @@ untouched.
 Validation: 1,033 integration tests and 59 app tests passed, including interrupted
 partial/complete checkpoint writes, retirement followed by restart, unchanged app
 activation and rejection of unprocessed acknowledgements. Not deployed yet.
+
+## Stage 4 — indexed operational evidence and recent diagnostics
+
+App execution now restores immutable SQLite evidence views instead of hydrating
+lifetime histories. Materialized meter edges and daily sums preserve exact interval
+bounds, including late replacements and resets; ordinal prefixes preserve old
+views. Objective versions, acknowledgements and deduplication remain exact. Upgrade
+creates a consistent offline backup and checks accounting parity before activation.
+Interrupted verification resumes explicitly. Source checkpoint reconciliation hashes
+exclude changing query metrics.
+
+Detailed verification, resource samples and execution traces now have a maximum
+three-day age, with existing count limits also applying. Operational evidence and
+physical obligations are not aged out. The System page inventories active app and
+companion databases, table sizes/counts, retained ranges, receipt progress and
+separate offline archives.
+
+Validation: integration suite 1,033 tests (one fixture updated to use timestamped
+traces, its 21-test suite rerun); app suite 65 tests plus two additional interruption
+checks passed; web build passed. Six indexed-store differential/runtime tests cover
+unordered corrections, reset edges, historical views, actual battery dispatch,
+restart without history hydration, interrupted verification and transaction rollback.
+Production-snapshot parity and live deployment verification remain outstanding.

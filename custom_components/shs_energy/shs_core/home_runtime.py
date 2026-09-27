@@ -303,10 +303,15 @@ class ExecutionAuthority:
 # immutable window; the database deletes the same oldest rows in its commit.
 MAX_EXECUTION_TRACES = 8192
 TRACE_TRIM = 1024
+TRACE_RETENTION_MS = 3 * 86400000
 
 
 def retain_traces(traces):
     """The latest traces; once over the limit, the oldest leave in TRACE_TRIM blocks."""
+    if traces:
+        cutoff = traces[-1].at_ms - TRACE_RETENTION_MS
+        first = next((i for i, row in enumerate(traces) if row.at_ms >= cutoff), len(traces))
+        traces = traces[first:]
     excess = len(traces) - MAX_EXECUTION_TRACES
     if excess <= 0:
         return traces
@@ -1342,4 +1347,10 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
     if future:
         effects.append(WakeAt(min(future)))
     # Coalesce identical requests within this decision; the host also coalesces work.
-    return state, tuple(dict.fromkeys(effects))
+    # Effects are a bounded batch. Their immutable accounting views may be
+    # backed by storage, so deduplication must not hash lifetime evidence.
+    unique = []
+    for effect in effects:
+        if effect not in unique:
+            unique.append(effect)
+    return state, tuple(unique)

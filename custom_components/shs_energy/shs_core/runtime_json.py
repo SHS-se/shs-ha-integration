@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
+from collections.abc import Sequence
 from functools import lru_cache
 import json
 from hashlib import sha256
@@ -15,7 +16,7 @@ MAX_BYTES = 1_000_000
 def encode_value(value):
     if is_dataclass(value):
         return {"type": type(value).__name__, **{field.name: encode_value(getattr(value, field.name)) for field in fields(value)}}
-    if isinstance(value, tuple):
+    if isinstance(value, Sequence) and not isinstance(value,(str,bytes,bytearray)):
         return [encode_value(item) for item in value]
     return value
 
@@ -38,7 +39,7 @@ def record_json(value, dumps):
     `dumps` returns compact JSON bytes. Only one record's encoded copy exists
     at a time, however long the account or trace history is.
     """
-    if isinstance(value, tuple):
+    if isinstance(value, Sequence) and not isinstance(value,(str,bytes,bytearray)):
         yield b"["
         for index, item in enumerate(value):
             yield (b"," if index else b"") + dumps(encode_value(item))

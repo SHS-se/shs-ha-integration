@@ -13,6 +13,7 @@ from aiohttp import ClientSession, ClientTimeout, ClientError, web
 
 from .companion import install
 from .storage import Diagnostics
+from .database_census import census
 from shs_wire.protocol import PROTOCOL
 
 LOGGER = logging.getLogger(__name__)
@@ -119,9 +120,13 @@ class Dashboard:
                         "plan_id": plan["plan_id"] if active else None}
             await asyncio.to_thread(self.db.record, sampled_at, {"resources": values, "telemetry": telemetry})
             database = await asyncio.to_thread(self.db.snapshot)
+            storage = await asyncio.to_thread(census,self.data,self.engine.root if self.engine else None,
+                self.engine.identity["entry_id"] if self.engine and self.engine.identity else None)
+            if self.engine and self.engine.battery:
+                storage["operations"] = self.engine.battery.store.resource_counts()
             disk = await asyncio.to_thread(shutil.disk_usage, self.data)
             self.system = {"sampled_at": sampled_at, "resources": values, "error": error,
-                           "database": database, "filesystem_free_bytes": disk.free}
+                           "database": database, "storage": storage, "filesystem_free_bytes": disk.free}
         except (OSError, ValueError, sqlite3.Error) as exception:
             self.system = {**self.system, "error": "Diagnostic storage failed: " + str(exception)}
 

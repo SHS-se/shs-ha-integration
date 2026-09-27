@@ -65,7 +65,7 @@ def _version(db):
         raise ValueError(f'Unsupported execution database version: {version}')
     return version
 
-def _decode_execution(db, size):
+def _decode_execution(db, size, history_factory=None):
     if _version(db) == 0:
         return None  # A first/import transaction was never committed.
     db.execute('BEGIN')
@@ -85,20 +85,23 @@ def _decode_execution(db, size):
     if captured is not None and not isinstance(captured, str):
         raise ValueError('Invalid captured planning request')
     base = replace(decode_value({**raw, 'captured_feedback':None}, ExecutionSession), captured_feedback=captured)
-    # Decode one record at a time: never build a second full JSON tree.
-    meters = tuple(execution.MeterReceipt(*row) for row in db.execute(
-        'SELECT event_id,stream,direction,boundary,epoch,source_at_ms,total_mwh,receipt,physical_id FROM meters ORDER BY ordinal'))
-    observations = tuple(execution.StateObservation(a, b, c, bool(d)) for a, b, c, d in db.execute(
-        'SELECT at_ms,stored_mwh,source,measured FROM observations ORDER BY ordinal'))
-    histories = {name: tuple(decode_value(json.loads(row[0]), kind) for row in db.execute(
-        f'SELECT payload FROM {name} ORDER BY ordinal')) for name, kind in
-        (('admissions', execution.Admission), ('reconciliations', execution.StateReconciliation))}
+    if history_factory is not None:
+        account=history_factory(db,base.account,counts)
+    else:
+        # Decode one record at a time: never build a second full JSON tree.
+        meters = tuple(execution.MeterReceipt(*row) for row in db.execute(
+            'SELECT event_id,stream,direction,boundary,epoch,source_at_ms,total_mwh,receipt,physical_id FROM meters ORDER BY ordinal'))
+        observations = tuple(execution.StateObservation(a, b, c, bool(d)) for a, b, c, d in db.execute(
+            'SELECT at_ms,stored_mwh,source,measured FROM observations ORDER BY ordinal'))
+        histories = {name: tuple(decode_value(json.loads(row[0]), kind) for row in db.execute(
+            f'SELECT payload FROM {name} ORDER BY ordinal')) for name, kind in
+            (('admissions', execution.Admission), ('reconciliations', execution.StateReconciliation))}
+        account = replace(base.account, meters=meters, observations=observations, **histories)
     traces = tuple(decode_value(json.loads(row[0]), ExecutionTrace) for row in db.execute(
         'SELECT payload FROM traces ORDER BY ordinal'))
     if len(traces) > MAX_EXECUTION_TRACES:
         raise ValueError('Execution database exceeds trace retention')
     trace_start = db.execute('SELECT COALESCE(MIN(ordinal),0) FROM traces').fetchone()[0]
-    account = replace(base.account, meters=meters, observations=observations, **histories)
     return ExecutionSnapshot(json.loads(metadata), replace(base, account=account, traces=traces), revision, trace_start, cleanup, size)
 
 
@@ -162,7 +165,7 @@ class ExecutionStorage:
             return None
         db = self._connect()
         try:
-            return _decode_execution(db, self.path.stat().st_size)
+            return _decode_execution(db, self.path.stat().st_size, getattr(self,'_history_factory',None))
         finally:
             db.close()
 
@@ -214,6 +217,9 @@ class ExecutionStorage:
         appended = {}
         for name in HISTORIES:
             before, after = getattr(self._session.account, name), getattr(session.account, name)
+            if hasattr(after,'appended_since'):
+                appended[name]=after.appended_since(before)
+                continue
             if before is after:
                 appended[name] = ()
                 continue

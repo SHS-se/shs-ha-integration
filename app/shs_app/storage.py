@@ -46,7 +46,7 @@ class Diagnostics:
                 timing["queue_ms"] = (started - queued) * 1000
 
     def record(self, sampled_at, values):
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
         with self.operation("record_resources") as db:
             db.execute("INSERT INTO resource_samples VALUES (?, ?)", (sampled_at, json.dumps(values)))
             db.execute("DELETE FROM resource_samples WHERE sampled_at < ?", (cutoff,))

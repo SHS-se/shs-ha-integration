@@ -1,3 +1,4 @@
+export type StorageCensus = {diagnostic_retention_days:number; databases:{name:string;error?:string;file_bytes?:number;wal_bytes?:number;shm_bytes?:number;schema_version?:number;journal_mode?:string;free_pages?:number;census_ms?:number;tables?:{name:string;rows:number;pages:number;bytes:number}[];receipts?:{received_through:number;processed_through:number;pending:number};retained_ranges?:Record<string,{first:number|string|null;last:number|string|null}>}[];archives:{name:string;bytes:number}[];operations?:Record<string,unknown>};
 export type Slot = {
   start: string; duration_hours: number; binding: boolean;
   pv_w: number|null; base_w: number|null; load_w: number|null;
@@ -20,6 +21,6 @@ export type State = {
   app_version:string; required_companion:string; protocol:number;
   connection:{state:string; message:string; loaded_version?:string};
   snapshot:{sampled_at:string; integration_version:string; entries:Entry[]}|null;
-  system:{sampled_at:string|null; resources:Resources|null; error:string|null; filesystem_free_bytes?:number; database:{file_bytes:number; schema_version:number; page_size:number; free_pages:number; journal_mode:string; tables:{name:string;bytes:number;pages:number;rows:number}[]; history:History[]; query_plan:string[]; operations:{name:string;count:number;errors:number;last_ms:number;max_recent_ms:number;queue_ms:number}[]}|null};
+  system:{storage?:StorageCensus;sampled_at:string|null; resources:Resources|null; error:string|null; filesystem_free_bytes?:number; database:{file_bytes:number; schema_version:number; page_size:number; free_pages:number; journal_mode:string; tables:{name:string;bytes:number;pages:number;rows:number}[]; history:History[]; query_plan:string[]; operations:{name:string;count:number;errors:number;last_ms:number;max_recent_ms:number;queue_ms:number}[]}|null};
   companion:{state:string;message:string}; app_slug:string|null; sidebar_enabled:boolean|null; control_owner:string;
 };

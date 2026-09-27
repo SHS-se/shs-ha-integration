@@ -67,5 +67,5 @@ class CheckpointStorage(ExecutionStorage):
         # Evidence is identified by its committed database revision and receipt.
         # Reconciliation binds this compact checkpoint, not a scan of old pages.
         value=dict(revision=self._revision,metadata=self.metadata,source=self.source_checkpoint,session=_shell(self._session),
-                   counts=self.resource_counts())
+                   counts=super().resource_counts())
         return sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()

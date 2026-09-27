@@ -532,7 +532,8 @@ class Account:
         return frozenset((row.stream, row.boundary, row.direction, row.physical_id) for row in self.meters)
 
     def anchor(self, at_ms):
-        return next((r.observation for r in reversed(self.reconciliations) if r.at_ms <= at_ms), self.opening)
+        row=_at_or_before(self.reconciliations,at_ms)
+        return row.observation if row else self.opening
 
     @property
     def contract(self):
@@ -543,6 +544,16 @@ class Account:
         return self.observations[-1] if self.observations else None
 
 
+def _append_history(rows, record):
+    """The online store appends a delta; the offline reference uses tuples."""
+    return rows.append_record(record) if hasattr(rows,'append_record') else (*rows,record)
+
+
+def _at_or_before(rows, at_ms):
+    if hasattr(rows,'at_or_before'):return rows.at_or_before(at_ms)
+    return next((row for row in reversed(rows) if row.at_ms<=at_ms),None)
+
+
 def _evolve(account, **changes):
     """Internal validated transitions extend an already validated prefix.
 
@@ -551,6 +562,8 @@ def _evolve(account, **changes):
     before using this helper; no caller-selectable validation switch exists.
     Derived read models are shared only while their evidence is unchanged.
     """
+    if '_evidence' in account.__dict__:
+        return account._evidence.evolve(account,changes)
     for name in ('receipt', 'requested_generation'):
         if name in changes:
             _integer(changes[name], minimum=0)
@@ -593,7 +606,7 @@ def observe_state(account, observation):
     # Source time never decides receipt order. Interval time remains provenance.
     if account.observed == observation:
         return account
-    return _evolve(account, receipt=account.receipt + 1, observations=(*account.observations, observation))
+    return _evolve(account, receipt=account.receipt + 1, observations=_append_history(account.observations, observation))
 
 
 def record_meter(account, *, event_id, stream, direction, boundary, epoch, source_at_ms, total_mwh, physical_id=None):
@@ -609,7 +622,7 @@ def record_meter(account, *, event_id, stream, direction, boundary, epoch, sourc
     if any(key != stream and (bound, flow, physical) == (boundary, direction, physical_id)
            for key, bound, flow, physical in account._physical_meters):
         raise ValueError("one declared physical boundary cannot be counted twice")
-    return _evolve(account, receipt=receipt.receipt, meters=(*account.meters, receipt))
+    return _evolve(account, receipt=receipt.receipt, meters=_append_history(account.meters, receipt))
 
 
 def admit_plan(account, contract, at_ms, observation):
@@ -642,17 +655,18 @@ def admit_plan(account, contract, at_ms, observation):
     reconciliations=account.reconciliations
     if old and old.capacity_mwh != contract.capacity_mwh:
         prior=balance(account,at_ms)
-        reconciliations=(*reconciliations,StateReconciliation(at_ms,old.capacity_mwh,contract.capacity_mwh,
+        reconciliations=_append_history(reconciliations,StateReconciliation(at_ms,old.capacity_mwh,contract.capacity_mwh,
             observation,prior.flow_debt_low_mwh,prior.flow_debt_high_mwh,
             "Configured capacity changed; observed SOC establishes a new stored-energy basis, not delivered charge"))
     previous = old.stored_at(min(at_ms, old.valid_until_ms)) if old else contract.stored_at(at_ms)
     amendment = contract.stored_at(at_ms) - previous
     # Omitted dispositions never erase an outcome; objective_history retains it.
-    history_ids = {o.id for a in account.admissions for o in a.contract.objectives}
+    old_objectives = (account._evidence.objective_catalog() if '_evidence' in account.__dict__
+                      else {o.id:o for a in account.admissions for o in a.contract.objectives})
+    history_ids = old_objectives.keys()
     if any(d.objective_id not in history_ids for d in contract.dispositions):
         raise ValueError("disposition names an unknown prior objective")
     if old:
-        old_objectives = {o.id: o for a in account.admissions for o in a.contract.objectives}
         for objective in contract.objectives:
             prior = old_objectives.get(objective.id)
             if prior and (prior.kind, prior.deadline_ms) != (objective.kind, objective.deadline_ms):
@@ -664,8 +678,8 @@ def admit_plan(account, contract, at_ms, observation):
                     raise ValueError("changed objective target needs an explicit retained amendment")
     number = account.receipt + 1
     return _evolve(account, receipt=number, opening=account.opening or observation, reconciliations=reconciliations,
-                   observations=(*account.observations, observation),
-                   admissions=(*account.admissions, Admission(contract, at_ms, amendment, number)))
+                   observations=_append_history(account.observations, observation),
+                   admissions=_append_history(account.admissions, Admission(contract, at_ms, amendment, number)))
 
 
 @dataclass(frozen=True)
@@ -683,7 +697,7 @@ class Balance:
 def balance(account, at_ms):
     if not account.admissions or account.opening is None:
         raise ValueError("account has no accepted reference and opening state")
-    admission = next((a for a in reversed(account.admissions) if a.at_ms <= at_ms), None)
+    admission = _at_or_before(account.admissions,at_ms)
     if admission is None:
         raise ValueError("accounting instant precedes admission")
     contract = admission.contract
@@ -734,6 +748,8 @@ def _objective_outcome(account, objective, closed_at_ms, at_ms, observed):
 
 def objective_history(account, at_ms):
     """Planner dispositions and measured outcomes remain distinct and replayable."""
+    if '_evidence' in account.__dict__:
+        return tuple(account._evidence.objective_history(account,at_ms))
     records, latest = {}, {}
     for admission in account.admissions:
         if admission.at_ms > at_ms:
@@ -762,6 +778,8 @@ def objective_history(account, at_ms):
 
 def _live_objectives(account, at_ms):
     """Live responsibilities by reference: each admitted objective is visited once, only live rows copied."""
+    if '_evidence' in account.__dict__:
+        return account._evidence.live_objectives(account,at_ms)
     latest, closed_at, responsibility = _objective_catalog(account, at_ms)
     observed = _measured_observations(account)
     rows = []
@@ -810,6 +828,8 @@ def feedback(account, at_ms):
 
 def _receipt_summary(account):
     """Receipts since the accepted reference, including late evidence for earlier source times."""
+    if '_evidence' in account.__dict__:
+        return account._evidence.receipt_summary(account)
     acknowledged=account.contract.source_receipt if account.contract else 0
     if '_summary' not in account.__dict__:
         prior_times={}
@@ -826,6 +846,8 @@ def _receipt_summary(account):
 
 def planner_feedback(account,at_ms):
     """Bound planning input to live responsibilities; archive the complete audit."""
+    if '_evidence' in account.__dict__:
+        return account._evidence.planner_feedback(account,at_ms)
     value=feedback(account,at_ms)
     history=value['objectives']
     value['objectives']=[{key:row[key] for key in ('objective','responsibility','outcome','shortfall_mwh','fulfilment_basis')}

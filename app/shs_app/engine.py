@@ -23,7 +23,7 @@ from shs_core.household_ports import HouseholdPorts
 from shs_core.receipt_inbox import ReceiptInbox
 from shs_core.resource_profiling import process_resources
 from shs_core.runtime_projection import runtime_projection
-from shs_core.verification import VerificationJournal
+from .retention import RecentVerification
 from shs_core.verification_storage import VerificationStorage
 
 from .gateway_client import GatewayClient
@@ -35,7 +35,7 @@ from .projection import display_plan
 from .sources import ObservationMirror, RemoteHistory
 from .upgrades import open_runtime_schema
 from .configuration import Configuration
-from .checkpoint_storage import CheckpointStorage
+from .indexed_storage import IndexedStorage
 from .configuration_editor import ConfigurationEditor
 
 
@@ -149,12 +149,12 @@ class AppEngine:
         controller = self.controller = ScheduledController(
             ControllerInputs(self.mirror.read,lambda:self.mirror.context['home']['temperature_unit'],
                 lambda entity:self.mirror.context['platforms'].get(entity)),h,OwnershipView(),h.resolved_options,
-            VerificationJournal(verification_store,record('verification_samples.')),
+            RecentVerification(verification_store,record('verification_samples.')),
             native_executor=NoNativeServices(),devices=self.devices)
         h.controller = controller
         controller.metrics.performance = {'verification_storage':verification_store.metrics}
         path = stores/f'shs_energy.execution.{entry}.sqlite'
-        self.battery = h.battery_runtime = AppBatteryRuntime(h,controller,CheckpointStorage(path,asyncio.to_thread,self.mirror),
+        self.battery = h.battery_runtime = AppBatteryRuntime(h,controller,IndexedStorage(path,asyncio.to_thread,self.mirror),
             lambda:int(datetime.now(timezone.utc).timestamp()*1000))
         self.writer = h.battery_writer = RemoteBattery(self.gateway,self.battery,self.battery.now)
         self.battery.physical = self.writer
