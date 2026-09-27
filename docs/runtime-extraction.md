@@ -100,3 +100,26 @@ import, post-export evidence, gateway, activation and HA entity projection remai
 prerequisites to actual cutover. The app cannot yet control devices. Old unreferenced
 files (`battery_policy_delivery`, `control_agreement`) found during live inventory
 are preserved, not silently imported. No source cleanup is part of this milestone.
+
+## Live HAOS rehearsal evidence
+
+Validated on 27 September 2026 using app `0.1.0-beta.3` against databases written
+by the still-running `0.9.0-beta.50` integration:
+
+- SQLite backups: 310,894,592 execution bytes and 56,057,856 verification bytes.
+- Execution revision 288065, receipt 487671; 342,709 meters, 144,962 observations,
+  800 admissions and 6,165 retained traces. No pending attempts in this checkpoint.
+- Verification revision 26044, with 4,324 records.
+- Backup API completed in 1.491 seconds; full rehearsal in 47.923 seconds.
+  The one-shot worker peaked at 474,276 KiB RSS (about 463 MiB).
+- Both stores passed integrity, schema, canonical reopen and unchanged-content
+  checks. Beta.50's original code independently reopened the **same frozen copy**:
+  its serialized-session and accounting digests exactly matched the app core's.
+  This comparison used the same captured accounting timestamp, not two moving
+  live states. It took 31.066 seconds.
+
+The private snapshots/report are retained at `/data/rehearsal-20260927-beta50` in
+the app. They are rehearsal evidence, not active app state or a migration export.
+All JSON stores, HA configuration, permissions and live database ownership remain
+in HA. These measurements also confirm that full-history reopen is too expensive
+to perform inside normal dashboard queries.
