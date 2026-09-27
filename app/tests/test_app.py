@@ -20,7 +20,9 @@ class CompanionTests(unittest.TestCase):
             path.mkdir(parents=True)
         self.target = self.ha / "custom_components/shs_energy"
         (self.target / "old.py").write_text("previous")
+        (self.target / "manifest.json").write_text('{"domain":"shs_energy","version":"v1"}')
         (self.bundle / "shs_energy/new.py").write_text("new")
+        (self.bundle / "shs_energy/manifest.json").write_text('{"domain":"shs_energy","version":"v2"}')
         (self.bundle / "bundle.json").write_text(json.dumps({"integration_version": "v2", "files": hashes(self.bundle / "shs_energy"), "replaceable": [hashes(self.target)]}))
         (self.ha / ".storage").mkdir()
         (self.ha / ".storage/history").write_text("must survive")
@@ -28,8 +30,24 @@ class CompanionTests(unittest.TestCase):
     def test_explicit_install_preserves_history_and_is_idempotent(self):
         self.assertEqual(install(self.bundle, self.ha, self.data)["state"], "installed")
         self.assertEqual((self.ha / ".storage/history").read_text(), "must survive")
-        self.assertEqual((self.ha / "custom_components/.shs_energy-before-app/old.py").read_text(), "previous")
+        self.assertEqual((self.ha / ".shs-companion-install/backup/old.py").read_text(), "previous")
+        self.assertEqual(self.discovered_versions(), ["v2"])
         self.assertEqual(install(self.bundle, self.ha, self.data)["state"], "installed")
+
+    def discovered_versions(self):
+        # Match HA's directory discovery: hidden directories are not excluded.
+        return [json.loads((directory / "manifest.json").read_text())["version"]
+                for directory in (self.ha / "custom_components").iterdir()
+                if directory.is_dir() and (directory / "manifest.json").exists()]
+
+    def test_staging_never_adds_another_discoverable_integration(self):
+        with patch.object(Path, "rename", side_effect=OSError("interrupted before swap")):
+            with self.assertRaises(OSError):
+                install(self.bundle, self.ha, self.data)
+        self.assertEqual(self.discovered_versions(), ["v1"])
+        self.assertTrue((self.ha / ".shs-companion-install/stage/manifest.json").exists())
+        install(self.bundle, self.ha, self.data)
+        self.assertEqual(self.discovered_versions(), ["v2"])
 
     def test_refuse_local_modification_and_symlinks(self):
         (self.target / "old.py").write_text("local edits")
@@ -42,7 +60,7 @@ class CompanionTests(unittest.TestCase):
     def test_resume_after_old_directory_rename(self):
         original = Path.rename
         def interrupted(path, target):
-            if path.name == ".shs_energy-stage":
+            if path.name == "stage":
                 raise OSError("power interrupted")
             return original(path, target)
         with patch.object(Path, "rename", interrupted):
@@ -52,7 +70,9 @@ class CompanionTests(unittest.TestCase):
         self.assertEqual(install(self.bundle, self.ha, self.data)["state"], "installed")
 
     def test_missing_current_target_without_matching_journal_is_rejected(self):
-        self.target.rename(self.target.with_name(".shs_energy-before-app"))
+        workspace = self.ha / ".shs-companion-install"
+        workspace.mkdir()
+        self.target.rename(workspace / "backup")
         with self.assertRaises(ValueError):
             install(self.bundle, self.ha, self.data)
 

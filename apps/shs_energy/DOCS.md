@@ -44,7 +44,9 @@ Installation is an explicit Home Assistant administrator setting, never an autom
 side effect of opening the web page. The installer accepts a clean beta.49, an absent
 integration, or already matching beta.50 files. It checks file hashes, stages the
 replacement and journals the swap. It retains the previous files at
-`/config/custom_components/.shs_energy-before-app` inside Home Assistant. It never
+`/config/.shs-companion-install/backup` inside Home Assistant. Staging and backup
+directories are outside `custom_components`, because HA discovers hidden directories
+there as integrations too. The installer never
 changes `.storage`, configuration entries or integration databases. An interrupted
 swap resumes forward on the next app start.
 

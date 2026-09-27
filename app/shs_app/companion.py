@@ -46,11 +46,15 @@ def install(bundle, homeassistant, data):
         raise ValueError("Home Assistant component directory is a symbolic link")
     parent.mkdir(exist_ok=True)
     target = parent / "shs_energy"
-    stage = parent / ".shs_energy-stage"
-    backup = parent / ".shs_energy-before-app"
+    # HA discovers every directory under custom_components, including dotfiles.
+    # Keep both manifests outside that tree, on the same filesystem for rename.
+    workspace = homeassistant / ".shs-companion-install"
+    stage = workspace / "stage"
+    backup = workspace / "backup"
     journal_path = data / "companion-install.json"
-    if any(p.is_symlink() for p in (target, stage, backup, journal_path)):
+    if any(p.is_symlink() for p in (target, workspace, stage, backup, journal_path)):
         raise ValueError("Companion installation paths must not be symbolic links")
+    workspace.mkdir(exist_ok=True)
     current = hashes(target) if target.exists() else None
     if current == expected:
         return {"state": "installed", "version": manifest["integration_version"],
@@ -67,7 +71,7 @@ def install(bundle, homeassistant, data):
     if not stage.exists():
         shutil.copytree(source, stage)
     if hashes(stage) != expected:
-        raise ValueError("Staged companion is incomplete; review and remove .shs_energy-stage before retrying")
+        raise ValueError("Staged companion is incomplete; review .shs-companion-install/stage before retrying")
     for path in stage.rglob("*"):
         if path.is_file():
             with path.open("rb") as handle:
@@ -83,7 +87,9 @@ def install(bundle, homeassistant, data):
             raise ValueError("Both previous and active integration directories exist; review before proceeding")
         target.rename(backup)
         sync_directory(parent)
+        sync_directory(workspace)
     stage.rename(target)
     sync_directory(parent)
+    sync_directory(workspace)
     return {"state": "installed", "version": manifest["integration_version"],
             "message": "Companion installed. Restart Home Assistant Core to load it. Existing configuration and history were preserved."}
