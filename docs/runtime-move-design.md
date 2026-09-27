@@ -329,3 +329,74 @@ A stopped Core or disconnected app does not prove that a command reached hardwar
 The gateway performs a finite battery baseline handback after losing its writer;
 uncertain handback outcomes stay fenced for diagnosis. Source timestamps never order
 receipts. Normal HA Recorder and registries stay in HA throughout the migration.
+
+### Live cutover repairs (companion beta.60 / app beta.14)
+
+The first live activation exposed three adapter issues without changing the shared
+controller policy:
+
+- Source capture now includes entity references throughout canonical configuration
+  and follows HA Filter sensor dependencies. A filtered pool temperature must also
+  carry its underlying raw sensor, which the existing verification policy reads.
+- App status travels as ordered, checksummed chunks on the authenticated current
+  socket. HA publishes only the complete projection. This avoids HA's per-message
+  WebSocket limit when a refreshed plan and its diagnostic data grow. The display
+  copy omits per-slot decision explanation trees; the full plan remains in the app.
+- Historical receipt counters continue through the durable accounting path, while
+  measurement feedback predating HomeHost's existing resume epoch is withheld from
+  live actuation. The observed failing receipt contained measurements about 11.5
+  seconds before that epoch. No source-time ordering rule was added.
+
+The active migration identity remains immutable. Transport-only paired releases
+may resume it when protocol and exact shared-core digest match. Every new socket
+also declares the current bundled companion version, which HA checks against the
+installed version before opening a session. Cold imports still require the complete
+original pair. A different shared core requires an explicit future upgrade design.
+
+Delayed verification-store writes now use atomic app records, and their failures
+are surfaced. The integration installer checks the exact beta.59 file manifest
+before replacing it; the previous installation and journal are archived.
+
+Validation for this pair: 1,034 integration tests, 50 app tests, 93 frontend checks,
+and six desktop/mobile browser tests. The socket test sends a projection larger
+than HA's default 4 MiB message limit. Existing SHS branding assets match across
+the app store, web interface and integration.
+
+### Completed household cutover — 2026-09-27
+
+The live HAOS installation now runs app `0.1.0-beta.14` with companion
+`0.9.0-beta.60` (release commit `0645b60`). Migration
+`0246210f-f60b-4871-8668-3ce4fdb04880` retains activation
+`bdf1a357ada4457cb848df654874d04b`. The original beta.56 source command journal is
+still permanently fenced, with a clean stop and the same migration UUID. The
+coherent cold export remains preserved. The app reads and advances its own stores;
+no second import or source-runtime restart occurred after activation.
+
+The import contained 348,971 meter records, 147,645 observations and 4,322
+verification records. Live app accounting has advanced beyond those meter and
+observation counts. Normal trace retention continues; the complete original export
+is retained independently. The initial queued receipt replay was slow (roughly
+19 minutes to reach current measurements), but passed its previously failing
+receipt and reached live control without discarding the backlog.
+
+Live verification after an app restart:
+
+- The same activation resumed under a new gateway session. One transient startup
+  reconnect recovered automatically; the subsequent session remained active.
+- Battery status returned to `controlling`, “Following the plan”, with a current
+  writer and no pending commands. Physical readbacks matched Maximum Self
+  Consumption, 8.8 kW charge limit and 0 kW discharge limit for the current plan.
+- The native journal recorded three successful service returns: the initial app
+  command, the finite battery handback during restart, and the resumed app command.
+- EV, pool and hot water remained in their existing verification modes. Pool
+  verification received its underlying raw temperature sensor successfully.
+- All 29 SHS entity registrations survived. The app reported ownership and a
+  connected gateway, served the existing 512px SHS icon, and had sidebar access
+  enabled. Resource/diagnostic sampling reported no storage error.
+- A fresh planning snapshot was captured and uploaded from the app. The retained
+  accepted schedule remained ready while an updated plan was requested.
+
+Do not rerun the cold import against this active directory. `import.json` describes
+immutable import-time evidence, including work that was still pending at import;
+`activation.json` and the separate cutover completion record describe the subsequent
+activation and live checks.
