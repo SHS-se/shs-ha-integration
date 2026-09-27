@@ -20,7 +20,7 @@ from .battery_native_adapter import SigenAdapter
 from .battery_conversion import conversion_model, windows_from_statistics
 from .battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
 from . import plan_execution as execution
-from .runtime_json import Records
+from .runtime_json import Records, runtime_digest as digest
 from .resource_profiling import ResourceProfiler
 from .battery_live import native_surface, source_revision, planned_power_bindings
 from .battery_supply import SupplyScope, observe_supply
@@ -57,9 +57,6 @@ def stamp(value):
     if parsed.tzinfo is None:
         raise ValueError('timestamp needs timezone')
     return round(parsed.timestamp()*1000)
-
-def digest(value):
-    return sha256(json.dumps(value,sort_keys=True,allow_nan=False).encode()).hexdigest()
 
 def plan_scope(options):
     """The local setup a battery plan is captured for, without writer authority.
@@ -105,8 +102,9 @@ class BatteryRuntime:
     History/calibration reads are ports on the coordinator; tests use the same
     composition with an in-memory state table and real fake service boundary.
     """
-    def __init__(self,coordinator,controller,store,now_ms):
+    def __init__(self,coordinator,controller,store,now_ms, *, physical=None):
         self.coordinator,self.controller,self.store,self.now=coordinator,controller,store,now_ms
+        self.physical = physical
         self.profiler=ResourceProfiler()
         self.host=None;self.adapter=None;self._grant=None;self._identity=None
         self._lock=asyncio.Lock();self._observe_lock=asyncio.Lock();self._closed=False;self._closing=False
@@ -121,12 +119,24 @@ class BatteryRuntime:
         self._fault_history=[]
         self._observation_error=None
         self._live_accounting=None
+        self._loaded=None;self._started=False;self._processing=None
+        self.receipt_driven=False
         controller.battery_runtime=self
 
     async def open(self):
+        if self._loaded is None and not self._started:
+            await self.load()
+        self.reconcile()
+        await self.start()
+
+    async def load(self):
+        """Hydrate persisted state without observations, timers, grants or writes."""
+        if self._started or self._loaded is not None:
+            raise RuntimeError('Battery state already loaded or started')
         restored=await self.store.load()
         if restored is not None:
             value, session = restored
+            self._processing=value.get('gateway_processing')
             if value.get('schema') != 'battery-runtime-v4':
                 raise ValueError('invalid battery runtime journal')
             from .home_runtime_checkpoint import decode_checkpoint
@@ -148,15 +158,33 @@ class BatteryRuntime:
             self._mode_revision,self._mode=group.mode_revision,group.mode
             self._model=authority.plant.conversion
             self._scope=authority.supply_scope
-            reports={e:self.coordinator.ports.battery_report(e) for e in self._control_entities()}
-            if any(not row or row.get('state') in ('unknown','unavailable') for row in reports.values()):
-                raise NativeReadbackPending('Waiting for configured Sigen controls to become available')
-            self._surface=native_surface(self._options,reports)
-            if self._surface['revision']!=authority.catalog.control_surface_revision:
-                raise ValueError('journalled Sigen control surface changed')
-            self.adapter=SigenAdapter(authority.catalog,self._model)
-            self._identity=rt.WriterIdentity(OWNER,authority.config_revision,self._surface['revision'])
-            self._releasing=state.execution.account.contract is None;self._seeded=True
+            self._loaded=(state,checkpoint)
+
+    def reconcile(self):
+        """Read the exact current native surface while remaining dormant."""
+        if self._started:
+            raise RuntimeError('Battery runtime already started')
+        if self._loaded is None:
+            return
+        state,_ = self._loaded
+        authority=state.authority
+        reports={e:self.coordinator.ports.battery_report(e) for e in self._control_entities()}
+        if any(not row or row.get('state') in ('unknown','unavailable') for row in reports.values()):
+            raise NativeReadbackPending('Waiting for configured Sigen controls to become available')
+        self._surface=native_surface(self._options,reports)
+        if self._surface['revision']!=authority.catalog.control_surface_revision:
+            raise ValueError('journalled Sigen control surface changed')
+        self.adapter=SigenAdapter(authority.catalog,self._model)
+        self._identity=rt.WriterIdentity(OWNER,authority.config_revision,self._surface['revision'])
+        self._releasing=state.execution.account.contract is None;self._seeded=True
+
+    async def start(self):
+        if self._started:
+            raise RuntimeError('Battery runtime can only start once')
+        self._started=True
+        if self._loaded is not None:
+            state,checkpoint=self._loaded
+            authority=state.authority
             await self._open_host(state,checkpoint)
             if self._scope.kind=='whole_house':
                 participants=tuple(p for p in authority.scope.participants if p.owner=='new_runtime') + tuple(
@@ -176,7 +204,7 @@ class BatteryRuntime:
                 self._record_fault('recovery',self._status['reason'])
 
     async def _open_host(self,state,checkpoint=None):
-        ports=HostPorts(self._persist,self._dispatch,self._observe,self._confirm,self._transition,self._renew,self._report,self.now,self._persist_state)
+        ports=HostPorts(self._persist,self._dispatch,self._observe,self._confirm,self._transition,self._renew,self._report,self.now,self._persist_state,self._persist_received)
         # Apply current scheduling limits on restart without extending any
         # previously prepared or issued attempt's persisted effect window.
         self.host=HomeHost(replace(state,limits=RUNTIME_LIMITS),ports,self.profiler)
@@ -332,7 +360,8 @@ class BatteryRuntime:
             captured_feedback=self._bootstrap_captured,plan_rejection=self._bootstrap_rejection)
         with self.profiler.measure('checkpoint_save'):
             await self.store.save({'schema':'battery-runtime-v4','checkpoint':None,
-                'options':None,'devices':[],'model_sources':None,'ratings':None},session)
+                'options':None,'devices':[],'model_sources':None,'ratings':None,
+                **({'gateway_processing':self._processing} if self._processing is not None else {})},session)
 
     def validate_plan_response(self,plan):
         """Reject stale response identity before replacing the coordinator's cache."""
@@ -389,7 +418,14 @@ class BatteryRuntime:
     async def _persist(self,data):
         raise RuntimeError('battery execution requires an atomic archived checkpoint')
 
+    async def _persist_received(self,state,processing):
+        await self._save_state(state,processing)
+        self._processing=processing
+
     async def _persist_state(self,state):
+        await self._save_state(state,self._processing)
+
+    async def _save_state(self,state,processing):
         from .home_runtime_checkpoint import encode_checkpoint, _check_state
         with self.profiler.measure('checkpoint_encode'):
             _check_state(state)
@@ -398,7 +434,8 @@ class BatteryRuntime:
         with self.profiler.measure('checkpoint_save'):
             await self.store.save({'schema':'battery-runtime-v4','checkpoint':checkpoint,
                 'options':self._options,'devices':self._devices,
-                'model_sources':self._model_sources,'ratings':self._ratings},state.execution)
+                'model_sources':self._model_sources,'ratings':self._ratings,
+                **({'gateway_processing':processing} if processing is not None else {})},state.execution)
 
     def _report(self,group,reason):
         if reason not in ('meter_recorded','duplicate_meter_sample','stale_meter_sample'):
@@ -437,6 +474,8 @@ class BatteryRuntime:
                     self._status.update(reason=str(error), fix=error.fix, next_step=error.next_step, retry_automatically=True)
 
     async def _record_counters(self, options):
+        if self.receipt_driven:
+            return
         if self.host:
             # Actual energy is recorded even while plans are expired or the
             # planner is unreachable. Excluded source identities are respected.
@@ -490,8 +529,11 @@ class BatteryRuntime:
         self._options=options
         if mode=='control_verification' and 'battery' in self.controller.ownership.records:
             async with self.controller.lock:
-                del self.controller.ownership.records['battery']
-                await self.controller.save()
+                if self.controller.devices is not None:
+                    self.controller.adopt_ownership(await self.controller.devices.abandon('battery'))
+                else:
+                    del self.controller.ownership.records['battery']
+                    await self.controller.save()
         if battery_measurement_errors(options):
             raise BatteryMeasurementConfigurationError(options)
         self._devices=await self.coordinator.async_battery_planned_devices()
@@ -644,7 +686,7 @@ class BatteryRuntime:
                 await self._meter(spec.stream_id,value,attributes,round(at.timestamp()*1000))
         # Missing anchors remain uncertain in the execution account.
 
-    async def _meter(self,entity,value,attrs,at,event_id=None):
+    async def _meter(self,entity,value,attrs,at,event_id=None,*,processing=None):
         # HA records outages in history too. They contain no counter evidence;
         # leave delivery uncertain, just as for a missing live counter report.
         if value in ('unknown','unavailable',None):
@@ -666,7 +708,69 @@ class BatteryRuntime:
         event_id=digest({'entity':entity,'at':at,'total':total,'source_event':event_id})
         sample=execution.MeterReceipt(event_id,entity,stream.spec.direction,stream.spec.boundary_id,
             same.epoch if same else str(epoch),at,total,0,entity)
-        await self.host.accept(rt.CounterReceived(sample))
+        if processing is None:
+            await self.host.accept(rt.CounterReceived(sample))
+        else:
+            await self.host.accept_received(rt.CounterReceived(sample),processing)
+
+    async def consume_receipt(self,identity,receipt):
+        """Apply a fact with a deterministic counter/measurement sub-event order.
+
+        The host carries each cursor on its queue item. Internal timers and
+        service completions preserve the last committed cursor.
+        """
+        from .receipt_inbox import processing_checkpoint
+        async with self._lock:
+            ordinal=receipt['ordinal']
+            previous=self._processing
+            if previous is not None:
+                expected=processing_checkpoint(identity,previous['receipt'],previous['sub_event'],complete=previous['complete'])
+                if previous != expected:
+                    raise ValueError('Execution receipt checkpoint belongs to a different gateway')
+            next_receipt=(previous['receipt']+int(previous['complete'])) if previous else 1
+            if ordinal>next_receipt:
+                raise ValueError('Execution receipt prefix has a gap')
+            if previous and (previous['receipt']>ordinal or (previous['receipt']==ordinal and previous['complete'])):
+                return
+            if self.host is None:
+                checkpoint=processing_checkpoint(identity,ordinal,0,complete=True)
+                if self._loaded is not None:
+                    raise RuntimeError('Start the reconciled battery host before consuming observation receipts')
+                else:
+                    # Bootstrap account has no HomeHost yet; the same execution
+                    # store remains the sole atomic domain/checkpoint owner.
+                    session=rt.ExecutionSession(account=self._bootstrap,captured_feedback=self._bootstrap_captured,
+                                                plan_rejection=self._bootstrap_rejection)
+                    await self.store.save({'schema':'battery-runtime-v4','checkpoint':None,'options':None,
+                        'devices':[],'model_sources':None,'ratings':None,'gateway_processing':checkpoint},session)
+                    self._processing=checkpoint
+                return
+            if receipt['kind']!='observation':
+                await self.host.accept_received(None,processing_checkpoint(identity,ordinal,0,complete=True))
+                return
+            row=receipt['payload']
+            # Every observation has exactly two logical positions, even when
+            # it has no counter sample or cannot form a usable measurement set.
+            if not previous or previous['receipt']!=ordinal or previous['sub_event']<0:
+                checkpoint=processing_checkpoint(identity,ordinal,0,complete=False)
+                streams={stream.spec.stream_id for stream in self.host.state.ledger.streams}
+                if row['entity_id'] in streams and row.get('state') not in (None,'unknown','unavailable'):
+                    try:
+                        await self._meter(row['entity_id'],row['state'],row['attributes'],stamp(row['last_reported']),
+                                          str(ordinal),processing=checkpoint)
+                    except (ValueError,KeyError,TypeError) as error:
+                        self._record_fault('receipt_counter',str(error))
+                if self._processing!=checkpoint:
+                    await self.host.accept_received(None,checkpoint)
+            checkpoint=processing_checkpoint(identity,ordinal,1,complete=True)
+            try:
+                events=await self._observe(self.host.state.groups[0].spec.id)
+            except (ValueError,KeyError,TypeError) as error:
+                self._record_fault('receipt_observation',str(error))
+                events=()
+            if len(events)>1:
+                raise RuntimeError('Battery observation must be one atomic measurement event')
+            await self.host.accept_received(events[0] if events else None,checkpoint)
 
     async def _observe(self,group_id):
         async with self._observe_lock:
@@ -729,10 +833,11 @@ class BatteryRuntime:
         envelope=rt.Envelope(max(native.import_w,self._model.grid_charge.input(max(0,battery))),
                             max(native.export_w,self._model.discharge.output(max(0,-battery))))
         valid=min(times)+AGE_MS
-        for stream in self.host.state.ledger.streams:
-            row=read(stream.spec.stream_id)
-            if row:
-                await self._meter(stream.spec.stream_id,row['state'],row['attributes'],stamp(row['last_reported']),row.get('event_id'))
+        if not self.receipt_driven:
+            for stream in self.host.state.ledger.streams:
+                row=read(stream.spec.stream_id)
+                if row:
+                    await self._meter(stream.spec.stream_id,row['state'],row['attributes'],stamp(row['last_reported']),row.get('event_id'))
         state=self.host.state
         # Reserve a unique local revision while holding _observe_lock. Captures
         # may queue before either reaches the reducer, and persisted watermarks
@@ -788,6 +893,8 @@ class BatteryRuntime:
         return tuple(events)
 
     async def _transition(self,effect):
+        if self.physical is not None and self.host.state.groups[0].mode != 'control_verification':
+            return await self.physical.propose(effect)
         return self.adapter.propose(effect)
 
     def _request_replan(self,reason):
@@ -845,6 +952,8 @@ class BatteryRuntime:
                 if self.host._fault or not self._can_send(effect) or not rt.authorize_send(self.host.state,effect,self.now()):
                     raise DispatchRejected('battery writer or request changed')
             authorize()
+            if self.physical is not None:
+                return await self.physical.dispatch(effect, authorize)
             entity,value=effect.key,effect.value
             if entity==self._options['battery_mode_entity']:
                 action=NativeAction(entity,'select_option',value)

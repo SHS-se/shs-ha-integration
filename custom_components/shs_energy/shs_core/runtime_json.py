@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import fields, is_dataclass
 from functools import lru_cache
 import json
+from hashlib import sha256
 from math import isfinite
 import types
 from typing import get_args, get_origin, get_type_hints, Literal, Union
@@ -120,3 +121,7 @@ def read_runtime_json(data):
     if not isinstance(data, (str, bytes)) or len(data if isinstance(data, bytes) else data.encode()) > MAX_BYTES:
         raise ValueError("runtime JSON exceeds byte limit")
     return json.loads(data, object_pairs_hook=_unique, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(f"nonfinite JSON: {value}")))
+
+
+def runtime_digest(value):
+    return sha256(json.dumps(value, sort_keys=True, allow_nan=False).encode()).hexdigest()

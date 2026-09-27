@@ -271,3 +271,61 @@ Local validation for this foundation passed 1,009 integration tests, 39 app test
 app metadata check confirms that the existing SHS icon bytes remain identical in
 the integration, app-store assets and web interface. No live export, source fence,
 gateway seed, app activation or HA restart was performed for this foundation.
+
+## Final app ownership composition (beta.58 / app beta.10)
+
+The final composition replaces HA's policy runtime with `GatewayService`,
+`DeviceGateway` and `BatteryGateway`. HA retains canonical configuration, source
+capture, native command admission and finite restoration/minimum-run obligations.
+`AppEngine` owns Household, cloud jobs, ScheduledController, HomeHost, accounting,
+verification, diagnostics and dashboard projections. Existing entities and editors
+consume the app projection; their identities remain unchanged.
+
+The independent Opus 5.5 High and Codex design reviews converged on this semantic
+boundary. The app cannot send an arbitrary HA service call. Device operations are
+whole, durably identified intentions. Battery steps must match an admitted native
+adapter route. Session, configuration, writer and native metadata checks run again
+at the final HA dispatch boundary, after durable preparation. Interrupted prepared
+commands become uncertain evidence and are never automatically replayed.
+
+Receipt delivery commits to an app inbox before acknowledgement. Domain receipt
+progress, including partial receipts and no-op receipts, commits in the same
+ExecutionStorage transaction as accounting. HA run-state mutations accompany their
+observation in the gateway journal transaction. Long recorder reads and diagnostic
+requests are multiplexed separately from observation delivery and physical writes.
+
+Startup opens imported stores while dormant, checks the exact app/companion core
+hash, reconciles current physical settings, persists the activation identity on both
+sides, consumes the durable receipt prefix, then enables policy and cloud jobs.
+Reconnects acquire a new fenced session and reconcile again. The cold export and
+source command journal remain permanently sealed. There is no legacy policy startup
+path in the final HA composition.
+
+Local validation: 1,030 integration tests passed. App tests include cold import,
+dormant activation, restart, a controlling BatteryRuntime through RemoteBattery and
+the real native gateway, receipt durability, and separate-process socket loss.
+The companion also imports against the installed HA libraries. Branding validation
+compares the existing SHS icon bytes across the app store, web app and integration.
+Live cutover evidence is recorded separately after deployment; these checks alone
+do not assert a completed household migration.
+
+### One-off operator sequence
+
+1. Publish the immutable pair; update the HAOS app with `install_companion: false`.
+2. Stop Core and confirm Docker reports `exited`; retain the beta.56 source files.
+3. Run `scripts/export-migration.py` with the entry and a persisted migration UUID.
+4. Run the app's `shs_app.migration_import` module against that coherent export.
+5. With Core still stopped, call `seed_gateway` against the imported directory and
+   HA `.storage`. Verify the imported accounting and verification evidence.
+6. Install the bundled companion using its verified beta.56 baseline. Preserve any
+   earlier installer workspace/journal under an archival name before installation.
+7. Select the imported directory with the private `RecordStore` at
+   `/data/runtime-target.json` (`data.path`), then start Core.
+8. Verify activation, receipt consumption, app ownership, entity readiness, current
+   battery writer/command status and controller modes. Restart the app once and
+   verify the same activation resumes with a new session and retained accounting.
+
+A stopped Core or disconnected app does not prove that a command reached hardware.
+The gateway performs a finite battery baseline handback after losing its writer;
+uncertain handback outcomes stay fenced for diagnosis. Source timestamps never order
+receipts. Normal HA Recorder and registries stay in HA throughout the migration.

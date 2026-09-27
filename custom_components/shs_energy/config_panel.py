@@ -588,8 +588,7 @@ async def websocket_replan(hass, connection, msg):
         options = resolved_options(hass, dict(entry.options))
         if options[shs_const.OPT_PLANNING_MODE] != shs_const.PLANNING_MODE_LIVE:
             raise ShsApiError("Planning is turned off for this home in Home Assistant")
-        request_id = await coordinator.client.request_replan()
-        await coordinator.async_answer_replan(request_id)
+        await coordinator.async_replan()
         if coordinator.last_optimisation_error:
             raise ShsApiError(coordinator.last_optimisation_error)
         connection.send_result(msg["id"], await _configuration_payload(hass, entry, refresh_roles=False))
@@ -599,17 +598,23 @@ async def websocket_replan(hass, connection, msg):
 
 async def _controller_diagnostics_file(hass, entry):
     """Gzip JSON and its summary. Only the live snapshot runs on the event loop."""
-    controller = entry.runtime_data.controller
-    async with controller.lock:
-        panel = await _configuration_payload(hass, entry, refresh_roles=False)
-        report = controller_diagnostics(controller, panel)
-        runtime = entry.runtime_data.battery_runtime
-        report['resource_profiling'] = runtime.profiler.snapshot(runtime.resource_counts())
-        # The report shares live records: serialize it before the next await.
-        # Immutable battery journals are encoded with the compression instead.
-        parts = report_parts(report, json_bytes)
-        summary = report_summary(report)
-    return await hass.async_add_executor_job(gzip_report, parts, json_bytes), summary
+    panel = await _configuration_payload(hass, entry, refresh_roles=False)
+    service = entry.runtime_data.service
+    artifact = await service.request_app('diagnostics', {'panel':panel})
+    from base64 import b64decode
+    from hashlib import sha256
+    content = bytearray()
+    while len(content) < artifact['bytes']:
+        chunk = await service.request_app('diagnostics_chunk',{'id':artifact['id'],'offset':len(content)})
+        block = b64decode(chunk['data'],validate=True)
+        if not block:
+            raise ValueError('The app diagnostic download ended early')
+        content.extend(block)
+    if len(content) != artifact['bytes'] or sha256(content).hexdigest() != artifact['sha256']:
+        raise ValueError('The app diagnostic download failed its content check')
+    await service.request_app('diagnostics_done',{'id':artifact['id']})
+    return bytes(content),artifact['summary']
+
 
 
 class ControllerDiagnosticsView(HomeAssistantView):

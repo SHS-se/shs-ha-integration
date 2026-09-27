@@ -651,3 +651,16 @@ def requested_controllable_devices(
         ),
         key=lambda value: (str(value.get("name") or "").lower(), value["key"]),
     )
+
+
+def battery_setup_attention(options, *, included):
+    """One field-targeted setup preflight shared by the household and HA editors."""
+    field_errors = {}
+    errors = battery_control_errors(options, field_errors=field_errors)
+    if not included or not errors:
+        return None
+    return dict(severity='warning', title='House battery setup needs attention',
+        detail='Complete the highlighted settings before battery control can operate. Each field link opens the setting that needs correction.',
+        items=list(errors),
+        fix={'kind':'fields', 'fields':[{'key':key,'message':'; '.join(messages)} for key,messages in field_errors.items()]},
+        placeholders={'gaps':'\n'.join('- '+value for value in errors)})

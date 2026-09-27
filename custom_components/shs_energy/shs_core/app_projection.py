@@ -2,7 +2,7 @@
 from copy import deepcopy
 from urllib.parse import urlencode
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 SLOT_FIELDS = (
     "start", "duration_hours", "binding", "pv_w", "base_w", "load_w",
     "shadow_import_sek_per_kwh", "shadow_export_sek_per_kwh",

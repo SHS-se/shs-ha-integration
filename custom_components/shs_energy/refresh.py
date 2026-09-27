@@ -16,6 +16,4 @@ def refresh_in_progress(hass, entry):
             or entry.entry_id in hass.data.get("shs_energy_configuration_writes", ())):
         return True
     coordinator = getattr(entry, "runtime_data", None)
-    return bool(coordinator and (
-        coordinator._recovering or coordinator._push_lock.locked()
-    ))
+    return bool(coordinator and coordinator.configuration_busy)

@@ -23,6 +23,15 @@ class GatewayTests(unittest.TestCase):
         self.addCleanup(self.gateway.close)
         self.session = self.gateway.begin(IDENTITY, 'app')['session']
 
+    def test_observation_and_run_ownership_commit_together(self):
+        ownership = {'records':{},'runs':{'device':{'active':True}}}
+        ordinal = self.gateway.record('observation',{'entity_id':'switch.device','state':'on'},ownership)
+        self.assertEqual(self.gateway.load_record('ownership'),ownership)
+        with self.assertRaises(ValueError):
+            self.gateway.record('outcome',{}, {'runs':{}})
+        self.assertEqual(self.gateway.load_record('ownership'),ownership)
+        self.assertEqual(self.gateway.snapshot(self.session)['through'],ordinal)
+
     def test_seed_preserves_uncertain_history_without_a_command_queue(self):
         with closing(self.gateway.connect(readonly=True)) as db:
             self.assertEqual([tuple(r) for r in db.execute('SELECT command_id,source_status,status FROM inherited_commands ORDER BY ordinal')],

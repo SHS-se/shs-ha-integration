@@ -96,6 +96,9 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
 
         diagnostics = load_function('diagnostics.py', 'async_get_config_entry_diagnostics',
                                     {'INTEGRATION_VERSION': 'test'})
+        entry.runtime_data.async_diagnostics = AsyncMock(return_value={
+            'network_traffic':{'requests':0},'controller_metrics':meter.snapshot(),
+            'resource_profiling':entry.runtime_data.battery_runtime.profiler.snapshot({'meters':123})})
         report = await diagnostics(None, entry)
         self.assertEqual(report['controller_metrics']['triggers']['timer']['skipped_busy'], 1)
         self.assertIn('network_traffic', report)
@@ -117,7 +120,15 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
                 'operation': fixture.coordinator.operational_status, 'readiness': {},
             }),
         })
-        body, summary = await download(SimpleNamespace(async_add_executor_job=executor), entry)
+        sys.path.append(str(Path(__file__).parents[1]/'app'))
+        from shs_app.engine import AppEngine
+        from unittest.mock import patch
+        app = SimpleNamespace(controller=controller,battery=entry.runtime_data.battery_runtime,download=None)
+        async def request(operation,body):
+            return await AppEngine.diagnostic_download(app,operation,body)
+        entry.runtime_data.service = SimpleNamespace(request_app=request)
+        with patch('shs_app.engine.asyncio.to_thread',executor):
+            body, summary = await download(None, entry)
         self.assertEqual(workers, [gzip_report], 'encoding and compression run off the event loop')
         result = json.loads(gzip.decompress(body))
         self.assertEqual(result['attempts'], [])

@@ -5,7 +5,7 @@ import unittest
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components/shs_energy"))
-from app_projection import schedule, attention_links
+from shs_core.app_projection import schedule, attention_links
 
 
 class AppProjectionTests(unittest.TestCase):

@@ -27,20 +27,22 @@ class GatewayStream:
         self.accepting = True
         self.task = asyncio.create_task(self._run())
 
-    def capture(self, kind, payload):
+    def capture(self, kind, payload, *, ownership=None):
         """Assign local queue order in the source callback, including equal timestamps."""
         if not self.accepting or self.failure:
             raise GatewayConflict('Receipt stream unavailable; source coverage interrupted')
         # Copy now: mutable source attributes must not change a queued receipt.
         future = asyncio.get_running_loop().create_future()
         future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
-        self._enqueue(('record', (kind, deepcopy(payload)), future))
+        args = (kind, deepcopy(payload)) if ownership is None else (kind, deepcopy(payload), deepcopy(ownership))
+        self._enqueue(('record', args, future))
         return future
 
     async def call(self, operation, *args):
         if not self.accepting or self.failure:
             raise GatewayConflict('Receipt stream unavailable; reconnect after recovery')
-        if operation not in ('begin', 'disconnect', 'read', 'acknowledge_delivery', 'snapshot'):
+        if operation not in ('begin', 'disconnect', 'read', 'acknowledge_delivery', 'snapshot',
+                             'load_record', 'save_record', 'prepare_command', 'finish_command', 'admit_route', 'read_route', 'begin_operation', 'finish_operation', 'command_outcome', 'activate', 'resume'):
             raise ValueError('Unsupported gateway operation')
         future = asyncio.get_running_loop().create_future()
         future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
@@ -148,3 +150,45 @@ class GatewayConnection:
                     await self.stream.call('disconnect', self.session)
                 finally:
                     self.session = None
+
+
+class GatewayRecord:
+    """Local physical state is serialized with observations on the same worker."""
+    def __init__(self, stream, name):
+        self.stream, self.name = stream, name
+
+    async def async_load(self):
+        return await self.stream.call('load_record', self.name)
+
+    async def async_save(self, value):
+        await self.stream.call('save_record', self.name, value)
+
+
+class GatewayCommands:
+    """Bind CommandTransport to gateway commands without repurposing the source."""
+    def __init__(self, stream):
+        self.stream = stream
+
+    def prepare(self, command):
+        raise RuntimeError('Gateway commands must run on the receipt worker')
+
+    def finish(self, command, status, reason=None):
+        raise RuntimeError('Gateway commands must run on the receipt worker')
+
+    async def execute(self, function, *args):
+        if function == self.prepare:
+            return await self.stream.call('prepare_command', *args)
+        if function == self.finish:
+            return await self.stream.call('finish_command', *args)
+        raise ValueError('Unsupported gateway journal operation')
+
+
+class GatewayOperations:
+    def __init__(self, stream, session):
+        self.stream, self.session = stream, session
+
+    async def begin(self, operation):
+        return await self.stream.call('begin_operation', self.session(), operation)
+
+    async def finish(self, operation, result):
+        await self.stream.call('finish_operation', operation, result)

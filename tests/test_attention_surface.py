@@ -40,6 +40,12 @@ class AttentionSurfaceTests(unittest.TestCase):
 
     def test_every_attention_item_states_where_its_fix_lives(self) -> None:
         for call in COORDINATOR.split("self._set_attention(")[1:]:
+            if call.startswith('ISSUE_BATTERY_CONTROL, **value)'):
+                from shs_core.device_controls import battery_setup_attention
+                value = battery_setup_attention({'battery_control_enabled':True},included=True)
+                self.assertEqual(value['fix']['kind'],'fields')
+                self.assertTrue(value['fix']['fields'])
+                continue
             body = call[: call.index("\n        )")]
             with self.subTest(item=body.split(",", 1)[0].strip()):
                 # Either a literal, or one resolved from a table that this

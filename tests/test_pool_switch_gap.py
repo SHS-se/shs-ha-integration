@@ -22,9 +22,10 @@ def later(test, minutes):
         def now(cls, tz=None):
             return datetime.now(tz) + offset
 
-    patcher = patch('shs_core.controller.datetime', Clock)
-    patcher.start()
-    test.addCleanup(patcher.stop)
+    for module in ('controller', 'device_operations'):
+        patcher = patch('shs_core.'+module+'.datetime', Clock)
+        patcher.start()
+        test.addCleanup(patcher.stop)
 
 
 class ControllingTests(unittest.IsolatedAsyncioTestCase):

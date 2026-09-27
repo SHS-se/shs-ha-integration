@@ -12,7 +12,7 @@ sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
 from shs_core.battery_runtime import BatteryRuntime, exact_start, iso, stamp
 from command_fixture import command_transport
 from shs_core.native_commands import NativeExecutor
-from battery_writer import BatteryWriterFence
+from shs_core.battery_writer import BatteryWriterFence
 from shs_core.battery_runtime import digest, plan_scope
 from shs_core.plan_execution import *
 
@@ -1049,7 +1049,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
         restarted.runtime.store=r.store
         restarted.store.session=r.store.session
         try:
-            await restarted.runtime.open()
+            await restarted.runtime.load()
             self.assertEqual(restarted.runtime.snapshot()['plan_status'],'rejected')
             self.assertEqual(restarted.runtime.snapshot()['plan_rejection'],dump['plan_rejection'])
             await restarted.start()

@@ -122,6 +122,18 @@ class Command:
         return encoded(asdict(self))
 
 
+@dataclass(frozen=True)
+class RoutedCommand(Command):
+    route_id: str
+    step_index: int
+
+
+@dataclass(frozen=True)
+class ObligationCommand(Command):
+    """A local, captured physical obligation; never constructed from an app RPC."""
+    pass
+
+
 class CommandJournal:
     def __init__(self, path):
         self.path = Path(path)

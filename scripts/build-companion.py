@@ -18,6 +18,6 @@ shutil.copy2(source / "manifest.json", destination / "core/manifest.json")
 assert hashes(core) == hashes(destination / "shs_energy/shs_core")
 manifest = json.loads((source / "manifest.json").read_text())
 (destination / "bundle.json").write_text(json.dumps({
-    "protocol": 1, "integration_version": manifest["version"], "files": hashes(source),
+    "protocol": 2, "integration_version": manifest["version"], "files": hashes(source),
     "replaceable": [json.loads((ROOT / "app/companion-baseline.json").read_text())],
 }, indent=2) + "\n")

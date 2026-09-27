@@ -29,6 +29,9 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.clock_patch = patch('shs_core.controller.datetime', Clock)
         self.clock_patch.start()
         self.addCleanup(self.clock_patch.stop)
+        physical_clock = patch('shs_core.device_operations.datetime', Clock)
+        physical_clock.start()
+        self.addCleanup(physical_clock.stop)
         self.subscriptions = {}
         self.timers = {}
         self.next_timer = 0
@@ -407,7 +410,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.event('sensor.water', 'state_report')
         await asyncio.wait_for(task, 0.1)
         self.assertEqual(self.evaluations('pool'), 1)
-        with patch('shs_core.controller.CONFIRM_SECONDS', 0.01):
+        with patch('shs_core.device_operations.CONFIRM_SECONDS', 0.01):
             with self.assertRaisesRegex(ValueError, 'no response'):
                 await self.controller.confirm(lambda: False, 'no response')
 

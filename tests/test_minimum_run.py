@@ -121,6 +121,9 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         self.clock = patch('shs_core.controller.datetime', Clock)
         self.clock.start()
         self.addCleanup(self.clock.stop)
+        physical_clock = patch('shs_core.device_operations.datetime', Clock)
+        physical_clock.start()
+        self.addCleanup(physical_clock.stop)
         self.options['device_control_mappings']['pool']['minimum_on_seconds'] = 3600
         self.options['device_modes']['$pool'] = 'controlling'
         self.controller.verification = VerificationJournal(fixtures.Store(), fixtures.Store())

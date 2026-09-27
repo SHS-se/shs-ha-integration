@@ -261,6 +261,17 @@ class Household:
         # Read every few seconds but saved only on exchanges: parse it once.
         self._store = store
 
+    @property
+    def configuration_busy(self):
+        return self._recovering or self._push_lock.locked()
+
+    async def async_replan(self):
+        request_id = await self.client.request_replan()
+        result = await self.async_answer_replan(request_id)
+        if self.last_optimisation_error:
+            raise ShsApiError(self.last_optimisation_error)
+        return result
+
     def resolved_options(self):
         home = self.ports.home()
         return resolve_configuration(dict(self.ports.options()), home.latitude, home.longitude)
@@ -751,28 +762,12 @@ class Household:
         )
 
     def _sync_battery_control_issue(self, options: dict[str, Any], *, included: bool) -> None:
-        """Name every setup gap for an included battery at its owning field.
-
-        The panel also runs this preflight before execution is enabled, so
-        users can complete setup without first attempting a control operation.
-        """
-        field_errors = {}
-        errors = battery_control_errors(options, field_errors=field_errors)
-        if not included or not errors:
+        from .device_controls import battery_setup_attention
+        value = battery_setup_attention(options, included=included)
+        if value is None:
             self._clear_attention(ISSUE_BATTERY_CONTROL)
-            return
-        self._set_attention(
-            ISSUE_BATTERY_CONTROL,
-            severity="warning",
-            title="House battery setup needs attention",
-            detail=(
-                "Complete the highlighted settings before battery control can operate. "
-                "Each field link opens the setting that needs correction."
-            ),
-            items=list(errors),
-            fix={"kind": "fields", "fields": [{"key": key, "message": "; ".join(messages)} for key, messages in field_errors.items()]},
-            placeholders={"gaps": "\n".join(f"- {value}" for value in errors)},
-        )
+        else:
+            self._set_attention(ISSUE_BATTERY_CONTROL, **value)
 
     def _sync_pool_control_issue(self, options: dict[str, Any], *, included: bool) -> None:
         """Expose the shared water sensor required for pool execution."""

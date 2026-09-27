@@ -12,13 +12,4 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ConfigEntry,
 ) -> dict[str, Any]:
     """Expose operational snapshots without serializing the config entry or plan."""
-    return {
-        "integration_version": INTEGRATION_VERSION,
-        "network_traffic": entry.runtime_data.client.traffic.snapshot(),
-        "battery_live_inputs": entry.runtime_data.battery_live_inputs.snapshot(),
-        "battery_writer": entry.runtime_data.battery_writer.snapshot(),
-        "battery_runtime": entry.runtime_data.battery_runtime.snapshot(),
-        "controller_metrics": entry.runtime_data.controller.metrics.snapshot(),
-        "resource_profiling": entry.runtime_data.battery_runtime.profiler.snapshot(
-            entry.runtime_data.battery_runtime.resource_counts()),
-    }
+    return {'integration_version':INTEGRATION_VERSION, **await entry.runtime_data.async_diagnostics()}

@@ -67,6 +67,8 @@ class ReplanContractTests(unittest.TestCase):
         self.assertIn("error[:MAX_REPLAN_ERROR_CHARS]", API)
 
 
+ENGINE = (Path(__file__).parents[1]/'app/shs_app/engine.py').read_text()
+
 class ReplanWiringTests(unittest.TestCase):
     """Home Assistant is not installed in CI, so this tier is read as text."""
 
@@ -74,9 +76,9 @@ class ReplanWiringTests(unittest.TestCase):
         # Cloud exchange runs on one local interval; market-quarter callbacks
         # only advance local prices and commands.
         self.assertIn("PLAN_EXCHANGE_INTERVAL_MINUTES", CONST)
-        self.assertIn("coordinator.async_replan_poll", INIT)
+        self.assertIn("self.household.async_replan_poll", ENGINE)
         self.assertIn(
-            "timedelta(minutes=PLAN_EXCHANGE_INTERVAL_MINUTES)", INIT
+            "PLAN_EXCHANGE_INTERVAL_MINUTES*60", ENGINE
         )
 
     def test_the_request_travels_with_the_snapshot_that_answers_it(self) -> None:

@@ -180,3 +180,39 @@ class HomeHostTests(unittest.IsolatedAsyncioTestCase):
         await host.accept(GrantRevoked(h.group.spec.id,h.group.grant_epoch+1))
         finish.set();await host.idle()
         self.assertFalse(writes)
+
+    async def test_receipt_progress_is_bound_to_its_queued_event_including_no_op(self):
+        from dataclasses import replace
+        from shs_core.home_runtime import Tick
+        host, h, _, _, _ = await self.make_host()
+        saved = []
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def received(state, checkpoint):
+            saved.append(('receipt', state, dict(checkpoint)))
+            if checkpoint['receipt'] == 1:
+                entered.set()
+                await release.wait()
+        async def internal(state):
+            saved.append(('internal', state, None))
+        host.ports = replace(host.ports, persist_state=internal, persist_received=received)
+        first = asyncio.create_task(host.accept_received(None, {'receipt':1}))
+        await entered.wait()
+        # Future receipt progress must not leak to a previously queued timer.
+        timer = asyncio.create_task(host.accept(Tick()))
+        second = asyncio.create_task(host.accept_received(None, {'receipt':2}))
+        release.set()
+        await asyncio.gather(first, timer, second)
+        self.assertEqual([row[2] for row in saved if row[0] == 'receipt'], [{'receipt':1}, {'receipt':2}])
+        self.assertTrue(all(row[2] is None for row in saved if row[0] == 'internal'))
+
+    async def test_no_op_receipt_save_failure_faults_host_before_any_dispatch(self):
+        from dataclasses import replace
+        host, h, writes, _, _ = await self.make_host()
+        async def failed(state, checkpoint):
+            raise OSError('receipt checkpoint disk full')
+        host.ports = replace(host.ports, persist_received=failed)
+        with self.assertRaises(RuntimeError):
+            await host.accept_received(None, {'receipt':1})
+        with self.assertRaises(RuntimeError):
+            await host.accept(ExecutionPlanOffered(h.contract))
+        self.assertFalse(writes)

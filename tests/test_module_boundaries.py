@@ -21,12 +21,17 @@ sys.path.append(str(PACKAGE))
 
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
+    "shs_core.gateway_service", "shs_core.runtime_projection",
+    "shs_core.battery_gateway",
+    "shs_core.device_port",
+    "shs_core.device_gateway",
+    "shs_core.device_operations",
     "shs_core.gateway_journal", "shs_core.gateway_stream", "shs_core.receipt_inbox",
-    "shs_core.household", "shs_core.household_ports", "app_projection", "shs_core.native_commands", "shs_core.controller_inputs", "shs_core.device_ownership", "shs_core.command_journal", "shs_core.command_transport",
+    "shs_core.household", "shs_core.household_ports", "shs_core.app_projection", "shs_core.native_commands", "shs_core.controller_inputs", "shs_core.device_ownership", "shs_core.command_journal", "shs_core.command_transport",
     "shs_core.battery_commands", "shs_core.operating_modes", "shs_core.verification",
     "shs_core.home_runtime", "shs_core.home_runtime_checkpoint", "shs_core.energy_ledger", "shs_core.runtime_json",
     "shs_core.battery_supply", "shs_core.home_host", "shs_core.battery_native_adapter",
-    "shs_core.controller", "shs_core.battery_live", "battery_writer", "shs_core.battery_runtime", "shs_core.battery_conversion",
+    "shs_core.controller", "shs_core.battery_live", "shs_core.battery_writer", "shs_core.battery_runtime", "shs_core.battery_conversion",
     "shs_core.presentation", "shs_core.plan_execution", "shs_core.battery_physical", "shs_core.execution_storage", "execution_migration",
     "shs_core.api_contract", "shs_core.durable_record", "shs_core.verification_storage",
     "shs_core.const", "shs_core.replan_listener",
@@ -52,6 +57,7 @@ PURE_MODULES = (
 
 # Thin by design: they wire Home Assistant to the modules above.
 HOME_ASSISTANT_MODULES = (
+    "gateway", "gateway_projection",
     "app_api",
     "__init__",
     "config_flow",

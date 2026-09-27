@@ -65,6 +65,9 @@ CONSTANTS = (
 FIELDS = (Path(__file__).parents[1] / "custom_components/shs_energy/shs_core/configuration_fields.py").read_text()
 SCHEMA = (Path(__file__).parents[1] / "custom_components/shs_energy/shs_core/configuration_schema.py").read_text()
 
+ENGINE = (Path(__file__).parents[1]/'app/shs_app/engine.py').read_text()
+GATEWAY = (Path(__file__).parents[1]/'custom_components/shs_energy/gateway.py').read_text()
+
 class SensorWiringTests(unittest.TestCase):
     """Guard the parts a Home-Assistant-free test cannot exercise directly."""
 
@@ -141,10 +144,9 @@ class SensorWiringTests(unittest.TestCase):
             self.assertNotIn(retired_key, CONSTANTS)
             self.assertNotIn(retired_key, COORDINATOR)
 
-    def test_general_configuration_replans_after_reload(self) -> None:
-        listener = INIT[INIT.index("async def _async_options_updated") :]
-        self.assertIn("async_reload(entry.entry_id)", listener)
-        self.assertIn("async_optimisation_push(force_plan=True)", listener)
+    def test_general_configuration_replans_in_the_app_after_a_receipt(self) -> None:
+        self.assertIn("self.household.options_update_requires_reload()",ENGINE)
+        self.assertIn("self.household.async_optimisation_push(force_plan=True)",ENGINE)
 
     def test_device_cards_have_an_independent_save_button(self) -> None:
         self.assertIn('data-action="save-device"', CONFIG_PANEL_FRONTEND)
@@ -162,7 +164,7 @@ class SensorWiringTests(unittest.TestCase):
         ]
         self.assertIn("async_optimisation_push(force_plan=True)", refresh)
         self.assertIn('"configuration": configuration, "refreshing": True', CONFIG_PANEL)
-        self.assertIn("options_update_requires_reload()", INIT)
+        self.assertIn("options_update_requires_reload()", ENGINE)
         live_update = COORDINATOR[
             COORDINATOR.index("def options_update_requires_reload") :
             COORDINATOR.index("def optimisation_input_gap_is_transient")
@@ -181,27 +183,17 @@ class SensorWiringTests(unittest.TestCase):
         ]
         self.assertNotIn('"area_id"', fields)
 
-    def test_changing_the_options_reloads_the_entry(self) -> None:
-        # Entities subscribe to the supplier price sensor when they are added.
-        # A price entity chosen after setup is only watched if the entry is
-        # rebuilt, so re-pushing alone would leave totals on the hourly poll.
+    def test_changing_options_refreshes_the_gateway_source_subscription(self) -> None:
         listener = INIT[INIT.index("async def _async_options_updated") :]
-        self.assertIn("options_update_requires_reload()", listener)
-        self.assertIn("async_reload(entry.entry_id)", listener)
+        self.assertIn("source.refresh_configuration()",listener)
+        self.assertIn("self.entities = mapped_entity_ids(self.options())",GATEWAY)
+        self.assertNotIn("async_reload(entry.entry_id)",listener)
 
     def test_startup_planning_waits_for_entity_providers(self) -> None:
-        helper = INIT[
-            INIT.index("async def _async_delayed_startup_optimisation_push") :
-            INIT.index("def _entry_for_call")
-        ]
-        self.assertIn(
-            "await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)", helper
-        )
-        self.assertIn("await coordinator.async_replan_poll()", helper)
-        self.assertNotIn("for attempt", helper)
-        self.assertIn(
-            "_async_delayed_startup_optimisation_push(coordinator)", INIT
-        )
+        helper = ENGINE[ENGINE.index('    async def planning(self):'):ENGINE.index('    async def resources(self):')]
+        self.assertIn('await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)',helper)
+        self.assertIn('self.periodic(self.household.async_replan_poll,PLAN_EXCHANGE_INTERVAL_MINUTES*60)',helper)
+        self.assertIn('self.spawn(self.planning())',ENGINE)
 
     def test_transient_startup_gaps_do_not_raise_an_immediate_repair(self) -> None:
         issue_sync = COORDINATOR[

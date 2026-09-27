@@ -140,75 +140,54 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         with WriterLease(self.lock_path):
             pass
 
-    async def test_fenced_entry_setup_cannot_construct_coordinator_or_call_services(self):
+    async def test_companion_without_a_seed_cannot_construct_a_runtime(self):
         import ast
         from types import SimpleNamespace
-        from shs_core.command_journal import process_lease, _PROCESS_LEASES
-        with WriterLease(self.lock_path) as lease:
-            self.journal.stopped()
-            self.journal.seal(lease,'migration')
-        # Execute the actual setup function; HA imports/types are supplied at
-        # its boundary. Any access past the migration gate is a test failure.
         source=Path(__file__).parents[1]/'custom_components/shs_energy/__init__.py'
-        tree=ast.parse(source.read_text())
-        setup=next(n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='async_setup_entry')
+        setup=next(n for n in ast.parse(source.read_text()).body if isinstance(n,ast.AsyncFunctionDef) and n.name=='async_setup_entry')
         setup.returns=None
-        for arg in setup.args.args:
-            arg.annotation=None
-        class EntryError(Exception):
-            pass
-        def forbidden(*args,**kwargs):
-            raise AssertionError('Fenced setup reached runtime composition')
-        namespace={'entry_paths':entry_paths,'process_lease':process_lease,'CommandJournal':CommandJournal,
-                   'SourceFenced':SourceFenced,'WriterActive':WriterActive,'ConfigEntryError':EntryError,
-                   'ConfigEntryNotReady':RuntimeError,'STORAGE_DIR':'.storage','INTEGRATION_VERSION':'preparation',
-                   'CommandTransport':forbidden,'ShsApiClient':forbidden}
+        for arg in setup.args.args:arg.annotation=None
+        setup.body=[n for n in setup.body if not isinstance(n,ast.ImportFrom)]
+        async def missing(hass,entry):raise ValueError('gateway seed missing')
+        def forbidden(*args,**kwargs):raise AssertionError('missing seed reached runtime composition')
+        namespace={'open_gateway':missing,'GatewayProjection':forbidden,'ConfigEntryNotReady':RuntimeError}
         exec(compile(ast.fix_missing_locations(ast.Module(body=[setup],type_ignores=[])),str(source),'exec'),namespace)
-        hass=SimpleNamespace(config=SimpleNamespace(path=lambda _:self.temp.name),async_add_executor_job=asyncio.to_thread)
         before=self.path.read_bytes()
-        try:
-            with self.assertRaisesRegex(EntryError,'fenced'):
-                await namespace['async_setup_entry'](hass,SimpleNamespace(entry_id='entry'))
-        finally:
-            _PROCESS_LEASES.pop(self.lock_path.resolve()).close()
+        with self.assertRaisesRegex(RuntimeError,'gateway seed missing'):
+            await namespace['async_setup_entry'](SimpleNamespace(),SimpleNamespace(entry_id='entry'))
         self.assertEqual(self.path.read_bytes(),before)
 
 
 class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
-    async def test_unload_uses_the_native_transport_and_marks_clean_only_after_owners_stop(self):
+    async def test_unload_revokes_and_settles_gateway_before_closing_its_journal(self):
         import ast
         from types import SimpleNamespace
-        source = Path(__file__).parents[1]/'custom_components/shs_energy/__init__.py'
-        tree = ast.parse(source.read_text())
-        functions = [node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
-                     and node.name in ('_async_stop_runtime', 'async_unload_entry')]
+        source=Path(__file__).parents[1]/'custom_components/shs_energy/__init__.py'
+        functions=[n for n in ast.parse(source.read_text()).body if isinstance(n,ast.AsyncFunctionDef)
+                   and n.name in ('_async_stop_runtime','async_unload_entry')]
         for node in functions:
-            node.returns = None
-            for arg in node.args.args:
-                arg.annotation = None
-        namespace = {'PLATFORMS': ['sensor', 'select']}
-        exec(compile(ast.fix_missing_locations(ast.Module(body=functions, type_ignores=[])), str(source), 'exec'), namespace)
-        order = []
-        def sync(label):
-            return lambda: order.append(label)
-        def asynchronous(label, failure=False):
-            async def call(*args, **kwargs):
-                order.append(label)
-                if failure:
-                    raise OSError('fixture shutdown failure')
-                return True
-            return call
-        coordinator = SimpleNamespace(
-            controller=SimpleNamespace(native_executor=SimpleNamespace(transport=SimpleNamespace(
-                stopping=asynchronous('stopping'), stopped=asynchronous('clean'))), async_stop=asynchronous('controller')),
-            battery_runtime=SimpleNamespace(close=asynchronous('battery')),
-            battery_live_inputs=SimpleNamespace(close=sync('observations')),
-            battery_writer=SimpleNamespace(close=sync('writer')))
-        hass = SimpleNamespace(config_entries=SimpleNamespace(async_unload_platforms=asynchronous('platforms')))
-        self.assertTrue(await namespace['async_unload_entry'](hass, SimpleNamespace(runtime_data=coordinator)))
-        self.assertEqual(order, ['stopping', 'observations', 'battery', 'controller', 'clean', 'writer', 'platforms'])
+            node.returns=None
+            for arg in node.args.args:arg.annotation=None
+        namespace={'PLATFORMS':['sensor','select']}
+        exec(compile(ast.fix_missing_locations(ast.Module(body=functions,type_ignores=[])),str(source),'exec'),namespace)
+        order=[]
+        async def stream_close():order.append('stream')
+        def journal_close():order.append('journal')
+        async def service_close():
+            self.assertTrue(service.source.closed)
+            order.append('revoke_and_settle')
+        async def platforms(*args):order.append('platforms');return True
+        service=SimpleNamespace(closed=False,source=SimpleNamespace(closed=False),close=service_close,
+            stream=SimpleNamespace(close=stream_close,journal=SimpleNamespace(close=journal_close)))
+        hass=SimpleNamespace(data={'shs_energy_gateways':{'entry':service}},async_add_executor_job=asyncio.to_thread,
+            config_entries=SimpleNamespace(async_unload_platforms=platforms))
+        coordinator=SimpleNamespace(service=service,hass=hass,entry=SimpleNamespace(entry_id='entry'),platforms_loaded=True)
+        self.assertTrue(await namespace['async_unload_entry'](hass,SimpleNamespace(runtime_data=coordinator)))
+        self.assertEqual(order,['revoke_and_settle','stream','journal','platforms'])
+        self.assertFalse(hass.data['shs_energy_gateways'])
         order.clear()
-        coordinator.battery_runtime.close = asynchronous('battery', failure=True)
+        async def failed():raise OSError('physical handback failed')
+        service.close=failed
         with self.assertRaises(OSError):
-            await namespace['async_unload_entry'](hass, SimpleNamespace(runtime_data=coordinator))
-        self.assertEqual(order, ['stopping', 'observations', 'battery', 'writer'])
+            await namespace['async_unload_entry'](hass,SimpleNamespace(runtime_data=coordinator))
+        self.assertEqual(order,['stream','journal'])

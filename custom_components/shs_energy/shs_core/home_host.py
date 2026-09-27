@@ -7,6 +7,7 @@ schedule-command alternative when a policy is unavailable.
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
@@ -30,6 +31,7 @@ class HostPorts:
     report: Callable[[str, str], None]
     now_ms: Callable[[], int]
     persist_state: Optional[Callable[[runtime.HomeState], Awaitable[None]]] = None
+    persist_received: Optional[Callable[[runtime.HomeState, dict], Awaitable[None]]] = None
 
 
 class HomeHost:
@@ -66,21 +68,41 @@ class HomeHost:
         if self._closed or self._runner is None or self._fault:
             raise RuntimeError("home host is not running") from self._fault
         completion = asyncio.get_running_loop().create_future()
-        self._queue.put_nowait((event, completion))
+        self._queue.put_nowait((event, completion, None))
         return await completion
+
+    async def accept_received(self, event: runtime.Event | None, checkpoint: dict):
+        """Serialize receipt progress with this event, never with unrelated work.
+
+        None represents a receipt with no battery event; its cursor still needs
+        a durable commit. Cancellation does not discard already queued work.
+        """
+        if self.ports.persist_received is None:
+            raise RuntimeError('Host has no atomic receipt persistence port')
+        if self._closed or self._runner is None or self._fault:
+            raise RuntimeError('home host is not running') from self._fault
+        completion = asyncio.get_running_loop().create_future()
+        completion.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
+        self._queue.put_nowait((event, completion, deepcopy(checkpoint)))
+        return await asyncio.shield(completion)
 
     def _enqueue(self, event):
         if not self._closed:
-            self._queue.put_nowait((event, None))
+            self._queue.put_nowait((event, None, None))
 
     async def _run(self):
         while True:
-            event, completion = await self._queue.get()
+            event, completion, processing = await self._queue.get()
             try:
                 with self.profiler.measure('reduce'):
-                    state, effects = runtime.reduce_home(self.state, event, self.ports.now_ms())
+                    state, effects = (runtime.reduce_home(self.state, event, self.ports.now_ms())
+                                      if event is not None else (self.state, ()))
                 self.state = state
-                await self._effects(effects)
+                # Even a duplicate/no-op receipt must commit its cursor. Only
+                # the explicitly tagged queue item can advance that cursor.
+                if processing is not None and not any(isinstance(e, runtime.Persist) for e in effects):
+                    await self._persist(state, processing, acknowledge=False)
+                await self._effects(effects, processing=processing)
                 if self._fault is not None:
                     raise RuntimeError("home journal could not persist the transition") from self._fault
                 if completion is not None and not completion.done():
@@ -108,24 +130,28 @@ class HomeHost:
                 self._work.pop(key, None)
         self._work[key] = asyncio.create_task(work())
 
-    async def _effects(self, effects):
+    async def _persist(self, state, processing=None, *, acknowledge=True):
+        try:
+            if processing is not None:
+                await self.ports.persist_received(state, processing)
+            elif self.ports.persist_state:
+                await self.ports.persist_state(state)
+            else:
+                await self.ports.persist(encode_checkpoint(state))
+        except Exception as error:
+            self._fault = error
+            self.ports.report("home", f"Checkpoint failed: {error}")
+            self._enqueue(runtime.JournalFailed(state.revision))
+            return
+        if acknowledge:
+            self._enqueue(runtime.JournalDurable(state.revision))
+
+    async def _effects(self, effects, *, processing=None):
         for effect in effects:
             if self._fault is not None:
                 return
             if isinstance(effect, runtime.Persist):
-                try:
-                    if self.ports.persist_state:
-                        await self.ports.persist_state(effect.state)
-                    else:
-                        await self.ports.persist(encode_checkpoint(effect.state))
-                except Exception as error:
-                    self._fault = error
-                    self.ports.report("home", f"Checkpoint failed: {error}")
-                    self._enqueue(runtime.JournalFailed(effect.state.revision))
-                    # No other effects from this decision can dispatch after a
-                    # failed durable write. The reducer retains issued effects.
-                    return
-                self._enqueue(runtime.JournalDurable(effect.state.revision))
+                await self._persist(effect.state, processing)
             elif isinstance(effect, runtime.Send):
                 self._launch(("send", effect.attempt_id), lambda e=effect: self._send(e))
             elif isinstance(effect, runtime.Observe):
@@ -210,7 +236,7 @@ class HomeHost:
             self._runner.cancel()
             await asyncio.gather(self._runner, return_exceptions=True)
         while not self._queue.empty():
-            _, completion = self._queue.get_nowait()
+            _, completion, _ = self._queue.get_nowait()
             if completion is not None and not completion.done():
                 completion.set_exception(RuntimeError("home host closed"))
             self._queue.task_done()

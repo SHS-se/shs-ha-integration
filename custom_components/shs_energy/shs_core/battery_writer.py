@@ -3,11 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-if __package__:
-    from .shs_core.home_runtime import WriterGrant, WriterIdentity
-else:
-    from shs_core.home_runtime import WriterGrant, WriterIdentity
-
+from .home_runtime import WriterGrant, WriterIdentity
 
 class BatteryWriterFence:
     """The existing controller lock drains all legacy writes before a handover.
@@ -22,6 +18,7 @@ class BatteryWriterFence:
         self._grant = None
         self._closed = False
         self._fault = None
+        self._revocation = 0
 
     def _surfaces(self):
         options = self._options()
@@ -70,8 +67,9 @@ class BatteryWriterFence:
         """
         if not isinstance(identity, WriterIdentity) or identity != self._identity():
             raise ValueError("an exact writer identity is required")
+        revocation = self._revocation
         async with self._lock:
-            if self._closed or self._fault or self._record is None:
+            if revocation != self._revocation or self._closed or self._fault or self._record is None:
                 raise ValueError("battery writer journal unavailable")
             if type(expires_at_ms) is not int or not self._now_ms() < expires_at_ms <= self._now_ms() + 900_000:
                 raise ValueError("writer grant must expire within this admission window")
@@ -86,13 +84,13 @@ class BatteryWriterFence:
                             "surfaces": sorted(set(self._record["surfaces"]) | set(self._surfaces()))}
             try:
                 await self._store.async_save(deepcopy(self._record))
-                if self._closed or self._now_ms() >= expires_at_ms or identity != self._identity():
+                if revocation != self._revocation or self._closed or self._now_ms() >= expires_at_ms or identity != self._identity():
                     raise ValueError("writer admission expired during persistence")
                 grant = WriterGrant(identity.owner_id, self._record["epoch"], identity.config_revision,
                                     identity.control_surface_revision, expires_at_ms)
                 self._record = {**self._record, "owner": "runtime"}
                 await self._store.async_save(deepcopy(self._record))
-                if self._closed or self._now_ms() >= expires_at_ms or identity != self._identity():
+                if revocation != self._revocation or self._closed or self._now_ms() >= expires_at_ms or identity != self._identity():
                     raise ValueError("writer admission expired during persistence")
                 self._grant = grant
                 return grant
@@ -108,6 +106,10 @@ class BatteryWriterFence:
                 and self._record["owner"] == "runtime" and self._now_ms() < grant.expires_at_ms
                 and (grant.owner_id, grant.config_revision, grant.control_surface_revision) ==
                     (identity.owner_id, identity.config_revision, identity.control_surface_revision))
+
+    def revoke(self):
+        self._revocation += 1
+        self._grant = None
 
     def close(self):
         self._closed = True

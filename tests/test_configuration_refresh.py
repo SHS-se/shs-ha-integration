@@ -25,51 +25,42 @@ def load_functions(filename, names, namespace):
     return namespace
 
 
+class CoordinatorFixture(SimpleNamespace):
+    @property
+    def configuration_busy(self):
+        return self._recovering or self._push_lock.locked()
+
+
 class RefreshTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.hass = SimpleNamespace(data={})
         self.entry = SimpleNamespace(entry_id='entry', state='loaded')
-        self.coordinator = SimpleNamespace(_recovering=False, _push_lock=asyncio.Lock(),
+        self.coordinator = CoordinatorFixture(_recovering=False, _push_lock=asyncio.Lock(),
             options_update_requires_reload=Mock(return_value=True),
             async_report_runtime=AsyncMock(), async_optimisation_push=AsyncMock())
         self.entry.runtime_data = self.coordinator
+        self.coordinator.service = SimpleNamespace(source=SimpleNamespace(refresh_configuration=AsyncMock()))
         self.hass.config_entries = SimpleNamespace(async_reload=AsyncMock(return_value=True),
             async_get_entry=lambda _: self.entry)
         self.ns = load_functions('__init__.py', {'_async_options_updated'}, {
             'set_reloading': set_reloading,
         })
 
-    async def test_reload_and_replan_are_one_continuous_operation_across_coordinators(self):
-        replacement = SimpleNamespace(_recovering=False, _push_lock=asyncio.Lock(),
-            async_report_runtime=AsyncMock())
-        async def reload(_):
-            self.entry.state = 'not_loaded'
-            self.assertTrue(refresh_in_progress(self.hass, self.entry))
-            self.entry.runtime_data = replacement
-            self.assertTrue(refresh_in_progress(self.hass, self.entry))
-            self.entry.state = 'loaded'
-            return True
-        async def replan(**kwargs):
-            self.assertTrue(refresh_in_progress(self.hass, self.entry))
-        replacement.async_optimisation_push = AsyncMock(side_effect=replan)
-        self.hass.config_entries.async_reload.side_effect = reload
-        await self.ns['_async_options_updated'](self.hass, self.entry)
-        self.assertFalse(refresh_in_progress(self.hass, self.entry))
-        replacement.async_optimisation_push.assert_awaited_once_with(force_plan=True)
-        self.coordinator.async_optimisation_push.assert_not_awaited()
-        replacement.async_report_runtime.assert_awaited_once()
+    async def test_configuration_change_reaches_gateway_without_reloading_entities(self):
+        set_reloading(self.hass,self.entry,True)
+        await self.ns['_async_options_updated'](self.hass,self.entry)
+        self.coordinator.service.source.refresh_configuration.assert_awaited_once()
+        self.hass.config_entries.async_reload.assert_not_awaited()
+        self.assertIs(self.entry.runtime_data,self.coordinator)
+        self.assertFalse(refresh_in_progress(self.hass,self.entry))
 
-    async def test_failed_reload_and_failed_replan_always_end_progress(self):
-        self.hass.config_entries.async_reload.return_value = False
-        await self.ns['_async_options_updated'](self.hass, self.entry)
-        self.assertFalse(refresh_in_progress(self.hass, self.entry))
-        self.coordinator.async_optimisation_push.assert_not_awaited()
-        self.assertIn('could not reload', self.coordinator.last_optimisation_error)
-        self.hass.config_entries.async_reload.return_value = True
-        self.coordinator.async_optimisation_push.side_effect = RuntimeError('Failed')
-        with self.assertRaisesRegex(RuntimeError, 'Failed'):
-            await self.ns['_async_options_updated'](self.hass, self.entry)
-        self.assertFalse(refresh_in_progress(self.hass, self.entry))
+    async def test_failed_configuration_publication_ends_progress_and_exposes_failure(self):
+        set_reloading(self.hass,self.entry,True)
+        self.coordinator.service.source.refresh_configuration.side_effect = OSError('receipt disk failed')
+        with self.assertRaisesRegex(OSError,'receipt disk failed'):
+            await self.ns['_async_options_updated'](self.hass,self.entry)
+        self.assertFalse(refresh_in_progress(self.hass,self.entry))
+        self.hass.config_entries.async_reload.assert_not_awaited()
 
     async def test_progress_responses_retain_clients_and_block_other_saves(self):
         names = {'websocket_get_configuration', 'websocket_get_status',
@@ -111,8 +102,7 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
 
 class ManualReplanTests(unittest.IsolatedAsyncioTestCase):
     async def test_queues_authenticated_request_and_waits_for_existing_answer_path(self):
-        coordinator = SimpleNamespace(client=SimpleNamespace(request_replan=AsyncMock(return_value='request')),
-            async_answer_replan=AsyncMock(), last_optimisation_error=None)
+        coordinator = SimpleNamespace(async_replan=AsyncMock(), last_optimisation_error=None)
         entry = SimpleNamespace(runtime_data=coordinator, options={})
         payload = AsyncMock(return_value={'replan_recommendations': []})
         ns = load_functions('config_panel.py', {'websocket_replan'}, {
@@ -123,16 +113,15 @@ class ManualReplanTests(unittest.IsolatedAsyncioTestCase):
         })
         connection = SimpleNamespace(send_error=Mock(), send_result=Mock())
         await ns['websocket_replan'](None, connection, {'id': 1, 'config_entry': 'entry'})
-        coordinator.client.request_replan.assert_awaited_once()
-        coordinator.async_answer_replan.assert_awaited_once_with('request')
+        coordinator.async_replan.assert_awaited_once()
         connection.send_result.assert_called_once_with(1, {'replan_recommendations': []})
         coordinator.last_optimisation_error = 'Cannot build plan'
         await ns['websocket_replan'](None, connection, {'id': 2, 'config_entry': 'entry'})
         connection.send_error.assert_called_with(2, 'replan_failed', 'Cannot build plan')
         ns['resolved_options'] = lambda *_: {'mode': 'off'}
-        coordinator.client.request_replan.reset_mock()
+        coordinator.async_replan.reset_mock()
         await ns['websocket_replan'](None, connection, {'id': 3, 'config_entry': 'entry'})
-        coordinator.client.request_replan.assert_not_awaited()
+        coordinator.async_replan.assert_not_awaited()
         connection.send_error.assert_called_with(3, 'replan_failed', 'Planning is turned off for this home in Home Assistant')
 
     async def test_client_queues_a_manual_request_and_requires_confirmation(self):

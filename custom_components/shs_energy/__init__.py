@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import voluptuous as vol
@@ -11,78 +9,23 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import (
-    async_track_time_change,
-    async_track_time_interval,
-)
+from homeassistant.exceptions import ConfigEntryNotReady
 
-from homeassistant.helpers.storage import STORAGE_DIR, Store
 from homeassistant.helpers.service import async_register_admin_service
-from homeassistant.helpers.json import json_bytes
-from homeassistant.util.json import json_loads
-from homeassistant.helpers import entity_registry as er
 
-from .shs_core.api_contract import INTEGRATION_VERSION
-from .shs_core.command_journal import CommandJournal, entry_paths, process_lease, SourceFenced, WriterActive
-from .shs_core.native_commands import NativeExecutor
-from .shs_core.controller_inputs import ControllerInputs
-from .shs_core.command_transport import CommandTransport
 from .refresh import set_reloading
-from .shs_core.resource_profiling import process_resources
-from .shs_core.api import ShsApiClient
-from .controller_events import attach_controller_events
 from .config_panel import async_apply_configuration, async_register_config_panel
-from .shs_core.const import (
-    CONFIGURABLE_CATEGORIES,
-    CONFIG_ENTRY_VERSION,
-    CONF_BASE_URL,
-    CONF_DEVICE_TOKEN,
-    PUSH_TIME_HOUR,
-    PUSH_TIME_MINUTE,
-    PRICE_REFRESH_SECOND,
-    OPTIMISATION_STARTUP_DELAY_SECONDS,
-    PRICE_BACKFILL_MAX_DAYS,
-    PLAN_EXCHANGE_INTERVAL_MINUTES,
-    OPT_AUTOMATIC_SETUP,
-    OPT_DEVICE_CONTROL_MAPPINGS,
-    OPT_DISCOVERY_EVIDENCE,
-    OPT_PLANNING_MODE,
-    OPT_PREFIX_ENTITIES,
-    DOMAIN,
-)
-from .configuration import (
-    async_discover_configuration,
-    entity_area_id,
-    resolved_options,
-)
-from .shs_core.controller import ScheduledController
-from .battery_writer import BatteryWriterFence
-from .shs_core.battery_runtime import BatteryRuntime, NativeReadbackPending
-from .shs_core.execution_storage import ExecutionStorage
-from .execution_migration import LegacyExecution
-from .shs_core.verification import VerificationJournal
-from .shs_core.verification_storage import VerificationStorage
-from .shs_core.configuration_schema import ConfigurationReader
-from .coordinator import ShsStatusCoordinator
+from .shs_core.const import CONFIGURABLE_CATEGORIES, CONFIG_ENTRY_VERSION, PRICE_BACKFILL_MAX_DAYS, OPT_AUTOMATIC_SETUP, OPT_DISCOVERY_EVIDENCE, OPT_PLANNING_MODE, OPT_PREFIX_ENTITIES, DOMAIN
+from .configuration import async_discover_configuration, entity_area_id
 from .migration import mapped_entity_ids, migrate_options
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SELECT]
 
-ShsEnergyConfigEntry = ConfigEntry[ShsStatusCoordinator]
+ShsEnergyConfigEntry = ConfigEntry
 
 SERVICE_DISCOVER_CONFIGURATION = "discover_configuration"
 SERVICE_APPLY_CONFIGURATION = "apply_configuration"
 SERVICE_BACKFILL_PRICES = "backfill_prices"
-
-
-async def _async_delayed_startup_optimisation_push(
-    coordinator: ShsStatusCoordinator,
-) -> None:
-    """Give entity providers time to start, then exchange once."""
-    await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)
-    await coordinator.async_replan_poll()
 
 
 def _entry_for_call(hass: HomeAssistant, call: ServiceCall) -> ConfigEntry:
@@ -118,6 +61,8 @@ def _configuration_response(
 async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
     """Register the full-page configuration panel and automation services."""
     await async_register_config_panel(hass)
+    from .gateway import register_gateway
+    register_gateway(hass)
 
     async def discover(call: ServiceCall) -> dict[str, Any]:
         entry = _entry_for_call(hass, call)
@@ -176,11 +121,7 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
         coordinator = getattr(entry, 'runtime_data', None)
         if coordinator is None:
             raise ValueError('SHS Energy is not loaded for that entry')
-        runtime = coordinator.battery_runtime
-        seconds = call.data.get('allocation_seconds', 0)
-        if seconds:
-            runtime.profiler.start_allocations(seconds, hass.async_add_executor_job)
-        return runtime.profiler.snapshot(runtime.resource_counts())
+        return await coordinator.async_profile(call.data.get('allocation_seconds', 0))
 
     async_register_admin_service(hass, DOMAIN, 'profile_resources', profile_resources,
         schema=vol.Schema({vol.Optional('entry_id'):str,
@@ -210,188 +151,56 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) 
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
-    """Set up the current configuration; migration is owned by the entry hook."""
-    journal_path, lease_path = entry_paths(hass.config.path(STORAGE_DIR), entry.entry_id)
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Load only the seeded physical gateway; policy and archives live in the app."""
+    from .gateway import open_gateway
+    from .gateway_projection import GatewayProjection
     try:
-        await hass.async_add_executor_job(process_lease, lease_path)
-        journal = await hass.async_add_executor_job(CommandJournal(journal_path).open, INTEGRATION_VERSION)
-    except SourceFenced as error:
-        raise ConfigEntryError(str(error)) from error
-    except WriterActive as error:
-        raise ConfigEntryNotReady(str(error)) from error
-    transport = CommandTransport(journal, hass.async_add_executor_job)
-    client = ShsApiClient(
-        async_get_clientsession(hass),
-        entry.data[CONF_BASE_URL],
-        entry.data[CONF_DEVICE_TOKEN],
-    )
-    coordinator = ShsStatusCoordinator(hass, entry, client)
+        service = await open_gateway(hass, entry)
+    except (OSError, ValueError, RuntimeError) as error:
+        raise ConfigEntryNotReady(f"SHS app gateway is not ready: {error}") from error
+    coordinator = GatewayProjection(hass, entry, service)
     entry.runtime_data = coordinator
-    options = ConfigurationReader(lambda: entry.options,
-        lambda: (hass.config.latitude, hass.config.longitude), json_bytes, json_loads)
-    verification_store = VerificationStorage(
-        hass.config.path(STORAGE_DIR, f"shs_energy.verification.{entry.entry_id}.sqlite"),
-        hass.async_add_executor_job, Store(hass, 1, f"shs_energy.verification.{entry.entry_id}"), json_bytes)
-    async def send_native(domain, service, data):
-        await hass.services.async_call(domain, service, data, blocking=True)
+    service.source.projection = coordinator
 
-    native_executor = NativeExecutor(transport, hass.states.get,
-        lambda: hass.config.units.temperature_unit, send_native)
-    registry = er.async_get(hass)
-    inputs = ControllerInputs(hass.states.get, lambda: hass.config.units.temperature_unit,
-        lambda entity: item.platform if (item := registry.async_get(entity)) is not None else None)
-    controller = ScheduledController(
-        inputs, coordinator, Store(hass, 1, f"shs_energy.controller.{entry.entry_id}"),
-        options,
-        VerificationJournal(verification_store,
-                            Store(hass, 1, f"shs_energy.verification_samples.{entry.entry_id}")),
-        native_executor=native_executor,
-    )
-    coordinator.controller = controller
-    controller.metrics.performance = {'verification_storage': verification_store.metrics,
-                                      'configuration_reads': options.metrics}
-    execution_store = ExecutionStorage(
-        hass.config.path(STORAGE_DIR, f"shs_energy.execution.{entry.entry_id}.sqlite"),
-        hass.async_add_executor_job,
-        LegacyExecution(hass.config.path(STORAGE_DIR), entry.entry_id,
-            Store(hass, 1, f"shs_energy.battery_runtime.{entry.entry_id}"),
-            hass.async_add_executor_job))
-    coordinator.battery_runtime = BatteryRuntime(coordinator, controller, execution_store,
-        lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
-    coordinator.battery_writer = BatteryWriterFence(
-        Store(hass, 1, f"shs_energy.battery_writer.{entry.entry_id}"), controller.lock,
-        options,
-        lambda: int(datetime.now(timezone.utc).timestamp() * 1000),
-        coordinator.battery_runtime.identity,
-    )
-    controller.battery_writer_fence = coordinator.battery_writer
-    await coordinator.battery_writer.open()
-    try:
-        await coordinator.battery_runtime.open()
-    except NativeReadbackPending as error:
-        coordinator.battery_writer.close()
-        raise ConfigEntryNotReady(str(error)) from error
-    entry.async_on_unload(coordinator.battery_live_inputs.close)
-    entry.async_on_unload(coordinator.battery_writer.close)
-
-    async def stop_controller(_event=None):
-        await _async_stop_runtime(coordinator)
-
-    scheduler = attach_controller_events(hass, entry, controller)
-    # Recover local ownership before contacting the cloud. A network outage
-    # must not prevent restoration of commands left by the previous process.
-    try:
-        await coordinator.async_restore_plan()
-        await controller.async_start(reason="integration_load" if hass.is_running else "homeassistant_startup")
-        await coordinator.async_config_entry_first_refresh()
-    except BaseException:
-        await stop_controller()
-        raise
-
-    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stop_controller))
-    try:
+    async def platforms():
+        # Do not interpret an absent app projection as an empty device inventory:
+        # that would remove the existing execution-mode selects during startup.
+        await coordinator.ready.wait()
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    except BaseException:
-        await stop_controller()
-        raise
-    scheduler.coordinator_updated()
-    async def sample_resources(_now=None):
-        runtime = coordinator.battery_runtime
-        if runtime._closed:
-            return
-        try:
-            process = await hass.async_add_executor_job(process_resources)
-        except Exception as error:
-            process = {'error':f'{type(error).__name__}: {error}'}
-        runtime.profiler.sample(process, runtime.resource_counts())
+        coordinator.platforms_loaded = True
 
-    entry.async_on_unload(async_track_time_interval(hass, sample_resources, timedelta(minutes=1)))
-    entry.async_create_background_task(hass, sample_resources(), name='shs_energy_resource_sample')
-    entry.async_on_unload(async_track_time_interval(
-        hass, coordinator.async_battery_inputs_refresh, timedelta(seconds=5)))
-    entry.async_create_background_task(hass, coordinator.async_battery_inputs_refresh(),
-        name="shs_energy_battery_live_inputs")
-
-    # Nightly push shortly after midnight; also catch up on startup in case
-    # HA was down at the scheduled time.
-    entry.async_on_unload(
-        async_track_time_change(
-            hass,
-            coordinator.async_scheduled_push,
-            hour=PUSH_TIME_HOUR,
-            minute=PUSH_TIME_MINUTE,
-            second=0,
-        )
-    )
-    entry.async_create_background_task(
-        hass, coordinator.async_scheduled_push(), name="shs_energy_startup_push"
-    )
-    # Advance cached price values on market quarters without a network request.
-    entry.async_on_unload(
-        async_track_time_change(
-            hass,
-            coordinator.async_price_refresh,
-            minute=[0, 15, 30, 45],
-            second=PRICE_REFRESH_SECOND,
-        )
-    )
-    entry.async_create_background_task(
-        hass, coordinator.async_replan_listener(), name="shs_energy_replan_notifications"
-    )
-    # Relative to this integration's startup, not shared wall-clock quarters.
-    entry.async_on_unload(
-        async_track_time_interval(
-            hass, coordinator.async_replan_poll,
-            timedelta(minutes=PLAN_EXCHANGE_INTERVAL_MINUTES),
-        )
-    )
-    entry.async_create_background_task(
-        hass,
-        _async_delayed_startup_optimisation_push(coordinator),
-        name="shs_energy_startup_optimisation_push",
-    )
-
-    # React to changed local meter and device-control mappings.
+    entry.async_create_background_task(hass, platforms(), name='shs_gateway_entities')
+    async def stopped(_event=None):
+        await _async_stop_runtime(coordinator)
+    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stopped))
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
 
-async def _async_options_updated(
-    hass: HomeAssistant, entry: ShsEnergyConfigEntry
-) -> None:
-    if not entry.runtime_data.options_update_requires_reload():
-        return
-    # Keep progress outside runtime_data: HA replaces it during this reload.
-    set_reloading(hass, entry, True)
-    coordinator = entry.runtime_data
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Publish canonical edits to the app without reloading physical ownership."""
     try:
-        await coordinator.async_report_runtime()
-        if not await hass.config_entries.async_reload(entry.entry_id):
-            coordinator.last_optimisation_error = "The integration could not reload its configuration"
-            return
-        reloaded = hass.config_entries.async_get_entry(entry.entry_id)
-        coordinator = reloaded.runtime_data
-        await coordinator.async_optimisation_push(force_plan=True)
+        await entry.runtime_data.service.source.refresh_configuration()
     finally:
         set_reloading(hass, entry, False)
-        await coordinator.async_report_runtime()
 
 
 async def _async_stop_runtime(coordinator):
-    """Use one shutdown path for reload, failed setup and Core stop."""
-    transport = coordinator.controller.native_executor.transport
+    service = coordinator.service
+    if service.closed:
+        return
+    service.source.closed = True
     try:
-        await transport.stopping()
-        coordinator.battery_live_inputs.close()
-        await coordinator.battery_runtime.close(release=True)
-        await coordinator.controller.async_stop()
-        await transport.stopped()
+        await service.close()
     finally:
-        coordinator.battery_writer.close()
+        await service.stream.close()
+        await coordinator.hass.async_add_executor_job(service.stream.journal.close)
+        coordinator.hass.data.get('shs_energy_gateways', {}).pop(coordinator.entry.entry_id, None)
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
-    """Unload a config entry after all owner writes have settled."""
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _async_stop_runtime(entry.runtime_data)
+    if not entry.runtime_data.platforms_loaded:
+        return True
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

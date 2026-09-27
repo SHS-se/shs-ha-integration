@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from aiohttp.test_utils import AioHTTPTestCase
 from shs_app.companion import hashes, install
-from shs_app.server import create_app, Observer
+from shs_app.server import create_app, Dashboard
 from shs_app.storage import Diagnostics
 
 
@@ -107,24 +107,13 @@ class IngressTests(AioHTTPTestCase):
             self.assertEqual(response.status, 403)
 
 
-class ObserverTests(unittest.IsolatedAsyncioTestCase):
-    async def test_version_mismatch_clears_snapshot_and_failure_marks_stale(self):
+class DashboardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dashboard_starts_without_claiming_control_or_a_loaded_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "bundle.json").write_text(json.dumps({"protocol": 1, "integration_version": "v2"}))
-            (root / "app.json").write_text('{"version":"v1"}')
-            observer = Observer(root, root)
-            async def good(path): return {"protocol": 1, "integration_version": "v2", "entries": []}
-            observer.get = good
-            await observer.observe()
-            self.assertEqual(observer.connection["state"], "connected")
-            async def broken(path): raise TimeoutError("timed out")
-            observer.get = broken
-            await observer.observe()
-            self.assertEqual(observer.connection["state"], "disconnected")
-            self.assertIsNotNone(observer.snapshot)
-            async def mismatch(path): return {"protocol": 1, "integration_version": "v3"}
-            observer.get = mismatch
-            await observer.observe()
-            self.assertEqual(observer.connection["state"], "incompatible")
-            self.assertIsNone(observer.snapshot)
+            (root/'bundle.json').write_text(json.dumps({'protocol':2,'integration_version':'paired'}))
+            (root/'app.json').write_text('{"version":"app"}')
+            dashboard = Dashboard(root,root)
+            self.assertEqual(dashboard.payload()['control_owner'],'Migration pending')
+            self.assertIsNone(dashboard.payload()['snapshot'])
+            self.assertEqual(dashboard.payload()['required_companion'],'paired')

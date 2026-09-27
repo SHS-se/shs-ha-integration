@@ -8,7 +8,7 @@ from aiohttp import web
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "app"), str(ROOT / "custom_components/shs_energy")]
 from shs_app.server import create_app
-from app_projection import schedule
+from shs_core.app_projection import schedule
 
 plan = json.loads((ROOT / "tests/fixtures/schema-9-mixed-mode-plan.json").read_text())["plan"]
 entry = {"id": "test-home", "title": "Test home", "state": "loaded", "operation": {"state": "ready", "label": "Ready", "reason": "A validated plan is available"},
