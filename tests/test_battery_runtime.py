@@ -720,6 +720,56 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(r.runtime.snapshot()['accounting']['balance']['charge']['high'])
         finally:await r.runtime.close()
 
+    async def test_historical_counter_outage_does_not_block_current_control(self):
+        for mode in ('controlling','control_verification'):
+            with self.subTest(mode=mode):
+                r=Rig(mode)
+                async def history(entities,start,end,with_attributes):
+                    return {entity:[
+                        (datetime.fromtimestamp(5,timezone.utc),'99',deepcopy(r.rows[entity]['attributes'])),
+                        (datetime.fromtimestamp(10,timezone.utc),'unavailable',deepcopy(r.rows[entity]['attributes'])),
+                        (datetime.fromtimestamp(15,timezone.utc),'unknown',None),
+                        (datetime.fromtimestamp(20,timezone.utc),None,{}),
+                        (datetime.fromtimestamp(25,timezone.utc),'100',deepcopy(r.rows[entity]['attributes'])),
+                    ] for entity in entities}
+                r.coordinator._state_history=history
+                await r.start()
+                try:
+                    for _ in range(5):await r.advance()
+                    status=r.runtime.snapshot()
+                    self.assertEqual(status['state'],'controlling' if mode=='controlling' else 'verified',status)
+                    self.assertTrue(r.runtime._seeded)
+                    self.assertFalse(status['fault_history'])
+                    self.assertNotIn('fix',status)
+                    self.assertEqual(bool(r.calls),mode=='controlling')
+                    for entity in ('sensor.battery_charge','sensor.battery_discharge','sensor.grid_import','sensor.grid_export'):
+                        receipts=[m for m in r.runtime.host.state.execution.account.meters if m.stream==entity]
+                        self.assertEqual([(m.source_at_ms,m.total_mwh,m.epoch) for m in receipts[:2]],
+                                         [(5000,99000000,'0'),(25000,100000000,'0')])
+                finally:await r.runtime.close()
+
+    async def test_missing_counter_history_does_not_invent_energy_evidence(self):
+        r=Rig('control_verification')
+        entity='sensor.battery_charge'
+        r.rows[entity]['state']='unavailable'
+        async def history(entities,start,end,with_attributes):
+            return {key:[(datetime.fromtimestamp(5,timezone.utc),'unavailable',{})] for key in entities}
+        r.coordinator._state_history=history
+        await r.start()
+        try:
+            await r.advance()
+            status=r.runtime.snapshot()
+            self.assertEqual(status['state'],'verified',status)
+            self.assertIsNone(status['accounting']['balance']['charge']['high'])
+            self.assertFalse(any(m.stream==entity for m in r.runtime.host.state.execution.account.meters))
+            r.rows[entity]['state']='101'
+            await r.advance()
+            receipts=[m for m in r.runtime.host.state.execution.account.meters if m.stream==entity]
+            self.assertEqual([(m.total_mwh,m.epoch) for m in receipts],[(101000000,'0')])
+            self.assertEqual(r.runtime.snapshot()['state'],'verified')
+            self.assertFalse(r.runtime.snapshot()['fault_history'])
+        finally:await r.runtime.close()
+
     async def test_receipt_order_reset_and_late_correction_do_not_invent_epochs(self):
         r=Rig('control_verification');await r.start()
         try:

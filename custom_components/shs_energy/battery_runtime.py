@@ -467,7 +467,7 @@ class BatteryRuntime:
                 if stream.spec.stream_id in excluded or '$battery' in excluded:
                     continue
                 row=self.coordinator._battery_entity_report(stream.spec.stream_id)
-                if row and row.get('state') not in ('unknown','unavailable',None):
+                if row:
                     await self._meter(stream.spec.stream_id,row['state'],row['attributes'],
                         stamp(row['last_reported']),row.get('event_id'))
 
@@ -667,6 +667,10 @@ class BatteryRuntime:
         # Missing anchors remain uncertain in the execution account.
 
     async def _meter(self,entity,value,attrs,at,event_id=None):
+        # HA records outages in history too. They contain no counter evidence;
+        # leave delivery uncertain, just as for a missing live counter report.
+        if value in ('unknown','unavailable',None):
+            return
         stream=next(s for s in self.host.state.ledger.streams if s.spec.stream_id==entity)
         unit=(attrs or {}).get('unit_of_measurement')
         if unit not in ('Wh','kWh','MWh') or (attrs or {}).get('state_class') not in ('total','total_increasing'):
@@ -749,7 +753,7 @@ class BatteryRuntime:
         valid=min(times)+AGE_MS
         for stream in self.host.state.ledger.streams:
             row=read(stream.spec.stream_id)
-            if row and row.get('state') not in ('unknown','unavailable',None):
+            if row:
                 await self._meter(stream.spec.stream_id,row['state'],row['attributes'],stamp(row['last_reported']),row.get('event_id'))
         state=self.host.state
         # Reserve a unique local revision while holding _observe_lock. Captures
