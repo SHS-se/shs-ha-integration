@@ -189,3 +189,29 @@ canonical admission, recorder start-state/attribute flags and read-only weather 
 This is an in-process extraction milestone, not remote gateway activation or completed
 live data migration. Durable receipts, remote ownership, final dormant reconciliation
 and activation remain the next cutover gates.
+
+### Live verification of the household extraction
+
+The first deployment (`8bb8a54`, beta.55/app beta.7) exposed a battery recovery
+caller still using the removed coordinator observation helper. `f9f6d75` moves
+all battery reads onto `coordinator.ports.battery_report` and adds a composed test
+that reopens a persisted BatteryRuntime using the real Household. This is covered
+by the isolated distribution test as well as the regular runtime suite.
+
+The corrected pair, integration **0.9.0-beta.56** and app **0.1.0-beta.8**, is
+published and installed. CI passed **993 integration tests**, **30 app tests**,
+**93 configuration frontend checks**, and **six browser scenarios**. Metadata and
+existing SHS branding checks passed; both container architectures were published.
+Core returned in 101 seconds and SHS loaded successfully. The app reports
+Connected; the household reports Ready/actionable. Battery state is controlling,
+command state adopted, execution active, plan accepted, and current runtime reason
+null. EV, pool and hot-water controllers retain their configured verification mode.
+
+The live app imports `shs_core.household` and `shs_core.api` without HA; its bundled
+manifest names beta.56. The source command journal still records integration
+ownership, release beta.56 and a null migration ID (297 completed service calls at
+the read). No `/data/migrations` exists. A single startup observation-scope fault
+remains in diagnostic history, but current battery execution recovered and its
+runtime reason cleared. A supplier-cost price lookup warning was also logged;
+these checks do not claim historical diagnostics are empty. No export, source
+fence or live ownership transfer occurred during this extraction.
