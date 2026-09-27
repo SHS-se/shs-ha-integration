@@ -241,7 +241,9 @@ class SensorWiringTests(unittest.TestCase):
         self.assertNotIn("connection.require_admin", CONFIG_PANEL)
         # The diagnostics file is an HTTP view; it has the same admin guard.
         self.assertIn("    @require_admin\n    async def get(self, request", CONFIG_PANEL)
-        self.assertEqual(CONFIG_PANEL.count("register_view("), 1)
+        self.assertEqual(CONFIG_PANEL.count("register_view("), 2)
+        app_view = (Path(__file__).parents[1] / "custom_components/shs_energy/app_api.py").read_text()
+        self.assertIn("    @require_admin\n    async def get(self, request", app_view)
 
 
 if __name__ == "__main__":

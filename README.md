@@ -1,5 +1,15 @@
 # Smart Home Solutions Energy — Home Assistant integration
 
+## SHS Energy app for Home Assistant OS
+
+This repository also provides the **SHS Energy** app. Add
+`https://github.com/SHS-se/shs-ha-integration` to the App store’s repositories, then
+install SHS Energy. [Installation and companion setup](apps/shs_energy/DOCS.md).
+
+The first beta provides a branded dashboard, forecast charts and diagnostics through
+Ingress. It observes the existing integration; device control and historical data
+remain in Home Assistant until the separate migration stage.
+
 ## Replacement controller specification — 17 September 2026
 
 [Plan execution and deviation accounting](docs/controller-plan-execution.md) is

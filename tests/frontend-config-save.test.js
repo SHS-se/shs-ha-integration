@@ -1224,6 +1224,15 @@ test('battery measurement errors open and highlight the Energy fields, not the d
   panel._openField('configuration::house_consumption_power_entity');
   assert.equal(panel._tab, 'energy');
   assert.ok(panel._expanded.has('section:prices_forecasts'));
+  let focused = false;
+  panel.shadowRoot = { querySelectorAll: () => [{ dataset: { fieldToken: 'configuration::grid_power_entity' },
+    scrollIntoView() {}, querySelector: () => ({ focus() { focused = true; } }) }] };
+  panel._linkedField = new URLSearchParams('field=grid_power_entity&scope=configuration');
+  panel._openLinkedField();
+  assert.equal(panel._tab, 'energy');
+  assert.ok(panel._expanded.has('section:prices_forecasts'));
+  assert.equal(focused, true);
+  assert.equal(panel._fieldProblems('grid_power_entity').length, 1);
   panel._data.attention = [];
   battery.execution_status = {};
   assert.equal(panel._fieldProblems('house_consumption_power_entity').length, 0);

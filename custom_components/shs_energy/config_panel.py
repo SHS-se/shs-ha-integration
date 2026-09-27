@@ -655,6 +655,8 @@ async def async_register_config_panel(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_replan)
     websocket_api.async_register_command(hass, websocket_control_permission)
     hass.http.register_view(ControllerDiagnosticsView)
+    from .app_api import AppSnapshotView
+    hass.http.register_view(AppSnapshotView)
     websocket_api.async_register_command(hass, websocket_get_configuration)
     websocket_api.async_register_command(hass, websocket_discover_configuration)
     websocket_api.async_register_command(hass, websocket_save_configuration)

@@ -39,6 +39,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._error = "";
     this._notice = "";
     this._entryId = new URLSearchParams(window.location.search).get("config_entry");
+    this._linkedField = new URLSearchParams(window.location.search);
     this._boundClick = (event) => this._onClick(event);
     this._boundChange = (event) => this._onChange(event);
     this._boundInput = (event) => this._onChange(event);
@@ -184,7 +185,20 @@ class ShsEnergyConfigPanel extends HTMLElement {
     } finally {
       this._loading = false;
       this._renderBackground();
+      this._openLinkedField();
     }
+  }
+
+  _openLinkedField() {
+    if (!this._linkedField || this._linkedFieldOpened || !this._data || this._data.requires_entry_selection) return;
+    const query = this._linkedField;
+    if (!query.has("field")) return;
+    const target = this._fieldLocations().find(location => location.field.key === query.get("field")
+      && location.scope === (query.get("scope") || "configuration")
+      && (!query.get("device") || location.deviceKey === query.get("device")));
+    if (!target) return;
+    this._linkedFieldOpened = true;
+    this._openField(target.token);
   }
 
   _acceptRefresh(data) {

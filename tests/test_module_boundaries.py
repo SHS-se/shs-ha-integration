@@ -21,6 +21,7 @@ sys.path.append(str(PACKAGE))
 
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
+    "app_projection",
     "battery_commands", "operating_modes", "verification",
     "home_runtime", "home_runtime_checkpoint", "energy_ledger", "runtime_json",
     "battery_supply", "home_host", "battery_native_adapter",
@@ -50,6 +51,7 @@ PURE_MODULES = (
 
 # Thin by design: they wire Home Assistant to the modules above.
 HOME_ASSISTANT_MODULES = (
+    "app_api",
     "__init__",
     "config_flow",
     "config_panel", "control_configuration", "select",

@@ -1,0 +1,4 @@
+configuration:
+  install_companion:
+    name: Install companion
+    description: Install the integration bundled with this app on the next app start. Existing settings and history are preserved. After installation, restart Home Assistant Core, then turn this option off. Unknown local modifications are never overwritten.

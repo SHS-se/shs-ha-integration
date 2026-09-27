@@ -15,6 +15,17 @@ number is bumped locally as part of the change.
 
 ## One-time setup
 
+The HAOS app has a separate version in `apps/shs_energy/config.yaml` and
+`web/package.json`; keep them equal. The **SHS app** workflow tests and publishes
+`ghcr.io/shs-se/shs-energy-app:<version>` for amd64 and arm64 when app files change.
+Never reuse a published app version for changed bytes. Each app image includes the
+exact integration source from its commit. Update the installer baseline hash manifest
+when deliberately supporting replacement of another integration release. The package
+must be publicly pullable before advertising the repository as installable.
+
+The Beta integration workflow watches integration code and its tests. App-only work
+does not publish a second HACS release under an unchanged integration version.
+
 Add a repository Actions secret named `RELEASE_TOKEN`. Its value must be a
 fine-grained GitHub personal access token with the **Copilot Requests**
 permission. Only **Release** needs it; **Beta** uses GitHub's generated notes so

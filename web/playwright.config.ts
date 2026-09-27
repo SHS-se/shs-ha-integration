@@ -1,0 +1,2 @@
+import {defineConfig} from '@playwright/test';
+export default defineConfig({testDir:'tests',use:{baseURL:'http://127.0.0.1:8098/ingress/test/',screenshot:'only-on-failure'},webServer:{command:'python3 ../app/tests/preview.py',url:'http://127.0.0.1:8098/ingress/test/',reuseExistingServer:false},projects:[{name:'desktop',use:{viewport:{width:1440,height:1000}}},{name:'mobile',use:{viewport:{width:375,height:812},isMobile:true}}]});

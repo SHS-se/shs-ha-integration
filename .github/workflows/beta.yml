@@ -6,8 +6,11 @@ on:
       - main
     # Documentation cannot change what gets installed, so it does not earn a
     # build. Any push that also touches code still publishes one.
-    paths-ignore:
-      - "**.md"
+    paths:
+      - "custom_components/**"
+      - "tests/**"
+      - "scripts/bump.sh"
+      - ".github/workflows/beta.yml"
   workflow_dispatch:
 
 permissions:

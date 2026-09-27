@@ -1,0 +1,62 @@
+name: SHS app
+on:
+  push:
+    branches: [main]
+    paths: ['app/**', 'web/**', 'apps/**', 'repository.yaml', '.dockerignore', '.github/workflows/app.yml', 'scripts/build-companion.py', 'scripts/check-app.py']
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: shs-app-publication
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: pip install -r app/requirements.txt PyYAML==6.0.3
+      - run: python scripts/check-app.py
+      - run: PYTHONPATH=app python -m unittest discover -s app/tests -v
+      - run: python -m unittest discover -s tests
+      - run: node --test tests/frontend-config-save.test.js
+      - run: npm ci --no-fund --no-audit && npm run build && npx playwright install --with-deps chromium && npm test
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: app-browser-results
+          path: web/test-results
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - id: version
+        run: echo "version=$(node -p 'require("./web/package.json").version')" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/shs_energy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/shs-se/shs-energy-app:${{ steps.version.outputs.version }}
+          build-args: BUILD_VERSION=${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: docker buildx imagetools inspect ghcr.io/shs-se/shs-energy-app:${{ steps.version.outputs.version }}
