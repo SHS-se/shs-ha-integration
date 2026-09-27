@@ -4,7 +4,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_point_in_utc_time, async_track_state_change_event
 
-from .controller_scheduler import ControllerScheduler
+from .shs_core.controller_scheduler import ControllerScheduler
 
 
 def attach_controller_events(hass, entry, controller):

@@ -4,14 +4,9 @@ from datetime import datetime, timedelta, timezone
 from math import isfinite
 import re
 
-if __package__:
-    from .configuration_fields import _configuration_sections, _control_fields, POWER_FIELD, OPTIONAL_TEMPERATURE_FIELD
-    from .shs_core.operating_modes import device_mode, system_device_keys, system_member_keys
-    from .verification import observation
-else:
-    from configuration_fields import _configuration_sections, _control_fields, POWER_FIELD, OPTIONAL_TEMPERATURE_FIELD
-    from shs_core.operating_modes import device_mode, system_device_keys, system_member_keys
-    from verification import observation
+from .configuration_fields import _configuration_sections, _control_fields, POWER_FIELD, OPTIONAL_TEMPERATURE_FIELD
+from .operating_modes import device_mode, system_device_keys, system_member_keys
+from .verification import observation
 
 SAMPLE_SECONDS = 60
 MAX_SAMPLE_AGE_SECONDS = 180

@@ -172,3 +172,43 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         finally:
             _PROCESS_LEASES.pop(self.lock_path.resolve()).close()
         self.assertEqual(self.path.read_bytes(),before)
+
+
+class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unload_uses_the_native_transport_and_marks_clean_only_after_owners_stop(self):
+        import ast
+        from types import SimpleNamespace
+        source = Path(__file__).parents[1]/'custom_components/shs_energy/__init__.py'
+        tree = ast.parse(source.read_text())
+        functions = [node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
+                     and node.name in ('_async_stop_runtime', 'async_unload_entry')]
+        for node in functions:
+            node.returns = None
+            for arg in node.args.args:
+                arg.annotation = None
+        namespace = {'PLATFORMS': ['sensor', 'select']}
+        exec(compile(ast.fix_missing_locations(ast.Module(body=functions, type_ignores=[])), str(source), 'exec'), namespace)
+        order = []
+        def sync(label):
+            return lambda: order.append(label)
+        def asynchronous(label, failure=False):
+            async def call(*args, **kwargs):
+                order.append(label)
+                if failure:
+                    raise OSError('fixture shutdown failure')
+                return True
+            return call
+        coordinator = SimpleNamespace(
+            controller=SimpleNamespace(native_executor=SimpleNamespace(transport=SimpleNamespace(
+                stopping=asynchronous('stopping'), stopped=asynchronous('clean'))), async_stop=asynchronous('controller')),
+            battery_runtime=SimpleNamespace(close=asynchronous('battery')),
+            battery_live_inputs=SimpleNamespace(close=sync('observations')),
+            battery_writer=SimpleNamespace(close=sync('writer')))
+        hass = SimpleNamespace(config_entries=SimpleNamespace(async_unload_platforms=asynchronous('platforms')))
+        self.assertTrue(await namespace['async_unload_entry'](hass, SimpleNamespace(runtime_data=coordinator)))
+        self.assertEqual(order, ['stopping', 'observations', 'battery', 'controller', 'clean', 'writer', 'platforms'])
+        order.clear()
+        coordinator.battery_runtime.close = asynchronous('battery', failure=True)
+        with self.assertRaises(OSError):
+            await namespace['async_unload_entry'](hass, SimpleNamespace(runtime_data=coordinator))
+        self.assertEqual(order, ['stopping', 'observations', 'battery', 'writer'])

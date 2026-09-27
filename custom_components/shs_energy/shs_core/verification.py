@@ -6,10 +6,7 @@ import json
 from time import monotonic
 from uuid import uuid4
 
-if __package__:
-    from .battery_commands import OPERATIONS as BATTERY_OPERATIONS
-else:
-    from battery_commands import OPERATIONS as BATTERY_OPERATIONS
+from .battery_commands import OPERATIONS as BATTERY_OPERATIONS
 
 MAX_GROUPS = 2000
 MAX_LIFECYCLE_EVENTS = 500
@@ -227,10 +224,7 @@ class VerificationJournal:
         return group_id
 
     async def sample(self, options, devices, read, *, at, version, slot, plan_id):
-        if __package__:
-            from .controller_observations import measurement_sample
-        else:
-            from controller_observations import measurement_sample
+        from .controller_observations import measurement_sample
         context = {"integration_version": version, "configuration": deepcopy(options),
                    "devices": [{key: deepcopy(row.get(key)) for key in
                                 ("key", "name", "controller_id", "mode", "mapping", "configured_mapping", "statistic_id", "category", "planning_role", "control_type")}

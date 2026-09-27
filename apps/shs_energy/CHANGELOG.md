@@ -1,3 +1,11 @@
+# 0.1.0-beta.6
+
+Bundle preparation companion 0.9.0-beta.54. Package the controller, battery runtime,
+verification, plan validation and configuration logic for use outside HA. Replace
+HA-shaped controller inputs with explicit observation ports. Isolated packaged
+pool and battery scenarios execute without importing HA. Control still runs in
+the integration pending the remote gateway and household-runtime cutover.
+
 # 0.1.0-beta.5
 
 Bundle preparation companion 0.9.0-beta.53. Extract shared device ownership,

@@ -1,13 +1,14 @@
+from dataclasses import replace
 """Verification shares command generation but never acquires physical ownership."""
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 import unittest
 import test_controller as fixtures
-from controller import ScheduledController
-from verification import VerificationJournal
+from shs_core.controller import ScheduledController
+from shs_core.verification import VerificationJournal
 from shs_core.operating_modes import device_mode, planning_devices
-from configuration_schema import resolve_configuration
+from shs_core.configuration_schema import resolve_configuration
 from migration import migrate_options
 
 
@@ -287,7 +288,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import patch
         self.options['device_modes']['$battery'] = 'control_verification'
         await self.controller.async_start()
-        with patch('verification.monotonic', return_value=self.journal.last_saved + 61):
+        with patch('shs_core.verification.monotonic', return_value=self.journal.last_saved + 61):
             await self.controller.async_tick()
         self.assertEqual(self.audit_store.saved['attempts'][0]['count'], 2)
         await self.controller.async_tick()
@@ -326,7 +327,8 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.states['sensor.water'].last_reported -= timedelta(hours=2)
         self.states['sensor.raw_water'] = fixtures.State(31, unit_of_measurement='°C')
         self.registry = {'sensor.water': SimpleNamespace(platform='filter')}
-        self.controller.entity_registry = SimpleNamespace(async_get=self.registry.get)
+        self.controller.inputs = replace(self.controller.inputs, platform=lambda entity:
+            item.platform if (item := self.registry.get(entity)) is not None else None)
 
     async def test_filter_uses_smoothed_value_and_logs_raw_freshness(self):
         self.configure_pool_filter()
@@ -445,7 +447,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_start()
         attempts = deepcopy(self.journal.attempts)
-        with patch('verification.MAX_LIFECYCLE_EVENTS', 2):
+        with patch('shs_core.verification.MAX_LIFECYCLE_EVENTS', 2):
             await self.journal.lifecycle('stop', 'test', 'integration_unload_or_setup_stop')
             await self.journal.lifecycle('start', 'test', 'integration_load')
         self.assertEqual([event['event'] for event in self.journal.events], ['stop', 'start'])
@@ -469,7 +471,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
 
     def test_slot_block_classification_distinguishes_rollover_expiry_and_invalid_plan(self):
-        from controller import PlanChangedError
+        from shs_core.controller import PlanChangedError
         now = datetime.now(timezone.utc)
         for code, age, current, actionable in (
             ('slot_rollover', 16, {'start': now.isoformat()}, True),
@@ -572,7 +574,7 @@ class JournalRetentionTests(unittest.IsolatedAsyncioTestCase):
         row = {'device': 'pool', 'scope': 'old', 'configuration': {'old': True},
                'at': '2026-09-11T14:00:00+00:00', 'slot': {'start': 'old'},
                'expected_operations': ['heat', 'defer', 'handover'], 'operations': ['heat'], 'outcome': 'verified'}
-        with patch('verification.MAX_GROUPS', 2):
+        with patch('shs_core.verification.MAX_GROUPS', 2):
             await journal.append(row)
             await journal.append(row)
             await journal.append(row)

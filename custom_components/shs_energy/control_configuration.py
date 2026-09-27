@@ -4,11 +4,11 @@ from datetime import datetime, timezone
 from .shs_core import const as shs_const
 from .configuration import (resolved_options, entity_display_name_by_id,
     area_name_by_id, entity_area_id_by_id, suggest_device_control_mapping)
-from .configuration_fields import _control_fields
-from .configuration_schema import initialise_device_inclusion
+from .shs_core.configuration_fields import _control_fields
+from .shs_core.configuration_schema import initialise_device_inclusion
 from .shs_core.device_controls import apply_planner_support, mapping_report, is_room_thermal_control, mapped_planning_path
 from .shs_core.operating_modes import execution_mode_options
-from .presentation import complete_device_views
+from .shs_core.presentation import complete_device_views
 
 
 def execution_device_views(hass, entry, choices, *, include_suggestions=True):

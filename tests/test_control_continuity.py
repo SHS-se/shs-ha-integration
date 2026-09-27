@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, patch
 import unittest
 import test_controller as fixtures
 from test_controller import State
-from controller import ScheduledController
-from command_fixture import native_executor
-from verification import VerificationJournal
+from shs_core.controller import ScheduledController
+from command_fixture import native_executor, controller_inputs
+from shs_core.verification import VerificationJournal
 
 
 def later(test, minutes):
@@ -24,7 +24,7 @@ def later(test, minutes):
         def now(cls, tz=None):
             return datetime.now(tz) + offset
 
-    patcher = patch('controller.datetime', Clock)
+    patcher = patch('shs_core.controller.datetime', Clock)
     patcher.start()
     test.addCleanup(patcher.stop)
 
@@ -36,7 +36,7 @@ class Continuity(unittest.IsolatedAsyncioTestCase):
 
     def restarted(self):
         """A new process, as after an HA restart or an integration update."""
-        controller = ScheduledController(self.hass, self.coordinator, self.store, self.controller.options, native_executor=native_executor(self.hass))
+        controller = ScheduledController(controller_inputs(self.hass), self.coordinator, self.store, self.controller.options, native_executor=native_executor(self.hass))
         controller.confirm = self.controller.confirm
         controller.verification = VerificationJournal(fixtures.Store(), fixtures.Store())
         controller.device = 'battery'

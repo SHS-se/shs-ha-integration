@@ -28,7 +28,7 @@ from homeassistant.util.json import json_loads
 
 from .refresh import refresh_in_progress
 from .replan_listener import listen_for_replans
-from .battery_live import BatteryLiveInputs
+from .shs_core.battery_live import BatteryLiveInputs
 from .durable_record import DurableRecord
 from .shs_core.operating_modes import device_mode, operating_mode_identity
 
@@ -39,7 +39,7 @@ from .api import (
     ShsSubscriptionInactiveError,
 )
 from .shs_core.configuration_values import resolve_battery_quantities
-from .api_contract import ApiContractError, validate_server_contract
+from .shs_core.api_contract import ApiContractError, validate_server_contract
 from .shs_core.const import (
     BACKFILL_MAX_DAYS,
     CATEGORIES,
@@ -119,7 +119,7 @@ from .shs_core.device_controls import (
     planning_path,
     requested_controllable_devices,
 )
-from .optimisation import (
+from .shs_core.optimisation import (
     OptimisationInputError,
     REMEDY_DEFECT,
     REMEDY_SETTING,
@@ -140,7 +140,7 @@ from .optimisation import (
     utc_slots,
     validate_plan_contract,
 )
-from .measurements import device_measurement_issues
+from .shs_core.measurements import device_measurement_issues
 from .planning import (
     build_device_models,
     build_services,
@@ -1091,7 +1091,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             watts = self._mapped_power_w(mapping)
             if watts is not None:
                 device["active_power_w"] = round(watts, 1)
-        from .configuration_schema import shared_devices
+        from .shs_core.configuration_schema import shared_devices
         return shared_devices(prepared, self.entry.options) if included_only else prepared
 
     def _record_device_exchange(
@@ -1258,7 +1258,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def operational_status(self) -> dict[str, Any]:
-        from .presentation import operational_status
+        from .shs_core.presentation import operational_status
         options = resolved_options(self.hass, dict(self.entry.options))
         result = operational_status(self.optimisation_plan, options[OPT_PLANNING_MODE],
             self.optimisation_missing_inputs, datetime.now(timezone.utc), options=options,
@@ -1482,7 +1482,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         end: datetime,
     ) -> list[dict[str, Any]]:
         """Build complete quarter-hour thermal observations for every zone."""
-        from .configuration_schema import shared_devices
+        from .shs_core.configuration_schema import shared_devices
         zones = thermal_zone_inputs(
             shared_devices(devices, options), options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
             pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
@@ -2295,7 +2295,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         end: datetime,
     ) -> list[dict[str, Any]]:
         """Return complete per-device Energy Dashboard quarters."""
-        from .configuration_schema import shared_devices
+        from .shs_core.configuration_schema import shared_devices
         devices = shared_devices(devices, dict(self.entry.options))
         statistic_by_key = {
             str(device["key"]): str(device["statistic_id"])
@@ -2389,7 +2389,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         stored: dict[str, Any],
         devices: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        from .configuration_schema import shared_devices
+        from .shs_core.configuration_schema import shared_devices
         from .shs_core.operating_modes import planning_devices
         runtime = getattr(self, "battery_runtime", None)
         execution_options = runtime.controller.options() if runtime is not None else None
@@ -3301,7 +3301,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def binding_plan_for(self, device, options):
         """Select and validate the physical or hypothetical plan as one unit."""
         from .shs_core.operating_modes import scoped_plan
-        from .presentation import operational_status
+        from .shs_core.presentation import operational_status
         plan = scoped_plan(self.optimisation_plan, options, device)
         now = dt_util.utcnow()
         # Check the cached branch itself: the battery view below is a new object on

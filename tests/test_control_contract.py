@@ -8,14 +8,14 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
-from configuration_fields import (  # noqa: E402
+from shs_core.configuration_fields import (  # noqa: E402
     CONTROL_FIELDS,
     OBSERVATION_FIELDS,
     control_fields,
     local_contract,
     mapping_keys,
 )
-from configuration_schema import MAPPING_KEYS  # noqa: E402
+from shs_core.configuration_schema import MAPPING_KEYS  # noqa: E402
 from shs_core.device_commands import execution_setup_errors  # noqa: E402
 
 PATHS = (None, "room", "pool", "boiler", "ev")
@@ -176,7 +176,7 @@ class DriftTests(unittest.TestCase):
         the entity list drifted apart in the first place.
         """
         from shs_core.device_controls import _ENTITY_FIELDS_BY_CONTROL_TYPE
-        from configuration_fields import local_contract
+        from shs_core.configuration_fields import local_contract
         for method in CONTROL_FIELDS:
             for path in PATHS:
                 contract = local_contract(method, path)

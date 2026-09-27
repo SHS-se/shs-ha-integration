@@ -1,12 +1,8 @@
 """Shared field descriptions: rendering and writes use the same definitions."""
 from __future__ import annotations
 from typing import Any
-if __package__:
-    from .shs_core import const as shs_const
-    from .shs_core.device_controls import is_room_thermal_control
-else:
-    from shs_core import const as shs_const
-    from shs_core.device_controls import is_room_thermal_control
+from . import const as shs_const
+from .device_controls import is_room_thermal_control
 
 LABELS = {
     "monitoring": "Monitoring", "planning": "Planning", "control_verification": "Control verification",

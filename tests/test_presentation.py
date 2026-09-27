@@ -4,8 +4,8 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import unittest
-from presentation import controller_explanation, operational_status, timeline, complete_device_views, device_name, system_fields, device_readiness
-from configuration_schema import configuration_defaults, shared_devices
+from shs_core.presentation import controller_explanation, operational_status, timeline, complete_device_views, device_name, system_fields, device_readiness
+from shs_core.configuration_schema import configuration_defaults, shared_devices
 from planning import unplanned_services
 
 
@@ -367,7 +367,7 @@ class PresentationTests(unittest.TestCase):
         self.assertFalse(device['execution_eligibility']['eligible'])
 
     def test_passive_mode_does_not_display_old_verification_as_current_work(self):
-        from presentation import execution_view
+        from shs_core.presentation import execution_view
         status = {'state': 'verified', 'reason': 'Commands logged'}
         self.assertEqual(execution_view('planning', status)['state'], 'planning')
         self.assertEqual(status['state'], 'verified')

@@ -12,7 +12,7 @@ import sys
 
 ROOT = Path(__file__).parents[1] / 'custom_components/shs_energy'
 sys.path.append(str(ROOT))
-from presentation import operational_status
+from shs_core.presentation import operational_status
 
 
 def methods(names, namespace):

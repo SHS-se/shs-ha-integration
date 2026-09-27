@@ -106,7 +106,7 @@ class ControllerScheduler:
         stats[kind + "_events"] += 1
         self.controller.observation_changed.set()
         run_revision = self.controller.ownership.runs.revision
-        self.controller.ownership.runs.observe(lambda target: state if target == entity else self.controller.hass.states.get(target),
+        self.controller.ownership.runs.observe(lambda target: state if target == entity else self.controller.inputs.read(target),
                                      self.now(), entity=entity, received=kind == "state_change")
         affected = {device for device, entities in self.dependencies.items() if entity in entities}
         affected.update(binding["owner"] for binding in self.controller.ownership.runs.bindings.values()

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 import unittest
 import test_controller as fixtures
 State = fixtures.State
-from controller import ScheduledController
-from command_fixture import native_executor
+from shs_core.controller import ScheduledController
+from command_fixture import native_executor, controller_inputs
 from shs_core.device_commands import validate_commands
 
 
@@ -48,7 +48,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['device:heater']['state'], 'overridden')
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), native_executor=native_executor(self.hass))
+        other = ScheduledController(controller_inputs(self.hass), self.coordinator, self.store, lambda: deepcopy(self.options), native_executor=native_executor(self.hass))
         await other.async_start()
         self.assertEqual(other.status['device:heater']['state'], 'overridden')
         self.assertEqual(self.states['switch.heater'].state, 'on')
@@ -181,7 +181,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_server_generated_schema_seven_fixture_validates_in_ha(self):
         import json
         from pathlib import Path
-        from optimisation import validate_plan_contract
+        from shs_core.optimisation import validate_plan_contract
         fixture = json.loads((Path(__file__).parent / 'fixtures/schema-7-device-plan.json').read_text())
         now = datetime.fromisoformat(fixture['validation_time'].replace('Z','+00:00'))
         validate_plan_contract(fixture['plan'], now)

@@ -5,12 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
 import test_controller as fixtures
-from controller import ScheduledController
-from command_fixture import native_executor
+from shs_core.controller import ScheduledController
+from command_fixture import native_executor, controller_inputs
 from shs_core.minimum_run import MinimumRuns, minimum_run_errors
-from verification import VerificationJournal
-from configuration_fields import control_fields
-from configuration_schema import save_device
+from shs_core.verification import VerificationJournal
+from shs_core.configuration_fields import control_fields
+from shs_core.configuration_schema import save_device
 from shs_core.device_controls import mapping_report
 
 NOW = datetime(2026, 9, 25, 12, tzinfo=timezone.utc)
@@ -118,7 +118,7 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         Clock.value = NOW
         for state in self.states.values():
             state.last_updated = state.last_reported = state.last_changed = NOW
-        self.clock = patch('controller.datetime', Clock)
+        self.clock = patch('shs_core.controller.datetime', Clock)
         self.clock.start()
         self.addCleanup(self.clock.stop)
         self.options['device_control_mappings']['pool']['minimum_on_seconds'] = 3600
@@ -189,7 +189,7 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status['pool']['state'], 'pending')
         await self.controller.async_stop()
         self.assertEqual(self.calls, [])
-        restarted = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), native_executor=native_executor(self.hass))
+        restarted = ScheduledController(controller_inputs(self.hass), self.coordinator, self.store, lambda: deepcopy(self.options), native_executor=native_executor(self.hass))
         await restarted.async_start()
         self.assertEqual(self.calls, [])
         self.assertEqual(restarted.ownership.runs.records['pool']['since'], since)

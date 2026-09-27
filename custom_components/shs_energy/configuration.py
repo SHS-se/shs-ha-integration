@@ -41,9 +41,9 @@ from .shs_core.const import (
     OPT_PREFIX_ENTITIES,
     OPT_PV_FORECAST_ENTITIES,
 )
-from .configuration_schema import configuration_defaults, resolve_configuration
+from .shs_core.configuration_schema import configuration_defaults, resolve_configuration
 from .shs_core.device_controls import is_room_thermal_control
-from .optimisation import suggested_device_planning, suggested_load_type
+from .shs_core.optimisation import suggested_device_planning, suggested_load_type
 
 
 def optimisation_defaults(hass: HomeAssistant) -> dict[str, Any]:
@@ -240,7 +240,7 @@ def _energy_dashboard_inventory(
         # The registry/state name is live Home Assistant metadata. Energy
         # Dashboard preferences may retain an older copied label after a user
         # rename, so the live friendly name takes precedence on every sync.
-        from .presentation import device_name
+        from .shs_core.presentation import device_name
         name = device_name(state_name or configured_name or statistic_id)
         evidence_text = " ".join(
             value for value in (name, statistic_id, _state_text(state) if state else "")

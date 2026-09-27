@@ -3,10 +3,10 @@ from copy import deepcopy
 from unittest.mock import AsyncMock, patch
 import unittest
 import test_controller as fixtures
-from controller import ScheduledController
-from command_fixture import native_executor
-from controller_diagnostics import controller_diagnostics
-from verification import VerificationJournal
+from shs_core.controller import ScheduledController
+from command_fixture import native_executor, controller_inputs
+from shs_core.controller_diagnostics import controller_diagnostics
+from shs_core.verification import VerificationJournal
 
 
 class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
@@ -135,7 +135,7 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         ownership = deepcopy(self.store.saved)
         await self.controller.async_stop()
         self.assertEqual(self.store.saved, ownership, 'stopping leaves ownership journalled')
-        controller = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), self.journal, native_executor=native_executor(self.hass))
+        controller = ScheduledController(controller_inputs(self.hass), self.coordinator, self.store, lambda: deepcopy(self.options), self.journal, native_executor=native_executor(self.hass))
         await controller.async_start()
         triggers = {row['trigger'] for row in self.journal.evaluations}
         self.assertFalse(triggers & {'shutdown_handover', 'startup_handover'})
@@ -155,7 +155,7 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_retention_keeps_both_collections_references_and_rolls_forward_v2(self):
         self.options['device_modes'] = {'$pool': 'control_verification', '$battery': 'controlling'}
-        with patch('verification.MAX_GROUPS', 2):
+        with patch('shs_core.verification.MAX_GROUPS', 2):
             await self.controller.async_start()
             self.slot['pool_w'] = 0
             await self.controller.async_tick()
@@ -207,7 +207,7 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         import gzip
         import json
         from types import SimpleNamespace
-        from controller_diagnostics import gzip_report, report_parts
+        from shs_core.controller_diagnostics import gzip_report, report_parts
         from shs_core.home_runtime import ExecutionTrace
         from shs_core.runtime_json import Records, encode_value
         self.options['device_modes']['$pool'] = 'control_verification'

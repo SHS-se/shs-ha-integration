@@ -21,28 +21,16 @@ from datetime import datetime, timedelta
 from math import isfinite
 from typing import Any, Callable
 
-try:  # pragma: no cover - exercised by both import paths
-    from .shs_core.configuration_values import BATTERY_QUANTITIES, QUANTITY_UNITS
-    from .shs_core.const import (
-        OPT_BATTERY_SOC_ENTITY,
-        OPT_EV_CONNECTED_ENTITY,
-        OPT_EV_ENERGY_REMAINING_ENTITY,
-        OPT_EV_SOC_ENTITY,
-        OPT_EV_TARGET_SOC_ENTITY,
-        OPT_POOL_WATER_TEMPERATURE_ENTITY,
-    )
-    from .shs_core.device_controls import mapped_planning_path
-except ImportError:  # The test suite imports flat modules without Home Assistant.
-    from shs_core.configuration_values import BATTERY_QUANTITIES, QUANTITY_UNITS  # type: ignore[no-redef]
-    from shs_core.const import (  # type: ignore[no-redef]
-        OPT_BATTERY_SOC_ENTITY,
-        OPT_EV_CONNECTED_ENTITY,
-        OPT_EV_ENERGY_REMAINING_ENTITY,
-        OPT_EV_SOC_ENTITY,
-        OPT_EV_TARGET_SOC_ENTITY,
-        OPT_POOL_WATER_TEMPERATURE_ENTITY,
-    )
-    from shs_core.device_controls import mapped_planning_path  # type: ignore[no-redef]
+from .configuration_values import BATTERY_QUANTITIES, QUANTITY_UNITS
+from .const import (
+    OPT_BATTERY_SOC_ENTITY,
+    OPT_EV_CONNECTED_ENTITY,
+    OPT_EV_ENERGY_REMAINING_ENTITY,
+    OPT_EV_SOC_ENTITY,
+    OPT_EV_TARGET_SOC_ENTITY,
+    OPT_POOL_WATER_TEMPERATURE_ENTITY,
+)
+from .device_controls import mapped_planning_path
 
 UNREADABLE = frozenset({"unknown", "unavailable"})
 # The age the snapshot already required of the battery's state of charge.

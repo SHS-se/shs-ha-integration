@@ -22,8 +22,8 @@ import unittest
 PACKAGE = Path(__file__).parents[1] / "custom_components" / "shs_energy"
 sys.path.append(str(PACKAGE))
 
-CONFIG_PANEL = (PACKAGE / "configuration_fields.py").read_text(encoding="utf-8")
-CONFIGURATION = (PACKAGE / "configuration_schema.py").read_text(encoding="utf-8")
+CONFIG_PANEL = (PACKAGE / "shs_core/configuration_fields.py").read_text(encoding="utf-8")
+CONFIGURATION = (PACKAGE / "shs_core/configuration_schema.py").read_text(encoding="utf-8")
 COORDINATOR = (PACKAGE / "coordinator.py").read_text(encoding="utf-8")
 FRONTEND = (
     PACKAGE / "frontend" / "shs-energy-config-panel.js"

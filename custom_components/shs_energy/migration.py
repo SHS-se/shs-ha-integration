@@ -6,11 +6,11 @@ from copy import deepcopy
 from typing import Any
 
 if __package__:
-    from .configuration_schema import MAPPING_KEYS, OPTION_KEYS, PERSISTED_KEYS, ROOM_AREA_FIELD
-    from .configuration_fields import control_fields
+    from .shs_core.configuration_schema import MAPPING_KEYS, OPTION_KEYS, PERSISTED_KEYS, ROOM_AREA_FIELD
+    from .shs_core.configuration_fields import control_fields
 else:
-    from configuration_schema import MAPPING_KEYS, OPTION_KEYS, PERSISTED_KEYS, ROOM_AREA_FIELD
-    from configuration_fields import control_fields
+    from shs_core.configuration_schema import MAPPING_KEYS, OPTION_KEYS, PERSISTED_KEYS, ROOM_AREA_FIELD
+    from shs_core.configuration_fields import control_fields
 
 ARCHIVE_KEY = "_legacy_configuration_archive"
 EV_FIELDS = {

@@ -8,7 +8,7 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 from migration import migrate_options
-from configuration_schema import merge_options, validate_mapping_keys, OPTION_KEYS
+from shs_core.configuration_schema import merge_options, validate_mapping_keys, OPTION_KEYS
 
 
 class OptionMigrationTests(unittest.TestCase):

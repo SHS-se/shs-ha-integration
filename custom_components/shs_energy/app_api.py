@@ -5,7 +5,7 @@ import math
 
 from homeassistant.components.http import HomeAssistantView, KEY_HASS, require_admin
 
-from .api_contract import INTEGRATION_VERSION
+from .shs_core.api_contract import INTEGRATION_VERSION
 from .app_projection import PROTOCOL_VERSION, schedule, attention_links
 from .shs_core.const import DOMAIN
 

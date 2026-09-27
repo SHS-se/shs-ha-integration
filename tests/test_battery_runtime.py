@@ -9,17 +9,17 @@ import sys
 from types import SimpleNamespace
 import unittest
 sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
-from battery_runtime import BatteryRuntime, exact_start, iso, stamp
+from shs_core.battery_runtime import BatteryRuntime, exact_start, iso, stamp
 from command_fixture import command_transport
 from shs_core.native_commands import NativeExecutor
 from battery_writer import BatteryWriterFence
-from battery_runtime import digest, plan_scope
+from shs_core.battery_runtime import digest, plan_scope
 from shs_core.plan_execution import *
 
 
 def downloaded(value):
     """A snapshot as the controller diagnostics file contains it."""
-    from controller_diagnostics import report_fragments, report_parts
+    from shs_core.controller_diagnostics import report_fragments, report_parts
     dumps=lambda item:json.dumps(item,allow_nan=False).encode()
     return json.loads(b''.join(report_fragments(report_parts(value,dumps),dumps)))
 
@@ -375,7 +375,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         finally:await r.runtime.close()
 
     async def test_snapshot_readers_share_one_live_account_view(self):
-        import battery_runtime as module
+        from shs_core import battery_runtime as module
         from unittest.mock import patch
         r=Rig();await r.start()
         try:
@@ -632,7 +632,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 finally:await restarted.runtime.close()
 
     async def test_recovery_waits_for_sigen_entities_then_retries(self):
-        from battery_runtime import NativeReadbackPending
+        from shs_core.battery_runtime import NativeReadbackPending
         r=Rig();await r.start();await r.runtime.close()
         restarted=Rig();restarted.store.saved=deepcopy(r.store.saved)
         restarted.store.session=r.store.session
@@ -935,7 +935,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(status['technical_error'],str(r.runtime.host._fault))
             self.assertFalse(status['retry_automatically'])
             self.assertIn('Restart Home Assistant',status['next_step'])
-            from presentation import controller_explanation
+            from shs_core.presentation import controller_explanation
             attributes=controller_explanation('battery','controlling',{'battery_runtime':status})
             self.assertEqual(attributes['technical_error'],status['technical_error'])
             self.assertNotIn('physical battery group',attributes['explanation'])

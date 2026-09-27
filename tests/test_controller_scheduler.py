@@ -1,3 +1,4 @@
+from dataclasses import replace
 """Exercise the event scheduler with real controllers and a virtual timer clock."""
 import asyncio
 from copy import deepcopy
@@ -7,9 +8,9 @@ from unittest.mock import patch
 import unittest
 
 import test_controller as fixtures
-from controller import ScheduledController
-from controller_scheduler import ControllerScheduler
-from verification import VerificationJournal
+from shs_core.controller import ScheduledController
+from shs_core.controller_scheduler import ControllerScheduler
+from shs_core.verification import VerificationJournal
 
 
 class SchedulerTests(unittest.IsolatedAsyncioTestCase):
@@ -25,7 +26,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
             def now(cls, tz=None):
                 return owner.now
 
-        self.clock_patch = patch('controller.datetime', Clock)
+        self.clock_patch = patch('shs_core.controller.datetime', Clock)
         self.clock_patch.start()
         self.addCleanup(self.clock_patch.stop)
         self.subscriptions = {}
@@ -224,8 +225,8 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
 
     async def test_filter_gap_waits_on_the_filter_and_holds_through_a_source_change(self):
-        self.controller.entity_registry = SimpleNamespace(async_get=lambda entity:
-            SimpleNamespace(platform='filter') if entity == 'sensor.water' else None)
+        self.controller.inputs = replace(self.controller.inputs, platform=lambda entity:
+            'filter' if entity == 'sensor.water' else None)
         self.states['sensor.water'].attributes['entity_id'] = 'sensor.raw'
         self.states['sensor.raw'] = fixtures.State(29, unit_of_measurement='°C')
         self.states['sensor.raw'].last_reported = self.now
@@ -254,7 +255,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(('pool', 'observation_gap'), self.scheduler.deadlines)
 
     async def test_a_reading_lost_during_a_write_holds_the_write(self):
-        from controller import ControlObservationError
+        from shs_core.controller import ControlObservationError
         await self.start_live_pool()
         original = self.hass.services.async_call
         failed = False
@@ -279,8 +280,8 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['number.start'].state, '29.5')
 
     async def test_stale_raw_source_behind_a_missing_filter_is_surfaced_once_the_filter_returns(self):
-        self.controller.entity_registry = SimpleNamespace(async_get=lambda entity:
-            SimpleNamespace(platform='filter') if entity == 'sensor.water' else None)
+        self.controller.inputs = replace(self.controller.inputs, platform=lambda entity:
+            'filter' if entity == 'sensor.water' else None)
         self.states['sensor.water'].attributes['entity_id'] = 'sensor.raw'
         self.states['sensor.raw'] = fixtures.State(29, unit_of_measurement='°C')
         self.states['sensor.raw'].last_reported = self.now
@@ -380,8 +381,8 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('slot_boundary', self.controller.metrics.triggers)
 
     async def test_filter_source_changes_replace_dependencies(self):
-        self.controller.entity_registry = SimpleNamespace(async_get=lambda entity:
-            SimpleNamespace(platform='filter') if entity == 'sensor.water' else None)
+        self.controller.inputs = replace(self.controller.inputs, platform=lambda entity:
+            'filter' if entity == 'sensor.water' else None)
         self.states['sensor.water'].attributes['entity_id'] = 'sensor.raw_old'
         self.states['sensor.raw_old'] = fixtures.State(29, unit_of_measurement='°C')
         self.states['sensor.raw_old'].last_reported = self.now
@@ -406,7 +407,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.event('sensor.water', 'state_report')
         await asyncio.wait_for(task, 0.1)
         self.assertEqual(self.evaluations('pool'), 1)
-        with patch('controller.CONFIRM_SECONDS', 0.01):
+        with patch('shs_core.controller.CONFIRM_SECONDS', 0.01):
             with self.assertRaisesRegex(ValueError, 'no response'):
                 await self.controller.confirm(lambda: False, 'no response')
 

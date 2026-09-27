@@ -13,7 +13,7 @@ from homeassistant.helpers.entity_platform import async_get_current_platform
 from .shs_core.const import DOMAIN, CONF_CUSTOMER_NAME, CONF_DEVICE_TOKEN_ID
 from .control_configuration import async_execution_devices, async_set_execution_mode
 from .shs_core.operating_modes import MODES, device_mode
-from .presentation import controller_explanation
+from .shs_core.presentation import controller_explanation
 
 
 async def async_setup_entry(hass, entry, async_add_entities):

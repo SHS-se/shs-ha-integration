@@ -114,3 +114,32 @@ The `import.json` proof is published last and explicitly lists runtime validatio
 gateway seeding, physical reconciliation and activation as unfinished. This worker
 cannot activate control, and it must not be used to justify fencing the live owner
 before the remaining runtime replacement exists.
+
+The second extraction packages the actual controller, battery runtime, verification,
+configuration validators, plan validation and presentation code in `shs_core`.
+Controller policy now receives `ControllerInputs` (state reads, temperature unit,
+entity platform) and `NativeExecutor`; it no longer receives an HA object or entity
+registry. Native dispatch remains injected at HA composition. A subprocess test
+executes pool and battery scenarios from a copied distribution with no HA module,
+then closes both owners. The existing controller assertions and accounting digest
+checks still run against the canonical package.
+
+Distribution metadata: the app copies the integration manifest beside `shs_core`,
+just as it sits beside that package in HA. `api_contract` reads this explicit paired
+manifest path, independent of working directory. This keeps versioned diagnostic
+and cloud payloads tied to the exact bundled companion while the cloud client is
+still being extracted; no alternate version or import fallback is introduced.
+
+Remaining cutover work is substantial and explicit: household/coordinator and cloud
+ports, durable receipts and gateway session/activation, remote ownership/restoration
+operations, compact HA projections, and the real dormant engine reconciliation.
+The shared runtime existing in the image does not by itself mean it is the owner.
+
+## Live evidence from the first extraction
+
+Commit `7d38720` was published and deployed as integration beta.53 and app beta.5.
+Both release workflows passed; the app reports Connected and the integration
+reports Ready. The existing SHS icon assets are unchanged. An authenticated
+Supervisor `/core/websocket` probe completed `auth_ok` and `get_config`, confirming
+that the planned transport requires no new app permissions. No export, migration
+fence or live ownership transfer was performed.

@@ -12,7 +12,7 @@ ROOT = Path(__file__).parents[1] / "custom_components" / "shs_energy"
 sys.path.append(str(ROOT))
 from supplier import all_in_price_slots
 from tariff import grid_price_forecast, TariffError
-from optimisation import quarter_start
+from shs_core.optimisation import quarter_start
 from test_grid_price_parity import _catalog
 
 

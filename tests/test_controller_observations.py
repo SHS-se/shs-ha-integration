@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, patch
 import unittest
 
 import test_controller as fixtures
-from controller_observations import diagnostic_inventory, observation_entities
-from controller_diagnostics import controller_diagnostics
-from verification import VerificationJournal
+from shs_core.controller_observations import diagnostic_inventory, observation_entities
+from shs_core.controller_diagnostics import controller_diagnostics
+from shs_core.verification import VerificationJournal
 
 
 class ObservationTests(unittest.IsolatedAsyncioTestCase):
@@ -125,7 +125,7 @@ class ObservationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.journal.samples_dirty)
 
     async def test_retention_reload_and_storage_failure_preserve_references(self):
-        with patch('verification.MAX_SAMPLES', 2):
+        with patch('shs_core.verification.MAX_SAMPLES', 2):
             await self.sample()
             self.slot['grid_import_w'] = 701
             await self.sample(60)

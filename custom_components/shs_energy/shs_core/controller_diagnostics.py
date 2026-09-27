@@ -4,20 +4,12 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import zlib
 
-if __package__:
-    from .controller_observations import diagnostic_inventory, observation_entities, field_entities
-    from .presentation import execution_view
-    from .verification import observation, evaluation_record, VerificationJournal
-    from .api_contract import INTEGRATION_VERSION
-    from .configuration_fields import _control_fields, POWER_FIELD, OPTIONAL_TEMPERATURE_FIELD
-    from .shs_core.runtime_json import Records, record_json
-else:
-    from controller_observations import diagnostic_inventory, observation_entities, field_entities
-    from presentation import execution_view
-    from verification import observation, evaluation_record, VerificationJournal
-    from api_contract import INTEGRATION_VERSION
-    from configuration_fields import _control_fields, POWER_FIELD, OPTIONAL_TEMPERATURE_FIELD
-    from shs_core.runtime_json import Records, record_json
+from .controller_observations import diagnostic_inventory, observation_entities, field_entities
+from .presentation import execution_view
+from .verification import observation, evaluation_record, VerificationJournal
+from .api_contract import INTEGRATION_VERSION
+from .configuration_fields import _control_fields, POWER_FIELD, OPTIONAL_TEMPERATURE_FIELD
+from .runtime_json import Records, record_json
 
 # JSON fragments reach zlib in batches of this size. Compression releases the
 # GIL, so the event loop keeps running beside the worker thread.
@@ -50,14 +42,14 @@ def controller_diagnostics(controller, panel):
     rows, unassigned = diagnostic_inventory(panel["devices"], panel["meter_inventory"], options)
     for item in unassigned:
         references = observation_entities({}, [{"key": item["key"], "mapping": item["mapping"]}]) - excluded
-        item["observations"] = {entity: observation(controller.hass.states.get(entity)) for entity in sorted(references)}
+        item["observations"] = {entity: observation(controller.inputs.read(entity)) for entity in sorted(references)}
     identities = {row["controller_id"] for row in rows}
     for device in rows:
         identity = device["controller_id"]
         latest = next((row for row in reversed(report["evaluations"]) if row["device"] == identity), None)
         suggestions = device.get("suggested_mapping", {})
         suggested_entities = field_entities(suggestions, (*_control_fields({**device, **suggestions}), POWER_FIELD, OPTIONAL_TEMPERATURE_FIELD)) - excluded
-        device["suggested_observations"] = {entity: observation(controller.hass.states.get(entity)) for entity in sorted(suggested_entities)}
+        device["suggested_observations"] = {entity: observation(controller.inputs.read(entity)) for entity in sorted(suggested_entities)}
         device["last_evaluated_at"] = latest["last_at"] if latest else None
         device["last_evaluated_mode"] = latest["mode"] if latest else None
         device["last_controller_result"] = deepcopy(controller.status.get(identity))
@@ -101,7 +93,7 @@ def controller_diagnostics(controller, panel):
             "configuration": deepcopy(options), "plan": controller.coordinator.optimisation_plan,
             "active_slot": deepcopy(controller.coordinator.current_plan_slot),
             "operation": deepcopy(panel["operation"]), "readiness": deepcopy(panel["readiness"]),
-            "observations": {entity: observation(controller.hass.states.get(entity)) for entity in sorted(entities)},
+            "observations": {entity: observation(controller.inputs.read(entity)) for entity in sorted(entities)},
             "ownership": {key: deepcopy(value) for key, value in controller.ownership.records.items() if key in identities},
             "overrides": {key: value for key, value in controller.ownership.overrides.items() if key in identities},
             "failure_latched": sorted(identities & controller.failed.keys()),

@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
-from battery_commands import validate_battery_command, battery_mode_key
+from shs_core.battery_commands import validate_battery_command, battery_mode_key
 
 
 class BatteryCommandTests(unittest.TestCase):

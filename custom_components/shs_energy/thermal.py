@@ -42,11 +42,11 @@ from typing import Any
 
 try:  # pragma: no cover - exercised by both import paths
     from .shs_core.device_controls import mapped_planning_path
-    from .optimisation import quarter_start
+    from .shs_core.optimisation import quarter_start
 except ImportError:  # The test suite imports these helpers as flat modules,
     # without Home Assistant installed, so the package parent does not exist.
     from shs_core.device_controls import mapped_planning_path  # type: ignore[no-redef]
-    from optimisation import quarter_start  # type: ignore[no-redef]
+    from shs_core.optimisation import quarter_start  # type: ignore[no-redef]
 
 SLOT = timedelta(minutes=15)
 SLOT_SECONDS = int(SLOT.total_seconds())

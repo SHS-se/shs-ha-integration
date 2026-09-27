@@ -14,6 +14,7 @@ source = ROOT / "custom_components/shs_energy"
 shutil.copytree(source, destination / "shs_energy", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 core = destination / "core/shs_core"
 shutil.copytree(source / "shs_core", core, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+shutil.copy2(source / "manifest.json", destination / "core/manifest.json")
 assert hashes(core) == hashes(destination / "shs_energy/shs_core")
 manifest = json.loads((source / "manifest.json").read_text())
 (destination / "bundle.json").write_text(json.dumps({

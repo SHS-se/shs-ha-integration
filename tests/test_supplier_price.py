@@ -62,8 +62,8 @@ CONSTANTS = (
 ).read_text(encoding="utf-8")
 
 
-FIELDS = (Path(__file__).parents[1] / "custom_components/shs_energy/configuration_fields.py").read_text()
-SCHEMA = (Path(__file__).parents[1] / "custom_components/shs_energy/configuration_schema.py").read_text()
+FIELDS = (Path(__file__).parents[1] / "custom_components/shs_energy/shs_core/configuration_fields.py").read_text()
+SCHEMA = (Path(__file__).parents[1] / "custom_components/shs_energy/shs_core/configuration_schema.py").read_text()
 
 class SensorWiringTests(unittest.TestCase):
     """Guard the parts a Home-Assistant-free test cannot exercise directly."""

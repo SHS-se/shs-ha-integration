@@ -20,7 +20,7 @@ MINIMUM_PLAN_SCHEMA_VERSION = 5
 # is refused outright, which would lose the explanation rather than shorten it.
 MAX_REPLAN_ERROR_CHARS = 1000
 INTEGRATION_VERSION = json.loads(
-    Path(__file__).with_name("manifest.json").read_text(encoding="utf-8")
+    Path(__file__).parent.parent.joinpath("manifest.json").read_text(encoding="utf-8")
 )["version"]
 
 

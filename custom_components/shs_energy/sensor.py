@@ -32,8 +32,8 @@ from .shs_core.const import (
 )
 from .configuration import resolved_options
 from .shs_core.operating_modes import device_mode
-from .presentation import controller_explanation
-from .optimisation import OptimisationInputError, validate_plan_contract
+from .shs_core.presentation import controller_explanation
+from .shs_core.optimisation import OptimisationInputError, validate_plan_contract
 from .coordinator import ShsStatusCoordinator
 from .supplier import current_supplier_prices
 

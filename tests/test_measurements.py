@@ -15,7 +15,7 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
-from measurements import device_measurement_issues, fraction  # noqa: E402
+from shs_core.measurements import device_measurement_issues, fraction  # noqa: E402
 
 NOW = datetime(2026, 9, 23, 4, 55, tzinfo=timezone.utc)
 OPTIONS = {

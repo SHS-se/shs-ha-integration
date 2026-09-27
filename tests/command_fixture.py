@@ -22,3 +22,9 @@ def native_executor(hass):
         await hass.services.async_call(domain, service, data, blocking=True)
     return NativeExecutor(command_transport(), lambda entity: hass.states.get(entity),
                           lambda: hass.config.units.temperature_unit, send)
+
+
+def controller_inputs(hass):
+    from shs_core.controller_inputs import ControllerInputs
+    return ControllerInputs(lambda entity: hass.states.get(entity),
+                            lambda: hass.config.units.temperature_unit, lambda entity: None)

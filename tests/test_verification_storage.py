@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from shs_core.verification_storage import VerificationStorage
-from verification import VerificationJournal, evaluation_record
+from shs_core.verification import VerificationJournal, evaluation_record
 
 
 class Legacy:
@@ -45,7 +45,7 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.path = Path(self.directory.name) / 'verification.sqlite'
+        self.path = Path(self.directory.name) / 'shs_core.verification.sqlite'
         self.legacy = Legacy(snapshot())
         self.store = self.make_store()
 

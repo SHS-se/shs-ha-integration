@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).parents[1] / 'custom_components/shs_energy'
 sys.path.append(str(ROOT))
-from optimisation import OptimisationInputError, REMEDY_WAITING
+from shs_core.optimisation import OptimisationInputError, REMEDY_WAITING
 from shs_core.device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError, battery_control_errors, pool_control_errors, mapping_report, apply_requested_configuration
 
 
@@ -58,7 +58,7 @@ class FieldIssueTests(unittest.TestCase):
         self.assertEqual(battery_measurement_errors(options), [])
 
     def test_battery_measurements_are_visible_and_required_only_when_applicable(self):
-        from configuration_fields import _configuration_sections
+        from shs_core.configuration_fields import _configuration_sections
         keys = {'house_consumption_power_entity', 'solar_production_power_entity', 'grid_power_entity'}
         for included in (False, True):
             sections = _configuration_sections(battery_control_required=included)

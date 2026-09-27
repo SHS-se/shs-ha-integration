@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import AsyncMock
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
-from battery_live import BatteryLiveInputs, MeasurementProfile, capture_battery_inputs, source_revision
+from shs_core.battery_live import BatteryLiveInputs, MeasurementProfile, capture_battery_inputs, source_revision
 from shs_core.battery_supply import SupplyScope
 
 

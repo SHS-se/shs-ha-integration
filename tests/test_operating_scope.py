@@ -9,7 +9,7 @@ import unittest
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
 from shs_core.operating_modes import execution_mode_options, operating_mode_identity, reconcile_admissions, scoped_plan, system_device_keys
 from planning import build_operating_scope
-from optimisation import validate_plan_contract, OptimisationInputError, PlanContractCache
+from shs_core.optimisation import validate_plan_contract, OptimisationInputError, PlanContractCache
 import test_controller as fixtures
 
 
@@ -65,7 +65,7 @@ class ScopeTests(unittest.TestCase):
                     self.assertEqual(set(scope['external_demands']), {'heater', 'pump'} - live)
 
     def test_monitoring_owner_survives_plan_validation_status_and_timeline(self):
-        from presentation import operational_status, timeline
+        from shs_core.presentation import operational_status, timeline
         fixture = json.loads((Path(__file__).parent/'fixtures/schema-9-mixed-mode-plan.json').read_text())
         plan = fixture['plan']
         now = datetime.fromisoformat(fixture['validation_time'])
@@ -162,7 +162,7 @@ class ScopeTests(unittest.TestCase):
         self.assertIs(select('battery')[0], plan['execution_plan'])
 
     def test_runtime_status_uses_execution_feasibility_and_current_modes(self):
-        from presentation import operational_status
+        from shs_core.presentation import operational_status
         fixture = json.loads((Path(__file__).parent/'fixtures/schema-9-mixed-mode-plan.json').read_text())
         plan = fixture['plan']; now = datetime.fromisoformat(fixture['validation_time'])
         options = {'device_modes': deepcopy(plan['operating_scope']['modes'])}
@@ -172,7 +172,7 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(operational_status(plan, 'live', [], now, options=options)['state'], 'infeasible')
 
     def test_timeline_keeps_original_branches_after_mode_changes(self):
-        from presentation import timeline
+        from shs_core.presentation import timeline
         plan = json.loads((Path(__file__).parent/'fixtures/schema-9-mixed-mode-plan.json').read_text())['plan']
         options = {'device_modes': plan['operating_scope']['modes']}
         display = timeline(plan, {'state': 'ready'}, options=options)
@@ -285,7 +285,7 @@ class ScopeControllerTests(unittest.IsolatedAsyncioTestCase):
         self.coordinator.binding_plan_for = binding
 
     async def test_live_battery_uses_execution_command_and_verification_does_not_write(self):
-        from verification import VerificationJournal
+        from shs_core.verification import VerificationJournal
         self.controller.verification = VerificationJournal(fixtures.Store(), fixtures.Store())
         await self.controller.async_start()
         self.assertIn(('number.charge_limit', .5), self.calls)

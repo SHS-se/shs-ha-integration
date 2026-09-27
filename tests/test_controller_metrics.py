@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
-from controller_metrics import ControllerMetrics
+from shs_core.controller_metrics import ControllerMetrics
 from shs_core.resource_profiling import ResourceProfiler
 
 
@@ -45,7 +45,7 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(meter.snapshot()['devices']['battery']['completed'], 5)
 
     def test_wall_time_and_bounded_device_cardinality(self):
-        with patch('controller_metrics.perf_counter', return_value=10) as clock:
+        with patch('shs_core.controller_metrics.perf_counter', return_value=10) as clock:
             meter = ControllerMetrics('test')
             meter.begin_device('pool', {'mode': 'controlling'})
             clock.return_value = 16
@@ -65,8 +65,8 @@ class MetricsTests(unittest.TestCase):
 class ExportTests(unittest.IsolatedAsyncioTestCase):
     async def test_diagnostics_and_verification_include_session_metrics(self):
         import test_controller as fixtures
-        from controller_diagnostics import controller_diagnostics
-        from verification import VerificationJournal
+        from shs_core.controller_diagnostics import controller_diagnostics
+        from shs_core.verification import VerificationJournal
         root = Path(__file__).parents[1] / 'custom_components' / 'shs_energy'
         meter = ControllerMetrics('test')
         meter.trigger('timer', 'busy')
@@ -101,7 +101,7 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('network_traffic', report)
         self.assertEqual(report['resource_profiling']['retained']['meters'], 123)
         import gzip
-        from controller_diagnostics import gzip_report, report_parts, report_summary
+        from shs_core.controller_diagnostics import gzip_report, report_parts, report_summary
         workers = []
 
         async def executor(function, *args):

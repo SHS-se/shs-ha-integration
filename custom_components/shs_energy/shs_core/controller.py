@@ -14,32 +14,18 @@ from types import SimpleNamespace
 from time import perf_counter
 from uuid import uuid4
 
-try:
-    from .shs_core.command_journal import Command
-    from .shs_core.native_commands import finite, native_command
-    from .shs_core.device_ownership import DeviceOwnership
-    from .api_contract import INTEGRATION_VERSION
-    from .shs_core.operating_modes import device_mode, EXECUTING_MODES
-    from .shs_core.minimum_run import RunStateUnavailable, minimum_run_errors
-    from .verification import OPERATIONS, operation_name, evaluation_record, observation
-    from .controller_metrics import ControllerMetrics, fingerprint, record_time
-    from .battery_commands import validate_battery_command, battery_mode_key
-    from .shs_core.configuration_values import resolve_battery_quantities, resolve_quantity
-    from .shs_core.device_commands import actuator_targets, execution_setup_errors, validate_commands
-    from .shs_core.device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
-except ImportError:  # Pure executor tests, without importing Home Assistant.
-    from shs_core.command_journal import Command
-    from shs_core.native_commands import finite, native_command
-    from shs_core.device_ownership import DeviceOwnership
-    from api_contract import INTEGRATION_VERSION
-    from shs_core.operating_modes import device_mode, EXECUTING_MODES
-    from shs_core.minimum_run import RunStateUnavailable, minimum_run_errors
-    from verification import OPERATIONS, operation_name, evaluation_record, observation
-    from controller_metrics import ControllerMetrics, fingerprint, record_time
-    from battery_commands import validate_battery_command, battery_mode_key
-    from shs_core.configuration_values import resolve_battery_quantities, resolve_quantity
-    from shs_core.device_commands import actuator_targets, execution_setup_errors, validate_commands
-    from shs_core.device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
+from .command_journal import Command
+from .native_commands import finite, native_command
+from .device_ownership import DeviceOwnership
+from .api_contract import INTEGRATION_VERSION
+from .operating_modes import device_mode, EXECUTING_MODES
+from .minimum_run import RunStateUnavailable, minimum_run_errors
+from .verification import OPERATIONS, operation_name, evaluation_record, observation
+from .controller_metrics import ControllerMetrics, fingerprint, record_time
+from .battery_commands import validate_battery_command, battery_mode_key
+from .configuration_values import resolve_battery_quantities, resolve_quantity
+from .device_commands import actuator_targets, execution_setup_errors, validate_commands
+from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -130,15 +116,14 @@ def battery_limit_value(entity, watts, state):
 class ScheduledController:
     """HA adapter supplied by the caller, so execution is behaviour-testable."""
 
-    def __init__(self, hass, coordinator, store, options, verification=None, *, native_executor, entity_registry=None):
+    def __init__(self, inputs, coordinator, store, options, verification=None, *, native_executor):
         self.native_executor = native_executor
         self.verification = verification
-        self.entity_registry = entity_registry
         self.verifying = False
         self.verification_commands = []
         self.shadow = {}
         self.verification_observations = {}
-        self.hass = hass
+        self.inputs = inputs
         self.coordinator = coordinator
         self.ownership = DeviceOwnership(store)
         self.options = options
@@ -197,7 +182,7 @@ class ScheduledController:
                     **{key: status[key] for key in ("fix", "next_step", "retry_automatically") if key in status})
 
     def observed_state(self, entity, *, max_age=None):
-        state = self.hass.states.get(entity) if entity else None
+        state = self.inputs.read(entity) if entity else None
         if self.diagnostic_evaluation is not None and not self.verifying and entity:
             value = observation(state)
             self.diagnostic_evaluation["observations"].setdefault(entity, value)
@@ -356,7 +341,7 @@ class ScheduledController:
 
     def minimum_run_deadline(self, entity, value, now):
         try:
-            return self.ownership.runs.blocked_until(entity, value, self.hass.states.get, now)
+            return self.ownership.runs.blocked_until(entity, value, self.inputs.read, now)
         except RunStateUnavailable as err:
             raise ActuatorUnavailableError(str(err), err.entity,
                 "Wait for the device's enabled state to return.", unavailable=True) from err
@@ -369,13 +354,13 @@ class ScheduledController:
         domain = entity.split(".")[0]
         state = ((self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)) if getattr(self, "device", None) == "battery" and domain == "number" else self.actuator_state(entity)
         native = native_command(entity, value, state,
-                                temperature_unit=self.hass.config.units.temperature_unit if domain == "climate" else None)
+                                temperature_unit=self.inputs.temperature_unit() if domain == "climate" else None)
         value, equal = native.value, native.equal
         _, service, service_data = native.action.service_call()
         data = {key: item for key, item in service_data.items() if key != "entity_id"}
         now = datetime.now(timezone.utc)
         if not self.verifying:
-            self.ownership.runs.observe(self.hass.states.get, now)
+            self.ownership.runs.observe(self.inputs.read, now)
         if not equal:
             release = self.minimum_run_deadline(entity, value, now)
             if release:
@@ -415,7 +400,7 @@ class ScheduledController:
                         self.scheduler.device_deadline(self.device,"battery_headroom",datetime.now(timezone.utc)+timedelta(seconds=5))
                     raise ControlDeadlineError("Waiting for battery charging to release grid capacity")
                 # Persist the start before the service can activate hardware.
-                prepared = self.ownership.runs.prepare_start(entity, value, self.hass.states.get, datetime.now(timezone.utc))
+                prepared = self.ownership.runs.prepare_start(entity, value, self.inputs.read, datetime.now(timezone.utc))
                 if self.ownership.runs.dirty:
                     await self.save()
                 def authorize():
@@ -437,14 +422,14 @@ class ScheduledController:
                 await self.native_executor.execute(request, authorize=authorize,
                     timeout=CONFIRM_SECONDS, on_sent=sent)
                 command["transport"] = "accepted"
-                self.ownership.runs.observe(self.hass.states.get, datetime.now(timezone.utc), entity=entity)
+                self.ownership.runs.observe(self.inputs.read, datetime.now(timezone.utc), entity=entity)
                 if self.ownership.runs.dirty:
                     await self.save()
             # Service completion records an accepted setting. Ordinary readings
             # and explicit device workflows assess the physical response.
         except (Exception, asyncio.CancelledError) as err:
             if prepared and not command["called"]:
-                self.ownership.runs.cancel_unsent_start(prepared, self.hass.states.get, datetime.now(timezone.utc))
+                self.ownership.runs.cancel_unsent_start(prepared, self.inputs.read, datetime.now(timezone.utc))
                 await self.save()
             command["error"] = str(err) or type(err).__name__
             raise
@@ -500,7 +485,7 @@ class ScheduledController:
         async with self.lock:
             now = datetime.now(timezone.utc)
             self.ownership.runs.configure(options, models, now)
-            self.ownership.runs.observe(self.hass.states.get, now)
+            self.ownership.runs.observe(self.inputs.read, now)
             if self.ownership.runs.dirty:
                 await self.save()
             return self.ownership.runs.snapshot(now)
@@ -677,8 +662,7 @@ class ScheduledController:
             value = finite(state.state)
             if entity == selected:
                 temperature = value
-            entry = self.entity_registry.async_get(entity) if self.entity_registry is not None else None
-            if entry is None or entry.platform != "filter":
+            if self.inputs.platform(entity) != "filter":
                 raw = reader(entity, max_age=POOL_MAX_AGE_SECONDS)
                 sources[entity] = None
                 return temperature, sources, raw.last_reported + timedelta(seconds=POOL_MAX_AGE_SECONDS)
@@ -856,7 +840,7 @@ class ScheduledController:
 
     def preview_state(self, entity, *, max_age=None):
         """Read real HA state without scheduling observations or changing journals."""
-        state = self.hass.states.get(entity) if entity else None
+        state = self.inputs.read(entity) if entity else None
         return checked_state(state, entity, max_age)
 
     def preview_commands(self, slot, *, plan=None, options=None):
@@ -877,7 +861,7 @@ class ScheduledController:
                 fields = [{"label": "Mode", "value": mode}]
                 for direction in ("charge", "discharge"):
                     entity = options[f"battery_{direction}_limit_entity"]
-                    state = self.hass.states.get(entity)
+                    state = self.inputs.read(entity)
                     value = battery_limit_value(entity, command[f"{direction}_limit_w"], state)
                     fields.append({"label": f"{direction.capitalize()} limit", "value": value,
                                    "unit": state.attributes["unit_of_measurement"]})
@@ -1019,7 +1003,7 @@ class ScheduledController:
             for entity in targets:
                 state = self.state(entity)
                 if entity.startswith("climate."):
-                    if state.state != "heat" or self.hass.config.units.temperature_unit != "°C":
+                    if state.state != "heat" or self.inputs.temperature_unit() != "°C":
                         raise ValueError("setpoint execution requires an active Celsius heating thermostat")
                     step = finite(state.attributes.get("target_temp_step", 0.1))
                     origin = finite(state.attributes["min_temp"])
@@ -1182,14 +1166,9 @@ class ScheduledController:
         """Observe every inventory device without running any actuator logic."""
         if self.closed or not self.initialized or self.verification is None:
             return
-        if __package__:
-            from .controller_observations import diagnostic_inventory
-            from .presentation import equipment_present
-            from .shs_core.operating_modes import system_device_keys
-        else:
-            from controller_observations import diagnostic_inventory
-            from presentation import equipment_present
-            from shs_core.operating_modes import system_device_keys
+        from .controller_observations import diagnostic_inventory
+        from .presentation import equipment_present
+        from .operating_modes import system_device_keys
         try:
             async with self.lock:
                 if self.closed:
@@ -1203,7 +1182,7 @@ class ScheduledController:
                         if system not in system_device_keys(devices, options).values():
                             devices.append({"key": "$" + system, "system": system, "name": system})
                 rows, _unassigned = diagnostic_inventory(devices, [], options)
-                await self.verification.sample(options, rows, self.hass.states.get,
+                await self.verification.sample(options, rows, self.inputs.read,
                     at=datetime.now(timezone.utc), version=INTEGRATION_VERSION,
                     slot=self.coordinator.current_plan_slot,
                     plan_id=(self.coordinator.optimisation_plan or {}).get("plan_id"))
@@ -1296,7 +1275,7 @@ class ScheduledController:
                     del self.ownership.overrides[device]
                     await self.save()
             self.ownership.runs.configure(options, requested, datetime.now(timezone.utc))
-            self.ownership.runs.observe(self.hass.states.get, datetime.now(timezone.utc))
+            self.ownership.runs.observe(self.inputs.read, datetime.now(timezone.utc))
             if self.ownership.runs.dirty:
                 await self.save()
             if self.scheduler is not None:

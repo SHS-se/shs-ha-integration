@@ -8,9 +8,9 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 import unittest
 import test_controller as fixtures
-from controller import ScheduledController
-from command_fixture import native_executor
-from verification import VerificationJournal
+from shs_core.controller import ScheduledController
+from command_fixture import native_executor, controller_inputs
+from shs_core.verification import VerificationJournal
 
 
 def later(test, minutes):
@@ -22,7 +22,7 @@ def later(test, minutes):
         def now(cls, tz=None):
             return datetime.now(tz) + offset
 
-    patcher = patch('controller.datetime', Clock)
+    patcher = patch('shs_core.controller.datetime', Clock)
     patcher.start()
     test.addCleanup(patcher.stop)
 
@@ -119,7 +119,7 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_restart_with_journalled_ownership_resumes_without_a_flip(self):
         await self.controller.async_start()
         journal = self.store.saved
-        restarted = ScheduledController(self.hass, self.coordinator, self.store, self.controller.options, native_executor=native_executor(self.hass))
+        restarted = ScheduledController(controller_inputs(self.hass), self.coordinator, self.store, self.controller.options, native_executor=native_executor(self.hass))
         restarted.confirm = self.controller.confirm
         self.store.saved = journal
         self.calls.clear()

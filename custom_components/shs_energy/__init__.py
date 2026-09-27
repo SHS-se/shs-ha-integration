@@ -24,9 +24,10 @@ from homeassistant.helpers.json import json_bytes
 from homeassistant.util.json import json_loads
 from homeassistant.helpers import entity_registry as er
 
-from .api_contract import INTEGRATION_VERSION
+from .shs_core.api_contract import INTEGRATION_VERSION
 from .shs_core.command_journal import CommandJournal, entry_paths, process_lease, SourceFenced, WriterActive
 from .shs_core.native_commands import NativeExecutor
+from .shs_core.controller_inputs import ControllerInputs
 from .shs_core.command_transport import CommandTransport
 from .refresh import set_reloading
 from .shs_core.resource_profiling import process_resources
@@ -56,14 +57,14 @@ from .configuration import (
     entity_area_id,
     resolved_options,
 )
-from .controller import ScheduledController
+from .shs_core.controller import ScheduledController
 from .battery_writer import BatteryWriterFence
-from .battery_runtime import BatteryRuntime, NativeReadbackPending
+from .shs_core.battery_runtime import BatteryRuntime, NativeReadbackPending
 from .shs_core.execution_storage import ExecutionStorage
 from .execution_migration import LegacyExecution
-from .verification import VerificationJournal
+from .shs_core.verification import VerificationJournal
 from .shs_core.verification_storage import VerificationStorage
-from .configuration_schema import ConfigurationReader
+from .shs_core.configuration_schema import ConfigurationReader
 from .coordinator import ShsStatusCoordinator
 from .migration import mapped_entity_ids, migrate_options
 
@@ -237,12 +238,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
 
     native_executor = NativeExecutor(transport, hass.states.get,
         lambda: hass.config.units.temperature_unit, send_native)
+    registry = er.async_get(hass)
+    inputs = ControllerInputs(hass.states.get, lambda: hass.config.units.temperature_unit,
+        lambda entity: item.platform if (item := registry.async_get(entity)) is not None else None)
     controller = ScheduledController(
-        hass, coordinator, Store(hass, 1, f"shs_energy.controller.{entry.entry_id}"),
+        inputs, coordinator, Store(hass, 1, f"shs_energy.controller.{entry.entry_id}"),
         options,
         VerificationJournal(verification_store,
                             Store(hass, 1, f"shs_energy.verification_samples.{entry.entry_id}")),
-        native_executor=native_executor, entity_registry=er.async_get(hass),
+        native_executor=native_executor,
     )
     coordinator.controller = controller
     controller.metrics.performance = {'verification_storage': verification_store.metrics,
@@ -272,14 +276,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     entry.async_on_unload(coordinator.battery_writer.close)
 
     async def stop_controller(_event=None):
-        await transport.stopping()
-        coordinator.battery_live_inputs.close()
-        try:
-            await coordinator.battery_runtime.close(release=True)
-            await controller.async_stop()
-            await transport.stopped()
-        finally:
-            coordinator.battery_writer.close()
+        await _async_stop_runtime(coordinator)
 
     scheduler = attach_controller_events(hass, entry, controller)
     # Recover local ownership before contacting the cloud. A network outage
@@ -381,14 +378,20 @@ async def _async_options_updated(
         await coordinator.async_report_runtime()
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
-    """Unload a config entry."""
-    await entry.runtime_data.controller.command_transport.stopping()
-    await entry.runtime_data.battery_runtime.close(release=True)
-    entry.runtime_data.battery_live_inputs.close()
+async def _async_stop_runtime(coordinator):
+    """Use one shutdown path for reload, failed setup and Core stop."""
+    transport = coordinator.controller.native_executor.transport
     try:
-        await entry.runtime_data.controller.async_stop()
-        await entry.runtime_data.controller.command_transport.stopped()
+        await transport.stopping()
+        coordinator.battery_live_inputs.close()
+        await coordinator.battery_runtime.close(release=True)
+        await coordinator.controller.async_stop()
+        await transport.stopped()
     finally:
-        entry.runtime_data.battery_writer.close()
+        coordinator.battery_writer.close()
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) -> bool:
+    """Unload a config entry after all owner writes have settled."""
+    await _async_stop_runtime(entry.runtime_data)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

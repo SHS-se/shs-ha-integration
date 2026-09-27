@@ -5,7 +5,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .api_contract import INTEGRATION_VERSION
+from .shs_core.api_contract import INTEGRATION_VERSION
 
 
 async def async_get_config_entry_diagnostics(

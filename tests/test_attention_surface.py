@@ -76,7 +76,7 @@ class AttentionSurfaceTests(unittest.TestCase):
         Deciding this by matching the message text downstream is how the
         base-load shortfall came to be announced as a missing panel field.
         """
-        optimisation = (PACKAGE / "optimisation.py").read_text(encoding="utf-8")
+        optimisation = (PACKAGE / "shs_core/optimisation.py").read_text(encoding="utf-8")
         self.assertIn("remedy: str = REMEDY_SETTING", optimisation)
         start = optimisation.index("lacks {minimum_samples} samples")
         raise_call = optimisation[start : optimisation.index("\n        )", start)]

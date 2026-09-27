@@ -16,12 +16,8 @@ from typing import Any, Callable, Iterable
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-try:  # pragma: no cover - package in HA, flat module in the pure test suite
-    from .api_contract import SNAPSHOT_SCHEMA_VERSION, SUPPORTED_PLAN_SCHEMA_VERSIONS
-    from .measurements import fraction
-except ImportError:
-    from api_contract import SNAPSHOT_SCHEMA_VERSION, SUPPORTED_PLAN_SCHEMA_VERSIONS
-    from measurements import fraction
+from .api_contract import SNAPSHOT_SCHEMA_VERSION, SUPPORTED_PLAN_SCHEMA_VERSIONS
+from .measurements import fraction
 
 SLOT_SECONDS = 900
 SLOT_HOURS = 0.25
@@ -1012,12 +1008,8 @@ def require_fresh_source(
         raise OptimisationInputError(f"{label} is stale")
 
 
-if __package__:
-    from .battery_commands import validate_battery_command
-    from .shs_core.device_commands import validate_commands
-else:
-    from battery_commands import validate_battery_command
-    from shs_core.device_commands import validate_commands
+from .battery_commands import validate_battery_command
+from .device_commands import validate_commands
 
 
 def validate_plan_contract(
@@ -1048,10 +1040,7 @@ def validate_plan_contract(
         from_modes = scope["modes"]
         if "battery_execution" in plan:
             try:
-                if __package__:
-                    from .shs_core.plan_execution import read_contract
-                else:
-                    from shs_core.plan_execution import read_contract
+                from .plan_execution import read_contract
                 contract = read_contract(plan["battery_execution"])
                 if contract.plan_id != plan.get("plan_id") or contract.mode != from_modes.get("$battery"):
                     raise ValueError("battery execution identity or mode differs from the plan")

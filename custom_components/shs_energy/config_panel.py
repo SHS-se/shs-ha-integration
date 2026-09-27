@@ -21,8 +21,8 @@ from homeassistant.helpers.json import json_bytes
 from .shs_core import const as shs_const
 from .refresh import refresh_in_progress, set_reloading
 from .api import ShsApiError
-from .api_contract import INTEGRATION_VERSION
-from .controller_diagnostics import controller_diagnostics, gzip_report, report_parts, report_summary
+from .shs_core.api_contract import INTEGRATION_VERSION
+from .shs_core.controller_diagnostics import controller_diagnostics, gzip_report, report_parts, report_summary
 from .control_configuration import async_execution_devices, async_set_execution_mode
 from .configuration import (
     area_name_by_id,
@@ -32,9 +32,9 @@ from .configuration import (
     entity_display_name_by_id,
     resolved_options,
 )
-from .configuration_fields import _control_fields, _configuration_sections, LABELS
-from .presentation import timeline, system_fields, device_name, device_readiness
-from .configuration_schema import (
+from .shs_core.configuration_fields import _control_fields, _configuration_sections, LABELS
+from .shs_core.presentation import timeline, system_fields, device_name, device_readiness
+from .shs_core.configuration_schema import (
     prepare_options, save_device,
 )
 from .shs_core.device_controls import (

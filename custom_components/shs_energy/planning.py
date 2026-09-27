@@ -40,7 +40,7 @@ try:  # pragma: no cover - exercised by both import paths
         OPTIMISATION_PROFILE_DAYS,
     )
     from .shs_core.device_controls import CONTROL_TYPES, planning_path, mapped_planning_path
-    from .optimisation import (
+    from .shs_core.optimisation import (
         OptimisationInputError,
         REMEDY_DEFECT,
         REMEDY_WAITING,
@@ -78,7 +78,7 @@ except ImportError:  # The test suite imports these helpers as flat modules,
         planning_path,
         mapped_planning_path,
     )
-    from optimisation import (  # type: ignore[no-redef]
+    from shs_core.optimisation import (  # type: ignore[no-redef]
         OptimisationInputError,
         REMEDY_DEFECT,
         REMEDY_WAITING,

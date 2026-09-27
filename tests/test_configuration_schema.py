@@ -6,10 +6,10 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
-from configuration_schema import prepare_options, resolve_configuration, save_device, initialise_device_inclusion
+from shs_core.configuration_schema import prepare_options, resolve_configuration, save_device, initialise_device_inclusion
 from migration import migrate_options
-from configuration_fields import _control_fields
-from presentation import system_fields
+from shs_core.configuration_fields import _control_fields
+from shs_core.presentation import system_fields
 from shs_core.device_commands import execution_setup_errors
 
 ENTITIES = {key: {'state': '20', 'attributes': {}} for key in
@@ -25,7 +25,7 @@ def save(existing, key, mapping):
 
 class ConfigurationReaderTests(unittest.TestCase):
     def test_removed_export_toggle_is_not_an_editor_or_runtime_option(self):
-        from configuration_schema import OPTION_KEYS
+        from shs_core.configuration_schema import OPTION_KEYS
         self.assertNotIn("battery_export_enabled", OPTION_KEYS)
         for value in (False, True):
             self.assertNotIn("battery_export_enabled", resolve_configuration({"battery_export_enabled": value}))
@@ -33,7 +33,7 @@ class ConfigurationReaderTests(unittest.TestCase):
             self.assertNotIn("battery_export_enabled", migrated)
 
     def test_revision_location_changes_and_private_copies(self):
-        from configuration_schema import ConfigurationReader
+        from shs_core.configuration_schema import ConfigurationReader
         source = {'rooms': {'room': {'temperature_entity_id': 'sensor.old'}},
                   'device_control_mappings': {'heater': {'room_area_id': 'room'}},
                   'device_modes': {'$battery': 'controlling'}}
@@ -98,7 +98,7 @@ class CurrentConfigurationTests(unittest.TestCase):
                     save_pool(options, {**saved, 'unexpected': True})
 
     def test_non_pool_variable_power_still_rejects_unrelated_temperature_field(self):
-        from configuration_schema import validate_mapping_keys
+        from shs_core.configuration_schema import validate_mapping_keys
         with self.assertRaisesRegex(ValueError, 'unknown device fields: temperature_entity_id'):
             validate_mapping_keys({'control_type': 'variable_power', 'temperature_entity_id': 'sensor.water'})
 

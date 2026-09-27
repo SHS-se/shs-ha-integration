@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
 
-from presentation import battery_status_text, controller_explanation
+from shs_core.presentation import battery_status_text, controller_explanation
 from shs_core.operating_modes import device_mode
 from test_price_sensor_forecasts import method
 from test_execution_mode_select import Rig
@@ -119,8 +119,8 @@ class SelectDetailsTests(unittest.IsolatedAsyncioTestCase):
 class ControllerSensorSubscriptionTests(unittest.IsolatedAsyncioTestCase):
     async def test_battery_refreshes_and_device_reports_rewrite_only_their_own_sensor(self):
         import ast
-        from controller import ScheduledController
-        from command_fixture import native_executor
+        from shs_core.controller import ScheduledController
+        from command_fixture import native_executor, controller_inputs
         source = Path(__file__).parents[1]/'custom_components'/'shs_energy'/'sensor.py'
         cls = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.ClassDef) and n.name == 'ShsControllerSensor')
         cls.bases = [ast.Name(id='Base', ctx=ast.Load())]
@@ -135,7 +135,7 @@ class ControllerSensorSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         exec(compile(ast.fix_missing_locations(ast.Module(body=[cls], type_ignores=[])), str(source), 'exec'), namespace)
         battery_listeners = []
         coordinator = SimpleNamespace(async_add_battery_listener=lambda listener: battery_listeners.append(listener) or (lambda: None))
-        coordinator.controller = ScheduledController(None, coordinator, None, dict, native_executor=native_executor(None))
+        coordinator.controller = ScheduledController(controller_inputs(None), coordinator, None, dict, native_executor=native_executor(None))
         sensors = {}
         for device in ('battery', 'ev', 'pool', 'devices'):
             sensor = namespace['ShsControllerSensor'].__new__(namespace['ShsControllerSensor'])

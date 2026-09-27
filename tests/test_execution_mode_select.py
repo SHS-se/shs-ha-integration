@@ -209,9 +209,9 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.ticks,0)
 
     async def test_real_schedule_view_removes_website_monitoring_and_local_exclusion(self):
-        from presentation import complete_device_views
+        from shs_core.presentation import complete_device_views
         from shs_core.device_controls import apply_planner_support, mapping_report, is_room_thermal_control, mapped_planning_path
-        from configuration_fields import _control_fields
+        from shs_core.configuration_fields import _control_fields
         from test_device_controls import _battery
         r=Rig();r.entry.options.update(_battery())
         r.entry.runtime_data.operational_status={'actionable':False,'reason':'Waiting for a plan'}
@@ -265,7 +265,7 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.entry.options,before);self.assertEqual(r.ticks,0)
 
     async def test_first_inventory_applies_same_inclusion_defaults_before_exposing_entities(self):
-        from configuration_schema import initialise_device_inclusion
+        from shs_core.configuration_schema import initialise_device_inclusion
         r=Rig()
         module=load_adapter('control_configuration.py', {'initialise_device_inclusion':initialise_device_inclusion})
         def views(hass,entry,choices,**kwargs):

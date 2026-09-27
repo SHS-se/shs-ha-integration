@@ -12,7 +12,7 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
-from optimisation import (  # noqa: E402
+from shs_core.optimisation import (  # noqa: E402
     OptimisationInputError,
     REMEDY_DEFECT,
     REMEDY_SETTING,

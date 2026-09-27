@@ -14,7 +14,7 @@ import aiohttp
 
 from .network_traffic import NetworkTraffic
 
-from .api_contract import (
+from .shs_core.api_contract import (
     API_VERSION,
     INTEGRATION_VERSION,
     MAX_REPLAN_ERROR_CHARS,

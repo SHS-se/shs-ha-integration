@@ -29,6 +29,7 @@ class CorePackageTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             shutil.copytree(CORE, tmp / 'shs_core', ignore=shutil.ignore_patterns('__pycache__'))
+            shutil.copy2(CORE.parent/'manifest.json', tmp/'manifest.json')
             path = tmp / 'execution.sqlite'
             store = ExecutionStorage(path, asyncio.to_thread)
             await store.load()
@@ -53,6 +54,41 @@ print(json.dumps({'session':digest(encode_value(snapshot.session)), 'feedback':d
         replay = subprocess.run([sys.executable, str(ROOT/'scripts/replay-home-runtime.py'),
             str(ROOT/'tests/fixtures/home-runtime-crash-recovery.json')], check=True, capture_output=True, text=True)
         self.assertEqual(digest(json.loads(replay.stdout)), baseline['crash_replay'])
+
+    def test_packaged_controllers_execute_through_ports_without_ha(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            shutil.copytree(CORE, tmp/'shs_core', ignore=shutil.ignore_patterns('__pycache__'))
+            shutil.copy2(CORE.parent/'manifest.json', tmp/'manifest.json')
+            result = subprocess.run([sys.executable, '-I', '-c', """
+import asyncio, pathlib, sys
+sys.path.insert(0, sys.argv[1])
+sys.path.append(sys.argv[2])
+from shs_core.controller import ScheduledController
+from shs_core.battery_runtime import BatteryRuntime
+from test_controller import ControllerTests
+from test_battery_runtime import Rig
+assert pathlib.Path(sys.modules['shs_core.controller'].__file__).is_relative_to(sys.argv[1])
+assert pathlib.Path(sys.modules['shs_core.battery_runtime'].__file__).is_relative_to(sys.argv[1])
+async def exercise():
+    pool = ControllerTests()
+    pool.setUp()
+    pool.options['device_modes']['$pool'] = 'controlling'
+    await pool.controller.async_start()
+    assert ('switch.pool', 'on') in pool.calls, pool.controller.status
+    assert not hasattr(pool.controller, 'hass')
+    assert pool.controller.ownership.records['pool']['originals'] == {'switch.pool': 'off'}
+    await pool.controller.async_stop()
+    battery = Rig()
+    await battery.start()
+    assert battery.calls, battery.runtime.snapshot()
+    assert battery.runtime.host.state is not None
+    await battery.runtime.close()
+asyncio.run(exercise())
+assert 'homeassistant' not in sys.modules
+print('packaged pool and battery runtimes executed through explicit ports')
+""", str(tmp), str(ROOT/'tests')], cwd=tmp, check=True, capture_output=True, text=True, timeout=30)
+            self.assertIn('executed through explicit ports', result.stdout)
 
     def test_core_dependency_boundary_is_closed(self):
         modules = {p.stem for p in CORE.glob('*.py')}

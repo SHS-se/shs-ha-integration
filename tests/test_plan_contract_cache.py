@@ -7,8 +7,8 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
-from optimisation import OptimisationInputError, PlanContractCache, validate_plan_contract
-from presentation import operational_status
+from shs_core.optimisation import OptimisationInputError, PlanContractCache, validate_plan_contract
+from shs_core.presentation import operational_status
 
 FIXTURE = json.loads((Path(__file__).parent / 'fixtures/schema-9-mixed-mode-plan.json').read_text())
 
