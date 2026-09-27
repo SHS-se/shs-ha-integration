@@ -115,6 +115,15 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(engine.close)
         return engine
 
+    async def test_restart_acknowledges_delivery_even_without_new_receipts(self):
+        from unittest.mock import AsyncMock
+        engine=self.engine()
+        engine.inbox=SimpleNamespace(through=lambda:42)
+        engine.gateway=SimpleNamespace(receive=AsyncMock())
+        await engine.receive_through(42)
+        engine.gateway.receive.assert_awaited_once()
+        engine.inbox=None;engine.gateway=None
+
     async def test_dormant_load_activates_once_and_restart_resumes_app_stores(self):
         engine = self.engine()
         await engine.load()

@@ -174,8 +174,12 @@ class AppEngine:
         controller.add_listener(self.wake_projection.set)
 
     async def receive_through(self, through):
-        while await asyncio.to_thread(self.inbox.through) < through:
+        # Even an empty suffix establishes delivery in this new socket epoch.
+        # The persisted inbox cursor alone cannot authorize HA receipt retirement.
+        while True:
             await self.gateway.receive()
+            if await asyncio.to_thread(self.inbox.through) >= through:
+                return
 
     async def activate(self):
         """Persist matching activation identities before starting any runtime job."""
