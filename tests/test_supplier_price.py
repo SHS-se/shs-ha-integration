@@ -186,7 +186,7 @@ class SensorWiringTests(unittest.TestCase):
     def test_changing_options_refreshes_the_gateway_source_subscription(self) -> None:
         listener = INIT[INIT.index("async def _async_options_updated") :]
         self.assertIn("source.refresh_configuration()",listener)
-        self.assertIn("self.entities = mapped_entity_ids(self.options())",GATEWAY)
+        self.assertIn("self.entities = configured_entity_ids(self.options())",GATEWAY)
         self.assertNotIn("async_reload(entry.entry_id)",listener)
 
     def test_startup_planning_waits_for_entity_providers(self) -> None:
