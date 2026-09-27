@@ -132,3 +132,20 @@ write and service call, revocation during the new await (generic and battery),
 minimum-run cancellation for unsent writes, disk failure, process-lock exclusion,
 fenced reopen immutability, shutdown sample flush, private selected-entry capture,
 interrupted retry, source mutation and Core restart before manifest publication.
+
+## Deployment evidence
+
+Deployed commit `2d3f7c2` on 27 September 2026 through the normal release workflows.
+CI passed 972 integration tests, 21 app tests, 93 frontend checks and 6 browser
+checks; both amd64 and aarch64 app images were published. App metadata checks
+confirmed the existing SHS branding assets remain byte-identical.
+
+HACS installed beta.52 and Core returned after 103 seconds. The SHS entry reports
+Ready. The command journal records a real `service_returned` outcome and still
+names the integration as owner. Acquiring its process lease from the app container
+fails as intended, demonstrating exclusion across the actual HAOS bind mounts.
+
+App beta.4 was then installed and reports Connected with required companion
+beta.52. Its read-only live catalog validated three databases, five active Store
+files and two retained obsolete files. No migration attempt directory exists and
+no source fence was written. The household continues running in the integration.
