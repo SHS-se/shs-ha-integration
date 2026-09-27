@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, Mock
 ROOT = Path(__file__).parents[1] / 'custom_components/shs_energy'
 sys.path.append(str(ROOT))
 from refresh import refresh_in_progress
-import const
+from shs_core import const
 from optimisation import OptimisationInputError, validate_plan_contract, optimisation_plan_due, quarter_start
 from test_battery_runtime import Store
 

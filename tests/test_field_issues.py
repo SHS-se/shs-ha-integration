@@ -8,7 +8,7 @@ import unittest
 ROOT = Path(__file__).parents[1] / 'custom_components/shs_energy'
 sys.path.append(str(ROOT))
 from optimisation import OptimisationInputError, REMEDY_WAITING
-from device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError, battery_control_errors, pool_control_errors, mapping_report, apply_requested_configuration
+from shs_core.device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError, battery_control_errors, pool_control_errors, mapping_report, apply_requested_configuration
 
 
 def price_catalog(coordinator):

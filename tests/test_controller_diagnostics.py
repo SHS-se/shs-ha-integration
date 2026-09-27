@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 import unittest
 import test_controller as fixtures
 from controller import ScheduledController
-from command_fixture import command_transport
+from command_fixture import native_executor
 from controller_diagnostics import controller_diagnostics
 from verification import VerificationJournal
 
@@ -135,12 +135,12 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         ownership = deepcopy(self.store.saved)
         await self.controller.async_stop()
         self.assertEqual(self.store.saved, ownership, 'stopping leaves ownership journalled')
-        controller = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), self.journal, command_transport=command_transport())
+        controller = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), self.journal, native_executor=native_executor(self.hass))
         await controller.async_start()
         triggers = {row['trigger'] for row in self.journal.evaluations}
         self.assertFalse(triggers & {'shutdown_handover', 'startup_handover'})
         self.assertFalse(any(c['phase'] == 'handover' for row in self.journal.evaluations for c in row['commands']))
-        self.assertEqual(controller.records['pool']['originals'], ownership['records']['pool']['originals'])
+        self.assertEqual(controller.ownership.records['pool']['originals'], ownership['records']['pool']['originals'])
 
     async def test_export_filters_excluded_history_without_destroying_retained_evidence(self):
         self.options['device_modes']['$pool'] = 'control_verification'

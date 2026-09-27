@@ -58,7 +58,7 @@ CONSTANTS = (
     Path(__file__).parents[1]
     / "custom_components"
     / "shs_energy"
-    / "const.py"
+    / "shs_core/const.py"
 ).read_text(encoding="utf-8")
 
 

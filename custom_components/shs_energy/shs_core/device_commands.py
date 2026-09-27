@@ -1,10 +1,7 @@
 """Schema-7 executable decisions and local capability validation."""
 from math import isfinite
 
-if __package__:
-    from .minimum_run import minimum_run_errors
-else:
-    from minimum_run import minimum_run_errors
+from .minimum_run import minimum_run_errors
 
 
 def numeric(value):

@@ -11,7 +11,7 @@ from unittest.mock import Mock
 
 ROOT = Path(__file__).parents[1] / "custom_components/shs_energy"
 sys.path.append(str(ROOT))
-from const import CONFIG_ENTRY_VERSION
+from shs_core.const import CONFIG_ENTRY_VERSION
 from migration import migrate_options, mapped_entity_ids
 
 

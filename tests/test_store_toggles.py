@@ -29,7 +29,7 @@ FRONTEND = (
     PACKAGE / "frontend" / "shs-energy-config-panel.js"
 ).read_text(encoding="utf-8")
 
-import const  # noqa: E402
+from shs_core import const  # noqa: E402
 
 # Keyed by the constant's *name*, because what is guarded here is source
 # wiring: the panel refers to `c.OPT_POOL_ENABLED`, never to "pool_enabled".

@@ -8,7 +8,7 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
-from device_controls import (  # noqa: E402
+from shs_core.device_controls import (  # noqa: E402
     apply_requested_configuration,
     battery_control_errors,
     pool_control_errors,

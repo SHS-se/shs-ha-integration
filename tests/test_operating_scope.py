@@ -7,7 +7,7 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
-from operating_modes import execution_mode_options, operating_mode_identity, reconcile_admissions, scoped_plan, system_device_keys
+from shs_core.operating_modes import execution_mode_options, operating_mode_identity, reconcile_admissions, scoped_plan, system_device_keys
 from planning import build_operating_scope
 from optimisation import validate_plan_contract, OptimisationInputError, PlanContractCache
 import test_controller as fixtures
@@ -253,7 +253,7 @@ class PoolMembershipTests(unittest.TestCase):
         self.assertEqual(reconcile_admissions(admitted, self.devices, self.home)['device_modes']['$pool'], 'controlling')
 
     def test_the_heater_remains_the_only_actuator_the_pool_drives(self):
-        from device_controls import pool_control_mapping
+        from shs_core.device_controls import pool_control_mapping
         self.assertEqual(system_device_keys(self.devices, self.options),
                          {'sensor.pool_heater_energy': 'pool', 'sensor.car_charging_total_energy': 'ev'})
         key, mapping = pool_control_mapping(self.options, self.devices)
@@ -297,7 +297,7 @@ class ScopeControllerTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['$pool'] = 'controlling'
         await self.controller.async_start()
         self.assertIn(('number.charge_limit', .5), self.calls)
-        self.assertIn('pool', self.controller.records)
+        self.assertIn('pool', self.controller.ownership.records)
 
     async def test_scope_change_during_awaited_command_stops_remaining_optimisation_writes(self):
         original = self.hass.services.async_call

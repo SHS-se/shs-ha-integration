@@ -26,13 +26,14 @@ from homeassistant.helpers import entity_registry as er
 
 from .api_contract import INTEGRATION_VERSION
 from .shs_core.command_journal import CommandJournal, entry_paths, process_lease, SourceFenced, WriterActive
+from .shs_core.native_commands import NativeExecutor
 from .shs_core.command_transport import CommandTransport
 from .refresh import set_reloading
 from .shs_core.resource_profiling import process_resources
 from .api import ShsApiClient
 from .controller_events import attach_controller_events
 from .config_panel import async_apply_configuration, async_register_config_panel
-from .const import (
+from .shs_core.const import (
     CONFIGURABLE_CATEGORIES,
     CONFIG_ENTRY_VERSION,
     CONF_BASE_URL,
@@ -231,12 +232,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShsEnergyConfigEntry) ->
     verification_store = VerificationStorage(
         hass.config.path(STORAGE_DIR, f"shs_energy.verification.{entry.entry_id}.sqlite"),
         hass.async_add_executor_job, Store(hass, 1, f"shs_energy.verification.{entry.entry_id}"), json_bytes)
+    async def send_native(domain, service, data):
+        await hass.services.async_call(domain, service, data, blocking=True)
+
+    native_executor = NativeExecutor(transport, hass.states.get,
+        lambda: hass.config.units.temperature_unit, send_native)
     controller = ScheduledController(
         hass, coordinator, Store(hass, 1, f"shs_energy.controller.{entry.entry_id}"),
         options,
         VerificationJournal(verification_store,
                             Store(hass, 1, f"shs_energy.verification_samples.{entry.entry_id}")),
-        command_transport=transport, entity_registry=er.async_get(hass),
+        native_executor=native_executor, entity_registry=er.async_get(hass),
     )
     coordinator.controller = controller
     controller.metrics.performance = {'verification_storage': verification_store.metrics,

@@ -26,10 +26,10 @@ if __package__:
     from .battery_live import native_surface, source_revision, planned_power_bindings
     from .shs_core.battery_supply import SupplyScope, observe_supply
     from .configuration_schema import METADATA_KEYS
-    from .configuration_values import resolve_battery_quantities
+    from .shs_core.configuration_values import resolve_battery_quantities
     from .shs_core.energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
-    from .device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
-    from .operating_modes import device_mode
+    from .shs_core.device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
+    from .shs_core.operating_modes import device_mode
     from .presentation import battery_status_text
 else:
     from shs_core.command_journal import Command, NativeAction
@@ -45,10 +45,10 @@ else:
     from battery_live import native_surface, source_revision, planned_power_bindings
     from shs_core.battery_supply import SupplyScope, observe_supply
     from configuration_schema import METADATA_KEYS
-    from configuration_values import resolve_battery_quantities
+    from shs_core.configuration_values import resolve_battery_quantities
     from shs_core.energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
-    from device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
-    from operating_modes import device_mode
+    from shs_core.device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
+    from shs_core.operating_modes import device_mode
     from presentation import battery_status_text
 
 AGE_MS=30000
@@ -514,9 +514,9 @@ class BatteryRuntime:
             return
         self._releasing=False
         self._options=options
-        if mode=='control_verification' and 'battery' in self.controller.records:
+        if mode=='control_verification' and 'battery' in self.controller.ownership.records:
             async with self.controller.lock:
-                del self.controller.records['battery']
+                del self.controller.ownership.records['battery']
                 await self.controller.save()
         if battery_measurement_errors(options):
             raise BatteryMeasurementConfigurationError(options)
@@ -624,7 +624,7 @@ class BatteryRuntime:
         if mode=='controlling' and (not self.coordinator.battery_writer.is_current(self._grant,self.identity()) or self._grant.expires_at_ms-self.now()<60000):
             async def release_old():
                 await self.controller.restore('battery')
-                if 'battery' in self.controller.records:
+                if 'battery' in self.controller.ownership.records:
                     raise ValueError('previous battery owner has not released its commands')
             self._grant=await self.coordinator.battery_writer.take_over(self._identity,self.now()+900000,release_old)
         if self._grant and self.coordinator.battery_writer.is_current(self._grant,self.identity()):
@@ -806,7 +806,7 @@ class BatteryRuntime:
                 events.append(rt.ReleaseApproved(group_id,release))
         if group.release_pending and self.identity() and not self.coordinator.battery_writer.is_current(self._grant,self.identity()):
             async def released():
-                if 'battery' in self.controller.records:
+                if 'battery' in self.controller.ownership.records:
                     raise ValueError('legacy owner still present during runtime release')
             self._grant=await self.coordinator.battery_writer.take_over(self.identity(),self.now()+900000,released)
         if self._grant and self.coordinator.battery_writer.is_current(self._grant,self.identity()):
@@ -880,10 +880,8 @@ class BatteryRuntime:
                 action=NativeAction(entity,'set_value',value/(1000 if limit['unit']=='kW' else 1))
             identity=f'battery:{effect.grant.owner_id}:{effect.grant.epoch}:{effect.group_id}:{effect.attempt_id}'
             request=Command(identity,'battery',effect.group_id,'battery',action)
-            async def send(domain,service,data):
-                await self.controller.hass.services.async_call(domain,service,data,blocking=True)
             try:
-                await self.controller.command_transport.execute(request,authorize=authorize,send=send,timeout=75)
+                await self.controller.native_executor.execute(request,authorize=authorize,timeout=75)
             except CommandNotSent as error:
                 raise DispatchRejected(str(error)) from error
 
@@ -914,7 +912,7 @@ class BatteryRuntime:
         self._releasing=True
         self._status={'state':'idle','reason':reason}
         if self.host is None:
-            if 'battery' in self.controller.records:
+            if 'battery' in self.controller.ownership.records:
                 async with self.controller.lock:
                     await self.controller.restore('battery')
             return
@@ -929,7 +927,7 @@ class BatteryRuntime:
         if group.owned or group.attempts or group.release_pending:
             if self.identity() and not self.coordinator.battery_writer.is_current(self._grant,self.identity()):
                 async def already_released():
-                    if 'battery' in self.controller.records:
+                    if 'battery' in self.controller.ownership.records:
                         raise ValueError('legacy owner still present during runtime release')
                 self._grant=await self.coordinator.battery_writer.take_over(self.identity(),self.now()+900000,already_released)
             if self._grant:

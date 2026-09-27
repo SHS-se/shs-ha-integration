@@ -6,12 +6,12 @@ from unittest.mock import patch
 import unittest
 import test_controller as fixtures
 from controller import ScheduledController
-from command_fixture import command_transport
-from minimum_run import MinimumRuns, minimum_run_errors
+from command_fixture import native_executor
+from shs_core.minimum_run import MinimumRuns, minimum_run_errors
 from verification import VerificationJournal
 from configuration_fields import control_fields
 from configuration_schema import save_device
-from device_controls import mapping_report
+from shs_core.device_controls import mapping_report
 
 NOW = datetime(2026, 9, 25, 12, tzinfo=timezone.utc)
 
@@ -132,7 +132,7 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_revocation_during_command_prepare_cancels_unsent_minimum_run(self):
         import asyncio
-        transport=self.controller.command_transport
+        transport=self.controller.native_executor.transport
         async def executor(fn,*args):
             result=await asyncio.to_thread(fn,*args)
             if fn==transport.journal.prepare:
@@ -141,7 +141,7 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         transport.executor=executor
         await self.controller.async_start()
         self.assertEqual(self.calls,[])
-        self.assertIsNone(self.controller.runs.release_at('pool'))
+        self.assertIsNone(self.controller.ownership.runs.release_at('pool'))
         self.assertEqual(self.states['switch.pool'].state,'off')
 
     async def test_switching_to_verification_while_start_is_saved_prevents_the_write(self):
@@ -157,7 +157,7 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.store.saved['runs']['pool']['active'])
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
-        self.assertNotIn('pool', self.controller.records)
+        self.assertNotIn('pool', self.controller.ownership.records)
 
     async def test_verification_change_while_restoration_is_saved_leaves_device_on(self):
         await self.controller.async_start()
@@ -174,12 +174,12 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.states['switch.pool'].state, 'on')
         await self.controller.async_tick()
-        self.assertNotIn('pool', self.controller.records)
+        self.assertNotIn('pool', self.controller.ownership.records)
 
     async def test_pool_stop_temperature_replan_restart_and_expiry(self):
         await self.controller.async_start()
         self.assertEqual(self.states['switch.pool'].state, 'on')
-        since = self.controller.runs.records['pool']['since']
+        since = self.controller.ownership.runs.records['pool']['since']
         self.calls.clear()
         self.slot['pool_w'] = 0
         self.coordinator.optimisation_plan['plan_id'] = 'replanned'
@@ -189,10 +189,10 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status['pool']['state'], 'pending')
         await self.controller.async_stop()
         self.assertEqual(self.calls, [])
-        restarted = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), command_transport=command_transport())
+        restarted = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), native_executor=native_executor(self.hass))
         await restarted.async_start()
         self.assertEqual(self.calls, [])
-        self.assertEqual(restarted.runs.records['pool']['since'], since)
+        self.assertEqual(restarted.ownership.runs.records['pool']['since'], since)
         self.advance(minutes=50)
         await restarted.async_tick()
         self.assertEqual(self.calls, [('switch.pool', 'off')])
@@ -204,13 +204,13 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         self.states['switch.pool'].state = 'on'
         self.advance(minutes=5)
         await self.controller.async_tick()
-        since = self.controller.runs.records['pool']['since']
+        since = self.controller.ownership.runs.records['pool']['since']
         self.assertEqual(self.calls, [])
         self.options['device_modes']['$pool'] = 'controlling'
         self.advance(minutes=10)
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
-        self.assertEqual(self.controller.runs.records['pool']['since'], since)
+        self.assertEqual(self.controller.ownership.runs.records['pool']['since'], since)
         self.assertEqual(self.controller.status['pool']['state'], 'pending')
         snapshot = await self.controller.minimum_run_snapshot(self.options, self.coordinator.optimisation_plan['device_models'])
         self.assertEqual(snapshot['pool']['remaining_seconds'], 3000)
@@ -224,7 +224,7 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
         self.assertEqual(self.states['switch.pool'].state, 'on')
-        self.assertNotIn('pool', self.controller.records)
+        self.assertNotIn('pool', self.controller.ownership.records)
 
     async def test_override_and_exclusion_restoration_cannot_stop_a_locked_run(self):
         await self.controller.async_start()
@@ -232,7 +232,7 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         self.options['excluded_device_readings'] = ['$pool']
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
-        self.assertTrue(self.controller.records['pool']['restoration_pending'])
+        self.assertTrue(self.controller.ownership.records['pool']['restoration_pending'])
         self.assertEqual(self.controller.status['pool']['state'], 'pending')
 
     async def test_ev_target_and_disconnect_cannot_stop_a_locked_run(self):

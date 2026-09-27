@@ -14,3 +14,11 @@ atexit.register(_TEMP.cleanup)
 def command_transport():
     journal = CommandJournal(Path(_TEMP.name) / (uuid4().hex + '.sqlite')).open('fixture')
     return CommandTransport(journal, asyncio.to_thread)
+
+
+def native_executor(hass):
+    from shs_core.native_commands import NativeExecutor
+    async def send(domain, service, data):
+        await hass.services.async_call(domain, service, data, blocking=True)
+    return NativeExecutor(command_transport(), lambda entity: hass.states.get(entity),
+                          lambda: hass.config.units.temperature_unit, send)

@@ -1,3 +1,13 @@
+# 0.1.0-beta.5
+
+Bundle preparation companion 0.9.0-beta.53. Extract shared device ownership,
+minimum-run rules and native execution; recheck native hardware metadata after
+persisting a command and before dispatch. Add a verified dormant importer for
+cold exports with accounting parity, immutable retry evidence and exact target
+pair binding. This is preparation: the integration still owns control, and the
+remote runtime and activation are not yet available. Existing SHS branding is
+unchanged.
+
 # 0.1.0-beta.4
 
 Bundle preparation companion 0.9.0-beta.52 with durable command outcomes for all

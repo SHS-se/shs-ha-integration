@@ -8,7 +8,7 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
-from const import backend_attributes  # noqa: E402
+from shs_core.const import backend_attributes  # noqa: E402
 
 
 class BackendAttributesTests(unittest.TestCase):

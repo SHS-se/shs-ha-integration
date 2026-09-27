@@ -21,16 +21,16 @@ sys.path.append(str(PACKAGE))
 
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
-    "app_projection", "shs_core.command_journal", "shs_core.command_transport",
-    "battery_commands", "operating_modes", "verification",
+    "app_projection", "shs_core.native_commands", "shs_core.device_ownership", "shs_core.command_journal", "shs_core.command_transport",
+    "battery_commands", "shs_core.operating_modes", "verification",
     "shs_core.home_runtime", "shs_core.home_runtime_checkpoint", "shs_core.energy_ledger", "shs_core.runtime_json",
     "shs_core.battery_supply", "shs_core.home_host", "shs_core.battery_native_adapter",
     "controller", "battery_live", "battery_writer", "battery_runtime", "shs_core.battery_conversion",
     "presentation", "shs_core.plan_execution", "shs_core.battery_physical", "shs_core.execution_storage", "execution_migration",
     "api_contract", "durable_record", "shs_core.verification_storage",
-    "const", "replan_listener",
-    "device_controls",
-    "device_commands", "minimum_run",
+    "shs_core.const", "replan_listener",
+    "shs_core.device_controls",
+    "shs_core.device_commands", "shs_core.minimum_run",
     "migration",
     "network_traffic",
     "controller_metrics", "shs_core.resource_profiling",
@@ -38,7 +38,7 @@ PURE_MODULES = (
     "controller_observations",
     "controller_scheduler",
     "configuration_schema",
-    "configuration_values",
+    "shs_core.configuration_values",
     "configuration_fields",
     "optimisation",
     "measurements",
@@ -176,7 +176,7 @@ class ModuleBoundaryTests(unittest.TestCase):
         """A repair with no strings entry renders as a bare key to the user."""
         import json
 
-        source = (PACKAGE / "const.py").read_text(encoding="utf-8")
+        source = (PACKAGE / "shs_core/const.py").read_text(encoding="utf-8")
         keys = {
             line.split("=", 1)[1].strip().strip('"')
             for line in source.splitlines()

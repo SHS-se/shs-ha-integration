@@ -16,7 +16,7 @@ from configuration_fields import (  # noqa: E402
     mapping_keys,
 )
 from configuration_schema import MAPPING_KEYS  # noqa: E402
-from device_commands import execution_setup_errors  # noqa: E402
+from shs_core.device_commands import execution_setup_errors  # noqa: E402
 
 PATHS = (None, "room", "pool", "boiler", "ev")
 
@@ -70,7 +70,7 @@ class PoolContractTests(unittest.TestCase):
         `actuator_targets` is what the controller writes to; the setting must
         never appear there, whatever the mapping says.
         """
-        from device_commands import actuator_targets
+        from shs_core.device_commands import actuator_targets
         mapping = {
             "control_type": "switch_schedule",
             "actuator_entity_ids": ["switch.pool"],
@@ -106,7 +106,7 @@ class RoutingTests(unittest.TestCase):
     """`planning_path` is the single authority; the contract follows it."""
 
     def test_a_pool_heater_with_a_power_dial_is_still_the_pool(self):
-        from device_controls import planning_path
+        from shs_core.device_controls import planning_path
         self.assertEqual(planning_path("variable_power", "pool_heating"), "pool")
         self.assertEqual(planning_path("switch_schedule", "pool_heating"), "pool")
 
@@ -117,12 +117,12 @@ class RoutingTests(unittest.TestCase):
         belongs to its room's heat model. Assuming otherwise once turned a
         single bad pairing into a whole-plan failure.
         """
-        from device_controls import planning_path
+        from shs_core.device_controls import planning_path
         self.assertEqual(planning_path("setpoint", "pool_heating"), "room")
         self.assertEqual(planning_path("switch_schedule", "heating"), "room")
 
     def test_no_other_meter_gains_a_pool_route(self):
-        from device_controls import planning_path
+        from shs_core.device_controls import planning_path
         for category in ("ev_charging", "hot_water", "property_energy", None):
             self.assertNotEqual(
                 planning_path("variable_power", category), "pool", category,
@@ -136,7 +136,7 @@ class RoutingTests(unittest.TestCase):
         device stopped being a pool device mid-edit and the executor was asked
         about a method it has never run.
         """
-        from device_controls import planning_path
+        from shs_core.device_controls import planning_path
         mapping = {
             "control_type": "variable_power",
             "actuator_entity_ids": ["switch.pool_heater"],
@@ -175,7 +175,7 @@ class DriftTests(unittest.TestCase):
         never notices its entity was deleted, which is how the render list and
         the entity list drifted apart in the first place.
         """
-        from device_controls import _ENTITY_FIELDS_BY_CONTROL_TYPE
+        from shs_core.device_controls import _ENTITY_FIELDS_BY_CONTROL_TYPE
         from configuration_fields import local_contract
         for method in CONTROL_FIELDS:
             for path in PATHS:

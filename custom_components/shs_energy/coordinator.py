@@ -30,7 +30,7 @@ from .refresh import refresh_in_progress
 from .replan_listener import listen_for_replans
 from .battery_live import BatteryLiveInputs
 from .durable_record import DurableRecord
-from .operating_modes import device_mode, operating_mode_identity
+from .shs_core.operating_modes import device_mode, operating_mode_identity
 
 from .api import (
     ShsApiClient,
@@ -38,9 +38,9 @@ from .api import (
     ShsAuthError,
     ShsSubscriptionInactiveError,
 )
-from .configuration_values import resolve_battery_quantities
+from .shs_core.configuration_values import resolve_battery_quantities
 from .api_contract import ApiContractError, validate_server_contract
-from .const import (
+from .shs_core.const import (
     BACKFILL_MAX_DAYS,
     CATEGORIES,
     CONFIGURABLE_CATEGORIES,
@@ -110,7 +110,7 @@ from .configuration import (
     entity_display_name_by_id,
     resolved_options,
 )
-from .device_controls import (
+from .shs_core.device_controls import (
     apply_requested_configuration,
     battery_control_errors, battery_measurement_errors, BatteryMeasurementConfigurationError,
     pool_control_errors, mapped_planning_path,
@@ -1131,7 +1131,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         home = result.get("home_configuration")
         if not isinstance(home, dict) or not isinstance(home.get("battery", {}).get("included"), bool):
             raise ShsApiError("Website planning choices are unavailable; update the website first")
-        from .operating_modes import reconcile_admissions
+        from .shs_core.operating_modes import reconcile_admissions
         admitted = reconcile_admissions(dict(self.entry.options), list(configuration.values()), home)
         if admitted != dict(self.entry.options):
             self.hass.config_entries.async_update_entry(self.entry, options=admitted)
@@ -2390,7 +2390,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         devices: list[dict[str, Any]],
     ) -> dict[str, Any]:
         from .configuration_schema import shared_devices
-        from .operating_modes import planning_devices
+        from .shs_core.operating_modes import planning_devices
         runtime = getattr(self, "battery_runtime", None)
         execution_options = runtime.controller.options() if runtime is not None else None
         scope_devices = shared_devices(devices, options)
@@ -3300,7 +3300,7 @@ class ShsStatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def binding_plan_for(self, device, options):
         """Select and validate the physical or hypothetical plan as one unit."""
-        from .operating_modes import scoped_plan
+        from .shs_core.operating_modes import scoped_plan
         from .presentation import operational_status
         plan = scoped_plan(self.optimisation_plan, options, device)
         now = dt_util.utcnow()

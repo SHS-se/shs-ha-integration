@@ -6,7 +6,7 @@ import unittest
 import test_controller as fixtures
 from controller import ScheduledController
 from verification import VerificationJournal
-from operating_modes import device_mode, planning_devices
+from shs_core.operating_modes import device_mode, planning_devices
 from configuration_schema import resolve_configuration
 from migration import migrate_options
 
@@ -27,7 +27,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.assertEqual(self.controller.status['pool']['state'],'scheduled',self.controller.status['pool'])
         self.assertEqual(self.states['switch.pool'].state,'on')
-        self.assertNotIn('device:pool',self.controller.records)
+        self.assertNotIn('device:pool',self.controller.ownership.records)
         self.options['device_modes']['$pool']='control_verification'
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.pool'].state,'on')
@@ -38,7 +38,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         before = {key: (value.state, dict(value.attributes)) for key, value in self.states.items()}
         await self.controller.async_start()
         self.assertEqual(self.calls, [])
-        self.assertFalse(self.controller.records)
+        self.assertFalse(self.controller.ownership.records)
         self.assertEqual(self.controller.status['battery']['decision'],
                          {'kind': 'battery', 'operation': 'grid_charge',
                           'charge_limit_w': 2000, 'discharge_limit_w': 0})
@@ -95,7 +95,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(battery['changed_inputs'], 1)
         self.assertEqual(report['devices']['pool']['unchanged_inputs'], 3)
         self.assertEqual(self.calls, [])
-        self.assertFalse(self.controller.records)
+        self.assertFalse(self.controller.ownership.records)
 
     async def test_metrics_complete_when_sensor_is_unavailable(self):
         self.options['device_modes']['$battery'] = 'control_verification'
@@ -167,7 +167,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         await self.controller.async_stop()
         self.assertEqual(self.calls, [])
-        self.assertFalse(self.controller.records)
+        self.assertFalse(self.controller.ownership.records)
 
     async def test_leaving_live_control_leaves_device_unchanged(self):
         self.options['device_modes']['$pool'] = 'controlling'
@@ -177,7 +177,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_tick()
         self.assertEqual(float(self.states['number.start'].state), 29.5)
-        self.assertFalse(self.controller.records)
+        self.assertFalse(self.controller.ownership.records)
         after = len(self.calls)
         await self.controller.async_tick()
         self.assertEqual(len(self.calls), after)
@@ -218,8 +218,8 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
         self.assertEqual(self.states['select.mode'].state, 'Charge')
-        self.assertIn('battery', self.controller.records)
-        self.assertNotIn('pool', self.controller.records)
+        self.assertIn('battery', self.controller.ownership.records)
+        self.assertNotIn('pool', self.controller.ownership.records)
 
     async def test_ev_verifies_current_then_switch_and_handover_without_writes(self):
         self.options['device_modes']['$ev'] = 'control_verification'
@@ -403,7 +403,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.states['sensor.raw_water'].last_reported -= timedelta(minutes=16)
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'pending')
-        self.assertIn('pool', self.controller.records)
+        self.assertIn('pool', self.controller.ownership.records)
         self.assertEqual(float(self.states['number.stop'].state), 30)
         self.states['sensor.raw_water'].last_reported = datetime.now(timezone.utc)
         await self.controller.async_tick()
@@ -516,7 +516,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                     self.options['device_modes']['$pool'] = 'control_verification'
                     await self.controller.async_tick()
                     self.assertEqual(self.states['switch.pool'].state, 'off')
-                    self.assertNotIn('pool', self.controller.records)
+                    self.assertNotIn('pool', self.controller.ownership.records)
                     self.assertTrue(all(entity == 'switch.pool' for entity, _ in self.calls))
 
 

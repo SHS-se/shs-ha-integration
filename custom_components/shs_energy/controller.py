@@ -10,34 +10,36 @@ import asyncio
 from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 import logging
-from math import isfinite
-from typing import Any
 from types import SimpleNamespace
 from time import perf_counter
 from uuid import uuid4
 
 try:
-    from .shs_core.command_journal import Command, NativeAction
+    from .shs_core.command_journal import Command
+    from .shs_core.native_commands import finite, native_command
+    from .shs_core.device_ownership import DeviceOwnership
     from .api_contract import INTEGRATION_VERSION
-    from .operating_modes import device_mode, EXECUTING_MODES
-    from .minimum_run import MinimumRuns, RunStateUnavailable, minimum_run_errors
+    from .shs_core.operating_modes import device_mode, EXECUTING_MODES
+    from .shs_core.minimum_run import RunStateUnavailable, minimum_run_errors
     from .verification import OPERATIONS, operation_name, evaluation_record, observation
     from .controller_metrics import ControllerMetrics, fingerprint, record_time
     from .battery_commands import validate_battery_command, battery_mode_key
-    from .configuration_values import resolve_battery_quantities, resolve_quantity
-    from .device_commands import actuator_targets, execution_setup_errors, validate_commands
-    from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
+    from .shs_core.configuration_values import resolve_battery_quantities, resolve_quantity
+    from .shs_core.device_commands import actuator_targets, execution_setup_errors, validate_commands
+    from .shs_core.device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
 except ImportError:  # Pure executor tests, without importing Home Assistant.
-    from shs_core.command_journal import Command, NativeAction
+    from shs_core.command_journal import Command
+    from shs_core.native_commands import finite, native_command
+    from shs_core.device_ownership import DeviceOwnership
     from api_contract import INTEGRATION_VERSION
-    from operating_modes import device_mode, EXECUTING_MODES
-    from minimum_run import MinimumRuns, RunStateUnavailable, minimum_run_errors
+    from shs_core.operating_modes import device_mode, EXECUTING_MODES
+    from shs_core.minimum_run import RunStateUnavailable, minimum_run_errors
     from verification import OPERATIONS, operation_name, evaluation_record, observation
     from controller_metrics import ControllerMetrics, fingerprint, record_time
     from battery_commands import validate_battery_command, battery_mode_key
-    from configuration_values import resolve_battery_quantities, resolve_quantity
-    from device_commands import actuator_targets, execution_setup_errors, validate_commands
-    from device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
+    from shs_core.configuration_values import resolve_battery_quantities, resolve_quantity
+    from shs_core.device_commands import actuator_targets, execution_setup_errors, validate_commands
+    from shs_core.device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -87,15 +89,6 @@ def correction_details(error):
     return error.details if isinstance(error, (ControlObservationError, PlanChangedError)) else {}
 
 
-def finite(value: Any) -> float:
-    if isinstance(value, bool):
-        raise ValueError("boolean is not a numeric command")
-    result = float(value)
-    if not isfinite(result):
-        raise ValueError("non-finite value")
-    return result
-
-
 def checked_state(state, entity, max_age=None):
     if state is None or state.state in ("unknown", "unavailable"):
         raise ControlObservationError(
@@ -137,8 +130,8 @@ def battery_limit_value(entity, watts, state):
 class ScheduledController:
     """HA adapter supplied by the caller, so execution is behaviour-testable."""
 
-    def __init__(self, hass, coordinator, store, options, verification=None, *, command_transport, entity_registry=None):
-        self.command_transport = command_transport
+    def __init__(self, hass, coordinator, store, options, verification=None, *, native_executor, entity_registry=None):
+        self.native_executor = native_executor
         self.verification = verification
         self.entity_registry = entity_registry
         self.verifying = False
@@ -147,10 +140,8 @@ class ScheduledController:
         self.verification_observations = {}
         self.hass = hass
         self.coordinator = coordinator
-        self.store = store
+        self.ownership = DeviceOwnership(store)
         self.options = options
-        self.records: dict[str, dict] = {}
-        self.runs = MinimumRuns()
         self.status = {device: {"state": "disabled"} for device in DEVICES}
         self.listeners = set()
         self.lock = asyncio.Lock()
@@ -163,7 +154,6 @@ class ScheduledController:
         self.failed = {}
         self.initialized = False
         self.command_times = {}
-        self.overrides = {}
         self.requested_types = {}
         self.requested_systems = set()
         self.requested_error = None
@@ -173,7 +163,6 @@ class ScheduledController:
         self.diagnostic_evaluation = None
         self.diagnostics_error = None
         self.diagnostics_failed_evaluations = 0
-        self.retired_pool_temperature_settings = {}
         self.diagnostics_sampling_error = None
         self.diagnostics_failed_samples = 0
 
@@ -186,8 +175,8 @@ class ScheduledController:
     def report(self, device, state, **details):
         if self.verifying:
             return
-        if device == "pool" and self.retired_pool_temperature_settings:
-            details["retired_temperature_settings"] = deepcopy(self.retired_pool_temperature_settings)
+        if device == "pool" and self.ownership.retired_pool_temperature_settings:
+            details["retired_temperature_settings"] = deepcopy(self.ownership.retired_pool_temperature_settings)
             details["control_notice"] = "Old temperature control has been removed. Check the heater's own temperature settings; SHS now only uses its switch."
         value = {"state": state, **details}
         if self.status.get(device) == value:
@@ -262,8 +251,8 @@ class ScheduledController:
         read raises instead, so it holds rather than releases.
         """
         mode = device_mode(options, device)
-        if device in self.overrides:
-            return {"state": "overridden", "reason": self.overrides[device]}
+        if device in self.ownership.overrides:
+            return {"state": "overridden", "reason": self.ownership.overrides[device]}
         if mode not in EXECUTING_MODES:
             return {"state": mode, "reason": "Observing only; no SHS commands" if mode == "monitoring" else
                     "Planning only; no SHS commands or command verification"}
@@ -305,7 +294,7 @@ class ScheduledController:
 
     def holding(self, device, reason):
         """Say that the device keeps the last setting SHS sent, when there is one."""
-        return f"{reason}; holding the last setting SHS sent" if device in self.records else reason
+        return f"{reason}; holding the last setting SHS sent" if device in self.ownership.records else reason
 
     def check_authority(self):
         if self.restoring:
@@ -348,7 +337,7 @@ class ScheduledController:
             raise ValueError("control disabled or manually overridden")
 
     def validate_minimum_run_configuration(self):
-        options = self.records.get(self.device, {}).get("options") if self.restoring else self.options()
+        options = self.ownership.records.get(self.device, {}).get("options") if self.restoring else self.options()
         options = options or self.options()
         models = {model["key"]: model for model in (self.coordinator.optimisation_plan or {}).get("device_models", [])}
         fields = []
@@ -367,7 +356,7 @@ class ScheduledController:
 
     def minimum_run_deadline(self, entity, value, now):
         try:
-            return self.runs.blocked_until(entity, value, self.hass.states.get, now)
+            return self.ownership.runs.blocked_until(entity, value, self.hass.states.get, now)
         except RunStateUnavailable as err:
             raise ActuatorUnavailableError(str(err), err.entity,
                 "Wait for the device's enabled state to return.", unavailable=True) from err
@@ -379,46 +368,14 @@ class ScheduledController:
         self.check_authority()
         domain = entity.split(".")[0]
         state = ((self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)) if getattr(self, "device", None) == "battery" and domain == "number" else self.actuator_state(entity)
-        if state is None:
-            raise ValueError(f"{entity} is unavailable")
-        if domain in ("number", "input_number"):
-            value = finite(value)
-            low = finite(state.attributes["min"])
-            high = finite(state.attributes["max"])
-            step = finite(state.attributes.get("step", 1))
-            if not low <= value <= high or step <= 0:
-                raise ValueError(f"{entity}: target outside hardware bounds")
-            if abs((value-low)/step - round((value-low)/step)) > 1e-5:
-                raise ValueError(f"{entity}: target is not a supported step")
-            service, data = "set_value", {"value": value}
-            try:
-                equal = abs(finite(state.state) - value) < 1e-6
-            except (TypeError, ValueError):
-                equal = False
-        elif domain == "climate":
-            value = finite(value)
-            low, high = finite(state.attributes["min_temp"]), finite(state.attributes["max_temp"])
-            if state.state != "heat" or self.hass.config.units.temperature_unit != "°C":
-                raise ValueError(f"{entity}: setpoint execution requires an active Celsius heating thermostat")
-            if not low <= value <= high:
-                raise ValueError(f"{entity}: target outside hardware bounds")
-            service, data = "set_temperature", {"temperature": value}
-            equal = abs(finite(state.attributes["temperature"]) - value) < 1e-6
-        elif domain in ("select", "input_select"):
-            if value not in state.attributes.get("options", []):
-                raise ValueError(f"{entity}: unsupported mode {value}")
-            service, data = "select_option", {"option": value}
-            equal = state.state == value
-        elif domain in ("switch", "input_boolean"):
-            if value not in ("on", "off"):
-                raise ValueError(f"{entity}: invalid switch state")
-            service, data = f"turn_{value}", {}
-            equal = state.state == value
-        else:
-            raise ValueError(f"{entity}: unsupported actuator domain")
+        native = native_command(entity, value, state,
+                                temperature_unit=self.hass.config.units.temperature_unit if domain == "climate" else None)
+        value, equal = native.value, native.equal
+        _, service, service_data = native.action.service_call()
+        data = {key: item for key, item in service_data.items() if key != "entity_id"}
         now = datetime.now(timezone.utc)
         if not self.verifying:
-            self.runs.observe(self.hass.states.get, now)
+            self.ownership.runs.observe(self.hass.states.get, now)
         if not equal:
             release = self.minimum_run_deadline(entity, value, now)
             if release:
@@ -435,7 +392,7 @@ class ScheduledController:
             if domain == "climate":
                 attributes["temperature"] = value
             self.shadow[entity] = SimpleNamespace(state=state.state if domain == "climate" else str(value), attributes=attributes)
-            record = self.records.get(self.device)
+            record = self.ownership.records.get(self.device)
             if record is not None and not self.restoring:
                 record.setdefault("last_commands", {})[entity] = value
             return
@@ -444,7 +401,7 @@ class ScheduledController:
             self.diagnostic_evaluation["commands"].append(command)
         prepared = {}
         try:
-            record = self.records.get(getattr(self, "device", ""))
+            record = self.ownership.records.get(getattr(self, "device", ""))
             if record is not None and not self.restoring:
                 record.setdefault("last_commands", {})[entity] = value
                 await self.save()
@@ -458,8 +415,8 @@ class ScheduledController:
                         self.scheduler.device_deadline(self.device,"battery_headroom",datetime.now(timezone.utc)+timedelta(seconds=5))
                     raise ControlDeadlineError("Waiting for battery charging to release grid capacity")
                 # Persist the start before the service can activate hardware.
-                prepared = self.runs.prepare_start(entity, value, self.hass.states.get, datetime.now(timezone.utc))
-                if self.runs.dirty:
+                prepared = self.ownership.runs.prepare_start(entity, value, self.hass.states.get, datetime.now(timezone.utc))
+                if self.ownership.runs.dirty:
                     await self.save()
                 def authorize():
                     self.check_authority()
@@ -474,23 +431,20 @@ class ScheduledController:
                     self.command_times[entity] = datetime.now(timezone.utc)
                     command.update(called=True, transport="ambiguous")
 
-                async def send(domain, service, data):
-                    await self.hass.services.async_call(domain, service, data, blocking=True)
-
                 command["command_id"] = "controller:" + uuid4().hex
                 request = Command(command["command_id"], "controller", self.device, command["phase"],
-                    NativeAction(entity, service, next(iter(data.values())) if data else None))
-                await self.command_transport.execute(request, authorize=authorize, send=send,
+                    native.action)
+                await self.native_executor.execute(request, authorize=authorize,
                     timeout=CONFIRM_SECONDS, on_sent=sent)
                 command["transport"] = "accepted"
-                self.runs.observe(self.hass.states.get, datetime.now(timezone.utc), entity=entity)
-                if self.runs.dirty:
+                self.ownership.runs.observe(self.hass.states.get, datetime.now(timezone.utc), entity=entity)
+                if self.ownership.runs.dirty:
                     await self.save()
             # Service completion records an accepted setting. Ordinary readings
             # and explicit device workflows assess the physical response.
         except (Exception, asyncio.CancelledError) as err:
             if prepared and not command["called"]:
-                self.runs.cancel_unsent_start(prepared, self.hass.states.get, datetime.now(timezone.utc))
+                self.ownership.runs.cancel_unsent_start(prepared, self.hass.states.get, datetime.now(timezone.utc))
                 await self.save()
             command["error"] = str(err) or type(err).__name__
             raise
@@ -540,34 +494,32 @@ class ScheduledController:
     async def save(self):
         if self.verifying:
             return
-        run_revision = self.runs.revision
-        await self.store.async_save({"records": self.records, "overrides": self.overrides,
-                                     "retired_pool_temperature_settings": self.retired_pool_temperature_settings,
-                                     "runs": deepcopy(self.runs.records)})
-        self.runs.saved_revision = run_revision
+        await self.ownership.save()
 
     async def minimum_run_snapshot(self, options, models):
         async with self.lock:
             now = datetime.now(timezone.utc)
-            self.runs.configure(options, models, now)
-            self.runs.observe(self.hass.states.get, now)
-            if self.runs.dirty:
+            self.ownership.runs.configure(options, models, now)
+            self.ownership.runs.observe(self.hass.states.get, now)
+            if self.ownership.runs.dirty:
                 await self.save()
-            return self.runs.snapshot(now)
+            return self.ownership.runs.snapshot(now)
 
     async def capture(self, device, options, entities):
-        if device in self.records:
-            return self.records[device]
+        if device in self.ownership.records:
+            return self.ownership.records[device]
         originals = {entity: (self.state(entity).attributes["temperature"] if entity.startswith("climate.")
                               else self.state(entity).state) for entity in entities if entity}
-        record = {"options": deepcopy(options), "originals": originals}
-        self.records[device] = record
-        await self.save()
-        return record
+        if self.verifying:
+            # Verification owns only a hypothetical record, never a disk write.
+            record = {"options": deepcopy(options), "originals": originals}
+            self.ownership.records[device] = record
+            return record
+        return await self.ownership.capture(device, options, originals)
 
     async def restore(self, device):
         self.device = device
-        record = self.records.get(device)
+        record = self.ownership.records.get(device)
         if record is None:
             return
         options, original = record["options"], record["originals"]
@@ -586,7 +538,7 @@ class ScheduledController:
                         changed.add(entity)
                 if changed:
                     record["externally_changed"] = sorted(changed)
-                    self.overrides[device] = EXTERNAL_CHANGE
+                    self.ownership.overrides[device] = EXTERNAL_CHANGE
                     await self.save()
                 mapping = options["device_control_mappings"][device.removeprefix("device:")]
                 if mapping["control_type"] == "switch_schedule":
@@ -628,7 +580,7 @@ class ScheduledController:
             elif device == "pool":
                 # Never write temperature registers, even from a pre-upgrade journal.
                 if any(entity.split(".")[0] not in ("switch", "input_boolean") for entity in original):
-                    self.retired_pool_temperature_settings = {entity: value for entity, value in original.items()
+                    self.ownership.retired_pool_temperature_settings = {entity: value for entity, value in original.items()
                         if entity.split(".")[0] not in ("switch", "input_boolean")}
                     self.report("pool", "legacy_control_retired",
                         reason="Old temperature control has been removed. Check the heater's own temperature settings; SHS will only use its switch.",
@@ -644,7 +596,7 @@ class ScheduledController:
                     if entity != switch:
                         await self.command(entity, finite(value))
                 await self.command(switch, original[switch])
-            del self.records[device]
+            del self.ownership.records[device]
             await self.save()
         except Exception as err:
             # A failed service may recover without any entity event. Retain the
@@ -804,8 +756,8 @@ class ScheduledController:
         since = datetime.fromisoformat(previous) if previous else now
         deadline = since + timedelta(seconds=OBSERVATION_GRACE_SECONDS)
         if purpose is None:
-            purpose = "hand it back" if self.records.get(device, {}).get("restoration_pending") else "resume the plan"
-        hold = "SHS holds the last setting it sent and will" if device in self.records else "SHS will"
+            purpose = "hand it back" if self.ownership.records.get(device, {}).get("restoration_pending") else "resume the plan"
+        hold = "SHS holds the last setting it sent and will" if device in self.ownership.records else "SHS will"
         details = {"retry_automatically": True, "unavailable_since": since.isoformat(),
                    **({"plan_id": plan.get("plan_id"), "slot_start": slot["start"]} if slot and plan else {})}
         if now < deadline:
@@ -824,7 +776,7 @@ class ScheduledController:
 
     def check_targets(self, device, targets):
         """A new control entity is adopted through the select, never by a silent release."""
-        record = self.records.get(device)
+        record = self.ownership.records.get(device)
         if record is None:
             return
         # A pre-upgrade pool journal also named temperature settings, which are never written.
@@ -853,7 +805,7 @@ class ScheduledController:
 
     async def hold_inhibit_limit(self, device, options):
         """Without a plan every setting is held, but a paused device still gets its permitted run."""
-        record = self.records.get(device)
+        record = self.ownership.records.get(device)
         mapping = options.get("device_control_mappings", {}).get(device.removeprefix("device:"), {})
         if not device.startswith("device:") or not record or mapping.get("control_type") != "permit_inhibit":
             return False
@@ -1044,7 +996,7 @@ class ScheduledController:
         if set(targets) & system_targets:
             raise ValueError("actuator is assigned to a system controller")
         self.check_targets(device, targets)
-        record = self.records.get(device)
+        record = self.ownership.records.get(device)
         if record:
             for entity in record.get("last_commands", {}):
                 # Unavailable is unknown, never an external change.
@@ -1052,10 +1004,10 @@ class ScheduledController:
             changed = [entity for entity, value in record.get("last_commands", {}).items() if not self.matches(entity, value)]
             if changed:
                 record["externally_changed"] = changed
-                self.overrides[device] = EXTERNAL_CHANGE
+                self.ownership.overrides[device] = EXTERNAL_CHANGE
                 await self.save()
                 await self.restore(device)
-                return {"state": "overridden", "reason": self.overrides[device]}
+                return {"state": "overridden", "reason": self.ownership.overrides[device]}
         values = {}
         limited = None
         kind = command["type"]
@@ -1147,8 +1099,8 @@ class ScheduledController:
         if not expected:
             raise ValueError("no executable operation catalogue for this device")
         attempt = evaluation_record(device, "control_verification", options, slot, plan, INTEGRATION_VERSION, expected)
-        owned, overrides = self.records, self.overrides
-        self.records, self.overrides = {}, deepcopy(overrides)
+        owned, overrides = self.ownership.records, self.ownership.overrides
+        self.ownership.records, self.ownership.overrides = {}, deepcopy(overrides)
         self.verifying, self.verification_commands, self.shadow = True, [], {}
         self.verification_observations = {}
         gap = None
@@ -1182,7 +1134,7 @@ class ScheduledController:
             attempt["commands"] = self.verification_commands
             attempt["observations"] = self.verification_observations
             self.verifying = False
-            self.records, self.overrides = owned, overrides
+            self.ownership.records, self.ownership.overrides = owned, overrides
         group_id = await self.verification.append(attempt)
         if self.diagnostic_evaluation is not None:
             self.diagnostic_evaluation["verification_group_id"] = group_id
@@ -1205,7 +1157,7 @@ class ScheduledController:
         self.diagnostic_evaluation = evaluation_record(
             device, device_mode(options, device), options, slot, plan, INTEGRATION_VERSION)
         self.diagnostic_evaluation.update(trigger=trigger, evidence_kind="runtime",
-            ownership_before=deepcopy(self.records.get(device)),
+            ownership_before=deepcopy(self.ownership.records.get(device)),
             status_before=deepcopy(self.status.get(device)))
 
     async def finish_diagnostic_evaluation(self):
@@ -1215,8 +1167,8 @@ class ScheduledController:
         device = attempt["device"]
         attempt.update(completed_at=datetime.now(timezone.utc).isoformat(),
             outcome="evaluated", result=deepcopy(self.status.get(device, {})),
-            ownership_after=deepcopy(self.records.get(device)),
-            override=self.overrides.get(device), failure_latched=device in self.failed)
+            ownership_after=deepcopy(self.ownership.records.get(device)),
+            override=self.ownership.overrides.get(device), failure_latched=device in self.failed)
         try:
             await self.verification.append(attempt, runtime=True)
             self.diagnostics_error = None
@@ -1233,11 +1185,11 @@ class ScheduledController:
         if __package__:
             from .controller_observations import diagnostic_inventory
             from .presentation import equipment_present
-            from .operating_modes import system_device_keys
+            from .shs_core.operating_modes import system_device_keys
         else:
             from controller_observations import diagnostic_inventory
             from presentation import equipment_present
-            from operating_modes import system_device_keys
+            from shs_core.operating_modes import system_device_keys
         try:
             async with self.lock:
                 if self.closed:
@@ -1263,16 +1215,11 @@ class ScheduledController:
 
     async def async_start(self, *, reason="integration_load"):
         try:
-            saved = await self.store.async_load() or {}
-            runs = MinimumRuns(saved.get("runs"))
+            await self.ownership.load()
         except Exception as err:
             for device in DEVICES:
                 self.report(device, "fault", reason=f"cannot load restoration journal: {err}")
             return
-        self.retired_pool_temperature_settings = saved.get("retired_pool_temperature_settings", {})
-        self.records = saved.get("records", {})
-        self.overrides = saved.get("overrides", {})
-        self.runs = runs
         journal_error = None
         if self.verification is not None:
             try:
@@ -1317,12 +1264,12 @@ class ScheduledController:
             self.active_plan_id = plan.get("plan_id")
             mappings = options.get("device_control_mappings", {})
             generic = {"device:" + key for key, mapping in mappings.items() if device_mode(options, "device:" + key) in EXECUTING_MODES}
-            generic.update(key for key in self.records if key.startswith("device:"))
+            generic.update(key for key in self.ownership.records if key.startswith("device:"))
             if self.scheduler is not None:
                 self.scheduler.retain_devices(set(DEVICES) | generic)
             requested = []
             previous_authority = (self.requested_types, self.requested_systems, self.requested_error)
-            if generic or any(device_mode(options, d) in EXECUTING_MODES for d in DEVICES) or self.records:
+            if generic or any(device_mode(options, d) in EXECUTING_MODES for d in DEVICES) or self.ownership.records:
                 self.requested_types = {}
                 self.requested_systems = set()
                 self.requested_error = None
@@ -1343,14 +1290,14 @@ class ScheduledController:
                 # A shared ownership change or cache failure affects all owners,
                 # even if it was discovered during one device's sensor event.
                 devices = None
-            for device in tuple(self.overrides):
+            for device in tuple(self.ownership.overrides):
                 # Leaving Controlling on the select clears an external-change latch.
                 if device_mode(options, device) != "controlling":
-                    del self.overrides[device]
+                    del self.ownership.overrides[device]
                     await self.save()
-            self.runs.configure(options, requested, datetime.now(timezone.utc))
-            self.runs.observe(self.hass.states.get, datetime.now(timezone.utc))
-            if self.runs.dirty:
+            self.ownership.runs.configure(options, requested, datetime.now(timezone.utc))
+            self.ownership.runs.observe(self.hass.states.get, datetime.now(timezone.utc))
+            if self.ownership.runs.dirty:
                 await self.save()
             if self.scheduler is not None:
                 self.scheduler.watch_runs()
@@ -1377,16 +1324,16 @@ class ScheduledController:
                 key = repr((options, plan.get("plan_id"), slot))
                 self.metrics.begin_device(device, {
                     "mode": device_mode(options, device), "shared": metrics_context,
-                    "override": self.overrides.get(device),
-                    "ownership": self.records.get(device), "failed": self.failed.get(device),
+                    "override": self.ownership.overrides.get(device),
+                    "ownership": self.ownership.records.get(device), "failed": self.failed.get(device),
                 })
                 self.begin_diagnostic_evaluation(device, options, slot, plan, trigger)
                 try:
-                    record = self.records.get(device)
+                    record = self.ownership.records.get(device)
                     inactive = self.inactive_status(device, options)
                     if record and device_mode(options, device) == "control_verification":
                         # Relinquishing permission must never change the hardware.
-                        del self.records[device]
+                        del self.ownership.records[device]
                         self.failed.pop(device, None)
                         await self.save()
                         record = None
@@ -1473,7 +1420,7 @@ class ScheduledController:
             self.scheduler.pause()
         try:
             async with self.lock:
-                if self.runs.dirty:
+                if self.ownership.runs.dirty:
                     await self.save()
                 # Stopping is half of a restart: every device keeps the last setting
                 # SHS sent, and its journalled ownership resumes on the next start.

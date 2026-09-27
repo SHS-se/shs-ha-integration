@@ -1014,10 +1014,10 @@ def require_fresh_source(
 
 if __package__:
     from .battery_commands import validate_battery_command
-    from .device_commands import validate_commands
+    from .shs_core.device_commands import validate_commands
 else:
     from battery_commands import validate_battery_command
-    from device_commands import validate_commands
+    from shs_core.device_commands import validate_commands
 
 
 def validate_plan_contract(

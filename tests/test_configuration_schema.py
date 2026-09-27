@@ -10,7 +10,7 @@ from configuration_schema import prepare_options, resolve_configuration, save_de
 from migration import migrate_options
 from configuration_fields import _control_fields
 from presentation import system_fields
-from device_commands import execution_setup_errors
+from shs_core.device_commands import execution_setup_errors
 
 ENTITIES = {key: {'state': '20', 'attributes': {}} for key in
             ('sensor.old', 'sensor.new', 'climate.a', 'climate.b', 'number.current')}

@@ -5,13 +5,13 @@ import re
 if __package__:
     from .optimisation import validate_plan_contract, OptimisationInputError
     from .configuration_fields import _configuration_sections, _control_fields, LABELS
-    from .device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_control_errors
-    from .device_commands import execution_setup_errors
+    from .shs_core.device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_control_errors
+    from .shs_core.device_commands import execution_setup_errors
 else:
     from optimisation import validate_plan_contract, OptimisationInputError
     from configuration_fields import _configuration_sections, _control_fields, LABELS
-    from device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_control_errors
-    from device_commands import execution_setup_errors
+    from shs_core.device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_control_errors
+    from shs_core.device_commands import execution_setup_errors
 
 
 
@@ -41,9 +41,9 @@ def operational_status(plan, mode, missing, now, *, options=None, validate=valid
             scope_changed = False
             if options is not None:
                 if __package__:
-                    from .operating_modes import operating_mode_identity
+                    from .shs_core.operating_modes import operating_mode_identity
                 else:
-                    from operating_modes import operating_mode_identity
+                    from shs_core.operating_modes import operating_mode_identity
                 modes = operating_mode_identity(options, plan.get("operating_scope", {}).get("device_owners", {}).values())
                 scope_changed = plan.get("operating_scope", {}).get("modes") != modes
                 if "controlling" in plan.get("operating_scope", {}).get("modes", {}).values():
@@ -138,9 +138,9 @@ def equipment_present(options, system, devices, configured_keys=()):
 def complete_device_views(devices, options, choices, status, plan, controllers, entity_names, area_names, now, configured_keys=()):
     """Augment one inventory with website choice, setup owner and local permission."""
     if __package__:
-        from .operating_modes import device_mode, system_device_keys, system_member_keys
+        from .shs_core.operating_modes import device_mode, system_device_keys, system_member_keys
     else:
-        from operating_modes import device_mode, system_device_keys, system_member_keys
+        from shs_core.operating_modes import device_mode, system_device_keys, system_member_keys
     devices = deepcopy(devices)
     for device in devices:
         key = device.get("statistic_id") or device["key"]

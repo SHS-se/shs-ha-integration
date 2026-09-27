@@ -17,7 +17,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import (
+from .shs_core.const import (
     CONF_BASE_URL,
     CONF_CUSTOMER_NAME,
     CONF_DEVICE_TOKEN_ID,
@@ -31,7 +31,7 @@ from .const import (
     backend_attributes,
 )
 from .configuration import resolved_options
-from .operating_modes import device_mode
+from .shs_core.operating_modes import device_mode
 from .presentation import controller_explanation
 from .optimisation import OptimisationInputError, validate_plan_contract
 from .coordinator import ShsStatusCoordinator

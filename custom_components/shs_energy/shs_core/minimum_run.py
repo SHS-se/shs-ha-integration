@@ -15,10 +15,7 @@ def minimum_run_errors(mapping):
 
 
 def run_bindings(options, models):
-    if __package__:
-        from .device_controls import mapped_planning_path
-    else:
-        from device_controls import mapped_planning_path
+    from .device_controls import mapped_planning_path
     models = {model["key"]: model for model in models}
     result = {}
     for key, mapping in options.get("device_control_mappings", {}).items():

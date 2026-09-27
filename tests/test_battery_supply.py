@@ -4,7 +4,7 @@ import sys
 import unittest
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
 from shs_core.battery_supply import SupplyScope, PowerReading, measured_supply, proportional_supply, observe_supply
-from operating_modes import reconcile_admissions, planning_devices
+from shs_core.operating_modes import reconcile_admissions, planning_devices
 from configuration_schema import prepare_options
 
 

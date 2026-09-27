@@ -115,7 +115,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
         self.assertEqual(self.calls, [])
         self.assertIn('plan_replaced', self.controller.metrics.triggers)
-        self.assertIn('battery', self.controller.records)
+        self.assertIn('battery', self.controller.ownership.records)
 
     async def test_short_pool_temperature_gaps_hold_without_reapplying(self):
         await self.start_live_pool()
@@ -149,7 +149,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.advance(5 * 60)
         await self.drain()
         self.assertEqual(self.controller.status['pool']['state'], 'fault')
-        self.assertIn('pool', self.controller.records)
+        self.assertIn('pool', self.controller.ownership.records)
         self.assertEqual((self.states['number.start'].state, self.states['number.stop'].state), ('29.5', '30'))
         self.assertEqual(self.calls, [])
 
@@ -161,7 +161,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.advance(900)
         self.coordinator.current_plan_slot = None
         await self.controller.async_tick()
-        self.assertIn('pool', self.controller.records)
+        self.assertIn('pool', self.controller.ownership.records)
         self.assertIn('holding', self.controller.status['pool']['reason'])
         self.assertEqual(self.calls, [])
 
@@ -183,7 +183,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.event('switch.pool')
         await self.drain()
         self.assertIn(('pool', 'observation_gap'), self.scheduler.deadlines)
-        self.assertNotIn('restoration_pending', self.controller.records['pool'])
+        self.assertNotIn('restoration_pending', self.controller.ownership.records['pool'])
 
     async def test_pool_switch_gap_resumes_on_its_return_and_escalates_only_if_it_stays_away(self):
         await self.start_live_pool()
@@ -219,7 +219,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.event('sensor.water')
         await self.drain()
         self.assertEqual(self.controller.status['pool']['state'], 'fault')
-        self.assertIn('pool', self.controller.records)
+        self.assertIn('pool', self.controller.ownership.records)
         self.assertNotIn(('pool', 'observation_gap'), self.scheduler.deadlines)
         self.assertEqual(self.calls, [])
 
@@ -240,7 +240,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.event('sensor.water')
         await self.drain()
         self.assertEqual(self.controller.status['pool']['state'], 'fault')
-        self.assertIn('pool', self.controller.records)
+        self.assertIn('pool', self.controller.ownership.records)
         self.assertEqual(self.calls, [])
 
     async def test_pool_gap_ends_when_control_is_disabled(self):
@@ -250,7 +250,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         await self.drain()
         self.options['device_modes']['$pool'] = 'planning'
         await self.controller.async_tick()
-        self.assertNotIn('pool', self.controller.records)
+        self.assertNotIn('pool', self.controller.ownership.records)
         self.assertNotIn(('pool', 'observation_gap'), self.scheduler.deadlines)
 
     async def test_a_reading_lost_during_a_write_holds_the_write(self):
@@ -274,7 +274,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         await self.drain()
         self.assertTrue(failed)
         self.assertEqual(self.controller.status['pool']['state'], 'pending')
-        self.assertIn('pool', self.controller.records)
+        self.assertIn('pool', self.controller.ownership.records)
         self.assertEqual(self.states['switch.pool'].state, 'on', 'the accepted write is not undone')
         self.assertEqual(self.states['number.start'].state, '29.5')
 
@@ -295,7 +295,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         await self.drain()
         self.assertEqual(self.controller.status['pool']['state'], 'pending')
         self.assertEqual(self.controller.status['pool']['fix']['entity_id'], 'sensor.raw')
-        self.assertIn('pool', self.controller.records)
+        self.assertIn('pool', self.controller.ownership.records)
         self.assertEqual(self.calls, [])
 
     async def test_quiet_controller_has_no_five_second_sweep_and_changes_are_scoped(self):
@@ -462,7 +462,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['heater'] = 'monitoring'
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertNotIn('device:heater', self.controller.records)
+        self.assertNotIn('device:heater', self.controller.ownership.records)
         self.assertNotIn(('device:heater', 'minimum_run:switch.heater'), self.scheduler.deadlines)
 
     async def test_minimum_run_deadline_retries_without_a_sensor_event(self):
@@ -489,7 +489,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.states['switch.pool'].state = 'on'
         self.event('switch.pool')
         await self.drain()
-        self.assertEqual(self.controller.runs.records['pool']['since'], self.now.isoformat())
+        self.assertEqual(self.controller.ownership.runs.records['pool']['since'], self.now.isoformat())
         self.options['device_modes']['$pool'] = 'controlling'
         self.scheduler.coordinator_updated()
         await self.drain()
@@ -515,7 +515,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.hass.services.async_call = service
         self.advance(5)
         await self.drain()
-        self.assertNotIn('pool', self.controller.records)
+        self.assertNotIn('pool', self.controller.ownership.records)
         self.assertNotIn(('pool', 'restoration_retry'), self.scheduler.deadlines)
         self.assertEqual(float(self.states['number.start'].state), 29.5)
 
@@ -526,12 +526,12 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['heater'] = 'planning'
         self.scheduler.coordinator_updated()
         await self.drain()
-        self.assertTrue(self.controller.records['device:heater']['restoration_pending'])
+        self.assertTrue(self.controller.ownership.records['device:heater']['restoration_pending'])
         self.assertNotIn(('device:heater', 'restoration_retry'), self.scheduler.deadlines)
         self.advance(60)
         await self.drain()
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertNotIn('device:heater', self.controller.records)
+        self.assertNotIn('device:heater', self.controller.ownership.records)
 
     async def test_inactive_device_keeps_minimum_run_observations(self):
         self.configure_heater()
@@ -690,12 +690,12 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def test_shared_authority_failure_during_one_device_event_holds_all_owners(self):
         self.options['device_modes'] = {'$pool': 'controlling', '$battery': 'controlling'}
         await self.controller.async_start()
-        self.assertEqual(set(self.controller.records), {'pool', 'battery'})
+        self.assertEqual(set(self.controller.ownership.records), {'pool', 'battery'})
         self.calls.clear()
         self.coordinator.async_cached_device_configuration.side_effect = ValueError('bad cache')
         self.event('sensor.water')
         await self.drain()
-        self.assertEqual(set(self.controller.records), {'pool', 'battery'})
+        self.assertEqual(set(self.controller.ownership.records), {'pool', 'battery'})
         for device in ('battery', 'pool'):
             self.assertIn('could not be read', self.controller.status[device]['reason'])
         self.assertEqual(self.calls, [])

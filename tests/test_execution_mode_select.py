@@ -11,8 +11,8 @@ from unittest.mock import Mock
 
 ROOT = Path(__file__).parents[1] / 'custom_components' / 'shs_energy'
 sys.path.append(str(ROOT))
-from operating_modes import device_mode, execution_mode_options
-import const
+from shs_core.operating_modes import device_mode, execution_mode_options
+from shs_core import const
 
 
 def load_adapter(filename, namespace):
@@ -210,7 +210,7 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_schedule_view_removes_website_monitoring_and_local_exclusion(self):
         from presentation import complete_device_views
-        from device_controls import apply_planner_support, mapping_report, is_room_thermal_control, mapped_planning_path
+        from shs_core.device_controls import apply_planner_support, mapping_report, is_room_thermal_control, mapped_planning_path
         from configuration_fields import _control_fields
         from test_device_controls import _battery
         r=Rig();r.entry.options.update(_battery())

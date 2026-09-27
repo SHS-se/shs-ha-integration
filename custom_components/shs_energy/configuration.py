@@ -19,7 +19,7 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from .const import (
+from .shs_core.const import (
     CONFIGURABLE_CATEGORIES,
     OPT_AUTOMATIC_SETUP,
     OPT_BATTERY_CAPACITY_KWH,
@@ -42,7 +42,7 @@ from .const import (
     OPT_PV_FORECAST_ENTITIES,
 )
 from .configuration_schema import configuration_defaults, resolve_configuration
-from .device_controls import is_room_thermal_control
+from .shs_core.device_controls import is_room_thermal_control
 from .optimisation import suggested_device_planning, suggested_load_type
 
 

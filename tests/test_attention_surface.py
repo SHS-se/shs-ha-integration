@@ -25,7 +25,7 @@ COORDINATOR = (PACKAGE / "coordinator.py").read_text(encoding="utf-8")
 FRONTEND = (
     PACKAGE / "frontend" / "shs-energy-config-panel.js"
 ).read_text(encoding="utf-8")
-CONST = (PACKAGE / "const.py").read_text(encoding="utf-8")
+CONST = (PACKAGE / "shs_core/const.py").read_text(encoding="utf-8")
 
 
 class AttentionSurfaceTests(unittest.TestCase):

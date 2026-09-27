@@ -11,7 +11,7 @@ import unittest
 import test_controller as fixtures
 from test_controller import State
 from controller import ScheduledController
-from command_fixture import command_transport
+from command_fixture import native_executor
 from verification import VerificationJournal
 
 
@@ -36,7 +36,7 @@ class Continuity(unittest.IsolatedAsyncioTestCase):
 
     def restarted(self):
         """A new process, as after an HA restart or an integration update."""
-        controller = ScheduledController(self.hass, self.coordinator, self.store, self.controller.options, command_transport=command_transport())
+        controller = ScheduledController(self.hass, self.coordinator, self.store, self.controller.options, native_executor=native_executor(self.hass))
         controller.confirm = self.controller.confirm
         controller.verification = VerificationJournal(fixtures.Store(), fixtures.Store())
         controller.device = 'battery'
@@ -69,8 +69,8 @@ class GenericDeviceTests(Continuity):
         self.states['switch.heater'] = State('unavailable')
         await self.controller.async_tick()
         self.assertEqual(self.status()['state'], 'pending', self.status())
-        self.assertNotIn('device:heater', self.controller.overrides)
-        self.assertNotIn('restoration_pending', self.controller.records['device:heater'])
+        self.assertNotIn('device:heater', self.controller.ownership.overrides)
+        self.assertNotIn('restoration_pending', self.controller.ownership.records['device:heater'])
         self.states['switch.heater'] = State('off')
         await self.controller.async_tick()
         self.assertEqual(self.status()['state'], 'commanded', self.status())
@@ -84,7 +84,7 @@ class GenericDeviceTests(Continuity):
         await self.controller.async_tick()
         self.assertEqual(self.status()['state'], 'fault', self.status())
         self.assertTrue(self.status()['retry_automatically'])
-        self.assertNotIn('device:heater', self.controller.overrides)
+        self.assertNotIn('device:heater', self.controller.ownership.overrides)
         self.assertEqual(self.calls, [])
 
     async def test_a_genuine_external_change_latches_until_the_select_leaves_controlling(self):
@@ -97,7 +97,7 @@ class GenericDeviceTests(Continuity):
         self.assertEqual(self.status()['state'], 'overridden')
         self.options['device_modes']['heater'] = 'control_verification'
         await self.controller.async_tick()
-        self.assertNotIn('device:heater', self.controller.overrides)
+        self.assertNotIn('device:heater', self.controller.ownership.overrides)
         self.options['device_modes']['heater'] = 'controlling'
         await self.controller.async_tick()
         self.assertEqual(self.status()['state'], 'commanded', self.status())
@@ -111,12 +111,12 @@ class GenericDeviceTests(Continuity):
         await controller.async_start()
         self.assertEqual(self.calls, [])
         self.assertEqual(self.status(controller)['state'], 'commanded', self.status(controller))
-        self.assertEqual(controller.records['device:heater']['originals'], {'switch.heater': 'on'})
+        self.assertEqual(controller.ownership.records['device:heater']['originals'], {'switch.heater': 'on'})
         # Verification relinquishes ownership without restoring the baseline.
         self.options['device_modes']['heater'] = 'control_verification'
         await controller.async_tick()
         self.assertEqual(self.calls, [])
-        self.assertNotIn('device:heater', controller.records)
+        self.assertNotIn('device:heater', controller.ownership.records)
 
     async def test_a_restart_before_the_switch_reports_waits_for_it(self):
         await self.start()
@@ -125,7 +125,7 @@ class GenericDeviceTests(Continuity):
         controller = self.restarted()
         await controller.async_start()
         self.assertEqual(self.status(controller)['state'], 'pending', self.status(controller))
-        self.assertNotIn('device:heater', controller.overrides)
+        self.assertNotIn('device:heater', controller.ownership.overrides)
         self.states['switch.heater'] = State('off')
         await controller.async_tick()
         self.assertEqual(self.status(controller)['state'], 'commanded')
@@ -136,17 +136,17 @@ class GenericDeviceTests(Continuity):
         self.slot['device_commands']['heater'] = {'type': 'unavailable', 'reason': 'No executable planning model for this device'}
         await self.controller.async_tick()
         self.assertEqual(self.status()['state'], 'unsupported', self.status())
-        self.assertIn('device:heater', self.controller.records)
+        self.assertIn('device:heater', self.controller.ownership.records)
         self.assertEqual(self.calls, [])
 
     async def test_the_maximum_pause_allows_a_quarter_of_running_while_keeping_control(self):
         await self.start()
-        self.controller.records['device:heater']['inhibited_since'] = (
+        self.controller.ownership.records['device:heater']['inhibited_since'] = (
             datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
         await self.controller.async_tick()
         self.assertEqual(self.status()['state'], 'limited', self.status())
         self.assertEqual(self.calls, [('switch.heater', 'on')])
-        self.assertIn('device:heater', self.controller.records, 'control is kept')
+        self.assertIn('device:heater', self.controller.ownership.records, 'control is kept')
         self.calls.clear()
         await self.controller.async_tick()
         self.assertEqual(self.calls, [], 'it may run for the rest of that quarter')
@@ -157,7 +157,7 @@ class GenericDeviceTests(Continuity):
     async def test_the_maximum_pause_also_applies_while_no_plan_is_available(self):
         await self.start()
         self.coordinator.current_plan_slot = None
-        self.controller.records['device:heater']['inhibited_since'] = (
+        self.controller.ownership.records['device:heater']['inhibited_since'] = (
             datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
         await self.controller.async_tick()
         self.assertEqual(self.calls, [('switch.heater', 'on')])
@@ -179,7 +179,7 @@ class EvTests(Continuity):
         self.states['number.current'] = State('unavailable')
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['ev']['state'], 'pending', self.controller.status['ev'])
-        self.assertNotIn('restoration_pending', self.controller.records['ev'])
+        self.assertNotIn('restoration_pending', self.controller.ownership.records['ev'])
         self.states['number.current'] = State(10, min=5, max=16, step=1, unit_of_measurement='A')
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['ev']['state'], 'commanded', self.controller.status['ev'])
@@ -190,7 +190,7 @@ class EvTests(Continuity):
         self.states['sensor.ev_soc'].last_reported -= timedelta(minutes=16)
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['ev']['state'], 'pending', self.controller.status['ev'])
-        self.assertIn('ev', self.controller.records)
+        self.assertIn('ev', self.controller.ownership.records)
         self.assertEqual(self.calls, [])
 
     async def test_a_restart_keeps_the_vehicle_charging(self):
@@ -226,7 +226,7 @@ class PoolTests(Continuity):
         self.states['sensor.water'].last_reported -= timedelta(minutes=16)
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'pending', self.controller.status['pool'])
-        self.assertIn('pool', self.controller.records)
+        self.assertIn('pool', self.controller.ownership.records)
         later(self, 6)
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'fault', self.controller.status['pool'])
@@ -237,7 +237,7 @@ class PoolTests(Continuity):
         self.coordinator.current_plan_slot = None
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
-        self.assertIn('pool', self.controller.records)
+        self.assertIn('pool', self.controller.ownership.records)
         self.assertIn('holding', self.controller.status['pool']['reason'])
 
     async def test_unreadable_website_choices_hold_every_device(self):
@@ -245,7 +245,7 @@ class PoolTests(Continuity):
         self.coordinator.async_cached_device_configuration = AsyncMock(side_effect=RuntimeError('bad cache'))
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
-        self.assertIn('pool', self.controller.records)
+        self.assertIn('pool', self.controller.ownership.records)
 
     async def test_an_unrelated_configuration_change_hands_nothing_back(self):
         await self.start()
@@ -275,5 +275,5 @@ class PoolTests(Continuity):
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
-        self.assertNotIn('pool', self.controller.records)
+        self.assertNotIn('pool', self.controller.ownership.records)
         self.assertEqual(self.controller.status['pool']['state'], 'verified', self.controller.status['pool'])

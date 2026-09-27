@@ -26,7 +26,7 @@ from api_contract import (  # noqa: E402
 API = (MODULE_ROOT / "api.py").read_text(encoding="utf-8")
 COORDINATOR = (MODULE_ROOT / "coordinator.py").read_text(encoding="utf-8")
 INIT = (MODULE_ROOT / "__init__.py").read_text(encoding="utf-8")
-CONST = (MODULE_ROOT / "const.py").read_text(encoding="utf-8")
+CONST = (MODULE_ROOT / "shs_core/const.py").read_text(encoding="utf-8")
 
 REQUEST_ID = "2f1c0c74-9d31-4f0e-9a45-9c6f2f5f0a11"
 

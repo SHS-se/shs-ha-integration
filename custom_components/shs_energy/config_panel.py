@@ -18,7 +18,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.json import json_bytes
 
-from . import const as shs_const
+from .shs_core import const as shs_const
 from .refresh import refresh_in_progress, set_reloading
 from .api import ShsApiError
 from .api_contract import INTEGRATION_VERSION
@@ -37,7 +37,7 @@ from .presentation import timeline, system_fields, device_name, device_readiness
 from .configuration_schema import (
     prepare_options, save_device,
 )
-from .device_controls import (
+from .shs_core.device_controls import (
     room_thermal_zones,
 )
 

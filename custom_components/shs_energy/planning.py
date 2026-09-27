@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Callable, Optional
 
 try:  # pragma: no cover - exercised by both import paths
-    from .const import (
+    from .shs_core.const import (
         EV_CHARGE_EFFICIENCY,
         EU_AC_PHASE_COUNT,
         EU_AC_PHASE_VOLTAGE,
@@ -36,10 +36,10 @@ try:  # pragma: no cover - exercised by both import paths
         OPT_EV_KWH_PER_KM,
         DEFAULT_EV_KWH_PER_KM,
     )
-    from .const import (
+    from .shs_core.const import (
         OPTIMISATION_PROFILE_DAYS,
     )
-    from .device_controls import CONTROL_TYPES, planning_path, mapped_planning_path
+    from .shs_core.device_controls import CONTROL_TYPES, planning_path, mapped_planning_path
     from .optimisation import (
         OptimisationInputError,
         REMEDY_DEFECT,
@@ -53,7 +53,7 @@ try:  # pragma: no cover - exercised by both import paths
     )
 except ImportError:  # The test suite imports these helpers as flat modules,
     # without Home Assistant installed, so the package parent does not exist.
-    from const import (  # type: ignore[no-redef]
+    from shs_core.const import (  # type: ignore[no-redef]
         EV_CHARGE_EFFICIENCY,
         EU_AC_PHASE_COUNT,
         EU_AC_PHASE_VOLTAGE,
@@ -70,10 +70,10 @@ except ImportError:  # The test suite imports these helpers as flat modules,
         OPT_EV_KWH_PER_KM,
         DEFAULT_EV_KWH_PER_KM,
     )
-    from const import (  # type: ignore[no-redef]
+    from shs_core.const import (  # type: ignore[no-redef]
         OPTIMISATION_PROFILE_DAYS,
     )
-    from device_controls import (  # type: ignore[no-redef]
+    from shs_core.device_controls import (  # type: ignore[no-redef]
         CONTROL_TYPES,
         planning_path,
         mapped_planning_path,
@@ -745,9 +745,9 @@ def build_operating_scope(options, devices, device_models, device_actuals, horiz
     observed running state persists through the planning horizon.
     """
     if __package__:
-        from .operating_modes import operating_mode_identity, system_member_keys
+        from .shs_core.operating_modes import operating_mode_identity, system_member_keys
     else:
-        from operating_modes import operating_mode_identity, system_member_keys
+        from shs_core.operating_modes import operating_mode_identity, system_member_keys
     from math import isfinite
     owners = system_member_keys(devices, options)
     model_owners = {model["key"]: "$" + owners[model["key"]] if model["key"] in owners else model["key"]

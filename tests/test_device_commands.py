@@ -7,8 +7,8 @@ import unittest
 import test_controller as fixtures
 State = fixtures.State
 from controller import ScheduledController
-from command_fixture import command_transport
-from device_commands import validate_commands
+from command_fixture import native_executor
+from shs_core.device_commands import validate_commands
 
 
 class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -33,7 +33,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['heater'] = 'planning'
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertNotIn('device:heater', self.controller.records)
+        self.assertNotIn('device:heater', self.controller.ownership.records)
 
     async def test_website_exclusion_restores_even_if_old_plan_remains(self):
         await self.controller.async_start()
@@ -48,7 +48,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['device:heater']['state'], 'overridden')
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), command_transport=command_transport())
+        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), native_executor=native_executor(self.hass))
         await other.async_start()
         self.assertEqual(other.status['device:heater']['state'], 'overridden')
         self.assertEqual(self.states['switch.heater'].state, 'on')
@@ -71,11 +71,11 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_maximum_inhibit_permits_while_keeping_control(self):
         await self.controller.async_start()
-        self.controller.records['device:heater']['inhibited_since'] = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
+        self.controller.ownership.records['device:heater']['inhibited_since'] = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'on')
         self.assertEqual(self.controller.status['device:heater']['state'], 'limited')
-        self.assertIn('device:heater', self.controller.records)
+        self.assertIn('device:heater', self.controller.ownership.records)
 
     async def test_setpoint_and_mapping_edit_restore_original_target(self):
         mapping = self.options['device_control_mappings']['heater']
@@ -107,7 +107,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status['state'], 'commanded')
         self.assertNotIn('measured_power_w', status)
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertIn('device:heater', self.controller.records)
+        self.assertIn('device:heater', self.controller.ownership.records)
 
     async def test_service_failure_after_effect_is_fault_and_restores(self):
         original_call = self.hass.services.async_call
@@ -122,7 +122,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status['device:heater']['state'], 'fault')
         self.assertIn('service outcome unknown', self.controller.status['device:heater']['reason'])
         self.assertEqual(self.states['switch.heater'].state, 'off')
-        self.assertIn('device:heater', self.controller.records)
+        self.assertIn('device:heater', self.controller.ownership.records)
 
     async def test_bad_or_missing_device_command_rejected(self):
         models = self.coordinator.optimisation_plan['device_models']
@@ -143,11 +143,11 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['heater'] = 'planning'
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'off')
-        self.assertTrue(self.controller.records['device:heater']['restoration_pending'])
-        self.controller.records['device:heater']['transition_times']['switch.heater'] = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        self.assertTrue(self.controller.ownership.records['device:heater']['restoration_pending'])
+        self.controller.ownership.records['device:heater']['transition_times']['switch.heater'] = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertFalse(self.controller.records)
+        self.assertFalse(self.controller.ownership.records)
 
     async def test_climate_target_acknowledgement_preserves_heating_mode(self):
         self.hass.config = SimpleNamespace(units=SimpleNamespace(temperature_unit='°C'))
@@ -176,7 +176,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state,'off')
         self.assertIn('could not be read', self.controller.status['device:heater']['reason'])
-        self.assertIn('device:heater', self.controller.records)
+        self.assertIn('device:heater', self.controller.ownership.records)
 
     async def test_server_generated_schema_seven_fixture_validates_in_ha(self):
         import json
@@ -194,7 +194,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.coordinator.async_cached_device_configuration.return_value[0]['control_type'] = 'switch_schedule'
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertFalse(self.controller.records)
+        self.assertFalse(self.controller.ownership.records)
 
     async def test_a_release_waits_for_a_missing_actuator_instead_of_marking_it_changed(self):
         await self.controller.async_start()
@@ -202,10 +202,10 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['heater'] = 'monitoring'
         await self.controller.async_tick()
         self.assertFalse(self.controller.eligible('device:heater', self.options))
-        self.assertTrue(self.controller.records['device:heater']['restoration_pending'])
-        self.assertNotIn('device:heater', self.controller.overrides)
+        self.assertTrue(self.controller.ownership.records['device:heater']['restoration_pending'])
+        self.assertNotIn('device:heater', self.controller.ownership.overrides)
         self.assertEqual(self.controller.status['device:heater']['state'], 'pending')
         self.states['switch.heater'] = State('off')
         await self.controller.async_tick()
-        self.assertFalse(self.controller.records)
+        self.assertFalse(self.controller.ownership.records)
         self.assertEqual(self.states['switch.heater'].state, 'on')

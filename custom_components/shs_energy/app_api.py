@@ -7,7 +7,7 @@ from homeassistant.components.http import HomeAssistantView, KEY_HASS, require_a
 
 from .api_contract import INTEGRATION_VERSION
 from .app_projection import PROTOCOL_VERSION, schedule, attention_links
-from .const import DOMAIN
+from .shs_core.const import DOMAIN
 
 
 class AppSnapshotView(HomeAssistantView):

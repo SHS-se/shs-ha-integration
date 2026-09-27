@@ -9,7 +9,7 @@ from unittest.mock import patch
 import unittest
 import test_controller as fixtures
 from controller import ScheduledController
-from command_fixture import command_transport
+from command_fixture import native_executor
 from verification import VerificationJournal
 
 
@@ -38,7 +38,7 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_reconnect_resumes_the_plan_without_touching_the_heater(self):
         await self.controller.async_start()
         self.assertEqual(self.states['switch.pool'].state, 'on')
-        self.assertEqual(self.controller.records['pool']['originals'], {'switch.pool': 'off'})
+        self.assertEqual(self.controller.ownership.records['pool']['originals'], {'switch.pool': 'off'})
         self.calls.clear()
         self.switch('unavailable')
         await self.controller.async_tick()
@@ -48,7 +48,7 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(status['retry_automatically'])
         self.assertIn('unavailable_since', status)
         # Ownership is kept and no handover is queued for the switch's return.
-        self.assertNotIn('restoration_pending', self.controller.records['pool'])
+        self.assertNotIn('restoration_pending', self.controller.ownership.records['pool'])
         self.assertEqual(self.calls, [])
         self.switch('on')
         await self.controller.async_tick()
@@ -64,7 +64,7 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
         self.switch('off')
         await self.controller.async_tick()
         self.assertEqual(self.calls, [('switch.pool', 'on')])
-        self.assertEqual(self.controller.records['pool']['originals'], {'switch.pool': 'off'})
+        self.assertEqual(self.controller.ownership.records['pool']['originals'], {'switch.pool': 'off'})
 
     async def test_a_long_gap_needs_attention_but_still_hands_nothing_back(self):
         await self.controller.async_start()
@@ -77,7 +77,7 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status['state'], 'fault', status)
         self.assertTrue(status['retry_automatically'])
         self.assertIn('more than 5 minutes', status['reason'])
-        self.assertNotIn('restoration_pending', self.controller.records['pool'])
+        self.assertNotIn('restoration_pending', self.controller.ownership.records['pool'])
         self.assertEqual(self.calls, [])
         self.switch('on')
         await self.controller.async_tick()
@@ -100,7 +100,7 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
         self.switch('unavailable')
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_tick()
-        self.assertNotIn('pool', self.controller.records)
+        self.assertNotIn('pool', self.controller.ownership.records)
         self.switch('on')
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
@@ -119,7 +119,7 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_restart_with_journalled_ownership_resumes_without_a_flip(self):
         await self.controller.async_start()
         journal = self.store.saved
-        restarted = ScheduledController(self.hass, self.coordinator, self.store, self.controller.options, command_transport=command_transport())
+        restarted = ScheduledController(self.hass, self.coordinator, self.store, self.controller.options, native_executor=native_executor(self.hass))
         restarted.confirm = self.controller.confirm
         self.store.saved = journal
         self.calls.clear()
@@ -132,7 +132,7 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
         await restarted.async_tick()
         self.assertEqual(self.calls, [], 'the heater kept its setting through the restart')
         self.assertEqual(restarted.status['pool']['state'], 'scheduled')
-        self.assertEqual(restarted.records['pool']['originals'], {'switch.pool': 'off'})
+        self.assertEqual(restarted.ownership.records['pool']['originals'], {'switch.pool': 'off'})
 
 
 class VerificationTests(unittest.IsolatedAsyncioTestCase):

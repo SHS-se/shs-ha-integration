@@ -12,7 +12,7 @@ from planning import unplanned_services
 class PresentationTests(unittest.TestCase):
     def test_no_forecast_or_old_website_refresh_does_not_block_permission_correction(self):
         from test_device_controls import _battery
-        from operating_modes import execution_mode_options
+        from shs_core.operating_modes import execution_mode_options
         options={**self.options, **_battery(), 'device_modes':{'$battery':'control_verification'}}
         choices={'home':{'battery':{'included':True}},'refreshed_at':(self.now-timedelta(days=3)).isoformat()}
         status={'actionable':False,'reason':'No forecast schedule is available'}
@@ -30,7 +30,7 @@ class PresentationTests(unittest.TestCase):
         self.assertFalse(view()[0]['execution_eligibility']['eligible'])
 
     def test_mode_change_retains_actionable_schedule(self):
-        from operating_modes import operating_mode_identity
+        from shs_core.operating_modes import operating_mode_identity
         plan = deepcopy(self.plan)
         plan['operating_scope'] = {'modes': operating_mode_identity(self.options), 'device_owners': {}}
         options = {**self.options, 'device_modes': {'$battery': 'controlling'}}
@@ -113,7 +113,7 @@ class PresentationTests(unittest.TestCase):
 
     def test_room_zones_ignore_the_planned_battery_and_other_system_entries(self):
         from test_device_controls import _battery
-        from device_controls import room_thermal_zones
+        from shs_core.device_controls import room_thermal_zones
         self.options.update(_battery(), ev_enabled=True, ev_connected_entity='binary_sensor.car')
         self.choices['home']['battery'] = {'included': True, 'choice_at': self.now.isoformat()}
         views = self.view(configured_keys=['battery_enabled'])
@@ -257,7 +257,7 @@ class PresentationTests(unittest.TestCase):
         import ast
         from types import SimpleNamespace
         from typing import Any
-        from device_controls import planning_path
+        from shs_core.device_controls import planning_path
         tree = ast.parse((Path(__file__).parents[1] / 'custom_components/shs_energy/coordinator.py').read_text())
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'ShsStatusCoordinator')
         function = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == '_record_device_exchange')

@@ -10,38 +10,21 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any
 
-try:  # pragma: no cover - package in HA, flat module in the pure test suite
-    from .const import (
-        OPT_BATTERY_CONTROL_ENABLED,
-        OPT_BATTERY_ENABLED,
-        OPT_BATTERY_MODE_CHARGE,
-        OPT_BATTERY_MODE_DISCHARGE,
-        OPT_BATTERY_MODE_ENTITY,
-        OPT_BATTERY_MODE_IDLE,
-        OPT_BATTERY_CHARGE_LIMIT_ENTITY,
-        OPT_BATTERY_DISCHARGE_LIMIT_ENTITY,
-        OPT_BATTERY_CHARGING_ENTITY,
-        OPT_BATTERY_DISCHARGING_ENTITY,
-        OPT_BATTERY_MODE_BASELINE,
-        OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
-        OPT_BATTERY_SOC_ENTITY,
-    )
-except ImportError:  # pragma: no cover - flat import path
-    from const import (  # type: ignore[no-redef]
-        OPT_BATTERY_CONTROL_ENABLED,
-        OPT_BATTERY_ENABLED,
-        OPT_BATTERY_MODE_CHARGE,
-        OPT_BATTERY_MODE_DISCHARGE,
-        OPT_BATTERY_MODE_ENTITY,
-        OPT_BATTERY_MODE_IDLE,
-        OPT_BATTERY_CHARGE_LIMIT_ENTITY,
-        OPT_BATTERY_DISCHARGE_LIMIT_ENTITY,
-        OPT_BATTERY_CHARGING_ENTITY,
-        OPT_BATTERY_DISCHARGING_ENTITY,
-        OPT_BATTERY_MODE_BASELINE,
-        OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
-        OPT_BATTERY_SOC_ENTITY,
-    )
+from .const import (
+    OPT_BATTERY_CONTROL_ENABLED,
+    OPT_BATTERY_ENABLED,
+    OPT_BATTERY_MODE_CHARGE,
+    OPT_BATTERY_MODE_DISCHARGE,
+    OPT_BATTERY_MODE_ENTITY,
+    OPT_BATTERY_MODE_IDLE,
+    OPT_BATTERY_CHARGE_LIMIT_ENTITY,
+    OPT_BATTERY_DISCHARGE_LIMIT_ENTITY,
+    OPT_BATTERY_CHARGING_ENTITY,
+    OPT_BATTERY_DISCHARGING_ENTITY,
+    OPT_BATTERY_MODE_BASELINE,
+    OPT_BATTERY_POWER_MEASUREMENT_ENTITY,
+    OPT_BATTERY_SOC_ENTITY,
+)
 
 CONTROL_TYPES = (
     "switch_schedule",
@@ -50,10 +33,7 @@ CONTROL_TYPES = (
     "setpoint",
 )
 
-if __package__:
-    from .const import ROOM_AREA_FIELD
-else:
-    from const import ROOM_AREA_FIELD
+from .const import ROOM_AREA_FIELD
 
 _ENTITY_FIELDS_BY_CONTROL_TYPE: dict[str, tuple[str, ...]] = {
     "setpoint": (
@@ -270,10 +250,7 @@ def mapping_errors(
         return ["the saved mapping belongs to a different control type"]
 
     errors: list[str] = []
-    if __package__:
-        from .minimum_run import minimum_run_errors
-    else:
-        from minimum_run import minimum_run_errors
+    from .minimum_run import minimum_run_errors
     for field, messages in minimum_run_errors(mapping).items():
         for message in messages:
             _field_error(errors, field_errors, message, field)
@@ -655,10 +632,7 @@ def pool_control_errors(options, mapping=None, *, field_errors=None):
 
 def pool_control_mapping(options, devices):
     """Resolve the same physical owner as the pool card, without a second binding."""
-    if __package__:
-        from .operating_modes import system_device_keys
-    else:
-        from operating_modes import system_device_keys
+    from .operating_modes import system_device_keys
     owners = system_device_keys(devices, options)
     key = next((key for key, system in owners.items() if system == "pool"), None)
     return key, options.get("device_control_mappings", {}).get(key, {})

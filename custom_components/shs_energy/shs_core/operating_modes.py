@@ -22,10 +22,7 @@ def device_mode(options, device):
 
 def _system_candidates(devices, options):
     """Each pool/EV system's devices, its actuator owner first."""
-    if __package__:
-        from .device_controls import mapped_planning_path
-    else:
-        from device_controls import mapped_planning_path
+    from .device_controls import mapped_planning_path
     result = {}
     for system in ("pool", "ev"):
         candidates = [device for device in devices if mapped_planning_path(

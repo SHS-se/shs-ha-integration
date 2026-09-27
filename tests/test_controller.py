@@ -9,7 +9,7 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from controller import ScheduledController
-from command_fixture import command_transport
+from command_fixture import native_executor
 from configuration_schema import resolve_configuration
 
 
@@ -128,7 +128,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                 for sensor in ('sensor.battery_power', 'binary_sensor.charging', 'binary_sensor.discharging'):
                     self.states[sensor].last_reported = datetime.now(timezone.utc)
         self.hass = SimpleNamespace(states=SimpleNamespace(get=self.states.get), services=SimpleNamespace(async_call=call))
-        self.controller = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), command_transport=command_transport())
+        self.controller = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), native_executor=native_executor(self.hass))
         self.controller.device = "battery"
         # Timeouts are exercised as refusal rather than sleeping in a test.
         async def confirm(predicate, error):
@@ -278,7 +278,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(preview['pool']['basis'], 'current_readings')
         self.assertEqual(self.calls, [])
         self.assertIsNone(self.store.saved)
-        self.assertEqual(self.controller.records, {})
+        self.assertEqual(self.controller.ownership.records, {})
         self.assertEqual(self.controller.verification_commands, [])
         del self.controller.observed_state
         self.options['device_modes'].update({'$battery': 'controlling', '$pool': 'controlling'})
@@ -312,12 +312,12 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.states['sensor.rated_charge'].state = '8.5'
         self.options['device_modes']['$battery'] = 'planning'
-        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), command_transport=command_transport())
+        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: deepcopy(self.options), native_executor=native_executor(self.hass))
         await other.async_start()
         self.assertEqual(self.states['select.mode'].state, 'Baseline')
         self.assertEqual(float(self.states['number.charge_limit'].state), 8.5)
         self.assertEqual(float(self.states['number.discharge_limit'].state), 9.6)
-        self.assertFalse(other.records)
+        self.assertFalse(other.ownership.records)
 
     async def test_ambiguous_old_watt_only_plan_cannot_operate_the_battery(self):
         self.options['device_modes']['$battery'] = 'controlling'
@@ -384,7 +384,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['$battery'] = 'controlling'
         await self.controller.async_start()
         self.assertEqual(self.calls, [])
-        self.assertFalse(self.controller.records)
+        self.assertFalse(self.controller.ownership.records)
         self.assertEqual(self.controller.status['battery']['state'], 'fault')
 
     async def test_all_off_never_writes(self):
@@ -412,7 +412,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.states['number.current'].state, '8.0')
         self.assertEqual(self.states['switch.charge'].state, 'off')
-        self.assertFalse(self.controller.records)
+        self.assertFalse(self.controller.ownership.records)
         self.assertFalse(any('battery' in e or e == 'number.start' for e, _ in self.calls))
 
     async def test_disconnection_and_soc_completion_stop_charging(self):
@@ -437,11 +437,11 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.coordinator.current_plan_slot = None
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.pool'].state, 'on', 'an expired plan holds the last setting')
-        self.assertEqual(self.controller.records['pool']['originals'], {'switch.pool': 'off'})
+        self.assertEqual(self.controller.ownership.records['pool']['originals'], {'switch.pool': 'off'})
         self.options['device_modes']['$pool'] = 'monitoring'
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.pool'].state, 'off')
-        self.assertFalse(self.controller.records)
+        self.assertFalse(self.controller.ownership.records)
 
     async def test_restart_recovers_journal_before_using_new_mapping(self):
         self.options['device_modes']['$pool'] = 'controlling'
@@ -449,11 +449,11 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.options['device_modes']['$pool'] = 'planning'
         self.options['rooms'] = {'office': {'temperature_entity_id': 'sensor.new'}}
-        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: resolve_configuration(self.options), command_transport=command_transport())
+        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: resolve_configuration(self.options), native_executor=native_executor(self.hass))
         await other.async_start()
         self.assertEqual(float(self.states['number.start'].state), 29.5)
         self.assertEqual(float(self.states['number.stop'].state), 30)
-        self.assertFalse(other.records)
+        self.assertFalse(other.ownership.records)
 
     async def test_battery_reversal_closes_ceiling_before_mode_and_positive_limit(self):
         self.options['device_modes']['$battery'] = 'controlling'
@@ -580,7 +580,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.controller.status['pool']['retry_automatically'])
         self.assertEqual(float(self.states['number.start'].state), 29.5)
         self.assertEqual(float(self.states['number.stop'].state), 30)
-        self.assertIn('pool', self.controller.records)
+        self.assertIn('pool', self.controller.ownership.records)
         self.calls.clear()
         await self.controller.async_tick()
         self.assertEqual(self.calls, [], 'stale input must not command anything')
@@ -677,7 +677,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                         expected = 'on' if scheduled and water < 30 else 'off'
                         self.assertEqual(self.states['switch.pool'].state, expected)
                         self.assertEqual(self.controller.status['pool']['decision']['heating'], expected == 'on')
-                        self.assertEqual(self.controller.records['pool']['originals'], {'switch.pool': initial})
+                        self.assertEqual(self.controller.ownership.records['pool']['originals'], {'switch.pool': initial})
                         self.assertTrue(all(entity == 'switch.pool' for entity, _ in self.calls))
                         self.options['device_modes']['$pool'] = 'monitoring'
                         await self.controller.async_tick()
@@ -692,13 +692,13 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
         self.assertEqual(self.controller.status['pool']['state'], 'fault')
-        self.assertEqual(self.controller.records['pool']['originals'], {'switch.pool': 'off'})
-        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: resolve_configuration(self.options), command_transport=command_transport())
+        self.assertEqual(self.controller.ownership.records['pool']['originals'], {'switch.pool': 'off'})
+        other = ScheduledController(self.hass, self.coordinator, self.store, lambda: resolve_configuration(self.options), native_executor=native_executor(self.hass))
         self.options['device_modes']['$pool'] = 'monitoring'
         await other.async_start()
         self.assertEqual(self.calls, [('switch.pool', 'off')], 'the released switch is the one SHS owned')
         self.assertEqual(self.states['switch.new_pool'].state, 'off')
-        self.assertFalse(other.records)
+        self.assertFalse(other.ownership.records)
 
     async def test_genuinely_shared_pool_switch_is_blocked_then_recovers_when_excluded(self):
         self.options['device_modes'].update({'$pool':'controlling','other':'controlling'})
@@ -732,11 +732,11 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.coordinator.optimisation_plan['pool'] = {}
         await self.controller.async_start()
         self.assertEqual(self.calls, [])
-        self.assertFalse(self.controller.records)
+        self.assertFalse(self.controller.ownership.records)
         self.assertIn('Stop at', self.controller.status['pool']['reason'])
 
     async def test_pool_legacy_journal_never_restores_temperature_numbers(self):
-        self.controller.records['pool'] = {'options': deepcopy(self.options),
+        self.controller.ownership.records['pool'] = {'options': deepcopy(self.options),
             'originals': {'number.start': '29.5', 'number.stop': '30', 'switch.pool': 'off'}}
         self.states['number.start'].state = '20'
         self.states['number.stop'].state = '21'
@@ -745,17 +745,17 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [('switch.pool', 'off')])
         self.assertEqual(self.states['number.start'].state, '20')
         self.assertEqual(self.states['number.stop'].state, '21')
-        self.assertNotIn('pool', self.controller.records)
+        self.assertNotIn('pool', self.controller.ownership.records)
 
     async def test_battery_website_exclusion_restores_even_with_cached_plan(self):
         self.options['device_modes']['$battery'] = 'controlling'
         await self.controller.async_start()
-        self.assertIn('battery', self.controller.records)
+        self.assertIn('battery', self.controller.ownership.records)
         self.coordinator.async_cached_home_configuration.return_value = {'battery': {'included': False}}
         self.calls.clear()
         await self.controller.async_tick()
         self.assertEqual(self.states['select.mode'].state, 'Baseline')
-        self.assertNotIn('battery', self.controller.records)
+        self.assertNotIn('battery', self.controller.ownership.records)
         self.assertEqual(self.controller.status['battery']['state'], 'disabled')
         self.calls.clear()
         await self.controller.async_tick()
@@ -777,7 +777,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.charge'].state, 'off')
         self.assertEqual(self.options, before)
-        self.assertNotIn('ev', self.controller.records)
+        self.assertNotIn('ev', self.controller.ownership.records)
 
 
     async def test_replacement_reconciles_partial_write_without_baseline(self):
@@ -805,7 +805,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.hass.services.async_call = replace_during_write
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['battery']['state'], 'pending')
-        self.assertIn('battery', self.controller.records)
+        self.assertIn('battery', self.controller.ownership.records)
         self.assertNotIn('battery', self.controller.failed)
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
@@ -851,7 +851,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         await self.controller.async_tick()
         self.assertEqual(self.calls, [], 'a lost plan never hands the battery back')
-        self.assertIn('battery', self.controller.records)
+        self.assertIn('battery', self.controller.ownership.records)
 
 
 class EntityCommandTests(unittest.IsolatedAsyncioTestCase):
@@ -862,7 +862,7 @@ class EntityCommandTests(unittest.IsolatedAsyncioTestCase):
         self.controller.requested_systems = {'pool'}
         self.controller.active_options = deepcopy(self.controller.options())
         self.controller.active_slot = deepcopy(self.slot)
-        self.controller.records['pool'] = {}
+        self.controller.ownership.records['pool'] = {}
         self.controller.diagnostic_evaluation = {'commands': [], 'observations': {}}
         self.controller.confirm = AsyncMock(side_effect=AssertionError('command must not poll state'))
         self.hass.services.async_call = AsyncMock()

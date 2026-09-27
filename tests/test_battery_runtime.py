@@ -11,6 +11,7 @@ import unittest
 sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
 from battery_runtime import BatteryRuntime, exact_start, iso, stamp
 from command_fixture import command_transport
+from shs_core.native_commands import NativeExecutor
 from battery_writer import BatteryWriterFence
 from battery_runtime import digest, plan_scope
 from shs_core.plan_execution import *
@@ -65,8 +66,14 @@ class Rig:
             assert self.fence_store.saved['owner']=='runtime'
             self.rows[data['entity_id']]['state']=str(data.get('value',data.get('option')))
             self.rows[data['entity_id']]['last_reported']=iso(self.now)
-        async def restore(device):self.controller.records.pop(device,None)
-        self.controller=SimpleNamespace(command_transport=command_transport(),options=lambda:deepcopy(self.options),lock=asyncio.Lock(),records={},
+        async def restore(device):self.controller.ownership.records.pop(device,None)
+        async def send_native(domain,service,data):
+            await self.controller.hass.services.async_call(domain,service,data,blocking=True)
+        def read_native(entity):
+            row=self.rows.get(entity)
+            return SimpleNamespace(state=row['state'],attributes=row['attributes']) if row else None
+        native=NativeExecutor(command_transport(),read_native,lambda:'°C',send_native)
+        self.controller=SimpleNamespace(native_executor=native,options=lambda:deepcopy(self.options),lock=asyncio.Lock(),ownership=SimpleNamespace(records={}),
             restore=restore,hass=SimpleNamespace(services=SimpleNamespace(async_call=service)))
         self.readbacks=0
         async def readback(entities):
@@ -268,7 +275,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         import sqlite3
         from contextlib import closing
         r=Rig()
-        transport=r.controller.command_transport
+        transport=r.controller.native_executor.transport
         async def executor(fn,*args):
             result=await asyncio.to_thread(fn,*args)
             if fn==transport.journal.prepare:

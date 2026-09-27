@@ -7,17 +7,17 @@ from math import isfinite
 import re
 from typing import Any
 if __package__:
-    from .configuration_values import resolve_quantity
-    from .device_commands import execution_setup_errors
-    from . import const as c
+    from .shs_core.configuration_values import resolve_quantity
+    from .shs_core.device_commands import execution_setup_errors
+    from .shs_core import const as c
     from .configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS, local_contract, mapping_keys
-    from .device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_control_errors, mapped_planning_path
+    from .shs_core.device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_control_errors, mapped_planning_path
 else:
-    from configuration_values import resolve_quantity
-    from device_commands import execution_setup_errors
-    import const as c
+    from shs_core.configuration_values import resolve_quantity
+    from shs_core.device_commands import execution_setup_errors
+    from shs_core import const as c
     from configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS, local_contract, mapping_keys
-    from device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_control_errors, mapped_planning_path
+    from shs_core.device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_control_errors, mapped_planning_path
 
 OPTION_FIELDS = {
     field["key"]: field
@@ -233,9 +233,9 @@ def resolve_configuration(options, latitude=0.0, longitude=0.0):
     resolved.update(deepcopy(options))
     resolved.pop("battery_export_enabled", None)
     if __package__:
-        from .operating_modes import device_mode
+        from .shs_core.operating_modes import device_mode
     else:
-        from operating_modes import device_mode
+        from shs_core.operating_modes import device_mode
     resolved["planning_mode"] = "live"
     for system in ("battery", "pool", "ev"):
         resolved[system + "_control_enabled"] = device_mode(resolved, system) == "controlling"
