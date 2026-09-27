@@ -85,7 +85,7 @@ class Rig:
             return {e:[(datetime.fromtimestamp(5,timezone.utc),'100',deepcopy(self.rows[e]['attributes']))] for e in entities}
         self.listener_updates=0
         def update_listeners():self.listener_updates+=1
-        self.coordinator=SimpleNamespace(_battery_entity_report=lambda e:deepcopy(self.rows.get(e)),async_battery_planned_devices=devices,
+        self.coordinator=SimpleNamespace(ports=SimpleNamespace(battery_report=lambda e:deepcopy(self.rows.get(e))),async_battery_planned_devices=devices,
             async_battery_native_readback=readback,async_battery_loss_statistics=statistics,_state_history=history,async_update_listeners=update_listeners,
             binding_plan_for=lambda device,options:(self.plan,next((s for s in self.plan['plans']['priority']['slots']
                 if stamp(s['start'])<=self.now<min(stamp(s['start'])+900000,stamp(self.plan['valid_until']),stamp(self.plan['binding_until']))),None)),_battery_native_context=None)

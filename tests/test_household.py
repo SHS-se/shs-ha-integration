@@ -126,3 +126,30 @@ class HouseholdTests(unittest.IsolatedAsyncioTestCase):
             if not task.done():
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+
+    async def test_real_household_reopens_persisted_battery_runtime_through_observation_port(self):
+        from copy import deepcopy
+        from test_battery_runtime import Rig as BatteryRig
+        source = BatteryRig('control_verification')
+        await source.start()
+        await source.advance()
+        await source.runtime.close()
+        restored = BatteryRig('control_verification')
+        restored.now = source.now
+        restored.rows = deepcopy(source.rows)
+        restored.runtime.store = source.store
+        household = Rig(options=restored.options).household
+        household.ports = replace(household.ports, battery_report=lambda entity: deepcopy(restored.rows.get(entity)))
+        household.battery_writer = restored.fence
+        household.async_battery_native_readback = restored.coordinator.async_battery_native_readback
+        restored.runtime.coordinator = household
+        try:
+            await restored.fence.open()
+            await restored.runtime.open()
+            self.assertIsNotNone(restored.runtime.host)
+            await asyncio.wait_for(restored.runtime.host.idle(), 2)
+            self.assertEqual(restored.runtime.host.state.execution.account.contract.id,
+                             source.store.session.account.contract.id)
+            self.assertEqual(restored.calls, [])
+        finally:
+            await restored.runtime.close()

@@ -148,7 +148,7 @@ class BatteryRuntime:
             self._mode_revision,self._mode=group.mode_revision,group.mode
             self._model=authority.plant.conversion
             self._scope=authority.supply_scope
-            reports={e:self.coordinator._battery_entity_report(e) for e in self._control_entities()}
+            reports={e:self.coordinator.ports.battery_report(e) for e in self._control_entities()}
             if any(not row or row.get('state') in ('unknown','unavailable') for row in reports.values()):
                 raise NativeReadbackPending('Waiting for configured Sigen controls to become available')
             self._surface=native_surface(self._options,reports)
@@ -186,7 +186,7 @@ class BatteryRuntime:
         if self._closed or self._identity is None or (not self._releasing and self.controller.options()!=self._options):
             return None
         try:
-            reports={e:self.coordinator._battery_entity_report(e) for e in self._control_entities()}
+            reports={e:self.coordinator.ports.battery_report(e) for e in self._control_entities()}
             if native_surface(self._options,reports)['revision']!=self._surface['revision']:
                 return None
         except (ValueError,TypeError,KeyError):
@@ -357,8 +357,8 @@ class BatteryRuntime:
         # Run the real handover checks before the new plan can replace the
         # coordinator cache. This is a pure transition: no journal or commands.
         now=self.now()
-        ratings=resolve_battery_quantities(options,self.coordinator._battery_entity_report)
-        soc=self.coordinator._battery_entity_report(options['battery_soc_entity'])
+        ratings=resolve_battery_quantities(options,self.coordinator.ports.battery_report)
+        soc=self.coordinator.ports.battery_report(options['battery_soc_entity'])
         stored=round(float(soc['state']) / 100 * ratings['battery_capacity_kwh'] * 1e6)
         execution.admit_plan(account,contract,now,execution.StateObservation(now,stored,'live_soc_at_validation',False))
 
@@ -444,7 +444,7 @@ class BatteryRuntime:
             for stream in self.host.state.ledger.streams:
                 if stream.spec.stream_id in excluded or '$battery' in excluded:
                     continue
-                row=self.coordinator._battery_entity_report(stream.spec.stream_id)
+                row=self.coordinator.ports.battery_report(stream.spec.stream_id)
                 if row:
                     await self._meter(stream.spec.stream_id,row['state'],row['attributes'],
                         stamp(row['last_reported']),row.get('event_id'))
@@ -480,7 +480,7 @@ class BatteryRuntime:
         await self._record_counters(options)
         mode=device_mode(options,'battery')
         plan,slot=self.coordinator.binding_plan_for('battery',options)
-        override=any(options.get(k) and (self.coordinator._battery_entity_report(options[k]) or {}).get('state')!='off'
+        override=any(options.get(k) and (self.coordinator.ports.battery_report(options[k]) or {}).get('state')!='off'
                      for k in ('control_override_entity','battery_control_override_entity'))
         if mode not in ('controlling','control_verification') or not slot or override or not options.get('battery_enabled',True) or '$battery' in options.get('excluded_device_readings',[]):
             self.coordinator._battery_native_context=None
@@ -496,7 +496,7 @@ class BatteryRuntime:
             raise BatteryMeasurementConfigurationError(options)
         self._devices=await self.coordinator.async_battery_planned_devices()
         source=source_revision(options,self._devices)
-        read=self.coordinator._battery_entity_report
+        read=self.coordinator.ports.battery_report
         reports={e:read(e) for e in self._control_entities()}
         self._surface=native_surface(options,reports)
         surface=self._surface
@@ -686,7 +686,7 @@ class BatteryRuntime:
         if options!=self._options and not self._releasing:
             raise ValueError('battery configuration changed')
         options=self._options
-        read=self.coordinator._battery_entity_report
+        read=self.coordinator.ports.battery_report
         now=self.now()
         entities=set(self._control_entities())|{entity for _,entity,_ in self._demand_sources()}|{options.get(k) for k in
             ('house_consumption_power_entity','solar_production_power_entity','battery_power_measurement_entity','battery_soc_entity','grid_power_entity')}
@@ -828,7 +828,7 @@ class BatteryRuntime:
             return False
         for key in ('control_override_entity','battery_control_override_entity'):
             entity=options.get(key)
-            if entity and (self.coordinator._battery_entity_report(entity) or {}).get('state')!='off':
+            if entity and (self.coordinator.ports.battery_report(entity) or {}).get('state')!='off':
                 return False
         plan,slot=self.coordinator.binding_plan_for('battery',options)
         accepted=self.host.state.execution.account.contract
@@ -872,11 +872,11 @@ class BatteryRuntime:
         group=self.host.state.groups[0]
         if any(a.stage!='prepared' and a.step.possible.import_w>0 for a in group.attempts):
             return False
-        report=self.coordinator._battery_entity_report(self._options['battery_power_measurement_entity'])
+        report=self.coordinator.ports.battery_report(self._options['battery_power_measurement_entity'])
         try:
             watts,_=power(report,source=self._options['battery_power_measurement_entity'],now_ms=self.now(),signed=True)
-            mode=self.coordinator._battery_entity_report(self._options['battery_mode_entity'])['state']
-            limit=self.coordinator._battery_entity_report(self._options['battery_charge_limit_entity'])
+            mode=self.coordinator.ports.battery_report(self._options['battery_mode_entity'])['state']
+            limit=self.coordinator.ports.battery_report(self._options['battery_charge_limit_entity'])
             ceiling=float(limit['state'])*(1000 if limit['attributes']['unit_of_measurement']=='kW' else 1)
             return mode!='Command Charging (PV First)' or (ceiling==0 and watts<=100)
         except (ValueError,KeyError,TypeError):
