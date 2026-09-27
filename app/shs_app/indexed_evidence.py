@@ -5,7 +5,8 @@ and daily sums; historical views query the indexed original facts at their prefi
 No timestamp decides whether a receipt is admitted or retained.
 """
 from collections.abc import Sequence
-from contextlib import closing
+from contextlib import closing, contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, fields
 from hashlib import sha256
 import json
@@ -36,15 +37,26 @@ def columns(name):
 class EvidenceDatabase:
     def __init__(self,path):
         self.path=path
+        self.reader=ContextVar("evidence_reader",default=None)
         self.counts={name:0 for name in ('meters','observations','admissions','reconciliations')}
         self.metrics=dict(queries=0,query_ms=0.,max_query_ms=0.,historical_meter_queries=0)
+
+    @contextmanager
+    def snapshot(self):
+        existing=self.reader.get()
+        if existing is not None:
+            yield existing
+            return
+        with closing(sqlite3.connect(self.path.resolve().as_uri()+'?mode=ro',uri=True)) as db:
+            db.execute('BEGIN')
+            token=self.reader.set(db)
+            try:yield db
+            finally:self.reader.reset(token)
 
     def query(self,operation):
         start=perf_counter()
         try:
-            with closing(sqlite3.connect(self.path.resolve().as_uri()+'?mode=ro',uri=True)) as db:
-                db.execute('BEGIN')
-                return operation(db)
+            with self.snapshot() as db:return operation(db)
         finally:
             elapsed=(perf_counter()-start)*1000
             self.metrics['queries']+=1;self.metrics['query_ms']+=elapsed
@@ -355,6 +367,10 @@ class AccountEvidence:
         return result
 
     def planner_feedback(self,account,at_ms):
+        with self.database.snapshot():
+            return self._planner_feedback(account,at_ms)
+
+    def _planner_feedback(self,account,at_ms):
         history=self.objective_history(account,at_ms) if account.contract else ()
         digest=sha256();digest.update(b'[');live=[];count=0
         for item in history:

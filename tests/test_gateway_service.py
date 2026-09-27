@@ -31,7 +31,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.stream.start()
         self.addAsyncCleanup(self.stream.close)
         self.source = SimpleNamespace(options=self.controller.options,
-            physical_controls=lambda:{'switch.pool':self.states['switch.pool'].state},publish=lambda value:None)
+            physical_controls=lambda:{'switch.pool':self.states['switch.pool'].state},publish=__import__("unittest.mock",fromlist=["AsyncMock"]).AsyncMock())
         self.service = GatewayService(self.stream,IDENTITY,self.source)
         self.service.battery = SimpleNamespace(revoke=lambda:None)
         commands = GatewayCommands(self.stream)
@@ -62,7 +62,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         page = await self.call('receipts',{'after':0,'limit':4096})
         await self.call('ack_delivery',{'through':page['through']})
         await self.call('activate',{'activation_id':'activation','proof':result['reconciliation']['proof']})
-        await self.call('policy',{'value':{'plan':'plan','options':digest(self.controller.options())}})
+        await self.call('policy',{'value':{'plan':'plan','options':digest(__import__('shs_core.native_configuration',fromlist=['native_options']).native_options(self.controller.options()))}})
         await self.call('synchronize',{'models':self.coordinator.optimisation_plan['device_models']})
 
     def intention(self):

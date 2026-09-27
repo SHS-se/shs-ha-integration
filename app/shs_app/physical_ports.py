@@ -1,5 +1,6 @@
 """App-side semantic device and battery ports; no native service RPC."""
 from uuid import uuid4
+from shs_core.native_configuration import native_options
 from shs_core import home_runtime as rt
 from shs_core.command_transport import CommandUncertain
 from shs_core.device_port import device_intent
@@ -18,7 +19,7 @@ class RemoteDevices:
     async def synchronize(self, models):
         # Update the command epoch before returning a physical ownership view.
         value = {'plan':digest(self.household.optimisation_plan),
-                 'options':digest(self.household.resolved_options())}
+                 'options':digest(native_options(self.household.resolved_options()))}
         self.context = await self.gateway.call('policy', {'value':value})
         self.policy = value
         return await self.gateway.call('synchronize', {'models':models})

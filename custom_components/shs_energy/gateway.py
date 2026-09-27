@@ -65,7 +65,10 @@ class HomeAssistantSource:
             event_id=state.context.id if state else None, kind=kind))
 
     def options(self):
-        return resolved_options(self.hass, self.configuration.options())
+        options=self.configuration.options()
+        if self.configuration.value['revision']==0:
+            return resolved_options(self.hass,options)  # One-time adoption source.
+        return {key:value for key,value in options.items() if key!='_observed_entities'}
 
     def context(self):
         h = self.hass
@@ -96,7 +99,7 @@ class HomeAssistantSource:
         async with self.update_lock:
             if self.closed:
                 return
-            self.entities = configured_entity_ids(self.options())
+            self.entities = (set(self.configuration.options()['_observed_entities']) if self.configuration.value['revision'] else configured_entity_ids(self.options()))
             for record in self.service.physical.ownership.records.values():
                 self.entities.update(record['originals'])
                 self.entities.update(configured_entity_ids(record['options']))
@@ -155,9 +158,9 @@ class HomeAssistantSource:
             return wire(await self.history.statistics(start,end,set(body['entities']),body['period'],body['units'],set(body['kinds'])))
         return wire(await self.history.states(start,end,body['entities'],with_attributes=body['with_attributes']))
 
-    def publish(self, value):
+    async def publish(self, value):
         if self.projection:
-            self.projection.accept(value)
+            await self.projection.accept(value)
 
     def external_ready(self, device):
         # The app has already reserved unknown pending demand. HA independently
@@ -238,7 +241,7 @@ async def open_gateway(hass, entry):
     source.service = service
     source.configuration = ExecutionConfiguration(GatewayRecord(stream,'execution_configuration'),
         source.invalidate, source.refresh_configuration)
-    await source.configuration.load(dict(entry.options))
+
     async def send(domain, action, data):
         await hass.services.async_call(domain, action, data, blocking=True)
     commands = GatewayCommands(stream)
@@ -254,6 +257,7 @@ async def open_gateway(hass, entry):
     service.battery = BatteryGateway(stream,service.physical,source.options,source.report,now,
         authorize=service.authorize,session=service.session,context=service.context)
     try:
+        await source.configuration.load(dict(entry.options))
         await service.physical.load()
         service.physical.ownership.runs.configure(source.options(), [])
         await service.battery.open()
@@ -288,7 +292,10 @@ async def websocket_gateway(hass, connection, msg):
             @callback
             def disconnected():
                 sockets.pop(connection,None)
+                current = service.connection is peer
                 peer.disconnected()
+                if current and service.source.projection:
+                    service.source.projection.disconnected()
                 hass.async_create_task(peer.close())
             connection.subscriptions['shs_energy_gateway'] = disconnected
         if peer is None:

@@ -71,8 +71,7 @@ class ConfigurationEditor:
         return prepare_options(existing,incoming,self.read,latitude=self.catalog.latitude,longitude=self.catalog.longitude)
 
     async def _commit(self, options, body, *, replan):
-        options[c.OPT_CONFIGURATION_REVIEWED_AT] = datetime.now(timezone.utc).isoformat()
-        result = await self.engine.configuration.commit(body['expected_revision'],options,body['request_id'])
+        result = await self.engine.configuration.commit(body['expected_revision'],options,body['request_id'],reviewed=True)
         h = self.engine.household
         # Canonical commit and gateway acknowledgement precede all policy work.
         # The ordered configuration receipt triggers subscription/plan handling.

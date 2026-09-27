@@ -61,7 +61,7 @@ class PriceSensorForecastTests(unittest.TestCase):
         )
 
     def attributes(self, class_name, direction):
-        getter = method("sensor.py", class_name, "extra_state_attributes")
+        getter = method("shs_core/entity_views.py", class_name, "extra_state_attributes")
         return getter(SimpleNamespace(coordinator=self.coordinator, direction=direction,
                                       _supplier_price=lambda: None))
 

@@ -1,6 +1,7 @@
 """The single app-owned settings writer and its acknowledged HA projection."""
 import asyncio
 from copy import deepcopy
+from datetime import datetime,timezone
 from uuid import uuid4
 
 from shs_core.gateway_journal import GatewayConflict, digest
@@ -8,9 +9,10 @@ from .records import RecordStore
 
 
 class Configuration:
-    def __init__(self, root, identity, install):
+    def __init__(self, root, identity, install, *, project):
         self.record = RecordStore(root / 'configuration.json')
         self.identity, self.install = identity, install
+        self.project = project
         self.lock = asyncio.Lock()
         self.data = None
 
@@ -44,20 +46,22 @@ class Configuration:
 
     async def _apply(self):
         desired = self.data
+        projected = self.project(desired["options"])
         result = await self.install(dict(expected_revision=desired['applied_revision'],
-            revision=desired['revision'], options=desired['options'], digest=digest(desired['options'])))
-        if result != {'revision':desired['revision'], 'digest':digest(desired['options'])}:
+            revision=desired['revision'], options=projected, digest=digest(projected)))
+        if result != {'revision':desired['revision'], 'digest':digest(projected)}:
             raise GatewayConflict('HA did not acknowledge the desired configuration revision')
         if desired['applied_revision'] != desired['revision']:
             updated = dict(desired, applied_revision=desired['revision'], applied_options=deepcopy(desired['options']))
             await self.record.async_save(updated)
             self.data = updated
 
-    async def commit(self, expected_revision, options, request_id):
+    async def commit(self, expected_revision, options, request_id, *, reviewed=False):
         if type(expected_revision) is not int or type(options) is not dict or type(request_id) is not str or not request_id:
             raise ValueError('A configuration revision, document and request identity are required')
         async with self.lock:
-            request_digest = digest(dict(expected_revision=expected_revision, options=options))
+            request_digest = digest(dict(expected_revision=expected_revision, reviewed=reviewed,
+                options={k:v for k,v in options.items() if k!='configuration_reviewed_at'}))
             prior = self.data['requests'].get(request_id)
             if prior:
                 if prior['digest'] != request_digest:
@@ -71,7 +75,9 @@ class Configuration:
             revision = self.revision + 1
             requests = dict(list(self.data['requests'].items())[-127:])
             requests[request_id] = dict(digest=request_digest, revision=revision)
-            updated = dict(self.data, revision=revision, options=deepcopy(options), requests=requests)
+            committed=deepcopy(options)
+            if reviewed:committed['configuration_reviewed_at']=datetime.now(timezone.utc).isoformat()
+            updated = dict(self.data, revision=revision, options=committed, requests=requests)
             await self.record.async_save(updated)
             self.data = updated
             await self._apply()

@@ -21,6 +21,7 @@ from .battery_conversion import conversion_model, windows_from_statistics
 from .battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
 from . import plan_execution as execution
 from .runtime_json import Records, runtime_digest as digest
+from .native_configuration import native_options
 from .resource_profiling import ResourceProfiler
 from .battery_live import native_surface, source_revision, planned_power_bindings
 from .battery_supply import SupplyScope, observe_supply
@@ -561,7 +562,7 @@ class BatteryRuntime:
         operations=[BatteryOperation('idle','idle',0,0),BatteryOperation('hold','hold',cc,0),
             BatteryOperation('solar','solar_charge',cc,0),BatteryOperation('supply','supply_house',cc,dc),
             BatteryOperation('charge','grid_charge',cc,0),BatteryOperation('export','export',0,dc)]
-        config=digest(options)
+        config=digest(native_options(options))
         if self._mode!=mode:
             self._mode_revision+=1
             self._mode=mode

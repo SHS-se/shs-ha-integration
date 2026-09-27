@@ -21,7 +21,7 @@ sys.path.append(str(PACKAGE))
 
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
-    "gateway_wire",
+    "gateway_wire", "shs_core.entity_views", "shs_core.native_configuration", "shs_wire.entity_modes",
     "shs_wire.protocol", "shs_core.native_records", "shs_core.native_readings",
     "shs_core.execution_configuration", "shs_core.discovery", "shs_core.configuration_view",
     "shs_core.gateway_service", "shs_core.runtime_projection",
@@ -173,14 +173,14 @@ class ModuleBoundaryTests(unittest.TestCase):
         owners = [
             node.name
             for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and any(
                 isinstance(inner, ast.Attribute)
                 and inner.attr == "async_create_issue"
                 for inner in ast.walk(node)
             )
         ]
-        self.assertEqual(owners, ["publish_repair"])
+        self.assertEqual(owners, ["accept"])
 
     def test_native_gateway_does_not_import_the_runtime_or_accounting(self):
         import subprocess

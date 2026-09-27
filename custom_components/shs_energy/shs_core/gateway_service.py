@@ -9,6 +9,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 from .gateway_journal import GatewayConflict, digest
+from .native_configuration import native_options
 from .gateway_stream import GatewayConnection
 
 
@@ -229,7 +230,7 @@ class AppConnection(GatewayConnection):
             return result
         s.authorize(op)
         if op == 'policy':
-            if type(body['value']) is not dict or body['value'].get('options') != digest(s.source.options()):
+            if type(body['value']) is not dict or body['value'].get('options') != digest(native_options(s.source.options())):
                 raise ValueError('Policy identity must be an object')
             if s.policy != body['value']:
                 s.policy = deepcopy(body['value'])
@@ -253,7 +254,7 @@ class AppConnection(GatewayConnection):
             if type(body['value']) is not dict:
                 raise ValueError('Projection must be an object')
             s.projection = deepcopy(body['value'])
-            s.source.publish(s.projection)
+            await s.source.publish(s.projection)
             return {}
         if op == 'requests':
             batch = [{'id':key, 'operation':r['operation'], 'body':r['body']}

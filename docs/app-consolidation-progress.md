@@ -19,13 +19,13 @@ runtime cutover remains active; this work upgrades it in place.
 
 - [x] Synthesize independent Codex and Opus 5.5 High architecture reviews.
 - [x] Separate protocol capabilities, installation identity and storage schemas.
-- [ ] Extract the companion's native execution and wire dependency boundary.
-- [ ] Move canonical configuration and credentials into app storage.
-- [ ] Route app edits and existing HA mode entities through acknowledged revisioned changes.
-- [ ] Move configuration editors and diagnostic downloads into the app.
-- [ ] Atomically checkpoint the source mirror and retire processed transport receipts.
-- [ ] Replace lifetime accounting hydration with indexed operational evidence.
-- [ ] Apply three-day detailed diagnostic retention and expose all active database metrics.
+- [x] Extract the companion's native execution and wire dependency boundary.
+- [x] Move canonical configuration and credentials into app storage.
+- [x] Route app edits and existing HA mode entities through acknowledged revisioned changes.
+- [x] Move configuration editors and diagnostic downloads into the app.
+- [x] Atomically checkpoint the source mirror and retire processed transport receipts.
+- [x] Replace lifetime accounting hydration with indexed operational evidence.
+- [x] Apply three-day detailed diagnostic retention and expose all active database metrics.
 - [ ] Publish, upgrade and verify live controls, entity identities and app-only restart.
 
 ## Verification requirements
@@ -120,3 +120,28 @@ checks passed; web build passed. Six indexed-store differential/runtime tests co
 unordered corrections, reset edges, historical views, actual battery dispatch,
 restart without history hydration, interrupted verification and transaction rollback.
 Production-snapshot parity and live deployment verification remain outstanding.
+
+## Stage 5 — thin native entities and release preparation
+
+HA now renders app-calculated sensor descriptors/values and mode explanations.
+The native entity catalogue persists independently of live values: app downtime
+marks entities unavailable and preserves identities through a Core restart.
+Detailed runtime/plan documents no longer cross the entity projection. Existing
+HA diagnostics provide a compact connection report and link to app downloads.
+Native configuration contains permissions, mappings, device ratings/overrides and
+explicit source subscriptions; credentials, tariff settings and discovery metadata
+remain in the app. Configuration acknowledgement precedes policy work. Retry
+fingerprints exclude generated review timestamps.
+
+The complete live accounting snapshot (355,923 meters, 149,884 observations and 800
+admissions) passed indexed/reference parity. Warm restore took 0.36 seconds without
+meter hydration. Reusing a consistent read transaction reduced full historical
+planner feedback to 2.73 seconds on that snapshot; routine live feedback uses the
+active objective catalogue. The offline upgrade backup remains separate.
+
+Validation: 1,032 integration tests, 69 app tests, 93 editor tests and eight browser
+checks passed. The removed per-controller HA subscription test is superseded by
+persisted generic entity catalogue/offline/reconnect coverage. Installed beta.60
+was verified against all 86 source hashes and all 29 HA entity registrations were
+recorded before deployment. App beta.15 and companion beta.65 are prepared for the
+coordinated upgrade; publication and live verification still follow.

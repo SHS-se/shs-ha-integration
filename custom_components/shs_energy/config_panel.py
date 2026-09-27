@@ -11,8 +11,8 @@ from .shs_core.const import DOMAIN
 @websocket_api.async_response
 async def websocket_app_link(hass, connection, msg):
     entries = hass.config_entries.async_entries(DOMAIN)
-    urls = {entry.runtime_data.projection.get('app_url') for entry in entries
-        if getattr(entry,'runtime_data',None) and entry.runtime_data.projection}
+    urls = {entry.runtime_data.app_url for entry in entries
+        if getattr(entry,'runtime_data',None) and entry.runtime_data.app_url}
     urls.discard(None)
     if len(urls) != 1:
         connection.send_error(msg['id'],'app_unavailable','Open SHS Energy from Home Assistant’s Apps page while the app connects.')

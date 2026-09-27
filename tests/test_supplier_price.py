@@ -9,7 +9,7 @@ SENSOR = (
     Path(__file__).parents[1]
     / "custom_components"
     / "shs_energy"
-    / "sensor.py"
+    / "shs_core" / "entity_views.py"
 ).read_text(encoding="utf-8")
 INIT = (
     Path(__file__).parents[1]
@@ -66,12 +66,12 @@ class SensorWiringTests(unittest.TestCase):
     """Guard the parts a Home-Assistant-free test cannot exercise directly."""
 
     def test_total_sensors_are_registered(self) -> None:
-        self.assertIn('ShsTotalPriceSensor(coordinator, "import")', SENSOR)
-        self.assertIn('ShsTotalPriceSensor(coordinator, "export")', SENSOR)
+        self.assertIn('views.ShsTotalPriceSensor', (Path(__file__).parents[1]/'app/shs_app/entities.py').read_text())
+        self.assertIn("for direction in ('import','export')", (Path(__file__).parents[1]/'app/shs_app/entities.py').read_text())
 
     def test_ev_current_target_sensor_is_registered(self) -> None:
-        self.assertIn("ShsEvPlanCurrentSensor(coordinator)", SENSOR)
-        self.assertIn('slot["ev_target_current_a"]', SENSOR)
+        self.assertIn('ShsEvPlanCurrentSensor(context)', (Path(__file__).parents[1]/'app/shs_app/entities.py').read_text())
+        self.assertIn("slot['ev_target_current_a']", SENSOR)
 
     def test_a_missing_supplier_price_leaves_the_total_unknown(self) -> None:
         # Falling back to the grid share alone would read as an all-in price.
@@ -162,7 +162,7 @@ class SensorWiringTests(unittest.TestCase):
     def test_changing_options_refreshes_the_gateway_source_subscription(self) -> None:
         listener = INIT[INIT.index("async def _async_options_updated") :]
         self.assertIn("source.refresh_configuration()",listener)
-        self.assertIn("self.entities = configured_entity_ids(self.options())",GATEWAY)
+        self.assertIn("set(self.configuration.options()['_observed_entities'])",GATEWAY)
         self.assertNotIn("async_reload(entry.entry_id)",listener)
 
     def test_startup_planning_waits_for_entity_providers(self) -> None:

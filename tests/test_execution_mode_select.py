@@ -66,7 +66,9 @@ class Rig:
         self.shared = load_adapter('control_configuration.py', {'datetime': datetime, 'timezone': timezone,
             'deepcopy':deepcopy, 'GatewayConflict':RuntimeError, 'uuid4':__import__('uuid').uuid4})
         self.entry.runtime_data.resolved_options = lambda:self.entry.options
-        self.entry.runtime_data.projection = {'configuration':{'revision':1},'execution_devices':self.devices}
+        self.entry.runtime_data.online=True
+        self.entry.runtime_data.catalogue={'devices':self.devices}
+        self.entry.runtime_data.projection = {'configuration':{'revision':1},'execution_devices':self.devices,'entities':{'modes':{}}}
         async def request_app(operation, body):
             assert operation == 'configuration' and body['operation'] == 'control'
             edit=body['body']
@@ -76,6 +78,7 @@ class Rig:
                 self.entry.options=options
                 self.entry.runtime_data.projection['configuration']['revision']+=1
                 await self.refresh_battery();await self.tick()
+            self.project_modes()
             return {'revision':self.entry.runtime_data.projection['configuration']['revision']}
         self.entry.runtime_data.service=SimpleNamespace(request_app=request_app)
 
@@ -93,7 +96,13 @@ class Rig:
         self.manager = self.adapter.ExecutionModeEntities(self.hass,self.entry,self.add)
         self.listeners.append(self.manager.schedule_refresh)
 
+    def project_modes(self):
+        modes=self.entry.runtime_data.projection['entities']['modes']
+        for row in self.devices:
+            modes[row['key']]={'mode':device_mode(self.entry.options,row['permission']['controller_id']),'attributes':{}}
+
     async def get_devices(self,hass,entry,**kwargs):
+        self.project_modes()
         self.inventory_loads += 1
         return deepcopy(self.devices)
     def add_battery_listener(self,listener):
@@ -124,12 +133,12 @@ class Rig:
 
 
 class SelectTests(unittest.IsolatedAsyncioTestCase):
-    async def test_battery_refresh_rewrites_only_the_battery_select_without_reloading_inventory(self):
+    async def test_projection_refresh_rewrites_select_values_without_reloading_inventory(self):
         r=Rig();await r.manager.refresh()
         battery,heater=r.manager.entities['$battery'],r.manager.entities['sensor.heater']
         writes,loads=(battery.writes,heater.writes),r.inventory_loads
         for _ in range(3):r.notify_battery()
-        self.assertEqual((battery.writes,heater.writes),(writes[0]+3,writes[1]))
+        self.assertEqual((battery.writes,heater.writes),(writes[0]+3,writes[1]+3))
         self.assertEqual(r.inventory_loads,loads)
         r.devices[0]['planned']=False
         await r.manager.refresh()

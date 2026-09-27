@@ -12,8 +12,7 @@ from homeassistant.helpers.entity_platform import async_get_current_platform
 
 from .shs_core.const import DOMAIN, CONF_CUSTOMER_NAME, CONF_DEVICE_TOKEN_ID
 from .control_configuration import async_execution_devices, async_set_execution_mode
-from .shs_core.operating_modes import MODES, device_mode
-from .shs_core.presentation import controller_explanation
+from .shs_wire.entity_modes import MODES
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -123,25 +122,22 @@ class ExecutionModeSelect(SelectEntity):
     @callback
     def _battery_updated(self):
         # Battery details change every refresh; other owners change with the plan.
-        if self.active and self.device['permission']['controller_id'] == 'battery':
+        if self.active:
             self.async_write_ha_state()
 
     @property
+    def available(self):
+        return self.entry.runtime_data.online
+
+    @property
     def current_option(self):
-        mode = device_mode(self.entry.runtime_data.resolved_options(), self.device['permission']['controller_id'])
-        return mode if mode in MODES else None
+        projection=self.entry.runtime_data.projection
+        return projection['entities']['modes'].get(self.device['key'],{}).get('mode') if projection else None
 
     @property
     def extra_state_attributes(self):
-        coordinator = self.entry.runtime_data
-        owner = self.device['permission']['controller_id']
-        status = coordinator.controller.status.get(owner, {})
-        if owner == 'battery':
-            status = {**status, 'battery_runtime': coordinator.battery_runtime.snapshot()}
-        _, slot = coordinator.binding_plan_for(owner, coordinator.controller.options())
-        return {'device_key': self.device['key'],
-                'controlling_blocked_reason': self.device['permission']['reason'],
-                **controller_explanation(owner, self.current_option, status, slot)}
+        projection=self.entry.runtime_data.projection
+        return projection['entities']['modes'].get(self.device['key'],{}).get('attributes',{}) if projection else {}
 
     @callback
     def update_device(self, device):

@@ -15,6 +15,8 @@ from . import native_records as rt
 from .operating_modes import device_mode
 from .runtime_json import decode_value, encode_value, runtime_digest
 
+from .native_configuration import native_options
+
 OWNER = 'shs-household-battery'
 
 
@@ -68,7 +70,7 @@ class BatteryGateway:
         conversion = Conversion.read(conversion_wire)
         options = self.options()
         surface = self.surface(options)
-        expected = rt.WriterIdentity(OWNER, runtime_digest(options), surface['revision'])
+        expected = rt.WriterIdentity(OWNER, runtime_digest(native_options(options)), surface['revision'])
         if identity != expected:
             # An old, already admitted installation may only obtain release routes.
             if self.installation is None or identity != self.installation[0]:
@@ -110,7 +112,7 @@ class BatteryGateway:
         if self.installation is None or not self.fence.is_current(grant, self.identity()):
             raise GatewayConflict('Battery grant is no longer current')
         identity, catalog, conversion, installed_options = self.installation
-        if effect.purpose != 'release' and (runtime_digest(self.options()) != identity.config_revision or device_mode(self.options(), 'battery') != 'controlling'):
+        if effect.purpose != 'release' and (runtime_digest(native_options(self.options())) != identity.config_revision or device_mode(self.options(), 'battery') != 'controlling'):
             raise GatewayConflict('Battery optimisation permission changed')
         if device_mode(self.options(), 'battery') == 'control_verification':
             raise GatewayConflict('Verification never writes native battery settings')
@@ -147,7 +149,7 @@ class BatteryGateway:
                 if device_mode(current, 'battery') == 'control_verification':
                     raise GatewayConflict('Battery control relinquished to verification')
                 if effect.purpose != 'release':
-                    if (runtime_digest(current) != grant.config_revision or device_mode(current, 'battery') != 'controlling'
+                    if (runtime_digest(native_options(current)) != grant.config_revision or device_mode(current, 'battery') != 'controlling'
                             or not current.get('battery_enabled', True) or '$battery' in current.get('excluded_device_readings', [])
                             or self.now() >= effect.request.valid_until_ms):
                         raise GatewayConflict('Battery request or configuration changed')

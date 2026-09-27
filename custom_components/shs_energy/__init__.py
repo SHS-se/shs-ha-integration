@@ -75,7 +75,8 @@ async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
     async def apply(call: ServiceCall) -> dict[str, Any]:
         entry = _entry_for_call(hass, call)
         await configuration_request(entry, 'save', {'configuration':dict(call.data['configuration'])})
-        return _configuration_response(entry.runtime_data.service.source.configuration.options())
+        current = await configuration_request(entry,'get',{})
+        return _configuration_response(current['configuration'])
 
     hass.services.async_register(
         DOMAIN,
@@ -159,6 +160,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = GatewayProjection(hass, entry, service)
     entry.runtime_data = coordinator
     service.source.projection = coordinator
+    try:
+        await coordinator.restore()
+    except BaseException:
+        await _async_stop_runtime(coordinator)
+        raise
 
     async def platforms():
         # Do not interpret an absent app projection as an empty device inventory:

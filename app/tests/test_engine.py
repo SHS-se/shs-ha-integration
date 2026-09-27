@@ -82,7 +82,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             if operation == 'configure': return await self.configuration.install(body)
             raise AssertionError('unexpected source request '+operation)
         source = SimpleNamespace(options=lambda:resolve_configuration(self.entry['options'],59,18),
-            physical_controls=lambda:{},request=request,publish=lambda value:None)
+            physical_controls=lambda:{},request=request,publish=__import__("unittest.mock",fromlist=["AsyncMock"]).AsyncMock())
         self.service = GatewayService(self.stream,identity,source)
         self.context = dict(home=dict(latitude=59,longitude=18,language='en',timezone='Europe/Stockholm',temperature_unit='°C'),
             entity_ids=[],entity_names={},area_names={},entity_areas={},platforms={})

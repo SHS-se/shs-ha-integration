@@ -96,13 +96,12 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
 
         diagnostics = load_function('diagnostics.py', 'async_get_config_entry_diagnostics',
                                     {'INTEGRATION_VERSION': 'test'})
-        entry.runtime_data.async_diagnostics = AsyncMock(return_value={
-            'network_traffic':{'requests':0},'controller_metrics':meter.snapshot(),
-            'resource_profiling':entry.runtime_data.battery_runtime.profiler.snapshot({'meters':123})})
-        report = await diagnostics(None, entry)
-        self.assertEqual(report['controller_metrics']['triggers']['timer']['skipped_busy'], 1)
-        self.assertIn('network_traffic', report)
-        self.assertEqual(report['resource_profiling']['retained']['meters'], 123)
+        entry.runtime_data.online=True
+        entry.runtime_data.app_url='/app/shs'
+        report = await diagnostics(None,entry)
+        self.assertEqual(report['diagnostic_downloads'],'/app/shs/#system')
+        self.assertTrue(report['connected'])
+        self.assertNotIn('controller_metrics',report)
         import gzip
         from shs_core.controller_diagnostics import gzip_report, report_parts, report_summary
         workers = []
@@ -122,7 +121,7 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(workers, [gzip_report], 'encoding and compression run off the event loop')
         result = json.loads(gzip.decompress(body))
         self.assertEqual(result['attempts'], [])
-        self.assertEqual(result['controller_metrics']['triggers'], report['controller_metrics']['triggers'])
+        self.assertEqual(result['controller_metrics']['triggers'], meter.snapshot()['triggers'])
         self.assertEqual(result['resource_profiling']['retained']['meters'], 123)
         self.assertEqual(result['current']['devices'][0]['mode'], 'monitoring')
         self.assertEqual(summary, {'devices': 1, 'runtime_evaluations': 0, 'verification_checks': 0, 'observation_samples': 0})

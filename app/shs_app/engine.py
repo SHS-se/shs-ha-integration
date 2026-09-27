@@ -37,6 +37,10 @@ from .upgrades import open_runtime_schema
 from .configuration import Configuration
 from .indexed_storage import IndexedStorage
 from .configuration_editor import ConfigurationEditor
+from .entities import project_entities
+from shs_core.native_configuration import native_options
+from shs_core.configuration_schema import resolve_configuration
+from shs_core.controller_inputs import configured_entity_ids
 
 
 def encode(value):
@@ -125,7 +129,7 @@ class AppEngine:
         self.mirror.install_snapshot(snapshot)
         history = RemoteHistory(self.gateway)
         self.configuration = Configuration(self.root,self.identity,
-            lambda body:history.source('configure',body))
+            lambda body:history.source('configure',body),project=self.native_configuration)
         await self.configuration.load(dict(snapshot['configuration']['configuration_authority'],
             options=snapshot['configuration']['options']),lambda:history.source('credentials',{}))
         credentials = self.configuration.credentials()
@@ -262,6 +266,11 @@ class AppEngine:
             await self.consume()
             await asyncio.sleep(.5)
 
+    def native_configuration(self,options):
+        home=self.mirror.context['home']
+        resolved=resolve_configuration(options,home['latitude'],home['longitude'])
+        return {**native_options(resolved),'_observed_entities':sorted(configured_entity_ids(resolved))}
+
     async def project(self):
         h = self.household
         self.cached = dict(devices=await h.async_cached_device_configuration(),home=await h.async_cached_home_configuration(),
@@ -273,7 +282,9 @@ class AppEngine:
             ('key','name','planned','system_member','permission','mode')}
             for device in await self.editor.devices(self.cached['planning'],include_suggestions=False)]
         value['values']['optimisation_plan'] = display_plan(value['values']['optimisation_plan'])
-        await self.gateway.project(value)
+        native = project_entities(self,value["execution_devices"])
+        await self.gateway.project(dict(schema=2,entities=native,execution_devices=value["execution_devices"],
+            configuration=value["configuration"],repairs=value["repairs"],app_url=self.app_url))
         self.publish_ui(value)
 
     async def projections(self):

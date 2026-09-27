@@ -69,7 +69,7 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
             lambda entity:self.rows.get(entity), lambda:self.rig.now, authorize=authorize,
             session=lambda:self.session, context=lambda:dict(session=self.session, policy=self.policy))
         await self.gateway.open()
-        identity = rt.WriterIdentity(OWNER, runtime_digest(self.options), self.catalog.control_surface_revision)
+        identity = rt.WriterIdentity(OWNER, runtime_digest(__import__('shs_core.native_configuration',fromlist=['native_options']).native_options(self.options)), self.catalog.control_surface_revision)
         self.grant = decode_value(await self.gateway.grant(encode_value(identity), encode_value(self.catalog),
             self.conversion.wire(), self.rig.now+900000), rt.WriterGrant)
         self.route = await self.gateway.propose(encode_value(self.effect), encode_value(self.grant))

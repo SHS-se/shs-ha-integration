@@ -26,7 +26,7 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
             self.credentials_calls += 1
             return {'device_token':'private-app-credential'}
         self.credentials = credentials
-        self.app = Configuration(self.root,{'installation':'original'},self.gateway.install)
+        self.app = Configuration(self.root,{'installation':'original'},self.gateway.install,project=deepcopy)
         await self.app.load(self.gateway.value,credentials)
 
     async def test_adoption_is_once_and_mode_success_means_native_revision_applied(self):
@@ -34,7 +34,7 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result,{'revision':2})
         self.assertEqual(self.app.options(),self.gateway.options())
         self.assertEqual(self.captures[-1]['revision'],2)
-        reopened = Configuration(self.root,{'installation':'original'},self.gateway.install)
+        reopened = Configuration(self.root,{'installation':'original'},self.gateway.install,project=deepcopy)
         await reopened.load(self.gateway.value,self.credentials)
         self.assertEqual(reopened.options(),self.app.options())
         self.assertEqual(self.credentials_calls,1)
@@ -51,7 +51,7 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.app.options(),previous)
         with self.assertRaisesRegex(ValueError,'still waiting'):
             await self.app.commit(1,{},'other')
-        reopened = Configuration(self.root,{'installation':'original'},self.gateway.install)
+        reopened = Configuration(self.root,{'installation':'original'},self.gateway.install,project=deepcopy)
         await reopened.load(self.gateway.value,self.credentials)
         count = self.invalidations
         await reopened.commit(1,{'device_modes':{}},'edit')
@@ -76,6 +76,6 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_app_record_is_not_readopted_after_ownership_transfer(self):
         other = self.root/'empty';other.mkdir()
-        app = Configuration(other,{'installation':'original'},self.gateway.install)
+        app = Configuration(other,{'installation':'original'},self.gateway.install,project=deepcopy)
         with self.assertRaisesRegex(ValueError,'missing after adoption'):
             await app.load(self.gateway.value,self.credentials)

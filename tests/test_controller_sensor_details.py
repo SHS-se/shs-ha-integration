@@ -32,7 +32,7 @@ class ControllerDetailsTests(unittest.TestCase):
             binding_plan_for=lambda *args:({},self.slot),battery_runtime=SimpleNamespace(snapshot=lambda:deepcopy(self.runtime)))
 
     def attributes(self, device):
-        getter=method('sensor.py','ShsControllerSensor','extra_state_attributes',
+        getter=method('shs_core/entity_views.py','ShsControllerSensor','extra_state_attributes',
             device_mode=device_mode,controller_explanation=controller_explanation)
         return getter(SimpleNamespace(coordinator=self.coordinator,device=device))
 
@@ -52,7 +52,7 @@ class ControllerDetailsTests(unittest.TestCase):
         self.assertEqual(attributes['plan_status'],'rejected')
         self.assertEqual(attributes['accepted_reference_id'],'previous')
         self.assertIn('Waiting for a corrected plan',attributes['explanation'])
-        getter=method('sensor.py','ShsControllerSensor','native_value')
+        getter=method('shs_core/entity_views.py','ShsControllerSensor','native_value')
         self.assertEqual(getter(SimpleNamespace(coordinator=self.coordinator,device='battery')),'fault')
         self.runtime.update(plan_status='accepted',plan_rejection=None,state='verified')
         self.assertIsNone(self.attributes('battery')['plan_rejection'])
@@ -95,8 +95,9 @@ class SelectDetailsTests(unittest.IsolatedAsyncioTestCase):
         r.entry.runtime_data.controller.options=lambda:r.entry.options
         r.entry.runtime_data.battery_runtime=SimpleNamespace(snapshot=lambda:{'reason':'Testing the plan','explanation':{'plan':'Store spare solar energy.'}})
         r.entry.runtime_data.binding_plan_for=lambda *args:({}, {'device_commands':{'sensor.heater':{'type':'switch_schedule','on_seconds':900}}})
-        getter=r.adapter.ExecutionModeSelect.extra_state_attributes.fget
-        getter.__globals__['controller_explanation']=controller_explanation
+        sys.path.append(str(Path(__file__).parents[1]/'app'))
+        from shs_app.entities import project_modes
+        r.entry.runtime_data.projection['entities']['modes']=project_modes(r.entry.runtime_data,r.devices)
         self.assertIn('Store spare solar',r.manager.entities['$battery'].extra_state_attributes['explanation'])
         self.assertIn('requests this device to be on',r.manager.entities['sensor.heater'].extra_state_attributes['explanation'])
 
@@ -108,45 +109,12 @@ class SelectDetailsTests(unittest.IsolatedAsyncioTestCase):
         r.entry.runtime_data.battery_runtime=SimpleNamespace(snapshot=lambda:{'state':'fault',
             'plan_status':'rejected','plan_rejection':rejection,'accepted_reference_id':'previous'})
         r.entry.runtime_data.binding_plan_for=lambda *args:({},None)
-        getter=r.adapter.ExecutionModeSelect.extra_state_attributes.fget
-        getter.__globals__['controller_explanation']=controller_explanation
+        sys.path.append(str(Path(__file__).parents[1]/'app'))
+        from shs_app.entities import project_modes
+        r.entry.runtime_data.projection['entities']['modes']=project_modes(r.entry.runtime_data,r.devices)
         attributes=r.manager.entities['$battery'].extra_state_attributes
         self.assertEqual(attributes['plan_rejection'],rejection)
         self.assertEqual(attributes['accepted_reference_id'],'previous')
         self.assertIn('Waiting for a corrected plan',attributes['explanation'])
 
 
-class ControllerSensorSubscriptionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_battery_refreshes_and_device_reports_rewrite_only_their_own_sensor(self):
-        import ast
-        from shs_core.controller import ScheduledController
-        from command_fixture import native_executor, controller_inputs
-        source = Path(__file__).parents[1]/'custom_components'/'shs_energy'/'sensor.py'
-        cls = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.ClassDef) and n.name == 'ShsControllerSensor')
-        cls.bases = [ast.Name(id='Base', ctx=ast.Load())]
-        cls.body = [n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'async_added_to_hass']
-
-        class Base:
-            async def async_added_to_hass(self): pass
-            def async_on_remove(self, remove): self.removals.append(remove)
-            def async_write_ha_state(self): self.writes += 1
-
-        namespace = {'Base': Base}
-        exec(compile(ast.fix_missing_locations(ast.Module(body=[cls], type_ignores=[])), str(source), 'exec'), namespace)
-        battery_listeners = []
-        coordinator = SimpleNamespace(async_add_battery_listener=lambda listener: battery_listeners.append(listener) or (lambda: None))
-        coordinator.controller = ScheduledController(controller_inputs(None), coordinator, None, dict, native_executor=native_executor(None))
-        sensors = {}
-        for device in ('battery', 'ev', 'pool', 'devices'):
-            sensor = namespace['ShsControllerSensor'].__new__(namespace['ShsControllerSensor'])
-            sensor.device, sensor.coordinator, sensor.writes, sensor.removals = device, coordinator, 0, []
-            await sensor.async_added_to_hass()
-            sensors[device] = sensor
-        writes = lambda: {device: sensor.writes for device, sensor in sensors.items()}
-        for listener in battery_listeners: listener()
-        self.assertEqual(writes(), {'battery': 1, 'ev': 0, 'pool': 0, 'devices': 0})
-        coordinator.controller.report('battery', 'controlling')
-        coordinator.controller.report('pool', 'scheduled')
-        coordinator.controller.report('device:heater', 'verified')
-        self.assertEqual(writes(), {'battery': 1, 'ev': 0, 'pool': 1, 'devices': 1})
-        self.assertTrue(all(len(sensor.removals) == 1 for sensor in sensors.values()))
