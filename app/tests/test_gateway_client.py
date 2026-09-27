@@ -36,7 +36,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.http.close)
         self.inbox = ReceiptInbox(self.root/'inbox.sqlite', IDENTITY).open()
         self.addCleanup(self.inbox.close)
-        self.client = GatewayClient(self.http, self.url, 'fixture-token', IDENTITY, self.inbox)
+        self.client = GatewayClient(self.http, self.url, 'fixture-token', IDENTITY, self.inbox, paired_release={'app_version':'independent-app'})
         self.addAsyncCleanup(self.client.close)
 
     async def stop_server(self):
@@ -81,7 +81,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_replacement_socket_revokes_old_one_and_concurrent_receive_serializes(self):
         first = await self.client.connect()
-        replacement = GatewayClient(self.http, self.url, 'fixture-token', IDENTITY, self.inbox)
+        replacement = GatewayClient(self.http, self.url, 'fixture-token', IDENTITY, self.inbox, paired_release={'app_version':'newer-independent-app'})
         self.addAsyncCleanup(replacement.close)
         second = await replacement.connect()
         with self.assertRaises(GatewayConflict):
@@ -96,7 +96,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(aiohttp.ClientResponseError):
             await wrong.connect()
         self.assertIsNone(wrong.socket)
-        wrong_pair = GatewayClient(self.http, self.url, 'fixture-token', dict(IDENTITY, export_sha256='different'), self.inbox)
+        wrong_pair = GatewayClient(self.http, self.url, 'fixture-token', dict(IDENTITY, export_sha256='different'), self.inbox, paired_release={'app_version':'independent-app'})
         with self.assertRaises(GatewayConflict):
             await wrong_pair.connect()
         self.assertIsNone(wrong_pair.socket)

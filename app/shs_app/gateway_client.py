@@ -1,6 +1,7 @@
 """Authenticated, multiplexed HA gateway client with durable delivery receipts."""
 import asyncio
 import json
+import logging
 from hashlib import sha256
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ import aiohttp
 
 from shs_core.command_transport import settled
 from shs_core.gateway_journal import GatewayConflict, GatewayRejected, validate_identity
+from shs_wire.protocol import admit, hello
 
 
 class GatewayClient:
@@ -39,10 +41,10 @@ class GatewayClient:
             if (await socket.receive_json()).get('type') != 'auth_ok':
                 raise GatewayConflict('Gateway authentication rejected')
             self.reader = asyncio.create_task(self._read(socket))
-            body = {'identity':self.identity,'instance':self.instance}
-            if self.paired_release is not None:
-                body['release'] = self.paired_release
+            requirement = hello(self.paired_release['app_version'])
+            body = {'identity':self.identity,'instance':self.instance,'contract':requirement}
             self.connected = await self._call('connect',body)
+            admit(requirement, self.connected.get('contract'))
             return self.connected
         except BaseException:
             await self.close()
@@ -64,7 +66,8 @@ class GatewayClient:
                     raise GatewayConflict('Gateway session is no longer current')
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as error:
+            logging.getLogger(__name__).warning('HA gateway socket closed: %s: %s', type(error).__name__, error)
             await self.close()
 
     async def _call(self, operation, body):

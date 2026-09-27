@@ -11,7 +11,7 @@ from .command_journal import NativeAction, RoutedCommand, ObligationCommand
 from .configuration_values import resolve_battery_quantities
 from .gateway_journal import GatewayConflict, digest
 from .gateway_stream import GatewayRecord
-from . import home_runtime as rt
+from . import native_records as rt
 from .operating_modes import device_mode
 from .runtime_json import decode_value, encode_value, runtime_digest
 

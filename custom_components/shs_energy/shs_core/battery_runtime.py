@@ -31,7 +31,7 @@ from .device_controls import battery_measurement_errors, BatteryMeasurementConfi
 from .operating_modes import device_mode
 from .presentation import battery_status_text
 
-AGE_MS=30000
+from .native_readings import AGE_MS, stamp, power, BatteryPowerReadingError
 ALIGNMENT_MS=15000
 # Entities, the mode select and controller status all read one refresh's account.
 ACCOUNTING_REUSE_MS=1000
@@ -52,11 +52,6 @@ MODES={'idle':'Standby','grid_charge':'Command Charging (PV First)',
        'solar_charge':'Maximum Self Consumption','self_consumption':'Maximum Self Consumption',
        'hold':'Maximum Self Consumption'}
 
-def stamp(value):
-    parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
-    if parsed.tzinfo is None:
-        raise ValueError('timestamp needs timezone')
-    return round(parsed.timestamp()*1000)
 
 def plan_scope(options):
     """The local setup a battery plan is captured for, without writer authority.
@@ -74,25 +69,8 @@ def iso(ms):
     return datetime.fromtimestamp(ms/1000,timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
 
 
-class BatteryPowerReadingError(ValueError):
-    """A failed live source is distinct from an actuator configuration error."""
-    fix = {'kind': 'diagnostics'}
-    next_step = 'Check that the named power sensor is reporting current measurements. Control retries automatically when fresh readings arrive.'
 
 
-def power(report, *, source, now_ms, signed=False):
-    if not isinstance(report,dict):
-        raise BatteryPowerReadingError(f'{source}: configured power source is unavailable')
-    attrs=report['attributes'];unit=attrs.get('unit_of_measurement')
-    if attrs.get('state_class')!='measurement' or unit not in ('W','kW'):
-        raise BatteryPowerReadingError(f'{source}: instantaneous W or kW power required')
-    try:
-        at=stamp(report['last_reported']);value=float(report['state'])*(1000 if unit=='kW' else 1)
-    except (KeyError, TypeError, ValueError) as error:
-        raise BatteryPowerReadingError(f'{source}: invalid physical power reading') from error
-    if not isfinite(value) or (value<0 and not signed) or not at<=now_ms<at+AGE_MS:
-        raise BatteryPowerReadingError(f'{source}: power source is invalid or stale (last report: {report["last_reported"]})')
-    return value,at
 
 
 class BatteryRuntime:

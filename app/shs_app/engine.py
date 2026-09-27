@@ -33,6 +33,7 @@ from .physical_ports import RemoteDevices, RemoteBattery
 from .records import RecordStore
 from .projection import display_plan
 from .sources import ObservationMirror, RemoteHistory
+from .upgrades import open_runtime_schema
 
 
 def encode(value):
@@ -107,15 +108,7 @@ class AppEngine:
         self.identity = validate_identity({key:self.proof[key] for key in ('entry_id','migration_id','export_sha256','pair')})
         self.marker = RecordStore(self.root/'activation.json')
         self.activation = await self.marker.async_load()
-        # The migration identity records its original app release. App-only
-        # fixes may resume it when the protocol and exact companion core remain
-        # identical; cold imports still require the complete original pair.
-        expected = self.identity['pair']
-        compatible = expected == self.paired_release or (self.activation is not None and
-            self.activation.get('state') == 'active' and
-            all(expected[key] == self.paired_release[key] for key in ('protocol','core_sha256')))
-        if not compatible:
-            raise GatewayConflict('App binary differs from the imported migration pair')
+        self.schema = await open_runtime_schema(self.root, self.identity, self.activation, self.paired_release)
         if self.activation is None:
             await asyncio.to_thread(verify_import,self.root,self.proof)
         elif self.activation['identity'] != self.identity:

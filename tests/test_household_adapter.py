@@ -34,7 +34,7 @@ class Base:
 
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        path = Path(__file__).parents[1]/'custom_components/shs_energy/coordinator.py'
+        path = Path(__file__).parents[1]/'custom_components/shs_energy/recorder_source.py'
         tree = ast.parse(path.read_text())
         tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
         self.rig = Rig()
@@ -58,40 +58,25 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             async_energy_dashboard_inventory=AsyncMock(return_value=[]),
         )
         exec(compile(tree, str(path), 'exec'), ns)
-        self.coordinator = ns['ShsStatusCoordinator'](self.hass, self.entry, self.rig.client)
-
-    async def test_framework_listeners_and_repairs_are_preserved_and_admission_is_canonical(self):
-        h = self.coordinator
-        control = Mock()
-        h.async_add_control_listener(control)
-        await h.async_request_refresh()
-        self.assertEqual(h.notifications, 1)
-        control.assert_called_once()
-        self.issues.async_create_issue.assert_called_once()
-        self.assertEqual(self.issues.async_create_issue.call_args.args[2], h.attention_items[0]['key'])
-        await h.ports.admit(dict(self.entry.options), {'device_modes': {}})
-        self.assertEqual(self.entry.options, {'device_modes': {}})
-        with self.assertRaises(ConfigurationChanged):
-            await h.ports.admit({'outdated': True}, {})
-        self.assertEqual(self.entry.options, {'device_modes': {}})
+        self.source = ns['RecorderSource'](self.hass)
 
     async def test_history_retains_start_state_and_attributes_only_when_requested(self):
         now = self.rig.now
         self.history.return_value = {'climate.room': [SimpleNamespace(last_updated=now, state='heat', attributes={'hvac_action':'heating'})]}
         for attrs in (True, False):
-            result = await self.coordinator._state_history(['climate.room'], now, now, with_attributes=attrs)
+            result = await self.source.states(now, now, ['climate.room'], with_attributes=attrs)
             self.assertEqual(result['climate.room'], [(now, 'heat', {'hvac_action':'heating'} if attrs else None)])
             self.assertEqual(self.history.call_args.kwargs, dict(include_start_time_state=True, significant_changes_only=False,
                                                               minimal_response=False, no_attributes=not attrs))
         self.history.side_effect = HomeAssistantError('recorder unavailable')
         with self.assertRaises(HouseholdReadError):
-            await self.coordinator._state_history(['climate.room'], now, now, with_attributes=False)
+            await self.source.states(now, now, ['climate.room'], with_attributes=False)
 
     async def test_weather_port_uses_only_read_only_forecast_service(self):
         forecast = [{'temperature': 12}]
         self.hass.services.async_call.return_value = {'weather.home': {'forecast': forecast}}
-        self.assertEqual(await self.coordinator.ports.history.hourly_forecast('weather.home'), forecast)
+        self.assertEqual(await self.source.hourly_forecast('weather.home'), forecast)
         self.hass.services.async_call.assert_awaited_once_with('weather', 'get_forecasts', {'entity_id':'weather.home','type':'hourly'}, blocking=True, return_response=True)
         self.hass.services.async_call.side_effect = HomeAssistantError('offline')
         with self.assertRaises(HouseholdReadError):
-            await self.coordinator.ports.history.hourly_forecast('weather.home')
+            await self.source.hourly_forecast('weather.home')

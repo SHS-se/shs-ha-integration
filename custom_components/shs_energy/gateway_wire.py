@@ -15,14 +15,6 @@ def filter_sources(entities, read, platform):
     return result
 
 
-def validate_release(release, identity, version):
-    if (type(release) is not dict or set(release) != {'protocol','app_version','integration_version','core_sha256'}
-            or release['integration_version'] != version
-            or any(release[key] != identity['pair'][key] for key in ('protocol','core_sha256'))
-            or type(release['app_version']) is not str or not release['app_version']):
-        raise ValueError('The running app and installed companion are not the paired release')
-
-
 class ProjectionAssembly:
     """One bounded, checksummed projection per authenticated socket."""
     def __init__(self):

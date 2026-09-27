@@ -16,12 +16,13 @@ from homeassistant.util.json import json_loads
 
 from .configuration import (area_name_by_id, async_energy_dashboard_inventory, entity_area_id_by_id,
                             entity_display_name_by_id, resolved_options)
-from .coordinator import RecorderSource
-from .gateway_wire import ProjectionAssembly, filter_sources, validate_release
+from .recorder_source import RecorderSource
+from .gateway_wire import ProjectionAssembly, filter_sources
+from .shs_wire.protocol import admit, offer
 from .shs_core.controller_inputs import configured_entity_ids
 from .shs_core.api_contract import INTEGRATION_VERSION
 from .shs_core.battery_gateway import BatteryGateway
-from .shs_core.battery_runtime import power
+from .shs_core.native_readings import power
 from .shs_core.command_transport import CommandTransport
 from .shs_core.controller_inputs import ControllerInputs
 from .shs_core.device_gateway import DeviceGateway
@@ -207,7 +208,7 @@ async def open_gateway(hass, entry):
         files = {str(p.relative_to(root)):sha256(p.read_bytes()).hexdigest()
                  for p in sorted(root.rglob('*')) if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc'}
         return sha256(json.dumps(files,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
-    if identity['pair']['core_sha256'] != await hass.async_add_executor_job(core_digest):
+    if not activated and identity['pair']['core_sha256'] != await hass.async_add_executor_job(core_digest):
         raise GatewayConflict('The installed companion core differs from the paired app')
     if identity['entry_id'] != entry.entry_id or (not activated and identity['pair']['integration_version'] != INTEGRATION_VERSION):
         raise GatewayConflict('The installed companion differs from the seeded migration release')
@@ -260,7 +261,7 @@ async def websocket_gateway(hass, connection, msg):
             service = hass.data.get(GATEWAYS,{}).get(entry)
             if service is None:
                 raise GatewayConflict('The SHS gateway is not loaded for this entry')
-            validate_release(msg['body'].get('release'), service.identity, INTEGRATION_VERSION)
+            admit(msg['body'].get('contract'), offer(INTEGRATION_VERSION))
             peer = sockets[connection] = AppConnection(service)
             peer.projection_assembly = ProjectionAssembly()
             @callback
@@ -273,7 +274,7 @@ async def websocket_gateway(hass, connection, msg):
             raise GatewayConflict('Connect the paired SHS app first')
         request = {key:msg[key] for key in ('id','operation','body')}
         if request['operation'] == 'connect':
-            request['body'] = {key:value for key,value in request['body'].items() if key != 'release'}
+            request['body'] = {key:value for key,value in request['body'].items() if key != 'contract'}
         elif request['operation'] == 'projection_chunk':
             if peer.closed or peer.service.connection is not peer or not peer.service.active:
                 raise GatewayConflict('Projection belongs to an inactive socket')
@@ -283,6 +284,8 @@ async def websocket_gateway(hass, connection, msg):
                 return
             request.update(operation='projection',body={'value':value})
         result = await peer.request(request)
+        if request['operation'] == 'connect':
+            result['result']['contract'] = offer(INTEGRATION_VERSION)
         connection.send_result(msg['id'],result['result'])
     except (ValueError, KeyError, TypeError, RuntimeError) as error:
         stale = peer is None or peer.closed or peer.service.connection is not peer

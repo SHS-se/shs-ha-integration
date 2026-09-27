@@ -34,7 +34,7 @@ from .configuration import resolved_options
 from .shs_core.operating_modes import device_mode
 from .shs_core.presentation import controller_explanation
 from .shs_core.optimisation import OptimisationInputError, validate_plan_contract
-from .coordinator import ShsStatusCoordinator
+from .gateway_projection import GatewayProjection
 from .shs_core.supplier import current_supplier_prices
 
 
@@ -43,7 +43,7 @@ async def async_setup_entry(
     entry: Any,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: ShsStatusCoordinator = entry.runtime_data
+    coordinator: GatewayProjection = entry.runtime_data
     async_add_entities(
         [
             ShsSubscriptionSensor(coordinator),
@@ -84,7 +84,7 @@ async def async_setup_entry(
     entry.async_on_unload(coordinator.async_add_listener(add_component_entities))
 
 
-class ShsBaseSensor(CoordinatorEntity[ShsStatusCoordinator], SensorEntity):
+class ShsBaseSensor(CoordinatorEntity[GatewayProjection], SensorEntity):
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -96,7 +96,7 @@ class ShsBaseSensor(CoordinatorEntity[ShsStatusCoordinator], SensorEntity):
         """A failed refresh does not erase a previously received value."""
         return self.coordinator.data is not None
 
-    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+    def __init__(self, coordinator: GatewayProjection) -> None:
         super().__init__(coordinator)
         entry = coordinator.entry
         self._attr_device_info = DeviceInfo(
@@ -110,7 +110,7 @@ class ShsBaseSensor(CoordinatorEntity[ShsStatusCoordinator], SensorEntity):
 class ShsSubscriptionSensor(ShsBaseSensor):
     _attr_translation_key = "subscription"
 
-    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+    def __init__(self, coordinator: GatewayProjection) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_subscription"
 
@@ -137,7 +137,7 @@ class ShsSubscriptionSensor(ShsBaseSensor):
 class ShsLastPushSensor(ShsBaseSensor):
     _attr_translation_key = "last_push"
 
-    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+    def __init__(self, coordinator: GatewayProjection) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_last_push"
 
@@ -161,7 +161,7 @@ class ShsOptimisationStatusSensor(ShsBaseSensor):
 
     _attr_translation_key = "optimisation_status"
 
-    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+    def __init__(self, coordinator: GatewayProjection) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_optimisation_status"
 
@@ -210,7 +210,7 @@ class ShsReactiveSurplusSensor(ShsBaseSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = None
 
-    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+    def __init__(self, coordinator: GatewayProjection) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_reactive_surplus"
 
@@ -243,7 +243,7 @@ class ShsPlanRequestSensor(ShsBaseSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = None
 
-    def __init__(self, coordinator: ShsStatusCoordinator, device: str) -> None:
+    def __init__(self, coordinator: GatewayProjection, device: str) -> None:
         super().__init__(coordinator)
         self.device = device
         self._attr_name = f"{device.title()} planned request"
@@ -306,7 +306,7 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = None
 
-    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+    def __init__(self, coordinator: GatewayProjection) -> None:
         super().__init__(coordinator)
         self._attr_name = "EV planned current"
         self._attr_unique_id = f"{coordinator.entry.entry_id}_ev_planned_current"
@@ -418,7 +418,7 @@ class ShsGridOperatorSensor(ShsBaseSensor):
 
     _attr_translation_key = "grid_operator"
 
-    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+    def __init__(self, coordinator: GatewayProjection) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_grid_operator"
 
@@ -440,7 +440,7 @@ class ShsGridOperatorSensor(ShsBaseSensor):
 class ShsTariffStatusSensor(ShsBaseSensor):
     _attr_translation_key = "tariff_status"
 
-    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+    def __init__(self, coordinator: GatewayProjection) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_tariff_status"
 
@@ -479,7 +479,7 @@ class ShsTotalPriceSensor(ShsBaseSensor):
     _attr_entity_category = None
     _attr_suggested_display_precision = 3
 
-    def __init__(self, coordinator: ShsStatusCoordinator, direction: str) -> None:
+    def __init__(self, coordinator: GatewayProjection, direction: str) -> None:
         super().__init__(coordinator)
         self.direction = direction
         self._attr_translation_key = f"total_{direction}_price"
@@ -541,7 +541,7 @@ class ShsGridPriceSensor(ShsBaseSensor):
     _attr_entity_category = None
     _attr_suggested_display_precision = 3
 
-    def __init__(self, coordinator: ShsStatusCoordinator, direction: str) -> None:
+    def __init__(self, coordinator: GatewayProjection, direction: str) -> None:
         super().__init__(coordinator)
         self.direction = direction
         self._attr_translation_key = f"grid_{direction}_price"
@@ -654,7 +654,7 @@ class ShsTariffComponentSensor(ShsBaseSensor):
 
     def __init__(
         self,
-        coordinator: ShsStatusCoordinator,
+        coordinator: GatewayProjection,
         component_key: str,
         definition: dict[str, str],
     ) -> None:
@@ -711,7 +711,7 @@ class ShsCurrentGridCostSensor(ShsBaseSensor):
     _attr_entity_category = None
     _attr_suggested_display_precision = 2
 
-    def __init__(self, coordinator: ShsStatusCoordinator) -> None:
+    def __init__(self, coordinator: GatewayProjection) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_current_grid_cost"
 

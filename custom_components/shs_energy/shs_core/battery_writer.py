@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from .home_runtime import WriterGrant, WriterIdentity
+from .native_records import WriterGrant, WriterIdentity
 
 class BatteryWriterFence:
     """The existing controller lock drains all legacy writes before a handover.

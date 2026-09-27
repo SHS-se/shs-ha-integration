@@ -9,6 +9,7 @@ from shs_core.gateway_journal import GatewayJournal
 from shs_core.gateway_stream import GatewayConnection, GatewayStream
 sys.path.append(str(Path(__file__).parents[2]/'custom_components/shs_energy'))
 from gateway_wire import ProjectionAssembly
+from shs_wire.protocol import admit, offer
 
 
 async def serve():
@@ -36,6 +37,8 @@ async def serve():
                 request_id = value['id']
                 assert value.pop('type') == 'shs_energy/gateway'
                 try:
+                    if value['operation'] == 'connect':
+                        admit(value['body'].pop('contract'), offer('released-companion'))
                     if value['operation'] == 'projection_chunk':
                         await connection.request(dict(value,operation='snapshot',body={}))
                         assembled = projection.receive(value['body'])
@@ -44,6 +47,8 @@ async def serve():
                         result = {'id':request_id,'result':{}}
                     else:
                         result = await connection.request(value)
+                    if value['operation'] == 'connect':
+                        result['result']['contract'] = offer('released-companion')
                     reply = dict(type='result', success=True, **result)
                 except ValueError as error:
                     reply = dict(id=request_id, type='result', success=False, error={'message':str(error)})

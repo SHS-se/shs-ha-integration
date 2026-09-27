@@ -22,6 +22,7 @@ sys.path.append(str(PACKAGE))
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
     "gateway_wire",
+    "shs_wire.protocol", "shs_core.native_records", "shs_core.native_readings",
     "shs_core.gateway_service", "shs_core.runtime_projection",
     "shs_core.battery_gateway",
     "shs_core.device_port",
@@ -64,7 +65,7 @@ HOME_ASSISTANT_MODULES = (
     "config_flow",
     "config_panel", "control_configuration", "select",
     "configuration", "refresh",
-    "coordinator",
+    "recorder_source",
     "diagnostics",
     "sensor",
     "controller_events", "battery_sigen",
@@ -140,6 +141,7 @@ class ModuleBoundaryTests(unittest.TestCase):
         listed = set(PURE_MODULES) | set(HOME_ASSISTANT_MODULES) | {"shs_core.api"}
         actual = {str(path.relative_to(PACKAGE).with_suffix("")).replace("/", ".") for path in PACKAGE.rglob("*.py")}
         listed.add("shs_core.__init__")
+        listed.add("shs_wire.__init__")
         self.assertEqual(
             actual - listed,
             set(),
@@ -155,7 +157,7 @@ class ModuleBoundaryTests(unittest.TestCase):
         records the panel item in one call; a second `async_create_issue`
         anywhere would let the two drift apart again.
         """
-        source = (PACKAGE / "coordinator.py").read_text(encoding="utf-8")
+        source = (PACKAGE / "gateway_projection.py").read_text(encoding="utf-8")
         creates = [
             number
             for number, line in enumerate(source.splitlines(), start=1)
@@ -178,7 +180,18 @@ class ModuleBoundaryTests(unittest.TestCase):
                 for inner in ast.walk(node)
             )
         ]
-        self.assertEqual(owners, ["_publish_repair"])
+        self.assertEqual(owners, ["publish_repair"])
+
+    def test_native_gateway_does_not_import_the_runtime_or_accounting(self):
+        import subprocess
+        code = '''
+import sys
+sys.path.append(sys.argv[1])
+from shs_core import battery_gateway, device_gateway, native_readings
+for name in ('household','home_runtime','battery_runtime','plan_execution','execution_storage'):
+    assert 'shs_core.'+name not in sys.modules, name
+'''
+        subprocess.run([sys.executable,'-c',code,str(PACKAGE)],check=True)
 
     def test_every_raised_repair_has_a_translation(self) -> None:
         """A repair with no strings entry renders as a bare key to the user."""
