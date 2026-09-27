@@ -16,4 +16,7 @@ brand = (root / "custom_components/shs_energy/brand/icon@2x.png").read_bytes()
 for path in ("apps/shs_energy/icon.png", "apps/shs_energy/logo.png", "web/public/shs.png"):
     assert (root / path).read_bytes() == brand, path
 assert yaml.safe_load((root / "repository.yaml").read_text())["url"] == "https://github.com/SHS-se/shs-ha-integration"
-print("App metadata, version and existing SHS branding verified")
+dockerfile=(root / "apps/shs_energy/Dockerfile").read_text()
+assert "COPY --from=companion /bundle/core/shs_wire ./shs_wire" in dockerfile
+assert "import shs_app.server; import shs_app.engine" in dockerfile
+print("App metadata, version, packaged runtime imports and existing SHS branding verified")
