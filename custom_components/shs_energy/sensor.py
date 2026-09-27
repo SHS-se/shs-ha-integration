@@ -35,7 +35,7 @@ from .shs_core.operating_modes import device_mode
 from .shs_core.presentation import controller_explanation
 from .shs_core.optimisation import OptimisationInputError, validate_plan_contract
 from .coordinator import ShsStatusCoordinator
-from .supplier import current_supplier_prices
+from .shs_core.supplier import current_supplier_prices
 
 
 async def async_setup_entry(

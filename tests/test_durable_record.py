@@ -6,7 +6,7 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
-from durable_record import DurableRecord
+from shs_core.durable_record import DurableRecord
 
 
 class FileStore:

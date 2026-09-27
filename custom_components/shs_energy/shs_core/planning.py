@@ -18,77 +18,38 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Callable, Optional
 
-try:  # pragma: no cover - exercised by both import paths
-    from .shs_core.const import (
-        EV_CHARGE_EFFICIENCY,
-        EU_AC_PHASE_COUNT,
-        EU_AC_PHASE_VOLTAGE,
-        OPT_DEVICE_CONTROL_MAPPINGS,
-        OPT_EV_CONNECTED_ENTITY,
-        OPT_EV_DEPARTURE_ENTITY,
-        OPT_EV_ENERGY_REMAINING_ENTITY,
-        OPT_EV_SOC_ENTITY,
-        OPT_EV_TARGET_SOC_ENTITY,
-        OPT_EV_ENABLED,
-        OPT_POOL_ENABLED,
-        OPT_POOL_WATER_TEMPERATURE_ENTITY,
-        OPT_EV_CHARGE_EFFICIENCY,
-        OPT_EV_KWH_PER_KM,
-        DEFAULT_EV_KWH_PER_KM,
-    )
-    from .shs_core.const import (
-        OPTIMISATION_PROFILE_DAYS,
-    )
-    from .shs_core.device_controls import CONTROL_TYPES, planning_path, mapped_planning_path
-    from .shs_core.optimisation import (
-        OptimisationInputError,
-        REMEDY_DEFECT,
-        REMEDY_WAITING,
-        build_device_load_model,
-        discrete_current_control,
-        normalized_fraction,
-        parse_number,
-        state_is_on,
-        validate_service_windows,
-    )
-except ImportError:  # The test suite imports these helpers as flat modules,
-    # without Home Assistant installed, so the package parent does not exist.
-    from shs_core.const import (  # type: ignore[no-redef]
-        EV_CHARGE_EFFICIENCY,
-        EU_AC_PHASE_COUNT,
-        EU_AC_PHASE_VOLTAGE,
-        OPT_DEVICE_CONTROL_MAPPINGS,
-        OPT_EV_CONNECTED_ENTITY,
-        OPT_EV_DEPARTURE_ENTITY,
-        OPT_EV_ENERGY_REMAINING_ENTITY,
-        OPT_EV_SOC_ENTITY,
-        OPT_EV_TARGET_SOC_ENTITY,
-        OPT_EV_ENABLED,
-        OPT_POOL_ENABLED,
-        OPT_POOL_WATER_TEMPERATURE_ENTITY,
-        OPT_EV_CHARGE_EFFICIENCY,
-        OPT_EV_KWH_PER_KM,
-        DEFAULT_EV_KWH_PER_KM,
-    )
-    from shs_core.const import (  # type: ignore[no-redef]
-        OPTIMISATION_PROFILE_DAYS,
-    )
-    from shs_core.device_controls import (  # type: ignore[no-redef]
-        CONTROL_TYPES,
-        planning_path,
-        mapped_planning_path,
-    )
-    from shs_core.optimisation import (  # type: ignore[no-redef]
-        OptimisationInputError,
-        REMEDY_DEFECT,
-        REMEDY_WAITING,
-        build_device_load_model,
-        discrete_current_control,
-        normalized_fraction,
-        parse_number,
-        state_is_on,
-        validate_service_windows,
-    )
+from .const import (
+    EV_CHARGE_EFFICIENCY,
+    EU_AC_PHASE_COUNT,
+    EU_AC_PHASE_VOLTAGE,
+    OPT_DEVICE_CONTROL_MAPPINGS,
+    OPT_EV_CONNECTED_ENTITY,
+    OPT_EV_DEPARTURE_ENTITY,
+    OPT_EV_ENERGY_REMAINING_ENTITY,
+    OPT_EV_SOC_ENTITY,
+    OPT_EV_TARGET_SOC_ENTITY,
+    OPT_EV_ENABLED,
+    OPT_POOL_ENABLED,
+    OPT_POOL_WATER_TEMPERATURE_ENTITY,
+    OPT_EV_CHARGE_EFFICIENCY,
+    OPT_EV_KWH_PER_KM,
+    DEFAULT_EV_KWH_PER_KM,
+)
+from .const import (
+    OPTIMISATION_PROFILE_DAYS,
+)
+from .device_controls import CONTROL_TYPES, planning_path, mapped_planning_path
+from .optimisation import (
+    OptimisationInputError,
+    REMEDY_DEFECT,
+    REMEDY_WAITING,
+    build_device_load_model,
+    discrete_current_control,
+    normalized_fraction,
+    parse_number,
+    state_is_on,
+    validate_service_windows,
+)
 
 # Reads one entity as ``{"state": str, "attributes": dict}``, raising
 # OptimisationInputError when it is missing or unavailable.
@@ -744,10 +705,7 @@ def build_operating_scope(options, devices, device_models, device_actuals, horiz
     subsequent empirical forecast remains an expectation, not a claim that the
     observed running state persists through the planning horizon.
     """
-    if __package__:
-        from .shs_core.operating_modes import operating_mode_identity, system_member_keys
-    else:
-        from shs_core.operating_modes import operating_mode_identity, system_member_keys
+    from .operating_modes import operating_mode_identity, system_member_keys
     from math import isfinite
     owners = system_member_keys(devices, options)
     model_owners = {model["key"]: "$" + owners[model["key"]] if model["key"] in owners else model["key"]

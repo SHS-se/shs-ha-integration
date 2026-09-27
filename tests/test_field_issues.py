@@ -12,11 +12,11 @@ from shs_core.device_controls import battery_measurement_errors, BatteryMeasurem
 
 
 def price_catalog(coordinator):
-    cls = next(n for n in ast.parse((ROOT / 'coordinator.py').read_text()).body
-               if isinstance(n, ast.ClassDef) and n.name == 'ShsStatusCoordinator')
+    cls = next(n for n in ast.parse((ROOT / 'shs_core/household.py').read_text()).body
+               if isinstance(n, ast.ClassDef) and n.name == 'Household')
     method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == '_supplier_price_catalog')
     namespace = {'OptimisationInputError': OptimisationInputError, 'REMEDY_WAITING': REMEDY_WAITING}
-    exec(compile(ast.Module(body=[method], type_ignores=[]), 'coordinator.py', 'exec'), namespace)
+    exec(compile(ast.Module(body=[method], type_ignores=[]), 'shs_core/household.py', 'exec'), namespace)
     return namespace['_supplier_price_catalog'](coordinator)
 
 

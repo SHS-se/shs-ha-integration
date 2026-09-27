@@ -18,7 +18,8 @@ sys.path.append(str(ROOT))
 from refresh import refresh_in_progress
 from shs_core import const
 from shs_core.optimisation import OptimisationInputError, validate_plan_contract, optimisation_plan_due, quarter_start
-from test_battery_runtime import Store
+from household_fixture import Rig
+from shs_core.api import ShsApiError
 
 
 class ContinuityTests(unittest.IsolatedAsyncioTestCase):
@@ -26,42 +27,21 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
         fixture=json.loads((Path(__file__).parent/'fixtures/schema-9-mixed-mode-plan.json').read_text())
         self.plan=fixture['plan']
         self.now=datetime.fromisoformat(fixture['validation_time'])
-        tree=ast.parse((ROOT/'coordinator.py').read_text())
-        cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='ShsStatusCoordinator')
-        names={'_planning_exchange','async_optimisation_push','async_restore_plan','operational_status','binding_plan_for'}
-        methods=[n for n in cls.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name in names]
-        for method in methods:
-            for node in ast.walk(method):
-                if isinstance(node,ast.ImportFrom):node.level=0
-        namespace={'asynccontextmanager':asynccontextmanager,'refresh_in_progress':refresh_in_progress,**vars(const),'Any':Any,'datetime':datetime,'timedelta':timedelta,'timezone':timezone,
-            'monotonic':monotonic,'dt_util':SimpleNamespace(utcnow=lambda:self.now),
-            'resolved_options':lambda hass,options:options,'_LOGGER':Mock(),
-            'OptimisationInputError':OptimisationInputError,'validate_plan_contract':validate_plan_contract,
-            'optimisation_plan_due':optimisation_plan_due,'quarter_start':quarter_start,
-            'ShsApiError':RuntimeError,'HomeAssistantError':RuntimeError,
-            'ShsSubscriptionInactiveError':PermissionError}
-        # operational_status uses the coordinator's datetime clock as well.
-        class Clock(datetime):
-            @classmethod
-            def now(cls,tz=None):return self.now
-        namespace['datetime']=Clock
-        exec(compile(ast.Module(body=methods,type_ignores=[]),'coordinator.py','exec'),namespace)
-        self.c=type('CoordinatorBoundary',(),{name:namespace[name] for name in names})()
-        c=self.c
-        c._store=Store();c._store.saved={'optimisation_plan':deepcopy(self.plan)}
-        c.entry=SimpleNamespace(options={'planning_mode':'live','device_modes':deepcopy(self.plan['operating_scope']['modes'])})
-        c.hass=SimpleNamespace(data={});c.entry.entry_id='entry';c.entry.runtime_data=c;c._push_lock=asyncio.Lock();c._recovering=False
+        self.rig = Rig(now=self.now, options={'planning_mode':'live','device_modes':deepcopy(self.plan['operating_scope']['modes'])}, stored={'optimisation_plan':deepcopy(self.plan)})
+        self.c = c = self.rig.household
+        # Store assertions refer to the durable bytes written by the real wrapper.
+        c._store = self.rig.records
         c._plan_configuration_changed=False;c._plan_contract=validate_plan_contract
         c.optimisation_plan=self.plan;c.optimisation_missing_inputs=[]
         c.last_optimisation_error=None;c.supplier_prices=[]
         c._configured_entities=lambda:{}
         c._prepared_device_inventory=AsyncMock(return_value=[])
         c._observe_calibration=Mock();c._thermal_quarters=AsyncMock(return_value=[])
-        c._optimisation_options=lambda:c.entry.options
+        c._optimisation_options=lambda:self.rig.options
         c._build_optimisation_snapshot=AsyncMock(return_value={})
         c._price_quarters=lambda *args:[]
         c.equipment_presence=lambda:{}
-        c._record_device_exchange=Mock(return_value={})
+        c._record_device_exchange=AsyncMock(return_value={})
         c._retry_pending_plan_ack=AsyncMock(return_value=False)
         c._sync_plan_refused_issue=Mock();c._sync_optimisation_issue=Mock()
         c.async_update_listeners=Mock();c.async_report_runtime=AsyncMock()
@@ -72,12 +52,12 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.c.optimisation_plan,self.plan)
         self.assertEqual(self.c._store.saved['optimisation_plan'],self.plan)
         self.assertTrue(self.c.operational_status['actionable'],self.c.operational_status)
-        self.assertIsNotNone(self.c.binding_plan_for('battery',self.c.entry.options)[1])
+        self.assertIsNotNone(self.c.binding_plan_for('battery',self.rig.options)[1])
 
     async def test_failed_request_after_configuration_change_retains_schedule_through_restore(self):
         self.c._plan_configuration_changed=True
         self.c._store.saved['plan_configuration_changed']=True
-        self.c.client.push_optimisation.side_effect=RuntimeError('Planning worker returned HTTP 546')
+        self.c.client.push_optimisation.side_effect=ShsApiError('Planning worker returned HTTP 546')
         await self.c.async_optimisation_push(force_plan=True)
         self.assert_retained()
         self.assertIn('HTTP 546',self.c.last_optimisation_error)

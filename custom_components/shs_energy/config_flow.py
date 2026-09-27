@@ -9,7 +9,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import ShsApiClient, ShsApiError, ShsPairingError
+from .shs_core.api import ShsApiClient, ShsApiError, ShsPairingError
 from .shs_core.const import (
     CONFIG_ENTRY_VERSION,
     CONF_BASE_URL,

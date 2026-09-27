@@ -9,7 +9,7 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
-from thermal import (  # noqa: E402
+from shs_core.thermal import (  # noqa: E402
     actuator_value,
     cooling_value,
     build_thermal_slots,

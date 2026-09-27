@@ -12,13 +12,13 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
-from supplier import all_in_price_slots  # noqa: E402
+from shs_core.supplier import all_in_price_slots  # noqa: E402
 
 COORDINATOR = (
     Path(__file__).parents[1]
     / "custom_components"
     / "shs_energy"
-    / "coordinator.py"
+    / "shs_core/household.py"
 ).read_text(encoding="utf-8")
 INIT = (
     Path(__file__).parents[1]
@@ -36,7 +36,7 @@ API = (
     Path(__file__).parents[1]
     / "custom_components"
     / "shs_energy"
-    / "api.py"
+    / "shs_core/api.py"
 ).read_text(encoding="utf-8")
 
 

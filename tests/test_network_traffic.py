@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).parents[1] / "custom_components/shs_energy"
 sys.path.append(str(ROOT))
-from network_traffic import NetworkTraffic
+from shs_core.network_traffic import NetworkTraffic
 
 
 class TrafficTests(unittest.TestCase):
@@ -36,20 +36,8 @@ class TrafficTests(unittest.TestCase):
 
 class ApiTrafficTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        class ClientError(Exception):
-            pass
-        tree = ast.parse((ROOT / "api.py").read_text())
-        # Use the entire real client with only its external imports replaced.
-        tree.body = [node for node in tree.body if not (
-            isinstance(node, ast.ImportFrom) and node.level > 0
-            or isinstance(node, ast.Import) and any(a.name == "aiohttp" for a in node.names)
-        )]
-        ns = {"aiohttp": SimpleNamespace(ClientError=ClientError, ContentTypeError=ClientError,
-                ClientTimeout=lambda **kwargs: SimpleNamespace(**kwargs)),
-              "NetworkTraffic": NetworkTraffic, "API_VERSION": 1, "INTEGRATION_VERSION": "test",
-              "MAX_REPLAN_ERROR_CHARS": 1000, "SUPPORTED_PLAN_SCHEMA_VERSIONS": {6}}
-        exec(compile(tree, "api.py", "exec"), ns)
-        self.api = ns
+        from shs_core import api
+        self.api = vars(api)
 
     async def call(self, status=200, payload=None, interrupted=False, path="integration-status"):
         if payload is None:

@@ -21,13 +21,13 @@ COORDINATOR = (
     Path(__file__).parents[1]
     / "custom_components"
     / "shs_energy"
-    / "coordinator.py"
+    / "shs_core/household.py"
 ).read_text(encoding="utf-8")
 PLANNING = (
     Path(__file__).parents[1]
     / "custom_components"
     / "shs_energy"
-    / "planning.py"
+    / "shs_core/planning.py"
 ).read_text(encoding="utf-8")
 CONFIGURATION = (
     Path(__file__).parents[1]

@@ -23,8 +23,8 @@ from shs_core.api_contract import (  # noqa: E402
     validate_server_contract,
 )
 
-API = (MODULE_ROOT / "api.py").read_text(encoding="utf-8")
-COORDINATOR = (MODULE_ROOT / "coordinator.py").read_text(encoding="utf-8")
+API = (MODULE_ROOT / "shs_core/api.py").read_text(encoding="utf-8")
+COORDINATOR = (MODULE_ROOT / "shs_core/household.py").read_text(encoding="utf-8")
 INIT = (MODULE_ROOT / "__init__.py").read_text(encoding="utf-8")
 CONST = (MODULE_ROOT / "shs_core/const.py").read_text(encoding="utf-8")
 

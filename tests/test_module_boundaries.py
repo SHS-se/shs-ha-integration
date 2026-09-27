@@ -21,18 +21,18 @@ sys.path.append(str(PACKAGE))
 
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
-    "app_projection", "shs_core.native_commands", "shs_core.controller_inputs", "shs_core.device_ownership", "shs_core.command_journal", "shs_core.command_transport",
+    "shs_core.household", "shs_core.household_ports", "app_projection", "shs_core.native_commands", "shs_core.controller_inputs", "shs_core.device_ownership", "shs_core.command_journal", "shs_core.command_transport",
     "shs_core.battery_commands", "shs_core.operating_modes", "shs_core.verification",
     "shs_core.home_runtime", "shs_core.home_runtime_checkpoint", "shs_core.energy_ledger", "shs_core.runtime_json",
     "shs_core.battery_supply", "shs_core.home_host", "shs_core.battery_native_adapter",
     "shs_core.controller", "shs_core.battery_live", "battery_writer", "shs_core.battery_runtime", "shs_core.battery_conversion",
     "shs_core.presentation", "shs_core.plan_execution", "shs_core.battery_physical", "shs_core.execution_storage", "execution_migration",
-    "shs_core.api_contract", "durable_record", "shs_core.verification_storage",
-    "shs_core.const", "replan_listener",
+    "shs_core.api_contract", "shs_core.durable_record", "shs_core.verification_storage",
+    "shs_core.const", "shs_core.replan_listener",
     "shs_core.device_controls",
     "shs_core.device_commands", "shs_core.minimum_run",
     "migration",
-    "network_traffic",
+    "shs_core.network_traffic",
     "shs_core.controller_metrics", "shs_core.resource_profiling",
     "shs_core.controller_diagnostics",
     "shs_core.controller_observations",
@@ -42,11 +42,11 @@ PURE_MODULES = (
     "shs_core.configuration_fields",
     "shs_core.optimisation",
     "shs_core.measurements",
-    "planning",
-    "readings",
-    "supplier",
-    "tariff",
-    "thermal",
+    "shs_core.planning",
+    "shs_core.readings",
+    "shs_core.supplier",
+    "shs_core.tariff",
+    "shs_core.thermal",
 )
 
 # Thin by design: they wire Home Assistant to the modules above.
@@ -129,7 +129,7 @@ class ModuleBoundaryTests(unittest.TestCase):
                     )
 
     def test_the_module_lists_still_describe_the_package(self) -> None:
-        listed = set(PURE_MODULES) | set(HOME_ASSISTANT_MODULES) | {"api"}
+        listed = set(PURE_MODULES) | set(HOME_ASSISTANT_MODULES) | {"shs_core.api"}
         actual = {str(path.relative_to(PACKAGE).with_suffix("")).replace("/", ".") for path in PACKAGE.rglob("*.py")}
         listed.add("shs_core.__init__")
         self.assertEqual(
@@ -170,7 +170,7 @@ class ModuleBoundaryTests(unittest.TestCase):
                 for inner in ast.walk(node)
             )
         ]
-        self.assertEqual(owners, ["_set_attention"])
+        self.assertEqual(owners, ["_publish_repair"])
 
     def test_every_raised_repair_has_a_translation(self) -> None:
         """A repair with no strings entry renders as a bare key to the user."""

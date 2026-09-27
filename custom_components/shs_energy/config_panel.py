@@ -20,7 +20,7 @@ from homeassistant.helpers.json import json_bytes
 
 from .shs_core import const as shs_const
 from .refresh import refresh_in_progress, set_reloading
-from .api import ShsApiError
+from .shs_core.api import ShsApiError
 from .shs_core.api_contract import INTEGRATION_VERSION
 from .shs_core.controller_diagnostics import controller_diagnostics, gzip_report, report_parts, report_summary
 from .control_configuration import async_execution_devices, async_set_execution_mode

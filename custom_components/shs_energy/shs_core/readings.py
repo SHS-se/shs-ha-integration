@@ -10,14 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-try:  # pragma: no cover - exercised by both import paths
-    from .shs_core.const import MAX_KWH_PER_READING, MAX_NEGATIVE_CHANGE_KWH
-except ImportError:  # The test suite imports these helpers as flat modules,
-    # without Home Assistant installed, so the package parent does not exist.
-    from shs_core.const import (  # type: ignore[no-redef]
-        MAX_KWH_PER_READING,
-        MAX_NEGATIVE_CHANGE_KWH,
-    )
+from .const import MAX_KWH_PER_READING, MAX_NEGATIVE_CHANGE_KWH
 
 
 def usable_change(change: float) -> float | None:

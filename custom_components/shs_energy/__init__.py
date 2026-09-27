@@ -31,7 +31,7 @@ from .shs_core.controller_inputs import ControllerInputs
 from .shs_core.command_transport import CommandTransport
 from .refresh import set_reloading
 from .shs_core.resource_profiling import process_resources
-from .api import ShsApiClient
+from .shs_core.api import ShsApiClient
 from .controller_events import attach_controller_events
 from .config_panel import async_apply_configuration, async_register_config_panel
 from .shs_core.const import (

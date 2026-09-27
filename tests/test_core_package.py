@@ -90,6 +90,27 @@ print('packaged pool and battery runtimes executed through explicit ports')
 """, str(tmp), str(ROOT/'tests')], cwd=tmp, check=True, capture_output=True, text=True, timeout=30)
             self.assertIn('executed through explicit ports', result.stdout)
 
+    def test_packaged_household_runs_plan_exchange_and_source_scenarios_without_ha(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            shutil.copytree(CORE, tmp/'shs_core', ignore=shutil.ignore_patterns('__pycache__'))
+            shutil.copy2(CORE.parent/'manifest.json', tmp/'manifest.json')
+            result = subprocess.run([sys.executable, '-I', '-c', """
+import pathlib, sys, unittest
+sys.path.insert(0, sys.argv[1])
+sys.path.append(sys.argv[2])
+from shs_core.household import Household
+import shs_core.household
+assert pathlib.Path(shs_core.household.__file__).is_relative_to(sys.argv[1])
+loader = unittest.TestLoader()
+suite = unittest.TestSuite(loader.loadTestsFromName(name) for name in ('test_household', 'test_plan_continuity', 'test_plan_recovery'))
+result = unittest.TextTestRunner().run(suite)
+assert result.wasSuccessful()
+assert 'homeassistant' not in sys.modules
+print('household exchange runs from the isolated distribution')
+""", str(tmp), str(ROOT/'tests')], cwd=tmp, check=True, capture_output=True, text=True, timeout=30)
+            self.assertIn('household exchange runs', result.stdout)
+
     def test_core_dependency_boundary_is_closed(self):
         modules = {p.stem for p in CORE.glob('*.py')}
         for path in CORE.glob('*.py'):
@@ -103,7 +124,7 @@ print('packaged pool and battery runtimes executed through explicit ports')
                         self.assertIn(node.module.split('.')[0], sys.stdlib_module_names, str(path))
                 elif isinstance(node, ast.Import):
                     for name in node.names:
-                        self.assertIn(name.name.split('.')[0], sys.stdlib_module_names, str(path))
+                        self.assertIn(name.name.split('.')[0], sys.stdlib_module_names | ({'aiohttp'} if path.name == 'api.py' else set()), str(path))
 
     async def test_read_only_reader_does_not_complete_legacy_cleanup_or_create_files(self):
         import sqlite3

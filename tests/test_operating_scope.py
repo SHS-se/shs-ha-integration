@@ -8,7 +8,7 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
 from shs_core.operating_modes import execution_mode_options, operating_mode_identity, reconcile_admissions, scoped_plan, system_device_keys
-from planning import build_operating_scope
+from shs_core.planning import build_operating_scope
 from shs_core.optimisation import validate_plan_contract, OptimisationInputError, PlanContractCache
 import test_controller as fixtures
 
@@ -131,14 +131,14 @@ class ScopeTests(unittest.TestCase):
         from types import SimpleNamespace
         fixture = json.loads((Path(__file__).parent/'fixtures/schema-9-mixed-mode-plan.json').read_text())
         plan = fixture['plan']; now = datetime.fromisoformat(fixture['validation_time'])
-        tree = ast.parse((Path(__file__).parents[1]/'custom_components/shs_energy/coordinator.py').read_text())
-        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'ShsStatusCoordinator')
+        tree = ast.parse((Path(__file__).parents[1]/'custom_components/shs_energy/shs_core/household.py').read_text())
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'Household')
         method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == 'binding_plan_for')
         for node in ast.walk(method):
-            if isinstance(node, ast.ImportFrom): node.level = 0
+            if isinstance(node, ast.ImportFrom): node.level = 0; node.module = "shs_core." + node.module
         namespace = {'datetime': datetime, 'timedelta': timedelta, 'dt_util': SimpleNamespace(utcnow=lambda: now)}
-        exec(compile(ast.Module(body=[method], type_ignores=[]), 'coordinator.py', 'exec'), namespace)
-        coordinator = SimpleNamespace(optimisation_plan=plan, _plan_configuration_changed=False)
+        exec(compile(ast.Module(body=[method], type_ignores=[]), 'shs_core/household.py', 'exec'), namespace)
+        coordinator = SimpleNamespace(ports=SimpleNamespace(utcnow=lambda: now), optimisation_plan=plan, _plan_configuration_changed=False)
         checked = []
         def validate(candidate, at, **kwargs):
             checked.append(candidate)

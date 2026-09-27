@@ -145,7 +145,7 @@ class MeasurementIssueTests(unittest.TestCase):
 class SnapshotWiringTests(unittest.TestCase):
     """The coordinator cannot be imported here; guard the wiring it owns."""
 
-    SOURCE = (Path(__file__).parents[1] / "custom_components" / "shs_energy" / "coordinator.py").read_text(
+    SOURCE = (Path(__file__).parents[1] / "custom_components" / "shs_energy" / "shs_core/household.py").read_text(
         encoding="utf-8")
 
     def test_the_builder_isolates_devices_before_reading_them(self) -> None:

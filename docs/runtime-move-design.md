@@ -130,9 +130,9 @@ manifest path, independent of working directory. This keeps versioned diagnostic
 and cloud payloads tied to the exact bundled companion while the cloud client is
 still being extracted; no alternate version or import fallback is introduced.
 
-Remaining cutover work is substantial and explicit: household/coordinator and cloud
-ports, durable receipts and gateway session/activation, remote ownership/restoration
-operations, compact HA projections, and the real dormant engine reconciliation.
+Remaining cutover work is substantial and explicit: durable receipts and gateway
+session/activation, remote ownership/restoration operations, compact HA projections,
+and the real dormant engine reconciliation.
 The shared runtime existing in the image does not by itself mean it is the owner.
 
 ## Live evidence from the first extraction
@@ -154,3 +154,38 @@ minimum-run record. The live command journal still names `integration` as owner,
 release beta.54, migration ID null, with 21 `service_returned` command outcomes.
 There is no `/data/migrations` directory. These are extraction/deployment checks,
 not evidence of completed household migration.
+
+## Household and cloud extraction
+
+`Household(ports, client, store=..., battery_inputs_store=...)` now owns the existing
+cloud exchange, plan cache, snapshot construction, tariff calculations, forecast
+resampling, actual/thermal aggregation and battery input scheduling logic. Construction
+and `async_restore_plan()` are inert; neither schedules work nor sends commands.
+The app distribution contains this exact implementation and the existing `ShsApiClient`.
+The HTTP client remains the one explicit `aiohttp` dependency in the shared package;
+all other imports remain standard-library or package-local. Both runtime hosts already
+use aiohttp. Release CI now installs the pinned app dependencies so it executes the
+real HTTP client instead of replacing its imports in tests.
+
+`HouseholdPorts` supplies home facts/timezone, canonical options/admission, observations,
+inventory, history/forecast reads, clock, repairs, publication and task lifetime.
+HA's `ShsStatusCoordinator` is a composition adapter using the shared household and
+HA's existing DataUpdateCoordinator listener/debounce machinery. `RecorderSource`
+reads recorder rows and the read-only weather forecast service; calculations stay
+in the household. Neither a synthetic HA object nor a config-entry facade is used
+by the domain package. Native actuator dispatch remains at its existing HA boundary.
+
+Configuration admission is awaited and compare-and-set: acknowledgement must follow
+successful canonical update, and a conflicting edit cannot be overwritten.
+Attention data remains in the household, while its single repair projection is
+published by HA. Raw observations and half-open statistic windows retain the existing
+semantics; local calendar calculations use the supplied home timezone, including
+23/25-hour days. The canonical configuration resolver remains shared with the editors.
+
+Tests now construct the real household for plan retention, rejected replacements,
+replan recovery and source-port scenarios. An isolated copied distribution executes
+those scenarios without HA. Adapter tests cover listener delivery, repair projection,
+canonical admission, recorder start-state/attribute flags and read-only weather calls.
+This is an in-process extraction milestone, not remote gateway activation or completed
+live data migration. Durable receipts, remote ownership, final dormant reconciliation
+and activation remain the next cutover gates.

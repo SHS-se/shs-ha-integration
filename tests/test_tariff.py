@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
-from tariff import (  # noqa: E402
+from shs_core.tariff import (  # noqa: E402
     HourlyGridReading,
     MissingTariffError,
     UnsupportedTariffError,

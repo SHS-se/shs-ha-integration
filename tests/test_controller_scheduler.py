@@ -619,9 +619,9 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         import ast
         from pathlib import Path
         from unittest.mock import AsyncMock
-        source = Path(__file__).parents[1] / 'custom_components/shs_energy/coordinator.py'
+        source = Path(__file__).parents[1] / 'custom_components/shs_energy/shs_core/household.py'
         tree = ast.parse(source.read_text())
-        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'ShsStatusCoordinator')
+        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'Household')
         cls.bases = [ast.Name(id='Base', ctx=ast.Load())]
         cls.body = [node for node in cls.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                     and node.name in ('async_add_control_listener', 'async_update_listeners', 'async_battery_inputs_refresh',
@@ -633,10 +633,12 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
 
         namespace = {'Base': Base, 'resolved_options': lambda hass, options: options}
         exec(compile(ast.fix_missing_locations(ast.Module(body=[cls], type_ignores=[])), str(source), 'exec'), namespace)
-        publisher = namespace['ShsStatusCoordinator']()
+        publisher = namespace['Household']()
         publisher._control_listeners = set()
         publisher._battery_listeners = set()
         publisher.status_updates = 0
+        publisher.ports = SimpleNamespace(publish=lambda: Base.async_update_listeners(publisher))
+        publisher.resolved_options = lambda: self.options
         publisher._battery_inputs_lock = asyncio.Lock()
         publisher.hass = self.hass
         publisher.entry = SimpleNamespace(options=self.options)

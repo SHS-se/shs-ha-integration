@@ -19,7 +19,7 @@ from shs_core.optimisation import (  # noqa: E402
     OptimisationInputError,
     build_base_load_model,
 )
-from planning import (  # noqa: E402
+from shs_core.planning import (  # noqa: E402
     build_device_models,
     build_services,
     disabled_store_paths,

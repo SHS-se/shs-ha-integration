@@ -23,7 +23,7 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
-from tariff import current_grid_prices  # noqa: E402
+from shs_core.tariff import current_grid_prices  # noqa: E402
 
 FIXTURE = json.loads(
     (Path(__file__).parent / "grid-price-parity.fixture.json").read_text(

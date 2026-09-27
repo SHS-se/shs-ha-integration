@@ -97,7 +97,7 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.send_error.call_args.args[1], 'not_loaded')
 
     async def test_exchange_reports_busy_then_idle_even_when_it_fails(self):
-        ns = load_functions('coordinator.py', {'_planning_exchange'}, {'asynccontextmanager': asynccontextmanager})
+        ns = load_functions('shs_core/household.py', {'_planning_exchange'}, {'asynccontextmanager': asynccontextmanager})
         states = []
         async def report():
             states.append(refresh_in_progress(self.hass, self.entry))
@@ -136,7 +136,7 @@ class ManualReplanTests(unittest.IsolatedAsyncioTestCase):
         connection.send_error.assert_called_with(3, 'replan_failed', 'Planning is turned off for this home in Home Assistant')
 
     async def test_client_queues_a_manual_request_and_requires_confirmation(self):
-        ns = load_functions('api.py', {'request_replan'}, {'API_VERSION': 1, 'ShsApiError': ValueError})
+        ns = load_functions('shs_core/api.py', {'request_replan'}, {'API_VERSION': 1, 'ShsApiError': ValueError})
         client = SimpleNamespace(_request=AsyncMock(return_value={'replan_request_id': 'request'}))
         self.assertEqual(await ns['request_replan'](client), 'request')
         client._request.assert_awaited_once_with('POST', 'integration-status',

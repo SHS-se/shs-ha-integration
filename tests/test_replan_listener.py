@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
-from replan_listener import listen_for_replans
+from shs_core.replan_listener import listen_for_replans
 
 
 class ReplanListenerTests(unittest.IsolatedAsyncioTestCase):

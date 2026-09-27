@@ -143,18 +143,18 @@ class CoordinatorMembershipTests(unittest.IsolatedAsyncioTestCase):
         import ast
         from types import SimpleNamespace
         root = Path(__file__).parents[1] / 'custom_components/shs_energy'
-        tree = ast.parse((root/'coordinator.py').read_text())
-        cls = next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='ShsStatusCoordinator')
+        tree = ast.parse((root/'shs_core/household.py').read_text())
+        cls = next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Household')
         method = next(n for n in cls.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='async_battery_planned_devices')
         ns={}
-        exec(compile(ast.Module(body=[method],type_ignores=[]),'coordinator.py','exec'),ns)
+        exec(compile(ast.Module(body=[method],type_ignores=[]),'shs_core/household.py','exec'),ns)
         cached={'optimisation_device_configuration':{
             'broken':dict(planning_role='controllable',control_type='unsupported'),
             'ev':dict(planning_role='controllable'),
             'monitored':dict(planning_role='base_load'),
         }}
         import json
-        from durable_record import DurableRecord
+        from shs_core.durable_record import DurableRecord
         store=SimpleNamespace(async_load=AsyncMock(return_value=cached))
         coordinator=SimpleNamespace(_store=DurableRecord(store,json.dumps,json.loads))
         devices=await ns['async_battery_planned_devices'](coordinator)

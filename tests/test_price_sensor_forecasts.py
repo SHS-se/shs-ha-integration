@@ -10,8 +10,8 @@ import unittest
 
 ROOT = Path(__file__).parents[1] / "custom_components" / "shs_energy"
 sys.path.append(str(ROOT))
-from supplier import all_in_price_slots
-from tariff import grid_price_forecast, TariffError
+from shs_core.supplier import all_in_price_slots
+from shs_core.tariff import grid_price_forecast, TariffError
 from shs_core.optimisation import quarter_start
 from test_grid_price_parity import _catalog
 
@@ -33,6 +33,8 @@ class PriceSensorForecastTests(unittest.TestCase):
         self.starts = ["2026-09-09T11:30:00+00:00", "2026-09-09T11:45:00+00:00",
                        "2026-09-09T12:00:00+00:00", "2026-09-10T22:00:00+00:00"]
         self.coordinator = SimpleNamespace(
+            ports=SimpleNamespace(utcnow=lambda: self.now),
+            local_midnight=lambda: datetime(2026, 9, 9, tzinfo=timezone(timedelta(hours=2))),
             tariff_catalog=_catalog({}),
             supplier_prices={"configuration": {"supplier": "test"}, "forecast": [
                 {"start": start, "supplier_import_price_sek_per_kwh": price,
@@ -42,14 +44,14 @@ class PriceSensorForecastTests(unittest.TestCase):
             grid_prices={}, demand_charge=None, latest_calculation=None,
         )
         price_quarters = method(
-            "coordinator.py", "ShsStatusCoordinator", "_price_quarters",
+            "shs_core/household.py", "Household", "_price_quarters",
             datetime=datetime, timezone=timezone, grid_price_forecast=grid_price_forecast,
             all_in_price_slots=all_in_price_slots, TariffError=TariffError,
             _LOGGER=logging.getLogger(__name__),
         )
         self.coordinator._price_quarters = MethodType(price_quarters, self.coordinator)
         self.forecast = method(
-            "coordinator.py", "ShsStatusCoordinator", "total_price_forecast",
+            "shs_core/household.py", "Household", "total_price_forecast",
             timedelta=timedelta,
             quarter_start=quarter_start,
             dt_util=SimpleNamespace(

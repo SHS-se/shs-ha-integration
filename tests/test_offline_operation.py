@@ -16,10 +16,10 @@ from shs_core.presentation import operational_status
 
 
 def methods(names, namespace):
-    cls = next(n for n in ast.parse((ROOT / 'coordinator.py').read_text()).body
-               if isinstance(n, ast.ClassDef) and n.name == 'ShsStatusCoordinator')
+    cls = next(n for n in ast.parse((ROOT / 'shs_core/household.py').read_text()).body
+               if isinstance(n, ast.ClassDef) and n.name == 'Household')
     nodes = [n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in names]
-    exec(compile(ast.Module(body=nodes, type_ignores=[]), 'coordinator.py', 'exec'), namespace)
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), 'shs_core/household.py', 'exec'), namespace)
     return namespace
 
 
@@ -27,7 +27,7 @@ class OfflineTests(unittest.IsolatedAsyncioTestCase):
     async def test_repeated_status_errors_keep_cached_values_and_plan(self):
         namespace = methods({'_async_update_data'}, dict(
             Any=object, ShsApiError=ValueError, ApiContractError=TypeError,
-            UpdateFailed=RuntimeError, validate_server_contract=lambda _: None,
+            HouseholdRefreshError=RuntimeError, validate_server_contract=lambda _: None,
             _LOGGER=SimpleNamespace(warning=lambda *args: None)))
         status = {'subscription_active': True}
         plan = {'plan_id': 'last-good'}
@@ -46,13 +46,13 @@ class OfflineTests(unittest.IsolatedAsyncioTestCase):
         namespace = methods({'_async_update_data'}, dict(
             Any=object, ShsApiError=ValueError, ApiContractError=TypeError,
             TariffError=ValueError, SupplierPriceError=ValueError,
-            ShsSubscriptionInactiveError=PermissionError, UpdateFailed=RuntimeError,
+            ShsSubscriptionInactiveError=PermissionError, HouseholdRefreshError=RuntimeError,
             validate_server_contract=lambda _: None,
             dt_util=SimpleNamespace(utcnow=lambda: now),
             _LOGGER=SimpleNamespace(warning=lambda *args: None)))
         tariff, prices = {'revision': 1}, {'slots': ['cached']}
         coordinator = SimpleNamespace(data={'subscription_active': True},
-            tariff_catalog=tariff, supplier_prices=prices, tariff_status='configured',
+            ports=SimpleNamespace(utcnow=lambda: now), tariff_catalog=tariff, supplier_prices=prices, tariff_status='configured',
             tariff_components={'fee': 'cached'}, _sync_subscription_issue=lambda _: None,
             _sync_missing_input_issue=lambda: None,
             client=SimpleNamespace(status=AsyncMock(return_value={'subscription_active': True}),
@@ -92,7 +92,7 @@ class OfflineTests(unittest.IsolatedAsyncioTestCase):
             now = start + timedelta(hours=hours)
             status = operational_status(plan, 'live', ['website offline'], now)
             self.assertTrue(status['actionable'], status)
-            coordinator = SimpleNamespace(optimisation_plan=plan, operational_status=status)
+            coordinator = SimpleNamespace(ports=SimpleNamespace(utcnow=lambda: now), optimisation_plan=plan, operational_status=status)
             self.assertIsNotNone(getter(coordinator)['device_commands'])
         now = start + timedelta(hours=72)
         status = operational_status(plan, 'live', [], now)

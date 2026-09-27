@@ -6,7 +6,7 @@ from pathlib import Path
 import unittest
 from shs_core.presentation import controller_explanation, operational_status, timeline, complete_device_views, device_name, system_fields, device_readiness
 from shs_core.configuration_schema import configuration_defaults, shared_devices
-from planning import unplanned_services
+from shs_core.planning import unplanned_services
 
 
 class PresentationTests(unittest.TestCase):
@@ -258,15 +258,17 @@ class PresentationTests(unittest.TestCase):
         from types import SimpleNamespace
         from typing import Any
         from shs_core.device_controls import planning_path
-        tree = ast.parse((Path(__file__).parents[1] / 'custom_components/shs_energy/coordinator.py').read_text())
-        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'ShsStatusCoordinator')
-        function = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == '_record_device_exchange')
+        tree = ast.parse((Path(__file__).parents[1] / 'custom_components/shs_energy/shs_core/household.py').read_text())
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'Household')
+        function = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '_record_device_exchange')
         for node in ast.walk(function):
-            if isinstance(node, ast.ImportFrom): node.level = 0
+            if isinstance(node, ast.ImportFrom): node.level = 0; node.module = "shs_core." + node.module
         module = ast.Module(body=[function], type_ignores=[])
         namespace = {'Any': Any, 'datetime': datetime, 'timezone': timezone, 'ShsApiError': ValueError,
                      'resolved_options': lambda hass, options: options, 'planning_path': planning_path, 'unplanned_services': unplanned_services}
-        exec(compile(module, 'coordinator.py', 'exec'), namespace)
+        exec(compile(module, 'shs_core/household.py', 'exec'), namespace)
+        import asyncio
+        from unittest.mock import AsyncMock
         calls = {}
         fake = SimpleNamespace(hass=SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=lambda entry, **kw: setattr(entry, 'options', kw['options']))), entry=SimpleNamespace(options=self.options), optimisation_degraded_devices=[{'key': 'pool'}],
             _sync_device_control_issue=lambda *args: None, _sync_degraded_device_issue=lambda: None,
@@ -275,9 +277,11 @@ class PresentationTests(unittest.TestCase):
             _sync_pool_control_issue=lambda options, **kw: calls.update(pool=kw['included']))
         device = {'key': 'pool', 'statistic_id': 'pool', 'name': 'Pool', 'category': 'pool_heating', 'load_type': 'duty_cycle',
                   'planning_role': 'base_load', 'control_type': None, 'planning_choice_at': self.now.isoformat()}
+        fake.ports = SimpleNamespace(options=lambda: self.options, utcnow=lambda: self.now, admit=AsyncMock())
+        fake.resolved_options = lambda: self.options
         stored = {}
-        namespace['_record_device_exchange'](fake, stored, [{'key': 'pool', 'active_power_w': 1000, 'profile_sample_count': 10, 'inference': {}}],
-            {'device_configuration': [device], 'home_configuration': {'battery': {'included': False, 'choice_at': self.now.isoformat()}}})
+        asyncio.run(namespace['_record_device_exchange'](fake, stored, [{'key': 'pool', 'active_power_w': 1000, 'profile_sample_count': 10, 'inference': {}}],
+            {'device_configuration': [device], 'home_configuration': {'battery': {'included': False, 'choice_at': self.now.isoformat()}}}))
         self.assertEqual(stored['optimisation_device_configuration']['pool']['planning_choice_at'], self.now.isoformat())
         self.assertEqual(fake.optimisation_degraded_devices, [])
         self.assertEqual(calls, {'battery': False, 'pool': False})

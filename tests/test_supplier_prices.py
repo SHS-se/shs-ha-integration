@@ -7,7 +7,7 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
-from supplier import (  # noqa: E402
+from shs_core.supplier import (  # noqa: E402
     SupplierPriceError,
     current_supplier_prices,
     hourly_supplier_price_means,
