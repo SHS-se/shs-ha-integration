@@ -143,3 +143,14 @@ reports Ready. The existing SHS icon assets are unchanged. An authenticated
 Supervisor `/core/websocket` probe completed `auth_ok` and `get_config`, confirming
 that the planned transport requires no new app permissions. No export, migration
 fence or live ownership transfer was performed.
+
+Commit `5593b40` was subsequently deployed as integration beta.54 and app beta.6.
+CI passed 981 integration tests, 30 app tests, 93 configuration frontend checks
+and six browser scenarios, and published both app architectures. Core returned
+in 100 seconds; an SHS-only reload also returned HTTP 200 with
+`require_restart: false`. The installed app imports the packaged controller and
+battery runtime without importing HA, and its ownership decoder reads the live
+minimum-run record. The live command journal still names `integration` as owner,
+release beta.54, migration ID null, with 21 `service_returned` command outcomes.
+There is no `/data/migrations` directory. These are extraction/deployment checks,
+not evidence of completed household migration.
