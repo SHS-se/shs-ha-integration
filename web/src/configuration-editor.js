@@ -607,12 +607,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (!device.included) this._showExcluded = true;
     const cardKey = "controls:" + key;
     this._expanded.add(cardKey);
-    this._render();
+    this._render({ expandedCard: cardKey });
     const card = [...this.shadowRoot.querySelectorAll("details[data-open-key]")]
       .find(node => node.dataset.openKey === cardKey);
     if (card) {
-      card.open = true;
-      this._expanded.add(cardKey);
       card.scrollIntoView({ behavior: "smooth", block: "start" });
       card.querySelector("summary").focus({ preventScroll: true });
     }
@@ -742,7 +740,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (device && !device.included) this._showExcluded = true;
     this._expanded.add(target.card);
     this._added.add(token);
-    this._render();
+    this._render({ expandedCard: target.card });
     const field = [...this.shadowRoot.querySelectorAll(".field[data-field-token]")].find(node => node.dataset.fieldToken === token);
     if (field) {
       field.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1477,7 +1475,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<datalist id="shs-entity-list">${options(this._data.entities)}</datalist><datalist id="shs-power-list">${options(powerEntities)}</datalist><datalist id="shs-energy-list">${options(this._data.entities.filter(e => e.domain === "sensor" && ["Wh", "kWh", "MWh"].includes(e.unit)))}</datalist><datalist id="shs-percent-list">${options(this._data.entities.filter(e => e.domain === "sensor" && e.unit === "%"))}</datalist>`;
   }
 
-  _render() {
+  _render({ expandedCard } = {}) {
     if (!this.shadowRoot) return;
     const active = this.shadowRoot.activeElement;
     const focusKey = active?.dataset.fieldKey;
@@ -1488,6 +1486,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     for (const node of this.shadowRoot.querySelectorAll("details[data-open-key]")) {
       if (node.open) this._expanded.add(node.dataset.openKey); else this._expanded.delete(node.dataset.openKey);
     }
+    if (expandedCard) this._expanded.add(expandedCard);
     if (!this._backend || (this._loading && !this._data)) {
       this.shadowRoot.innerHTML = `${this._styles()}<div class="center"><div class="spinner"></div><p>Loading SHS Energy configuration…</p></div>`;
       return;

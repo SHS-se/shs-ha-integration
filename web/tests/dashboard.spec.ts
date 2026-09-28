@@ -20,3 +20,12 @@ test('app settings save without HA reload and expose revision conflicts',async({
   await expect(editor.getByText('Configuration changed in another window; refresh before saving',{exact:true})).toBeVisible();
   await expect(mode).toHaveValue('61');
 });
+
+test('configuration field deep link opens the section and focuses its real editor',async({page})=>{
+  await page.goto('./#settings?field=house_consumption_power_entity&scope=configuration');
+  const editor=page.locator('shs-configuration-editor');
+  const field=editor.getByRole('combobox',{name:'Instantaneous house consumption',exact:true});
+  await expect(field).toBeVisible();
+  await expect(field).toBeFocused();
+  await expect(field.locator('xpath=ancestor::details')).toHaveAttribute('open','');
+});
