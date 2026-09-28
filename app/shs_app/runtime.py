@@ -1,5 +1,5 @@
 """Receipt replay adapts historical accounting to a newly resumed live host."""
-from shs_core.battery_runtime import BatteryRuntime
+from shs_core.battery_runtime import BatteryRuntime, ACCOUNTING_REUSE_MS
 from shs_core.runtime_json import Records
 from shs_core.home_runtime import TRACE_RETENTION_MS
 
@@ -8,6 +8,21 @@ class AppBatteryRuntime(BatteryRuntime):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._durable_state = None
+        self._accounting_ready_at = None
+
+    def _accounting(self, account, include_evidence):
+        cached = self._live_accounting
+        if (not include_evidence and cached is not None and cached[0] is account
+                and self._accounting_ready_at is not None
+                and 0 <= self.now()-self._accounting_ready_at < ACCOUNTING_REUSE_MS):
+            return cached[1], cached[2]
+        value = super()._accounting(account, include_evidence)
+        if not include_evidence:
+            # The result retains its actual sampled time. Its reuse period starts
+            # when calculation finishes, so a slow read can still be shared by
+            # the status, entity and mode projections in the same refresh.
+            self._accounting_ready_at = self.now()
+        return value
 
     async def _save_state(self, state, processing):
         # An empty counter sub-event changes only the in-memory replay cursor.

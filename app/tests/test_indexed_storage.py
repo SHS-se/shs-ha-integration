@@ -149,9 +149,45 @@ class IndexedTests(unittest.IsolatedAsyncioTestCase):
         await self.save(account)
         with closing(sqlite3.connect(self.path)) as db:
             plan=db.execute('EXPLAIN QUERY PLAN '+BOUNDARY_EDGES,dict(stream='charge',bucket=0,start=0,end=QUARTER)).fetchall()
-            self.assertTrue(any('meter_edge_bucket' in row[-1] for row in plan))
+            self.assertTrue(any('meter_edge_bounds' in row[-1] for row in plan))
         connect=sqlite3.connect
         with patch('shs_app.indexed_evidence.sqlite3.connect', wraps=connect) as connections:
             rows,count=account._evidence.live_objectives(account,QUARTER)
         self.assertEqual(connections.call_count,1)
         self.assertGreater(count,0)
+
+    async def test_boundary_reuse_is_scoped_to_snapshot_and_preserves_late_corrections(self):
+        indexed=self.account;reference=ex.Account()
+        for at,total in ((0,0),(DAY//2,100),(DAY-1,300),(2*DAY,500)):
+            indexed=meter(indexed,'charge',at,total)
+            reference=meter(reference,'charge',at,total)
+        await self.save(indexed)
+        with self.store.evidence.snapshot():
+            for end in (DAY+1,2*DAY):
+                self.assertEqual(indexed.meter_index.measure('charge',100,end),reference.meter_index.measure('charge',100,end))
+        self.assertIsNone(self.store.evidence.boundaries.get())
+        before=indexed.meter_index.measure('charge',100,DAY+1)
+        indexed=meter(indexed,'charge',DAY//2,200)
+        reference=meter(reference,'charge',DAY//2,200)
+        await self.save(indexed)
+        after=indexed.meter_index.measure('charge',100,DAY+1)
+        self.assertEqual(after,reference.meter_index.measure('charge',100,DAY+1))
+        self.assertNotEqual(before,after)
+
+    async def test_covering_index_upgrade_preserves_verified_facts_without_history_hydration(self):
+        account=meter(meter(self.account,'charge',0,0),'charge',DAY//2,100)
+        await self.save(account)
+        with closing(sqlite3.connect(self.path)) as db,db:
+            db.execute('DROP INDEX meter_edge_bounds')
+            db.execute('CREATE INDEX meter_edge_bucket ON meter_edges(stream,bucket,right_ms)')
+            before=db.execute('SELECT revision,metadata,counts FROM head').fetchone()
+        reopened=IndexedStorage(self.path,asyncio.to_thread,ObservationMirror())
+        with patch('shs_app.indexed_evidence.decode_row',side_effect=AssertionError('History hydrated')):
+            _,restored=await reopened.load()
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute('SELECT revision,metadata,counts FROM head').fetchone(),before)
+            self.assertEqual(db.execute('SELECT version,verified FROM indexed_evidence_schema').fetchone(),(1,1))
+            self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE name='meter_edge_bucket'").fetchone())
+            plan=db.execute('EXPLAIN QUERY PLAN '+BOUNDARY_EDGES,dict(stream='charge',bucket=0,start=0,end=DAY)).fetchall()
+            self.assertTrue(any('COVERING INDEX meter_edge_bounds' in row[-1] for row in plan))
+        self.assertEqual(restored.account.meter_index.measure('charge',0,DAY//2),account.meter_index.measure('charge',0,DAY//2))

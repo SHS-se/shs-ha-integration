@@ -13,11 +13,12 @@ from shs_core.home_runtime import ExecutionSession
 from .checkpoint_storage import CheckpointStorage
 from .indexed_evidence import (AccountEvidence,EvidenceDatabase,METER_COLUMNS,DAY,encode,edge)
 
+BOUNDARY_INDEX='CREATE INDEX IF NOT EXISTS meter_edge_bounds ON meter_edges(stream,bucket,right_ms,left_ms,energy,unknown)'
 SCHEMA=(
  'CREATE TABLE indexed_evidence_schema (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, verified INTEGER NOT NULL)',
  'CREATE TABLE meter_knots (event_id TEXT NOT NULL,stream TEXT NOT NULL,direction TEXT NOT NULL,boundary TEXT NOT NULL,epoch TEXT NOT NULL,source_at_ms INTEGER NOT NULL,total_mwh INTEGER NOT NULL,receipt INTEGER NOT NULL,physical_id TEXT,PRIMARY KEY(stream,source_at_ms)) WITHOUT ROWID',
  'CREATE TABLE meter_edges (stream TEXT NOT NULL,right_ms INTEGER NOT NULL,left_ms INTEGER NOT NULL,energy INTEGER NOT NULL,unknown INTEGER NOT NULL,bucket INTEGER,PRIMARY KEY(stream,right_ms)) WITHOUT ROWID',
- 'CREATE INDEX meter_edge_bucket ON meter_edges(stream,bucket,right_ms)',
+ BOUNDARY_INDEX,
  'CREATE TABLE meter_blocks (stream TEXT NOT NULL,bucket INTEGER NOT NULL,energy INTEGER NOT NULL,unknown INTEGER NOT NULL,PRIMARY KEY(stream,bucket)) WITHOUT ROWID',
  'CREATE TABLE meter_bindings (stream TEXT NOT NULL,boundary TEXT NOT NULL,direction TEXT NOT NULL,physical_id TEXT NOT NULL,PRIMARY KEY(stream,boundary,direction,physical_id)) WITHOUT ROWID',
  'CREATE TABLE meter_prefix (stream TEXT NOT NULL,receipt INTEGER NOT NULL,ordinal INTEGER NOT NULL,max_source INTEGER NOT NULL,PRIMARY KEY(stream,receipt)) WITHOUT ROWID',
@@ -92,6 +93,13 @@ class IndexedStorage(CheckpointStorage):
             indexed=db.execute("SELECT name FROM sqlite_master WHERE name='indexed_evidence_schema'").fetchone()
             state=db.execute('SELECT version,verified FROM indexed_evidence_schema').fetchone() if indexed else None
             if state and state[0]!=1:raise ValueError('Unsupported indexed evidence schema')
+            if state:
+                # A physical query-index upgrade, without rewriting any facts,
+                # execution checkpoint, activation or schema verification.
+                with db:
+                    db.execute('BEGIN')
+                    db.execute(BOUNDARY_INDEX)
+                    db.execute('DROP INDEX IF EXISTS meter_edge_bucket')
             if state==(1,1):return
         # Backup is a consistent offline snapshot, never an alternate live owner.
         archive=self.path.with_name(self.path.name+'.pre-indexed')

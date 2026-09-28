@@ -88,3 +88,23 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
         partial = processing_checkpoint(IDENTITY, 2, 0, complete=False)
         await runtime._persist_received(changed, partial)
         self.assertEqual(rig.store.saved['gateway_processing'], partial)
+
+    async def test_slow_accounting_result_is_shared_after_computation_and_new_accounts_invalidate(self):
+        from shs_core.battery_runtime import ACCOUNTING_REUSE_MS
+        from shs_core.plan_execution import Account
+        rig=Rig()
+        runtime=AppBatteryRuntime(rig.coordinator,rig.controller,rig.store,lambda:rig.now)
+        account=Account()
+        def slow_read(account,at):
+            rig.now+=2*ACCOUNTING_REUSE_MS
+            return {'sampled_at':at}
+        with patch('shs_core.plan_execution.live_feedback',side_effect=slow_read) as read:
+            first=runtime._accounting(account,False)
+            self.assertLess(first[0],rig.now)
+            self.assertEqual(runtime._accounting(account,False),first)
+            self.assertEqual(read.call_count,1)
+            rig.now+=ACCOUNTING_REUSE_MS
+            self.assertNotEqual(runtime._accounting(account,False),first)
+            self.assertEqual(read.call_count,2)
+            runtime._accounting(Account(),False)
+            self.assertEqual(read.call_count,3)

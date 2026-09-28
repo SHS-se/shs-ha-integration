@@ -20,7 +20,7 @@ DAY=86400000
 BOUNDARY_EDGES = """SELECT
     coalesce(sum(CASE WHEN left_ms>=:start AND right_ms<=:end THEN energy ELSE 0 END),0),
     coalesce(sum(energy),0),coalesce(sum(unknown),0)
-    FROM meter_edges INDEXED BY meter_edge_bucket
+    FROM meter_edges INDEXED BY meter_edge_bounds
     WHERE stream=:stream AND bucket IS :bucket AND right_ms>:start AND left_ms<:end"""
 METER_COLUMNS='event_id,stream,direction,boundary,epoch,source_at_ms,total_mwh,receipt,physical_id'
 KINDS={'admissions':ex.Admission,'reconciliations':ex.StateReconciliation}
@@ -43,6 +43,7 @@ class EvidenceDatabase:
     def __init__(self,path):
         self.path=path
         self.reader=ContextVar("evidence_reader",default=None)
+        self.boundaries=ContextVar("evidence_boundaries",default=None)
         self.counts={name:0 for name in ('meters','observations','admissions','reconciliations')}
         self.metrics=dict(queries=0,query_ms=0.,max_query_ms=0.,historical_meter_queries=0)
 
@@ -55,8 +56,24 @@ class EvidenceDatabase:
         with closing(sqlite3.connect(self.path.resolve().as_uri()+'?mode=ro',uri=True)) as db:
             db.execute('BEGIN')
             token=self.reader.set(db)
+            boundaries=self.boundaries.set({})
             try:yield db
-            finally:self.reader.reset(token)
+            finally:
+                self.boundaries.reset(boundaries)
+                self.reader.reset(token)
+
+    def boundary(self,db,stream,bucket,start,end):
+        # Within a bucket all edges lie wholly inside that day. Objectives with
+        # a shared anchor therefore share their first partial-day sum. Cache only
+        # within this SQLite snapshot; the next read sees every late correction.
+        if bucket is not None:
+            start=max(start,bucket*DAY)
+            end=min(end,(bucket+1)*DAY)
+        key=(stream,bucket,start,end)
+        cache=self.boundaries.get()
+        if key not in cache:
+            cache[key]=db.execute(BOUNDARY_EDGES,dict(stream=stream,bucket=bucket,start=start,end=end)).fetchone()
+        return cache[key]
 
     def query(self,operation):
         start=perf_counter()
@@ -211,9 +228,8 @@ class IndexedMeters(ex.MeterIndex):
                     first_bucket=(start+DAY-1)//DAY;last_bucket=end//DAY
                     low,unknown=db.execute('SELECT coalesce(sum(energy),0),coalesce(sum(unknown),0) FROM meter_blocks WHERE stream=? AND bucket>=? AND bucket<?',(stream,first_bucket,last_bucket)).fetchone()
                     high=low
-                    query=BOUNDARY_EDGES
                     for bucket in (None,*{n for n in (start//DAY,end//DAY) if not first_bucket<=n<last_bucket}):
-                        a,b,c=db.execute(query,dict(stream=stream,bucket=bucket,start=start,end=end)).fetchone()
+                        a,b,c=self.rows.database.boundary(db,stream,bucket,start,end)
                         low+=a;high+=b;unknown+=c
                     first_row=db.execute('SELECT source_at_ms FROM meter_knots WHERE stream=? ORDER BY source_at_ms LIMIT 1',(stream,)).fetchone()
                     last_row=db.execute('SELECT source_at_ms FROM meter_knots WHERE stream=? ORDER BY source_at_ms DESC LIMIT 1',(stream,)).fetchone()
