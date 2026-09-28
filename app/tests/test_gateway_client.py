@@ -124,3 +124,45 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         await self.client.project(value)
         self.assertEqual(json.loads((self.root/'projection.json').read_text()),value)
         self.assertIsNone((await self.client.snapshot())['activation'])
+
+    async def test_configuration_waits_for_admitted_calls_and_preserves_receipt_multiplexing(self):
+        active=asyncio.Event();finish=asyncio.Event();installing=asyncio.Event();installed=asyncio.Event()
+        entered=[]
+        async def exchange(operation,body):
+            entered.append(operation)
+            if operation=='device':
+                active.set();await finish.wait()
+            if operation=='source' and body.get('operation')=='configure':
+                installing.set();await installed.wait()
+            if operation=='requests':
+                self.assertTrue(installed.is_set(),'A poll reached HA while command admission was revoked')
+            return {}
+        with patch.object(self.client,'_exchange',side_effect=exchange):
+            command=asyncio.create_task(self.client.call('device',{}))
+            await active.wait()
+            change=asyncio.create_task(self.client.call('source',{'operation':'configure'}))
+            await asyncio.sleep(0)
+            poll=asyncio.create_task(self.client.call('requests',{}))
+            await self.client.call('receipts',{})
+            self.assertFalse(installing.is_set())
+            finish.set();await command;await installing.wait()
+            await self.client.call('source',{'operation':'statistics'})
+            self.assertNotIn('requests',entered)
+            installed.set();await change;await poll
+            self.assertEqual(entered,['device','receipts','source','source','requests'])
+
+    async def test_cancelled_configuration_wait_releases_admission(self):
+        active=asyncio.Event();finish=asyncio.Event()
+        async def exchange(operation,body):
+            if operation=='device':active.set();await finish.wait()
+            return {}
+        with patch.object(self.client,'_exchange',side_effect=exchange):
+            command=asyncio.create_task(self.client.call('device',{}));await active.wait()
+            change=asyncio.create_task(self.client.call('source',{'operation':'configure'}))
+            await asyncio.sleep(0);change.cancel()
+            with self.assertRaises(asyncio.CancelledError):await change
+            finish.set();await command
+            async with asyncio.timeout(1):
+                await self.client.call('requests',{})
+                await self.client.call('source',{'operation':'configure'})
+            self.assertEqual(self.client.admitted_calls,0)

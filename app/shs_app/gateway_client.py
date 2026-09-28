@@ -1,5 +1,6 @@
 """Authenticated, multiplexed HA gateway client with durable delivery receipts."""
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 from hashlib import sha256
@@ -27,6 +28,40 @@ class GatewayClient:
         self.receiving = asyncio.Lock()
         self.pending = {}
         self.reader = None
+        self.configuration_writer = asyncio.Lock()
+        self.admission = asyncio.Condition()
+        self.installing_configuration = False
+        self.admitted_calls = 0
+
+    @asynccontextmanager
+    async def configuration_boundary(self, operation, body):
+        installing = operation == 'source' and body.get('operation') == 'configure'
+        if not installing and (operation == 'source' or operation in
+                ('connect','receipts','ack_delivery','ack_processed','snapshot','reconcile','activate','resume')):
+            # Recorder/history requests and receipt delivery remain multiplexed.
+            yield
+            return
+        if installing:
+            async with self.configuration_writer:
+                try:
+                    async with self.admission:
+                        self.installing_configuration = True
+                        await self.admission.wait_for(lambda: self.admitted_calls == 0)
+                    yield
+                finally:
+                    async with self.admission:
+                        self.installing_configuration = False
+                        self.admission.notify_all()
+        else:
+            async with self.admission:
+                await self.admission.wait_for(lambda: not self.installing_configuration)
+                self.admitted_calls += 1
+            try:
+                yield
+            finally:
+                async with self.admission:
+                    self.admitted_calls -= 1
+                    self.admission.notify_all()
 
     async def connect(self):
         if self.socket is not None:
@@ -71,6 +106,13 @@ class GatewayClient:
             await self.close()
 
     async def _call(self, operation, body):
+        # HA revokes command admission while it durably captures a new native
+        # configuration. Finish admitted calls first, then keep app operations
+        # outside that interval until HA acknowledges the installed revision.
+        async with self.configuration_boundary(operation, body):
+            return await self._exchange(operation, body)
+
+    async def _exchange(self, operation, body):
         future = asyncio.get_running_loop().create_future()
         future.add_done_callback(lambda f:f.exception() if not f.cancelled() else None)
         try:
