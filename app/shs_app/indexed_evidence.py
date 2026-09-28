@@ -17,6 +17,11 @@ from shs_core import plan_execution as ex
 from shs_core.runtime_json import decode_value, encode_value
 
 DAY=86400000
+BOUNDARY_EDGES = """SELECT
+    coalesce(sum(CASE WHEN left_ms>=:start AND right_ms<=:end THEN energy ELSE 0 END),0),
+    coalesce(sum(energy),0),coalesce(sum(unknown),0)
+    FROM meter_edges INDEXED BY meter_edge_bucket
+    WHERE stream=:stream AND bucket IS :bucket AND right_ms>:start AND left_ms<:end"""
 METER_COLUMNS='event_id,stream,direction,boundary,epoch,source_at_ms,total_mwh,receipt,physical_id'
 KINDS={'admissions':ex.Admission,'reconciliations':ex.StateReconciliation}
 
@@ -206,10 +211,10 @@ class IndexedMeters(ex.MeterIndex):
                     first_bucket=(start+DAY-1)//DAY;last_bucket=end//DAY
                     low,unknown=db.execute('SELECT coalesce(sum(energy),0),coalesce(sum(unknown),0) FROM meter_blocks WHERE stream=? AND bucket>=? AND bucket<?',(stream,first_bucket,last_bucket)).fetchone()
                     high=low
-                    query='SELECT left_ms,right_ms,energy,unknown FROM meter_edges WHERE stream=? AND bucket IS ? AND right_ms>? AND left_ms<?'
+                    query=BOUNDARY_EDGES
                     for bucket in (None,*{n for n in (start//DAY,end//DAY) if not first_bucket<=n<last_bucket}):
-                        for row in db.execute(query,(stream,bucket,start,end)):
-                            a,b,c=contribution(row,start,end);low+=a;high+=b;unknown+=c
+                        a,b,c=db.execute(query,dict(stream=stream,bucket=bucket,start=start,end=end)).fetchone()
+                        low+=a;high+=b;unknown+=c
                     first_row=db.execute('SELECT source_at_ms FROM meter_knots WHERE stream=? ORDER BY source_at_ms LIMIT 1',(stream,)).fetchone()
                     last_row=db.execute('SELECT source_at_ms FROM meter_knots WHERE stream=? ORDER BY source_at_ms DESC LIMIT 1',(stream,)).fetchone()
                     first=first_row[0] if first_row else None;last=last_row[0] if last_row else None
@@ -333,6 +338,10 @@ class AccountEvidence:
                 dispositions=dispositions,**outcome,responsibility=row['responsibility'])
 
     def live_objectives(self,account,at_ms):
+        with self.database.snapshot():
+            return self._live_objectives(account,at_ms)
+
+    def _live_objectives(self,account,at_ms):
         rows,number=self._catalog(at_ms,True)
         result=[]
         for row in rows:

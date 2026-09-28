@@ -3,6 +3,8 @@ import asyncio
 from dataclasses import replace
 from pathlib import Path
 import random
+import sqlite3
+from contextlib import closing
 import sys
 import tempfile
 import unittest
@@ -16,7 +18,7 @@ from shs_core.execution_storage import ExecutionStorage
 from shs_core.home_runtime import ExecutionSession
 from shs_app.sources import ObservationMirror
 from shs_app.indexed_storage import IndexedStorage
-from shs_app.indexed_evidence import EvidenceRows,DAY
+from shs_app.indexed_evidence import EvidenceRows,DAY,BOUNDARY_EDGES
 
 
 class IndexedTests(unittest.IsolatedAsyncioTestCase):
@@ -136,3 +138,20 @@ class IndexedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored.account.meter_index.measure('charge',0,QUARTER),ex.Account().meter_index.measure('charge',0,QUARTER))
         await self.save(account)
         self.assertEqual(len(self.store._session.account.meters),1)
+
+    async def test_live_objectives_share_one_reader_and_use_boundary_bucket_index(self):
+        account=self.account
+        for direction in ('charge','discharge'):
+            account=meter(account,direction,0,0)
+        account=ex.admit_plan(account,contract(),0,ex.StateObservation(0,5000000,'soc'))
+        account=meter(account,'charge',QUARTER,100000)
+        account=meter(account,'discharge',QUARTER,0)
+        await self.save(account)
+        with closing(sqlite3.connect(self.path)) as db:
+            plan=db.execute('EXPLAIN QUERY PLAN '+BOUNDARY_EDGES,dict(stream='charge',bucket=0,start=0,end=QUARTER)).fetchall()
+            self.assertTrue(any('meter_edge_bucket' in row[-1] for row in plan))
+        connect=sqlite3.connect
+        with patch('shs_app.indexed_evidence.sqlite3.connect', wraps=connect) as connections:
+            rows,count=account._evidence.live_objectives(account,QUARTER)
+        self.assertEqual(connections.call_count,1)
+        self.assertGreater(count,0)
