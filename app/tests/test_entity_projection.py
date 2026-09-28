@@ -2,6 +2,7 @@
 import ast
 import asyncio
 from copy import deepcopy
+from enum import StrEnum
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,7 +39,7 @@ class EntityProjectionTests(unittest.IsolatedAsyncioTestCase):
         entry=SimpleNamespace(entry_id='home',data={'device_token_id':'device'})
         coordinator=module.GatewayProjection(None,entry,service)
         await coordinator.restore();self.assertFalse(coordinator.ready.is_set())
-        descriptor={'unique_id':'home_battery_controller','name':'Battery controller'}
+        descriptor={'unique_id':'home_battery_controller','name':'Battery controller','entity_category':'diagnostic'}
         projected=dict(schema=2,entities=dict(schema=1,sensors=[descriptor],values={descriptor['unique_id']:
             dict(value='controlling',attributes={'explanation':'Following the plan'},available=True)},modes={}),
             execution_devices=[{'key':'$battery','name':'House battery','planned':True,'system_member':None,'permission':{'controller_id':'battery'}}],app_url='/app/shs',repairs={})
@@ -46,9 +47,13 @@ class EntityProjectionTests(unittest.IsolatedAsyncioTestCase):
         class Base:
             def __init__(self,coordinator):self.coordinator=coordinator
         sensor_module=load('sensor.py',dict(CoordinatorEntity=Base,SensorEntity=object,DeviceInfo=dict,
+            EntityCategory=StrEnum('EntityCategory',{'DIAGNOSTIC':'diagnostic'}),
+            SensorDeviceClass=StrEnum('SensorDeviceClass',{'POWER':'power'}),
+            SensorStateClass=StrEnum('SensorStateClass',{'MEASUREMENT':'measurement'}),
             DeviceEntryType=SimpleNamespace(SERVICE='service'),DOMAIN='shs_energy',CONF_CUSTOMER_NAME='customer_name',CONF_DEVICE_TOKEN_ID='device_token_id'))
         sensor=sensor_module.ProjectedSensor(coordinator,descriptor)
         self.assertTrue(sensor.available);self.assertEqual(sensor.native_value,'controlling')
+        self.assertIsInstance(sensor._attr_entity_category,StrEnum)
         coordinator.disconnected();self.assertFalse(sensor.available)
         reopened=module.GatewayProjection(None,entry,service);await reopened.restore()
         self.assertTrue(reopened.ready.is_set());self.assertFalse(reopened.online)
