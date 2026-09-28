@@ -18,7 +18,7 @@ from shs_core.execution_storage import ExecutionStorage
 from shs_core.home_runtime import ExecutionSession
 from shs_app.sources import ObservationMirror
 from shs_app.indexed_storage import IndexedStorage
-from shs_app.indexed_evidence import EvidenceRows,DAY,BOUNDARY_EDGES
+from shs_app.indexed_evidence import EvidenceRows,DAY,BUCKET_MS,BOUNDARY_EDGES
 
 
 class IndexedTests(unittest.IsolatedAsyncioTestCase):
@@ -30,6 +30,44 @@ class IndexedTests(unittest.IsolatedAsyncioTestCase):
 
     async def save(self,account):
         await self.store.save(META,ExecutionSession(account=account))
+
+    async def test_daily_layout_upgrade_preserves_checkpoint_and_interval_bounds(self):
+        indexed=self.account;reference=ex.Account()
+        for at,total in ((0,0),(BUCKET_MS-1,50),(BUCKET_MS+1,150),(DAY-1,300),(2*DAY,500)):
+            indexed=meter(indexed,'charge',at,total)
+            reference=meter(reference,'charge',at,total)
+        await self.save(indexed)
+        with closing(sqlite3.connect(self.path)) as db,db:
+            db.execute('DROP TABLE meter_block_layout')
+            db.execute('UPDATE meter_edges SET bucket=CASE WHEN left_ms / ? = right_ms / ? THEN right_ms / ? ELSE NULL END',(DAY,)*3)
+            db.execute('DELETE FROM meter_blocks')
+            db.execute('INSERT INTO meter_blocks SELECT stream,bucket,sum(energy),sum(unknown) FROM meter_edges WHERE bucket IS NOT NULL GROUP BY stream,bucket')
+            before=db.execute('SELECT revision,metadata,counts FROM head').fetchone()
+        reopened=IndexedStorage(self.path,asyncio.to_thread,ObservationMirror())
+        _,state=await reopened.load()
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute('SELECT revision,metadata,counts FROM head').fetchone(),before)
+            self.assertEqual(db.execute('SELECT milliseconds FROM meter_block_layout').fetchone(),(BUCKET_MS,))
+        for start,end in ((1,BUCKET_MS),(BUCKET_MS-1,BUCKET_MS+1),(1,DAY),(DAY,2*DAY)):
+            self.assertEqual(state.account.meter_index.measure('charge',start,end),reference.meter_index.measure('charge',start,end))
+        corrected=meter(state.account,'charge',BUCKET_MS-1,200)
+        reference=meter(reference,'charge',BUCKET_MS-1,200)
+        await reopened.save(META,ExecutionSession(account=corrected))
+        self.assertEqual(corrected.meter_index.measure('charge',1,DAY),reference.meter_index.measure('charge',1,DAY))
+        self.assertEqual(state.account.meter_index.measure('charge',1,DAY),indexed.meter_index.measure('charge',1,DAY))
+
+    async def test_at_or_before_keeps_arrival_order_with_out_of_order_times(self):
+        account=self.account
+        for at in (100,300,200):
+            account=ex.observe_state(account,ex.StateObservation(at,5000000,'soc'))
+        await self.save(account)
+        reopened=IndexedStorage(self.path,asyncio.to_thread,ObservationMirror())
+        _,state=await reopened.load()
+        rows=state.account.observations
+        self.assertEqual(rows.at_or_before(400).at_ms,200)
+        self.assertEqual(rows.at_or_before(250).at_ms,200)
+        self.assertEqual(rows.at_or_before(150).at_ms,100)
+        self.assertIsNone(rows.at_or_before(50))
 
     async def test_unordered_corrections_resets_and_boundary_blocks_match_reference(self):
         reference=ex.Account();indexed=self.account

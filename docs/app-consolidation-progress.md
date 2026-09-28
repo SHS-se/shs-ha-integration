@@ -145,3 +145,104 @@ persisted generic entity catalogue/offline/reconnect coverage. Installed beta.60
 was verified against all 86 source hashes and all 29 HA entity registrations were
 recorded before deployment. App beta.15 and companion beta.65 are prepared for the
 coordinated upgrade; publication and live verification still follow.
+
+## Live rollout — 28 September 2026
+
+Published app `0.1.0-beta.18` and companion `0.9.0-beta.66`. The first live
+startup found that the gateway journal's durable-record allowlist omitted the new
+entity catalogue. Added the record and a real SQLite journal restart regression;
+all 1,033 integration tests pass. App CI passed all 70 app tests, 93 editor tests
+and eight browser checks before multiarchitecture publication.
+
+The live indexed/reference accounting check passed with 356,654 meter facts,
+150,083 observations and 800 admissions. The original migration identity,
+activation and fenced source journal remain unchanged. Configuration adoption
+removed the cloud token and editable options from HA; the app's canonical record
+has mode 0600 and HA acknowledged its native subset at revision 1. The final app
+image update left Core's start timestamp unchanged and skipped the completed
+accounting conversion. Live receipt recovery and final functional checks follow.
+
+Live load testing also found that diagnostic export still requested the lifetime
+accounting journal synchronously. App diagnostics now use current accounting and
+at most three days of execution traces, leaving operational evidence in SQLite.
+An app-only regression verifies that export never calls lifetime feedback. Empty
+counter sub-events no longer repeat an identical durable state write; the complete
+receipt still commits its cursor and source mirror, and actual state changes still
+persist immediately. Crash-replay coverage proves the preceding durable cursor
+survives an interrupted empty sub-event. The app suite now has 72 passing tests.
+
+The live HA log review caught five native diagnostic sensors rejected because
+JSON category strings were not converted to `EntityCategory`. The adapter now
+converts category, device class and state class to HA enums and applies descriptor
+updates through the same method. The repair was instantiated against the actual
+installed HA classes in an isolated process, and 1,034 integration tests pass.
+Companion `0.9.0-beta.67` loads all 29 real entities with no restored placeholders.
+Final app `0.1.0-beta.21` passed 72 app tests, 93 editor tests and eight browser
+checks and is deployed. It preserves Core's final start timestamp while catching
+up approximately 16 receipts/second on this machine, without storage failures.
+
+Live profiling identified repeated accounting interval reads as the remaining CPU
+bottleneck. SQLite chose the primary-key suffix scan instead of the day-bucket
+index. App `0.1.0-beta.22` explicitly selects that index, aggregates boundary edges
+inside SQLite and shares one read transaction for live objective outcomes. The
+production snapshot's live feedback remains byte-identical (SHA-256
+`9afb0eba76f7c72b3e0ef0b649fbf3dd8128a3a453d7c597f17b3f7da8bb8925`),
+with measured query time reduced from 2.34 seconds to 0.57 seconds. All 73 app
+regressions pass, including query-plan and transaction-reuse coverage.
+
+Recovery now has a dedicated dashboard state with the completed observation
+number. An existing runtime no longer offers first-install instructions while
+replaying its queued data. Desktop and mobile tests cover recovery progress and
+the transition to the live dashboard; all ten browser checks pass. This UI repair
+is published as app `0.1.0-beta.23` without changing the companion.
+
+The active-loop profile exposed two further costs: the one-second display cache
+expired before a slow calculation completed, and the boundary index required a
+second table lookup for every edge. App `0.1.0-beta.24` starts display-cache reuse
+when calculation finishes (retaining its true sample timestamp), shares identical
+boundary-day sums within one SQLite read snapshot, and replaces the old index
+with a covering index. New accounts invalidate the display cache immediately;
+read transactions never share cached sums across later corrections. The index
+upgrade retains the verified schema, head revision and all operational facts.
+Production-snapshot feedback remains byte-identical and takes about 0.10–0.16
+seconds instead of 2.34 seconds. All 76 app tests pass.
+
+The live settings-save check found a configuration-installation race: HA correctly
+revokes admission while recording the native revision, but an overlapping request
+poll caused the app session to restart. Gateway calls now coordinate around that
+installation: existing admitted calls finish first, new app operations wait for
+its acknowledgement, and receipt delivery/Recorder reads remain multiplexed.
+Cancellation releases the admission wait. All 78 app tests pass. The first live
+save was durably recovered and acknowledged at revision 2 without losing settings.
+
+The HA correction URL reached the app correctly but a redraw overwrote the
+requested card expansion with the prior collapsed DOM state. Expansion intent now
+applies after preserving existing card states. Browser coverage verifies that a
+direct field URL expands the owning section and focuses the actual editor. All
+12 desktop/mobile browser checks and 93 editor checks pass. App beta.25 reached
+the registry before workflow cancellation, so changed UI bytes use beta.26.
+
+A live diagnostic download completed in 4.07 seconds (6.5 MB gzip), with 167 recent
+execution traces, a three-day retention declaration and no lifetime accounting
+journal. The settings endpoint returned the 48 configured devices and applied
+revision. Receipt processing continued during export.
+
+The final active-loop profile found checkpoint validation repeatedly decoding the
+same latest admission through the indexed sequence. Each immutable evidence view
+now retains only its latest decoded row; appended views and prior ordinal prefixes
+remain independent. Coverage proves repeated contract access decodes once and
+appending cannot change an old view. All 79 app tests pass. The beta.26 build was
+cancelled before publication (registry manifest 404) and rebuilt with this repair.
+
+Live beta.26 checks passed both configuration paths: an unchanged app save applied
+revision 3 in 7.2 seconds, and the HA hot-water mode selector applied revision 4
+without changing its verification mode. No gateway reconnection occurred. The HA
+correction URL expanded the right section and focused its actual power editor.
+However, sustained receipt delay still caused intermittent freshness faults.
+
+App beta.27 changes only the derived meter query layout from daily to hourly
+blocks, atomically rebuilding aggregates without altering original facts or the
+execution checkpoint. Boundary scans stop at the interval's next edge, and current
+admission lookups reuse the immutable latest row. Production-snapshot feedback
+remains byte-identical, now taking 18 ms (previously 125 ms). All 81 app tests pass,
+including daily-layout upgrade, out-of-order times, late corrections and old views.

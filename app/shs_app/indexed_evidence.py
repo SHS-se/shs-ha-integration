@@ -1,7 +1,7 @@
 """Immutable ordinal views over operational facts, with bounded pending deltas.
 
 Old views keep their exact prefix. The current view uses materialized meter edges
-and daily sums; historical views query the indexed original facts at their prefix.
+and hourly sums; historical views query the indexed original facts at their prefix.
 No timestamp decides whether a receipt is admitted or retained.
 """
 from collections.abc import Sequence
@@ -17,11 +17,14 @@ from shs_core import plan_execution as ex
 from shs_core.runtime_json import decode_value, encode_value
 
 DAY=86400000
+BUCKET_MS=3600000
 BOUNDARY_EDGES = """SELECT
     coalesce(sum(CASE WHEN left_ms>=:start AND right_ms<=:end THEN energy ELSE 0 END),0),
     coalesce(sum(energy),0),coalesce(sum(unknown),0)
     FROM meter_edges INDEXED BY meter_edge_bounds
-    WHERE stream=:stream AND bucket IS :bucket AND right_ms>:start AND left_ms<:end"""
+    WHERE stream=:stream AND bucket IS :bucket AND right_ms>:start
+    AND right_ms<=coalesce((SELECT min(right_ms) FROM meter_edges
+        WHERE stream=:stream AND right_ms>=:end),:end) AND left_ms<:end"""
 METER_COLUMNS='event_id,stream,direction,boundary,epoch,source_at_ms,total_mwh,receipt,physical_id'
 KINDS={'admissions':ex.Admission,'reconciliations':ex.StateReconciliation}
 
@@ -63,12 +66,12 @@ class EvidenceDatabase:
                 self.reader.reset(token)
 
     def boundary(self,db,stream,bucket,start,end):
-        # Within a bucket all edges lie wholly inside that day. Objectives with
-        # a shared anchor therefore share their first partial-day sum. Cache only
+        # Within a bucket all edges lie wholly inside that hour. Objectives with
+        # a shared anchor therefore share their first partial-hour sum. Cache only
         # within this SQLite snapshot; the next read sees every late correction.
         if bucket is not None:
-            start=max(start,bucket*DAY)
-            end=min(end,(bucket+1)*DAY)
+            start=max(start,bucket*BUCKET_MS)
+            end=min(end,(bucket+1)*BUCKET_MS)
         key=(stream,bucket,start,end)
         cache=self.boundaries.get()
         if key not in cache:
@@ -141,6 +144,9 @@ class EvidenceRows(Sequence):
         return self[len(before):]
 
     def at_or_before(self,at_ms):
+        # The last ordinal wins when eligible, regardless of source-time order.
+        # Reuse its immutable decoded value on the common current-time path.
+        if self.count and (latest:=self[-1]).at_ms<=at_ms:return latest
         pending=next((r for r in reversed(self.tail) if r.at_ms<=at_ms),None)
         if pending:return pending
         row=self.database.query(lambda db:db.execute(f'SELECT {columns(self.name)} FROM {self.name} WHERE at_ms<=? AND ordinal<? ORDER BY ordinal DESC LIMIT 1',(at_ms,self.tail_start)).fetchone())
@@ -230,11 +236,11 @@ class IndexedMeters(ex.MeterIndex):
                 if len(self.rows)<current:
                     low,high,unknown,first,last=self._historical(db,stream,start,end)
                 else:
-                    # Whole daily blocks plus the two boundary days and cross-day edges.
-                    first_bucket=(start+DAY-1)//DAY;last_bucket=end//DAY
+                    # Whole hourly blocks plus the two boundaries and crossing edges.
+                    first_bucket=(start+BUCKET_MS-1)//BUCKET_MS;last_bucket=end//BUCKET_MS
                     low,unknown=db.execute('SELECT coalesce(sum(energy),0),coalesce(sum(unknown),0) FROM meter_blocks WHERE stream=? AND bucket>=? AND bucket<?',(stream,first_bucket,last_bucket)).fetchone()
                     high=low
-                    for bucket in (None,*{n for n in (start//DAY,end//DAY) if not first_bucket<=n<last_bucket}):
+                    for bucket in (None,*{n for n in (start//BUCKET_MS,end//BUCKET_MS) if not first_bucket<=n<last_bucket}):
                         a,b,c=self.rows.database.boundary(db,stream,bucket,start,end)
                         low+=a;high+=b;unknown+=c
                     first_row=db.execute('SELECT source_at_ms FROM meter_knots WHERE stream=? ORDER BY source_at_ms LIMIT 1',(stream,)).fetchone()
