@@ -191,3 +191,20 @@ class IndexedTests(unittest.IsolatedAsyncioTestCase):
             plan=db.execute('EXPLAIN QUERY PLAN '+BOUNDARY_EDGES,dict(stream='charge',bucket=0,start=0,end=DAY)).fetchall()
             self.assertTrue(any('COVERING INDEX meter_edge_bounds' in row[-1] for row in plan))
         self.assertEqual(restored.account.meter_index.measure('charge',0,DAY//2),account.meter_index.measure('charge',0,DAY//2))
+
+    async def test_latest_committed_record_is_decoded_once_and_old_view_survives_append(self):
+        account=ex.admit_plan(self.account,contract(),0,ex.StateObservation(0,5000000,'soc'))
+        await self.save(account)
+        reopened=IndexedStorage(self.path,asyncio.to_thread,ObservationMirror())
+        _,state=await reopened.load()
+        from shs_app.indexed_evidence import decode_row
+        view=state.account.admissions
+        with patch('shs_app.indexed_evidence.decode_row',wraps=decode_row) as decode:
+            for _ in range(20):self.assertEqual(state.account.contract,account.contract)
+            self.assertEqual(decode.call_count,1)
+            original=view[-1]
+            newer=replace(original,at_ms=1)
+            extended=view.append_record(newer)
+            self.assertEqual(extended[-1],newer)
+            self.assertIs(view[-1],original)
+            self.assertEqual(decode.call_count,1)

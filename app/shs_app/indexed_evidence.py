@@ -90,6 +90,7 @@ class EvidenceDatabase:
 class EvidenceRows(Sequence):
     def __init__(self,database,name,count,tail_start,tail):
         self.database,self.name,self.count,self.tail_start,self.tail=database,name,count,tail_start,tail
+        self.latest=None
 
     def __len__(self):return self.count
 
@@ -100,9 +101,14 @@ class EvidenceRows(Sequence):
         if index<0:index+=self.count
         if not 0<=index<self.count:raise IndexError(index)
         if index>=self.tail_start:return self.tail[index-self.tail_start]
+        if index==self.count-1 and self.latest is not None:return self.latest
         row=self.database.query(lambda db:db.execute(f'SELECT {columns(self.name)} FROM {self.name} WHERE ordinal=?',(index,)).fetchone())
         if row is None:raise ValueError('Missing committed evidence ordinal')
-        return decode_row(self.name,row)
+        value=decode_row(self.name,row)
+        # Ordinal prefixes are immutable. The latest admission/observation is
+        # read by every checkpoint; retain one decoded row per view, not history.
+        if index==self.count-1:self.latest=value
+        return value
 
     def __iter__(self):
         for start in range(0,self.tail_start,256):
