@@ -117,3 +117,14 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(dashboard.payload()['control_owner'],'Migration pending')
             self.assertIsNone(dashboard.payload()['snapshot'])
             self.assertEqual(dashboard.payload()['required_companion'],'paired')
+
+            from types import SimpleNamespace
+            self.assertIsNone(dashboard.payload()['recovery'])
+            engine=dashboard.engine=SimpleNamespace(started=False,battery=None)
+            self.assertEqual(dashboard.payload()['recovery'],{'processed_receipt':None})
+            engine.battery=SimpleNamespace(_processing={'receipt':42,'complete':False})
+            self.assertEqual(dashboard.payload()['recovery'],{'processed_receipt':41})
+            engine.battery._processing['complete']=True
+            self.assertEqual(dashboard.payload()['recovery'],{'processed_receipt':42})
+            engine.started=True
+            self.assertIsNone(dashboard.payload()['recovery'])

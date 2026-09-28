@@ -89,6 +89,7 @@ class Dashboard:
                 continue
             self.engine = AppEngine(selected['path'],self.session,self.supervisor+'/core/websocket',self.token,
                 paired_release=pair,publish=self.publish_runtime,app_url='/app/'+self.app_info['slug'])
+            self.connection = {'state':'recovering','message':'Restoring the saved SHS runtime and processing queued Home Assistant observations.'}
             try:
                 await self.engine.run()
             except asyncio.CancelledError:
@@ -144,7 +145,12 @@ class Dashboard:
             await asyncio.gather(*tasks,return_exceptions=True)
 
     def payload(self):
+        recovery = None
+        if self.engine and not self.engine.started:
+            processing = self.engine.battery._processing if self.engine.battery else None
+            recovery = {'processed_receipt': (processing['receipt'] - int(not processing['complete'])) if processing else None}
         return {"app_version": self.version, "required_companion": self.manifest["integration_version"],
+                "recovery": recovery,
                 "protocol": PROTOCOL, "connection": self.connection,
                 "snapshot": self.snapshot, "system": self.system, "companion": self.companion,
                 "app_slug": self.app_info.get("slug") if self.app_info else None,

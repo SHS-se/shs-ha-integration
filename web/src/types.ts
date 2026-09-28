@@ -20,6 +20,7 @@ export type History = {sampled_at:string; resources:Resources|null; telemetry?:R
 export type State = {
   app_version:string; required_companion:string; protocol:number;
   connection:{state:string; message:string; loaded_version?:string};
+  recovery:{processed_receipt:number|null}|null;
   snapshot:{sampled_at:string; integration_version:string; entries:Entry[]}|null;
   system:{storage?:StorageCensus;sampled_at:string|null; resources:Resources|null; error:string|null; filesystem_free_bytes?:number; database:{file_bytes:number; schema_version:number; page_size:number; free_pages:number; journal_mode:string; tables:{name:string;bytes:number;pages:number;rows:number}[]; history:History[]; query_plan:string[]; operations:{name:string;count:number;errors:number;last_ms:number;max_recent_ms:number;queue_ms:number}[]}|null};
   companion:{state:string;message:string}; app_slug:string|null; sidebar_enabled:boolean|null; control_owner:string;

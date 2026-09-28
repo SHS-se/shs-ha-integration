@@ -50,3 +50,21 @@ test('keyboard navigation and reduced motion support',async({page})=>{
   await page.getByRole('button',{name:'Next →'}).focus();await page.keyboard.press('Enter');
   await expect(page.getByLabel('Selected interval')).toHaveValue('1');
 });
+
+
+test('existing runtime recovery shows progress and then the live dashboard',async({page})=>{
+  let recovering=true;
+  await page.route('**/api/state',async route=>{
+    const response=await route.fetch();const data=await response.json();
+    if(recovering){data.snapshot=null;data.recovery={processed_receipt:42};data.connection={state:'recovering',message:'Processing queued observations.'};}
+    await route.fulfill({json:data});
+  });
+  await page.goto('./');
+  await expect(page.getByRole('heading',{name:'Restoring SHS'})).toBeVisible();
+  await expect(page.getByText('Processed through observation 42.')).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Connect your Home Assistant integration'})).toHaveCount(0);
+  recovering=false;
+  await page.reload();
+  await expect(page.getByRole('heading',{name:'Your app is running the home'})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Restoring SHS'})).toHaveCount(0);
+});
