@@ -26,7 +26,7 @@ runtime cutover remains active; this work upgrades it in place.
 - [x] Atomically checkpoint the source mirror and retire processed transport receipts.
 - [x] Replace lifetime accounting hydration with indexed operational evidence.
 - [x] Apply three-day detailed diagnostic retention and expose all active database metrics.
-- [ ] Publish, upgrade and verify live controls, entity identities and app-only restart.
+- [x] Publish, upgrade and verify live controls, entity identities and app-only restart.
 
 ## Verification requirements
 
@@ -246,3 +246,39 @@ execution checkpoint. Boundary scans stop at the interval's next edge, and curre
 admission lookups reuse the immutable latest row. Production-snapshot feedback
 remains byte-identical, now taking 18 ms (previously 125 ms). All 81 app tests pass,
 including daily-layout upgrade, out-of-order times, late corrections and old views.
+
+## Final live acceptance — 28 September 2026
+
+Completed with app `0.1.0-beta.27`, companion `0.9.0-beta.67`, release commit
+`6145e0e` and successful app workflow `36366486694`. CI passed 81 app tests,
+1,034 integration tests, 93 editor tests and 12 desktop/mobile browser checks.
+
+- The app owns canonical settings and credentials, with desired/applied revision 4.
+  HA's native replica has no cloud token; the app configuration file is mode 0600.
+- All 29 original HA entity IDs, unique IDs and enabled states match the baseline.
+  All are genuinely loaded, with no restored placeholders or unavailable states.
+  Battery remains Controlling; EV, pool and hot water remain in Verification.
+- App settings save and the existing HA mode selector both passed live writes
+  without changing configuration values or restarting Core. The correction URL
+  expands the relevant section and focuses the actual measurement editor.
+- The existing SHS logo, navigation, schedule chart and settings rendered correctly
+  through HA ingress. The final browser shows Connected and a validated plan.
+- A requested planner exchange completed in 30.1 seconds, accepting plan
+  `cb6e8c3c-4e23-4f2f-a64d-2afa6937572a`, issued at 01:39:41 UTC. Receipt
+  processing and control continued during the exchange.
+- Detailed controller diagnostics downloaded successfully (6.5 MB gzip, 4.07 s),
+  containing recent execution traces and a three-day retention declaration, with
+  no lifetime accounting journal. Operational correction facts remain indexed.
+- An app-only restart recovered control within the first 15-second observation
+  interval after the initial sample. Subsequent samples showed Controlling,
+  successful native service returns and source ages around 2–7 seconds. Receipt
+  processing and retirement advanced monotonically; transient batches drained.
+- Core's start time remained `2026-09-28T00:00:17.04634887Z`. The activation
+  `bdf1a357ada4457cb848df654874d04b` is unchanged, and the original source
+  authority remains fenced with its clean-stop marker. Migration was not rerun.
+- The final resource spot-check showed 291.6 MiB memory and 0.33% CPU; this is a
+  momentary sample, not a long-term load measurement. No new app errors appeared
+  during the restart and acceptance checks.
+
+Routine app releases now restart only the app. Companion updates are reserved for
+HA adaptation, execution-boundary or wire-contract changes that need native code.

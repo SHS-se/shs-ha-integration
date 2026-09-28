@@ -3,8 +3,8 @@
 User-approved direction and follow-up notes, 27 September 2026. These requirements
 supersede the initial HA-authoritative configuration choice in
 [app-container-design.md](app-container-design.md). The runtime cutover is complete;
-see [runtime-move-design.md](runtime-move-design.md) for deployed evidence. This
-document records the next scope, not an implemented configuration/storage migration.
+see [runtime-move-design.md](runtime-move-design.md) for deployed evidence. Implementation and live acceptance are recorded in
+[app consolidation progress](app-consolidation-progress.md).
 
 ## Updates and ownership
 
