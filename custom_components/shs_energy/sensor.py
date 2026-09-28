@@ -40,6 +40,11 @@ class ProjectedSensor(CoordinatorEntity,SensorEntity):
         for key, value in descriptor.items():
             if key == 'unique_id':
                 continue
+            if key == 'name' and value is None and descriptor.get('translation_key'):
+                # HA gives an explicit None name precedence over translations.
+                # An unnamed wire field means the translated label owns the name.
+                self.__dict__.pop('_attr_name', None)
+                continue
             if value is not None and key in native_types:
                 value = native_types[key](value)
             setattr(self, '_attr_' + key, value)

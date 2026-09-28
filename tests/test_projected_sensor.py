@@ -34,3 +34,24 @@ class SensorMetadataTests(unittest.TestCase):
         self.assertIsNone(sensor._attr_entity_category)
         self.assertEqual(sensor._attr_name,'Measured power')
         self.assertEqual(sensor._attr_unique_id,'home_power')
+
+    def test_translated_name_is_not_masked_by_null_wire_name(self):
+        adapter = load_adapter('sensor.py', dict(SensorEntity=SensorEntity,
+            CoordinatorEntity=CoordinatorEntity, EntityCategory=Category,
+            SensorDeviceClass=DeviceClass, SensorStateClass=StateClass,
+            DeviceInfo=dict, DeviceEntryType=SimpleNamespace(SERVICE='service'),
+            DOMAIN='shs_energy', CONF_DEVICE_TOKEN_ID='device_token_id', CONF_CUSTOMER_NAME='customer_name'))
+        coordinator = SimpleNamespace(entry=SimpleNamespace(data={'device_token_id':'home'}))
+        descriptor = dict(unique_id='home_subscription',name=None,translation_key='subscription')
+        sensor = adapter.ProjectedSensor(coordinator,descriptor)
+        self.assertFalse(hasattr(sensor,'_attr_name'))
+        self.assertEqual(sensor._attr_translation_key,'subscription')
+        sensor.update_descriptor({**descriptor,'name':'Explicit label'})
+        self.assertEqual(sensor._attr_name,'Explicit label')
+        sensor.update_descriptor(descriptor)
+        self.assertFalse(hasattr(sensor,'_attr_name'))
+        self.assertEqual(sensor._attr_unique_id,'home_subscription')
+        # A deliberately nameless entity without a translation still uses HA's
+        # whole-device naming semantics.
+        sensor.update_descriptor({**descriptor,'translation_key':None})
+        self.assertIsNone(sensor._attr_name)
