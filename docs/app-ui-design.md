@@ -94,6 +94,16 @@ Plotly documents [range controls](https://plotly.com/javascript/range-slider/).
 These capabilities inform the recommendation; they do not prove our eventual
 chart is accessible or fast. Keyboard controls and a table remain SHS responsibilities.
 
+**Outcome, 2 October 2026.** The schedule was built in ECharts and compared with
+the website on real SHS data. It was harder to read: one legend-less canvas of
+similar lines, no band labels, and a tooltip listing every series. The Schedule
+screen now draws the website's own five-panel SVG (`web/src/plan-chart/`), using
+the website's geometry, price-band and power-flow modules unchanged, the same
+palette, and the same tooltip. ECharts remains for the ordinary single-plot
+observation and resource charts. `web/src/plan-chart/` imports nothing from the
+rest of the app except the wire types, so it is the unit a shared package would
+carry once the website's chart is ready to consume it too.
+
 ## Schedule: one time axis, progressively deeper evidence
 
 Use the reference website's five aligned panels: price (currency/kWh), signed power

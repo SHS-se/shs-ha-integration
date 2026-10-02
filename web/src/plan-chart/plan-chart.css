@@ -1,0 +1,60 @@
+/* Plan chart.
+
+   One colour per thing, held across every panel and never recycled for a
+   second meaning. The light values are the website's; the dark ones keep each
+   hue and lift it far enough to hold its place on a dark card. Plain hex
+   because these are read straight into SVG fill and stroke. */
+:root{
+  --plan-solar:#eb6834;--plan-grid:#2a78d6;--plan-battery:#1baf7a;--plan-ev:#4a3aa7;--plan-base:#8a8f98;
+  --plan-wash:rgba(42,120,214,.06);
+  /* Buy price, cheap to dear: a diverging ramp with a neutral middle. */
+  --plan-price-1:#1b5aa8;--plan-price-2:#4a8ed6;--plan-price-3:#9dc0e2;--plan-price-4:#b9bcc0;--plan-price-5:#eda893;--plan-price-6:#d4634f;--plan-price-7:#a92e22;
+  /* Consumption bands, assigned to a device and held there. */
+  --plan-load-0:#e34948;--plan-load-1:#4a3aa7;--plan-load-2:#e87ba4;--plan-load-3:#eda100;--plan-load-4:#008300;--plan-load-5:#2a78d6;--plan-load-6:#eb6834;--plan-load-7:#1baf7a;--plan-load-8:#a855b5;
+}
+:root[data-theme=dark]{
+  --plan-solar:#f2854f;--plan-grid:#5b9eea;--plan-battery:#3fc893;--plan-ev:#9d8ff2;--plan-base:#74808d;
+  --plan-wash:rgba(91,158,234,.08);
+  --plan-price-1:#3f82d6;--plan-price-2:#6aa7e6;--plan-price-3:#a9cbec;--plan-price-4:#98a2ad;--plan-price-5:#efae9a;--plan-price-6:#e27461;--plan-price-7:#c94a3c;
+  --plan-load-0:#f06c6b;--plan-load-1:#9d8ff2;--plan-load-2:#f093b6;--plan-load-3:#f0b52e;--plan-load-4:#48b548;--plan-load-5:#5b9eea;--plan-load-6:#f2854f;--plan-load-7:#3fc893;--plan-load-8:#c680d2;
+}
+
+.plan-chart{position:relative;--pc-ink:var(--text);--pc-muted:var(--muted);--pc-line:var(--line);--pc-card:var(--surface);--pc-accent:var(--primary)}
+.pc-scroll{overflow-x:auto}
+.plan-chart svg{display:block;width:100%;height:auto;min-width:760px;border-radius:8px}
+.plan-chart svg:focus-visible{outline:3px solid var(--pc-accent);outline-offset:3px}
+
+.pc-days{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;margin-bottom:8px}
+.pc-days button{min-height:44px;border-color:transparent;background:none;color:var(--pc-muted);font-variant-numeric:tabular-nums}
+.pc-days button:hover{background:var(--tint)}
+.pc-days button[aria-pressed=true]{background:var(--tint);color:var(--pc-ink)}
+
+.pc-heading{fill:var(--pc-ink);font-size:11px;font-weight:600}
+.pc-axis,.pc-day,.pc-now-text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.pc-axis{fill:var(--pc-muted);font-size:10px}
+.pc-day{fill:var(--pc-ink);font-size:10px;font-weight:600}
+.pc-grid{stroke:var(--pc-line);stroke-width:1}
+.pc-zero{stroke:var(--pc-ink);stroke-width:1.25}
+.pc-separator{stroke:var(--pc-card);stroke-width:2}
+.pc-sell{stroke:var(--pc-muted);stroke-width:1.25}
+.pc-end-dot{stroke:var(--pc-card);stroke-width:2}
+.pc-inline-box{fill:var(--pc-card);fill-opacity:.85}
+.pc-inline-text{fill:var(--pc-ink);font-size:9.5px;font-weight:600}
+.pc-cost-area{fill:var(--pc-ink);fill-opacity:.07}
+.pc-cost-line{stroke:var(--pc-ink);stroke-width:2}
+.pc-now{stroke:var(--pc-ink);stroke-width:1.5}
+.pc-now-flag{fill:var(--pc-ink)}
+.pc-now-text{fill:var(--pc-card);font-size:9.5px;font-weight:600;letter-spacing:.06em}
+.pc-selected{fill:var(--pc-accent);fill-opacity:.18}
+.pc-hover{fill:var(--pc-ink);fill-opacity:.07}
+.pc-hover-line{stroke:var(--pc-ink);stroke-width:1;stroke-opacity:.5}
+
+.pc-tooltip{position:absolute;z-index:10;pointer-events:none;border:1px solid var(--pc-line);border-radius:8px;background:var(--pc-card);color:var(--pc-ink);padding:8px 10px;font-size:12px;line-height:1.5;box-shadow:0 6px 18px rgba(0,0,0,.18)}
+.pc-tooltip-title{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px;font-weight:600}
+.pc-tooltip-title em{border:1px solid var(--pc-line);border-radius:4px;padding:0 4px;color:var(--pc-muted);font-size:9px;font-style:normal;font-weight:400;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
+.pc-tooltip-group{margin-top:4px;border-top:1px solid var(--pc-line);padding-top:4px}
+.pc-reading{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.pc-reading>span:first-child{display:flex;align-items:baseline;gap:6px;min-width:0}
+.pc-reading i{flex:none;width:8px;height:8px;border-radius:2px}
+.pc-reading b{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pc-reading>span:last-child{flex:none;font-variant-numeric:tabular-nums}

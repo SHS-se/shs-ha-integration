@@ -10,7 +10,10 @@ test('branded ingress dashboard, navigation, schedule inspection and themes',asy
   await page.screenshot({path:`test-results/${info.project.name}-overview.png`,fullPage:true});
   await page.getByRole('link',{name:'Schedule',exact:true}).click();
   await expect(page.getByRole('heading',{name:'Your energy schedule'})).toBeVisible();
-  await expect(page.locator('canvas')).toHaveCount(1);
+  const chart=page.getByRole('img',{name:/Price, power flows, consumption, storage and cost/});
+  await expect(chart).toBeVisible();
+  await expect(page.locator('canvas')).toHaveCount(0);
+  await expect(chart.getByText('Pool heater')).toBeVisible();
   await page.getByRole('button',{name:'Next →'}).click();
   await expect(page.getByLabel('Selected interval')).toHaveValue('1');
   await page.getByRole('button',{name:'Show data table'}).click();
@@ -67,4 +70,46 @@ test('existing runtime recovery shows progress and then the live dashboard',asyn
   await page.reload();
   await expect(page.getByRole('heading',{name:'Your app is running the home'})).toBeVisible();
   await expect(page.getByRole('heading',{name:'Restoring SHS'})).toHaveCount(0);
+});
+
+test('schedule chart explains an interval, selects it and narrows to one day',async({page},info)=>{
+  await page.route('**/api/state',async route=>{
+    const response=await route.fetch();const data=await response.json();
+    const schedule=data.snapshot.entries[0].schedule,first=schedule.household[1],start=Date.now()-2*3600000;
+    schedule.devices=[{key:'pool_heater',name:'Pool heater',category:'pool_heating'},{key:'pool_pump',name:'pool_pump',category:'pool_heating'}];
+    schedule.household=Array.from({length:200},(_,i)=>{const day=(i%96)/96,sun=Math.max(0,Math.sin((day-.25)*2*Math.PI)),on=i%96<24;return {...first,
+      start:new Date(Math.floor(start/900000)*900000+i*900000).toISOString(),duration_hours:.25,binding:i<110,
+      shadow_import_sek_per_kwh:1.4+Math.sin(i/14),shadow_export_sek_per_kwh:.6+Math.sin(i/14)/2,
+      pv_w:5000*sun,base_w:900,device_loads_w:{pool_heater:on?2400:0,pool_pump:on?700:0},load_w:900+(on?3100:0),
+      grid_import_w:on?2500:0,grid_export_w:sun>.6?1500:0,battery_charge_w:sun>.6?2000:0,battery_discharge_w:on?600:900,
+      battery_soc:.2+.6*sun,ev_soc:.69,import_cost_sek:on?.9:0,export_revenue_sek:sun>.6?.2:0};});
+    await route.fulfill({json:data});
+  });
+  await page.goto('./#schedule');
+  const chart=page.getByRole('img',{name:/Price, power flows, consumption, storage and cost/});
+  await expect(chart.getByText('NOW · PLAN →')).toBeVisible();
+  await expect(chart.getByText(/dashed = estimated/)).toBeVisible();
+  await chart.scrollIntoViewIfNeeded();
+  const box=(await chart.boundingBox())!;
+  await page.mouse.move(box.x+220,box.y+box.height*.4);
+  const tooltip=page.getByRole('tooltip');
+  await expect(tooltip).toContainText('House demand');
+  await expect(tooltip).toContainText('Base load');
+  await expect(tooltip).toContainText('Cost so far');
+  await page.screenshot({path:`test-results/${info.project.name}-schedule-tooltip.png`,fullPage:true});
+  await page.mouse.click(box.x+220,box.y+box.height*.4);
+  await expect(page.getByLabel('Selected interval')).not.toHaveValue('0');
+  const days=page.getByRole('group',{name:'Days shown'});
+  await expect(days.getByRole('button',{name:'All'})).toHaveAttribute('aria-pressed','true');
+  await days.getByRole('button').nth(1).click();
+  await expect(days.getByRole('button').nth(1)).toHaveAttribute('aria-pressed','true');
+  await chart.focus();await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');
+  await expect(tooltip).toContainText('Home battery');
+  await page.keyboard.press('Enter');
+  await expect(page.getByLabel('Selected interval')).not.toHaveValue('0');
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+  await page.getByRole('link',{name:'Settings',exact:true}).click();
+  await page.getByLabel('Color theme').selectOption('dark');
+  await page.getByRole('link',{name:'Schedule',exact:true}).click();
+  await page.screenshot({path:`test-results/${info.project.name}-schedule-dark.png`,fullPage:true});
 });
