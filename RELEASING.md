@@ -66,7 +66,12 @@ without it.
 `scripts/deploy.sh` does all of this from a committed, bumped change: it pushes
 `main`, waits for the Beta workflow, downloads the published version through
 HACS, restarts Home Assistant, and reports whether the integration loaded. It
-asks HACS for that exact version, so the beta toggle is not needed. It logs in
+asks HACS for that exact version, so the beta toggle is not needed. It deploys
+the app the same way: it waits for the SHS app workflow to publish the image for
+the version in `web/package.json`, reloads the Supervisor's app store, and
+updates the installed app to it. Whichever of the two is already installed is
+skipped, so an app-only change neither publishes a HACS release nor restarts
+Home Assistant. It logs in
 as root over the Home Assistant OS host's SSH on port 22222 (set up by the
 HassOS SSH port 22222 Configurator add-on) and runs its Home Assistant steps
 inside the Advanced SSH & Web Terminal add-on's container, whose Supervisor
