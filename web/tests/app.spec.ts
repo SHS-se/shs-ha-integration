@@ -48,7 +48,8 @@ test('incompatible companion and failed installation stay actionable',async({pag
 
 test('keyboard navigation and reduced motion support',async({page})=>{
   await page.emulateMedia({reducedMotion:'reduce'});await page.goto('./');
-  await page.keyboard.press('Tab');await expect(page.getByRole('link',{name:'Skip to content'})).toBeFocused();
+  const skip=page.getByRole('link',{name:'Skip to content'});
+  await expect(skip).toBeAttached();await page.keyboard.press('Tab');await expect(skip).toBeFocused();
   await page.goto('./#schedule');
   await page.getByRole('button',{name:'Next →'}).focus();await page.keyboard.press('Enter');
   await expect(page.getByLabel('Selected interval')).toHaveValue('1');
