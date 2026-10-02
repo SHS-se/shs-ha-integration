@@ -204,8 +204,6 @@ update_app_on_home_assistant() {
     echo "The SHS app is $(jq -r .data.state <<<"$info"); start it in Home Assistant to run $version."
     return
   fi
-  # Its own log since it started, where a failed start explains itself.
-  supervisor_api GET "addons/$slug/logs" | grep -E "(WARNING|ERROR|CRITICAL|Traceback)" | tail -n 20 || true
   echo "The SHS app is running $version."
 }
 
