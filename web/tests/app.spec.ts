@@ -90,15 +90,15 @@ test('schedule chart explains an interval, selects it and narrows to one day',as
   const chart=page.getByRole('img',{name:/Price, power flows, consumption, storage and cost/});
   await expect(chart.getByText('NOW · PLAN →')).toBeVisible();
   await expect(chart.getByText(/dashed = estimated/)).toBeVisible();
-  await chart.scrollIntoViewIfNeeded();
-  const box=(await chart.boundingBox())!;
-  await page.mouse.move(box.x+220,box.y+box.height*.4);
+  // Positions are relative to the chart, so a scroll between steps cannot move the target.
+  const point={x:220,y:(await chart.boundingBox())!.height*.4};
+  await chart.hover({position:point});
   const tooltip=page.getByRole('tooltip');
   await expect(tooltip).toContainText('House demand');
   await expect(tooltip).toContainText('Base load');
   await expect(tooltip).toContainText('Cost so far');
   await page.screenshot({path:`test-results/${info.project.name}-schedule-tooltip.png`,fullPage:true});
-  await page.mouse.click(box.x+220,box.y+box.height*.4);
+  await chart.click({position:point});
   await expect(page.getByLabel('Selected interval')).not.toHaveValue('0');
   const days=page.getByRole('group',{name:'Days shown'});
   await expect(days.getByRole('button',{name:'All'})).toHaveAttribute('aria-pressed','true');
