@@ -101,9 +101,8 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             await wrong_pair.connect()
         self.assertIsNone(wrong_pair.socket)
 
-    async def test_cancelled_reply_closes_socket_before_next_request(self):
-        first = await self.client.connect()
-        self.flag.write_text('pause')
+    async def abandon_snapshot(self, reply):
+        self.flag.write_text(reply)
         pending = asyncio.create_task(self.client.snapshot())
         async with asyncio.timeout(5):
             while self.flag.exists():
@@ -111,6 +110,50 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         pending.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await pending
+
+    async def test_cancelled_caller_keeps_the_session_for_every_other_request(self):
+        # A bounded caller (battery command preparation) that stops waiting must
+        # not end the session HA's battery grant and every other job depend on.
+        first = await self.client.connect()
+        await self.abandon_snapshot('pause')
+        self.assertIs(self.client.connected, first)
+        await self.client.receive()
+        self.assertEqual(self.delivered(first['session']), self.inbox.through())
+        self.assertIsNone((await self.client.snapshot())['activation'])
+        self.assertIs(self.client.connected, first)
+
+    async def test_late_reply_to_an_abandoned_request_is_settled_by_its_identity(self):
+        first = await self.client.connect()
+        await self.abandon_snapshot('late')
+        await self.client.receive()
+        self.assertEqual(self.client.pending, {})
+        self.assertIsNone((await self.client.snapshot())['activation'])
+        self.assertIs(self.client.connected, first)
+        self.assertEqual(self.delivered(first['session']), self.inbox.through())
+
+    async def test_cancellation_while_sending_leaves_the_session_open(self):
+        first = await self.client.connect()
+        entered = asyncio.Event()
+        send = self.client.socket.send_json
+        async def stalled(value):
+            await send(value)
+            entered.set()
+            await asyncio.Event().wait()  # transport backpressure after the frame was written
+        with patch.object(self.client.socket, 'send_json', side_effect=stalled):
+            pending = asyncio.create_task(self.client.snapshot())
+            await entered.wait()
+            pending.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await pending
+        self.assertIsNone((await self.client.snapshot())['activation'])
+        self.assertEqual(self.client.pending, {})
+        self.assertIs(self.client.connected, first)
+
+    async def test_transport_failure_still_closes_the_session(self):
+        first = await self.client.connect()
+        with patch.object(self.client.socket, 'send_json', side_effect=aiohttp.ClientConnectionResetError('peer reset')):
+            with self.assertRaises(GatewayConflict):
+                await self.client.snapshot()
         self.assertIsNone(self.client.socket)
         with self.assertRaises(GatewayConflict):
             await self.client.snapshot()

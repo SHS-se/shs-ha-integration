@@ -32,6 +32,7 @@ async def serve():
                 await ws.send_json({'type':'auth_invalid'})
                 return ws
             await ws.send_json({'type':'auth_ok'})
+            late = []
             async for frame in ws:
                 value = json.loads(frame.data)
                 request_id = value['id']
@@ -55,11 +56,17 @@ async def serve():
                 if flag.exists() and flag.read_text() == 'pause' and value['operation'] == 'snapshot':
                     flag.unlink()
                     continue
+                if flag.exists() and flag.read_text() == 'late' and value['operation'] == 'snapshot':
+                    flag.unlink()
+                    late.append(reply)  # answered only after a later request
+                    continue
                 if flag.exists() and value['operation'] == 'ack_delivery':
                     flag.unlink()
                     await ws.close()  # committed ACK, lost reply
                     return ws
                 await ws.send_json(reply)
+                while late:
+                    await ws.send_json(late.pop())
         finally:
             await connection.close()
         return ws

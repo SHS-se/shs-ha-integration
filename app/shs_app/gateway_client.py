@@ -126,7 +126,12 @@ class GatewayClient:
             # A slow recorder query must not stop current observation delivery or
             # final command admission on this same authenticated socket.
             return await asyncio.shield(future)
-        except GatewayRejected:
+        except (GatewayRejected, asyncio.CancelledError):
+            # Replies are correlated by request identity, so the reader settles
+            # an abandoned request whenever HA answers it. A caller that stops
+            # waiting (a bounded battery preparation, an ending task) is not a
+            # transport failure: closing here would revoke HA's battery grant and
+            # stop every other job on this session.
             raise
         except BaseException as error:
             await self.close()

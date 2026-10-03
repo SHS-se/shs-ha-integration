@@ -250,6 +250,20 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(r.runtime.snapshot()['fault_history'])
         finally:await r.runtime.close()
 
+    async def test_route_admission_wait_uses_the_measurement_lifetime_instead_of_one_second(self):
+        # Through the app, admission is a round trip to HA's durable journal. A
+        # one-second budget abandoned it at every busy quarter-hour boundary.
+        r=Rig();original=r.runtime._transition
+        async def journalled(effect):
+            await asyncio.sleep(1.2)
+            return await original(effect)
+        r.runtime._transition=journalled
+        try:
+            await r.start()
+            self.assertTrue(r.calls,r.runtime.snapshot())
+            self.assertFalse(r.runtime.snapshot()['fault_history'])
+        finally:await r.runtime.close()
+
     async def test_permission_change_while_waiting_for_household_lock_prevents_service_call(self):
         from shs_core.home_host import DispatchRejected
         r=Rig();original=r.runtime._dispatch;rejected=[]

@@ -38,7 +38,9 @@ ALIGNMENT_MS=15000
 ACCOUNTING_REUSE_MS=1000
 # Journal/lock waits share the existing measurement lifetime. Freshness and
 # authority are still checked after the lock, immediately before each write.
-RUNTIME_LIMITS=rt.Limits(AGE_MS,1000,30000)
+# Route admission is one of those waits: through the app it is a round trip to
+# HA's durable journal, and its proposal is unusable once the observation expires.
+RUNTIME_LIMITS=rt.Limits(AGE_MS,1000,30000,AGE_MS)
 ADAPTER_REVISION='sigen-ess-dc-v2'
 OWNER='shs-household-battery'
 

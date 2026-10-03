@@ -28,6 +28,7 @@ from shs_core.configuration_schema import resolve_configuration
 from shs_core.command_journal import CommandJournal
 from shs_core.household_ports import HomeFacts
 from shs_core.execution_configuration import ExecutionConfiguration
+from shs_wire.protocol import offer
 
 
 class InProcessClient:
@@ -52,6 +53,49 @@ class InProcessClient:
     async def close(self):
         self.connected = None
         await self.peer.close()
+
+
+class LoopbackSocket:
+    """HA's WebSocket envelope around the real gateway service, with a busy journal."""
+    def __init__(self,service):
+        self.peer = AppConnection(service)
+        self.replies = asyncio.Queue()
+        self.replies.put_nowait({'type':'auth_required'})
+        self.busy = {}
+        self.work = set()
+    def hold(self,operation):
+        self.busy[operation] = asyncio.Event()
+        return self.busy[operation]
+    async def receive_json(self):
+        reply = await self.replies.get()
+        if reply is None:raise TypeError('Received message 8:1000 is not str')
+        return reply
+    async def send_json(self,value):
+        if value['type'] == 'auth':
+            self.replies.put_nowait({'type':'auth_ok'})
+            return
+        task = asyncio.create_task(self.answer(value))
+        self.work.add(task)
+        task.add_done_callback(self.work.discard)
+    async def answer(self,value):
+        request = {key:value[key] for key in ('id','operation','body')}
+        connecting = request['operation'] == 'connect'
+        if connecting:
+            request['body'] = {key:item for key,item in request['body'].items() if key != 'contract'}
+        try:
+            if request['operation'] in self.busy:
+                await self.busy[request['operation']].wait()
+            result = (await self.peer.request(request))['result']
+            if connecting:result['contract'] = offer('companion')
+            reply = dict(success=True,result=result)
+        except (ValueError,KeyError,TypeError,RuntimeError) as error:
+            stale = self.peer.closed or self.peer.service.connection is not self.peer
+            reply = dict(success=False,error=dict(code='shs_gateway_stale' if stale else 'shs_gateway_rejected',message=str(error)))
+        self.replies.put_nowait(dict(id=value['id'],type='result',**reply))
+    async def close(self):
+        self.peer.disconnected()
+        await self.peer.close()
+        self.replies.put_nowait(None)
 
 
 class EngineTests(unittest.IsolatedAsyncioTestCase):
@@ -150,9 +194,8 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(replacement.battery._processing['receipt'],consumed)
         self.assertFalse(self.native_calls)
 
-    async def test_controlling_runtime_uses_remote_admission_and_durable_native_gateway(self):
+    def battery_rig(self):
         from test_battery_runtime import Rig
-        from shs_app.physical_ports import RemoteBattery
         rig = Rig()
         # Use the same finite native rows on opposite sides of the wire codec.
         self.entry['options'] = rig.options
@@ -167,6 +210,100 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             self.native_calls.append((domain,action,data))
             rig.rows[data['entity_id']]['state'] = str(data.get('value',data.get('option')))
         native.send = send
+        return rig
+
+    async def remote_battery(self, rig):
+        """The real multiplexed client and remote writer over HA's result envelope."""
+        from shs_app.gateway_client import GatewayClient
+        from shs_app.physical_ports import RemoteBattery
+        socket = LoopbackSocket(self.service)
+        async def ws_connect(*args,**kwargs):return socket
+        client = GatewayClient(SimpleNamespace(ws_connect=ws_connect),'loopback','token',self.service.identity,None,
+            paired_release={'app_version':'app'})
+        self.addAsyncCleanup(client.close)
+        await client.connect()
+        proof = (await client.call('reconcile',dict(checkpoint_sha256='a'*64)))['reconciliation']['proof']
+        page = await client.call('receipts',dict(after=0,limit=256))
+        await client.call('ack_delivery',dict(through=page['through']))
+        await client.call('activate',dict(activation_id='battery-test',proof=proof))
+        writer = RemoteBattery(client,rig.runtime,lambda:rig.now)
+        writer.enabled = True
+        rig.coordinator.battery_writer = writer
+        rig.runtime.physical = writer
+        self.addAsyncCleanup(rig.runtime.close,release=False)
+        return socket,client,writer
+
+    async def test_slow_route_admission_keeps_the_session_and_the_battery_grant(self):
+        # 3 October 2026: HA's journal answered a battery route after the host's
+        # preparation budget. Abandoning that one call closed the whole socket,
+        # so HA revoked the grant and handed the battery back every quarter hour.
+        from dataclasses import replace
+        from shs_core import battery_runtime
+        rig = self.battery_rig()
+        socket,client,writer = await self.remote_battery(rig)
+        limits = patch.object(battery_runtime,'RUNTIME_LIMITS',replace(battery_runtime.RUNTIME_LIMITS,transition_timeout_ms=20))
+        limits.start()
+        self.addCleanup(limits.stop)
+        journal = socket.hold('battery_route')
+        await rig.runtime.open()
+        await rig.runtime.refresh()
+        await asyncio.wait_for(rig.runtime.host.idle(),2)
+        failure = rig.runtime.host.state.groups[0].transition_work
+        self.assertIn('timed out',failure.reason)
+        self.assertFalse(self.native_calls)
+        self.assertIsNotNone(client.socket)
+        self.assertTrue(self.service.active)
+        self.assertTrue(writer.is_current(writer.grant,rig.runtime.identity()))
+        self.assertTrue(self.service.battery.fence.snapshot()['grant_current'])
+        # HA answers after the app stopped waiting; the next preparation is admitted
+        # on the same session and reaches the native controls.
+        journal.set()
+        await rig.advance(failure.retry_at_ms-rig.now)
+        self.assertTrue(self.native_calls,str(rig.runtime.snapshot()))
+        self.assertIsNotNone(client.socket)
+        self.assertEqual(client.pending,{})
+        self.assertTrue(self.service.battery.fence.snapshot()['grant_current'])
+
+    async def test_route_admission_may_outlast_a_second_while_its_observation_is_usable(self):
+        rig = self.battery_rig()
+        socket,client,writer = await self.remote_battery(rig)
+        journal = socket.hold('battery_route')
+        await rig.runtime.open()
+        await rig.runtime.refresh()
+        asyncio.get_running_loop().call_later(1.2,journal.set)
+        await asyncio.wait_for(rig.runtime.host.idle(),10)
+        self.assertTrue(self.native_calls,str(rig.runtime.snapshot()))
+        self.assertFalse([row for row in rig.runtime._fault_history if 'timed out' in row['reason']])
+
+    async def test_grant_revoked_by_ha_is_requested_again_without_waiting_for_its_expiry(self):
+        # 3 October 2026: HA invalidated its configuration replica with the session
+        # still active. It handed the battery back, while the app kept proposing with
+        # the revoked grant until its own renewal almost fourteen minutes later.
+        rig = self.battery_rig()
+        socket,client,writer = await self.remote_battery(rig)
+        await rig.runtime.open()
+        await rig.runtime.refresh()
+        await asyncio.wait_for(rig.runtime.host.idle(),2)
+        def settings():
+            return (rig.rows['select.mode']['state'],float(rig.rows['number.charge']['state']),float(rig.rows['number.discharge']['state']))
+        commanded = settings()
+        self.assertEqual(commanded[0],'Command Charging (PV First)',str(rig.runtime.snapshot()))
+        await rig.advance(5000)  # The commanded settings are observed before HA changes them.
+        self.service.invalidate_configuration()
+        self.service.configuration_pending = False  # An unchanged context is settled without a receipt.
+        await self.service.battery.maintain_obligation()
+        self.assertEqual(settings()[0],'Maximum Self Consumption')
+        granted = writer.grant
+        for _ in range(4):
+            await rig.advance(5000)
+        self.assertNotEqual(writer.grant,granted)
+        self.assertTrue(self.service.battery.fence.snapshot()['grant_current'])
+        self.assertEqual(settings(),commanded,str(rig.runtime.snapshot()))
+        self.assertIsNotNone(client.socket)
+
+    async def test_controlling_runtime_uses_remote_admission_and_durable_native_gateway(self):
+        from shs_app.physical_ports import RemoteBattery
+        rig = self.battery_rig()
         peer = AppConnection(self.service)
         number = 0
         async def call(operation,body):
