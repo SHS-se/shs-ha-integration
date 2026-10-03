@@ -12,13 +12,9 @@ import test_battery_gateway as battery_fixtures
 from gateway_fixture import IDENTITY
 from gateway_wire import filter_sources
 from test_execution_mode_select import load_adapter
-from shs_core import home_runtime as rt
-from shs_core.battery_gateway import OWNER
 from shs_core.controller_inputs import configured_entity_ids
 from shs_core.gateway_journal import digest
 from shs_core.gateway_service import GatewayService
-from shs_core.native_configuration import native_options
-from shs_core.runtime_json import decode_value, encode_value, runtime_digest
 
 REGISTRY_UPDATED = 'entity_registry_updated'
 CORE_CONFIG_UPDATE = 'core_config_updated'
@@ -75,11 +71,6 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             value=dict(revision=1, digest=digest(installed)))
         self.source.attach()
         await self.source.refresh_configuration()
-        # Capturing the first context fences the writer; the app then asks again.
-        identity = rt.WriterIdentity(OWNER, runtime_digest(native_options(self.options)), self.catalog.control_surface_revision)
-        self.grant = decode_value(await self.gateway.grant(encode_value(identity), encode_value(self.catalog),
-            self.conversion.wire(), self.rig.now+900000), rt.WriterGrant)
-        self.calls.clear()
 
     def current(self):
         return self.gateway.fence.snapshot()['grant_current']
@@ -99,18 +90,31 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.calls)
         self.assertTrue(self.gateway.obligation['pending'])
 
-    async def test_changed_metadata_fences_the_writer_before_its_capture_starts(self):
-        revision = self.service.configuration_revision
+    async def test_changed_metadata_refuses_commands_until_captured_and_keeps_the_battery_settings(self):
+        revision, policy = self.service.configuration_revision, self.service.policy_revision
         self.hass.names['switch.living_room_aircon'] = 'Heat pump'
         self.hass.fire(REGISTRY_UPDATED, action='update', entity_id='switch.living_room_aircon')
-        # No await has run: the fence precedes every queued journal write.
+        # No await has run: pending configuration and the new policy revision
+        # refuse every earlier grant, route, step and device intention.
         self.assertTrue(self.service.configuration_pending)
-        self.assertFalse(self.current())
+        self.assertEqual(self.service.policy_revision, policy+1)
         self.assertEqual(len(self.tasks), 1)
         await self.tasks[0]
         self.assertFalse(self.service.configuration_pending)
         self.assertEqual(self.service.configuration_revision, revision+1)
         self.assertEqual(self.source.last_context['entity_names'], {'switch.living_room_aircon':'Heat pump'})
+        # A renamed entity is no reason to hand the battery back to its baseline.
+        self.assertTrue(self.current())
+        await self.gateway.maintain_obligation()
+        self.assertFalse(self.calls)
+
+    async def test_settings_revision_still_revokes_the_writer_and_returns_the_battery(self):
+        self.source.invalidate()
+        self.assertTrue(self.service.configuration_pending)
+        self.assertFalse(self.current())
+        await self.gateway.maintain_obligation()
+        self.assertIn(('select.mode','Maximum Self Consumption'),
+            [(data['entity_id'],data.get('option',data.get('value'))) for _,_,data in self.calls])
 
     async def test_changed_home_and_new_entities_are_still_captured(self):
         for change in (lambda:setattr(self.hass.config, 'latitude', 60),
@@ -134,8 +138,9 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         def unreadable():
             raise RuntimeError('registry is loading')
         self.hass.states.async_all = unreadable
+        policy = self.service.policy_revision
         self.hass.fire(REGISTRY_UPDATED, action='update', entity_id='switch.living_room_aircon')
         self.assertTrue(self.service.configuration_pending)
-        self.assertFalse(self.current())
+        self.assertEqual(self.service.policy_revision, policy+1)
         with self.assertRaises(RuntimeError):
             await self.tasks.pop()

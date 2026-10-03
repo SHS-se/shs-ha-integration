@@ -66,6 +66,11 @@ class WriterIdentity:
         for value in (self.owner_id, self.config_revision, self.control_surface_revision):
             _identity(value)
 
+# HA's refusal of a grant it no longer honours. The app matches these words to
+# request a new grant, so they are part of the gateway contract.
+GRANT_NOT_CURRENT = "Battery grant is no longer current"
+
+
 @dataclass(frozen=True)
 class WriterGrant:
     owner_id: str

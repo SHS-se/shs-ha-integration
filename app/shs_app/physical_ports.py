@@ -6,6 +6,7 @@ from shs_core.command_transport import CommandUncertain
 from shs_core.device_port import device_intent
 from shs_core.gateway_journal import GatewayConflict, GatewayRejected, digest
 from shs_core.home_host import DispatchRejected
+from shs_core.native_records import GRANT_NOT_CURRENT
 from shs_core.runtime_json import encode_value, decode_value
 
 
@@ -89,13 +90,15 @@ class RemoteBattery:
             raise GatewayConflict('Battery writer is not current')
         try:
             result = await self.gateway.call('battery_route', {'effect':encode_value(effect), 'grant':encode_value(self.grant)})
-        except GatewayRejected:
-            # HA owns the grant and can revoke it with this session still open (a
-            # configuration invalidation), then hands the battery back. Forget the
-            # refused grant so the next refresh requests a new one, rather than
-            # proposing with it until this side's copy would have expired.
-            self.grant = None
-            self.routes.clear()
+        except GatewayRejected as error:
+            # HA owns the grant and can end it with this session still open (a
+            # settings revision), then hands the battery back. Forget that grant
+            # so the next refresh requests a new one, rather than proposing with
+            # it until this side's copy would have expired. Any other refusal,
+            # such as HA still settling a metadata capture, leaves it standing.
+            if str(error) == GRANT_NOT_CURRENT:
+                self.grant = None
+                self.routes.clear()
             raise
         proposal = decode_value(result['proposal'], rt.Proposed)
         key = (proposal.group_id, proposal.generation, proposal.request_id, proposal.request_revision)

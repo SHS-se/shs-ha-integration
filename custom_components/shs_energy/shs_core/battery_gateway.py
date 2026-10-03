@@ -110,7 +110,7 @@ class BatteryGateway:
         effect = decode_value(effect_wire, rt.NeedTransition)
         grant = decode_value(grant_wire, rt.WriterGrant)
         if self.installation is None or not self.fence.is_current(grant, self.identity()):
-            raise GatewayConflict('Battery grant is no longer current')
+            raise GatewayConflict(rt.GRANT_NOT_CURRENT)
         identity, catalog, conversion, installed_options = self.installation
         if effect.purpose != 'release' and (runtime_digest(native_options(self.options())) != identity.config_revision or device_mode(self.options(), 'battery') != 'controlling'):
             raise GatewayConflict('Battery optimisation permission changed')

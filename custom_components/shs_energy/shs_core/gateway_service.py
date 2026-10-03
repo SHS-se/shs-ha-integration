@@ -76,12 +76,23 @@ class GatewayService:
         self.configuration_pending = False
 
     def invalidate_configuration(self):
+        # A settings revision changes what the battery writer was granted for.
+        self.invalidate_context()
+        if self.battery:
+            self.battery.revoke()
+
+    def invalidate_context(self):
+        """Refuse everything admitted before a new context capture settles.
+
+        Pending configuration and the new policy revision already stop every
+        grant, route, step and device intention. The battery writer stands:
+        HA hands a revoked battery back to its baseline, and names, areas or
+        another integration's entities must never change a device's settings.
+        """
         self.configuration_pending = True
         self.reconciliation = None
         self.policy = None
         self.policy_revision += 1
-        if self.battery:
-            self.battery.revoke()
 
     def physical_proof(self):
         return digest({'ownership':self.physical.ownership.snapshot(),

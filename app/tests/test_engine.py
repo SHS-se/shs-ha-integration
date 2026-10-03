@@ -301,6 +301,32 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(settings(),commanded,str(rig.runtime.snapshot()))
         self.assertIsNotNone(client.socket)
 
+    async def test_route_refused_while_ha_captures_metadata_keeps_the_grant_and_the_plan(self):
+        # A renamed or new entity makes HA refuse commands until the app has the
+        # new context. Nothing is handed back, and the standing grant is used again.
+        rig = self.battery_rig()
+        socket,client,writer = await self.remote_battery(rig)
+        await rig.runtime.open()
+        await rig.runtime.refresh()
+        await asyncio.wait_for(rig.runtime.host.idle(),2)
+        await rig.advance(5000)
+        granted,epoch = writer.grant,self.service.battery.fence.snapshot()['epoch']
+        self.service.invalidate_context()
+        rig.rows['number.charge']['state'] = '1.0'  # A correction is due while HA is unsettled.
+        calls = len(self.native_calls)
+        await rig.advance(5000)
+        await self.service.battery.maintain_obligation()
+        self.assertEqual(len(self.native_calls),calls)
+        self.assertIs(writer.grant,granted)
+        self.assertFalse(rig.runtime._releasing)
+        self.assertTrue(rig.runtime.snapshot()['writer_current'])
+        self.service.configuration_pending = False
+        await rig.advance(5000)
+        self.assertEqual(float(rig.rows['number.charge']['state']),1.899,str(rig.runtime.snapshot()))
+        self.assertEqual(rig.rows['select.mode']['state'],'Command Charging (PV First)')
+        self.assertIs(writer.grant,granted)
+        self.assertEqual(self.service.battery.fence.snapshot()['epoch'],epoch)
+
     async def test_controlling_runtime_uses_remote_admission_and_durable_native_gateway(self):
         from shs_app.physical_ports import RemoteBattery
         rig = self.battery_rig()

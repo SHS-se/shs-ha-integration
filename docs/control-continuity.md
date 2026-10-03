@@ -49,6 +49,7 @@ Controlling then resumes from the current state.
 | No current plan, a plan with no command for the device, or website choices that cannot be read | Hold, with the reason on the device card. |
 | A fault: setup error, rejected or ambiguous service call, invalid plan | Hold and report. Latched until the plan, slot or configuration changes. |
 | A configuration change that keeps the device Controlling (other devices, admissions, migrations) | No effect on ownership. |
+| A Home Assistant metadata change: an entity renamed, added or moved to another area, another integration reloading, a core setting | No effect on ownership, the battery included (user requirement, 3 October 2026). The gateway refuses commands only until the app has received the new context; it does not revoke the battery writer, so nothing is handed back. |
 | A changed control entity | Refused with a fault until the select goes to Verification (which hands back the entity SHS owned) and back to Controlling (which captures the new one). |
 
 When an entity returns, SHS only carries out what the current plan and the select

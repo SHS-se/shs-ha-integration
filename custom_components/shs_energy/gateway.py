@@ -95,9 +95,8 @@ class HomeAssistantSource:
     def metadata_unchanged(self):
         """Whether a registry or core event leaves the settled context as it is.
 
-        Those events fire for every entity in Home Assistant. Invalidating
-        revokes the battery writer, which HA then hands back to its baseline,
-        so only a context the app has not received may do that.
+        Those events fire for every entity in Home Assistant. Only a context
+        the app has not received needs its commands refused and a new capture.
         """
         if self.service.configuration_pending:
             return False
@@ -131,7 +130,8 @@ class HomeAssistantSource:
             if context == self.last_context:
                 self.service.configuration_pending = False
                 return
-            self.invalidate()
+            # A settings installation has already revoked the battery writer.
+            self.service.invalidate_context()
             self.last_context = context
             future = self.service.stream.capture('configuration', context)
             pending = [self.service.stream.capture('observation', self.report(entity)) for entity in sorted(self.entities)]
@@ -228,7 +228,7 @@ class HomeAssistantSource:
         def metadata_changed(event):
             if self.metadata_unchanged():
                 return
-            self.invalidate()
+            self.service.invalidate_context()
             self.entry.async_create_background_task(self.hass, self.refresh_configuration(), name='shs_gateway_configuration')
         for event in (EVENT_STATE_CHANGED, EVENT_STATE_REPORTED):
             self.entry.async_on_unload(self.hass.bus.async_listen(event, observe, event_filter=matches))
