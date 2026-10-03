@@ -1,10 +1,10 @@
 # Control continuity: only the select releases
 
 **Normative, 21 September 2026.** Implemented for the scheduled controller (pool,
-EV, and generic room and hot-water devices) in 0.9.0-beta.37. The battery runtime
-does not follow it yet; see [the last section](#battery-runtime-not-yet-conforming).
-Where other documents describe handover on restart, on expiry or on faults, this
-document takes precedence.
+EV, and generic room and hot-water devices) in 0.9.0-beta.37, and for the battery
+in 0.9.0-beta.72 (user requirement, 3 October 2026); see
+[the last section](#battery). Where other documents describe handover on restart,
+on expiry or on faults, this document takes precedence.
 
 ## Rule
 
@@ -85,17 +85,38 @@ holds on unreadable website choices, `report_gap` reports interrupted readings,
 maximum pause. `async_start` and `async_stop` send nothing. Tests:
 `tests/test_control_continuity.py` and `tests/test_pool_switch_gap.py`.
 
-## Battery runtime (not yet conforming)
+## Battery
 
-The battery runs through its own runtime (`battery_runtime.py` and the
-`home_runtime.py` reducer), which still releases to Maximum Self Consumption:
+User requirement, 3 October 2026: the battery is released only when its control
+mode says so. Otherwise it stays in the mode the controller last set. The earlier
+exceptions (releasing to Maximum Self Consumption on a restart, a lost app, a
+settings change, an expired plan, stale measurements or a refresh error) are
+removed.
 
-- on HA stop and on integration unload or reload (`close(release=True)`);
-- when its measurements are stale, or its plan contract expires or changes
-  authority: the reducer withdraws execution, and an owned battery without a
-  fresh target is given the release target;
-- on any options change, which rebinds its authority, and on refresh errors.
+The battery runs through its own runtime (`battery_runtime.py`, the
+`home_runtime.py` reducer and Home Assistant's `battery_gateway.py`). All three
+follow the rule:
 
-Holding the battery's last command while it cannot see live measurements is a
-decision to make first. For example, a held grid charge cannot see the house load
-rise and could exceed the main fuse limit, which the release currently prevents.
+| Situation | Behaviour |
+|---|---|
+| The app stops, restarts, crashes or loses its connection; HA stops or restarts; the integration reloads | Nothing is written. HA fences the writer, so no stale command can be sent, and leaves the settings alone. The runtime resumes from them when it returns. |
+| No current plan or slot, a plan without battery instructions, an expired plan reference | Hold, status `idle` with the reason. |
+| Stale or missing measurements, a failing refresh | Hold, status `limited` or `fault` with the reason. |
+| A settings change that keeps the battery Controlling | The new settings are bound in place. Changed meters keep the command journal. A changed control entity is refused with a fault until the select goes to Verification and back. |
+| A manual-override entity that cannot be read | Hold. |
+
+What still hands the battery back to Maximum Self Consumption at its rated
+limits: it leaves Controlling and Verification (demoted on the website), it is
+disabled or excluded, or a configured manual-override entity turns on. If the app
+is not connected, Home Assistant completes that handover itself. Returning the
+battery to Controlling before the handover finishes cancels it.
+
+Consequence accepted with this requirement: a held command cannot follow the
+house. A held grid charge keeps charging at its last limit when the house load
+rises or the plan ends, and a held discharge keeps discharging, until SHS can
+see and plan again or the battery's own protections stop it. The main fuse is
+then protected only by the equipment's own limits.
+
+Tests: `tests/test_battery_continuity.py`, `tests/test_battery_gateway.py`,
+`tests/test_gateway_metadata.py` and the session tests in
+`app/tests/test_engine.py`.

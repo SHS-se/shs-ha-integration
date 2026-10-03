@@ -128,16 +128,60 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replacement.installation, self.gateway.installation)
         self.assertFalse(replacement.fence.is_current(self.grant, replacement.identity()))
 
-    async def test_revoked_writer_returns_native_controls_to_baseline(self):
+    def settings(self):
+        return [(data['entity_id'],data.get('option',data.get('value'))) for _,_,data in self.calls]
+
+    async def test_lost_writer_keeps_the_last_settings(self):
+        # A closed app session, a restart, a settings revision or an expired
+        # grant all leave HA without a current writer. None of them is a release.
         self.gateway.revoke()
         await self.gateway.maintain_obligation()
-        self.assertTrue(self.calls)
-        settings = [(data['entity_id'],data.get('option',data.get('value'))) for _,_,data in self.calls]
-        self.assertIn(('select.mode','Maximum Self Consumption'),settings)
-        self.assertFalse(self.gateway.obligation['pending'])
-        before = len(self.calls)
+        self.rig.now += 3600000
         await self.gateway.maintain_obligation()
-        self.assertEqual(len(self.calls),before)
+        self.assertFalse(self.calls)
+        self.assertTrue(self.gateway.obligation['pending'])
+
+    async def test_leaving_controlling_returns_native_controls_to_baseline(self):
+        for change in (lambda:self.options['device_modes'].update({'$battery':'monitoring'}),
+                       lambda:self.options.update(battery_enabled=False),
+                       lambda:self.options.update(excluded_device_readings=['$battery'])):
+            with self.subTest(options=self.options):
+                original, self.calls[:] = deepcopy(self.options), []
+                self.gateway.obligation = {'pending':True, 'command':None, 'fault':None}
+                change()
+                self.gateway.revoke()
+                await self.gateway.maintain_obligation()
+                self.assertIn(('select.mode','Maximum Self Consumption'),self.settings())
+                self.assertFalse(self.gateway.obligation['pending'])
+                before = len(self.calls)
+                await self.gateway.maintain_obligation()
+                self.assertEqual(len(self.calls),before)
+                self.options.clear();self.options.update(original)
+
+    async def test_manual_override_releases_and_an_unreadable_one_holds(self):
+        self.options['battery_control_override_entity'] = 'input_boolean.manual_battery'
+        self.gateway.revoke()
+        for state in (None,'unavailable','unknown','off'):
+            self.rows['input_boolean.manual_battery'] = state and {'state':state,'attributes':{}}
+            await self.gateway.maintain_obligation()
+            self.assertFalse(self.calls,state)
+        self.rows['input_boolean.manual_battery'] = {'state':'on','attributes':{}}
+        await self.gateway.maintain_obligation()
+        self.assertIn(('select.mode','Maximum Self Consumption'),self.settings())
+
+    async def test_returning_to_controlling_cancels_an_unfinished_handback(self):
+        self.options['device_modes']['$battery'] = 'monitoring'
+        send = self.physical.native_executor.send
+        async def reconsidered(*args):
+            await send(*args)
+            self.options['device_modes']['$battery'] = 'controlling'
+        self.physical.native_executor.send = reconsidered
+        self.gateway.revoke()
+        with self.assertRaisesRegex(GatewayConflict,'authority changed'):
+            await self.gateway.maintain_obligation()
+        self.assertEqual(len(self.calls),1)
+        await self.gateway.maintain_obligation()
+        self.assertEqual(len(self.calls),1)
 
     async def test_verification_relinquishes_without_a_baseline_write(self):
         self.options['device_modes']['$battery'] = 'control_verification'
@@ -151,6 +195,7 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
             self.calls.append(args)
             raise TimeoutError('native response lost')
         self.physical.native_executor.send = ambiguous
+        self.options['device_modes']['$battery'] = 'monitoring'
         self.gateway.revoke()
         with self.assertRaises(TimeoutError):
             await self.gateway.maintain_obligation()

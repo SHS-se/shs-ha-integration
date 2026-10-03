@@ -108,10 +108,14 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         await self.gateway.maintain_obligation()
         self.assertFalse(self.calls)
 
-    async def test_settings_revision_still_revokes_the_writer_and_returns_the_battery(self):
+    async def test_settings_revision_revokes_the_writer_without_handing_the_battery_back(self):
         self.source.invalidate()
         self.assertTrue(self.service.configuration_pending)
         self.assertFalse(self.current())
+        await self.gateway.maintain_obligation()
+        self.assertFalse(self.calls)
+        # Only settings that take the battery out of Controlling return it.
+        self.options['device_modes']['$battery'] = 'monitoring'
         await self.gateway.maintain_obligation()
         self.assertIn(('select.mode','Maximum Self Consumption'),
             [(data['entity_id'],data.get('option',data.get('value'))) for _,_,data in self.calls])

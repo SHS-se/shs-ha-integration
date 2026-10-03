@@ -20,8 +20,7 @@ The select is the only release. Setting Verification hands the device back to th
 settings captured when SHS took control. Restarts, integration updates, unavailable
 or stale entities, missing plans and faults never do: the device keeps the last
 setting SHS sent until the select says otherwise. See
-[control continuity](control-continuity.md), which also lists the battery runtime's
-remaining exceptions.
+[control continuity](control-continuity.md), which also covers the battery.
 
 Automations use Home Assistant's `select.select_option` action. Select the actual
 entity created for your device; the ID below is an example:

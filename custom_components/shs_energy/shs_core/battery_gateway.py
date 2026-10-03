@@ -192,8 +192,22 @@ class BatteryGateway:
         limit = self.surface(options)['limits'][field]
         return NativeAction(step.key,'set_value',step.value/(1000 if limit['unit']=='kW' else 1))
 
+    def released(self, options):
+        """Whether the settings themselves hand the battery back.
+
+        The select or the choices that remove the battery from it, and a manual
+        override configured for the purpose. A lost app session, a restart, a
+        settings revision or an expired grant is none of these: the battery
+        keeps the last settings SHS sent. An unreadable override holds too.
+        """
+        if (device_mode(options,'battery') != 'controlling' or not options.get('battery_enabled', True)
+                or '$battery' in options.get('excluded_device_readings', [])):
+            return True
+        return any(options.get(key) and (self.reports(options[key]) or {}).get('state') not in ('off','unknown','unavailable',None)
+                   for key in ('control_override_entity', 'battery_control_override_entity'))
+
     async def maintain_obligation(self):
-        """Release a revoked battery writer using the canonical native adapter.
+        """Finish an explicit release for an app that is not doing it itself.
 
         This is finite physical handback, with no plan, account or policy choice.
         Uncertain local writes remain a visible fence rather than being replayed.
@@ -210,7 +224,7 @@ class BatteryGateway:
                 self.obligation = {'pending':False,'command':None,'fault':None}
                 await self.obligation_store.async_save(self.obligation)
                 return
-            if self.fence.snapshot()['grant_current']:
+            if self.fence.snapshot()['grant_current'] or not self.released(self.options()):
                 return
             identity,catalog,conversion,options = installed = self.installation
             surface = self.surface(options)
@@ -229,7 +243,8 @@ class BatteryGateway:
             route = adapter.propose(effect)
             def authorize():
                 if (self.installation != installed or self.fence.snapshot()['grant_current']
-                        or device_mode(self.options(),'battery') == 'control_verification'):
+                        or device_mode(self.options(),'battery') == 'control_verification'
+                        or not self.released(self.options())):
                     raise GatewayConflict('Battery handback authority changed')
             for index,step in enumerate(route.steps):
                 command = ObligationCommand(request.id+':'+str(index),'battery','battery','handover',self.action(step,options))

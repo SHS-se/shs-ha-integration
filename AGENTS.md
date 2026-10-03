@@ -11,6 +11,18 @@ already been published. Documentation-only changes do not require a bump.
 
 Follow `RELEASING.md`; do not create release tags manually.
 
+# Control continuity
+
+Follow [control continuity](docs/control-continuity.md) for every device, the
+battery included: only an explicit control-mode, exclusion or override setting
+may change a device's settings. A restart, a lost app or socket, a settings or
+metadata change, a missing or expired plan, stale readings and faults all hold
+the last setting SHS sent. Do not add a handback, fallback or "safe default"
+write for any of them, in the app, the core or the Home Assistant gateway. A
+change to when a device is released needs the user's explicit requirement and
+regression coverage beside `tests/test_control_continuity.py` and
+`tests/test_battery_continuity.py`.
+
 # Configuration UX
 
 For configuration, readiness, status, or controller-error changes, follow

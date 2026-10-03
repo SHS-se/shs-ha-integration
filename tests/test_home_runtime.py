@@ -221,11 +221,22 @@ class HomeRuntimeTests(unittest.TestCase):
             self.assertEqual(h.group().attempts, ())
             self.assertFalse(any(isinstance(e, (Send, NeedTransition)) for e in h.effects))
 
-    def test_expiry_does_not_renew_authority_and_old_requests_are_fenced_on_reentry(self):
+    def test_expiry_holds_the_last_setting_and_old_requests_are_fenced_on_reentry(self):
         h = Harness(); h.request(expiry=1500); h.propose(); h.finish()
-        h.event(Tick(), 1500); h.finish()
-        self.assertEqual(h.group().status, "released")
-        h.authority("battery", "monitoring", 2); h.authority("battery", "controlling", 3)
+        commanded = h.group().observation.controls
+        h.event(Tick(), 1500)
+        # An expired target is not a release: nothing is written and ownership stays.
+        self.assertEqual(h.group().status, "holding")
+        self.assertTrue(h.group().owned)
+        self.assertFalse(h.group().release_pending)
+        self.assertFalse(any(isinstance(e, (NeedTransition, Send)) for e in h.effects))
+        self.assertEqual(h.group().observation.controls, commanded)
+        # Leaving Controlling is the release; returning to it cancels one in progress.
+        effects = h.authority("battery", "monitoring", 2)
+        self.assertTrue(h.group().release_pending)
+        self.assertTrue(any(isinstance(e, NeedTransition) and e.purpose == "release" for e in effects))
+        h.authority("battery", "controlling", 3)
+        self.assertFalse(h.group().release_pending)
         h.event(Requested("battery", 1, Request("old", 99, 90000, controls("export", 0, 1000), ())))
         self.assertIsNone(h.group().desired)
         self.assertFalse(any(isinstance(e, Send) for e in h.effects))
@@ -352,7 +363,8 @@ class HomeRuntimeTests(unittest.TestCase):
         h.request("second", target=controls(), expiry=1005)
         self.assertEqual(h.group("second").status, "adopted")
         h.event(Requested("battery", 0, Request("stale", 1, 90000, controls(), ())), 1006)
-        self.assertTrue(any(isinstance(e, NeedTransition) and e.group_id == "second" and e.purpose == "release" for e in h.effects))
+        self.assertEqual(h.group("second").status, "holding")
+        self.assertFalse(any(isinstance(e, NeedTransition) for e in h.effects))
 
     def test_restart_at_each_transport_cut_never_replays_a_send(self):
         for stage in ("prepared", "sent", "accepted", "ambiguous"):

@@ -157,7 +157,8 @@ class BatteryRuntime:
             raise ValueError('journalled Sigen control surface changed')
         self.adapter=SigenAdapter(authority.catalog,self._model)
         self._identity=rt.WriterIdentity(OWNER,authority.config_revision,self._surface['revision'])
-        self._releasing=state.execution.account.contract is None;self._seeded=True
+        # A restart is no release. Only a handover already asked for is resumed.
+        self._releasing=state.groups[0].release_pending;self._seeded=True
 
     async def start(self):
         if self._started:
@@ -262,7 +263,7 @@ class BatteryRuntime:
             value.update(state='fault',reason=reason)
         elif isinstance(group.transition_work,rt.TransitionFailure):
             value.update(state='fault',reason=group.transition_work.reason)
-        elif group.mode=='controlling' and session.status=='active':
+        elif group.mode=='controlling' and session.status=='active' and self._last_error is None:
             if group.status=='adopted':
                 value.update(state='controlling',runtime_reason=None)
             else:
@@ -444,13 +445,8 @@ class BatteryRuntime:
             except Exception as error:
                 self._last_error=f'{type(error).__name__}: {error}'
                 self._record_fault('refresh',self._last_error)
-                self._status={'state':'fault','reason':self._last_error}
-                if self.host and (self.host.state.groups[0].owned or self.host.state.groups[0].attempts):
-                    try:
-                        await self._release('The current battery plan is unavailable')
-                    except Exception:
-                        pass  # The existing journal/fence retains unresolved work.
-                    self._status={'state':'fault','reason':self._last_error}
+                # A fault never releases: the battery keeps the last settings SHS sent.
+                self._status={'state':'fault','reason':self._holding(self._last_error)}
                 if isinstance(error, (BatteryMeasurementConfigurationError, BatteryPowerReadingError)):
                     self._status.update(reason=str(error), fix=error.fix, next_step=error.next_step, retry_automatically=True)
 
@@ -469,20 +465,68 @@ class BatteryRuntime:
                     await self._meter(stream.spec.stream_id,row['state'],row['attributes'],
                         stamp(row['last_reported']),row.get('event_id'))
 
+    def _released(self, options):
+        """The explicit settings that hand the battery back, or None.
+
+        The select or the choices that remove the battery from it (demotion,
+        exclusion, a disabled battery) and a manual override configured for the
+        purpose. An override that cannot be read holds instead of releasing.
+        """
+        if device_mode(options,'battery') not in ('controlling','control_verification'):
+            return 'Battery is not set to Controlling'
+        if not options.get('battery_enabled',True) or '$battery' in options.get('excluded_device_readings',[]):
+            return 'Battery is excluded from SHS'
+        for key in ('control_override_entity','battery_control_override_entity'):
+            if options.get(key) and (self.coordinator.ports.battery_report(options[key]) or {}).get('state') not in ('off','unknown','unavailable',None):
+                return 'Battery manual override is on'
+        return None
+
+    def _holding(self, reason):
+        """Say that the battery keeps the last settings SHS sent, when it has some."""
+        owned=self.host is not None and self.host.state.groups[0].owned
+        return f'{reason}; holding the last settings SHS sent' if owned else reason
+
+    async def _hold(self, reason, mode):
+        """No plan, slot or reading is a release: nothing is written."""
+        self.coordinator._battery_native_context=None
+        self._releasing=False
+        group=self.host.state.groups[0] if self.host else None
+        if group is not None and group.release_pending:
+            # Returned to the select before the handover finished: it is cancelled.
+            self._mode_revision=group.mode_revision+1
+            self._mode=mode
+            await self.host.accept(rt.AuthorityChanged(group.spec.id,mode,self._mode_revision,None))
+        self._status={'state':'idle','reason':self._holding(reason)}
+
     async def _retire_changed_configuration(self, options):
-        """Retain the account, but finish old command ownership before rebinding."""
+        """Bind to changed settings without changing what the battery is doing."""
         if not self.host or self._options is None or options==self._options:
             return True
-        self._releasing=True
+        if self._released(options):
+            return True  # That handover completes under the settings it was commanded with.
         await self._record_counters(options)
-        if device_mode(options,'battery')=='control_verification':
-            self._mode_revision+=1
-            await self.host.accept(rt.AuthorityChanged(self.host.state.groups[0].spec.id,
-                'control_verification',self._mode_revision,None))
-        await self._release('Rebinding battery control to the current settings')
-        old=self.host.state.groups[0]
-        if old.owned or old.attempts or old.release_pending:
-            return False
+        group=self.host.state.groups[0]
+        if device_mode(options,'battery')=='control_verification' and group.mode!='control_verification':
+            self._mode_revision=group.mode_revision+1
+            self._mode='control_verification'
+            await self.host.accept(rt.AuthorityChanged(group.spec.id,'control_verification',self._mode_revision,None))
+            group=self.host.state.groups[0]
+        if group.owned or group.attempts or group.release_pending:
+            # SHS holds the battery: rebinding must not change what it is doing.
+            keys=tuple(options.get(k) for k in ('battery_mode_entity','battery_charge_limit_entity','battery_discharge_limit_entity'))
+            if keys!=group.spec.control_keys:
+                raise ValueError('The battery control entities changed while SHS controls the battery. '
+                    'Set the battery to Verification, then back to Controlling, to use the new entities')
+            specs=self._meter_specs(options)
+            mapping=digest([asdict(s) for s in specs])
+            if mapping!=self.host.state.ledger.mapping_revision:
+                # Only the meters changed. Keep the command journal and resume it,
+                # exactly as after a restart, against a ledger for the new meters.
+                state=replace(self.host.state,ledger=create_ledger('household-battery-actuals',mapping,specs,max_intervals=256))
+                await self.host.close()
+                self._seeded=False;self._last_capture=None;self._observation_error=None
+                await self._open_host(state,True)
+            return True  # The next authority is installed in place.
         await self.host.close()
         session=self.host.state.execution
         self._bootstrap=session.account
@@ -500,11 +544,16 @@ class BatteryRuntime:
         await self._record_counters(options)
         mode=device_mode(options,'battery')
         plan,slot=self.coordinator.binding_plan_for('battery',options)
-        override=any(options.get(k) and (self.coordinator.ports.battery_report(options[k]) or {}).get('state')!='off'
-                     for k in ('control_override_entity','battery_control_override_entity'))
-        if mode not in ('controlling','control_verification') or not slot or override or not options.get('battery_enabled',True) or '$battery' in options.get('excluded_device_readings',[]):
+        if released:=self._released(options):
             self.coordinator._battery_native_context=None
-            await self._release('No current battery schedule is available' if not slot and mode in ('controlling','control_verification') and not override else 'Battery is inactive or overridden')
+            await self._release(released)
+            return
+        if any(options.get(k) and (self.coordinator.ports.battery_report(options[k]) or {}).get('state')!='off'
+               for k in ('control_override_entity','battery_control_override_entity')):
+            await self._hold('The battery manual override cannot be read',mode)
+            return
+        if not slot:
+            await self._hold('No current battery schedule is available',mode)
             return
         self._releasing=False
         self._options=options
@@ -548,9 +597,9 @@ class BatteryRuntime:
             if left_out:
                 # The plan left the battery out for its readings. A replan cannot
                 # include it until they are real; the server recommends one then.
-                await self._release(f"The current plan leaves the battery out: {left_out.get('reason')}")
+                await self._hold(f"The current plan leaves the battery out: {left_out.get('reason')}",mode)
                 return
-            await self._release('Waiting for the planner to provide battery execution instructions')
+            await self._hold('Waiting for the planner to provide battery execution instructions',mode)
             self._request_replan('execution_contract_required')
             return
         contract=execution.read_contract(contract_wire)
@@ -636,7 +685,7 @@ class BatteryRuntime:
         self._status=({'state':'controlling' if mode=='controlling' else 'verified',
             'reason':'Following the battery plan' if mode=='controlling' else 'Testing the plan; battery settings are not being changed'}
             if session.status in ('active','diagnostic_only') else
-            {'state':'limited','reason':'Waiting for a current battery plan and measurements'})
+            {'state':'limited','reason':self._holding('Waiting for a current battery plan and measurements')})
         if self.host._fault:
             raise ValueError('battery command journal is unavailable')
 

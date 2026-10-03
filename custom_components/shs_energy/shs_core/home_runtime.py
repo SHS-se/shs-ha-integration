@@ -576,9 +576,10 @@ def _request(group, now):
         return None, None
     if not group.release_pending and group.mode == "controlling" and group.desired is not None and now < group.desired.valid_until_ms:
         return group.desired, "optimisation"
-    if group.release_pending or group.owned or group.attempts:
-        if group.release is not None and now < group.release.valid_until_ms:
-            return group.release, "release"
+    # Owning the controls is no reason to change them. Without a current target
+    # they keep the last setting; only an explicit release hands them back.
+    if group.release_pending and group.release is not None and now < group.release.valid_until_ms:
+        return group.release, "release"
     return None, None
 
 
@@ -868,9 +869,8 @@ def _validate_execution(state, contract):
 def _withdraw_execution(state, reason, effects, *, refresh=True):
     session, group = state.execution, _battery_group(state)
     if group and group.desired is not None:
-        group = replace(_supersede(group), desired=None,
-                        release_pending=group.release_pending or group.owned or any(a.stage != "prepared" for a in group.attempts))
-        state = _put(state, group)
+        # A lost plan, changed authority or stale measurement holds the last setting.
+        state = _put(state, replace(_supersede(group), desired=None))
     if refresh and session.replan_reason != reason:
         effects.append(NeedPlan(reason))
     return replace(state, execution=replace(session, status="unavailable", assessment=None,
@@ -979,7 +979,7 @@ def _drive(state, now, durable_revision, effects):
         if not group.authority_confirmed:
             effects.append(ConfirmAuthority(group.spec.id))
         if request is None:
-            group = replace(_supersede(group), status="release_required" if group.owned else "inactive") if group.plan else replace(group, status="release_required" if group.owned else "inactive")
+            group = replace(_supersede(group), status="holding" if group.owned else "inactive") if group.plan else replace(group, status="holding" if group.owned else "inactive")
             if group.attempts or group.owned:
                 effects.append(Observe(group.spec.id))
             state = _put(state, group)
@@ -1220,7 +1220,8 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 raise ValueError("conflicting requested mode revision")
             if event.revision >= group.mode_revision:
                 changed = event.mode != group.mode or event.revision != group.mode_revision
-                pending = group.release_pending or (event.mode != "controlling" and (group.owned or any(a.stage != "prepared" for a in group.attempts)))
+                # Leaving Controlling is the release; returning to it cancels one in progress.
+                pending = event.mode != "controlling" and (group.release_pending or group.owned or any(a.stage != "prepared" for a in group.attempts))
                 group = _supersede(group) if changed else group
                 release = event.approved_release if event.approved_release and (group.release is None or event.approved_release.revision > group.release.revision) else group.release
                 group = replace(group, mode=event.mode, mode_revision=event.revision, authority_confirmed=True,

@@ -276,9 +276,9 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse([row for row in rig.runtime._fault_history if 'timed out' in row['reason']])
 
     async def test_grant_revoked_by_ha_is_requested_again_without_waiting_for_its_expiry(self):
-        # 3 October 2026: HA invalidated its configuration replica with the session
-        # still active. It handed the battery back, while the app kept proposing with
-        # the revoked grant until its own renewal almost fourteen minutes later.
+        # 3 October 2026: HA revoked the grant with the session still active, and
+        # the app kept proposing with it until its own renewal almost fourteen
+        # minutes later.
         rig = self.battery_rig()
         socket,client,writer = await self.remote_battery(rig)
         await rig.runtime.open()
@@ -290,9 +290,10 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(commanded[0],'Command Charging (PV First)',str(rig.runtime.snapshot()))
         await rig.advance(5000)  # The commanded settings are observed before HA changes them.
         self.service.invalidate_configuration()
-        self.service.configuration_pending = False  # An unchanged context is settled without a receipt.
+        self.service.configuration_pending = False  # The settings revision has been captured.
         await self.service.battery.maintain_obligation()
-        self.assertEqual(settings()[0],'Maximum Self Consumption')
+        self.assertEqual(settings(),commanded)  # A revoked writer is not a release.
+        rig.rows['number.charge']['state'] = '1.0'  # A correction is due under the revoked grant.
         granted = writer.grant
         for _ in range(4):
             await rig.advance(5000)
@@ -326,6 +327,31 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rig.rows['select.mode']['state'],'Command Charging (PV First)')
         self.assertIs(writer.grant,granted)
         self.assertEqual(self.service.battery.fence.snapshot()['epoch'],epoch)
+
+    async def test_lost_app_session_keeps_the_battery_settings(self):
+        # An app restart, crash or dropped socket is not a release. HA fences the
+        # writer and leaves the battery in the mode the controller last set.
+        rig = self.battery_rig()
+        socket,client,writer = await self.remote_battery(rig)
+        await rig.runtime.open()
+        await rig.runtime.refresh()
+        await asyncio.wait_for(rig.runtime.host.idle(),2)
+        await rig.advance(5000)
+        commanded = {key:rig.rows[key]['state'] for key in ('select.mode','number.charge','number.discharge')}
+        self.assertEqual(commanded['select.mode'],'Command Charging (PV First)')
+        calls = len(self.native_calls)
+        await client.close()
+        self.assertFalse(self.service.active)
+        self.assertFalse(self.service.battery.fence.snapshot()['grant_current'])
+        for _ in range(3):
+            rig.now += 600000
+            await self.service.battery.maintain_obligation()
+        self.assertEqual(len(self.native_calls),calls)
+        self.assertEqual({key:rig.rows[key]['state'] for key in commanded},commanded)
+        # Taking the battery out of Controlling is what hands it back, app or no app.
+        rig.options['device_modes']['$battery'] = 'monitoring'
+        await self.service.battery.maintain_obligation()
+        self.assertEqual(rig.rows['select.mode']['state'],'Maximum Self Consumption')
 
     async def test_controlling_runtime_uses_remote_admission_and_durable_native_gateway(self):
         from shs_app.physical_ports import RemoteBattery

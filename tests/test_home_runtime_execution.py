@@ -240,12 +240,13 @@ class ExecutableRuntimeTests(unittest.TestCase):
         self.assertIsNone(h.group.desired)
         self.assertFalse(any(isinstance(e,Send) for e in h.effects))
 
-    def test_stale_measurements_withdraw_owned_request(self):
+    def test_stale_measurements_withdraw_the_request_and_hold_the_last_setting(self):
         h=Harness();h.offer();h.prepare();h.durable()
         h.event(Tick(),h.state.conditions.valid_until_ms)
         self.assertIsNone(h.group.desired)
-        self.assertTrue(h.group.release_pending)
+        self.assertFalse(h.group.release_pending)
         self.assertTrue(h.group.attempts)
+        self.assertFalse(any(isinstance(e,NeedTransition) for e in h.effects))
 
     def test_pending_native_effect_survives_plan_expiry(self):
         h=Harness();h.offer();h.prepare();h.durable()
@@ -254,7 +255,8 @@ class ExecutableRuntimeTests(unittest.TestCase):
         self.assertEqual(h.group.attempts[0].id,before[0].id)
         self.assertEqual(h.group.attempts[0].stage,'ambiguous')
         self.assertIsNone(h.group.desired)
-        self.assertTrue(h.group.release_pending)
+        self.assertFalse(h.group.release_pending)
+        self.assertFalse(any(isinstance(e,NeedTransition) for e in h.effects))
 
     def test_unchanged_target_preserves_native_request_identity(self):
         h=Harness();h.offer();request=h.group.desired

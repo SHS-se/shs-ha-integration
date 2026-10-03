@@ -583,24 +583,6 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(allowed,r.runtime.snapshot())
         finally:await r.runtime.close()
 
-    async def test_expired_policy_releases_even_when_exchange_has_no_policy(self):
-        from shs_core.home_runtime import Tick
-        r=Rig();await r.start()
-        try:
-            for _ in range(4):await r.advance()
-            r.now=900001
-            for row in r.rows.values():row['last_reported']=iso(r.now)
-            for event in await r.runtime._observe(r.runtime.host.state.groups[0].spec.id):await r.runtime.host.accept(event)
-            await r.runtime.host.accept(Tick());await r.runtime.host.idle()
-            for _ in range(35):
-                r.now+=10000
-                for row in r.rows.values():row['last_reported']=iso(r.now)
-                for event in await r.runtime._observe(r.runtime.host.state.groups[0].spec.id):await r.runtime.host.accept(event)
-                await r.runtime.host.accept(Tick());await r.runtime.host.idle()
-            self.assertEqual(r.rows['select.mode']['state'],'Maximum Self Consumption',r.runtime.snapshot())
-            self.assertFalse(r.runtime.host.state.groups[0].owned)
-        finally:await r.runtime.close()
-
     async def test_release_and_readmission_have_distinct_scope_identity(self):
         r=Rig();await r.start()
         try:
