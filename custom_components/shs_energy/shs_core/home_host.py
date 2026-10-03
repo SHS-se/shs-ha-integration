@@ -21,6 +21,17 @@ class DispatchRejected(Exception):
 
 
 @dataclass(frozen=True)
+class _Evidence:
+    event: runtime.Event | None
+    at_ms: int
+
+
+@dataclass(frozen=True)
+class _CommitEvidence:
+    pass
+
+
+@dataclass(frozen=True)
 class HostPorts:
     persist: Callable[[bytes], Awaitable[None]]
     dispatch: Callable[[runtime.Send], Awaitable[None]]
@@ -52,6 +63,7 @@ class HomeHost:
         self._runner = None
         self._fault = None
         self.profiler = profiler if profiler is not None else ResourceProfiler()
+        self._received = None
 
     async def start(self, checkpoint: Optional[bytes] = None, *, resume=False):
         if self._runner is not None or self._closed:
@@ -86,6 +98,25 @@ class HomeHost:
         self._queue.put_nowait((event, completion, deepcopy(checkpoint)))
         return await asyncio.shield(completion)
 
+    async def ingest_received(self, event: runtime.Event | None, checkpoint: dict):
+        """Archive a native-owned fact; only a commit barrier retires its prefix."""
+        if self.ports.persist_received is None:
+            raise RuntimeError('Host has no atomic receipt persistence port')
+        if self._closed or self._runner is None or self._fault:
+            raise RuntimeError('home host is not running') from self._fault
+        completion = asyncio.get_running_loop().create_future()
+        completion.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
+        self._queue.put_nowait((_Evidence(event, self.ports.now_ms()), completion, deepcopy(checkpoint)))
+        return await asyncio.shield(completion)
+
+    async def commit_evidence(self):
+        if self._closed or self._runner is None or self._fault:
+            raise RuntimeError('home host is not running') from self._fault
+        completion = asyncio.get_running_loop().create_future()
+        completion.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
+        self._queue.put_nowait((_CommitEvidence(), completion, None))
+        return await asyncio.shield(completion)
+
     def _enqueue(self, event):
         if not self._closed:
             self._queue.put_nowait((event, None, None))
@@ -94,15 +125,26 @@ class HomeHost:
         while True:
             event, completion, processing = await self._queue.get()
             try:
-                with self.profiler.measure('reduce'):
-                    state, effects = (runtime.reduce_home(self.state, event, self.ports.now_ms())
-                                      if event is not None else (self.state, ()))
+                archival = isinstance(event, _Evidence)
+                committing = isinstance(event, _CommitEvidence)
+                if archival:
+                    with self.profiler.measure('evidence_ingest'):
+                        state, effects = runtime.archive_evidence(self.state, event.event, event.at_ms)
+                    self._received = processing
+                elif committing:
+                    state, effects = self.state, ()
+                    if self._received is not None:
+                        await self._persist(state, self._received, acknowledge=False)
+                else:
+                    with self.profiler.measure('reduce'):
+                        state, effects = (runtime.reduce_home(self.state, event, self.ports.now_ms())
+                                          if event is not None else (self.state, ()))
                 self.state = state
                 # Even a duplicate/no-op receipt must commit its cursor. Only
                 # the explicitly tagged queue item can advance that cursor.
-                if processing is not None and not any(isinstance(e, runtime.Persist) for e in effects):
+                if not archival and processing is not None and not any(isinstance(e, runtime.Persist) for e in effects):
                     await self._persist(state, processing, acknowledge=False)
-                await self._effects(effects, processing=processing)
+                await self._effects(effects, processing=processing if processing is not None else self._received)
                 if self._fault is not None:
                     raise RuntimeError("home journal could not persist the transition") from self._fault
                 if completion is not None and not completion.done():
@@ -134,6 +176,8 @@ class HomeHost:
         try:
             if processing is not None:
                 await self.ports.persist_received(state, processing)
+                if self._received is not None and processing['receipt'] >= self._received['receipt']:
+                    self._received = None
             elif self.ports.persist_state:
                 await self.ports.persist_state(state)
             else:
@@ -143,7 +187,8 @@ class HomeHost:
             self.ports.report("home", f"Checkpoint failed: {error}")
             self._enqueue(runtime.JournalFailed(state.revision))
             return
-        if acknowledge:
+        if acknowledge and any(a.stage == 'prepared' and a.prepared_revision == state.revision
+                               for g in state.groups for a in g.attempts):
             self._enqueue(runtime.JournalDurable(state.revision))
 
     async def _effects(self, effects, *, processing=None):

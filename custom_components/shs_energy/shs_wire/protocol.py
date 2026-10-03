@@ -9,6 +9,8 @@ CAPABILITIES = frozenset({
     'ordered-receipts-v1', 'native-devices-v1', 'native-battery-v1',
     'source-queries-v1', 'entity-projection-v2', 'app-requests-v1',
     'app-configuration-v1', 'processed-receipt-retirement-v1',
+    'gateway-notifications-v1',
+    'source-admission-v1',
 })
 
 

@@ -20,6 +20,8 @@ class GatewayStream:
         self.task = None
         self.failure = None
         self.accepting = False
+        self.listeners = set()
+        self.metrics = {'fact_commits':0, 'facts':0, 'max_batch':0}
 
     def start(self):
         if self.task is not None:
@@ -59,34 +61,61 @@ class GatewayStream:
             raise self.failure from None
 
     async def _run(self):
+        pending = None
+        has_pending = False
         while True:
-            item = await self.queue.get()
+            item = pending if has_pending else await self.queue.get()
+            has_pending = False
+            batch = [item]
             try:
                 if item is None:
                     return
                 name, args, future = item
+                if name == 'record':
+                    while not self.queue.empty():
+                        following = self.queue.get_nowait()
+                        if following is None or following[0] != 'record':
+                            pending, has_pending = following, True
+                            break
+                        batch.append(following)
                 if self.failure:
-                    if not future.done(): future.set_exception(GatewayConflict('Receipt persistence failed'))
+                    for _, _, receiver in batch:
+                        if not receiver.done(): receiver.set_exception(GatewayConflict('Receipt persistence failed'))
                     continue
                 try:
-                    result = await settled(self.executor, getattr(self.journal, name), *args)
+                    if len(batch) > 1:
+                        records = [values if len(values)==3 else (*values,None) for _,values,_ in batch]
+                        results = await settled(self.executor, self.journal.record_many, records)
+                    else:
+                        results = [await settled(self.executor, getattr(self.journal, name), *args)]
                 except (GatewayConflict, ValueError) as error:
                     if name == 'record':
                         self.failure = error
                         self.accepting = False
-                    if not future.done(): future.set_exception(error)
+                    for _, _, receiver in batch:
+                        if not receiver.done(): receiver.set_exception(error)
                 except Exception as error:
                     self.failure = error
                     self.accepting = False
-                    if not future.done(): future.set_exception(error)
+                    for _, _, receiver in batch:
+                        if not receiver.done(): receiver.set_exception(error)
                 else:
-                    if not future.done():
-                        if self.failure:
-                            future.set_exception(GatewayConflict('Receipt stream faulted during persistence'))
-                        else:
-                            future.set_result(result)
+                    if name == 'record':
+                        self.metrics['fact_commits'] += 1
+                        self.metrics['facts'] += len(batch)
+                        self.metrics['max_batch'] = max(self.metrics['max_batch'],len(batch))
+                    if name in ('record', 'begin', 'disconnect', 'activate', 'finish_command'):
+                        for listener in tuple(self.listeners):
+                            listener()
+                    for (_, _, receiver), result in zip(batch, results):
+                        if not receiver.done():
+                            if self.failure:
+                                receiver.set_exception(GatewayConflict('Receipt stream faulted during persistence'))
+                            else:
+                                receiver.set_result(result)
             finally:
-                self.queue.task_done()
+                for _ in batch:
+                    self.queue.task_done()
 
     async def close(self):
         self.accepting = False

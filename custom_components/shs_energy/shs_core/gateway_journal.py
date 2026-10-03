@@ -229,34 +229,40 @@ class GatewayJournal:
             self._append(db, 'gap', {'reason': 'session_disconnect', 'previous_session': session})
 
     def record(self, kind, payload, ownership=None):
+        return self.record_many(((kind,payload,ownership),))[0]
+
+    def record_many(self, records):
+        """Already queued facts share durability; their received order is exact."""
+        with closing(self.connect()) as db, db:
+            self._owner(db)
+            return [self._record(db,*record) for record in records]
+
+    def _record(self, db, kind, payload, ownership=None):
         if kind not in ('observation', 'configuration', 'outcome'):
             raise ValueError('Only source observations, configuration or command outcomes may be recorded')
         if type(payload) is not dict:
             raise ValueError('Receipt payload must be an object')
-        with closing(self.connect()) as db, db:
-            self._owner(db)
-            ordinal = self._append(db, kind, payload)
-            if ownership is not None:
-                if kind != 'observation':
-                    raise ValueError('Run ownership must accompany an observation')
-                db.execute('UPDATE ownership SET payload=? WHERE id=1', (encoded(ownership),))
-            if kind == 'configuration':
-                # The revision is local receipt order, never a source timestamp.
-                db.execute('UPDATE authority SET configuration_revision=?', (ordinal,))
-                db.execute('INSERT OR REPLACE INTO configuration VALUES (1,?,?)', (ordinal, encoded(payload)))
-            elif kind == 'observation':
-                entity = payload.get('entity_id')
-                if type(entity) is not str or not entity:
-                    raise ValueError('Observation entity required')
-                db.execute('INSERT OR REPLACE INTO latest VALUES (?,?,?)', (entity, ordinal, encoded(payload)))
-            return ordinal
+        ordinal = self._append(db, kind, payload)
+        if ownership is not None:
+            if kind != 'observation':
+                raise ValueError('Run ownership must accompany an observation')
+            db.execute('UPDATE ownership SET payload=? WHERE id=1', (encoded(ownership),))
+        if kind == 'configuration':
+            db.execute('UPDATE authority SET configuration_revision=?', (ordinal,))
+            db.execute('INSERT OR REPLACE INTO configuration VALUES (1,?,?)', (ordinal, encoded(payload)))
+        elif kind == 'observation':
+            entity = payload.get('entity_id')
+            if type(entity) is not str or not entity:
+                raise ValueError('Observation entity required')
+            db.execute('INSERT OR REPLACE INTO latest VALUES (?,?,?)', (entity, ordinal, encoded(payload)))
+        return ordinal
 
     def read(self, session, after, limit=256):
         cursor(after)
         if type(limit) is not int or not 1 <= limit <= 4096:
             raise ValueError('Invalid receipt page size')
         with closing(self.connect()) as db, db:
-            self._session(db, session)
+            _, current = self._session(db, session)
             high = db.execute('SELECT high FROM transport').fetchone()[0]
             if after < db.execute('SELECT floor FROM transport').fetchone()[0]:
                 raise GatewayConflict('Receipt cursor precedes the processed gateway prefix')
@@ -264,7 +270,8 @@ class GatewayJournal:
                 raise GatewayConflict('Receipt cursor is ahead of the gateway')
             rows = db.execute('SELECT * FROM receipts WHERE ordinal>? ORDER BY ordinal LIMIT ?', (after, limit)).fetchall()
             through = rows[-1]['ordinal'] if rows else after
-            db.execute('UPDATE sessions SET offered=max(offered,?) WHERE id=?', (through, session))
+            if through > current['offered']:
+                db.execute('UPDATE sessions SET offered=? WHERE id=?', (through, session))
             return {'receipts': [dict(ordinal=r['ordinal'], kind=r['kind'], payload=json.loads(r['payload'])) for r in rows], 'through': through, 'high': high}
 
     def acknowledge_delivery(self, session, through):
@@ -273,7 +280,8 @@ class GatewayJournal:
             _, current = self._session(db, session)
             if through < current['delivered'] or through > current['offered']:
                 raise GatewayConflict('Delivery acknowledgement is outside offered receipts')
-            db.execute('UPDATE sessions SET delivered=? WHERE id=?', (through, session))
+            if through != current['delivered']:
+                db.execute('UPDATE sessions SET delivered=? WHERE id=?', (through, session))
             return through
 
     def acknowledge_processed(self, session, through):
@@ -283,8 +291,9 @@ class GatewayJournal:
             floor=db.execute('SELECT floor FROM transport').fetchone()[0]
             if through < floor or through > current['delivered']:
                 raise GatewayConflict('Processing acknowledgement is outside delivered receipts')
-            db.execute('UPDATE transport SET floor=? WHERE id=1',(through,))
-            db.execute('DELETE FROM receipts WHERE ordinal<=?',(through,))
+            if through != floor:
+                db.execute('UPDATE transport SET floor=? WHERE id=1',(through,))
+                db.execute('DELETE FROM receipts WHERE ordinal<=?',(through,))
             return through
 
     def snapshot(self, session):
@@ -331,7 +340,7 @@ class GatewayJournal:
             return {'activation': activation_id, 'receipt': receipt}
 
     def load_record(self, name):
-        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue'):
+        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission'):
             raise ValueError('Unknown physical gateway record')
         with closing(self.connect(readonly=True)) as db:
             self._owner(db)
@@ -340,7 +349,7 @@ class GatewayJournal:
             return json.loads(row[0]) if row else None
 
     def save_record(self, name, value):
-        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue') or type(value) is not dict:
+        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission') or type(value) is not dict:
             raise ValueError('Invalid physical gateway record')
         if name == 'ownership':
             decode_ownership(value)

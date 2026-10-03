@@ -18,6 +18,66 @@ from gateway_fixture import IDENTITY
 
 
 class ReplayTests(unittest.IsolatedAsyncioTestCase):
+    async def archival_runtime(self):
+        from shs_core.battery_writer import BatteryWriterFence
+        rig=Rig()
+        runtime=AppBatteryRuntime(rig.coordinator,rig.controller,rig.store,lambda:rig.now)
+        rig.runtime=runtime
+        rig.fence=BatteryWriterFence(rig.fence_store,rig.controller.lock,rig.controller.options,lambda:rig.now,runtime.identity)
+        rig.coordinator.battery_writer=rig.fence
+        await rig.start()
+        await rig.advance(1)
+        runtime.receipt_driven=True
+        self.addAsyncCleanup(runtime.close,release=False)
+        self.assertFalse(any(group.attempts or group.transition_work for group in runtime.host.state.groups))
+        return rig,runtime
+
+    async def test_archival_storm_keeps_every_soc_fact_without_reductions_or_saves_then_flushes_in_silence(self):
+        rig,runtime=await self.archival_runtime()
+        before=len(rig.store.writes)
+        observed=len(runtime.host.state.execution.account.observations)
+        with patch('shs_core.home_runtime.reduce_home',side_effect=AssertionError('archival facts ran economics')):
+            for ordinal in range(1,51):
+                rig.now+=1
+                row=rig.rows['sensor.soc']
+                row['last_reported']=iso(rig.now)
+                await runtime.ingest_receipt(IDENTITY,dict(ordinal=ordinal,kind='observation',
+                    payload=dict(row,entity_id='sensor.soc',kind='state_report')))
+            self.assertEqual(len(rig.store.writes),before)
+            self.assertEqual(len(runtime.host.state.execution.account.observations),observed+50)
+            self.assertIsNone(runtime._processing)
+            rig.now+=5000
+            await runtime.commit_evidence()
+        self.assertEqual(len(rig.store.writes),before+1)
+        self.assertEqual(runtime._processing,runtime.received_checkpoint())
+        self.assertEqual(rig.store.saved['gateway_processing']['receipt'],50)
+
+    async def test_recovery_decision_is_immediate_and_includes_archived_prefix(self):
+        rig,runtime=await self.archival_runtime()
+        rig.rows['sensor.soc']['state']='unavailable'
+        await runtime.ingest_receipt(IDENTITY,dict(ordinal=1,kind='observation',
+            payload=dict(rig.rows['sensor.soc'],entity_id='sensor.soc',kind='state_change')))
+        self.assertIsNone(runtime._processing)
+        rig.rows['sensor.soc']['state']='51'
+        await runtime.ingest_receipt(IDENTITY,dict(ordinal=2,kind='observation',
+            payload=dict(rig.rows['sensor.soc'],entity_id='sensor.soc',kind='state_change')))
+        await runtime.host.idle()
+        self.assertEqual(runtime._processing['receipt'],2)
+        self.assertTrue(runtime._processing['complete'])
+        self.assertIsNotNone(runtime.host.state.conditions)
+
+    async def test_explicit_verification_handover_commits_archived_evidence_before_writing(self):
+        rig,runtime=await self.archival_runtime()
+        rig.now+=1
+        rig.rows['sensor.soc']['last_reported']=iso(rig.now)
+        await runtime.ingest_receipt(IDENTITY,dict(ordinal=1,kind='observation',
+            payload=dict(rig.rows['sensor.soc'],entity_id='sensor.soc',kind='state_report')))
+        rig.options['device_modes']['$battery']='control_verification'
+        await runtime.refresh();await runtime.host.idle()
+        self.assertEqual(runtime._processing['receipt'],1)
+        self.assertEqual(rig.rows['select.mode']['state'],'Maximum Self Consumption')
+        self.assertFalse(runtime.host.state.groups[0].owned)
+
     async def test_receipt_before_resume_epoch_commits_counter_but_not_live_observation(self):
         rig = Rig()
         runtime = AppBatteryRuntime(rig.coordinator,rig.controller,rig.store,lambda:rig.now)

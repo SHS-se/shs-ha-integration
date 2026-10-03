@@ -15,9 +15,9 @@ FIELDS = (
 )
 
 
-def runtime_projection(household, cached, repairs):
+def runtime_projection(household, cached, repairs, *, plan):
     battery = household.battery_runtime
-    return dict(schema=1, values={key:deepcopy(getattr(household,key)) for key in FIELDS},
+    return dict(schema=1, values={key:plan if key == 'optimisation_plan' else deepcopy(getattr(household,key)) for key in FIELDS},
         controllers=deepcopy(household.controller.status), cached=deepcopy(cached), repairs=deepcopy(repairs),
         battery=battery.snapshot(), battery_live_inputs=household.battery_live_inputs.snapshot(),
         battery_writer=household.battery_writer.snapshot(),

@@ -9,6 +9,51 @@ class AppBatteryRuntime(BatteryRuntime):
         super().__init__(*args, **kwargs)
         self._durable_state = None
         self._accounting_ready_at = None
+        self._ingested = None
+        self._last_committed_at = self.now()
+
+    def received_checkpoint(self):
+        values = [value for value in (self._ingested, self._processing) if value is not None]
+        return max(values, key=lambda value: (value['receipt'], value['sub_event'], value['complete'])) if values else None
+
+    async def ingest_receipt(self, identity, receipt):
+        """Accept evidence promptly; ordinary decisions belong to the 5s clock."""
+        row = receipt['payload']
+        recovering = self._observation_error is not None
+        async def receive(event, checkpoint):
+            if event is None and not checkpoint['complete']:
+                return
+            if self.host is None:
+                if receipt['kind'] != 'observation':
+                    await self._bootstrap_received(checkpoint)
+                return
+            overrides = {value for key,value in self.controller.options().items() if key.endswith('control_override_entity')}
+            urgent = (receipt['kind'] != 'observation'
+                      or any(group.attempts or group.transition_work for group in self.host.state.groups)
+                      or (row['entity_id'] in set(self._control_entities()) | overrides and row.get('kind') == 'state_change')
+                      or recovering and event is not None)
+            receiver = self.host.accept_received if urgent else self.host.ingest_received
+            await receiver(event, checkpoint)
+        self._ingested = await self._consume_receipt(identity, receipt, receive, self.received_checkpoint)
+
+    async def commit_evidence(self):
+        async with self._lock:
+            if self._ingested is not None and self._ingested != self._processing and self.now()-self._last_committed_at >= 5000:
+                if self.host is None:
+                    await self._bootstrap_received(self._ingested)
+                else:
+                    await self.host.commit_evidence()
+
+    async def _bootstrap_received(self,checkpoint):
+        await super()._bootstrap_received(checkpoint)
+        self._last_committed_at=self.now()
+
+    async def _receipt_observation(self,row):
+        # A meter/reference delta cannot change any complete-frame input. Keep
+        # its evidence, without cloning and validating the same live capture.
+        if self.host.state.authority is None or row['entity_id'] not in self.capture_entities():
+            return ()
+        return await super()._receipt_observation(row)
 
     def _accounting(self, account, include_evidence):
         cached = self._live_accounting
@@ -32,6 +77,7 @@ class AppBatteryRuntime(BatteryRuntime):
             return
         await super()._save_state(state, processing)
         self._durable_state = state
+        self._last_committed_at = self.now()
 
     def snapshot(self, *, include_evidence=False):
         # Operational facts remain in indexed storage. A routine diagnostics

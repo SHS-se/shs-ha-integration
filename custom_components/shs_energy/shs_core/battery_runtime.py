@@ -725,7 +725,7 @@ class BatteryRuntime:
                 await self._meter(spec.stream_id,value,attributes,round(at.timestamp()*1000))
         # Missing anchors remain uncertain in the execution account.
 
-    async def _meter(self,entity,value,attrs,at,event_id=None,*,processing=None):
+    async def _meter(self,entity,value,attrs,at,event_id=None,*,processing=None,receiver=None):
         # HA records outages in history too. They contain no counter evidence;
         # leave delivery uncertain, just as for a missing live counter report.
         if value in ('unknown','unavailable',None):
@@ -750,7 +750,8 @@ class BatteryRuntime:
         if processing is None:
             await self.host.accept(rt.CounterReceived(sample))
         else:
-            await self.host.accept_received(rt.CounterReceived(sample),processing)
+            await receiver(rt.CounterReceived(sample),processing)
+        return True
 
     async def consume_receipt(self,identity,receipt):
         """Apply a fact with a deterministic counter/measurement sub-event order.
@@ -758,10 +759,25 @@ class BatteryRuntime:
         The host carries each cursor on its queue item. Internal timers and
         service completions preserve the last committed cursor.
         """
+        async def receive(event, checkpoint):
+            if self.host is None:
+                await self._bootstrap_received(checkpoint)
+            else:
+                await self.host.accept_received(event,checkpoint)
+        return await self._consume_receipt(identity, receipt, receive, lambda:self._processing)
+
+    async def _bootstrap_received(self,checkpoint):
+        session=rt.ExecutionSession(account=self._bootstrap,captured_feedback=self._bootstrap_captured,
+                                    plan_rejection=self._bootstrap_rejection)
+        await self.store.save({'schema':'battery-runtime-v4','checkpoint':None,'options':None,
+            'devices':[],'model_sources':None,'ratings':None,'gateway_processing':checkpoint},session)
+        self._processing=checkpoint
+
+    async def _consume_receipt(self,identity,receipt,receiver,progress):
         from .receipt_inbox import processing_checkpoint
         async with self._lock:
+            previous=progress()
             ordinal=receipt['ordinal']
-            previous=self._processing
             if previous is not None:
                 expected=processing_checkpoint(identity,previous['receipt'],previous['sub_event'],complete=previous['complete'])
                 if previous != expected:
@@ -770,7 +786,7 @@ class BatteryRuntime:
             if ordinal>next_receipt:
                 raise ValueError('Execution receipt prefix has a gap')
             if previous and (previous['receipt']>ordinal or (previous['receipt']==ordinal and previous['complete'])):
-                return
+                return previous
             if self.host is None:
                 checkpoint=processing_checkpoint(identity,ordinal,0,complete=True)
                 if self._loaded is not None:
@@ -778,38 +794,40 @@ class BatteryRuntime:
                 else:
                     # Bootstrap account has no HomeHost yet; the same execution
                     # store remains the sole atomic domain/checkpoint owner.
-                    session=rt.ExecutionSession(account=self._bootstrap,captured_feedback=self._bootstrap_captured,
-                                                plan_rejection=self._bootstrap_rejection)
-                    await self.store.save({'schema':'battery-runtime-v4','checkpoint':None,'options':None,
-                        'devices':[],'model_sources':None,'ratings':None,'gateway_processing':checkpoint},session)
-                    self._processing=checkpoint
-                return
+                    await receiver(None,checkpoint)
+                return checkpoint
             if receipt['kind']!='observation':
-                await self.host.accept_received(None,processing_checkpoint(identity,ordinal,0,complete=True))
-                return
+                checkpoint=processing_checkpoint(identity,ordinal,0,complete=True)
+                await receiver(None,checkpoint)
+                return checkpoint
             row=receipt['payload']
             # Every observation has exactly two logical positions, even when
             # it has no counter sample or cannot form a usable measurement set.
             if not previous or previous['receipt']!=ordinal or previous['sub_event']<0:
                 checkpoint=processing_checkpoint(identity,ordinal,0,complete=False)
                 streams={stream.spec.stream_id for stream in self.host.state.ledger.streams}
+                accepted=False
                 if row['entity_id'] in streams and row.get('state') not in (None,'unknown','unavailable'):
                     try:
-                        await self._meter(row['entity_id'],row['state'],row['attributes'],stamp(row['last_reported']),
-                                          str(ordinal),processing=checkpoint)
+                        accepted=await self._meter(row['entity_id'],row['state'],row['attributes'],stamp(row['last_reported']),
+                                          str(ordinal),processing=checkpoint,receiver=receiver)
                     except (ValueError,KeyError,TypeError) as error:
                         self._record_fault('receipt_counter',str(error))
-                if self._processing!=checkpoint:
-                    await self.host.accept_received(None,checkpoint)
+                if not accepted:
+                    await receiver(None,checkpoint)
             checkpoint=processing_checkpoint(identity,ordinal,1,complete=True)
             try:
-                events=await self._observe(self.host.state.groups[0].spec.id)
+                events=await self._receipt_observation(row)
             except (ValueError,KeyError,TypeError) as error:
                 self._record_fault('receipt_observation',str(error))
                 events=()
             if len(events)>1:
                 raise RuntimeError('Battery observation must be one atomic measurement event')
-            await self.host.accept_received(events[0] if events else None,checkpoint)
+            await receiver(events[0] if events else None,checkpoint)
+            return checkpoint
+
+    async def _receipt_observation(self,row):
+        return await self._observe(self.host.state.groups[0].spec.id)
 
     async def _observe(self,group_id):
         async with self._observe_lock:
@@ -831,8 +849,7 @@ class BatteryRuntime:
         options=self._options
         read=self.coordinator.ports.battery_report
         now=self.now()
-        entities=set(self._control_entities())|{entity for _,entity,_ in self._demand_sources()}|{options.get(k) for k in
-            ('house_consumption_power_entity','solar_production_power_entity','battery_power_measurement_entity','battery_soc_entity','grid_power_entity')}
+        entities=self.capture_entities()
         if None in entities:
             raise ValueError('house, solar, signed grid/battery, SOC and Planned power bindings are required')
         reports={entity:read(entity) for entity in entities}
@@ -903,6 +920,11 @@ class BatteryRuntime:
             'response_matches_direction':response==requested if requested else None,**asdict(accounting),'battery_dc_w':battery,'grid_w':grid,'at_ms':min(times),'valid_until_ms':valid}
         self._last_capture=capture
         return (rt.MeasurementsObserved(observed,frame.frame,conditions.conditions),)
+
+    def capture_entities(self):
+        """The exact dependencies used by the complete-frame acceptance below."""
+        return set(self._control_entities())|{entity for _,entity,_ in self._demand_sources()}|{self._options.get(key) for key in
+            ('house_consumption_power_entity','solar_production_power_entity','battery_power_measurement_entity','battery_soc_entity','grid_power_entity')}
 
     def _release_request(self,group,target=None):
         if self.host:

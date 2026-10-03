@@ -1,7 +1,15 @@
 import unittest
-from shs_app.projection import display_plan
+from shs_app.projection import display_plan, DisplayPlan
 
 class ProjectionTests(unittest.TestCase):
+    def test_unchanged_plan_reuses_adaptation_and_never_copies_discarded_diagnostics(self):
+        class Expensive:
+            def __deepcopy__(self,memo):raise AssertionError('discarded planner diagnostics copied')
+        plan={'plans':{'priority':{'slots':[{'start':'a','decision':Expensive()}]}}}
+        cached=DisplayPlan()
+        first=cached.get(plan)
+        self.assertIs(cached.get(plan),first)
+        self.assertIsNot(cached.get(dict(plan)),first)
     def test_all_scenario_facts_remain_and_app_diagnostics_are_not_mutated(self):
         slot = {'start':'time','battery_command':{'mode':'charge'},'decision':{'why':'large diagnostic tree'}}
         plan = {'plans':{key:{'slots':[slot]} for key in ('baseline','priority','cost')},

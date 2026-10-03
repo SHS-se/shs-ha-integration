@@ -15,11 +15,16 @@ import tracemalloc
 def process_resources():
     """Linux process gauges, called in a worker. No heap traversal or GC."""
     status = dict(line.split(':', 1) for line in Path('/proc/self/status').read_text().splitlines())
+    io = dict(line.split(':',1) for line in Path('/proc/self/io').read_text().splitlines())
     return {'process_cpu_seconds': process_time(),
             'rss_bytes': int(status['VmRSS'].split()[0]) * 1024,
             'rss_high_water_bytes': int(status['VmHWM'].split()[0]) * 1024,
             'swap_bytes': int(status['VmSwap'].split()[0]) * 1024,
-            'threads': int(status['Threads'])}
+            'threads': int(status['Threads']),
+            'disk_write_bytes': int(io['write_bytes']),
+            'cancelled_write_bytes': int(io['cancelled_write_bytes']),
+            'write_syscalls': int(io['syscw']),
+            'disk_read_bytes': int(io['read_bytes'])}
 
 
 class ResourceProfiler:
@@ -28,7 +33,7 @@ class ResourceProfiler:
     CPU belongs only to synchronous sections. An awaited operation is wall time
     only because other coroutines run on that same thread while it is suspended.
     """
-    OPERATIONS = ('reduce', 'accounting_view', 'checkpoint_encode', 'checkpoint_save', 'refresh')
+    OPERATIONS = ('reduce', 'evidence_ingest', 'accounting_view', 'checkpoint_encode', 'checkpoint_save', 'refresh')
     ASYNC_OPERATIONS = frozenset(('checkpoint_save', 'refresh'))
 
     def __init__(self):

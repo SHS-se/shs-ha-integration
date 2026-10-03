@@ -1098,6 +1098,57 @@ def _observe_measurement(state, event, now_ms, rollback):
     return state
 
 
+def _receive_measurements(state, event, now_ms, rollback):
+    if isinstance(event, MeasurementsObserved):
+        if not (event.observed.observation.at_ms == event.frame.at_ms == event.conditions.at_ms
+                and event.observed.observation.valid_until_ms == event.frame.valid_until_ms == event.conditions.valid_until_ms):
+            raise ValueError("measurement capture timestamps differ")
+        events = (event.observed, FrameObserved(event.frame), ConditionsObserved(event.conditions))
+    else:
+        events = (event,)
+    previous = state.conditions_revision
+    for measurement in events:
+        state = _observe_measurement(state, measurement, now_ms, rollback)
+    if isinstance(event, (ConditionsObserved, MeasurementsObserved)) and state.conditions is not None and not rollback and state.conditions_revision > previous and _fresh(state.conditions, now_ms):
+        observation = execution.StateObservation(state.conditions.stored_at_ms if state.conditions.stored_at_ms is not None else state.conditions.at_ms, round(state.conditions.energy_kwh * 1e6), "live_soc")
+        state = replace(state, execution=replace(state.execution,
+            account=execution.observe_state(state.execution.account, observation)))
+    return state
+
+
+def _receive_counter(state, event):
+    sample = event.sample
+    account = execution.record_meter(state.execution.account, **{
+        key: getattr(sample, key) for key in sample.__dataclass_fields__ if key != "receipt"})
+    return replace(state, execution=replace(state.execution, account=account))
+
+
+def archive_evidence(state: HomeState, event: Event | None, now_ms: int):
+    """Accept physical evidence without economics, command driving or traces.
+
+    The host batches its durability behind the native journal's retained prefix.
+    A subsequent command transition commits this evidence before dispatch.
+    """
+    if type(now_ms) is not int or now_ms < 0:
+        raise ValueError("now_ms must be an absolute nonnegative integer")
+    if event is None:
+        return state, ()
+    if not isinstance(event, (CounterReceived, MeasurementsObserved)):
+        raise ValueError("unsupported archival event")
+    if now_ms < state.last_time_ms:
+        # Clock rollback has command-state consequences; retain the established
+        # reducer's withdrawal and unsent-work fencing for this exceptional event.
+        return reduce_home(state, event, now_ms)
+    previous = state
+    if isinstance(event, CounterReceived):
+        state = _receive_counter(state, event)
+    else:
+        state = _receive_measurements(state, event, now_ms, False)
+    changed = state.execution.account is not previous.execution.account
+    return replace(state, revision=previous.revision + int(changed),
+                   last_time_ms=max(previous.last_time_ms, now_ms)), ()
+
+
 def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState, tuple[Effect, ...]]:
     """Process one validated domain event; performs no I/O and never reads a clock."""
     if type(now_ms) is not int or now_ms < 0:
@@ -1125,19 +1176,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
             state = replace(state, authority=event.authority, authority_revision=event.revision, conditions=None,
                             groups=tuple(replace(_supersede(g), grant_confirmed=False) for g in state.groups))
     elif isinstance(event, (Observed, FrameObserved, ConditionsObserved, MeasurementsObserved)):
-        if isinstance(event, MeasurementsObserved):
-            if not (event.observed.observation.at_ms == event.frame.at_ms == event.conditions.at_ms
-                    and event.observed.observation.valid_until_ms == event.frame.valid_until_ms == event.conditions.valid_until_ms):
-                raise ValueError("measurement capture timestamps differ")
-            events = (event.observed, FrameObserved(event.frame), ConditionsObserved(event.conditions))
-        else:
-            events = (event,)
-        for measurement in events:
-            state = _observe_measurement(state, measurement, now_ms, rollback)
-        if isinstance(event, (ConditionsObserved, MeasurementsObserved)) and state.conditions is not None and not rollback and state.conditions_revision > previous.conditions_revision and _fresh(state.conditions, now_ms):
-            observation = execution.StateObservation(state.conditions.stored_at_ms if state.conditions.stored_at_ms is not None else state.conditions.at_ms, round(state.conditions.energy_kwh * 1e6), "live_soc")
-            state = replace(state, execution=replace(state.execution,
-                account=execution.observe_state(state.execution.account, observation)))
+        state = _receive_measurements(state, event, now_ms, rollback)
     elif isinstance(event, ExecutionPlanOffered):
         try:
             _validate_execution(state, event.contract)
@@ -1165,10 +1204,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
         state = replace(state, execution=replace(state.execution, account=account,
             captured_feedback=json.dumps(captured, sort_keys=True, allow_nan=False)))
     elif isinstance(event, CounterReceived):
-        sample = event.sample
-        account = execution.record_meter(state.execution.account, **{
-            key: getattr(sample, key) for key in sample.__dataclass_fields__ if key != "receipt"})
-        state = replace(state, execution=replace(state.execution, account=account))
+        state = _receive_counter(state, event)
     elif isinstance(event, (MeterObserved, LedgerPruned)):
         if state.ledger is None:
             raise ValueError("energy ledger is not configured")

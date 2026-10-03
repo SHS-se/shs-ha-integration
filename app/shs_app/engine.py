@@ -32,7 +32,7 @@ from .migration_export import file_digest
 from .migration_import import verify_import, regular_path
 from .physical_ports import RemoteDevices, RemoteBattery
 from .records import RecordStore
-from .projection import display_plan
+from .projection import DisplayPlan
 from .sources import ObservationMirror, RemoteHistory
 from .upgrades import open_runtime_schema
 from .configuration import Configuration
@@ -40,12 +40,13 @@ from .indexed_storage import IndexedStorage
 from .configuration_editor import ConfigurationEditor
 from .entities import project_entities
 from shs_core.native_configuration import native_options
+from shs_core.source_admission import source_bindings, pool_paused
 from shs_core.configuration_schema import resolve_configuration
 from shs_core.controller_inputs import configured_entity_ids
 
 
 LOGGER = logging.getLogger(__name__)
-PERIODIC_PROFILES = {'async_battery_inputs_refresh':'battery_inputs',
+PERIODIC_PROFILES = {'battery_inputs':'battery_inputs',
                      'async_request_refresh':'cloud_refresh','async_replan_poll':'plan_exchange'}
 
 
@@ -69,6 +70,10 @@ class AppEngine:
     def __init__(self, root, session, url, token, *, paired_release, publish, app_url=None):
         self.profiler = AppProfiler()
         self.processed_receipts = 0
+        self._processed_ack = None
+        self._source_admission = None
+        self.source_counts = {}
+        self.live_revision = None
         self.root = regular_path(root)
         self.http, self.url, self.token = session, url, token
         self.paired_release, self.publish_ui = paired_release, publish
@@ -88,6 +93,7 @@ class AppEngine:
         self.mirror = ObservationMirror()
         self.repairs = {}
         self.cached = {}
+        self.display_plan = DisplayPlan()
         self.started = False
         self.consume_lock = asyncio.Lock()
         self.configuration = None
@@ -183,13 +189,12 @@ class AppEngine:
         h.async_add_battery_listener(controller.publish_battery_status)
         controller.add_listener(self.wake_projection.set)
 
-    async def receive_through(self, through):
+    async def receive_through(self, through, *, establish_delivery=False):
         # Even an empty suffix establishes delivery in this new socket epoch.
         # The persisted inbox cursor alone cannot authorize HA receipt retirement.
-        while True:
+        while establish_delivery or await asyncio.to_thread(self.inbox.through) < through:
             await self.gateway.receive()
-            if await asyncio.to_thread(self.inbox.through) >= through:
-                return
+            establish_delivery = False
 
     @profiled('runtime_activate')
     async def activate(self):
@@ -199,7 +204,7 @@ class AppEngine:
         self.mirror.install_snapshot(result['snapshot'])
         self.battery.reconcile()
         self.controller.adopt_ownership(result['ownership'])
-        await self.receive_through(reconciliation['proof']['through'])
+        await self.receive_through(reconciliation['proof']['through'], establish_delivery=True)
         previous = self.activation
         activation_id = previous['activation_id'] if previous else uuid4().hex
         self.activation = dict(identity=self.identity,activation_id=activation_id,state='pending',proof=reconciliation['proof'])
@@ -227,6 +232,8 @@ class AppEngine:
             self.mirror.revision=saved['receipt']
             cursor=saved['receipt']
             if cursor!=through: raise GatewayConflict('Source checkpoint does not match completed execution')
+        self.mirror.durable_rows=self.mirror.rows
+        self.mirror.row_receipts={entity:cursor for entity in self.mirror.rows}
         while cursor < through:
             rows = await asyncio.to_thread(self.inbox.after,cursor)
             if not rows:
@@ -244,6 +251,21 @@ class AppEngine:
         await self.devices.synchronize((self.household.optimisation_plan or {}).get('device_models',[]))
         self.started = True
         await self.controller.async_start(reason='app_migration_or_restart')
+        await self.admit_sources()
+
+    async def admit_sources(self):
+        h = self.household
+        slot = h.current_plan_slot
+        paused = pool_paused(self.controller.status.get('pool',{}),slot,h.optimisation_plan,
+            self.mirror.read,self.controller.ownership)
+        value = dict(revision=self.configuration.revision,
+            bindings=source_bindings(h.resolved_options(),(h.optimisation_plan or {}).get('device_models', [])),
+            pool_pause=(dict(entity=self.controller.status['pool']['control_entity'],
+                until=(datetime.fromisoformat(slot['start'].replace('Z','+00:00'))+timedelta(minutes=15)).isoformat()) if paused else None))
+        if value != self._source_admission:
+            await self.gateway.call('source',dict(operation='admission',body=value))
+            self._source_admission = value
+            self.live_revision = None
 
     async def consume(self):
         async with self.consume_lock:
@@ -251,7 +273,7 @@ class AppEngine:
 
     @profiled('receipt_consume')
     async def _consume(self):
-        previous = self.battery._processing
+        previous = self.battery.received_checkpoint() if self.started else self.battery._processing
         cursor = previous['receipt']-int(not previous['complete']) if previous else 0
         target = await asyncio.to_thread(self.inbox.through)
         while cursor < target:
@@ -263,26 +285,58 @@ class AppEngine:
                     break
                 with self.profiler.measure('receipt_apply'):
                     self.mirror.apply(row,notify=self.started)
-                await self.battery.consume_receipt(self.identity,row)
+                if self.started:
+                    await self.battery.ingest_receipt(self.identity,row)
+                else:
+                    await self.battery.consume_receipt(self.identity,row)
                 cursor = row['ordinal']
                 self.processed_receipts += 1
                 if self.started and row['kind']=='configuration':
+                    self._source_admission = None
                     self.scheduler.request('configuration_update')
                     self.wake_projection.set()
                     if self.household.options_update_requires_reload():
                         self.spawn(self.household.async_optimisation_push(force_plan=True),'shs_app_configuration_replan')
+        if self.started:
+            await self.battery.commit_evidence()
         saved=self.battery.store.source_checkpoint
         if saved is not None:
             completed=saved['receipt']
-            await asyncio.to_thread(self.inbox.retire,completed)
-            await self.gateway.call('ack_processed',{'through':completed})
+            if completed != self._processed_ack:
+                await asyncio.to_thread(self.inbox.retire,completed)
+                await self.gateway.call('ack_processed',{'through':completed})
+                self._processed_ack = completed
         return cursor
 
     async def receipts(self):
+        after = {'receipts':0, 'requests':0}
         while True:
-            await self.gateway.receive()
+            changed = await self.gateway.call('updates', {'after':after})
+            if changed['receipts'] != after['receipts']:
+                page = await self.gateway.receive()
+                while page['through'] < page['high']:
+                    page = await self.gateway.receive()
             await self.consume()
-            await asyncio.sleep(.5)
+            if changed['requests'] != after['requests']:
+                for request in await self.gateway.call('requests',{}):
+                    self.spawn(self.answer(request),'shs_app_request_'+request['operation'])
+            after = changed
+
+    async def battery_inputs(self):
+        await self.admit_sources()
+        live = await self.gateway.call('source',dict(operation='live',body={'after':self.live_revision}))
+        await self.receive_through(live['through'])
+        await self.consume()
+        if (live['configuration_revision'] == self.configuration.revision
+                == self.mirror.context['configuration_authority']['revision']):
+            self.mirror.apply_live(live['rows'], through=live['through'])
+            self.live_revision = live['revision']
+        else:
+            self.live_revision = None
+        self.source_counts = live['counts']
+        await self.battery.commit_evidence()
+        await self.household.async_battery_inputs_refresh()
+        await self.consume()
 
     def native_configuration(self,options):
         home=self.mirror.context['home']
@@ -294,15 +348,16 @@ class AppEngine:
         h = self.household
         self.cached = dict(devices=await h.async_cached_device_configuration(),home=await h.async_cached_home_configuration(),
             planning=await h.async_cached_planning_configuration(),exchange=await h.async_cached_exchange_status())
+        if h.optimisation_plan is not self.display_plan.source:
+            with self.profiler.measure('display_plan_build'):
+                self.display_plan.get(h.optimisation_plan)
         with self.profiler.measure('projection_build'):
-            value = runtime_projection(h,self.cached,self.repairs)
+            value = runtime_projection(h,self.cached,self.repairs,plan=self.display_plan.value)
         value['app_url'] = self.app_url
         value['configuration'] = self.configuration.status()
         value['execution_devices'] = [{key:deepcopy(device.get(key)) for key in
             ('key','name','planned','system_member','permission','mode')}
             for device in await self.editor.devices(self.cached['planning'],include_suggestions=False)]
-        with self.profiler.measure('display_plan_build'):
-            value['values']['optimisation_plan'] = display_plan(value['values']['optimisation_plan'])
         with self.profiler.measure('native_projection_build'):
             native = project_entities(self,value['execution_devices'])
         await self.gateway.project(dict(schema=2,entities=native,execution_devices=value["execution_devices"],
@@ -340,15 +395,10 @@ class AppEngine:
         checkpoint = self.battery.store.source_checkpoint
         completed = checkpoint['receipt'] if checkpoint else 0
         self.profiler.sample(values,{**self.battery.resource_counts(),
+            **{'source_'+key:value for key,value in self.source_counts.items()},
             'app_processed_receipts':self.processed_receipts,'app_receipt_backlog':max(0,received-completed)})
         self.profiler.log_sample()
         self.wake_projection.set()
-
-    async def requests(self):
-        while True:
-            for request in await self.gateway.call('requests',{}):
-                self.spawn(self.answer(request),'shs_app_request_'+request['operation'])
-            await asyncio.sleep(.5)
 
     async def answer(self, request):
         h, op, body = self.household, request['operation'], request['body']
@@ -417,8 +467,8 @@ class AppEngine:
                 self.battery.snapshot().get('mode'),(self.household.optimisation_plan or {}).get('plan_id'),self.processed_receipts)
             # Cloud jobs start only after the durable ownership handover.
             self.wake_projection.set()
-            jobs = [self.spawn(self.receipts(),'receipts'),self.spawn(self.projections(),'projections'),self.spawn(self.requests(),'requests'),
-                self.spawn(self.periodic(self.household.async_battery_inputs_refresh,5),'battery_inputs'),
+            jobs = [self.spawn(self.receipts(),'receipts'),self.spawn(self.projections(),'projections'),
+                self.spawn(self.periodic(self.battery_inputs,5),'battery_inputs'),
                 self.spawn(self.planning()),
                 self.spawn(self.periodic(self.household.async_request_refresh,60),'cloud_refresh'),
                 self.spawn(self.periodic(self.resources,60),'runtime_resources'),self.spawn(self.calendar(),'calendar'),

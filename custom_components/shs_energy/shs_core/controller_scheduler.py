@@ -2,6 +2,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
+from .source_admission import pool_paused, pool_temperature_sources, temperature_available, temperature_metadata
 
 
 class ControllerScheduler:
@@ -14,6 +15,7 @@ class ControllerScheduler:
         self.reads = {}
         self.freshness = {}
         self.stale = set()
+        self.metadata = {}
         self.deadlines = {}
         self.pending = {}
         self.reasons = set()
@@ -74,6 +76,7 @@ class ControllerScheduler:
         self.dependencies.setdefault(device, set()).add(entity)
         if entity not in self.watchers:
             self.watchers[entity] = self.subscribe(entity, self.entity_event)
+            self.metadata[entity] = temperature_metadata(state)
         if max_age is not None:
             key = (device, entity)
             self.freshness[key] = max_age
@@ -112,6 +115,15 @@ class ControllerScheduler:
         affected = {device for device, entities in self.dependencies.items() if entity in entities}
         affected.update(binding["owner"] for binding in self.controller.ownership.runs.bindings.values()
                         if entity in (binding["source"], binding["temperature"], *binding["targets"]))
+        controller = self.controller
+        metadata = temperature_metadata(state)
+        metadata_changed = self.metadata.get(entity) != metadata
+        self.metadata[entity] = metadata
+        if ('pool' in affected and temperature_available(state) and not metadata_changed
+                and entity in pool_temperature_sources(controller.options(), controller.inputs.read, controller.inputs.platform)
+                and pool_paused(controller.status.get('pool',{}), controller.coordinator.current_plan_slot,
+                    controller.coordinator.optimisation_plan, controller.inputs.read, controller.ownership)):
+            affected.discard('pool')
         recovered = set()
         for device in affected:
             key = (device, entity)

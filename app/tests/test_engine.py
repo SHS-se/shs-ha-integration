@@ -125,6 +125,16 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             if operation=='catalog':return dict(context=self.context,states={},preferences={})
             if operation in ('states','statistics'):return {}
             if operation == 'configure': return await self.configuration.install(body)
+            if operation == 'admission':
+                from shs_core.source_admission import validate_bindings
+                validate_bindings(body['bindings'])
+                self.assertEqual(body['revision'],self.configuration.value['revision'])
+                await self.stream.call('save_record','source_admission',body)
+                return {}
+            if operation == 'live':
+                snapshot = await self.stream.call('snapshot',self.service.session())
+                return dict(through=snapshot['through'],revision=0,
+                            configuration_revision=self.configuration.value['revision'],rows={},counts={})
             raise AssertionError('unexpected source request '+operation)
         source = SimpleNamespace(options=lambda:resolve_configuration(self.entry['options'],59,18),
             physical_controls=lambda:{},request=request,publish=__import__("unittest.mock",fromlist=["AsyncMock"]).AsyncMock())
@@ -165,7 +175,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         engine=self.engine()
         engine.inbox=SimpleNamespace(through=lambda:42)
         engine.gateway=SimpleNamespace(receive=AsyncMock())
-        await engine.receive_through(42)
+        await engine.receive_through(42, establish_delivery=True)
         engine.gateway.receive.assert_awaited_once()
         engine.inbox=None;engine.gateway=None
 

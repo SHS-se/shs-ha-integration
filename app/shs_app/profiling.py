@@ -33,7 +33,10 @@ class AppProfiler(ResourceProfiler):
                       for name, values in after['operations'].items()}
         retained = {name: value - before['retained'][name] for name, value in after['retained'].items()
                     if name in before['retained']}
-        return dict(seconds=seconds, process=dict(after['process']), operations=operations, retained_delta=retained)
+        io = {key:after['process'][key]-before['process'][key]
+              for key in ('disk_write_bytes','cancelled_write_bytes','write_syscalls','disk_read_bytes')
+              if key in after['process'] and key in before['process']}
+        return dict(seconds=seconds, process=dict(after['process']), operations=operations, retained_delta=retained, io_delta=io)
 
     def log_sample(self):
         report = self.interval()
@@ -56,6 +59,12 @@ class AppProfiler(ResourceProfiler):
                     ', '.join(f'{name}={values["cpu_ms"]:.0f}ms/{values["calls"]} calls'
                               for name, values in busy[:3] if values['calls']),
                     counters.get('storage_worker_cpu_ms', 0))
+        LOGGER.info('Runtime intake: ordered=%.1f/min replaceable=%.1f/min native_fact_commits=%.1f/min; '
+                    'app_disk_write_bytes=%s app_write_syscalls=%s',
+                    counters.get('source_ordered',0)*per_minute, counters.get('source_replaceable',0)*per_minute,
+                    counters.get('source_fact_commits',0)*per_minute,
+                    report['io_delta'].get('disk_write_bytes','unavailable'),
+                    report['io_delta'].get('write_syscalls','unavailable'))
         if LOGGER.isEnabledFor(logging.DEBUG):
             for name, values in report['operations'].items():
                 if values['calls']:

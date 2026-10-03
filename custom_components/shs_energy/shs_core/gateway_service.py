@@ -32,6 +32,24 @@ class GatewayService:
         self.obligation_event = asyncio.Event()
         self.obligation_task = None
         self.obligation_error = None
+        self.updates = {'receipts':0, 'requests':0}
+        self.update_event = asyncio.Event()
+        self.stream.listeners.add(self.receipts_changed)
+
+    def receipts_changed(self):
+        self.updates['receipts'] += 1
+        self.update_event.set()
+
+    async def wait_updates(self, after):
+        if (type(after) is not dict or set(after) != set(self.updates)
+                or any(type(value) is not int or value < 0 for value in after.values())):
+            raise ValueError('Invalid gateway notification cursor')
+        while True:
+            self.require_socket()
+            self.update_event.clear()
+            if after != self.updates:
+                return dict(self.updates)
+            await self.update_event.wait()
 
     def session(self):
         return self.connection.session if self.connection else None
@@ -44,6 +62,7 @@ class GatewayService:
         if connection is not None and self.connection is not connection:
             return
         self.active = False
+        self.update_event.set()
         self.obligation_event.set()
         self.reconciliation = None
         if self.battery:
@@ -108,6 +127,8 @@ class GatewayService:
         key = uuid4().hex
         future = asyncio.get_running_loop().create_future()
         self.pending[key] = dict(operation=operation, body=deepcopy(body), future=future, offered=False)
+        self.updates['requests'] += 1
+        self.update_event.set()
         try:
             async with asyncio.timeout(180):
                 return await future
@@ -130,6 +151,7 @@ class GatewayService:
 
     async def close(self):
         self.closed = True
+        self.stream.listeners.discard(self.receipts_changed)
         self.revoke()
         self.obligation_event.set()
         if self.obligation_task:
@@ -145,6 +167,7 @@ APP_REQUESTS = frozenset(('configuration', 'refresh', 'refresh_devices', 'cached
     'configuration_changed', 'tick', 'optimisation', 'runtime_report'))
 
 FIELDS = {
+    'updates': {'after'},
     'source': {'operation', 'body'},
     'reconcile': {'checkpoint_sha256'},
     'activate': {'activation_id', 'proof'},
@@ -208,6 +231,8 @@ class AppConnection(GatewayConnection):
 
     async def _operation(self, op, body):
         s = self.service
+        if op == 'updates':
+            return await s.wait_updates(body['after'])
         if op == 'source':
             return await s.source.request(body['operation'], body['body'])
         if op == 'reconcile':

@@ -1,5 +1,4 @@
 """Commit the completed source mirror in the same transaction as its accounting."""
-from copy import deepcopy
 from contextlib import closing
 from hashlib import sha256
 import json
@@ -32,12 +31,16 @@ class CheckpointStorage(ExecutionStorage):
     async def _save(self,metadata,session,*,cleanup_pending):
         checkpoint=self.source_checkpoint
         processing=metadata.get('gateway_processing')
-        if processing and processing['complete'] and processing['receipt']==self.mirror.revision:
-            checkpoint=dict(receipt=self.mirror.revision,context=deepcopy(self.mirror.context),rows=deepcopy(self.mirror.rows))
+        if processing:
+            through=processing['receipt']-int(not processing['complete'])
+            if checkpoint is not None or processing['complete']:
+                checkpoint=self.mirror.checkpoint(through,checkpoint)
         self.pending_checkpoint=checkpoint
         metadata={**metadata,**({'source_checkpoint':{'receipt':checkpoint['receipt']}} if checkpoint is not None else {})}
         await super()._save(metadata,session,cleanup_pending=cleanup_pending)
         self.metadata,self.source_checkpoint=metadata,checkpoint
+        if checkpoint is not None:
+            self.mirror.committed(checkpoint['receipt'])
 
     def _read_source(self):
         with closing(self._connect()) as db:

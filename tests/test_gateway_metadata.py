@@ -15,6 +15,8 @@ from test_execution_mode_select import load_adapter
 from shs_core.controller_inputs import configured_entity_ids
 from shs_core.gateway_journal import digest
 from shs_core.gateway_service import GatewayService
+from shs_core.source_admission import (validate_bindings, ordered, FACT_ATTRIBUTES, native_pool_idle, owned_device_sources,
+    validate_pool_pause, temperature_available, temperature_metadata)
 
 REGISTRY_UPDATED = 'entity_registry_updated'
 CORE_CONFIG_UPDATE = 'core_config_updated'
@@ -62,15 +64,146 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             entity_display_name_by_id=lambda hass:dict(hass.names), area_name_by_id=lambda hass:dict(hass.areas),
             entity_area_id_by_id=lambda hass:{}, RecorderSource=lambda hass:None,
             filter_sources=filter_sources, configured_entity_ids=configured_entity_ids))
+        for key,value in dict(validate_bindings=validate_bindings,ordered=ordered,FACT_ATTRIBUTES=FACT_ATTRIBUTES,
+                native_pool_idle=native_pool_idle,owned_device_sources=owned_device_sources,validate_pool_pause=validate_pool_pause,
+                temperature_available=temperature_available,temperature_metadata=temperature_metadata).items():
+            adapter.HomeAssistantSource.report.__globals__[key]=value
         self.source = adapter.HomeAssistantSource(self.hass, entry)
         self.service = GatewayService(self.stream, IDENTITY, self.source)
         self.service.physical, self.service.battery = self.physical, self.gateway
+        from shs_core.minimum_run import MinimumRuns
+        self.service.physical.ownership.runs=MinimumRuns()
         self.source.service = self.service
         installed = dict(self.options, _observed_entities=[])
         self.source.configuration = SimpleNamespace(options=lambda:deepcopy(installed),
             value=dict(revision=1, digest=digest(installed)))
         self.source.attach()
         await self.source.refresh_configuration()
+
+    async def test_retained_owned_controls_and_overrides_stay_ordered_until_release(self):
+        self.source.install_bindings(dict(revision=1,pool_pause=None,
+            bindings={'switch.new':['device'],'sensor.temperature':['pool_temperature']}))
+        self.physical.ownership.records['pool']=dict(originals={'switch.old':{}},
+            options={'pool_control_override_entity':'input_boolean.old',
+                     'pool_water_temperature_entity':'sensor.temperature'})
+        self.assertTrue(self.source.execution_source('switch.old'))
+        self.assertTrue(self.source.execution_source('input_boolean.old'))
+        self.physical.ownership.records.pop('pool')
+        self.assertFalse(self.source.execution_source('switch.old'))
+        self.assertFalse(self.source.execution_source('input_boolean.old'))
+
+    def test_retained_owned_filter_keeps_raw_override_source_ordered(self):
+        self.hass.states.get=lambda entity:SimpleNamespace(attributes={'entity_id':'sensor.raw'}) if entity=='sensor.old' else None
+        registry=SimpleNamespace(async_get=lambda entity:SimpleNamespace(platform='filter') if entity=='sensor.old' else None)
+        self.source.report.__globals__['er'].async_get=lambda hass:registry
+        self.physical.ownership.records['pool']=dict(originals={'switch.old':{}},
+            options={'pool_control_override_entity':'sensor.old'})
+        self.source.install_bindings(dict(revision=1,pool_pause=None,bindings={'switch.new':['device']}))
+        self.assertIn('sensor.raw',self.source.entities)
+        self.assertTrue(self.source.execution_source('sensor.raw'))
+        self.physical.ownership.records.pop('pool')
+        self.assertFalse(self.source.execution_source('sensor.raw'))
+
+    async def test_active_filter_rebinding_promotes_raw_source_in_the_refresh_itself(self):
+        now=datetime.now(timezone.utc)
+        states={entity:SimpleNamespace(state='30',attributes={'unit_of_measurement':'°C'},
+            last_changed=now,last_updated=now,last_reported=now,context=SimpleNamespace(id='report'))
+            for entity in ('sensor.filtered','sensor.a','sensor.b')}
+        states['sensor.filtered'].attributes['entity_id']='sensor.a'
+        self.hass.states.get=states.get
+        registry=SimpleNamespace(async_get=lambda entity:SimpleNamespace(platform='filter')
+            if entity=='sensor.filtered' else None)
+        self.source.report.__globals__['er'].async_get=lambda hass:registry
+        self.physical.pool_pause=None
+        self.physical.observation_changed=asyncio.Event()
+        self.source.install_bindings(dict(revision=1,pool_pause=None,
+            bindings={'sensor.filtered':['pool_temperature']}))
+        await self.source.refresh_configuration()
+        states['sensor.filtered'].attributes['entity_id']='sensor.b'
+        self.hass.fire('state_reported',entity_id='sensor.filtered',new_state=states['sensor.filtered'])
+        await asyncio.gather(*self.tasks)
+        self.assertTrue(self.source.execution_source('sensor.b'))
+        with self.journal.connect(readonly=True) as db:
+            self.assertIsNotNone(db.execute("SELECT payload FROM latest WHERE entity='sensor.b'").fetchone())
+        self.hass.fire('state_reported',entity_id='sensor.b',new_state=states['sensor.b'])
+        await self.stream.queue.join()
+        self.assertGreater(self.source.fact_versions['sensor.b'],0)
+
+    async def test_live_barrier_discards_frozen_reading_promoted_to_ordered_during_wait(self):
+        from unittest.mock import patch
+        self.source.install_bindings(dict(revision=1,pool_pause=None,bindings={'sensor.a':['reference']}))
+        async def barrier(*args):
+            self.source.bindings['sensor.a']=frozenset({'capture'})
+            return {'through':10}
+        with patch.object(self.source,'report',return_value={'state':'old'}), patch.object(self.stream,'call',side_effect=barrier):
+            frame=await self.source.request('live',{'after':None})
+        self.assertEqual(frame['rows'],{})
+        self.assertEqual(frame['configuration_revision'],1)
+
+    def test_new_policy_invalidates_declared_pool_pause_while_switch_stays_off(self):
+        from datetime import timedelta
+        now=datetime.now(timezone.utc)
+        states={'switch.pool':SimpleNamespace(state='off',attributes={}),
+                'sensor.temperature':SimpleNamespace(state='30',attributes={'unit_of_measurement':'°C'})}
+        self.hass.states.get=states.get
+        self.physical.pool_pause=None
+        self.source.install_bindings(dict(revision=1,
+            pool_pause=dict(entity='switch.pool',until=(now+timedelta(minutes=5)).isoformat()),
+            pool_context={key:self.service.context()[key] for key in ('configuration_revision','policy_revision')},
+            bindings={'sensor.temperature':['pool_temperature']}))
+        self.assertFalse(self.source.execution_source('sensor.temperature'))
+        self.service.policy_revision+=1
+        self.assertTrue(self.source.execution_source('sensor.temperature'))
+
+    async def test_quiet_filter_rebinding_refreshes_subscription_and_promotion_seeds_current_source(self):
+        now=datetime.now(timezone.utc)
+        states={entity:SimpleNamespace(state='1',attributes={'unit_of_measurement':'W'},
+            last_changed=now,last_updated=now,last_reported=now,context=SimpleNamespace(id='report'))
+            for entity in ('sensor.filtered','sensor.a','sensor.b')}
+        states['sensor.filtered'].attributes['entity_id']='sensor.a'
+        self.hass.states.get=states.get
+        registry=SimpleNamespace(async_get=lambda entity:SimpleNamespace(platform='filter')
+            if entity=='sensor.filtered' else None)
+        self.source.report.__globals__['er'].async_get=lambda hass:registry
+        from shs_core.minimum_run import MinimumRuns
+        self.service.physical.ownership.runs=MinimumRuns()
+        self.source.install_bindings(dict(revision=1,pool_pause=None,bindings={'sensor.filtered':['reference']}))
+        await self.source.refresh_configuration()
+        states['sensor.filtered'].attributes['entity_id']='sensor.b'
+        self.hass.fire('state_reported',entity_id='sensor.filtered',new_state=states['sensor.filtered'])
+        await asyncio.gather(*self.tasks)
+        self.assertIn('sensor.b',self.source.entities)
+        await self.source.request('admission',dict(revision=1,pool_pause=None,bindings={'sensor.filtered':['capture']}))
+        self.assertTrue(self.source.execution_source('sensor.b'))
+        with self.journal.connect(readonly=True) as db:
+            row=json.loads(db.execute("SELECT payload FROM latest WHERE entity='sensor.b'").fetchone()[0])
+        self.assertEqual(row['state'],'1')
+
+    async def test_reference_storm_is_filtered_before_encoding_and_required_battery_reports_keep_timestamps(self):
+        now=datetime.now(timezone.utc)
+        states={entity:SimpleNamespace(state='1',attributes={'unit_of_measurement':'W','ignored':object()},
+            last_changed=now,last_updated=now,last_reported=now,context=SimpleNamespace(id='report'))
+            for entity in ('sensor.power','sensor.reference')}
+        self.hass.states.get=states.get
+        from shs_core.minimum_run import MinimumRuns
+        self.service.physical.ownership.runs=MinimumRuns()
+        self.service.physical.observation_changed=asyncio.Event()
+        self.source.entities=set(states)
+        self.source.install_bindings(dict(revision=1,pool_pause=None,
+            bindings={'sensor.power':['capture'],'sensor.reference':['reference']}))
+        from unittest.mock import patch
+        with patch.object(self.source,'report',side_effect=AssertionError('filtered event was serialized')):
+            for _ in range(100):
+                self.hass.fire('state_reported',entity_id='sensor.reference',new_state=states['sensor.reference'])
+        self.hass.fire('state_reported',entity_id='sensor.power',new_state=states['sensor.power'])
+        await self.stream.queue.join()
+        # The real native journal receives only the required report.
+        with self.journal.connect(readonly=True) as db:
+            row=json.loads(db.execute("SELECT payload FROM latest WHERE entity='sensor.power'").fetchone()[0])
+            self.assertIsNone(db.execute("SELECT payload FROM latest WHERE entity='sensor.reference'").fetchone())
+        self.assertEqual(row['last_reported'],now.isoformat())
+        self.assertEqual(row['attributes'],{'unit_of_measurement':'W'})
+        self.assertEqual(self.source.intake_counts['replaceable'],100)
 
     def current(self):
         return self.gateway.fence.snapshot()['grant_current']

@@ -65,6 +65,24 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.call('policy',{'value':{'plan':'plan','options':digest(__import__('shs_core.native_configuration',fromlist=['native_options']).native_options(self.controller.options()))}})
         await self.call('synchronize',{'models':self.coordinator.optimisation_plan['device_models']})
 
+    async def test_notification_wait_is_idle_without_journal_calls_and_wakes_after_commit(self):
+        after=await self.call('updates',{'after':{'receipts':0,'requests':0}})
+        from unittest.mock import patch
+        waiting=asyncio.create_task(self.call('updates',{'after':after}))
+        await asyncio.sleep(0)
+        with patch.object(self.stream,'call',side_effect=AssertionError('idle wait touched SQLite')):
+            for _ in range(5):await asyncio.sleep(0)
+            self.assertFalse(waiting.done())
+        ordinal=await self.stream.capture('observation',{'entity_id':'sensor.a'})
+        changed=await waiting
+        self.assertGreater(changed['receipts'],after['receipts'])
+        self.assertEqual(self.journal.snapshot(self.peer.session)['observations']['sensor.a']['receipt'],ordinal)
+        # A replacement cannot keep an old socket waiting indefinitely.
+        waiting=asyncio.create_task(self.call('updates',{'after':changed}))
+        await asyncio.sleep(0)
+        self.peer.disconnected()
+        with self.assertRaises(GatewayConflict):await waiting
+
     def intention(self):
         return dict(request_id='pool-operation',device='pool',operation='apply',headroom_reserved=True,
             configuration_revision=self.service.configuration_revision,policy_revision=self.service.policy_revision,

@@ -95,6 +95,33 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.calls.clear()
 
+    async def test_idle_pool_temperature_storm_does_not_evaluate_and_heating_slot_does(self):
+        await self.start_live_pool()
+        before=self.evaluations('pool')
+        for index in range(100):
+            self.states['sensor.water'].state=str(28+index/100)
+            self.event('sensor.water')
+        await self.drain()
+        self.assertEqual(self.evaluations('pool'),before)
+        self.assertEqual(self.calls,[])
+        self.slot['pool_w']=3300
+        self.event('sensor.water')
+        await self.drain()
+        self.assertGreater(self.evaluations('pool'),before)
+        self.assertEqual(self.states['switch.pool'].state,'on')
+
+    async def test_cutoff_off_pool_still_wakes_when_it_cools(self):
+        await self.start_live_pool()
+        self.slot['pool_w']=3300
+        self.states['sensor.water'].state='40'
+        self.event('sensor.water');await self.drain()
+        self.assertEqual(self.states['switch.pool'].state,'off')
+        before=self.evaluations('pool')
+        self.states['sensor.water'].state='28'
+        self.event('sensor.water');await self.drain()
+        self.assertGreater(self.evaluations('pool'),before)
+        self.assertEqual(self.states['switch.pool'].state,'on')
+
     async def test_live_plan_replacement_queues_reconciliation_without_handover(self):
         self.options['device_modes'] = {'$battery': 'controlling'}
         self.slot['start'] = self.now.isoformat()

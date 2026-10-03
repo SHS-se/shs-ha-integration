@@ -42,7 +42,7 @@ class GatewayClient:
     async def configuration_boundary(self, operation, body):
         installing = operation == 'source' and body.get('operation') == 'configure'
         if not installing and (operation == 'source' or operation in
-                ('connect','receipts','ack_delivery','ack_processed','snapshot','reconcile','activate','resume')):
+                ('connect','receipts','ack_delivery','ack_processed','snapshot','reconcile','activate','resume','updates')):
             # Recorder/history requests and receipt delivery remain multiplexed.
             yield
             return

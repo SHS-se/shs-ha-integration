@@ -81,6 +81,14 @@ receipts, receipt backlog, checkpoint saves and evidence-query groups. The first
 sample establishes a baseline; rates start with the following sample. Each line
 states the actual interval. A runtime reconnect resets the profiler's counters.
 
+Info also reports ordered and replaceable source rates, native fact transactions,
+and the app process's disk-write bytes and write calls for each interval. These
+show whether irrelevant events are filtered and checkpoint work is reduced.
+Disk bytes come from Linux process I/O counters; write calls include sockets too.
+The companion's HA process I/O must be measured separately. See
+[event processing and measurements](../../docs/event-processing.md) for the
+processing cadence, reproducible replay and live comparison limits.
+
 **Debug** adds per-operation wall time, synchronous CPU time, counter deltas,
 projection sizes, dashboard access requests and exception traces. **Warning**,
 **Error** and **Critical** progressively reduce output. Profiling messages contain operation names and counters; they do not dump

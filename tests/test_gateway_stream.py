@@ -39,6 +39,33 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.connection.request(dict(id=4, operation='activate', body={}))
 
+    async def test_adjacent_facts_share_one_commit_and_snapshot_barrier_keeps_order(self):
+        await self.connect()
+        notices=[];self.stream.listeners.add(lambda:notices.append(self.stream.metrics['facts']))
+        before=self.stream.metrics['fact_commits']
+        first=[self.stream.capture('observation',{'entity_id':'sensor.a','state':str(i)}) for i in range(20)]
+        snapshot=asyncio.create_task(self.stream.call('snapshot',self.connection.session))
+        await asyncio.sleep(0)
+        second=self.stream.capture('observation',{'entity_id':'sensor.a','state':'later'})
+        ordinals=await asyncio.gather(*first)
+        captured=await snapshot
+        later=await second
+        self.assertEqual(ordinals,list(range(ordinals[0],ordinals[0]+20)))
+        self.assertEqual(captured['through'],ordinals[-1])
+        self.assertGreater(later,captured['through'])
+        self.assertEqual(self.stream.metrics['fact_commits']-before,2)
+        self.assertEqual(len(notices),2)
+
+    async def test_failed_batch_rolls_back_every_fact_and_sends_no_notification(self):
+        await self.connect()
+        notices=[];self.stream.listeners.add(lambda:notices.append(True))
+        first=self.stream.capture('observation',{'entity_id':'sensor.a'})
+        invalid=self.stream.capture('observation',{})
+        for pending in (first,invalid):
+            with self.assertRaises(ValueError):await pending
+        self.assertEqual(self.journal.snapshot(self.connection.session)['observations'],{})
+        self.assertEqual(notices,[])
+
     async def test_cancelled_connect_settles_and_revokes_its_committed_session(self):
         entered, release = asyncio.Event(), asyncio.Event()
         async def blocked(fn, *args):

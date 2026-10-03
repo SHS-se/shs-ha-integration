@@ -26,6 +26,9 @@ class ObservationMirror:
         self.rows = {}
         self.listeners = {}
         self.revision = 0
+        self.changes = {}
+        self.durable_rows = self.rows
+        self.row_receipts = {}
 
     def install_context(self, context):
         self.context = deepcopy(context)
@@ -54,13 +57,17 @@ class ObservationMirror:
     def apply(self, receipt, *, notify=True):
         # Receipt ordinals establish arrival order; timestamps remain provenance.
         self.revision = receipt['ordinal']
+        self.changes[self.revision] = deepcopy(receipt)
         if receipt['kind'] == 'observation':
             row = deepcopy(receipt['payload'])
             entity = row['entity_id']
+            self.row_receipts[entity] = self.revision
             if row['state'] is None:
                 self.rows.pop(entity, None)
+                self.durable_rows.pop(entity, None)
             else:
                 self.rows[entity] = row
+                self.durable_rows[entity] = row
             if notify:
                 for callback in tuple(self.listeners.get(entity, ())):
                     callback(entity, self.read(entity), row['kind'])
@@ -72,6 +79,54 @@ class ObservationMirror:
         self.rows = {key:deepcopy(value['value']) for key,value in snapshot['observations'].items()
                      if value['value']['state'] is not None}
         self.revision = snapshot['through']
+        self.changes.clear()
+        self.durable_rows = self.rows
+        self.row_receipts = {entity:snapshot['through'] for entity in snapshot['observations']}
+
+    def apply_live(self, rows, *, through):
+        # Replaceable values have no authority to advance the execution prefix.
+        if self.rows is self.durable_rows:
+            self.rows = dict(self.rows)
+        for entity, row in rows.items():
+            if self.row_receipts.get(entity, 0) > through:
+                continue
+            if row['state'] is None:
+                self.rows.pop(entity, None)
+            else:
+                self.rows[entity] = deepcopy(row)
+
+    def checkpoint(self, through, previous):
+        """Freeze only changed sources at the execution prefix, never ahead of it."""
+        if previous is None:
+            if through != self.revision:
+                raise ValueError('Initial source checkpoint must match the current mirror')
+            return dict(receipt=through, context=deepcopy(self.context), rows=deepcopy(self.durable_rows))
+        rows = dict(previous['rows'])
+        context = previous['context']
+        for ordinal, receipt in self.changes.items():
+            if not previous['receipt'] < ordinal <= through:
+                continue
+            if receipt['kind'] == 'configuration':
+                context = deepcopy(receipt['payload'])
+            elif receipt['kind'] == 'observation':
+                row = receipt['payload']
+                if row['state'] is None:
+                    rows.pop(row['entity_id'], None)
+                else:
+                    rows[row['entity_id']] = row
+        if through == self.revision:
+            # Also supports a freshly restored mirror without pending deltas.
+            for entity in rows.keys()-self.durable_rows.keys():
+                rows.pop(entity)
+            for entity, row in self.durable_rows.items():
+                if row != rows.get(entity):
+                    rows[entity] = deepcopy(row)
+            if self.context != context:
+                context = deepcopy(self.context)
+        return dict(receipt=through, context=context, rows=rows)
+
+    def committed(self, through):
+        self.changes = {ordinal: row for ordinal, row in self.changes.items() if ordinal > through}
 
 
 class RemoteHistory:

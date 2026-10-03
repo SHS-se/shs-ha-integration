@@ -76,6 +76,7 @@ class DeviceGateway(DeviceOperations):
         self.reads = set()
         self.sequence = 0
         self.local_obligation = False
+        self.pool_pause = None
 
     def before_external_command(self, device):
         if self.local_obligation:
@@ -304,4 +305,11 @@ class DeviceGateway(DeviceOperations):
                         deadlines=[{'device':d,'name':n,'at':at} for (d,n),at in self.deadlines.items()],
                         diagnostics=deepcopy(self.diagnostic_evaluation))
             await self.operations.finish(value, response)
+            if intent.device == 'pool':
+                self.pool_pause = (dict(configuration_revision=intent.configuration_revision,
+                    policy_revision=intent.policy_revision, start=self.slot['start'],
+                    entity=result['control_entity'])
+                    if error is None and result and intent.operation == 'apply'
+                    and result['requested_power_w'] == 0 and result['requested_switch_state'] == 'off'
+                    else None)
             return response

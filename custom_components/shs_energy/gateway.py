@@ -31,6 +31,8 @@ from .shs_core.gateway_journal import GatewayJournal, GatewayConflict
 from .shs_core.gateway_service import GatewayService, AppConnection
 from .shs_core.gateway_stream import GatewayCommands, GatewayOperations, GatewayRecord, GatewayStream
 from .shs_core.execution_configuration import ExecutionConfiguration
+from .shs_core.source_admission import (validate_bindings, ordered, FACT_ATTRIBUTES, native_pool_idle, owned_device_sources,
+    validate_pool_pause, temperature_available, temperature_metadata)
 from .shs_core.native_commands import NativeExecutor
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,12 +55,22 @@ class HomeAssistantSource:
         self.update_lock = asyncio.Lock()
         self.last_context = None
         self.configuration = None
+        self.admission = None
+        self.bindings = {}
+        self.pool_metadata = {}
+        self.pool_unavailable = set()
+        self.live_revision = 0
+        self.live_changes = {}
+        self.fact_versions = {}
+        self.intake_counts = {'ordered':0, 'replaceable':0, 'bytes':0}
 
-    def report(self, entity, state=None, kind='state_report'):
+    def report(self, entity, state=None, kind='state_report', *, compact=False):
         state = self.hass.states.get(entity) if state is None else state
         now = datetime.now(timezone.utc).isoformat()
+        attributes = ({key:value for key,value in state.attributes.items() if not compact or key in FACT_ATTRIBUTES}
+                      if state else {})
         return wire(dict(entity_id=entity, state=state.state if state else None,
-            attributes=dict(state.attributes) if state else {},
+            attributes=attributes,
             last_changed=state.last_changed.isoformat() if state else now,
             last_updated=state.last_updated.isoformat() if state else now,
             last_reported=state.last_reported.isoformat() if state else now,
@@ -85,12 +97,64 @@ class HomeAssistantSource:
     def sources(self):
         """Configured, owned and filter-derived entities, read without subscribing."""
         entities = (set(self.configuration.options()['_observed_entities']) if self.configuration.value['revision'] else configured_entity_ids(self.options()))
+        entities.update(self.bindings)
         for record in self.service.physical.ownership.records.values():
             entities.update(record['originals'])
             entities.update(configured_entity_ids(record['options']))
         registry = er.async_get(self.hass)
         return filter_sources(entities, self.hass.states.get,
             lambda entity: item.platform if (item := registry.async_get(entity)) else None)
+
+    def install_bindings(self, value):
+        self.admission = value
+        bindings = validate_bindings(value['bindings'])
+        registry = er.async_get(self.hass)
+        for entity, uses in tuple(bindings.items()):
+            derived = filter_sources({entity}, self.hass.states.get,
+                lambda key: item.platform if (item := registry.async_get(key)) else None)
+            for source in derived:
+                bindings[source] = bindings.get(source, frozenset()) | uses
+        self.bindings = bindings
+        self.entities = self.sources()
+        self.pool_metadata = {entity:temperature_metadata(self.hass.states.get(entity))
+                              for entity,uses in bindings.items() if 'pool_temperature' in uses}
+        self.pool_unavailable = {entity for entity in self.pool_metadata
+                                 if not temperature_available(self.hass.states.get(entity))}
+
+    def pool_idle(self):
+        context = self.service.context()
+        declared = (self.admission['pool_pause'] if self.admission is not None
+                    and self.admission['pool_pause'] is not None
+                    and self.admission['pool_context'] == {key:context[key]
+                        for key in ('configuration_revision','policy_revision')} else None)
+        return native_pool_idle(self.service.physical.pool_pause,
+            declared, context, self.hass.states.get,self.service.physical.ownership,
+            datetime.now(timezone.utc))
+
+    def owned_sources(self):
+        entities = set()
+        for record in self.service.physical.ownership.records.values():
+            entities.update(owned_device_sources(record))
+        registry = er.async_get(self.hass)
+        return filter_sources(entities, self.hass.states.get,
+            lambda key: item.platform if (item := registry.async_get(key)) else None)
+
+    def execution_source(self, entity):
+        # Prior durable input schemas drain normally until the explicit sealed
+        # admission installation for the current canonical configuration.
+        if self.admission is None or self.admission['revision'] != self.configuration.value['revision']:
+            return True
+        uses = self.bindings.get(entity, frozenset())
+        # Ownership outlives configuration edits until explicit handover retires
+        # it. Keep its former controls and override sources in the ordered plane.
+        if entity in self.owned_sources():
+            uses = uses | {'device'}
+        thermal = 'pool_temperature' in uses
+        valid = (not self.pool_unavailable and all(temperature_available(self.hass.states.get(source))
+                     and temperature_metadata(self.hass.states.get(source)) == self.pool_metadata[source]
+                     for source in self.pool_metadata) if thermal else True)
+        return (ordered(uses, pool_idle=valid and self.pool_idle() if thermal else False)
+            or entity in self.service.physical.ownership.runs.entities and 'pool_temperature' not in uses)
 
     def metadata_unchanged(self):
         """Whether a registry or core event leaves the settled context as it is.
@@ -123,6 +187,8 @@ class HomeAssistantSource:
         async with self.update_lock:
             if self.closed:
                 return
+            if self.admission is not None:
+                self.install_bindings(self.admission)
             self.entities = self.sources()
             # Queue the canonical configuration and its initial source values in
             # one callback turn before acknowledging the new revision.
@@ -134,13 +200,15 @@ class HomeAssistantSource:
             self.service.invalidate_context()
             self.last_context = context
             future = self.service.stream.capture('configuration', context)
-            pending = [self.service.stream.capture('observation', self.report(entity)) for entity in sorted(self.entities)]
+            pending = [self.service.stream.capture('observation', self.report(entity, compact=True))
+                       for entity in sorted(self.entities) if self.execution_source(entity)]
             self.service.configuration_revision = await future
             await asyncio.gather(*pending)
             self.service.configuration_pending = False
 
     async def request(self, operation, body):
         fields = {'credentials':set(),
+            'admission':{'revision','bindings','pool_pause'}, 'live':{'after'},
             'catalog':set(),
             'configure':{'expected_revision','revision','options','digest'},
             'statistics':{'start','end','entities','period','units','kinds'},
@@ -149,6 +217,42 @@ class HomeAssistantSource:
             raise ValueError('Unsupported source request')
         if operation == 'credentials':
             return dict(self.entry.data)
+        if operation == 'admission':
+            validate_bindings(body['bindings'])
+            validate_pool_pause(body['pool_pause'])
+            if body['revision'] != self.configuration.value['revision']:
+                raise GatewayConflict('Source bindings belong to another configuration')
+            previous = {entity for entity in self.entities if self.execution_source(entity)}
+            context = self.service.context()
+            sealed = {**body,'pool_context':{key:context[key] for key in ('configuration_revision','policy_revision')}}
+            await self.service.stream.call('save_record','source_admission',sealed)
+            if body['revision'] != self.configuration.value['revision']:
+                raise GatewayConflict('Configuration changed during source admission')
+            self.install_bindings(sealed)
+            context = self.last_context
+            await self.refresh_configuration()
+            if self.last_context == context:
+                # Role promotion must deliver the current value even when no
+                # state report fires after installation.
+                pending = [self.service.stream.capture('observation', self.report(entity, compact=True))
+                           for entity in sorted(self.entities-previous) if self.execution_source(entity)]
+                await asyncio.gather(*pending)
+            return {}
+        if operation == 'live':
+            after = body['after']
+            if after is not None and (type(after) is not int or not 0 <= after <= self.live_revision):
+                raise ValueError('Invalid live reading revision')
+            # Freeze selected values before the queue barrier in this loop turn.
+            revision = self.live_revision
+            configuration_revision = self.configuration.value['revision']
+            rows = {entity:self.report(entity) for entity in self.entities
+                    if (after is None or self.live_changes.get(entity,0) > after) and not self.execution_source(entity)}
+            versions = {entity:self.fact_versions.get(entity,0) for entity in rows}
+            snapshot = await self.service.stream.call('snapshot',self.service.session())
+            rows = {entity:row for entity,row in rows.items() if not self.execution_source(entity)
+                    and versions[entity] == self.fact_versions.get(entity,0)}
+            return dict(through=snapshot['through'],revision=revision,configuration_revision=configuration_revision,rows=rows,
+                        counts={**self.intake_counts,**self.service.stream.metrics})
         if operation == 'catalog':
             manager = await async_get_manager(self.hass)
             attributes = {'friendly_name','unit_of_measurement','device_class','state_class',
@@ -205,22 +309,38 @@ class HomeAssistantSource:
         @callback
         def observe(event):
             entity = event.data['entity_id']
-            kind = 'state_report' if event.event_type == EVENT_STATE_REPORTED else 'state_change'
-            physical = self.service.physical
-            physical.observation_changed.set()
             state = event.data.get('new_state')
             if state and state.attributes.get('entity_id') and er.async_get(self.hass).async_get(entity):
                 discovered = filter_sources({entity}, self.hass.states.get,
                     lambda key: item.platform if (item := er.async_get(self.hass).async_get(key)) else None)
                 if discovered - self.entities:
                     metadata_changed(event)
-            physical.ownership.runs.observe(lambda target:state if target==entity else self.hass.states.get(target),
-                datetime.now(timezone.utc),entity=entity,received=kind=='state_change')
+            if not self.execution_source(entity):
+                self.intake_counts['replaceable'] += 1
+                self.live_revision += 1
+                self.live_changes[entity] = self.live_revision
+                return
+            kind = 'state_report' if event.event_type == EVENT_STATE_REPORTED else 'state_change'
+            physical = self.service.physical
+            physical.observation_changed.set()
+            if entity in physical.ownership.runs.entities:
+                physical.ownership.runs.observe(lambda target:state if target==entity else self.hass.states.get(target),
+                    datetime.now(timezone.utc),entity=entity,received=kind=='state_change')
             if physical.ownership.runs.dirty:
                 self.service.obligation_event.set()
             try:
-                self.service.stream.capture('observation', self.report(entity, event.data.get('new_state'), kind),
+                row = self.report(entity, event.data.get('new_state'), kind, compact=True)
+                self.intake_counts['ordered'] += 1
+                self.intake_counts['bytes'] += len(json.dumps(row))
+                self.service.stream.capture('observation', row,
                     ownership=physical.ownership.snapshot() if physical.ownership.runs.dirty else None)
+                self.fact_versions[entity] = self.fact_versions.get(entity,0)+1
+                if entity in self.pool_metadata:
+                    self.pool_metadata[entity] = temperature_metadata(state)
+                    if temperature_available(state):
+                        self.pool_unavailable.discard(entity)
+                    else:
+                        self.pool_unavailable.add(entity)
             except Exception:
                 self.service.revoke()
                 _LOGGER.exception('SHS gateway observation persistence unavailable')
@@ -279,6 +399,9 @@ async def open_gateway(hass, entry):
         authorize=service.authorize,session=service.session,context=service.context)
     try:
         await source.configuration.load(dict(entry.options))
+        admission = await stream.call('load_record','source_admission')
+        if admission is not None:
+            source.install_bindings(admission)
         await service.physical.load()
         service.physical.ownership.runs.configure(source.options(), [])
         await service.battery.open()
