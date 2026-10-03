@@ -70,16 +70,41 @@ class HomeAssistantSource:
             return resolved_options(self.hass,options)  # One-time adoption source.
         return {key:value for key,value in options.items() if key!='_observed_entities'}
 
-    def context(self):
+    def context(self, entities=None):
         h = self.hass
         registry = er.async_get(h)
+        entities = self.entities if entities is None else entities
         return wire(dict(options=self.configuration.options(),
             configuration_authority={key:self.configuration.value[key] for key in ('revision','digest')},
             home=dict(latitude=h.config.latitude, longitude=h.config.longitude, language=h.config.language,
                       timezone=h.config.time_zone, temperature_unit=h.config.units.temperature_unit),
-            observed_entities=sorted(self.entities), entity_ids=[s.entity_id for s in h.states.async_all()], entity_names=entity_display_name_by_id(h),
+            observed_entities=sorted(entities), entity_ids=[s.entity_id for s in h.states.async_all()], entity_names=entity_display_name_by_id(h),
             area_names=area_name_by_id(h), entity_areas=entity_area_id_by_id(h),
-            platforms={entity:item.platform for entity in self.entities if (item:=registry.async_get(entity))}))
+            platforms={entity:item.platform for entity in entities if (item:=registry.async_get(entity))}))
+
+    def sources(self):
+        """Configured, owned and filter-derived entities, read without subscribing."""
+        entities = (set(self.configuration.options()['_observed_entities']) if self.configuration.value['revision'] else configured_entity_ids(self.options()))
+        for record in self.service.physical.ownership.records.values():
+            entities.update(record['originals'])
+            entities.update(configured_entity_ids(record['options']))
+        registry = er.async_get(self.hass)
+        return filter_sources(entities, self.hass.states.get,
+            lambda entity: item.platform if (item := registry.async_get(entity)) else None)
+
+    def metadata_unchanged(self):
+        """Whether a registry or core event leaves the settled context as it is.
+
+        Those events fire for every entity in Home Assistant. Invalidating
+        revokes the battery writer, which HA then hands back to its baseline,
+        so only a context the app has not received may do that.
+        """
+        if self.service.configuration_pending:
+            return False
+        try:
+            return self.context(self.sources()) == self.last_context
+        except Exception:
+            return False  # Fence first; the refresh then reports the failure.
 
     def physical_controls(self):
         entities = set()
@@ -99,13 +124,7 @@ class HomeAssistantSource:
         async with self.update_lock:
             if self.closed:
                 return
-            self.entities = (set(self.configuration.options()['_observed_entities']) if self.configuration.value['revision'] else configured_entity_ids(self.options()))
-            for record in self.service.physical.ownership.records.values():
-                self.entities.update(record['originals'])
-                self.entities.update(configured_entity_ids(record['options']))
-            registry = er.async_get(self.hass)
-            self.entities = filter_sources(self.entities, self.hass.states.get,
-                lambda entity: item.platform if (item := registry.async_get(entity)) else None)
+            self.entities = self.sources()
             # Queue the canonical configuration and its initial source values in
             # one callback turn before acknowledging the new revision.
             context = self.context()
@@ -207,6 +226,8 @@ class HomeAssistantSource:
                 _LOGGER.exception('SHS gateway observation persistence unavailable')
         @callback
         def metadata_changed(event):
+            if self.metadata_unchanged():
+                return
             self.invalidate()
             self.entry.async_create_background_task(self.hass, self.refresh_configuration(), name='shs_gateway_configuration')
         for event in (EVENT_STATE_CHANGED, EVENT_STATE_REPORTED):
