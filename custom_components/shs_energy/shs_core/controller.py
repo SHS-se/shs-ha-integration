@@ -239,8 +239,6 @@ class ScheduledController(DeviceOperations):
 
     def check_authority(self):
         if self.restoring:
-            if not self.verifying and device_mode(self.options(), self.device) == "control_verification":
-                raise ValueError("control relinquished to verification during restoration")
             return
         options = self.options()
         if options != self.active_options or self.closed:
@@ -555,13 +553,11 @@ class ScheduledController(DeviceOperations):
                 try:
                     record = self.ownership.records.get(device)
                     inactive = self.inactive_status(device, options)
-                    if self.devices is None and record and device_mode(options, device) == "control_verification":
-                        # Relinquishing permission must never change the hardware.
-                        del self.ownership.records[device]
-                        self.failed.pop(device, None)
-                        await self.save()
-                        record = None
                     if record and (inactive or device_mode(options, device) != "controlling"):
+                        # The only handover: the select (Verification included), or a
+                        # setting that removes the device from it. Nothing else hands a
+                        # device back, and Verification must not stop doing so; the
+                        # history of both mistakes is in docs/control-continuity.md.
                         await self.restore(device)
                         # The next attempt starts from the handed-back device, not the failed one.
                         self.failed.pop(device, None)

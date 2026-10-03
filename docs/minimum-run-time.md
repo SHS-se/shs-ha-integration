@@ -22,10 +22,17 @@ above zero. A climate entity is enabled in its active HVAC mode. A numeric
 thermostat target is enabled above its measured room temperature. SHS holds
 thermostat target reductions during the protected period.
 
-Verification observes real device transitions without sending commands. Moving
-from verification to controlling uses that same run history. Moving from
-controlling to verification relinquishes ownership without restoring or changing
-the device, including when a handover was already pending.
+Verification observes real device transitions without sending schedule commands.
+Moving from verification to controlling uses that same run history. Moving from
+controlling to verification hands the device back to its captured settings, as
+[control continuity](control-continuity.md) requires. That handover uses the same
+command guard: if it would stop the device inside its minimum run time, it stays
+pending and completes when the time has elapsed.
+
+Between 25 September and 3 October 2026 this section said, and the code did, the
+opposite: verification relinquished ownership without restoring the device. That
+was not a requirement of minimum run time and has been reverted; see the history
+in [control continuity](control-continuity.md#history).
 
 Snapshots carry the configured duration, current enabled state, and remaining
 seconds in each device model's `minimum_run`. Planner v45 reserves ongoing runs

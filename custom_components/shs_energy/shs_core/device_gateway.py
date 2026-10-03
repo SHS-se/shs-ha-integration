@@ -117,7 +117,7 @@ class DeviceGateway(DeviceOperations):
 
     def check_authority(self):
         if self.local_obligation:
-            if self.closed or self.options() != self.active_options or device_mode(self.options(), self.device) == 'control_verification':
+            if self.closed or self.options() != self.active_options:
                 raise GatewayConflict('Physical obligation permission changed')
             if not self.restoring and self.intent.operation != 'inhibit':
                 raise GatewayConflict('Only restoration and maximum-inhibit obligations run locally')
@@ -126,7 +126,9 @@ class DeviceGateway(DeviceOperations):
         if self.closed or self.options() != self.active_options:
             raise GatewayConflict('Canonical device configuration changed')
         mode = device_mode(self.options(), self.device)
-        if mode == 'control_verification' or (not self.restoring and mode != 'controlling'):
+        # Verification writes no schedule, but leaving Controlling for it is the
+        # release and its handover is a real write (docs/control-continuity.md).
+        if not self.restoring and mode != 'controlling':
             raise GatewayConflict('Local device control permission is absent')
         if self.restoring:
             return
@@ -183,7 +185,9 @@ class DeviceGateway(DeviceOperations):
                     del self.ownership.overrides[device]
                     changed = True
             for device, record in tuple(self.ownership.records.items()):
-                if device_mode(options, device) == 'control_verification':
+                if device == 'battery' and device_mode(options, device) == 'control_verification':
+                    # A pre-runtime battery record holds no settings to return:
+                    # the admitted battery adapter performs that handover.
                     del self.ownership.records[device]
                     changed = True
                 elif device_mode(options, device) == 'controlling' and record.pop('restoration_pending', None) is not None:
@@ -204,6 +208,8 @@ class DeviceGateway(DeviceOperations):
 
         No schedule is selected here. A lost app session alone does not restore
         ordinary devices; their captured settings survive a restart as before.
+        Leaving Controlling, for Verification too, is a release and is finished
+        here when the app is not doing it (docs/control-continuity.md).
         """
         async with self.lock:
             self.active_options = deepcopy(self.options())
@@ -213,10 +219,6 @@ class DeviceGateway(DeviceOperations):
                 if device == 'battery':
                     continue  # The admitted battery adapter owns its release.
                 mode = device_mode(self.active_options,device)
-                if mode == 'control_verification':
-                    del self.ownership.records[device]
-                    await self.ownership.save()
-                    continue
                 options = self.active_options
                 if device.startswith('device:'):
                     key = device.removeprefix('device:')

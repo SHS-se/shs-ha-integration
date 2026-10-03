@@ -31,7 +31,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('device:pool',self.controller.ownership.records)
         self.options['device_modes']['$pool']='control_verification'
         await self.controller.async_tick()
-        self.assertEqual(self.states['switch.pool'].state,'on')
+        self.assertEqual(self.states['switch.pool'].state,'off')
         self.assertEqual(self.controller.status['pool']['state'],'verified',self.controller.status['pool'])
 
     async def test_shared_log_captures_pool_and_battery_without_writes(self):
@@ -170,7 +170,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
         self.assertFalse(self.controller.ownership.records)
 
-    async def test_leaving_live_control_leaves_device_unchanged(self):
+    async def test_leaving_live_control_restores_before_verifying(self):
         self.options['device_modes']['$pool'] = 'controlling'
         self.slot['pool_w'] = 0
         await self.controller.async_start()
@@ -494,7 +494,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn('contract rejected', str(raised.exception))
 
 
-    async def test_pool_modes_use_configured_switch_and_leave_current_state(self):
+    async def test_pool_modes_use_configured_switch_and_restore_initial_state(self):
         for initial in ('off', 'on'):
             for first_heating in (False, True):
                 with self.subTest(initial=initial, first_heating=first_heating):
@@ -517,7 +517,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(self.states['switch.pool'].state, 'off')
                     self.options['device_modes']['$pool'] = 'control_verification'
                     await self.controller.async_tick()
-                    self.assertEqual(self.states['switch.pool'].state, 'off')
+                    self.assertEqual(self.states['switch.pool'].state, initial)
                     self.assertNotIn('pool', self.controller.ownership.records)
                     self.assertTrue(all(entity == 'switch.pool' for entity, _ in self.calls))
 

@@ -14,14 +14,22 @@ Follow `RELEASING.md`; do not create release tags manually.
 # Control continuity
 
 Follow [control continuity](docs/control-continuity.md) for every device, the
-battery included: only an explicit control-mode, exclusion or override setting
-may change a device's settings. A restart, a lost app or socket, a settings or
-metadata change, a missing or expired plan, stale readings and faults all hold
-the last setting SHS sent. Do not add a handback, fallback or "safe default"
-write for any of them, in the app, the core or the Home Assistant gateway. A
-change to when a device is released needs the user's explicit requirement and
-regression coverage beside `tests/test_control_continuity.py` and
-`tests/test_battery_continuity.py`.
+battery included, and read its History section before touching release logic.
+Only an explicit control-mode, exclusion or override setting may change a
+device's settings:
+
+- A restart, a lost app or socket, a settings or metadata change, a missing or
+  expired plan, stale readings and faults all hold the last setting SHS sent. Do
+  not add a handback, fallback or "safe default" write for any of them, in the
+  app, the core or the Home Assistant gateway.
+- Leaving Controlling on the select, for Verification too, hands the device back
+  to its captured settings. Do not change that to leaving the device as it is.
+
+Both halves have been lost before through unrelated work whose tests were
+rewritten to match. A change to when a device is released needs the user's
+explicit requirement. If a change makes `tests/test_control_continuity.py`,
+`tests/test_battery_continuity.py`, `tests/test_pool_switch_gap.py` or the
+Verification handover tests fail, stop and ask instead of editing them.
 
 # Configuration UX
 

@@ -468,9 +468,16 @@ class BatteryRuntime:
     def _released(self, options):
         """The explicit settings that hand the battery back, or None.
 
-        The select or the choices that remove the battery from it (demotion,
+        The choices that remove the battery from its select (demotion,
         exclusion, a disabled battery) and a manual override configured for the
         purpose. An override that cannot be read holds instead of releasing.
+        The select itself releases too: `_retire_changed_configuration` hands
+        the battery back before Verification starts.
+
+        These are the only releases. A restart, a lost app, a settings change,
+        a missing or expired plan, stale readings and faults hold the last
+        settings. Both halves have been broken before: read
+        docs/control-continuity.md before changing either.
         """
         if device_mode(options,'battery') not in ('controlling','control_verification'):
             return 'Battery is not set to Controlling'
@@ -491,8 +498,8 @@ class BatteryRuntime:
         self.coordinator._battery_native_context=None
         self._releasing=False
         group=self.host.state.groups[0] if self.host else None
-        if group is not None and group.release_pending:
-            # Returned to the select before the handover finished: it is cancelled.
+        if group is not None and group.release_pending and mode=='controlling':
+            # Returned to Controlling before the handover finished: it is cancelled.
             self._mode_revision=group.mode_revision+1
             self._mode=mode
             await self.host.accept(rt.AuthorityChanged(group.spec.id,mode,self._mode_revision,None))
@@ -506,11 +513,13 @@ class BatteryRuntime:
             return True  # That handover completes under the settings it was commanded with.
         await self._record_counters(options)
         group=self.host.state.groups[0]
-        if device_mode(options,'battery')=='control_verification' and group.mode!='control_verification':
-            self._mode_revision=group.mode_revision+1
-            self._mode='control_verification'
-            await self.host.accept(rt.AuthorityChanged(group.spec.id,'control_verification',self._mode_revision,None))
+        if device_mode(options,'battery')=='control_verification' and (group.owned or group.attempts or group.release_pending):
+            # Leaving Controlling on the select is the release. Verification
+            # starts only after the battery has been handed back.
+            await self._release('Handing the battery back before Verification')
             group=self.host.state.groups[0]
+            if group.owned or group.attempts or group.release_pending:
+                return False
         if group.owned or group.attempts or group.release_pending:
             # SHS holds the battery: rebinding must not change what it is doing.
             keys=tuple(options.get(k) for k in ('battery_mode_entity','battery_charge_limit_entity','battery_discharge_limit_entity'))

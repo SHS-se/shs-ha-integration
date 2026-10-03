@@ -1,10 +1,12 @@
 # Control continuity: only the select releases
 
-**Normative, 21 September 2026.** Implemented for the scheduled controller (pool,
-EV, and generic room and hot-water devices) in 0.9.0-beta.37, and for the battery
-in 0.9.0-beta.72 (user requirement, 3 October 2026); see
-[the last section](#battery). Where other documents describe handover on restart,
-on expiry or on faults, this document takes precedence.
+**Normative, 21 September 2026; restated by the user on 3 October 2026 for every
+device, the battery included.** Where other documents describe handover on
+restart, on expiry or on faults, or say that Verification leaves a device as it
+is, this document takes precedence.
+
+**Do not change either half of this rule without an explicit user requirement.**
+It has been broken twice by unrelated work; read [History](#history) first.
 
 ## Rule
 
@@ -31,7 +33,12 @@ control, and is the only time SHS sends a device its own settings.
 
 If the actuator is unavailable when a release is due, the handover waits and
 completes as soon as it reports (status `pending`, then `fault` after five
-minutes). Returning the select to Controlling before then cancels it.
+minutes). A handover that would stop an appliance inside its
+[minimum run time](minimum-run-time.md) waits for that time in the same way.
+Returning the select to Controlling before then cancels it.
+
+Verification itself writes no schedule. The handover is the one write that
+leaving Controlling causes, and Verification starts after it.
 
 A genuine external change (the actuator is available but not in the state SHS
 commanded) latches the device as `overridden`. SHS sends nothing and leaves the
@@ -87,11 +94,11 @@ maximum pause. `async_start` and `async_stop` send nothing. Tests:
 
 ## Battery
 
-User requirement, 3 October 2026: the battery is released only when its control
-mode says so. Otherwise it stays in the mode the controller last set. The earlier
-exceptions (releasing to Maximum Self Consumption on a restart, a lost app, a
-settings change, an expired plan, stale measurements or a refresh error) are
-removed.
+User requirement, 3 October 2026 (0.9.0-beta.72 and .73): the battery is released
+only when its control mode says so. Otherwise it stays in the mode the controller
+last set. The earlier exceptions (releasing to Maximum Self Consumption on a
+restart, a lost app, a settings change, an expired plan, stale measurements or a
+refresh error) are removed.
 
 The battery runs through its own runtime (`battery_runtime.py`, the
 `home_runtime.py` reducer and Home Assistant's `battery_gateway.py`). All three
@@ -105,11 +112,12 @@ follow the rule:
 | A settings change that keeps the battery Controlling | The new settings are bound in place. Changed meters keep the command journal. A changed control entity is refused with a fault until the select goes to Verification and back. |
 | A manual-override entity that cannot be read | Hold. |
 
-What still hands the battery back to Maximum Self Consumption at its rated
-limits: it leaves Controlling and Verification (demoted on the website), it is
-disabled or excluded, or a configured manual-override entity turns on. If the app
-is not connected, Home Assistant completes that handover itself. Returning the
-battery to Controlling before the handover finishes cancels it.
+What hands the battery back to Maximum Self Consumption at its rated limits is
+the same as for every device: its select is set to Verification, it leaves the
+select (demoted on the website, disabled, excluded), or a configured
+manual-override entity turns on. If the app is not connected, Home Assistant
+completes that handover itself. Returning the battery to Controlling before the
+handover finishes cancels it.
 
 Consequence accepted with this requirement: a held command cannot follow the
 house. A held grid charge keeps charging at its last limit when the house load
@@ -120,3 +128,29 @@ then protected only by the equipment's own limits.
 Tests: `tests/test_battery_continuity.py`, `tests/test_battery_gateway.py`,
 `tests/test_gateway_metadata.py` and the session tests in
 `app/tests/test_engine.py`.
+
+## History
+
+This rule has had to be fixed more than once. Each time it was lost through work
+on something else, with the tests rewritten to match the new behaviour. Keep this
+record so that it is not reimplemented differently again.
+
+| When | What happened |
+|---|---|
+| 21 September 2026 (`07e111e`, `e726f4f`) | The rule was written here and implemented for the scheduled controller (pool, EV, generic devices) after the pool switch was being flipped to its baseline on restarts. The battery was left out and listed as not yet conforming, pending a decision on holding a command without live measurements. |
+| 25 September 2026 (`7c5453a`) | The minimum-run-time work changed Controlling → Verification to relinquish a device without handing it back, for every device and the battery, and rewrote the continuity tests to expect that. No requirement asked for it, and this document and `ha-execution-mode-entities.md` kept describing the handover. The restore path already waits for a minimum run, so the change was not needed for that feature. |
+| 27 September 2026 (`014a18e`) | The move of the runtime into the app added a Home Assistant handback of the battery whenever its writer was lost: an app restart or dropped socket, an HA stop, a settings revision, an expired grant. Ordinary devices kept their continuity. Nothing tested the battery against the rule. |
+| 3 October 2026 | A one-second preparation timeout closed the app's gateway session at most quarter-hour boundaries, and the handback above flipped the battery to Maximum Self Consumption and back each time. The user restated the rule: only a control-mode change releases a device, the battery included, and Controlling → Verification hands it back. Both halves were restored for every device (`e97b71a`, `3649055`, `a2be5e3`, `909f5d0` and the commit adding this section). |
+
+What to take from it:
+
+- A restart, a lost app or socket, a settings or metadata change, a missing or
+  expired plan, stale readings and faults are never a reason to write to a
+  device. Do not add a handback, a fallback target or a "safe default" for them.
+- Leaving Controlling on the select, for Verification too, always hands the
+  device back. Do not turn that into "leave it as it is".
+- A change to either needs the user's explicit requirement, an update to this
+  document, and the tests listed above and in `tests/test_control_continuity.py`,
+  `tests/test_pool_switch_gap.py`, `tests/test_minimum_run.py` and
+  `tests/test_verification.py`. Rewriting those tests to fit new behaviour is the
+  signal to stop and ask.

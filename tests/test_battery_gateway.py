@@ -142,7 +142,8 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.gateway.obligation['pending'])
 
     async def test_leaving_controlling_returns_native_controls_to_baseline(self):
-        for change in (lambda:self.options['device_modes'].update({'$battery':'monitoring'}),
+        for change in (lambda:self.options['device_modes'].update({'$battery':'control_verification'}),
+                       lambda:self.options['device_modes'].update({'$battery':'monitoring'}),
                        lambda:self.options.update(battery_enabled=False),
                        lambda:self.options.update(excluded_device_readings=['$battery'])):
             with self.subTest(options=self.options):
@@ -182,13 +183,6 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.calls),1)
         await self.gateway.maintain_obligation()
         self.assertEqual(len(self.calls),1)
-
-    async def test_verification_relinquishes_without_a_baseline_write(self):
-        self.options['device_modes']['$battery'] = 'control_verification'
-        self.gateway.revoke()
-        await self.gateway.maintain_obligation()
-        self.assertFalse(self.calls)
-        self.assertFalse(self.gateway.obligation['pending'])
 
     async def test_uncertain_handback_is_fenced_and_never_replayed(self):
         async def ambiguous(*args):

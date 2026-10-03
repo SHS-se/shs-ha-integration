@@ -162,7 +162,9 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
         self.assertNotIn('pool', self.controller.ownership.records)
 
-    async def test_verification_change_while_restoration_is_saved_leaves_device_on(self):
+    async def test_verification_change_while_restoration_is_saved_still_hands_the_device_back(self):
+        # Exclusion and Verification are both releases: changing from one to the
+        # other in the middle of the handover does not leave the device running.
         await self.controller.async_start()
         self.calls.clear()
         self.advance(hours=2)
@@ -174,9 +176,9 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
                 self.options['device_modes']['$pool'] = 'control_verification'
         self.store.async_save = change_mode
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [])
-        self.assertEqual(self.states['switch.pool'].state, 'on')
         await self.controller.async_tick()
+        self.assertEqual(self.calls, [('switch.pool', 'off')])
+        self.assertEqual(self.states['switch.pool'].state, 'off')
         self.assertNotIn('pool', self.controller.ownership.records)
 
     async def test_pool_stop_temperature_replan_restart_and_expiry(self):
@@ -218,15 +220,19 @@ class MinimumRunControllerTests(unittest.IsolatedAsyncioTestCase):
         snapshot = await self.controller.minimum_run_snapshot(self.options, self.coordinator.optimisation_plan['device_models'])
         self.assertEqual(snapshot['pool']['remaining_seconds'], 3000)
 
-    async def test_verification_handoff_never_restores_even_after_minimum_has_elapsed(self):
+    async def test_verification_handoff_waits_for_the_minimum_run_then_restores(self):
         await self.controller.async_start()
         self.calls.clear()
-        self.advance(hours=2)
         self.options['device_modes']['$pool'] = 'control_verification'
-        self.slot['pool_w'] = 0
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
         self.assertEqual(self.states['switch.pool'].state, 'on')
+        self.assertTrue(self.controller.ownership.records['pool']['restoration_pending'])
+        self.assertEqual(self.controller.status['pool']['state'], 'pending')
+        self.advance(hours=2)
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [('switch.pool', 'off')])
+        self.assertEqual(self.states['switch.pool'].state, 'off')
         self.assertNotIn('pool', self.controller.ownership.records)
 
     async def test_override_and_exclusion_restoration_cannot_stop_a_locked_run(self):

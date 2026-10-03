@@ -577,7 +577,8 @@ def _request(group, now):
     if not group.release_pending and group.mode == "controlling" and group.desired is not None and now < group.desired.valid_until_ms:
         return group.desired, "optimisation"
     # Owning the controls is no reason to change them. Without a current target
-    # they keep the last setting; only an explicit release hands them back.
+    # they keep the last setting; only an explicit release hands them back. Do
+    # not restore a fallback to the release target (docs/control-continuity.md).
     if group.release_pending and group.release is not None and now < group.release.valid_until_ms:
         return group.release, "release"
     return None, None
@@ -652,7 +653,7 @@ def _settle(group, now):
                    and observation.at_ms >= attempt.latest_effect_ms
                    and observation.revision > attempt.observed_revision)
         if settled:
-            if attempt.stage != "accepted" and plan is not None and attempt.generation == plan.generation and attempt.step_index == plan.index:
+            if attempt.stage != "accepted" and preparation_matches(plan, attempt):
                 if _same(observation.controls, attempt.step.after) and _guards(attempt.step.native_guards, observation):
                     plan = replace(plan, index=plan.index + 1)
                 else:
@@ -1220,17 +1221,14 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 raise ValueError("conflicting requested mode revision")
             if event.revision >= group.mode_revision:
                 changed = event.mode != group.mode or event.revision != group.mode_revision
-                # Leaving Controlling is the release; returning to it cancels one in progress.
+                # Leaving Controlling, for Verification too, is the release; returning
+                # to it cancels one in progress. See docs/control-continuity.md.
                 pending = event.mode != "controlling" and (group.release_pending or group.owned or any(a.stage != "prepared" for a in group.attempts))
                 group = _supersede(group) if changed else group
                 release = event.approved_release if event.approved_release and (group.release is None or event.approved_release.revision > group.release.revision) else group.release
                 group = replace(group, mode=event.mode, mode_revision=event.revision, authority_confirmed=True,
                                 release=release, release_pending=pending,
                                 desired=None if changed and not _is_battery(state, group) else group.desired)
-                if event.mode == "control_verification":
-                    # Permission withdrawal leaves the equipment exactly as it is.
-                    group = replace(group, owned=False, release_pending=False, attempts=(),
-                                    plan=None, transition_work=None, desired=None)
         elif isinstance(event, Requested):
             if _is_battery(state, group):
                 raise ValueError("direct request cannot overwrite the scoped battery execution owner")
@@ -1283,10 +1281,13 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                     # One service result owns command progression. Queue delay,
                     # duplicate results and superseded requests cannot turn a
                     # completed HA call into an invalid confirmation event.
+                    # A route can be proposed again within one request, when the
+                    # new setting is reported before its call returns. Only the
+                    # step this attempt was prepared for may be advanced; a result
+                    # of the replaced route would otherwise skip a different step.
                     plan = group.plan
                     if (event.outcome == "accepted" and attempt.stage != "accepted"
-                            and plan is not None and attempt.generation == plan.generation
-                            and attempt.step_index == plan.index):
+                            and preparation_matches(plan, attempt)):
                         plan = replace(plan, index=plan.index + 1)
                     outcome = "accepted" if attempt.stage == "accepted" else event.outcome
                     group = replace(group, plan=plan,

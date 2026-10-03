@@ -353,6 +353,31 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         await self.service.battery.maintain_obligation()
         self.assertEqual(rig.rows['select.mode']['state'],'Maximum Self Consumption')
 
+    async def test_verification_hands_the_battery_back_through_the_gateway(self):
+        # Leaving Controlling on the select is the release (docs/control-continuity.md).
+        # Home Assistant must admit that handover although Verification writes no schedule.
+        rig = self.battery_rig()
+        socket,client,writer = await self.remote_battery(rig)
+        await rig.runtime.open()
+        await rig.runtime.refresh()
+        await asyncio.wait_for(rig.runtime.host.idle(),2)
+        await rig.advance(5000)
+        self.assertEqual(rig.rows['select.mode']['state'],'Command Charging (PV First)')
+        rig.options['device_modes']['$battery'] = 'control_verification'
+        self.service.invalidate_configuration()
+        self.service.configuration_pending = False  # The settings revision has been captured.
+        for _ in range(12):
+            await rig.advance(5000)
+            if rig.runtime.host is None:
+                break
+        self.assertEqual((rig.rows['select.mode']['state'],float(rig.rows['number.charge']['state']),
+            float(rig.rows['number.discharge']['state'])),('Maximum Self Consumption',4.0,4.0),str(rig.runtime.snapshot()))
+        calls = len(self.native_calls)
+        for _ in range(3):
+            await rig.advance(5000)
+        self.assertEqual(len(self.native_calls),calls)  # Verification itself writes nothing.
+        self.assertIsNotNone(client.socket)
+
     async def test_controlling_runtime_uses_remote_admission_and_durable_native_gateway(self):
         from shs_app.physical_ports import RemoteBattery
         rig = self.battery_rig()

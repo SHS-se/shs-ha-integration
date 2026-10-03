@@ -4,6 +4,11 @@ Restarts, integration updates, unavailable or stale entities, missing plans,
 faults and unrelated configuration changes never change a device's state: it
 keeps the last setting SHS sent, and SHS resumes the plan when it can. Setting
 a device's select to Verification is what hands it back to its own settings.
+
+On 25 September 2026 the handover assertions below were rewritten to expect no
+write, for a change no requirement asked for; they were restored on 3 October
+(docs/control-continuity.md, History). If a change makes these tests fail, stop
+and ask the user; do not edit the expectations.
 """
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -113,10 +118,10 @@ class GenericDeviceTests(Continuity):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.status(controller)['state'], 'commanded', self.status(controller))
         self.assertEqual(controller.ownership.records['device:heater']['originals'], {'switch.heater': 'on'})
-        # Verification relinquishes ownership without restoring the baseline.
+        # The baseline captured before the restart is still what a release returns to.
         self.options['device_modes']['heater'] = 'control_verification'
         await controller.async_tick()
-        self.assertEqual(self.calls, [])
+        self.assertEqual(self.calls, [('switch.heater', 'on')])
         self.assertNotIn('device:heater', controller.ownership.records)
 
     async def test_a_restart_before_the_switch_reports_waits_for_it(self):
@@ -266,15 +271,15 @@ class PoolTests(Continuity):
         self.assertEqual(self.calls, [], 'neither switch is touched')
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [], 'verification leaves the old switch untouched')
+        self.assertEqual(self.calls, [('switch.pool', 'off')], 'the old switch is handed back')
         self.options['device_modes']['$pool'] = 'controlling'
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.new_pool', 'on')])
+        self.assertEqual(self.calls, [('switch.pool', 'off'), ('switch.new_pool', 'on')])
 
     async def test_only_the_select_hands_the_heater_back(self):
         await self.start()
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [])
+        self.assertEqual(self.calls, [('switch.pool', 'off')])
         self.assertNotIn('pool', self.controller.ownership.records)
         self.assertEqual(self.controller.status['pool']['state'], 'verified', self.controller.status['pool'])

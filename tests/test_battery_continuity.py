@@ -3,6 +3,10 @@
 User requirement, 3 October 2026: the battery is handed back only when its
 control mode says so. A restart, a lost plan, stale or failing readings and a
 settings change all leave it in the mode the controller last set.
+
+This rule has been lost before through unrelated work whose tests were rewritten
+to match (docs/control-continuity.md, History). If a change makes these tests
+fail, stop and ask the user; do not edit the expectations.
 """
 from copy import deepcopy
 import unittest

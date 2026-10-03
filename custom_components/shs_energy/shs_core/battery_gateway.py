@@ -114,8 +114,6 @@ class BatteryGateway:
         identity, catalog, conversion, installed_options = self.installation
         if effect.purpose != 'release' and (runtime_digest(native_options(self.options())) != identity.config_revision or device_mode(self.options(), 'battery') != 'controlling'):
             raise GatewayConflict('Battery optimisation permission changed')
-        if device_mode(self.options(), 'battery') == 'control_verification':
-            raise GatewayConflict('Verification never writes native battery settings')
         proposal = SigenAdapter(catalog, conversion).propose(effect)
         payload = {'effect':effect_wire, 'proposal':encode_value(proposal), 'grant':grant_wire, 'context':self.context()}
         route_id = digest({'session':self.session(), **payload})
@@ -146,8 +144,6 @@ class BatteryGateway:
                 if not self.fence.is_current(grant, self.identity()):
                     raise GatewayConflict('Battery grant revoked before dispatch')
                 current = self.options()
-                if device_mode(current, 'battery') == 'control_verification':
-                    raise GatewayConflict('Battery control relinquished to verification')
                 if effect.purpose != 'release':
                     if (runtime_digest(native_options(current)) != grant.config_revision or device_mode(current, 'battery') != 'controlling'
                             or not current.get('battery_enabled', True) or '$battery' in current.get('excluded_device_readings', [])
@@ -195,10 +191,12 @@ class BatteryGateway:
     def released(self, options):
         """Whether the settings themselves hand the battery back.
 
-        The select or the choices that remove the battery from it, and a manual
-        override configured for the purpose. A lost app session, a restart, a
-        settings revision or an expired grant is none of these: the battery
-        keeps the last settings SHS sent. An unreadable override holds too.
+        The select leaving Controlling (for Verification too), the choices that
+        remove the battery from it, and a manual override configured for the
+        purpose. A lost app session, a restart, a settings revision or an
+        expired grant is none of these: the battery keeps the last settings SHS
+        sent. An unreadable override holds too. Both halves have been broken
+        before; read docs/control-continuity.md before changing either.
         """
         if (device_mode(options,'battery') != 'controlling' or not options.get('battery_enabled', True)
                 or '$battery' in options.get('excluded_device_readings', [])):
@@ -220,10 +218,6 @@ class BatteryGateway:
             await self._settle_obligation()
             if self.obligation['fault']:
                 raise GatewayConflict(self.obligation['fault'])
-            if device_mode(self.options(),'battery') == 'control_verification':
-                self.obligation = {'pending':False,'command':None,'fault':None}
-                await self.obligation_store.async_save(self.obligation)
-                return
             if self.fence.snapshot()['grant_current'] or not self.released(self.options()):
                 return
             identity,catalog,conversion,options = installed = self.installation
@@ -243,7 +237,6 @@ class BatteryGateway:
             route = adapter.propose(effect)
             def authorize():
                 if (self.installation != installed or self.fence.snapshot()['grant_current']
-                        or device_mode(self.options(),'battery') == 'control_verification'
                         or not self.released(self.options())):
                     raise GatewayConflict('Battery handback authority changed')
             for index,step in enumerate(route.steps):

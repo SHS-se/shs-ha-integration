@@ -241,6 +241,31 @@ class HomeRuntimeTests(unittest.TestCase):
         self.assertIsNone(h.group().desired)
         self.assertFalse(any(isinstance(e, Send) for e in h.effects))
 
+    def test_result_of_a_replaced_route_cannot_skip_a_step_of_its_replacement(self):
+        # The new setting can be reported before its service call returns. The
+        # route is then proposed again from that report within the same request;
+        # the late result belongs to the old route and must not advance the new
+        # one, or the mode change is never sent and the sequence still "completes".
+        h = Harness()
+        h.observe(target=controls("hold", 500, 0))
+        h.request(target=controls("charge", 1000, 0))
+        h.propose()
+        first = h.durable()
+        self.assertEqual((first.key, first.value), ("charge", 0))
+        attempt = h.group().attempts[0]
+        h.now = max(h.now + 1, h.group().retry_not_before_ms)
+        h.observe(target=attempt.step.after)
+        self.assertIsNone(h.group().plan)
+        h.propose()
+        replacement = h.group().plan
+        self.assertEqual((replacement.generation, replacement.index), (attempt.generation, 0))
+        self.assertEqual(replacement.steps[0].key, "mode")
+        h.event(TransportResult("battery", attempt.id, "accepted", "synthetic transport evidence"))
+        self.assertEqual(h.group().plan.index, 0)
+        h.finish()
+        self.assertEqual(h.group().status, "adopted")
+        self.assertEqual(h.group().observation.controls, controls("charge", 1000, 0))
+
     def test_journal_failure_blocks_that_send_but_an_independent_group_progresses(self):
         h = Harness(("battery", "second"))
         h.request("battery"); h.propose("battery")
