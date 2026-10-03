@@ -1,5 +1,5 @@
 name: SHS Energy
-version: 0.1.0-beta.33
+version: 0.1.0-beta.34
 slug: shs_energy
 description: Your energy plan, controller insights and system diagnostics
 url: https://github.com/SHS-se/shs-ha-integration/tree/main/apps/shs_energy
@@ -22,5 +22,7 @@ map:
     path: /homeassistant
 options:
   install_companion: false
+  log_level: info
 schema:
   install_companion: bool
+  log_level: list(debug|info|warning|error|critical)?

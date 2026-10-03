@@ -11,10 +11,15 @@ import aiohttp
 from shs_core.command_transport import settled
 from shs_core.gateway_journal import GatewayConflict, GatewayRejected, validate_identity
 from shs_wire.protocol import admit, hello
+from .profiling import AppProfiler, profiled
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class GatewayClient:
-    def __init__(self, session, url, token, identity, inbox, *, instance=None, executor=asyncio.to_thread, paired_release=None):
+    def __init__(self, session, url, token, identity, inbox, *, instance=None, executor=asyncio.to_thread, paired_release=None, profiler=None):
+        self.profiler = profiler if profiler is not None else AppProfiler()
         self.http, self.url, self.token = session, url, token
         self.paired_release = paired_release
         self.publishing = asyncio.Lock()
@@ -88,7 +93,7 @@ class GatewayClient:
     async def _read(self, socket):
         try:
             while True:
-                reply = await socket.receive_json()
+                reply = await socket.receive_json(loads=self.decode)
                 if type(reply) is not dict or reply.get('type') != 'result' or reply.get('id') not in self.pending:
                     raise GatewayConflict('Unexpected gateway reply')
                 future = self.pending.pop(reply['id'])
@@ -102,9 +107,18 @@ class GatewayClient:
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            logging.getLogger(__name__).warning('HA gateway socket closed: %s: %s', type(error).__name__, error)
+            LOGGER.warning('HA gateway socket closed: %s: %s', type(error).__name__, error)
             await self.close()
 
+    def encode(self, value):
+        with self.profiler.measure('gateway_encode'):
+            return json.dumps(value)
+
+    def decode(self, content):
+        with self.profiler.measure('gateway_decode'):
+            return json.loads(content)
+
+    @profiled('gateway_exchange')
     async def _call(self, operation, body):
         # HA revokes command admission while it durably captures a new native
         # configuration. Finish admitted calls first, then keep app operations
@@ -122,7 +136,7 @@ class GatewayClient:
                 self.request_id += 1
                 request_id = self.request_id
                 self.pending[request_id] = future
-                await self.socket.send_json({'id':request_id,'type':'shs_energy/gateway','operation':operation,'body':body})
+                await self.socket.send_json({'id':request_id,'type':'shs_energy/gateway','operation':operation,'body':body},dumps=self.encode)
             # A slow recorder query must not stop current observation delivery or
             # final command admission on this same authenticated socket.
             return await asyncio.shield(future)
@@ -143,8 +157,11 @@ class GatewayClient:
         return await self._call(operation,body)
 
     async def project(self, value):
-        content = json.dumps(value,separators=(',',':'),allow_nan=False)
-        digest, transfer = sha256(content.encode()).hexdigest(), uuid4().hex
+        with self.profiler.measure('gateway_encode'):
+            content = json.dumps(value,separators=(',',':'),allow_nan=False)
+            digest, transfer = sha256(content.encode()).hexdigest(), uuid4().hex
+        if LOGGER.isEnabledFor(logging.DEBUG):
+            LOGGER.debug('Publishing HA projection: bytes=%s chunks=%s',len(content.encode()),(len(content)+256*1024-1)//(256*1024))
         async with self.publishing:
             for index, offset in enumerate(range(0,len(content),256*1024)):
                 chunk = content[offset:offset+256*1024]

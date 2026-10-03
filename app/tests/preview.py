@@ -9,6 +9,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "app"), str(ROOT / "custom_components/shs_energy")]
 from shs_app.server import create_app
+from shs_app.profiling import AppProfiler
 from shs_core.app_projection import schedule
 from shs_core.configuration_fields import _configuration_sections, LABELS
 from shs_core.configuration_schema import resolve_configuration
@@ -33,6 +34,7 @@ class Editor:
             portal=dict(status='synchronised'),operation=entry['operation'],diagnostics={},meter_inventory=[],
             replan_recommendations=[],measurement_issues=[],locale=dict(language='en',timezone='Europe/Stockholm'))
 class Fixture:
+    profiler=AppProfiler()
     editor=Editor()
     async def project(self):pass
     @property

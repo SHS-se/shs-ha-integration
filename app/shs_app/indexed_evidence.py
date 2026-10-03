@@ -11,7 +11,7 @@ from dataclasses import asdict, fields
 from hashlib import sha256
 import json
 import sqlite3
-from time import perf_counter
+from time import perf_counter, thread_time
 
 from shs_core import plan_execution as ex
 from shs_core.runtime_json import decode_value, encode_value
@@ -43,12 +43,16 @@ def columns(name):
 
 
 class EvidenceDatabase:
+    OPERATIONS = ('row','scan','at_or_before','lookup','meter_neighbours','meter_energy',
+                  'bindings','objective_catalog','objective_history','late_evidence')
     def __init__(self,path):
         self.path=path
         self.reader=ContextVar("evidence_reader",default=None)
         self.boundaries=ContextVar("evidence_boundaries",default=None)
         self.counts={name:0 for name in ('meters','observations','admissions','reconciliations')}
-        self.metrics=dict(queries=0,query_ms=0.,max_query_ms=0.,historical_meter_queries=0)
+        self.metrics=dict(queries=0,query_ms=0.,query_cpu_ms=0.,max_query_ms=0.,historical_meter_queries=0)
+        self.metrics.update({f'{name}_{metric}':0 for name in self.OPERATIONS
+                             for metric in ('calls','failures','wall_ms','cpu_ms','max_wall_ms')})
 
     @contextmanager
     def snapshot(self):
@@ -78,14 +82,24 @@ class EvidenceDatabase:
             cache[key]=db.execute(BOUNDARY_EDGES,dict(stream=stream,bucket=bucket,start=start,end=end)).fetchone()
         return cache[key]
 
-    def query(self,operation):
-        start=perf_counter()
+    def query(self,operation,*,name):
+        if name not in self.OPERATIONS:raise ValueError('Unknown evidence operation '+name)
+        start,cpu=perf_counter(),thread_time()
+        failed=False
         try:
             with self.snapshot() as db:return operation(db)
+        except BaseException:
+            failed=True
+            raise
         finally:
             elapsed=(perf_counter()-start)*1000
             self.metrics['queries']+=1;self.metrics['query_ms']+=elapsed
             self.metrics['max_query_ms']=max(self.metrics['max_query_ms'],elapsed)
+            used_cpu=(thread_time()-cpu)*1000
+            self.metrics['query_cpu_ms']+=used_cpu
+            for metric,value in (('calls',1),('failures',int(failed)),('wall_ms',elapsed),('cpu_ms',used_cpu)):
+                self.metrics[f'{name}_{metric}']+=value
+            self.metrics[f'{name}_max_wall_ms']=max(self.metrics[f'{name}_max_wall_ms'],elapsed)
 
     def rows(self,name,count):return EvidenceRows(self,name,count,count,())
 
@@ -105,7 +119,7 @@ class EvidenceRows(Sequence):
         if not 0<=index<self.count:raise IndexError(index)
         if index>=self.tail_start:return self.tail[index-self.tail_start]
         if index==self.count-1 and self.latest is not None:return self.latest
-        row=self.database.query(lambda db:db.execute(f'SELECT {columns(self.name)} FROM {self.name} WHERE ordinal=?',(index,)).fetchone())
+        row=self.database.query(lambda db:db.execute(f'SELECT {columns(self.name)} FROM {self.name} WHERE ordinal=?',(index,)).fetchone(),name='row')
         if row is None:raise ValueError('Missing committed evidence ordinal')
         value=decode_row(self.name,row)
         # Ordinal prefixes are immutable. The latest admission/observation is
@@ -115,7 +129,7 @@ class EvidenceRows(Sequence):
 
     def __iter__(self):
         for start in range(0,self.tail_start,256):
-            rows=self.database.query(lambda db:db.execute(f'SELECT {columns(self.name)} FROM {self.name} WHERE ordinal>=? AND ordinal<? ORDER BY ordinal',(start,min(start+256,self.tail_start))).fetchall())
+            rows=self.database.query(lambda db:db.execute(f'SELECT {columns(self.name)} FROM {self.name} WHERE ordinal>=? AND ordinal<? ORDER BY ordinal',(start,min(start+256,self.tail_start))).fetchall(),name='scan')
             for row in rows:yield decode_row(self.name,row)
         yield from self.tail
 
@@ -149,7 +163,7 @@ class EvidenceRows(Sequence):
         if self.count and (latest:=self[-1]).at_ms<=at_ms:return latest
         pending=next((r for r in reversed(self.tail) if r.at_ms<=at_ms),None)
         if pending:return pending
-        row=self.database.query(lambda db:db.execute(f'SELECT {columns(self.name)} FROM {self.name} WHERE at_ms<=? AND ordinal<? ORDER BY ordinal DESC LIMIT 1',(at_ms,self.tail_start)).fetchone())
+        row=self.database.query(lambda db:db.execute(f'SELECT {columns(self.name)} FROM {self.name} WHERE at_ms<=? AND ordinal<? ORDER BY ordinal DESC LIMIT 1',(at_ms,self.tail_start)).fetchone(),name='at_or_before')
         return decode_row(self.name,row) if row else None
 
 
@@ -164,7 +178,7 @@ class EvidenceLookup:
             pending=next((r for r in reversed(rows.tail) if r.at_ms==key and (self.kind!='measured' or r.measured)),None)
             predicate='at_ms=?'+(' AND measured=1' if self.kind=='measured' else '')
         if pending:return pending
-        row=rows.database.query(lambda db:db.execute(f'SELECT {columns(rows.name)} FROM {rows.name} WHERE {predicate} AND ordinal<? ORDER BY ordinal DESC LIMIT 1',(key,rows.tail_start)).fetchone())
+        row=rows.database.query(lambda db:db.execute(f'SELECT {columns(rows.name)} FROM {rows.name} WHERE {predicate} AND ordinal<? ORDER BY ordinal DESC LIMIT 1',(key,rows.tail_start)).fetchone(),name='lookup')
         return decode_row(rows.name,row) if row else default
 
 
@@ -207,7 +221,7 @@ class IndexedMeters(ex.MeterIndex):
         return same,other
 
     def neighbours(self,stream,at_ms):
-        return self.rows.database.query(lambda db:self._neighbours(db,stream,at_ms,self._prefix(db)[1]))
+        return self.rows.database.query(lambda db:self._neighbours(db,stream,at_ms,self._prefix(db)[1]),name='meter_neighbours')
 
     def _historical(self,db,stream,start,end):
         self.rows.database.metrics['historical_meter_queries']+=1
@@ -264,7 +278,7 @@ class IndexedMeters(ex.MeterIndex):
                             last=max(last,row.source_at_ms) if last is not None else row.source_at_ms
                 result=result.plus(ex.Bounds(low,None if unknown or first is None or start<first or end>last else high))
             return result
-        return self.rows.database.query(measure)
+        return self.rows.database.query(measure,name='meter_energy')
 
 
 class AccountEvidence:
@@ -279,7 +293,7 @@ class AccountEvidence:
             _observed_at=EvidenceLookup(self.rows['observations'],'observed'),
             _measured_at=EvidenceLookup(self.rows['observations'],'measured'))
         if '_meter_bindings' not in account.__dict__:
-            bindings=self.database.query(lambda db:db.execute('SELECT stream,boundary,direction,physical_id FROM meter_bindings').fetchall())
+            bindings=self.database.query(lambda db:db.execute('SELECT stream,boundary,direction,physical_id FROM meter_bindings').fetchall(),name='bindings')
             account.__dict__['_meter_bindings']={s:(b,d,p or None) for s,b,d,p in bindings}
             account.__dict__['_physical_meters']=frozenset((s,b,d,p or None) for s,b,d,p in bindings)
         return account
@@ -340,7 +354,7 @@ class AccountEvidence:
                         if disposition.outcome in ('incorporated','retired') and row['closed_at'] is None:row['closed_at']=admission.at_ms
                 rows=list(mapping.values());number=len(rows)
             return rows,number
-        return self.database.query(read)
+        return self.database.query(read,name='objective_catalog')
 
     def objective_catalog(self):
         rows,_=self._catalog()
@@ -360,7 +374,7 @@ class AccountEvidence:
                     versions.extend(dict(objective=asdict(o),contract_id=admission.contract.id,at_ms=admission.at_ms) for o in admission.contract.objectives if o.id==row['id'])
                     dispositions.extend(dict(**asdict(d),contract_id=admission.contract.id,at_ms=admission.at_ms) for d in admission.contract.dispositions if d.objective_id==row['id'])
                 return versions,dispositions
-            versions,dispositions=self.database.query(read)
+            versions,dispositions=self.database.query(read,name='objective_history')
             outcome=ex._objective_outcome(account,ex.Objective(**row['objective']),row['closed_at'],at_ms,account._measured_at)
             yield dict(objective=row['objective'],origin_contract_id=versions[0]['contract_id'],versions=versions,
                 dispositions=dispositions,**outcome,responsibility=row['responsibility'])
@@ -400,7 +414,7 @@ class AccountEvidence:
                         count+=1;earliest=min(earliest,pending.source_at_ms) if earliest is not None else pending.source_at_ms
             return dict(through_receipt=account.receipt,previously_acknowledged_receipt=acknowledged,
                 late_evidence_count=count,earliest_amended_source_ms=earliest)
-        result=self.database.query(summary);account.__dict__['_summary']=result
+        result=self.database.query(summary,name='late_evidence');account.__dict__['_summary']=result
         return result
 
     def planner_feedback(self,account,at_ms):

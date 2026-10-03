@@ -33,7 +33,8 @@ from shs_wire.protocol import offer
 
 class InProcessClient:
     service = None
-    def __init__(self,session,url,token,identity,inbox,paired_release=None):
+    def __init__(self,session,url,token,identity,inbox,paired_release=None,profiler=None):
+        self.profiler = profiler
         self.identity,self.inbox = identity,inbox
         self.peer = AppConnection(self.service)
         self.connected = None
@@ -66,11 +67,11 @@ class LoopbackSocket:
     def hold(self,operation):
         self.busy[operation] = asyncio.Event()
         return self.busy[operation]
-    async def receive_json(self):
+    async def receive_json(self, **kwargs):
         reply = await self.replies.get()
         if reply is None:raise TypeError('Received message 8:1000 is not str')
         return reply
-    async def send_json(self,value):
+    async def send_json(self,value, **kwargs):
         if value['type'] == 'auth':
             self.replies.put_nowait({'type':'auth_ok'})
             return

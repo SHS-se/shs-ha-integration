@@ -14,6 +14,8 @@ from aiohttp import ClientSession, ClientTimeout, ClientError, web
 from .companion import install
 from .storage import Diagnostics
 from .database_census import census
+from .profiling import AppProfiler, profiled
+from .logging_config import configure_logging
 from shs_wire.protocol import PROTOCOL
 
 LOGGER = logging.getLogger(__name__)
@@ -21,6 +23,7 @@ LOGGER = logging.getLogger(__name__)
 
 class Dashboard:
     def __init__(self, data, bundle, supervisor="http://supervisor", token=""):
+        self.profiler = AppProfiler()
         self.data, self.bundle, self.supervisor, self.token = data, bundle, supervisor, token
         self.manifest = json.loads((bundle / "bundle.json").read_text())
         self.version = json.loads((bundle / "app.json").read_text())["version"]
@@ -41,34 +44,35 @@ class Dashboard:
             return await response.json()
 
     def publish_runtime(self, value):
-        from math import isfinite
-        from shs_core.app_projection import schedule, attention_links
-        engine = self.engine
-        values = value['values']
-        operation = values['operational_status']
-        entry = {'id':engine.identity['entry_id'], 'title':'Smart Home Solutions', 'state':'loaded',
-            'operation':operation, 'schedule':schedule(values['optimisation_plan'],operation),
-            'controllers':value['controllers'], 'attention':attention_links(values['attention_items'],engine.identity['entry_id']),
-            'measurements':{}}
-        options = engine.household.resolved_options()
-        for name,key,unit in (('house','house_consumption_power_entity','W'),('solar','solar_production_power_entity','W'),
-            ('grid','grid_power_entity','W'),('battery','battery_power_measurement_entity','W'),('battery_soc','battery_soc_entity','%')):
-            entity = options.get(key)
-            row = engine.mirror.report(entity)
-            measured = None
-            if row:
-                source_unit = row['attributes'].get('unit_of_measurement')
-                try:
-                    raw = float(row['state'])
-                    if isfinite(raw) and source_unit in ({'W','kW'} if unit=='W' else {'%'}):
-                        measured = raw*(1000 if source_unit=='kW' else 1)
-                except (TypeError,ValueError):pass
-            entry['measurements'][name] = dict(value=measured,unit=unit,entity_id=entity,
-                observed_at=row['last_reported'] if row else None)
-        self.snapshot = dict(protocol=PROTOCOL,integration_version=engine.gateway.connected['contract']['companion_version'],
-            sampled_at=datetime.now(timezone.utc).isoformat(),entries=[entry])
-        self.control_owner = 'SHS app'
-        self.connection = {'state':'connected','message':'App runtime active; connected to the Home Assistant gateway'}
+        with self.profiler.measure('dashboard_build'):
+            from math import isfinite
+            from shs_core.app_projection import schedule, attention_links
+            engine = self.engine
+            values = value['values']
+            operation = values['operational_status']
+            entry = {'id':engine.identity['entry_id'], 'title':'Smart Home Solutions', 'state':'loaded',
+                'operation':operation, 'schedule':schedule(values['optimisation_plan'],operation),
+                'controllers':value['controllers'], 'attention':attention_links(values['attention_items'],engine.identity['entry_id']),
+                'measurements':{}}
+            options = engine.household.resolved_options()
+            for name,key,unit in (('house','house_consumption_power_entity','W'),('solar','solar_production_power_entity','W'),
+                ('grid','grid_power_entity','W'),('battery','battery_power_measurement_entity','W'),('battery_soc','battery_soc_entity','%')):
+                entity = options.get(key)
+                row = engine.mirror.report(entity)
+                measured = None
+                if row:
+                    source_unit = row['attributes'].get('unit_of_measurement')
+                    try:
+                        raw = float(row['state'])
+                        if isfinite(raw) and source_unit in ({'W','kW'} if unit=='W' else {'%'}):
+                            measured = raw*(1000 if source_unit=='kW' else 1)
+                    except (TypeError,ValueError):pass
+                entry['measurements'][name] = dict(value=measured,unit=unit,entity_id=entity,
+                    observed_at=row['last_reported'] if row else None)
+            self.snapshot = dict(protocol=PROTOCOL,integration_version=engine.gateway.connected['contract']['companion_version'],
+                sampled_at=datetime.now(timezone.utc).isoformat(),entries=[entry])
+            self.control_owner = 'SHS app'
+            self.connection = {'state':'connected','message':'App runtime active; connected to the Home Assistant gateway'}
 
     async def runtime(self):
         from hashlib import sha256
@@ -81,24 +85,30 @@ class Dashboard:
         target = RecordStore(self.data/'runtime-target.json')
         # The one-off import worker selects the exact private runtime directory.
         # No source integration or observer controller is started here.
+        waiting = False
         while True:
             selected = await target.async_load()
             if selected is None:
+                if not waiting:
+                    LOGGER.info('Waiting for the saved SHS runtime migration')
+                    waiting = True
                 self.connection = {'state':'connecting','message':'Waiting for the one-off SHS data migration'}
                 await asyncio.sleep(5)
                 continue
             self.engine = AppEngine(selected['path'],self.session,self.supervisor+'/core/websocket',self.token,
                 paired_release=pair,publish=self.publish_runtime,app_url='/app/'+self.app_info['slug'])
+            self.profiler = self.engine.profiler
             self.connection = {'state':'recovering','message':'Restoring the saved SHS runtime and processing queued Home Assistant observations.'}
             try:
                 await self.engine.run()
             except asyncio.CancelledError:
                 raise
             except Exception as error:
-                LOGGER.exception('SHS app runtime stopped')
+                LOGGER.error('Runtime disconnected: %s: %s; reconnecting in 5s',type(error).__name__,error,exc_info=LOGGER.isEnabledFor(logging.DEBUG))
                 self.connection = {'state':'disconnected','message':str(error)+'. Reconnecting with a new gateway session.'}
             await asyncio.sleep(5)
 
+    @profiled('diagnostics_sample')
     async def resources(self):
         sampled_at = datetime.now(timezone.utc).isoformat()
         values, error = None, None
@@ -171,7 +181,9 @@ def create_app(observer, static, *, trusted_peer="172.30.32.2"):
 
     app = web.Application(middlewares=[ingress])
     async def state(request):
-        return web.json_response(observer.payload(), headers={"Cache-Control": "no-store"})
+        with observer.profiler.measure('state_encode'):
+            response = web.json_response(observer.payload(), headers={'Cache-Control':'no-store'})
+        return response
     async def index(request):
         return web.FileResponse(static / "index.html", headers={"Cache-Control": "no-cache"})
     def engine():
@@ -212,11 +224,11 @@ def create_app(observer, static, *, trusted_peer="172.30.32.2"):
 
 
 async def main():
-    logging.basicConfig(level=logging.INFO)
-    logging.getLogger('shs_core.controller').setLevel(logging.WARNING)
     data, bundle = Path("/data"), Path("/opt/shs/companion")
-    observer = Dashboard(data, bundle, token=os.environ["SUPERVISOR_TOKEN"])
-    options = json.loads((data / "options.json").read_text())
+    options = json.loads((data / 'options.json').read_text())
+    configure_logging(options.get('log_level','info'))
+    observer = Dashboard(data, bundle, token=os.environ['SUPERVISOR_TOKEN'])
+    LOGGER.info('Starting SHS app %s; companion=%s log_level=%s',observer.version,observer.manifest['integration_version'],options.get('log_level','info'))
     if options["install_companion"]:
         try:
             observer.companion = await asyncio.to_thread(install, bundle, Path("/homeassistant"), data)
@@ -225,7 +237,7 @@ async def main():
         LOGGER.info("Companion: %s", observer.companion["message"])
     async with ClientSession(timeout=ClientTimeout(total=180)) as session:
         observer.session = session
-        runner = web.AppRunner(create_app(observer, Path("/opt/shs/web")))
+        runner = web.AppRunner(create_app(observer, Path("/opt/shs/web")),access_log=logging.getLogger('aiohttp.access'))
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", 8099).start()
         task = asyncio.create_task(observer.run())

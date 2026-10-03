@@ -43,7 +43,7 @@ an app protocol upgrade.
 ## Screens and history
 
 - **Overview:** plan readiness, current operation and measurements.
-- **Schedule:** linked price, power, consumption, storage and cost charts, with
+- **Schedule:** linked price, power, consumption, storage and temperature charts, with
   interval inspection and a table view.
 - **Controller:** requested actions, measured outcomes and explanations.
 - **System:** container resources, active database tables and sizes, receipt
@@ -71,3 +71,31 @@ The HA API carries readings, entity projections and native commands. The writabl
 configuration mount supports explicit companion installation and storage inspection.
 Keep **Install companion** off during routine app updates. Container resource counters
 reset on restart; filesystem free space is shared storage, not a private allocation.
+
+## Logs and profiling
+
+In the app's Home Assistant **Configuration** tab, set **Log level**, save and
+restart the app. The default **Info** logs startup/recovery progress and a minute
+summary of process CPU (percent of one core), current resident memory, processed
+receipts, receipt backlog, checkpoint saves and evidence-query groups. The first
+sample establishes a baseline; rates start with the following sample. Each line
+states the actual interval. A runtime reconnect resets the profiler's counters.
+
+**Debug** adds per-operation wall time, synchronous CPU time, counter deltas,
+projection sizes, dashboard access requests and exception traces. **Warning**,
+**Error** and **Critical** progressively reduce output. Profiling messages contain operation names and counters; they do not dump
+credentials, sensor readings or command payloads. Debug also enables the existing
+detailed controller messages.
+
+Use **System → Download controller diagnostics** for the full existing profiler,
+its latest interval deltas and 120 minute samples. App timings now include receipt
+processing, projection building, dashboard serialization, HA history/statistics
+queries, cloud refreshes, planning exchange and diagnostic generation. Evidence
+queries are broken down by purpose, including meter neighbours and energy ranges.
+Those counts are logical query groups; a group can execute several SQL statements.
+
+CPU is measured only within synchronous sections, on the thread doing the work.
+Async spans measure wall time, including waits. Spans and query groups may overlap;
+do not add their times to attribute total process CPU. The profiler only reads
+small counters and bounded samples; it never traverses lifetime evidence for logs.
+Debug does not turn on the separate, opt-in allocation tracer.

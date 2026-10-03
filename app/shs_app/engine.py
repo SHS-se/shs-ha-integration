@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from shs_core.api import ShsApiClient
 from .runtime import AppBatteryRuntime
+from .profiling import AppProfiler, profiled
 from shs_core.command_journal import WriterLease
 from shs_core.const import CONF_BASE_URL, CONF_DEVICE_TOKEN, PLAN_EXCHANGE_INTERVAL_MINUTES, OPTIMISATION_STARTUP_DELAY_SECONDS, PUSH_TIME_HOUR, PUSH_TIME_MINUTE
 from shs_core.controller import ScheduledController
@@ -43,6 +44,11 @@ from shs_core.configuration_schema import resolve_configuration
 from shs_core.controller_inputs import configured_entity_ids
 
 
+LOGGER = logging.getLogger(__name__)
+PERIODIC_PROFILES = {'async_battery_inputs_refresh':'battery_inputs',
+                     'async_request_refresh':'cloud_refresh','async_replan_poll':'plan_exchange'}
+
+
 def encode(value):
     return json.dumps(value, separators=(',', ':'), allow_nan=False).encode()
 
@@ -61,6 +67,8 @@ class OwnershipView:
 
 class AppEngine:
     def __init__(self, root, session, url, token, *, paired_release, publish, app_url=None):
+        self.profiler = AppProfiler()
+        self.processed_receipts = 0
         self.root = regular_path(root)
         self.http, self.url, self.token = session, url, token
         self.paired_release, self.publish_ui = paired_release, publish
@@ -92,7 +100,7 @@ class AppEngine:
         def completed(task):
             self.tasks.discard(task)
             if not task.cancelled() and (error := task.exception()) is not None:
-                logging.getLogger(__name__).error('App task %s failed: %s',task.get_name(),error)
+                LOGGER.error('App task %s failed: %s: %s',task.get_name(),type(error).__name__,error,exc_info=(type(error),error,error.__traceback__))
         task.add_done_callback(completed)
         return task
 
@@ -110,6 +118,7 @@ class AppEngine:
         self.repairs[key] = {'severity':severity, 'placeholders':deepcopy(placeholders)}
         self.wake_projection.set()
 
+    @profiled('runtime_load')
     async def load(self):
         """Open verified app stores and current sources, without control or cloud jobs."""
         self.lease = await asyncio.to_thread(WriterLease, self.root/'runtime.lock')
@@ -123,7 +132,7 @@ class AppEngine:
         elif self.activation['identity'] != self.identity:
             raise GatewayConflict('Runtime activation belongs to another migration')
         self.inbox = await asyncio.to_thread(ReceiptInbox(self.root/'receipts.sqlite', self.identity).open)
-        self.gateway = GatewayClient(self.http,self.url,self.token,self.identity,self.inbox,paired_release=self.paired_release)
+        self.gateway = GatewayClient(self.http,self.url,self.token,self.identity,self.inbox,paired_release=self.paired_release,profiler=self.profiler)
         await self.gateway.connect()
         snapshot = await self.gateway.snapshot()
         self.mirror.install_snapshot(snapshot)
@@ -160,6 +169,7 @@ class AppEngine:
         path = stores/f'shs_energy.execution.{entry}.sqlite'
         self.battery = h.battery_runtime = AppBatteryRuntime(h,controller,IndexedStorage(path,asyncio.to_thread,self.mirror),
             lambda:int(datetime.now(timezone.utc).timestamp()*1000))
+        self.battery.profiler = self.profiler
         self.writer = h.battery_writer = RemoteBattery(self.gateway,self.battery,self.battery.now)
         self.battery.physical = self.writer
         self.battery.receipt_driven = True
@@ -181,6 +191,7 @@ class AppEngine:
             if await asyncio.to_thread(self.inbox.through) >= through:
                 return
 
+    @profiled('runtime_activate')
     async def activate(self):
         """Persist matching activation identities before starting any runtime job."""
         result = await self.gateway.call('reconcile',{'checkpoint_sha256':self.checkpoint_digest})
@@ -238,6 +249,7 @@ class AppEngine:
         async with self.consume_lock:
             return await self._consume()
 
+    @profiled('receipt_consume')
     async def _consume(self):
         previous = self.battery._processing
         cursor = previous['receipt']-int(not previous['complete']) if previous else 0
@@ -249,9 +261,11 @@ class AppEngine:
             for row in rows:
                 if row['ordinal'] > target:
                     break
-                self.mirror.apply(row,notify=self.started)
+                with self.profiler.measure('receipt_apply'):
+                    self.mirror.apply(row,notify=self.started)
                 await self.battery.consume_receipt(self.identity,row)
                 cursor = row['ordinal']
+                self.processed_receipts += 1
                 if self.started and row['kind']=='configuration':
                     self.scheduler.request('configuration_update')
                     self.wake_projection.set()
@@ -275,18 +289,22 @@ class AppEngine:
         resolved=resolve_configuration(options,home['latitude'],home['longitude'])
         return {**native_options(resolved),'_observed_entities':sorted(configured_entity_ids(resolved))}
 
+    @profiled('projection')
     async def project(self):
         h = self.household
         self.cached = dict(devices=await h.async_cached_device_configuration(),home=await h.async_cached_home_configuration(),
             planning=await h.async_cached_planning_configuration(),exchange=await h.async_cached_exchange_status())
-        value = runtime_projection(h,self.cached,self.repairs)
+        with self.profiler.measure('projection_build'):
+            value = runtime_projection(h,self.cached,self.repairs)
         value['app_url'] = self.app_url
         value['configuration'] = self.configuration.status()
         value['execution_devices'] = [{key:deepcopy(device.get(key)) for key in
             ('key','name','planned','system_member','permission','mode')}
             for device in await self.editor.devices(self.cached['planning'],include_suggestions=False)]
-        value['values']['optimisation_plan'] = display_plan(value['values']['optimisation_plan'])
-        native = project_entities(self,value["execution_devices"])
+        with self.profiler.measure('display_plan_build'):
+            value['values']['optimisation_plan'] = display_plan(value['values']['optimisation_plan'])
+        with self.profiler.measure('native_projection_build'):
+            native = project_entities(self,value['execution_devices'])
         await self.gateway.project(dict(schema=2,entities=native,execution_devices=value["execution_devices"],
             configuration=value["configuration"],repairs=value["repairs"],app_url=self.app_url))
         self.publish_ui(value)
@@ -299,12 +317,17 @@ class AppEngine:
             await asyncio.sleep(1)
 
     async def periodic(self, operation, seconds):
+        profile = PERIODIC_PROFILES.get(operation.__name__)
         while True:
             try:
-                await operation()
+                if profile:
+                    with self.profiler.measure(profile):
+                        await operation()
+                else:
+                    await operation()
             except (ValueError, OSError) as error:
                 if isinstance(error, GatewayConflict): raise
-                logging.getLogger(__name__).warning('SHS background operation failed: %s',error)
+                LOGGER.warning('Background operation %s failed: %s: %s',operation.__name__,type(error).__name__,error,exc_info=LOGGER.isEnabledFor(logging.DEBUG))
             await asyncio.sleep(seconds)
 
     async def planning(self):
@@ -313,7 +336,12 @@ class AppEngine:
 
     async def resources(self):
         values = await asyncio.to_thread(process_resources)
-        self.battery.profiler.sample(values,self.battery.resource_counts())
+        received = await asyncio.to_thread(self.inbox.through)
+        checkpoint = self.battery.store.source_checkpoint
+        completed = checkpoint['receipt'] if checkpoint else 0
+        self.profiler.sample(values,{**self.battery.resource_counts(),
+            'app_processed_receipts':self.processed_receipts,'app_receipt_backlog':max(0,received-completed)})
+        self.profiler.log_sample()
         self.wake_projection.set()
 
     async def requests(self):
@@ -353,7 +381,7 @@ class AppEngine:
             elif op == 'profile':
                 seconds = body.get('allocation_seconds',0)
                 if seconds: self.battery.profiler.start_allocations(seconds,asyncio.to_thread)
-                result = self.battery.profiler.snapshot(self.battery.resource_counts())
+                result = self.profiler.snapshot(self.battery.resource_counts(),include_samples=True)
             elif op == 'configuration_changed':
                 h._plan_configuration_changed = True
                 result = await h.async_refresh_device_configuration()
@@ -361,6 +389,7 @@ class AppEngine:
             await self.project()
         except Exception as exception:
             error = str(exception)
+            LOGGER.warning('App request %s failed: %s: %s',op,type(exception).__name__,exception,exc_info=LOGGER.isEnabledFor(logging.DEBUG))
         await self.gateway.call('reply',{'request_id':request['id'],'result':result,'error':error})
 
     async def calendar(self):
@@ -373,22 +402,27 @@ class AppEngine:
                 await self.household.async_price_refresh()
                 last_quarter = quarter
             if last_day != now.date() and (now.hour,now.minute) >= (PUSH_TIME_HOUR,PUSH_TIME_MINUTE):
-                await self.household.async_scheduled_push()
+                with self.profiler.measure('history_upload'):
+                    await self.household.async_scheduled_push()
                 last_day = now.date()
             await asyncio.sleep(5)
 
     async def run(self):
         try:
+            LOGGER.info('Restoring saved runtime and connecting to the HA gateway')
             await self.load()
+            LOGGER.info('Runtime loaded; reconciling ownership and replaying queued observations')
             await self.activate()
+            LOGGER.info('Runtime active; battery_mode=%s plan_id=%s processed_receipts=%s',
+                self.battery.snapshot().get('mode'),(self.household.optimisation_plan or {}).get('plan_id'),self.processed_receipts)
             # Cloud jobs start only after the durable ownership handover.
             self.wake_projection.set()
-            jobs = [self.spawn(self.receipts()),self.spawn(self.projections()),self.spawn(self.requests()),
-                self.spawn(self.periodic(self.household.async_battery_inputs_refresh,5)),
+            jobs = [self.spawn(self.receipts(),'receipts'),self.spawn(self.projections(),'projections'),self.spawn(self.requests(),'requests'),
+                self.spawn(self.periodic(self.household.async_battery_inputs_refresh,5),'battery_inputs'),
                 self.spawn(self.planning()),
-                self.spawn(self.periodic(self.household.async_request_refresh,60)),
-                self.spawn(self.periodic(self.resources,60)),self.spawn(self.calendar()),
-                self.spawn(self.household.async_replan_listener())]
+                self.spawn(self.periodic(self.household.async_request_refresh,60),'cloud_refresh'),
+                self.spawn(self.periodic(self.resources,60),'runtime_resources'),self.spawn(self.calendar(),'calendar'),
+                self.spawn(self.household.async_replan_listener(),'replan_listener')]
             done,_ = await asyncio.wait(jobs,return_when=asyncio.FIRST_EXCEPTION)
             for task in done: task.result()
         finally:

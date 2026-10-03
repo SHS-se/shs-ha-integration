@@ -81,7 +81,7 @@ class ResourceProfiler:
             'elapsed_seconds': elapsed, 'process': process,
             'retained': dict(retained), 'operations': deepcopy(self.operations)})
 
-    def snapshot(self, retained):
+    def snapshot(self, retained, *, include_samples=True):
         return {'schema_version': 1, 'started_at': self.started_at,
             'elapsed_seconds': monotonic() - self.started,
             'basis': 'CPU is current-thread time in synchronous sections; async spans report wall time only. '
@@ -91,7 +91,7 @@ class ResourceProfiler:
                      'Samples: latest 120, once per minute. '
                      'All profiler history resets on integration reload.',
             'operations': deepcopy(self.operations), 'retained': retained,
-            'samples': deepcopy(list(self.samples)), 'allocations': deepcopy(self.allocations)}
+            'samples': deepcopy(list(self.samples)) if include_samples else [], 'allocations': deepcopy(self.allocations)}
 
     def start_allocations(self, seconds, run):
         """Start a single process-wide capture only if no other tracer owns it."""

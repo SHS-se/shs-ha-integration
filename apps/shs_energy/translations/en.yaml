@@ -2,3 +2,6 @@ configuration:
   install_companion:
     name: Install companion
     description: Install the integration bundled with this app on the next app start. Existing settings and history are preserved. After installation, restart Home Assistant Core, then turn this option off. Unknown local modifications are never overwritten.
+  log_level:
+    name: Log level
+    description: Info shows connection progress and minute CPU, memory and accounting summaries. Debug adds operation timings, counter changes, dashboard requests and exception traces. Warning, Error and Critical reduce output. Save and restart the app to apply. Debug does not enable allocation tracing.

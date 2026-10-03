@@ -9,7 +9,8 @@ package = json.loads((root / "web/package.json").read_text())
 assert config["version"] == package["version"]
 assert set(config["arch"]) == {"aarch64", "amd64"}
 assert config["ingress"] and config["panel_admin"] and config["homeassistant_api"]
-assert config["options"] == {"install_companion": False}
+assert config["options"] == {"install_companion": False,"log_level":"info"}
+assert config["schema"]["log_level"] == "list(debug|info|warning|error|critical)?"
 assert "ports" not in config  # Only authenticated Ingress exposes the UI.
 assert config["image"] == "ghcr.io/shs-se/shs-energy-app"
 brand = (root / "custom_components/shs_energy/brand/icon@2x.png").read_bytes()

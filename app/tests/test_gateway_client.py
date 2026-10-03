@@ -135,8 +135,8 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         first = await self.client.connect()
         entered = asyncio.Event()
         send = self.client.socket.send_json
-        async def stalled(value):
-            await send(value)
+        async def stalled(value, **kwargs):
+            await send(value, **kwargs)
             entered.set()
             await asyncio.Event().wait()  # transport backpressure after the frame was written
         with patch.object(self.client.socket, 'send_json', side_effect=stalled):

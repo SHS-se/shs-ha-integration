@@ -108,9 +108,12 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
 
         async def executor(function, *args):
             workers.append(function)
+            self.assertFalse(controller.lock.locked(), 'Compression must not hold the controller lock')
             return function(*args)
         sys.path.append(str(Path(__file__).parents[1]/'app'))
         from shs_app.downloads import controller_download
+        from shs_app.profiling import AppProfiler
+        entry.runtime_data.battery_runtime.profiler=AppProfiler()
         from unittest.mock import patch
         app=SimpleNamespace(controller=controller,battery=entry.runtime_data.battery_runtime,
             editor=SimpleNamespace(view=AsyncMock(return_value={
@@ -118,7 +121,9 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
                 'configuration':fixture.options,'operation':fixture.coordinator.operational_status,'readiness':{}})))
         with patch('shs_app.downloads.asyncio.to_thread',executor):
             body,summary=await controller_download(app)
-        self.assertEqual(workers, [gzip_report], 'encoding and compression run off the event loop')
+        self.assertEqual(len(workers), 1, 'encoding and compression run off the event loop')
+        self.assertEqual(app.battery.profiler.operations['diagnostics_compress']['calls'], 1)
+        self.assertGreater(app.battery.profiler.operations['diagnostics_encode']['calls'], 0)
         result = json.loads(gzip.decompress(body))
         self.assertEqual(result['attempts'], [])
         self.assertEqual(result['controller_metrics']['triggers'], meter.snapshot()['triggers'])

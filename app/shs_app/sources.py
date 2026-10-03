@@ -77,9 +77,12 @@ class ObservationMirror:
 class RemoteHistory:
     def __init__(self, gateway):
         self.gateway = gateway
+        self.profiler = gateway.profiler
 
     async def source(self, operation, body):
-        return await self.gateway.call('source', {'operation':operation, 'body':body})
+        name = {'statistics':'ha_statistics','states':'ha_states','forecast':'ha_forecast'}.get(operation,'ha_metadata')
+        with self.profiler.measure(name):
+            return await self.gateway.call('source', {'operation':operation, 'body':body})
 
     async def statistics(self, start, end, entities, period, units, kinds):
         return await self.source('statistics', dict(start=start.isoformat(), end=end.isoformat(),
