@@ -468,6 +468,14 @@ class MeasurementsObserved:
 
 
 @dataclass(frozen=True)
+class MeasurementsReceived:
+    """Atomic physical evidence; economic selection belongs to an explicit decision."""
+    observed: Observed
+    frame: Frame
+    conditions: ExecutionConditions
+
+
+@dataclass(frozen=True)
 class AuthorityChanged:
     group_id: str
     mode: Mode
@@ -510,10 +518,15 @@ class TransportResult:
 
 @dataclass(frozen=True)
 class Tick:
-    pass
+    """Request an economic decision."""
 
 
-Event = Union[AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ExecutionPlanRejected, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, Tick]
+@dataclass(frozen=True)
+class ExecutionWake:
+    """Progress command deadlines without choosing another economic target."""
+
+
+Event = Union[AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ExecutionPlanRejected, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, MeasurementsReceived, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, Tick, ExecutionWake]
 
 
 @dataclass(frozen=True)
@@ -727,6 +740,11 @@ def _transition_key(group, request, purpose):
     return TransitionKey(group.generation, request.id, request.revision, purpose, group.observation.revision)
 
 
+def _same_transition(left, right):
+    # A new power/SOC capture does not replace a request or its adapter job.
+    return replace(left, observed_revision=0) == replace(right, observed_revision=0)
+
+
 def _transition_failure(job, now, limits, reason, *, unsupported=False):
     delay = min(limits.retry_max_ms, limits.retry_base_ms * 2 ** min(job.attempt - 1, 20))
     return TransitionFailure(job.key, job.attempt, None if unsupported else now + delay, reason)
@@ -744,7 +762,7 @@ def resumed_transition_work(group, now, limits):
 def _need_transition(group, request, purpose, now, limits, effects):
     key = _transition_key(group, request, purpose)
     work = group.transition_work
-    if isinstance(work, TransitionJob) and work.key == key:
+    if isinstance(work, TransitionJob) and _same_transition(work.key, key):
         if now < work.deadline_ms:
             return replace(group, status="needs_transition")
         work = _transition_failure(work, work.deadline_ms, limits, "transition_timeout")
@@ -878,7 +896,7 @@ def _withdraw_execution(state, reason, effects, *, refresh=True):
                    replan_reason=reason if refresh else session.replan_reason))
 
 
-def _refresh_execution(state, now, effects):
+def _refresh_execution(state, now, effects, *, select=True):
     session, conditions = state.execution, state.conditions
     contract = session.account.contract
     if contract is None:
@@ -895,6 +913,8 @@ def _refresh_execution(state, now, effects):
         return _withdraw_execution(state, "waiting_for_measurements", effects, refresh=False)
     if conditions.identity != state.authority.identity or conditions.permissions != state.authority.permissions:
         return _withdraw_execution(state, "measurement_authority_changed", effects)
+    if not select:
+        return state
     live = execution_live(state, now)
     assessment = execution.assess_execution(session.account, live, state.authority.plant.conversion)
     if assessment.replan_reason and assessment.replan_reason != session.replan_reason:
@@ -928,7 +948,8 @@ def _execution_send_valid(state, group, request, now):
         return False
     try:
         _validate_execution(state, session.account.contract)
-        assessment = execution.assess_execution(session.account, execution_live(state, now), state.authority.plant.conversion)
+        assessment = execution.assess_execution(session.account, execution_live(state, now),
+                                                state.authority.plant.conversion, responsibilities=False)
         binding = execution_binding(state, assessment)
     except (ValueError, StopIteration):
         return False
@@ -1013,11 +1034,17 @@ def _drive(state, now, durable_revision, effects):
                                 owned=purpose == "optimisation", release_pending=False if purpose == "release" else group.release_pending, consecutive_attempts=0)
             state = _put(state, group)
             continue
+        if purpose == "optimisation" and not _execution_send_valid(state, group, request, now):
+            # Keep issued effects. Cancel unsent work and wait for the decision
+            # clock instead of repeatedly proposing the same invalid target.
+            state = _put(state, replace(group, plan=None, transition_work=None,
+                attempts=tuple(a for a in group.attempts if a.stage != "prepared"),
+                status="awaiting_decision"))
+            continue
         prepared = next((a for a in group.attempts if a.stage == "prepared"), None)
         if prepared is not None:
             step = prepared.step
             valid = (prepared.generation == group.generation and prepared.grant == group.grant and now < prepared.send_by_ms
-                     and (purpose == "release" or _execution_send_valid(state, group, request, now))
                      and _same(command_controls(group), step.before) and _guards(step.native_guards, group.observation)
                      and _admissible(_put(state, group), group, step, now))
             if not valid:
@@ -1050,7 +1077,7 @@ def _drive(state, now, durable_revision, effects):
         elif len(group.attempts) >= 64:
             group = replace(group, status="attempt_limit")
             effects.append(Observe(group.spec.id))
-        elif not _admissible(_put(state, group), group, step, now) or (purpose == "optimisation" and not _execution_send_valid(state, group, request, now)):
+        elif not _admissible(_put(state, group), group, step, now):
             group = replace(group, status="physical_scope_blocked")
         else:
             send_by = min(now + state.limits.dispatch_window_ms, request.valid_until_ms,
@@ -1088,18 +1115,23 @@ def _observe_measurement(state, event, now_ms, rollback):
         group = next((g for g in state.groups if g.spec.id == event.group_id), None)
         if group is None:
             raise ValueError("unknown actuator group")
+        before_commands = command_controls(group)
         observation = event.observation
         if observation.at_ms > now_ms or (not rollback and observation.at_ms < state.resume_after_ms) or set(dict(observation.controls)) != set(group.spec.control_keys) or not _within(observation.envelope, group.spec.maximum):
             raise ValueError("observation exceeds its declared group scope")
         if observation.revision > group.observation_revision:
             group = replace(group, observation=None if rollback else observation, observation_revision=observation.revision)
+        if isinstance(group.transition_work, TransitionJob) and not _same(before_commands, command_controls(group)):
+            # A route built from different native starting controls is obsolete.
+            # Ordinary power/SOC captures retain the worker and its token.
+            group = replace(group, transition_work=None)
 
         state = _put(state, group)
     return state
 
 
 def _receive_measurements(state, event, now_ms, rollback):
-    if isinstance(event, MeasurementsObserved):
+    if isinstance(event, (MeasurementsObserved, MeasurementsReceived)):
         if not (event.observed.observation.at_ms == event.frame.at_ms == event.conditions.at_ms
                 and event.observed.observation.valid_until_ms == event.frame.valid_until_ms == event.conditions.valid_until_ms):
             raise ValueError("measurement capture timestamps differ")
@@ -1109,7 +1141,7 @@ def _receive_measurements(state, event, now_ms, rollback):
     previous = state.conditions_revision
     for measurement in events:
         state = _observe_measurement(state, measurement, now_ms, rollback)
-    if isinstance(event, (ConditionsObserved, MeasurementsObserved)) and state.conditions is not None and not rollback and state.conditions_revision > previous and _fresh(state.conditions, now_ms):
+    if isinstance(event, (ConditionsObserved, MeasurementsObserved, MeasurementsReceived)) and state.conditions is not None and not rollback and state.conditions_revision > previous and _fresh(state.conditions, now_ms):
         observation = execution.StateObservation(state.conditions.stored_at_ms if state.conditions.stored_at_ms is not None else state.conditions.at_ms, round(state.conditions.energy_kwh * 1e6), "live_soc")
         state = replace(state, execution=replace(state.execution,
             account=execution.observe_state(state.execution.account, observation)))
@@ -1126,14 +1158,15 @@ def _receive_counter(state, event):
 def archive_evidence(state: HomeState, event: Event | None, now_ms: int):
     """Accept physical evidence without economics, command driving or traces.
 
-    The host batches its durability behind the native journal's retained prefix.
+    Real control/guard changes and command settlement progress promptly.
+    The host batches ordinary evidence durability behind the native journal's retained prefix.
     A subsequent command transition commits this evidence before dispatch.
     """
     if type(now_ms) is not int or now_ms < 0:
         raise ValueError("now_ms must be an absolute nonnegative integer")
     if event is None:
         return state, ()
-    if not isinstance(event, (CounterReceived, MeasurementsObserved)):
+    if not isinstance(event, (CounterReceived, MeasurementsObserved, MeasurementsReceived)):
         raise ValueError("unsupported archival event")
     if now_ms < state.last_time_ms:
         # Clock rollback has command-state consequences; retain the established
@@ -1144,16 +1177,42 @@ def archive_evidence(state: HomeState, event: Event | None, now_ms: int):
         state = _receive_counter(state, event)
     else:
         state = _receive_measurements(state, event, now_ms, False)
+    if not isinstance(event, CounterReceived):
+        checked = _refresh_execution(state, now_ms, [], select=False)
+        control_changed = any(
+            before.observation is None or after.observation is None
+            or before.observation.controls != after.observation.controls
+            or (after.desired is not None and
+                _guards(after.desired.native_guards, before.observation) !=
+                _guards(after.desired.native_guards, after.observation))
+            or _settle(after, now_ms) != after
+            or (before.observation.valid_until_ms > previous.last_time_ms) != _fresh(after.observation, now_ms)
+            for before, after in zip(previous.groups, state.groups))
+        if checked != state or control_changed:
+            # Reprocess from the original state so accepted evidence is inserted
+            # exactly once, and commit its source prefix before any command.
+            return reduce_home(previous, event, now_ms)
     changed = state.execution.account is not previous.execution.account
     return replace(state, revision=previous.revision + int(changed),
                    last_time_ms=max(previous.last_time_ms, now_ms)), ()
+
+
+def decision_requested(state: HomeState, event: Event) -> bool:
+    """Economic inputs, separate from evidence and physical protocol progress."""
+    if isinstance(event, AuthorityInstalled):
+        return event.revision > state.authority_revision
+    if isinstance(event, AuthorityChanged):
+        group = next((g for g in state.groups if g.spec.id == event.group_id), None)
+        return group is not None and (event.mode, event.revision) != (group.mode, group.mode_revision)
+    return isinstance(event, (Tick, ConditionsObserved, FrameObserved, Observed,
+                              MeasurementsObserved, ExecutionPlanOffered, ReplanRequested))
 
 
 def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState, tuple[Effect, ...]]:
     """Process one validated domain event; performs no I/O and never reads a clock."""
     if type(now_ms) is not int or now_ms < 0:
         raise ValueError("now_ms must be an absolute nonnegative integer")
-    if not isinstance(event, (AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ExecutionPlanRejected, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, Tick)):
+    if not isinstance(event, (AuthorityInstalled, ConditionsObserved, GrantConfirmed, GrantRevoked, ReleaseApproved, ExecutionPlanOffered, ExecutionPlanRejected, ReplanRequested, CounterReceived, MeterObserved, LedgerPruned, Observed, FrameObserved, MeasurementsObserved, MeasurementsReceived, AuthorityChanged, Requested, Proposed, TransitionFailed, JournalDurable, JournalFailed, TransportResult, Tick, ExecutionWake)):
         raise ValueError("unsupported runtime event")
     previous = state
     rollback = now_ms < state.last_time_ms
@@ -1175,7 +1234,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 raise ValueError("changed execution scope needs a new identity")
             state = replace(state, authority=event.authority, authority_revision=event.revision, conditions=None,
                             groups=tuple(replace(_supersede(g), grant_confirmed=False) for g in state.groups))
-    elif isinstance(event, (Observed, FrameObserved, ConditionsObserved, MeasurementsObserved)):
+    elif isinstance(event, (Observed, FrameObserved, ConditionsObserved, MeasurementsObserved, MeasurementsReceived)):
         state = _receive_measurements(state, event, now_ms, rollback)
     elif isinstance(event, ExecutionPlanOffered):
         try:
@@ -1221,7 +1280,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
             for group in state.groups:
                 if any(a.stage == "prepared" and a.prepared_revision == event.revision for a in group.attempts):
                     state = _put(state, replace(group, journal_fault=True))
-    elif not isinstance(event, Tick):
+    elif not isinstance(event, (Tick, ExecutionWake)):
         group = next((g for g in state.groups if g.spec.id == event.group_id), None)
         if group is None:
             raise ValueError("unknown actuator group")
@@ -1281,10 +1340,11 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
             job = group.transition_work
             valid = (isinstance(job, TransitionJob) and type(event.token) is int and event.token == job.token
                      and now_ms < job.deadline_ms and request is not None
-                     and job.key == _transition_key(group, request, purpose)
+                     and _same_transition(job.key, _transition_key(group, request, purpose))
                      and event.generation == group.generation and event.request_id == request.id
                      and event.request_revision == request.revision and _fresh(group.observation, now_ms)
-                     and event.observed_revision == group.observation.revision and event.adapter_revision == group.spec.adapter_revision)
+                     and event.observed_revision == job.key.observed_revision and event.adapter_revision == group.spec.adapter_revision
+                     and (not event.steps or _same(event.steps[0].before, command_controls(group))))
             if valid and group.plan is None:
                 if len(event.relief_rules)>8 or any(rule.id not in {step.relief_id for step in event.steps} for rule in event.relief_rules):
                     raise ValueError("adapter relief must belong to this bounded proposal")
@@ -1335,7 +1395,7 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 # preparing. Its proposal must use the newly acknowledged start.
                 group = replace(group, transition_work=None)
         state = _put(state, group)
-    state = _refresh_execution(state, now_ms, effects)
+    state = _refresh_execution(state, now_ms, effects, select=decision_requested(previous, event))
     if not rollback:
         state = _drive(state, now_ms, event.revision if isinstance(event, JournalDurable) else None, effects)
     if state.authority and (not isinstance(event, JournalDurable) or any(isinstance(e, Send) for e in effects)):

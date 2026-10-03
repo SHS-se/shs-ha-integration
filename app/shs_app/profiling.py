@@ -49,10 +49,13 @@ class AppProfiler(ResourceProfiler):
         retained = self.samples[-1]['retained']
         per_minute = 60 / report['seconds']
         LOGGER.info('Runtime resources: CPU=%s RSS=%.1f MiB receipts=%.1f/min backlog=%s '
-                    'checkpoint_saves=%.1f/min evidence_query_groups=%.1f/min interval=%.1fs',
+                    'checkpoint_saves=%.1f/min evidence_query_groups=%.1f/min '
+                    'decisions=%.1f/min reducer_events=%.1f/min interval=%.1fs',
                     cpu_text, process['rss_bytes'] / 1048576,
                     counters.get('app_processed_receipts', 0) * per_minute, retained.get('app_receipt_backlog', 0),
-                    counters.get('storage_commits', 0) * per_minute, counters.get('evidence_queries', 0) * per_minute, report['seconds'])
+                    counters.get('storage_commits', 0) * per_minute, counters.get('evidence_queries', 0) * per_minute,
+                    report['operations']['decision']['calls'] * per_minute,
+                    report['operations']['reduce']['calls'] * per_minute, report['seconds'])
         # Sorting fixed, small vocabularies is cheap; the evidence itself is never loaded.
         busy = sorted(report['operations'].items(), key=lambda item: item[1]['cpu_ms'], reverse=True)
         LOGGER.info('Runtime CPU sections (overlapping): %s; storage_worker_cpu_ms=%.1f',

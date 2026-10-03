@@ -7,6 +7,7 @@ schedule-command alternative when a policy is unavailable.
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
@@ -136,7 +137,8 @@ class HomeHost:
                     if self._received is not None:
                         await self._persist(state, self._received, acknowledge=False)
                 else:
-                    with self.profiler.measure('reduce'):
+                    with self.profiler.measure('reduce'), (self.profiler.measure('decision')
+                            if runtime.decision_requested(self.state, event) else nullcontext()):
                         state, effects = (runtime.reduce_home(self.state, event, self.ports.now_ms())
                                           if event is not None else (self.state, ()))
                 self.state = state
@@ -216,7 +218,7 @@ class HomeHost:
                     self._wake_at = effect.at_ms
                     def wake():
                         self._wake_at = self._wake = None
-                        self._enqueue(runtime.Tick())
+                        self._enqueue(runtime.ExecutionWake())
                     self._wake = asyncio.get_running_loop().call_later(
                         max(0, (effect.at_ms - self.ports.now_ms()) / 1000), wake)
             elif isinstance(effect, runtime.Report):

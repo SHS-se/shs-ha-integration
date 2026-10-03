@@ -41,6 +41,7 @@ class AppProfilerTests(unittest.TestCase):
         with patch('shs_core.resource_profiling.monotonic', side_effect=[0, 30]):
             p.sample(dict(process_cpu_seconds=0, rss_bytes=1048576), before)
             p.operations['reduce']['calls'] = 10
+            p.operations['decision']['calls'] = 6
             p.operations['reduce']['cpu_ms'] = 250
             p.sample(dict(process_cpu_seconds=15, rss_bytes=2097152), after)
         with self.assertLogs('shs_app.profiling', level='INFO') as messages:
@@ -50,6 +51,7 @@ class AppProfilerTests(unittest.TestCase):
         self.assertIn('receipts=60.0/min backlog=5', output)
         self.assertIn('checkpoint_saves=120.0/min', output)
         self.assertIn('reduce=250ms/10 calls', output)
+        self.assertIn('decisions=12.0/min reducer_events=20.0/min', output)
         report = p.snapshot(after)
         self.assertEqual(report['samples'], [])
         self.assertEqual(report['sample_count'], 2)

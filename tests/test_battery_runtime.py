@@ -221,7 +221,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             r.runtime._last_capture=None
             events=await r.runtime._observe_batch(r.runtime.host.state.groups[0].spec.id)
             capture=events[0]
-            self.assertIsInstance(capture,rt.MeasurementsObserved)
+            self.assertIsInstance(capture,rt.MeasurementsReceived)
             invalid=replace(capture,conditions=replace(capture.conditions,at_ms=capture.conditions.at_ms+1))
             before=r.runtime.host.state
             with self.assertRaisesRegex(ValueError,'capture timestamps'):

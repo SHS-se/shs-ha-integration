@@ -1,7 +1,7 @@
 """Receipt replay adapts historical accounting to a newly resumed live host."""
 from shs_core.battery_runtime import BatteryRuntime, ACCOUNTING_REUSE_MS
 from shs_core.runtime_json import Records
-from shs_core.home_runtime import TRACE_RETENTION_MS
+from shs_core.home_runtime import TRACE_RETENTION_MS, Tick
 
 
 class AppBatteryRuntime(BatteryRuntime):
@@ -29,12 +29,13 @@ class AppBatteryRuntime(BatteryRuntime):
                 return
             overrides = {value for key,value in self.controller.options().items() if key.endswith('control_override_entity')}
             urgent = (receipt['kind'] != 'observation'
-                      or any(group.attempts or group.transition_work for group in self.host.state.groups)
                       or (row['entity_id'] in set(self._control_entities()) | overrides and row.get('kind') == 'state_change')
                       or recovering and event is not None)
             receiver = self.host.accept_received if urgent else self.host.ingest_received
             await receiver(event, checkpoint)
         self._ingested = await self._consume_receipt(identity, receipt, receive, self.received_checkpoint)
+        if recovering and self._observation_error is None and self.host is not None:
+            await self.host.accept(Tick())
 
     async def commit_evidence(self):
         async with self._lock:

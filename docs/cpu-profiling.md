@@ -1,5 +1,9 @@
 # CPU, memory and I/O investigation
 
+For the October 2026 app event-churn fix and matched archive benchmarks, see
+[battery command cadence and verification](battery-command-cadence.md). The earlier
+8.7×/28× steady-demand replay is not a deployed performance estimate.
+
 ## Built-in resource diagnostics
 
 The native HA diagnostics download and the controller gzip download include

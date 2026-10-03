@@ -33,7 +33,7 @@ class ResourceProfiler:
     CPU belongs only to synchronous sections. An awaited operation is wall time
     only because other coroutines run on that same thread while it is suspended.
     """
-    OPERATIONS = ('reduce', 'evidence_ingest', 'accounting_view', 'checkpoint_encode', 'checkpoint_save', 'refresh')
+    OPERATIONS = ('reduce', 'decision', 'evidence_ingest', 'accounting_view', 'checkpoint_encode', 'checkpoint_save', 'refresh')
     ASYNC_OPERATIONS = frozenset(('checkpoint_save', 'refresh'))
 
     def __init__(self):

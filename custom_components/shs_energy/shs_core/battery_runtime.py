@@ -919,7 +919,7 @@ class BatteryRuntime:
         self._measurements={'physical_response':response,'requested_direction':requested,
             'response_matches_direction':response==requested if requested else None,**asdict(accounting),'battery_dc_w':battery,'grid_w':grid,'at_ms':min(times),'valid_until_ms':valid}
         self._last_capture=capture
-        return (rt.MeasurementsObserved(observed,frame.frame,conditions.conditions),)
+        return (rt.MeasurementsReceived(observed,frame.frame,conditions.conditions),)
 
     def capture_entities(self):
         """The exact dependencies used by the complete-frame acceptance below."""

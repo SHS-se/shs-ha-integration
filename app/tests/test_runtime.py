@@ -52,6 +52,44 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime._processing,runtime.received_checkpoint())
         self.assertEqual(rig.store.saved['gateway_processing']['receipt'],50)
 
+    async def test_accepted_command_does_not_make_every_power_report_urgent(self):
+        from shs_core import home_runtime as rt
+        rig,runtime=await self.archival_runtime()
+        state=runtime.host.state
+        group=state.groups[0]
+        target=group.desired.target
+        old=tuple((key,0 if key=='number.charge' else value) for key,value in target)
+        step=rt.Step('number.charge',dict(target)['number.charge'],old,(),group.spec.maximum,
+            5000,100000,True,'delayed native publication')
+        attempt=rt.Attempt('battery:lag',state.revision,group.generation,group.desired.id,
+            group.desired.revision,'optimisation',0,step,group.observation_revision,
+            rig.now,rig.now+5000,rig.now+5000,rig.now+100000,'accepted',group.grant)
+        runtime.host.state=replace(state,groups=(replace(group,plan=None,transition_work=None,
+            observation=replace(group.observation,controls=old),attempts=(attempt,)),))
+        rig.rows['number.charge']['state']='0'
+        runtime._last_capture=None
+        writes=len(rig.store.writes)
+        decisions=runtime.profiler.operations['decision']['calls']
+        for ordinal in range(1,51):
+            rig.now+=10
+            row=rig.rows['sensor.house']
+            row.update(state=str(1000+ordinal),last_reported=iso(rig.now))
+            await runtime.ingest_receipt(IDENTITY,dict(ordinal=ordinal,kind='observation',
+                payload=dict(row,entity_id='sensor.house',kind='state_report')))
+        self.assertEqual(len(rig.store.writes),writes)
+        self.assertEqual(runtime.profiler.operations['decision']['calls'],decisions)
+        self.assertEqual(runtime.host.state.groups[0].attempts,(attempt,))
+        # State reports, too, must commit a real confirmation and its entire prefix.
+        row=rig.rows['number.charge']
+        row.update(state=str(dict(target)['number.charge']/1000),last_reported=iso(rig.now))
+        await runtime.ingest_receipt(IDENTITY,dict(ordinal=51,kind='observation',
+            payload=dict(row,entity_id='number.charge',kind='state_report')))
+        await runtime.host.idle()
+        self.assertFalse(runtime.host.state.groups[0].attempts)
+        self.assertGreater(len(rig.store.writes),writes)
+        self.assertEqual(runtime._processing['receipt'],51)
+        self.assertEqual(runtime.profiler.operations['decision']['calls'],decisions)
+
     async def test_recovery_decision_is_immediate_and_includes_archived_prefix(self):
         rig,runtime=await self.archival_runtime()
         rig.rows['sensor.soc']['state']='unavailable'

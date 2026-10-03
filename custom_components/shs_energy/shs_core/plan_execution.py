@@ -933,8 +933,13 @@ class Assessment:
     valid_until_ms: int
 
 
-def assess_execution(account: Account, live: LiveState, conversion: Conversion) -> Assessment:
-    """Follow the accepted role; delegate no price comparison to the executor."""
+def assess_execution(account: Account, live: LiveState, conversion: Conversion, *, responsibilities=True) -> Assessment:
+    """Follow the accepted role; delegate no price comparison to the executor.
+
+    Physical send checks need the identical power binding and validity window.
+    Historical objective responsibilities affect only the replan diagnostic;
+    explicit decisions and presentation include them.
+    """
     contract, now = account.contract, live.at_ms
     if contract is None or (row := contract.interval(now)) is None:
         return Assessment("idle", 0, 0, 0, 0, "no_current_plan", "unavailable", None, "plan_required", now)
@@ -1065,7 +1070,7 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion) 
     # Replan from the same live responsibilities sent to the planner. Completed
     # forecasts/fulfilled objectives remain in the audit, but cannot demand a
     # disposition that planner_feedback deliberately no longer asks for.
-    outstanding, _ = _live_objectives(account, now)
+    outstanding, _ = _live_objectives(account, now) if responsibilities else ((), {})
     if any(r["outcome"] == "missed" and r["responsibility"] in ("outstanding", "retained") for r in outstanding):
         replan = replan or "objective_missed"
     active_ids = {o.id for o in contract.objectives}
