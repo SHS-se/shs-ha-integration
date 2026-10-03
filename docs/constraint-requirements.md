@@ -44,3 +44,11 @@ command checks retain their stated purpose. Do not turn them into a general
 exception permitting invented checks, or confuse physical capability with
 statistical prediction. Prefer removing unnecessary validation and state over
 adding compensating mechanisms around it.
+
+User requirement, 4 October 2026: an EV mapping's saved Minimum value and
+Maximum value define the operating range of its Power or current control
+entity. The entity's live `min` and `max` attributes do not invalidate that
+configured range or block household planning. In particular, a saved 5–16 A
+range remains valid when `number.tesla_model_y_charge_current` reports `max: 5`.
+Use the configured range in the planning snapshot; retain the unit, step and
+command checks for their existing purposes.

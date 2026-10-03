@@ -170,7 +170,7 @@ _LOGGER = logging.getLogger(__name__)
 # and there is none — so only the first carries a button at all.
 PLANNING_BANNER_BY_REMEDY: dict[str, tuple[str, str, dict[str, Any]]] = {
     REMEDY_SETTING: (
-        "Planning is missing an input it needs",
+        "Planning inputs need attention",
         "Resolve the specific input error below. Only fields identified by the "
         "input check are highlighted. If no setting is identified, download "
         "diagnostics for investigation.",

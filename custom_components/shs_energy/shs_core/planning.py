@@ -287,20 +287,9 @@ def build_services(
             raise OptimisationInputError(
                 f"{current_entity} must declare unit A"
             )
-        entity_min_raw = current_payload["attributes"].get("min")
-        entity_max_raw = current_payload["attributes"].get("max")
-        if entity_min_raw is not None:
-            entity_min = parse_number(entity_min_raw, f"{current_entity} min")
-            if configured_min < entity_min:
-                raise OptimisationInputError(
-                    "configured EV current minimum is below the entity bound"
-                )
-        if entity_max_raw is not None:
-            entity_max = parse_number(entity_max_raw, f"{current_entity} max")
-            if configured_max > entity_max:
-                raise OptimisationInputError(
-                    "configured EV current maximum is above the entity bound"
-                )
+        # The saved mapping defines the installation's operating range.
+        # Entity min/max metadata may change with the vehicle's current state;
+        # it must not invalidate the commissioned range or household planning.
         configured_step = parse_number(
             current_payload["attributes"].get("step"),
             f"{current_entity} step",

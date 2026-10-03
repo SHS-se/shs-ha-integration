@@ -255,6 +255,31 @@ class EvServiceTests(unittest.TestCase):
             local_tz=timezone.utc,
         )
 
+    def test_saved_current_range_is_authoritative_over_entity_bounds(self) -> None:
+        options = {**self.options, "device_control_mappings": {
+            self.charger["key"]: {
+                **self.options["device_control_mappings"][self.charger["key"]],
+                "minimum_value": 5,
+            },
+        }}
+        for minimum, maximum in ((0, 5), (10, 13), (None, None), ("unknown", "unavailable")):
+            with self.subTest(entity_minimum=minimum, entity_maximum=maximum):
+                self.states["number.charge_current"]["attributes"].update(min=minimum, max=maximum)
+                services, _, battery = self.plan(options)
+                self.assertEqual(services[0]["control"]["min_current_a"], 5)
+                self.assertEqual(services[0]["control"]["max_current_a"], 16)
+                self.assertEqual(services[0]["control"]["current_step_a"], 1)
+                self.assertTrue(battery["connected"])
+
+    def test_entity_unit_and_step_are_still_required(self) -> None:
+        attributes = self.states["number.charge_current"]["attributes"]
+        attributes["unit_of_measurement"] = "W"
+        with self.assertRaisesRegex(OptimisationInputError, "number.charge_current must declare unit A"):
+            self.plan(self.options)
+        attributes.update(unit_of_measurement="A", step=0)
+        with self.assertRaisesRegex(OptimisationInputError, "number.charge_current step must be positive"):
+            self.plan(self.options)
+
     def test_a_connected_car_without_a_departure_charges_across_the_horizon(
         self,
     ) -> None:
