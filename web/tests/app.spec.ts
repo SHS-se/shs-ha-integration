@@ -10,7 +10,7 @@ test('branded ingress dashboard, navigation, schedule inspection and themes',asy
   await page.screenshot({path:`test-results/${info.project.name}-overview.png`,fullPage:true});
   await page.getByRole('link',{name:'Schedule',exact:true}).click();
   await expect(page.getByRole('heading',{name:'Your energy schedule'})).toBeVisible();
-  const chart=page.getByRole('img',{name:/Price, power flows, consumption, storage and cost/});
+  const chart=page.getByRole('img',{name:/Price, power flows, consumption, storage and temperature/});
   await expect(chart).toBeVisible();
   await expect(page.locator('canvas')).toHaveCount(0);
   await expect(chart.getByText('Pool heater')).toBeVisible();
@@ -77,18 +77,24 @@ test('schedule chart explains an interval, selects it and narrows to one day',as
   await page.route('**/api/state',async route=>{
     const response=await route.fetch();const data=await response.json();
     const schedule=data.snapshot.entries[0].schedule,first=schedule.household[1],start=Date.now()-2*3600000;
+    schedule.temperatures=[{key:'pool',name:'Pool',target_c:30.5},{key:'living_room',name:'Living room',target_c:21}];
     schedule.devices=[{key:'pool_heater',name:'Pool heater',category:'pool_heating'},{key:'pool_pump',name:'pool_pump',category:'pool_heating'}];
     schedule.household=Array.from({length:200},(_,i)=>{const day=(i%96)/96,sun=Math.max(0,Math.sin((day-.25)*2*Math.PI)),on=i%96<24;return {...first,
       start:new Date(Math.floor(start/900000)*900000+i*900000).toISOString(),duration_hours:.25,binding:i<110,
       shadow_import_sek_per_kwh:1.4+Math.sin(i/14),shadow_export_sek_per_kwh:.6+Math.sin(i/14)/2,
       pv_w:5000*sun,base_w:900,device_loads_w:{pool_heater:on?2400:0,pool_pump:on?700:0},load_w:900+(on?3100:0),
       grid_import_w:on?2500:0,grid_export_w:sun>.6?1500:0,battery_charge_w:sun>.6?2000:0,battery_discharge_w:on?600:900,
-      battery_soc:.2+.6*sun,ev_soc:.69,import_cost_sek:on?.9:0,export_revenue_sek:sun>.6?.2:0};});
+      battery_soc:.2+.6*sun,ev_soc:.69,temperatures_c:{pool:29+i*.004,living_room:20.8+sun*.4},import_cost_sek:on?.9:0,export_revenue_sek:sun>.6?.2:0};});
     await route.fulfill({json:data});
   });
   await page.goto('./#schedule');
-  const chart=page.getByRole('img',{name:/Price, power flows, consumption, storage and cost/});
+  const chart=page.getByRole('img',{name:/Price, power flows, consumption, storage and temperature/});
   await expect(chart.getByText('NOW · PLAN →')).toBeVisible();
+  await expect(chart.getByText('Temperature',{exact:true})).toBeVisible();
+  await expect(chart.getByText('What it costs')).toHaveCount(0);
+  await expect(chart.getByText('Pool · 30.5 °C target')).toBeVisible();
+  await expect(chart.locator('[data-temperature]')).toHaveCount(2);
+  await expect(chart.getByText('20.8 °C')).toBeVisible();
   await expect(chart.getByText(/dashed = estimated/)).toBeVisible();
   // Positions are relative to the chart, so a scroll between steps cannot move the target.
   const point={x:220,y:(await chart.boundingBox())!.height*.4};
@@ -96,7 +102,9 @@ test('schedule chart explains an interval, selects it and narrows to one day',as
   const tooltip=page.getByRole('tooltip');
   await expect(tooltip).toContainText('House demand');
   await expect(tooltip).toContainText('Base load');
-  await expect(tooltip).toContainText('Cost so far');
+  await expect(tooltip).toContainText('Pool temperature');
+  await expect(tooltip).toContainText('Living room temperature');
+  await expect(tooltip).not.toContainText('Cost so far');
   await page.screenshot({path:`test-results/${info.project.name}-schedule-tooltip.png`,fullPage:true});
   await chart.click({position:point});
   await expect(page.getByLabel('Selected interval')).not.toHaveValue('0');
@@ -113,4 +121,35 @@ test('schedule chart explains an interval, selects it and narrows to one day',as
   await page.getByLabel('Color theme').selectOption('dark');
   await page.getByRole('link',{name:'Schedule',exact:true}).click();
   await page.screenshot({path:`test-results/${info.project.name}-schedule-dark.png`,fullPage:true});
+});
+
+
+test('temperature forecast gaps stay gaps and a missing forecast is explicit',async({page})=>{
+  let missing=false;
+  await page.route('**/api/state',async route=>{
+    const response=await route.fetch();const data=await response.json();
+    const schedule=data.snapshot.entries[0].schedule;
+    schedule.temperatures=[{key:'room',name:'Room',target_c:null}];
+    schedule.household=schedule.household.slice(0,4).map((slot:any,i:number)=>({...slot,
+      temperatures_c:{room:missing||i===1?null:20+i*.1}}));
+    schedule.execution=schedule.household.map((slot:any)=>({...slot,temperatures_c:{room:18}}));
+    await route.fulfill({json:data});
+  });
+  await page.goto('./#schedule');
+  const chart=page.getByRole('img',{name:/storage and temperature/});
+  const curve=chart.locator('[data-temperature="room"] path');
+  await expect(curve).toHaveAttribute('d',/^M[^M]+M/);
+  await expect(chart.getByText('20.3 °C')).toBeVisible();
+  await chart.focus();await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tooltip')).toContainText('Room temperatureUnavailable');
+  await page.getByRole('button',{name:'Show data table'}).click();
+  await expect(page.getByRole('columnheader',{name:'Room °C'})).toBeVisible();
+  await expect(page.getByRole('table').first().locator('tbody tr').nth(1).locator('td').last()).toHaveText('Unavailable');
+  await page.getByRole('button',{name:'Show charts'}).click();
+  await page.getByLabel('Forecast scope').selectOption('execution');
+  await expect(chart.getByText('18.0 °C')).toBeVisible();
+  missing=true;await page.reload();
+  await expect(chart.getByText('No temperature forecast in this plan.')).toBeVisible();
+  await expect(chart.locator('[data-temperature] path')).toHaveCount(0);
+  await expect(chart.getByText('What it costs')).toHaveCount(0);
 });

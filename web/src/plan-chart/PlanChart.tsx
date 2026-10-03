@@ -4,8 +4,8 @@
 // the same palette and the same tooltip, over the plan horizon only. Each
 // quantity gets its own strip and its own axis, stacked over the same
 // intervals, so reading a moment in time is reading a column: what it cost,
-// where the power came from, what used it, what was left in store, what it
-// added up to.
+// where the power came from, what used it, what was left in store, the temperatures
+// expected.
 //
 // geometry.ts, price-bands.ts and power-flows.ts are the website's modules,
 // unchanged. Nothing in this directory imports from the rest of the app except
@@ -19,7 +19,7 @@ import {
 } from './geometry';
 import {PRICE_RAMP_STEPS, priceBands, priceGradientStops} from './price-bands';
 import {powerFlowMagnitudes} from './power-flows';
-import type {Plan, Slot} from '../types';
+import type {Plan, Slot, Temperature} from '../types';
 import './plan-chart.css';
 
 const VIEW_W = 1160;
@@ -36,6 +36,7 @@ const COLOURS = {
   solar: 'var(--plan-solar)', grid: 'var(--plan-grid)', battery: 'var(--plan-battery)',
   ev: 'var(--plan-ev)', base: 'var(--plan-base)',
 } as const;
+const temperatureColour = (index: number): string => `var(--plan-load-${(index + 2) % 9})`;
 const loadColour = (slot: number): string => `var(--plan-load-${slot})`;
 const FLOW_NAMES = ['Solar', 'Battery out', 'Grid in', 'Battery in', 'Grid out'];
 
@@ -171,16 +172,7 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
     const base = slots.map(slot => slot.base_w === null ? null
       : slot.base_w + folded.reduce((sum, key) => sum + (slot.device_loads_w?.[key] ?? 0), 0));
 
-    // Net cost from the start of the horizon; unknown from the first interval
-    // whose cost is unknown, because a running total cannot skip a term.
-    let total = 0, complete = true;
-    const cumulative = slots.map(slot => {
-      if (slot.import_cost_sek === null || slot.export_revenue_sek === null) complete = false;
-      if (!complete) return null;
-      total += slot.import_cost_sek! - slot.export_revenue_sek!;
-      return total;
-    });
-    return {days, series, base, cumulative};
+    return {days, series, base};
   }, [clock, plan.devices, slots]);
 
   const picked = whole.days.find(entry => entry.key === day);
@@ -205,8 +197,8 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
     const flow: Panel = {top: price.top + price.height + GAP, height: 126};
     const load: Panel = {top: flow.top + flow.height + GAP, height: 150};
     const soc: Panel = {top: load.top + load.height + GAP, height: showSoc ? 62 : 0};
-    const cost: Panel = {top: soc.top + (showSoc ? soc.height + GAP : 0), height: 72};
-    const axisY = cost.top + cost.height;
+    const temperature: Panel = {top: soc.top + (showSoc ? soc.height + GAP : 0), height: 96};
+    const axisY = temperature.top + temperature.height;
 
     // --- Price: published and estimated intervals as separate runs ----------
     const buy = rows.map(row => row.shadow_import_sek_per_kwh);
@@ -247,11 +239,18 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
 
     const socY = linearScale([0, 100], [soc.top + soc.height, soc.top]);
 
-    const cumulative = cut(whole.cumulative);
-    const known = cumulative.filter((value): value is number => value !== null);
-    const costMin = Math.min(0, ...known);
-    const costMax = Math.max(1, ...known) * 1.18;
-    const costY = linearScale([costMin, costMax], [cost.top + cost.height, cost.top]);
+    const temperatures = plan.temperatures.map((entry, index) => ({
+      ...entry, colour: temperatureColour(index),
+      values: rows.map(row => row.temperatures_c[entry.key] ?? null),
+    }));
+    const knownTemperatures = temperatures.flatMap(entry => entry.values).filter(
+      (value): value is number => value !== null && Number.isFinite(value),
+    );
+    const temperatureBounds = [...knownTemperatures, ...temperatures.flatMap(entry =>
+      entry.target_c === null ? [] : [entry.target_c])];
+    const temperatureMin = temperatureBounds.length ? Math.floor((Math.min(...temperatureBounds) - 0.3) * 2) / 2 : 0;
+    const temperatureMax = temperatureBounds.length ? Math.ceil((Math.max(...temperatureBounds) + 0.3) * 2) / 2 : 1;
+    const temperatureY = linearScale([temperatureMin, temperatureMax], [temperature.top + temperature.height, temperature.top]);
 
     const hours = (edges[edges.length - 1] - edges[0]) / HOUR_MS;
     const every = hours > 48 ? 6 : hours > 24 ? 3 : hours > 10 ? 2 : 1;
@@ -271,16 +270,16 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
       hasModelledPrice: modelledBuy.some(value => value !== null),
       flow, flowY, flowMin, flowMax, supply, disposal, flowLabels,
       load, loadY, loadMax, loadBands, loadLabels, series, base,
-      soc, socY, cost, costY, cumulative, costMin, costMax, hourTicks, dayTicks,
+      soc, socY, temperature, temperatureY, temperatures, knownTemperatures, temperatureMin, temperatureMax, hourTicks, dayTicks,
     };
-  }, [clock, from, slots, to, whole]);
+  }, [clock, from, plan.temperatures, slots, to, whole]);
 
   const {
     rows, edges, x, axisY, height, showSoc, showHome, showEv, homeSoc, evSoc,
     price, priceY, priceMax, buy, sell, bands, quotedBuy, modelledBuy, hasModelledPrice,
     flow, flowY, flowMin, flowMax, supply, disposal, flowLabels,
     load, loadY, loadMax, loadBands, loadLabels, series, base,
-    soc, socY, cost, costY, cumulative, costMin, costMax, hourTicks, dayTicks,
+    soc, socY, temperature, temperatureY, temperatures, knownTemperatures, temperatureMin, temperatureMax, hourTicks, dayTicks,
   } = geometry;
 
   if (n === 0) return <p className="muted">This plan has no intervals to draw.</p>;
@@ -356,7 +355,7 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
     <div className="pc-scroll">
       <svg ref={svgRef} viewBox={`0 0 ${VIEW_W} ${height}`} preserveAspectRatio="xMidYMid meet"
         role="img" tabIndex={0} style={onSelect ? {cursor: 'pointer'} : undefined}
-        aria-label="Price, power flows, consumption, storage and cost over the plan horizon. Arrow keys step through intervals; exact values are in the interval inspector and the data table."
+        aria-label="Price, power flows, consumption, storage and temperature over the plan horizon. Arrow keys step through intervals; exact values are in the interval inspector and the data table."
         onPointerMove={handleMove} onPointerDown={handleMove} onPointerLeave={() => { setHover(null); setPointer(null); }}
         onKeyDown={handleKey}
         onClick={event => { const index = intervalAt(event.clientX) ?? hover; if (index !== null) onSelect?.(from + index); }}>
@@ -440,12 +439,29 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
           {evSoc[n - 1] !== null && <EndLabel y={socY(evSoc[n - 1]!)} colour={COLOURS.ev}>{`car ${Math.round(evSoc[n - 1]!)}%`}</EndLabel>}
         </>}
 
-        {/* ----------------------------------------------------- Cost --- */}
-        <PanelHeading title="What it costs" unit={`${plan.currency}, cumulative over this plan`} y={cost.top - 14}/>
-        <Gridlines ticks={niceTicks(costMin, costMax, 4)} y={costY} format={tick => tick.toFixed(0)}/>
-        <path d={stepAreaPath(cumulative, x, costY, 0)} className="pc-cost-area"/>
-        <path d={stepLinePath(cumulative, x, costY)} fill="none" className="pc-cost-line"/>
-        {cumulative[n - 1] !== null && <EndLabel y={costY(cumulative[n - 1]!)} colour="var(--pc-ink)">{`${cumulative[n - 1]!.toFixed(2)} ${plan.currency}`}</EndLabel>}
+        {/* ---------------------------------------------- Temperature --- */}
+        <g id="plan-temperature">
+          <PanelHeading title="Temperature" unit="°C · planned" y={temperature.top - 14}/>
+          {knownTemperatures.length > 0 ? <>
+            <Gridlines ticks={niceTicks(temperatureMin, temperatureMax, 4)} y={temperatureY} format={tick => tick.toFixed(1)}/>
+            {temperatures.map(entry => <g key={entry.key} data-temperature={entry.key}>
+              {entry.target_c !== null && <>
+                <line x1={MARGIN_LEFT} x2={RIGHT} y1={temperatureY(entry.target_c)} y2={temperatureY(entry.target_c)}
+                  stroke={entry.colour} strokeWidth={1} strokeDasharray="2 3"/>
+                <text x={MARGIN_LEFT + 4} y={temperatureY(entry.target_c) - 3} className="pc-axis">
+                  {`${entry.name} · ${entry.target_c.toFixed(1)} °C target`}
+                </text>
+              </>}
+              <path d={midpointLinePath(entry.values, x, temperatureY)} fill="none"
+                stroke={entry.colour} strokeWidth={2} strokeLinejoin="round">
+                <title>{`${entry.name} · planned temperature`}</title>
+              </path>
+              {entry.values[n - 1] !== null && <EndLabel y={temperatureY(entry.values[n - 1]!)} colour={entry.colour}>
+                {`${entry.values[n - 1]!.toFixed(1)} °C`}
+              </EndLabel>}
+            </g>)}
+          </> : <text x={MARGIN_LEFT} y={temperature.top + 30} className="pc-axis">No temperature forecast in this plan.</text>}
+        </g>
 
         {/* ------------------------------------------------- Chrome ----- */}
         {nowX !== null && <g>
@@ -471,11 +487,15 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
       </svg>
     </div>
 
+    {temperatures.length > 0 && <div className="pc-temperature-legend" aria-label="Temperature series">
+      {temperatures.map(entry => <span key={entry.key}><i style={{backgroundColor: entry.colour}} aria-hidden="true"/>{entry.name}</span>)}
+    </div>}
+
     {hovered && pointer && <PlanTooltip
       row={hovered} label={`${clock.dayMonth(startOf(hovered))}, ${clock.time(startOf(hovered))}`}
       elapsed={endOf(hovered) <= now} currency={plan.currency}
       series={series.map(entry => ({...entry, value: entry.values[hover!] ?? 0}))}
-      base={base[hover!]} homeSoc={homeSoc[hover!]} evSoc={evSoc[hover!]} cost={cumulative[hover!]}
+      base={base[hover!]} homeSoc={homeSoc[hover!]} evSoc={evSoc[hover!]} temperatures={temperatures.map(entry => ({...entry, value: entry.values[hover!]}))}
       left={pointer.left} top={pointer.top} bounds={wrapRef.current?.getBoundingClientRect() ?? null}/>}
   </div>;
 }
@@ -485,10 +505,11 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
  * was drawn in. A reader matching a band to a number should not have to count
  * bands, or read past a column of zeroes to find the two devices running.
  */
-function PlanTooltip({row, label, elapsed, currency, series, base, homeSoc, evSoc, cost, left, top, bounds}: {
+function PlanTooltip({row, label, elapsed, currency, series, base, homeSoc, evSoc, temperatures, left, top, bounds}: {
   row: Slot; label: string; elapsed: boolean; currency: string;
   series: {key: string; name: string; slot: number; value: number}[];
-  base: number | null; homeSoc: number | null; evSoc: number | null; cost: number | null;
+  base: number | null; homeSoc: number | null; evSoc: number | null;
+  temperatures: (Temperature & {colour: string; value: number | null})[];
   left: number; top: number; bounds: DOMRect | null;
 }) {
   // Magnitudes, like the panel: "Battery in −3.59 kW" says the same thing
@@ -533,7 +554,8 @@ function PlanTooltip({row, label, elapsed, currency, series, base, homeSoc, evSo
         <Reading name={row.binding ? 'Buy' : 'Buy (estimated)'} value={price(row.shadow_import_sek_per_kwh)}/>}
       {row.shadow_export_sek_per_kwh !== null &&
         <Reading name={row.binding ? 'Sell' : 'Sell (estimated)'} value={price(row.shadow_export_sek_per_kwh)}/>}
-      {cost !== null && <Reading name="Cost so far" value={`${cost.toFixed(2)} ${currency}`}/>}
+      {temperatures.map(entry => <Reading key={entry.key} name={`${entry.name} temperature`} colour={entry.colour}
+        value={entry.value === null ? 'Unavailable' : `${entry.value.toFixed(1)} °C`}/>)}
     </div>
   </div>;
 }

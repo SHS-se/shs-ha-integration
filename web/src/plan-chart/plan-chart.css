@@ -40,8 +40,6 @@
 .pc-end-dot{stroke:var(--pc-card);stroke-width:2}
 .pc-inline-box{fill:var(--pc-card);fill-opacity:.85}
 .pc-inline-text{fill:var(--pc-ink);font-size:9.5px;font-weight:600}
-.pc-cost-area{fill:var(--pc-ink);fill-opacity:.07}
-.pc-cost-line{stroke:var(--pc-ink);stroke-width:2}
 .pc-now{stroke:var(--pc-ink);stroke-width:1.5}
 .pc-now-flag{fill:var(--pc-ink)}
 .pc-now-text{fill:var(--pc-card);font-size:9.5px;font-weight:600;letter-spacing:.06em}
@@ -58,3 +56,7 @@
 .pc-reading i{flex:none;width:8px;height:8px;border-radius:2px}
 .pc-reading b{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pc-reading>span:last-child{flex:none;font-variant-numeric:tabular-nums}
+
+.pc-temperature-legend{display:flex;flex-wrap:wrap;gap:8px 20px;color:var(--pc-muted);font-size:12px}
+.pc-temperature-legend span{display:flex;align-items:center;gap:6px}
+.pc-temperature-legend i{width:16px;height:3px;border-radius:2px;flex:none}

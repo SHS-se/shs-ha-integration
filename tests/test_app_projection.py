@@ -26,6 +26,29 @@ class AppProjectionTests(unittest.TestCase):
         self.assertIsNone(result["household"][0]["battery_soc"])
         self.assertEqual(result["household"][0]["load_w"], 9999999)
 
+    def test_published_temperatures_keep_scope_gaps_and_owner_target(self):
+        plan = {"pool": {"water_temperature_c": 25, "stop_temperature_c": 32},
+                "resolved_value_stores": [{"key": "pool", "derivation": {"source": "comfort"}}],
+                "plans": {"priority": {"slots": [{"pool_temperature_c": 29.4}, {},
+                                                  {"pool_temperature_c": 31.2}]}},
+                "execution_plan": {"plans": {"priority": {"slots": [{"pool_temperature_c": 28.1}]}}}}
+        before = json.dumps(plan)
+        result = schedule(plan, {"state": "ready"})
+        self.assertEqual(result["temperatures"], [{"key": "pool", "name": "Pool", "target_c": 30}])
+        self.assertEqual([slot["temperatures_c"]["pool"] for slot in result["household"]], [29.4, None, 31.2])
+        self.assertEqual(result["execution"][0]["temperatures_c"], {"pool": 28.1})
+        self.assertEqual(json.dumps(plan), before)
+        plan["resolved_value_stores"] = []
+        self.assertIsNone(schedule(plan, {"state": "ready"})["temperatures"][0]["target_c"])
+
+    def test_no_temperature_reconstruction_from_initial_state_or_heating(self):
+        plan = {"pool": {"water_temperature_c": 25, "stop_temperature_c": 32},
+                "plans": {"priority": {"slots": [{"pool_w": 3000}, {}]}}}
+        result = schedule(plan, {"state": "ready"})
+        self.assertEqual([slot["temperatures_c"]["pool"] for slot in result["household"]], [None, None])
+        del plan["pool"]
+        self.assertEqual(schedule(plan, {"state": "ready"})["temperatures"], [])
+
     def test_all_cross_section_targets_keep_exact_editor_identity(self):
         fields = [{"key": key, "scope": "configuration", "message": "Required"} for key in
                   ("battery_power_measurement_entity", "house_consumption_power_entity", "solar_production_power_entity", "grid_power_entity")]
