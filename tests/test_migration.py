@@ -12,6 +12,12 @@ from shs_core.configuration_schema import merge_options, validate_mapping_keys, 
 
 
 class OptionMigrationTests(unittest.TestCase):
+    def test_config_entry_upgrade_preserves_app_configuration_ownership(self):
+        marker = {"settings_owner": "app"}
+        for source_version in (14, 15):
+            self.assertEqual(migrate_options(marker, source_version=source_version), (marker, False))
+        self.assertEqual(marker, {"settings_owner": "app"})
+
     def test_beta20_fixture_is_clean_and_stays_clean_after_save_reload(self):
         original = json.loads((Path(__file__).parent / "fixtures/options-beta20.json").read_text())
         before = deepcopy(original)

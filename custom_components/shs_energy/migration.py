@@ -51,6 +51,11 @@ def migrate_options(
     not inferred from live states: a missing reviewed limit stays missing.
     No archive, defaults, credentials, or command journal is written here.
     """
+    if options.get("settings_owner") == "app":
+        # The app migrates its acknowledged configuration. HA keeps only the
+        # ownership marker; applying the legacy schema here would erase it.
+        marker = {"settings_owner": "app"}
+        return marker, marker != options
     result = {key: deepcopy(value) for key, value in options.items() if key in PERSISTED_KEYS}
     # Fold the former separate cut-off source into the single quantity field.
     if options.get("battery_min_soc_entity"):
