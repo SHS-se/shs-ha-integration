@@ -191,26 +191,29 @@ class BoilerServiceTests(unittest.TestCase):
                 service["control"]["max_consecutive_inhibit_slots"], 20
             )
 
-    def test_expected_power_above_the_reviewed_rating_is_refused(self) -> None:
+    def test_expected_power_above_running_watts_preserves_forecast_demand(self) -> None:
         boiler = device(
             "sensor.hot_water_energy", "hot_water", "permit_inhibit",
             watts=300, forecast_w=350,
         )
-        with self.assertRaises(OptimisationInputError) as caught:
-            build_services(
-                {"device_control_mappings": {
-                    "sensor.hot_water_energy": {
-                        "control_type": "permit_inhibit",
-                        "actuator_entity_ids": ["switch.water_boiler"],
-                        "max_inhibit_slots": 20,
-                    },
-                }},
-                HORIZON,
-                [boiler],
-                read_entity=lambda entity_id: self.fail("no entity read is needed"),
-                local_tz=timezone.utc,
-            )
-        self.assertIn("exceeds its reviewed rating", str(caught.exception))
+        services, _samples, _ev = build_services(
+            {"device_control_mappings": {
+                "sensor.hot_water_energy": {
+                    "control_type": "permit_inhibit",
+                    "actuator_entity_ids": ["switch.water_boiler"],
+                    "max_inhibit_slots": 20,
+                },
+            }},
+            HORIZON,
+            [boiler],
+            read_entity=lambda entity_id: self.fail("no entity read is needed"),
+            local_tz=timezone.utc,
+        )
+        self.assertTrue(services)
+        for service in services:
+            self.assertEqual(service["control"]["rated_power_w"], 300)
+            self.assertEqual(service["control"]["expected_power_w_by_slot"], [350] * len(HORIZON))
+            self.assertEqual(service["required_kwh"], 8.4)
 
 
 class EvServiceTests(unittest.TestCase):

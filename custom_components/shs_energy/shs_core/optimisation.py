@@ -1227,7 +1227,7 @@ def validate_plan_contract(
                     isinstance(value, bool)
                     or not isinstance(value, (int, float))
                     or not isfinite(value)
-                    or not 0 <= value <= rated_power_w
+                    or value < 0
                     for value in expected_power
                 )
                 or isinstance(maximum_inhibit, bool)
@@ -1641,10 +1641,6 @@ def validate_plan_contract(
                             f"{key} scenario {service_id} permission does not match inhibit slots"
                         )
                     boiler_w = float(slots[index]["boiler_expected_w"])
-                    if boiler_w > control["rated_power_w"] + 0.01:
-                        raise OptimisationInputError(
-                            f"{key} scenario {service_id} expected power exceeds rating"
-                        )
                     if is_inhibited and boiler_w > 0.01:
                         raise OptimisationInputError(
                             f"{key} scenario {service_id} draws power while inhibited"

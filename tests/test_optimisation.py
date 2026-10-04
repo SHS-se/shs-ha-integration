@@ -790,6 +790,14 @@ class ForecastTests(unittest.TestCase):
         }
         validate_plan_contract(plan, now)
 
+        # The same forecast is accepted in the snapshot service and returned
+        # plans even when it exceeds the running-power estimate. Permission
+        # still controls whether the planner may account for that demand.
+        plan["services"][0]["control"]["expected_power_w_by_slot"][0] = 3500
+        for scenario in plan["plans"].values():
+            scenario["slots"][0]["boiler_expected_w"] = 3500
+        validate_plan_contract(plan, now)
+
         plan["plans"]["priority"]["slots"][0]["boiler_permitted"] = False
         plan["plans"]["priority"]["service_inhibited_slots"]["boiler:today"] = [0]
         with self.assertRaisesRegex(OptimisationInputError, "draws power while inhibited"):

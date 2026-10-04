@@ -244,10 +244,9 @@ def build_services(
             parse_number(model.get("active_power_w"), f"{model['name']} power")
             for model in boiler_models
         )
-        if max(expected_w, default=0) > rated_power_w + 1e-6:
-            raise OptimisationInputError(
-                "empirical water-heater expected power exceeds its reviewed rating"
-            )
+        # Demand is a forecast, while active watts can be a current sensor
+        # reading or a learned running level. Their difference is not a
+        # configuration failure and must not discard the household plan.
         inhibit_values: list[int] = []
         for model, mapping in boiler_controls:
             maximum_inhibit = parse_number(
