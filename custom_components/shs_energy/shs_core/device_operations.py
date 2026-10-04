@@ -14,13 +14,12 @@ from .native_commands import finite, native_command
 from .device_ownership import DeviceOwnership
 from .api_contract import INTEGRATION_VERSION
 from .operating_modes import device_mode, EXECUTING_MODES
-from .minimum_run import RunStateUnavailable, minimum_run_errors
 from .verification import OPERATIONS, operation_name, evaluation_record, observation
 from .controller_metrics import ControllerMetrics, fingerprint, record_time
 from .battery_commands import validate_battery_command, battery_mode_key
 from .configuration_values import resolve_battery_quantities, resolve_quantity
 from .device_commands import actuator_targets, execution_setup_errors, validate_commands
-from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
+from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, planning_path
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -164,33 +163,7 @@ class DeviceOperations:
             raise ValueError(f"{entity} must report SOC as % or a fraction")
         return value
 
-    def validate_minimum_run_configuration(self):
-        options = self.ownership.records.get(self.device, {}).get("options") if self.restoring else self.options()
-        options = options or self.options()
-        models = {model["key"]: model for model in (self.execution_plan() or {}).get("device_models", [])}
-        fields = []
-        for key, mapping in options.get("device_control_mappings", {}).items():
-            path = mapped_planning_path(models.get(key, {}), mapping, options.get("pool_water_temperature_entity"))
-            owner = path if path in ("pool", "ev") else "device:" + key
-            if owner != self.device:
-                continue
-            for field, messages in minimum_run_errors(mapping).items():
-                fields.append({"scope": "mapping", "device_key": key, "key": field, "message": "; ".join(messages)})
-        if fields:
-            error = ControlObservationError("; ".join(field["message"] for field in fields), None,
-                                            "Correct the highlighted minimum run time setting.")
-            error.details["fix"] = {"kind": "fields", "fields": fields}
-            raise error
-
-    def minimum_run_deadline(self, entity, value, now):
-        try:
-            return self.ownership.runs.blocked_until(entity, value, self.inputs.read, now)
-        except RunStateUnavailable as err:
-            raise ActuatorUnavailableError(str(err), err.entity,
-                "Wait for the device's enabled state to return.", unavailable=True) from err
-
     async def command(self, entity, value):
-        self.validate_minimum_run_configuration()
         if self.battery_writer_fence is not None and not self.verifying:
             self.battery_writer_fence.check_legacy(entity)
         self.check_authority()
@@ -202,13 +175,6 @@ class DeviceOperations:
         _, service, service_data = native.action.service_call()
         data = {key: item for key, item in service_data.items() if key != "entity_id"}
         now = datetime.now(timezone.utc)
-        if not self.verifying:
-            self.ownership.runs.observe(self.inputs.read, now)
-        if not equal:
-            release = self.minimum_run_deadline(entity, value, now)
-            if release:
-                self.device_deadline("minimum_run:" + entity, release)
-                raise ControlDeadlineError(f"Minimum run time keeps the device on until {release.isoformat()}")
         command = {"at": now.isoformat(), "phase": "handover" if self.restoring else "plan",
                    "domain": domain, "service": service, "data": {"entity_id": entity, **data},
                    "value": value, "observed_value": state.state}
@@ -227,7 +193,6 @@ class DeviceOperations:
         command.update(called=False, transport="not_sent", settings_confirmation="not_checked")
         if self.diagnostic_evaluation is not None:
             self.diagnostic_evaluation["commands"].append(command)
-        prepared = {}
         try:
             record = self.ownership.records.get(getattr(self, "device", ""))
             if record is not None and not self.restoring:
@@ -241,20 +206,12 @@ class DeviceOperations:
                     if self.scheduler is not None:
                         self.scheduler.device_deadline(self.device,"battery_headroom",datetime.now(timezone.utc)+timedelta(seconds=5))
                     raise ControlDeadlineError("Waiting for battery charging to release grid capacity")
-                # Persist the start before the service can activate hardware.
-                prepared = self.ownership.runs.prepare_start(entity, value, self.inputs.read, datetime.now(timezone.utc))
-                if self.ownership.runs.dirty:
-                    await self.save()
                 def authorize():
                     self.check_authority()
                     if self.device != 'battery' and not self.before_external_command(self.device):
                         raise ControlDeadlineError('Waiting for battery charging to release grid capacity')
                     if self.battery_writer_fence is not None:
                         self.battery_writer_fence.check_legacy(entity)
-                    release = self.minimum_run_deadline(entity, value, datetime.now(timezone.utc))
-                    if release:
-                        self.device_deadline("minimum_run:" + entity, release)
-                        raise ControlDeadlineError(f"Minimum run time keeps the device on until {release.isoformat()}")
 
                 def sent():
                     self.command_times[entity] = datetime.now(timezone.utc)
@@ -265,15 +222,9 @@ class DeviceOperations:
                 await self.native_executor.execute(request, authorize=authorize,
                     timeout=CONFIRM_SECONDS, on_sent=sent)
                 command["transport"] = "accepted"
-                self.ownership.runs.observe(self.inputs.read, datetime.now(timezone.utc), entity=entity)
-                if self.ownership.runs.dirty:
-                    await self.save()
             # Service completion records an accepted setting. Ordinary readings
             # and explicit device workflows assess the physical response.
         except (Exception, asyncio.CancelledError) as err:
-            if prepared and not command["called"]:
-                self.ownership.runs.cancel_unsent_start(prepared, self.inputs.read, datetime.now(timezone.utc))
-                await self.save()
             command["error"] = str(err) or type(err).__name__
             raise
         finally:
@@ -324,14 +275,6 @@ class DeviceOperations:
             return
         await self.ownership.save()
 
-    async def minimum_run_snapshot(self, options, models):
-        async with self.lock:
-            now = datetime.now(timezone.utc)
-            self.ownership.runs.configure(options, models, now)
-            self.ownership.runs.observe(self.inputs.read, now)
-            if self.ownership.runs.dirty:
-                await self.save()
-            return self.ownership.runs.snapshot(now)
 
     async def capture(self, device, options, entities):
         if device in self.ownership.records:
@@ -368,18 +311,6 @@ class DeviceOperations:
                     record["externally_changed"] = sorted(changed)
                     self.ownership.overrides[device] = EXTERNAL_CHANGE
                     await self.save()
-                mapping = options["device_control_mappings"][device.removeprefix("device:")]
-                if mapping["control_type"] == "switch_schedule":
-                    now = datetime.now(timezone.utc)
-                    for entity, value in original.items():
-                        at = record.get("transition_times", {}).get(entity)
-                        last = record.get("last_commands", {}).get(entity)
-                        if at and last != value and entity not in record.get("externally_changed", []):
-                            minimum = mapping.get("minimum_off_seconds") if last == "off" else None
-                            if minimum is not None and (now - datetime.fromisoformat(at)).total_seconds() < minimum:
-                                self.device_deadline("minimum_run:" + entity,
-                                                     datetime.fromisoformat(at) + timedelta(seconds=minimum))
-                                raise ControlDeadlineError("restoration waiting for minimum relay run time")
                 for entity, value in original.items():
                     if entity not in record.get("externally_changed", []):
                         await self.command(entity, value)
@@ -795,29 +726,6 @@ class DeviceOperations:
                 on = True
                 values = {entity: "on" for entity in targets}
                 self.device_deadline("permitted_run", limited)
-            if kind == "switch_schedule" and not record:
-                for entity, value in values.items():
-                    state = self.state(entity)
-                    if state.state != value:
-                        minimum = mapping.get("minimum_off_seconds") if state.state == "off" else None
-                        if minimum is None or minimum == 0:
-                            continue
-                        at = getattr(state, "last_changed", None)
-                        if at is None:
-                            raise ValueError("cannot establish the actuator's current run time")
-                        if (now - at).total_seconds() < minimum:
-                            self.device_deadline("minimum_run:" + entity, at + timedelta(seconds=minimum))
-                            raise ControlDeadlineError("initial switch transition violates the reviewed minimum run time")
-            if record and kind == "switch_schedule":
-                for entity, value in values.items():
-                    previous = record.get("last_commands", {}).get(entity)
-                    changed_at = record.get("transition_times", {}).get(entity)
-                    if changed_at and previous != value:
-                        minimum = mapping.get("minimum_off_seconds") if previous == "off" else None
-                        if minimum is not None and (now - datetime.fromisoformat(changed_at)).total_seconds() < minimum:
-                            self.device_deadline("minimum_run:" + entity,
-                                                 datetime.fromisoformat(changed_at) + timedelta(seconds=minimum))
-                            raise ControlDeadlineError("planned switch transition violates the reviewed minimum run time")
         record = await self.capture(device, options, targets)
         now = datetime.now(timezone.utc).isoformat()
         if kind == "permit_inhibit":
@@ -829,8 +737,6 @@ class DeviceOperations:
                 self.device_deadline("maximum_inhibit", datetime.fromisoformat(record["inhibited_since"])
                                      + timedelta(seconds=mapping["max_inhibit_slots"] * 900))
         for entity, value in values.items():
-            if record.get("last_commands", {}).get(entity) != value:
-                record.setdefault("transition_times", {})[entity] = now
             await self.command(entity, value)
         await self.save()
         if kind == "setpoint":
@@ -844,9 +750,6 @@ class DeviceOperations:
                     "decision": decision, "retry_automatically": True}
         return {"state": "commanded", "reason": "actuator targets acknowledged; delivered heat or power is not inferred",
                 "decision": decision}
-
-
-
 
     def preview_state(self, entity, *, max_age=None):
         """Read real HA state without scheduling observations or changing journals."""

@@ -1,14 +1,12 @@
-"""Durable captured settings and appliance obligations owned by the device gateway."""
+"""Durable captured settings owned by the device gateway."""
 from copy import deepcopy
-
-from .minimum_run import MinimumRuns
 
 
 def decode_ownership(value):
     """Decode the existing controller Store without acquiring hardware ownership.
 
-    This decoder is also used by dormant migration checks. It neither consults
-    live entities nor changes the saved run clocks.
+    This decoder is also used by dormant migration checks. It does not consult
+    live entities. Retired run clocks are discarded on decode.
     """
     if type(value) is not dict:
         raise ValueError('Invalid device ownership record')
@@ -24,38 +22,33 @@ def decode_ownership(value):
     overrides = deepcopy(value.get('overrides', {}))
     if any(type(key) is not str or type(reason) is not str for key, reason in overrides.items()):
         raise ValueError('Invalid device override record')
-    return (records, overrides, deepcopy(value.get('retired_pool_temperature_settings', {})),
-            MinimumRuns(value.get('runs', {})))
+    return records, overrides, deepcopy(value.get('retired_pool_temperature_settings', {}))
 
 
 class DeviceOwnership:
-    """Single mutable owner of restoration records and minimum-run promises.
+    """Single mutable owner of restoration records.
 
     Methods are called under the gateway's command lock. Save captures a private
     value before awaiting storage; later in-memory mutations cannot change what
-    that save means or mark a newer run revision as persisted.
+    that save means.
     """
     def __init__(self, store):
         self.store = store
         self.records = {}
         self.overrides = {}
         self.retired_pool_temperature_settings = {}
-        self.runs = MinimumRuns()
 
     async def load(self):
         value = await self.store.async_load()
         decoded = decode_ownership(value if value is not None else {})
-        self.records, self.overrides, self.retired_pool_temperature_settings, self.runs = decoded
+        self.records, self.overrides, self.retired_pool_temperature_settings = decoded
 
     def snapshot(self):
         return deepcopy({'records': self.records, 'overrides': self.overrides,
-                         'retired_pool_temperature_settings': self.retired_pool_temperature_settings,
-                         'runs': self.runs.records})
+                         'retired_pool_temperature_settings': self.retired_pool_temperature_settings})
 
     async def save(self):
-        revision = self.runs.revision
         await self.store.async_save(self.snapshot())
-        self.runs.saved_revision = revision
 
     async def capture(self, device, options, originals):
         if device in self.records:

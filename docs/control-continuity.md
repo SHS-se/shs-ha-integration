@@ -68,7 +68,7 @@ already require. If the device is already in the planned state, nothing is sent.
   (`max_inhibit_slots`) is allowed to run for one quarter while SHS keeps control,
   including when no plan is available. This used to be a fault that handed the
   device back until the plan changed.
-- Native equipment protections are unaffected.
+- Native equipment protections are unaffected. SHS minimum-on/off timers were retired on 4 October 2026; they no longer delay planned transitions or explicit handover.
 
 ## Status values
 

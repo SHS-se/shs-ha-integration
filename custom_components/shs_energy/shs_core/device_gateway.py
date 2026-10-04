@@ -193,10 +193,6 @@ class DeviceGateway(DeviceOperations):
                     changed = True
                 elif device_mode(options, device) == 'controlling' and record.pop('restoration_pending', None) is not None:
                     changed = True
-            self.ownership.runs.configure(options, models, datetime.now(timezone.utc))
-            self.ownership.runs.observe(self.inputs.read, datetime.now(timezone.utc))
-            if changed or self.ownership.runs.dirty:
-                await self.ownership.save()
             return self.ownership.snapshot()
 
     def make_command(self, identity, phase, action):
@@ -215,7 +211,6 @@ class DeviceGateway(DeviceOperations):
         async with self.lock:
             self.active_options = deepcopy(self.options())
             self.plan, self.slot, self.active_slot = {'device_models':[]}, None, None
-            self.ownership.runs.observe(self.inputs.read,datetime.now(timezone.utc))
             for device,record in tuple(self.ownership.records.items()):
                 if device == 'battery':
                     continue  # The admitted battery adapter owns its release.
@@ -255,9 +250,6 @@ class DeviceGateway(DeviceOperations):
                 finally:
                     self.local_obligation = False
                     self.restoring = False
-            if self.ownership.runs.dirty:
-                await self.ownership.save()
-
     async def perform(self, value):
         intent = DeviceIntent.parse(value)
         async with self.lock:

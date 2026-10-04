@@ -79,3 +79,30 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
         app = Configuration(other,{'installation':'original'},self.gateway.install,project=deepcopy)
         with self.assertRaisesRegex(ValueError,'missing after adoption'):
             await app.load(self.gateway.value,self.credentials)
+
+    async def test_retire_live_four_hour_setting_once_preserving_modes_and_acknowledgement(self):
+        options = {'device_modes': {'pool': 'controlling'}, 'device_control_mappings': {
+            'pool': {'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.pool'],
+                     'power': 12000, 'minimum_on_seconds': 14400, 'minimum_off_seconds': 60}}}
+        await self.app.commit(1, options, 'old-settings')
+        old = deepcopy(options)
+        async def lose_reply(body):
+            result = await self.gateway.install(body)
+            if body['revision'] == 3:
+                raise OSError('migration reply lost')
+            return result
+        reopened = Configuration(self.root, {'installation': 'original'}, lose_reply, project=deepcopy)
+        with self.assertRaisesRegex(OSError, 'migration reply lost'):
+            await reopened.load(self.gateway.value, self.credentials)
+        # The first retry reconciles an already-applied revision before migration.
+        reopened.install = self.gateway.install
+        await reopened.load(self.gateway.value, self.credentials)
+        self.assertEqual(reopened.revision, 3)
+        self.assertEqual(reopened.options()['device_modes'], options['device_modes'])
+        mapping = reopened.options()['device_control_mappings']['pool']
+        self.assertEqual(mapping, {key: value for key, value in old['device_control_mappings']['pool'].items()
+                                  if key not in ('minimum_on_seconds', 'minimum_off_seconds')})
+        self.assertEqual(reopened.options(), self.gateway.options())
+        await reopened.load(self.gateway.value, self.credentials)
+        self.assertEqual(reopened.revision, 3)
+        self.assertEqual(options, old)

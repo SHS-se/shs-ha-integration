@@ -71,8 +71,6 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         self.source = adapter.HomeAssistantSource(self.hass, entry)
         self.service = GatewayService(self.stream, IDENTITY, self.source)
         self.service.physical, self.service.battery = self.physical, self.gateway
-        from shs_core.minimum_run import MinimumRuns
-        self.service.physical.ownership.runs=MinimumRuns()
         self.source.service = self.service
         installed = dict(self.options, _observed_entities=[])
         self.source.configuration = SimpleNamespace(options=lambda:deepcopy(installed),
@@ -165,8 +163,6 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         registry=SimpleNamespace(async_get=lambda entity:SimpleNamespace(platform='filter')
             if entity=='sensor.filtered' else None)
         self.source.report.__globals__['er'].async_get=lambda hass:registry
-        from shs_core.minimum_run import MinimumRuns
-        self.service.physical.ownership.runs=MinimumRuns()
         self.source.install_bindings(dict(revision=1,pool_pause=None,bindings={'sensor.filtered':['reference']}))
         await self.source.refresh_configuration()
         states['sensor.filtered'].attributes['entity_id']='sensor.b'
@@ -185,8 +181,6 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             last_changed=now,last_updated=now,last_reported=now,context=SimpleNamespace(id='report'))
             for entity in ('sensor.power','sensor.reference')}
         self.hass.states.get=states.get
-        from shs_core.minimum_run import MinimumRuns
-        self.service.physical.ownership.runs=MinimumRuns()
         self.service.physical.observation_changed=asyncio.Event()
         self.source.entities=set(states)
         self.source.install_bindings(dict(revision=1,pool_pause=None,

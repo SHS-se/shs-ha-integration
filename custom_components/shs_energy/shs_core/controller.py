@@ -19,7 +19,6 @@ from .native_commands import finite, native_command
 from .device_ownership import DeviceOwnership, decode_ownership
 from .api_contract import INTEGRATION_VERSION
 from .operating_modes import device_mode, EXECUTING_MODES
-from .minimum_run import RunStateUnavailable, minimum_run_errors
 from .verification import OPERATIONS, operation_name, evaluation_record, observation
 from .controller_metrics import ControllerMetrics, fingerprint, record_time
 from .battery_commands import validate_battery_command, battery_mode_key
@@ -75,7 +74,7 @@ class ScheduledController(DeviceOperations):
 
     def adopt_ownership(self, value):
         (self.ownership.records, self.ownership.overrides,
-         self.ownership.retired_pool_temperature_settings, self.ownership.runs) = decode_ownership(value)
+         self.ownership.retired_pool_temperature_settings) = decode_ownership(value)
 
     async def _physical(self, device, operation, options, slot=None):
         plan, _ = self.coordinator.binding_plan_for(device, options)
@@ -127,10 +126,6 @@ class ScheduledController(DeviceOperations):
             return await self._physical(device, 'inhibit', options)
         return await super().hold_inhibit_limit(device, options)
 
-    async def minimum_run_snapshot(self, options, models):
-        if self.devices is not None:
-            return await self.devices.minimum_run_snapshot(options, models)
-        return await super().minimum_run_snapshot(options, models)
 
     async def save(self):
         if self.devices is not None and not self.verifying:
@@ -307,10 +302,6 @@ class ScheduledController(DeviceOperations):
     def end_gap(self, device):
         if self.scheduler is not None:
             self.scheduler.device_deadline(device, "observation_gap", None)
-
-
-
-
 
     async def verify(self, device, options, slot, plan):
         if self.verification is None:
@@ -517,12 +508,6 @@ class ScheduledController(DeviceOperations):
                     if device_mode(options, device) != "controlling":
                         del self.ownership.overrides[device]
                         await self.save()
-                self.ownership.runs.configure(options, requested, datetime.now(timezone.utc))
-                self.ownership.runs.observe(self.inputs.read, datetime.now(timezone.utc))
-                if self.ownership.runs.dirty:
-                    await self.save()
-            if self.scheduler is not None:
-                self.scheduler.watch_runs()
             # Hash shared inputs once, excluding unused future-plan slots.
             metrics_context = fingerprint({
                 "options": options, "slot": slot,
@@ -640,8 +625,6 @@ class ScheduledController(DeviceOperations):
             self.scheduler.pause()
         try:
             async with self.lock:
-                if self.devices is None and self.ownership.runs.dirty:
-                    await self.save()
                 # Stopping is half of a restart: every device keeps the last setting
                 # SHS sent, and its journalled ownership resumes on the next start.
                 if self.verification is not None and self.initialized:

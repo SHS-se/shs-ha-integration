@@ -63,9 +63,7 @@ def pool_paused(status, slot, plan, read, ownership):
             or status.get('handover_pending') or ownership.records.get('pool',{}).get('restoration_pending')):
         return False
     state = read(status['control_entity'])
-    return (state is not None and state.state == 'off'
-        and not any(row.get('pending_start') or row['active'] for row in ownership.runs.records.values()
-                    if row['binding']['owner'] == 'pool'))
+    return state is not None and state.state == 'off'
 
 
 def temperature_available(state):
@@ -102,9 +100,7 @@ def validate_pool_pause(value):
 
 def native_pool_idle(pause, declared, context, read, ownership, now):
     """Inspect current physical obligations before accepting a paused interest."""
-    if (ownership.records.get('pool',{}).get('restoration_pending')
-            or any(row.get('pending_start') or row['active'] for row in ownership.runs.records.values()
-                   if row['binding']['owner'] == 'pool')):
+    if ownership.records.get('pool',{}).get('restoration_pending'):
         return False
     if declared is not None and now < datetime.fromisoformat(declared['until']):
         state = read(declared['entity'])

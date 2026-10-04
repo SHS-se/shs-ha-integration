@@ -131,9 +131,9 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 validate_commands(commands, models)
 
-    async def test_switch_restore_waits_for_minimum_run_time(self):
+    async def test_switch_restore_is_immediate_without_shs_run_timers(self):
         mapping = self.options['device_control_mappings']['heater']
-        mapping.update(control_type='switch_schedule', minimum_on_seconds=60, minimum_off_seconds=60)
+        mapping.update(control_type='switch_schedule')
         self.states['switch.heater'].last_changed = datetime.now(timezone.utc) - timedelta(minutes=10)
         self.coordinator.optimisation_plan['device_models'][0]['control_type'] = 'switch_schedule'
         self.coordinator.async_cached_device_configuration.return_value[0]['control_type'] = 'switch_schedule'
@@ -141,10 +141,6 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.assertEqual(self.states['switch.heater'].state, 'off')
         self.options['device_modes']['heater'] = 'planning'
-        await self.controller.async_tick()
-        self.assertEqual(self.states['switch.heater'].state, 'off')
-        self.assertTrue(self.controller.ownership.records['device:heater']['restoration_pending'])
-        self.controller.ownership.records['device:heater']['transition_times']['switch.heater'] = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'on')
         self.assertFalse(self.controller.ownership.records)

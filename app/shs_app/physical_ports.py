@@ -32,8 +32,6 @@ class RemoteDevices:
         # Only HA's canonical Verification mode can relinquish captured settings.
         return await self.synchronize((self.household.optimisation_plan or {}).get('device_models', []))
 
-    async def minimum_run_snapshot(self, options, models):
-        return await self.gateway.call('minimum_runs', {'models':models})
 
     async def perform(self, device, operation, plan, slot):
         if self.context is None:

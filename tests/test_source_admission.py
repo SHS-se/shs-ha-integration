@@ -15,7 +15,7 @@ class AdmissionTests(unittest.TestCase):
     def setUp(self):
         self.now = datetime.now(timezone.utc)
         self.off = SimpleNamespace(state='off')
-        self.owner = SimpleNamespace(records={},runs=SimpleNamespace(records={}))
+        self.owner = SimpleNamespace(records={})
         self.context = dict(configuration_revision=4,policy_revision=7)
         self.pause = dict(**self.context,start=self.now.isoformat(),entity='switch.pool')
 
@@ -29,14 +29,12 @@ class AdmissionTests(unittest.TestCase):
         self.assertFalse(ordered({'pool_temperature','reference'},pool_idle=True))
         self.assertTrue(ordered({'pool_temperature','reference'},pool_idle=False))
 
-    def test_observed_on_pending_run_restoration_and_slot_end_require_attention(self):
+    def test_observed_on_restoration_and_slot_end_require_attention(self):
         idle = lambda: native_pool_idle(self.pause,None,self.context,lambda _:self.off,self.owner,self.now)
         self.assertTrue(idle())
         self.off.state='on';self.assertFalse(idle());self.off.state='off'
         self.owner.records['pool']={'restoration_pending':True};self.assertFalse(idle())
         self.owner.records.clear()
-        self.owner.runs.records['run']={'active':False,'pending_start':True,'binding':{'owner':'pool'}}
-        self.assertFalse(idle());self.owner.runs.records.clear()
         self.pause['start']=(self.now-timedelta(minutes=15)).isoformat();self.assertFalse(idle())
 
     def test_verification_attention_follows_simulated_heating_and_current_slot(self):

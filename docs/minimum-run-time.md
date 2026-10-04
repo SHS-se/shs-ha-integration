@@ -1,45 +1,11 @@
-# Minimum run time
+# Minimum run time retired
 
-Each appliance control card offers **Minimum run time** under **Add a setting**.
-It is hidden until added, accepts minutes, and is optional for switch schedules,
-permit/inhibit controls, thermostats, and variable-power controls. An absent or
-zero value means no minimum run time. Battery charge/discharge operations are not
-appliance runs.
+Decision, 4 October 2026: remove SHS minimum-on/off settings and hard elapsed-time run locks for every appliance, including the live pool heater's four-hour setting. The current planner and integration no longer create or enforce run-duration promises.
 
-Once a device is enabled, SHS cannot stop it before the configured time elapses.
-The same command guard covers ordinary plans, replans, temperature and charge
-targets, exclusions, overrides, and restoration. Removing or shortening the
-setting during a run does not cancel the duration already promised. A replaced
-actuator gets its own run history while the old actuator retains its promise.
-The deadline allows a stop; it does not itself require one.
+Configuration version 15 removes the old timer fields through the existing one-time migration. The app-owned settings record is retired through its ordinary acknowledged revision writer on startup, including the live four-hour pool setting. The ownership decoder discards persisted `runs` while retaining captured settings and ownership. Old snapshots carrying a timer no longer force heating, charging, or hot-water permission.
 
-The controller journals real starts separately from control ownership. It saves
-an intended start before calling Home Assistant and retains elapsed time across
-integration reloads, HA restarts, and upgrades. Unknown observations preserve the
-journal. Real observed off/on transitions start a new run in receipt order.
-A switch or permission entity is enabled when on; a power control is enabled
-above zero. A climate entity is enabled in its active HVAC mode. A numeric
-thermostat target is enabled above its measured room temperature. SHS holds
-thermostat target reductions during the protected period.
+Native equipment protections remain in the equipment. A running pool may still have an economically preferred continuation candidate, compared against the freely replanned schedule using the existing release margin. That preference is not an actuator timer.
 
-Verification observes real device transitions without sending schedule commands.
-Moving from verification to controlling uses that same run history. Moving from
-controlling to verification hands the device back to its captured settings, as
-[control continuity](control-continuity.md) requires. That handover uses the same
-command guard: if it would stop the device inside its minimum run time, it stays
-pending and completes when the time has elapsed.
+Restart, source loss, stale plans and faults retain the last setting sent. Leaving Controlling, including for Verification, still restores captured settings; no SHS run timer delays that handover. See [control continuity](control-continuity.md).
 
-Between 25 September and 3 October 2026 this section said, and the code did, the
-opposite: verification relinquished ownership without restoring the device. That
-was not a requirement of minimum run time and has been reverted; see the history
-in [control continuity](control-continuity.md#history).
-
-Snapshots carry the configured duration, current enabled state, and remaining
-seconds in each device model's `minimum_run`. Planner v45 reserves ongoing runs
-before economic allocation, counts their energy and heat, and considers minimum
-run lengths when choosing future starts. Fixed-plan suffixes inherit unfinished
-runs. Durations use actual slot lengths, including the partial first slot.
-
-This feature spans both repositories: publish the planner changes alongside the
-integration beta. The integration's local command guard enforces the deadline;
-the planner changes make the planned consumption and scheduling reflect it.
+Historical implementation: minimum runs were restored on 25 September in both repositories, including a four-hour pool minimum. This retirement reverses that duration requirement without reversing the later control-continuity corrections.

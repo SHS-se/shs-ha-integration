@@ -1,4 +1,4 @@
-"""Captured originals and run promises must survive writes, interruptions and reloads."""
+"""Captured originals must survive writes, interruptions and reloads."""
 import asyncio
 from copy import deepcopy
 from pathlib import Path
@@ -35,32 +35,27 @@ class OwnershipTests(unittest.IsolatedAsyncioTestCase):
         first['originals']['switch.old'] = 'changed in memory'
         self.assertEqual(restored.records['pool']['originals']['switch.old'], 'off')
 
-    async def test_save_does_not_claim_a_concurrent_run_revision_is_persisted(self):
+    async def test_save_captures_a_private_value_before_awaiting(self):
         store = Store()
         owner = DeviceOwnership(store)
-        owner.runs.revision = 1
         owner.overrides['pool'] = 'before'
         store.release.clear()
         writing = asyncio.create_task(owner.save())
         await store.started.wait()
-        owner.runs.revision = 2
         owner.overrides['pool'] = 'after'
         store.release.set()
         await writing
         self.assertEqual(store.value['overrides']['pool'], 'before')
-        self.assertTrue(owner.runs.dirty)
         await owner.save()
         self.assertEqual(store.value['overrides']['pool'], 'after')
-        self.assertFalse(owner.runs.dirty)
 
-    async def test_dormant_decoder_never_changes_run_clocks_or_input(self):
+    async def test_dormant_decoder_discards_retired_run_clocks_without_changing_originals(self):
         source = {'records': {'battery': {'options': {}, 'originals': {},
                     'last_commands': {'number.limit': 0}}},
                   'runs': {'heater': {'since': '2026-09-27T12:00:00+00:00',
                             'minimum_seconds': 3600, 'active': True, 'pending_start': True}}}
         before = deepcopy(source)
-        records, _, _, runs = decode_ownership(source)
-        self.assertEqual(runs.records, before['runs'])
+        records, _, _ = decode_ownership(source)
         self.assertEqual(source, before)
         records['battery']['options']['new'] = True
         self.assertEqual(source, before)

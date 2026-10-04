@@ -51,7 +51,7 @@ actuators and modes are configured. The battery card and Status link to the Ener
 fields; they must not offer a generic “Edit house battery setup” for those errors.
 Export-only power, energy totals, and forecasts do not satisfy the signed-grid or
 instantaneous-power requirements. With no included battery, these shared fields
-remain optional. Minimum continuous on/off times remain optional in every mode.
+remain optional. SHS minimum continuous on/off settings were retired on 4 October 2026 and are absent from every mode.
 
 ## Measurement issues are not configuration errors
 

@@ -153,8 +153,7 @@ class HomeAssistantSource:
         valid = (not self.pool_unavailable and all(temperature_available(self.hass.states.get(source))
                      and temperature_metadata(self.hass.states.get(source)) == self.pool_metadata[source]
                      for source in self.pool_metadata) if thermal else True)
-        return (ordered(uses, pool_idle=valid and self.pool_idle() if thermal else False)
-            or entity in self.service.physical.ownership.runs.entities and 'pool_temperature' not in uses)
+        return ordered(uses, pool_idle=valid and self.pool_idle() if thermal else False)
 
     def metadata_unchanged(self):
         """Whether a registry or core event leaves the settled context as it is.
@@ -323,17 +322,11 @@ class HomeAssistantSource:
             kind = 'state_report' if event.event_type == EVENT_STATE_REPORTED else 'state_change'
             physical = self.service.physical
             physical.observation_changed.set()
-            if entity in physical.ownership.runs.entities:
-                physical.ownership.runs.observe(lambda target:state if target==entity else self.hass.states.get(target),
-                    datetime.now(timezone.utc),entity=entity,received=kind=='state_change')
-            if physical.ownership.runs.dirty:
-                self.service.obligation_event.set()
             try:
                 row = self.report(entity, event.data.get('new_state'), kind, compact=True)
                 self.intake_counts['ordered'] += 1
                 self.intake_counts['bytes'] += len(json.dumps(row))
-                self.service.stream.capture('observation', row,
-                    ownership=physical.ownership.snapshot() if physical.ownership.runs.dirty else None)
+                self.service.stream.capture('observation', row)
                 self.fact_versions[entity] = self.fact_versions.get(entity,0)+1
                 if entity in self.pool_metadata:
                     self.pool_metadata[entity] = temperature_metadata(state)
@@ -403,7 +396,6 @@ async def open_gateway(hass, entry):
         if admission is not None:
             source.install_bindings(admission)
         await service.physical.load()
-        service.physical.ownership.runs.configure(source.options(), [])
         await service.battery.open()
         source.attach()
         await source.refresh_configuration()

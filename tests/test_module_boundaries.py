@@ -40,7 +40,7 @@ PURE_MODULES = (
     "shs_core.api_contract", "shs_core.durable_record", "shs_core.verification_storage",
     "shs_core.const", "shs_core.replan_listener",
     "shs_core.device_controls",
-    "shs_core.device_commands", "shs_core.minimum_run",
+    "shs_core.device_commands",
     "migration",
     "shs_core.network_traffic",
     "shs_core.controller_metrics", "shs_core.resource_profiling",

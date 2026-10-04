@@ -91,15 +91,16 @@ class PhysicalGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.pool'].state, 'off')
         self.assertEqual(self.gateway.ownership.records, {})
 
-    async def test_minimum_run_rejects_early_stop_and_preserves_ownership(self):
+    async def test_retired_minimum_run_allows_early_stop_and_preserves_ownership(self):
         self.options['device_control_mappings']['pool']['minimum_on_seconds'] = 3600
         await self.gateway.synchronize(self.models)
         result = await self.gateway.perform(self.request())
         self.assertIsNone(result['error'])
         stopped = await self.gateway.perform({**self.request(heating_w=0), 'request_id':'stop'})
-        self.assertEqual(stopped['error']['kind'], 'deadline')
-        self.assertTrue(stopped['deadlines'])
-        self.assertEqual(self.states['switch.pool'].state, 'on')
+        self.assertIsNone(stopped['error'])
+        self.assertFalse(stopped['deadlines'])
+        self.assertEqual(self.states['switch.pool'].state, 'off')
+        self.assertIn('pool', self.gateway.ownership.records)
 
     async def test_raw_battery_or_service_payload_is_rejected(self):
         with self.assertRaises(ValueError):

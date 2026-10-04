@@ -175,7 +175,6 @@ FIELDS = {
     'policy': {'value'},
     'ownership': set(),
     'synchronize': {'models'},
-    'minimum_runs': {'models'},
     'device': {'intent'},
     'battery_grant': {'identity', 'catalog', 'conversion', 'expires_at_ms'},
     'battery_route': {'effect', 'grant'},
@@ -276,8 +275,6 @@ class AppConnection(GatewayConnection):
             return s.physical.ownership.snapshot()
         if op == 'synchronize':
             return await s.physical.synchronize(body['models'])
-        if op == 'minimum_runs':
-            return await s.physical.minimum_run_snapshot(s.physical.options(), body['models'])
         if op == 'device':
             return await s.physical.perform(body['intent'])
         if op == 'battery_grant':

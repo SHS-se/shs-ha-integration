@@ -43,6 +43,15 @@ class Configuration:
             elif self.data.get('schema') != 1 or self.data.get('identity') != self.identity:
                 raise GatewayConflict('Unsupported app configuration schema or installation identity')
             await self._apply()
+        # The app owns the current settings after adoption; HA config-entry
+        # migration cannot retire these fields. Roll forward once through the
+        # ordinary acknowledged revision writer, preserving modes and ownership.
+        cleaned = self.options()
+        for mapping in cleaned.get('device_control_mappings', {}).values():
+            mapping.pop('minimum_on_seconds', None)
+            mapping.pop('minimum_off_seconds', None)
+        if cleaned != self.options():
+            await self.commit(self.revision, cleaned, 'retire-shs-run-timers')
 
     async def _apply(self):
         desired = self.data

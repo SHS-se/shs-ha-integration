@@ -457,7 +457,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.states['switch.heater'].last_changed = self.now
         self.options['device_control_mappings']['heater'] = {
             'control_type': kind, 'actuator_entity_ids': ['switch.heater'],
-            'max_inhibit_slots': 2, 'minimum_on_seconds': 60, 'minimum_off_seconds': 60,
+            'max_inhibit_slots': 2,
         }
         self.coordinator.optimisation_plan.update(schema_version=7, device_models=[{'key': 'heater', 'control_type': kind}])
         self.coordinator.async_cached_device_configuration.return_value = [{'key': 'heater', 'control_type': kind}]
@@ -466,7 +466,6 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_maximum_inhibit_is_enforced_at_its_deadline(self):
         self.configure_heater()
-        self.options['device_control_mappings']['heater'].pop('minimum_on_seconds')
         await self.controller.async_start()
         self.assertEqual(self.states['switch.heater'].state, 'off')
         self.assertIn(('device:heater', 'maximum_inhibit'), self.scheduler.deadlines)
@@ -478,9 +477,6 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_omitted_timings_allow_initial_switching_transitions_and_restoration(self):
         self.configure_heater('switch_schedule')
-        mapping = self.options['device_control_mappings']['heater']
-        del mapping['minimum_on_seconds']
-        mapping['minimum_off_seconds'] = None
         del self.states['switch.heater'].last_changed
         await self.controller.async_start()
         self.assertEqual(self.states['switch.heater'].state, 'off')
@@ -496,37 +492,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('device:heater', self.controller.ownership.records)
         self.assertNotIn(('device:heater', 'minimum_run:switch.heater'), self.scheduler.deadlines)
 
-    async def test_minimum_run_deadline_retries_without_a_sensor_event(self):
-        self.configure_heater('switch_schedule')
-        await self.controller.async_start()
-        self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertIn(('device:heater', 'minimum_run:switch.heater'), self.scheduler.deadlines)
-        self.advance(60)
-        await self.drain()
-        self.assertEqual(self.states['switch.heater'].state, 'off')
-        self.assertEqual(self.controller.status['device:heater']['state'], 'commanded')
 
-    async def test_coalesced_external_restarts_in_verification_keep_the_latest_run(self):
-        self.options['device_control_mappings']['pool']['minimum_on_seconds'] = 3600
-        self.options['device_modes'] = {'$pool': 'control_verification'}
-        self.slot['pool_w'] = 0
-        await self.controller.async_start()
-        self.states['switch.pool'].state = 'on'
-        self.event('switch.pool')
-        await self.drain()
-        self.advance(30)
-        self.states['switch.pool'].state = 'off'
-        self.event('switch.pool')
-        self.states['switch.pool'].state = 'on'
-        self.event('switch.pool')
-        await self.drain()
-        self.assertEqual(self.controller.ownership.runs.records['pool']['since'], self.now.isoformat())
-        self.options['device_modes']['$pool'] = 'controlling'
-        self.scheduler.coordinator_updated()
-        await self.drain()
-        self.assertEqual(self.calls, [])
-        self.assertEqual(self.controller.status['pool']['state'], 'pending')
-        self.assertEqual(self.store.saved['runs']['pool']['since'], self.now.isoformat())
 
     async def test_failed_real_handover_alone_gets_a_timed_retry(self):
         self.states['switch.pool'].state = 'on'
@@ -550,30 +516,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(('pool', 'restoration_retry'), self.scheduler.deadlines)
         self.assertEqual(float(self.states['number.start'].state), 29.5)
 
-    async def test_handover_waiting_for_minimum_runtime_uses_its_deadline_not_retries(self):
-        self.configure_heater('switch_schedule')
-        self.states['switch.heater'].last_changed = self.now - timedelta(minutes=10)
-        await self.controller.async_start()
-        self.options['device_modes']['heater'] = 'planning'
-        self.scheduler.coordinator_updated()
-        await self.drain()
-        self.assertTrue(self.controller.ownership.records['device:heater']['restoration_pending'])
-        self.assertNotIn(('device:heater', 'restoration_retry'), self.scheduler.deadlines)
-        self.advance(60)
-        await self.drain()
-        self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertNotIn('device:heater', self.controller.ownership.records)
 
-    async def test_inactive_device_keeps_minimum_run_observations(self):
-        self.configure_heater()
-        await self.controller.async_start()
-        self.options['device_modes']['heater'] = 'planning'
-        self.scheduler.coordinator_updated()
-        await self.drain()
-        self.scheduler.coordinator_updated()
-        await self.drain()
-        self.assertIn('switch.heater', self.subscriptions)
-        self.assertFalse(any(key[0] == 'device:heater' for key in self.scheduler.deadlines))
 
     async def test_ha_adapter_filters_events_and_removes_listeners(self):
         import ast

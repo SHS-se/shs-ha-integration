@@ -223,7 +223,6 @@ CONTROL_FIELDS["setpoint"] += (
     _field("maximum_temperature_c", "Highest allowed target", "number", unit="°C", minimum=5, maximum=35),
 )
 CONTROL_FIELDS["switch_schedule"] += (
-    _field("minimum_off_seconds", "Minimum continuous off time", "number", unit="s", minimum=0, maximum=900, help_text="Optional. Leave unset for no minimum off time."),
 )
 
 
@@ -312,10 +311,7 @@ def control_fields(
         fields = tuple(field for field in fields if field["key"] in kept)
     elif is_room_thermal_control(contract, category) and contract != "setpoint":
         fields = (OPTIONAL_TEMPERATURE_FIELD, *fields)
-    fields = (*fields, *OBSERVATION_FIELDS.get(path or "", ()),
-        _field("minimum_on_seconds", "Minimum run time", "number", unit="min",
-               minimum=0, step=1, scale=1 / 60,
-               help_text="Optional. Once enabled, SHS keeps the device running for at least this long, even after replanning or restarting. Verification leaves the device unchanged."))
+    fields = (*fields, *OBSERVATION_FIELDS.get(path or "", ()))
     primary = {"actuator_entity_ids": 0, "control_entity_id": 0, "power": 1}
     return tuple(sorted(fields, key=lambda field: primary.get(field["key"], 2)))
 
