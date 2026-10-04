@@ -379,6 +379,34 @@ def extract_timestamped_forecast(
     return dict(sorted(result.items())), used, max(issued)
 
 
+def category_meters(
+    configured: dict[str, list[str]],
+    devices: list[dict[str, Any]],
+) -> dict[str, list[str]]:
+    """The meters each quarter-hour category is summed from, each load once.
+
+    Two lists name meters for a category: the options' Energy Dashboard meters,
+    copied from the dashboard when discovery last ran, and the shared device
+    inventory, read live from the dashboard and reviewed on the website. Adding
+    the second to the first counts a load twice whenever its two meters differ:
+    with the charger's older meter still in the options after the dashboard
+    had moved to a newer one, every charge was recorded twice, the second time
+    an hour late as the slower meter caught up, and the base load derived
+    beneath it fell to zero. Nothing in a meter tells a second meter on one
+    load from a meter on another, so a category with shared devices is
+    measured by those devices alone, the same meters its device quarters
+    carry; the options still measure every category that has no shared device.
+    """
+    result = {category: list(meters) for category, meters in configured.items()}
+    by_category: dict[str, list[str]] = {}
+    for device in devices:
+        meters = by_category.setdefault(str(device["category"]), [])
+        if device["statistic_id"] not in meters:
+            meters.append(str(device["statistic_id"]))
+    result.update(by_category)
+    return result
+
+
 def aggregate_category_changes(
     changes: dict[str, list[tuple[datetime, float]]],
 ) -> list[dict[str, Any]]:

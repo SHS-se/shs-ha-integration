@@ -109,6 +109,7 @@ from .optimisation import (
     build_base_load_model,
     base_load_source,
     calibration_summary,
+    category_meters,
     extract_timestamped_forecast,
     normalized_fraction,
     optimisation_plan_due,
@@ -2893,13 +2894,9 @@ class Household:
             )
             snapshot_error: str | None = None
             try:
-                entities = self._configured_entities()
                 exchange_options = dict(self.ports.options())
                 devices = await self._prepared_device_inventory(stored)
-                for device in devices:
-                    category_entities = entities.setdefault(device["category"], [])
-                    if device["statistic_id"] not in category_entities:
-                        category_entities.append(device["statistic_id"])
+                entities = category_meters(self._configured_entities(), devices)
                 # Query through the last completed quarter. Aggregation rejects
                 # incomplete buckets; a blanket extra-quarter delay also
                 # suppressed readings that the recorder had already finished.

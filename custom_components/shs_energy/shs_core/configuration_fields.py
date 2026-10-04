@@ -377,7 +377,7 @@ def _configuration_sections(*, battery_control_required=False) -> list[dict[str,
             "id": "metering",
             "tab": "energy",
             "title": "Energy Dashboard meters",
-            "description": "Every listed sensor is summed into its category. Device meters remain classified separately by the website.",
+            "description": "Every listed sensor is summed into its category. A category with shared Energy Dashboard devices takes its quarter-hour readings from those devices instead, so one load is never counted twice.",
             "fields": [
                 _field(
                     f"{c.OPT_PREFIX_ENTITIES}{category}",
