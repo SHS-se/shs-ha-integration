@@ -1,5 +1,6 @@
 """Encode app-selected semantic intentions without exporting a mutable owner."""
 from uuid import uuid4
+from .device_controls import pool_requested_w
 
 
 def device_intent(device, operation, plan, slot, *, configuration_revision, policy_revision):
@@ -10,7 +11,7 @@ def device_intent(device, operation, plan, slot, *, configuration_revision, poli
             parameters.update(current_a=slot['ev_target_current_a'], minimum_a=slot['ev_min_current_a'],
                               maximum_a=slot['ev_max_current_a'], models=plan['device_models'])
         elif device == 'pool':
-            parameters.update(heating_w=slot['pool_w'], stop_temperature_c=plan['pool']['stop_temperature_c'],
+            parameters.update(heating_w=pool_requested_w(plan, slot), stop_temperature_c=plan['pool']['stop_temperature_c'],
                               models=plan['device_models'])
         elif device.startswith('device:'):
             parameters.update(commands=slot['device_commands'], models=plan['device_models'])

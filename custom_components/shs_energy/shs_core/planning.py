@@ -81,14 +81,13 @@ def _positive_option(
     return fallback
 
 
-def pool_heating_running(
+def pool_heating_actuators(
     models: list[dict[str, Any]],
     mappings: dict[str, Any],
-    entity_state: Callable[[str], Any],
     *,
     pool_water_entity: str | None = None,
-) -> bool | None:
-    """Whether the mapped heating switches are already enabled, never inferred from watts."""
+) -> set[str]:
+    """Native switches that together enable the pool's mapped heater."""
     entities: set[str] = set()
     for model in models:
         if model.get("planning_role") != "controllable" or mapped_planning_path(
@@ -98,9 +97,15 @@ def pool_heating_running(
         mapping = mappings.get(model["key"], {})
         actuators = mapping.get("actuator_entity_ids", [])
         if not actuators:
-            return None
+            return set()
         entities.update(actuators)
         entities.update(mapping.get("companion_actuator_entity_ids", []))
+    return entities
+
+
+def pool_heating_running(models, mappings, entity_state, *, pool_water_entity=None) -> bool | None:
+    """Whether the mapped heating switches are already enabled, never inferred from watts."""
+    entities = pool_heating_actuators(models, mappings, pool_water_entity=pool_water_entity)
     if not entities:
         return None
     states = [entity_state(entity) for entity in sorted(entities)]
@@ -109,6 +114,40 @@ def pool_heating_running(
     if all(state == "on" or state is True for state in states):
         return True
     return None
+
+
+def pool_heating_runtime(entities, history, captured) -> dict:
+    """Confirmed enabled age. Unknown/reconnected observations do not restart a run.
+
+    Recorder rows are consumed in their supplied order. Their timestamps measure
+    duration; they are never used to reject or reorder received live observations.
+    An initial on row gives a lower bound on an already-running heater's age.
+    """
+    ages = []
+    lower_bound = False
+    for entity in sorted(entities):
+        started = None
+        previous = None
+        interrupted = False
+        basis = "observed_on_lower_bound"
+        for at, state, _attributes in history.get(entity, []):
+            if state == "off" or state is False:
+                started = None
+                previous = "off"
+                interrupted = False
+            elif (state == "on" or state is True) and started is None:
+                started = at
+                basis = "confirmed_transition" if previous == "off" and not interrupted else "observed_on_lower_bound"
+                previous = "on"
+                interrupted = False
+            elif state not in ("on", True):
+                interrupted = True
+        if started is None:
+            return {"heating_elapsed_seconds": None}
+        ages.append(max(0, (captured - started).total_seconds()))
+        lower_bound = lower_bound or basis == "observed_on_lower_bound"
+    return {"heating_elapsed_seconds": min(ages) if ages else None,
+            "heating_elapsed_basis": "observed_on_lower_bound" if lower_bound else "confirmed_transition"}
 
 
 def build_services(

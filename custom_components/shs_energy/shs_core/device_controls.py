@@ -33,6 +33,12 @@ CONTROL_TYPES = (
     "setpoint",
 )
 
+
+def pool_requested_w(plan, slot):
+    """Transient models distinguish enabled nominal command from expected electricity."""
+    response = (plan.get("pool") or {}).get("heater_response")
+    return slot["pool_command_w"] if response and response["kind"] == "bergvarme" else slot["pool_w"]
+
 from .const import ROOM_AREA_FIELD
 
 _ENTITY_FIELDS_BY_CONTROL_TYPE: dict[str, tuple[str, ...]] = {

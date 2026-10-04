@@ -20,6 +20,7 @@ from .battery_commands import validate_battery_command, battery_mode_key
 from .configuration_values import resolve_battery_quantities, resolve_quantity
 from .device_commands import actuator_targets, execution_setup_errors, validate_commands
 from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, planning_path
+from .device_controls import pool_requested_w
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -475,14 +476,15 @@ class DeviceOperations:
             raise error
         target = finite(target)
         water, sources, fresh_until = self.pool_temperature(options.get("pool_water_temperature_entity"), read_state=reader)
-        heating = finite(slot["pool_w"]) > 0
+        requested = finite(pool_requested_w(plan, slot))
+        heating = requested > 0
         on = heating and water < target
         reason = ("The pool heater is allowed to run as planned." if on else
                   "The water has reached your Stop at temperature; the pool heater is off." if heating else
                   "The plan is pausing pool heating; the pool heater is off.")
         return {"device_key": key, "control_entity": entity, "requested_switch_state": "on" if on else "off",
                 "water_temperature_c": water, "stop_temperature_c": target,
-                "requested_power_w": slot["pool_w"], "reason": reason,
+                "requested_power_w": requested, "reason": reason,
                 "decision": {"kind": "pool", "heating": on, "water_temperature_c": water,
                              "stop_temperature_c": target}}, sources, fresh_until
 
@@ -792,4 +794,3 @@ class DeviceOperations:
             except (KeyError, TypeError, ValueError) as err:
                 previews["pool"] = {"error": str(err)}
         return previews
-

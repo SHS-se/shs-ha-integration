@@ -995,3 +995,36 @@ class PoolRunningStateTests(unittest.TestCase):
         self.assertIsNone(pool_heating_running([model], PoolServiceTests.mappings, lambda _: None))
         self.assertIsNone(pool_heating_running([model], {}, lambda _: "on"))
         self.assertIsNone(pool_heating_running([], {}, lambda _: "on"))
+
+
+class PoolHeaterRuntimeTests(unittest.TestCase):
+    def test_recorder_reconnect_preserves_confirmed_run_start(self):
+        from shs_core.planning import pool_heating_runtime
+        rows = [(START, 'off', None), (START + timedelta(minutes=1), 'on', None),
+                (START + timedelta(minutes=20), 'unavailable', None),
+                (START + timedelta(minutes=21), 'on', None)]
+        runtime = pool_heating_runtime({'switch.heat'}, {'switch.heat': rows}, START + timedelta(minutes=30))
+        self.assertEqual(runtime, {'heating_elapsed_seconds': 29 * 60, 'heating_elapsed_basis': 'confirmed_transition'})
+
+    def test_true_off_then_on_starts_a_new_run(self):
+        from shs_core.planning import pool_heating_runtime
+        rows = [(START, 'on', None), (START + timedelta(minutes=20), 'off', None),
+                (START + timedelta(minutes=25), 'on', None)]
+        runtime = pool_heating_runtime({'switch.heat'}, {'switch.heat': rows}, START + timedelta(minutes=30))
+        self.assertEqual(runtime['heating_elapsed_seconds'], 5 * 60)
+        self.assertEqual(runtime['heating_elapsed_basis'], 'confirmed_transition')
+
+    def test_first_on_without_transition_is_labeled_as_age_lower_bound(self):
+        from shs_core.planning import pool_heating_runtime
+        rows = [(START, 'unavailable', None), (START + timedelta(minutes=25), 'on', None)]
+        runtime = pool_heating_runtime({'switch.heat'}, {'switch.heat': rows}, START + timedelta(minutes=30))
+        self.assertEqual(runtime, {'heating_elapsed_seconds': 5 * 60, 'heating_elapsed_basis': 'observed_on_lower_bound'})
+
+    def test_transient_command_controls_even_when_expected_draw_is_zero(self):
+        from shs_core.device_port import device_intent
+        plan = {'pool': {'heater_response': {'kind': 'bergvarme'}, 'stop_temperature_c': 32}, 'device_models': []}
+        slot = {'start': START.isoformat(), 'pool_w': 0, 'pool_command_w': 3000}
+        intent = device_intent('pool', 'apply', plan, slot, configuration_revision=1, policy_revision=1)
+        self.assertEqual(intent['parameters']['heating_w'], 3000)
+        with self.assertRaises(KeyError):
+            device_intent('pool', 'apply', plan, {'start': START.isoformat(), 'pool_w': 0}, configuration_revision=1, policy_revision=1)

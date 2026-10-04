@@ -1309,10 +1309,14 @@ def validate_plan_contract(
             if not isinstance(slot.get("binding"), bool):
                 raise OptimisationInputError(f"{key} slot binding flag is invalid")
             binding_flags.append(slot["binding"])
-            for field in (
+            power_fields = (
                 "pool_w", "boiler_expected_w", "ev_w", "ev_target_current_a",
                 "ev_min_current_a", "ev_max_current_a",
-            ):
+            )
+            response = (plan.get("pool") or {}).get("heater_response")
+            if response and response["kind"] == "bergvarme":
+                power_fields += ("pool_command_w",)
+            for field in power_fields:
                 value = slot.get(field)
                 if (
                     isinstance(value, bool)
