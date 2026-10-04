@@ -216,3 +216,42 @@ class HomeHostTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await host.accept(ExecutionPlanOffered(h.contract))
         self.assertFalse(writes)
+
+    async def test_archival_queue_delay_is_not_a_clock_rollback(self):
+        from dataclasses import replace
+        from shs_core import home_runtime as rt
+        host, h, writes, _, reports = await self.make_host()
+        entered, release = asyncio.Event(), asyncio.Event()
+        saved = []
+        async def received(state, checkpoint):
+            saved.append((state, checkpoint))
+            if checkpoint['receipt'] == 1:
+                entered.set()
+                await release.wait()
+        host.ports = replace(host.ports, persist_received=received)
+        first = asyncio.create_task(host.accept_received(None, {'receipt':1}))
+        await entered.wait()
+        h.now += 1
+        at = h.now
+        revision = h.state.conditions_revision + 1
+        capture = rt.MeasurementsReceived(
+            rt.Observed(h.group.spec.id, replace(h.group.observation, revision=revision, at_ms=at)),
+            replace(h.state.frame, revision=revision, at_ms=at),
+            replace(h.state.conditions, revision=revision, at_ms=at))
+        timer = asyncio.create_task(host.accept(rt.Tick()))
+        evidence = asyncio.create_task(host.ingest_received(capture, {'receipt':2}))
+        await asyncio.sleep(0)  # Both items are queued behind the slow save.
+        resume_after = host.state.resume_after_ms
+        h.now += 10
+        release.set()
+        await asyncio.gather(first, timer, evidence)
+        await host.commit_evidence()
+        self.assertEqual(host.state.last_time_ms, h.now)
+        self.assertEqual(host.state.resume_after_ms, resume_after)
+        self.assertEqual(host.state.conditions.at_ms, at)
+        self.assertEqual(len(host.state.execution.account.observations),
+                         len(h.state.execution.account.observations) + 1)
+        self.assertEqual(saved[-1][1], {'receipt':2})
+        self.assertEqual(saved[-1][0].conditions.at_ms, at)
+        self.assertFalse(writes)
+        self.assertFalse(reports)

@@ -24,7 +24,6 @@ class DispatchRejected(Exception):
 @dataclass(frozen=True)
 class _Evidence:
     event: runtime.Event | None
-    at_ms: int
 
 
 @dataclass(frozen=True)
@@ -107,7 +106,7 @@ class HomeHost:
             raise RuntimeError('home host is not running') from self._fault
         completion = asyncio.get_running_loop().create_future()
         completion.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
-        self._queue.put_nowait((_Evidence(event, self.ports.now_ms()), completion, deepcopy(checkpoint)))
+        self._queue.put_nowait((_Evidence(event), completion, deepcopy(checkpoint)))
         return await asyncio.shield(completion)
 
     async def commit_evidence(self):
@@ -130,7 +129,10 @@ class HomeHost:
                 committing = isinstance(event, _CommitEvidence)
                 if archival:
                     with self.profiler.measure('evidence_ingest'):
-                        state, effects = runtime.archive_evidence(self.state, event.event, event.at_ms)
+                        # All queue items use the processing clock. An enqueue
+                        # time behind a preceding reduction is queue delay,
+                        # not a rollback of the host clock.
+                        state, effects = runtime.archive_evidence(self.state, event.event, self.ports.now_ms())
                     self._received = processing
                 elif committing:
                     state, effects = self.state, ()

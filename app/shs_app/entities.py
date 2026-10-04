@@ -7,11 +7,19 @@ from shs_core.operating_modes import device_mode
 METADATA = ('name','translation_key','device_class','state_class','native_unit_of_measurement','entity_category','suggested_display_precision')
 
 class EntityContext:
+    # Several sensors consume the same derived prices and invoice rows. Share
+    # these calculations within this synchronous projection; the next pass
+    # creates a fresh context and reads current household inputs again.
+    _shared_display_values = frozenset(('grid_prices','total_price_forecast','latest_display_components'))
     def __init__(self,engine):
         self.household=engine.household
         self.entry=SimpleNamespace(entry_id=engine.identity['entry_id'],data=engine.configuration.credentials())
         self.mirror=engine.mirror
-    def __getattr__(self,name):return getattr(self.household,name)
+    def __getattr__(self,name):
+        value=getattr(self.household,name)
+        if name in self._shared_display_values:
+            setattr(self,name,value)
+        return value
     def read_state(self,entity):
         row=self.mirror.report(entity)
         return SimpleNamespace(**row) if row else None

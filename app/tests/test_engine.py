@@ -170,6 +170,41 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(engine.close)
         return engine
 
+    async def test_sensor_projection_shares_calculations_only_within_one_pass(self):
+        from contextlib import ExitStack
+        from unittest.mock import PropertyMock
+        from shs_app.entities import EntityContext, project_entities
+        engine = self.engine()
+        await engine.load()
+        household = engine.household
+        household.latest_calculation = {'total_amount_sek':12}
+        household.tariff_components = {
+            key:{'label':key,'category':'fixed'} for key in ('one','two')}
+        derived = {
+            'grid_prices':{'import_price_sek_per_kwh':1,'export_price_sek_per_kwh':0.2},
+            'total_price_forecast':[{'start':'2026-10-04T10:00:00Z',
+                                    'import_price_sek_per_kwh':2,'export_price_sek_per_kwh':0.5}],
+            'latest_display_components':[],
+        }
+        with ExitStack() as stack:
+            calculations = {name:stack.enter_context(patch.object(type(household),name,
+                new_callable=PropertyMock,return_value=value)) for name,value in derived.items()}
+            with patch.object(EntityContext,'_shared_display_values',frozenset()):
+                expected = project_entities(engine,[])
+            self.assertEqual(calculations['total_price_forecast'].call_count,2)
+            self.assertGreater(calculations['grid_prices'].call_count,1)
+            self.assertGreater(calculations['latest_display_components'].call_count,1)
+            for calculation in calculations.values():calculation.reset_mock()
+            self.assertEqual(project_entities(engine,[]),expected)
+            for calculation in calculations.values():calculation.assert_called_once_with()
+            # No values, including empty results, survive into the next pass.
+            calculations['grid_prices'].return_value = None
+            calculations['total_price_forecast'].return_value = []
+            refreshed = project_entities(engine,[])
+            self.assertIsNone(refreshed['values']['entry_grid_import_price']['value'])
+            self.assertEqual(refreshed['values']['entry_total_import_price']['attributes']['forecast'],[])
+            for calculation in calculations.values():self.assertEqual(calculation.call_count,2)
+
     async def test_restart_acknowledges_delivery_even_without_new_receipts(self):
         from unittest.mock import AsyncMock
         engine=self.engine()
