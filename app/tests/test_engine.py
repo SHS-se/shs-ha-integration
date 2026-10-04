@@ -252,13 +252,11 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         from shs_core import battery_runtime
         rig = self.battery_rig()
         socket,client,writer = await self.remote_battery(rig)
-        limits = patch.object(battery_runtime,'RUNTIME_LIMITS',replace(battery_runtime.RUNTIME_LIMITS,transition_timeout_ms=20))
-        limits.start()
-        self.addCleanup(limits.stop)
         journal = socket.hold('battery_route')
-        await rig.runtime.open()
-        await rig.runtime.refresh()
-        await asyncio.wait_for(rig.runtime.host.idle(),2)
+        with patch.object(battery_runtime,'RUNTIME_LIMITS',replace(battery_runtime.RUNTIME_LIMITS,transition_timeout_ms=20)):
+            await rig.runtime.open()
+            await rig.runtime.refresh()
+            await asyncio.wait_for(rig.runtime.host.idle(),2)
         failure = rig.runtime.host.state.groups[0].transition_work
         self.assertIn('timed out',failure.reason)
         self.assertFalse(self.native_calls)
@@ -268,8 +266,16 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.service.battery.fence.snapshot()['grant_current'])
         # HA answers after the app stopped waiting; the next preparation is admitted
         # on the same session and reaches the native controls.
-        journal.set()
-        await rig.advance(failure.retry_at_ms-rig.now)
+        # The host copied the artificial 20 ms limit when it opened. Restore its
+        # normal budget: an ordinary durable route need not finish within 20 ms.
+        rig.runtime.host.state = replace(rig.runtime.host.state,limits=battery_runtime.RUNTIME_LIMITS)
+        propose = self.service.battery.propose
+        async def delayed_route(*args):
+            await asyncio.sleep(.04)
+            return await propose(*args)
+        with patch.object(self.service.battery,'propose',delayed_route):
+            journal.set()
+            await rig.advance(failure.retry_at_ms-rig.now)
         self.assertTrue(self.native_calls,str(rig.runtime.snapshot()))
         self.assertIsNotNone(client.socket)
         self.assertEqual(client.pending,{})
