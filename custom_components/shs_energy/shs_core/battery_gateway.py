@@ -96,7 +96,10 @@ class BatteryGateway:
             if 'battery' in self.physical.ownership.records:
                 raise GatewayConflict('Legacy battery ownership has not been released')
         grant = await self.fence.take_over(identity, expires_at_ms, released)
-        self.obligation = {'pending':True, 'command':None, 'fault':None}
+        # A grant used only to finish handback must not create another handback
+        # after the app has already completed it.
+        self.obligation = {'pending':self.obligation['pending'] or not self.released(options),
+            'command':None, 'fault':None}
         try:
             await self.obligation_store.async_save(self.obligation)
             self.authorize('battery_grant')
@@ -112,12 +115,16 @@ class BatteryGateway:
         if self.installation is None or not self.fence.is_current(grant, self.identity()):
             raise GatewayConflict(rt.GRANT_NOT_CURRENT)
         identity, catalog, conversion, installed_options = self.installation
+        if effect.purpose == 'release' and dict(effect.request.target) != dict(self.release_target(catalog)):
+            raise GatewayConflict('Battery release differs from its native baseline')
         if effect.purpose != 'release' and (runtime_digest(native_options(self.options())) != identity.config_revision or device_mode(self.options(), 'battery') != 'controlling'):
             raise GatewayConflict('Battery optimisation permission changed')
         proposal = SigenAdapter(catalog, conversion).propose(effect)
         payload = {'effect':effect_wire, 'proposal':encode_value(proposal), 'grant':grant_wire, 'context':self.context()}
         route_id = digest({'session':self.session(), **payload})
         await self.stream.call('admit_route', self.session(), route_id, payload)
+        if effect.purpose == 'release':
+            self.obligation = await self.obligation_store.async_load()
         return {'route_id':route_id, 'proposal':encode_value(proposal)}
 
     async def step(self, route_id, index, send_wire):
@@ -152,20 +159,24 @@ class BatteryGateway:
                     for key in ('control_override_entity', 'battery_control_override_entity'):
                         if current.get(key) and (self.reports(current[key]) or {}).get('state') != 'off':
                             raise GatewayConflict('Battery manual override active')
-            self.authorize('battery_step')
-            previous = await self.stream.call('command_outcome', command.id)
-            if previous is not None:
-                return {'status':previous['status'], 'command_id':command.id, 'attempt_id':send.attempt_id}
             try:
-                check()
-                await self.physical.native_executor.execute(command, authorize=check, timeout=75)
-            except Exception:
-                outcome = await self.stream.call('command_outcome', command.id)
-                # No journal record means dispatch was not entered. A prepared
-                # record without an outcome must be treated as uncertain.
-                status = outcome['status'] if outcome else 'not_sent'
-                return {'status':status, 'command_id':command.id, 'attempt_id':send.attempt_id}
-            return {'status':'service_returned', 'command_id':command.id, 'attempt_id':send.attempt_id}
+                self.authorize('battery_step')
+                previous = await self.stream.call('command_outcome', command.id)
+                if previous is not None:
+                    return {'status':previous['status'], 'command_id':command.id, 'attempt_id':send.attempt_id}
+                try:
+                    check()
+                    await self.physical.native_executor.execute(command, authorize=check, timeout=75)
+                except Exception:
+                    outcome = await self.stream.call('command_outcome', command.id)
+                    # No journal record means dispatch was not entered. A prepared
+                    # record without an outcome must be treated as uncertain.
+                    status = outcome['status'] if outcome else 'not_sent'
+                    return {'status':status, 'command_id':command.id, 'attempt_id':send.attempt_id}
+                return {'status':'service_returned', 'command_id':command.id, 'attempt_id':send.attempt_id}
+            finally:
+                if effect.purpose == 'release':
+                    self.obligation = await self.obligation_store.async_load()
 
     def revoke(self):
         # Synchronous socket/configuration fence, before queued disk work.
@@ -204,6 +215,11 @@ class BatteryGateway:
         return any(options.get(key) and (self.reports(options[key]) or {}).get('state') not in ('off','unknown','unavailable',None)
                    for key in ('control_override_entity', 'battery_control_override_entity'))
 
+    @staticmethod
+    def release_target(catalog):
+        return ((catalog.mode_key,'Maximum Self Consumption'),(catalog.charge_key,catalog.charge_max_w),
+                (catalog.discharge_key,catalog.discharge_max_w))
+
     async def maintain_obligation(self):
         """Finish an explicit release for an app that is not doing it itself.
 
@@ -227,8 +243,7 @@ class BatteryGateway:
                 return float(self.reports(entity)['state'])*(1000 if surface['limits'][field]['unit']=='kW' else 1)
             controls = ((catalog.mode_key,mode),(catalog.charge_key,watts(catalog.charge_key,'charge')),
                         (catalog.discharge_key,watts(catalog.discharge_key,'discharge')))
-            target = ((catalog.mode_key,'Maximum Self Consumption'),(catalog.charge_key,catalog.charge_max_w),
-                      (catalog.discharge_key,catalog.discharge_max_w))
+            target = self.release_target(catalog)
             now = self.now()
             adapter = SigenAdapter(catalog,conversion)
             observation = rt.Observation(1,now,now+30000,controls,(),adapter.envelope(controls))

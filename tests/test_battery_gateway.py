@@ -131,6 +131,105 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
     def settings(self):
         return [(data['entity_id'],data.get('option',data.get('value'))) for _,_,data in self.calls]
 
+    async def release_route(self):
+        self.options['device_modes']['$battery'] = 'control_verification'
+        target = (('select.mode','Maximum Self Consumption'),('number.charge',4000),('number.discharge',4000))
+        effect = replace(self.effect, purpose='release', request=rt.Request('release',1,self.rig.now+900000,target,()))
+        self.route = await self.gateway.propose(encode_value(effect), encode_value(self.grant))
+        self.proposal = decode_value(self.route['proposal'], rt.Proposed)
+
+    async def test_app_handback_is_not_repeated_after_manual_changes_or_restart(self):
+        await self.release_route()
+        for index in range(len(self.proposal.steps)):
+            self.assertEqual((await self.step(index))['status'],'service_returned')
+        self.assertFalse(self.gateway.obligation['pending'])
+        self.assertFalse(self.journal.load_record('battery_obligation')['pending'])
+        # The owner sets a limit after handback; losing the app must leave it alone.
+        self.rows['number.discharge']['state'] = '0'
+        calls = len(self.calls)
+        self.rig.now += 900000
+        await self.gateway.maintain_obligation()
+        self.assertEqual(len(self.calls),calls)
+        replacement = BatteryGateway(self.stream,self.physical,lambda:self.options,
+            lambda entity:self.rows.get(entity),lambda:self.rig.now,authorize=lambda op:None,
+            session=lambda:self.session,context=lambda:{})
+        await replacement.open()
+        await replacement.maintain_obligation()
+        self.assertEqual(len(self.calls),calls)
+
+    async def test_empty_app_handback_completes_without_writes(self):
+        self.rows['select.mode']['state'] = 'Maximum Self Consumption'
+        for key in ('number.charge','number.discharge'):
+            self.rows[key]['state'] = '4'
+        controls = (('select.mode','Maximum Self Consumption'),('number.charge',4000),('number.discharge',4000))
+        self.effect = replace(self.effect,command_controls=controls)
+        await self.release_route()
+        self.assertEqual(self.proposal.steps,())
+        self.assertFalse(self.journal.load_record('battery_obligation')['pending'])
+        self.assertFalse(self.calls)
+
+    async def test_partial_app_handback_retains_the_physical_obligation(self):
+        await self.release_route()
+        self.assertGreater(len(self.proposal.steps),1)
+        self.assertEqual((await self.step())['status'],'service_returned')
+        self.assertTrue(self.journal.load_record('battery_obligation')['pending'])
+        self.gateway.revoke()
+        await self.gateway.maintain_obligation()
+        self.assertIn(('number.discharge',4.0),self.settings())
+        self.assertFalse(self.gateway.obligation['pending'])
+
+    async def test_release_grants_do_not_rearm_completed_handback(self):
+        self.gateway.revoke()
+        self.options['device_modes']['$battery'] = 'control_verification'
+        await self.gateway.maintain_obligation()
+        self.assertFalse(self.gateway.obligation['pending'])
+        identity = self.gateway.installation[0]
+        await self.gateway.grant(encode_value(identity),encode_value(self.catalog),
+            self.conversion.wire(),self.rig.now+900000)
+        self.assertFalse(self.gateway.obligation['pending'])
+        self.rows['number.discharge']['state'] = '0'
+        self.gateway.revoke()
+        calls = len(self.calls)
+        await self.gateway.maintain_obligation()
+        self.assertEqual(len(self.calls),calls)
+
+    async def test_controlling_grants_arm_the_next_handback(self):
+        self.gateway.revoke()
+        self.options['device_modes']['$battery'] = 'control_verification'
+        await self.gateway.maintain_obligation()
+        self.options['device_modes']['$battery'] = 'controlling'
+        identity = self.gateway.installation[0]
+        await self.gateway.grant(encode_value(identity),encode_value(self.catalog),
+            self.conversion.wire(),self.rig.now+900000)
+        self.assertTrue(self.gateway.obligation['pending'])
+
+    async def test_release_must_complete_the_admitted_baseline(self):
+        target = (('select.mode','Maximum Self Consumption'),('number.charge',4000),('number.discharge',0))
+        effect = replace(self.effect,purpose='release',request=rt.Request('release',1,self.rig.now+900000,target,()))
+        with self.assertRaisesRegex(GatewayConflict,'native baseline'):
+            await self.gateway.propose(encode_value(effect),encode_value(self.grant))
+        self.assertTrue(self.journal.load_record('battery_obligation')['pending'])
+
+    async def test_last_release_outcome_persists_completion_before_its_reply(self):
+        await self.release_route()
+        finish = self.journal.finish_command
+        def finished(command,status,reason=None):
+            finish(command,status,reason)
+            if command.step_index == len(self.proposal.steps)-1:
+                self.assertFalse(self.journal.load_record('battery_obligation')['pending'])
+        self.journal.finish_command = finished
+        for index in range(len(self.proposal.steps)):
+            self.assertEqual((await self.step(index))['status'],'service_returned')
+
+    async def test_uncertain_app_handback_retains_the_physical_obligation(self):
+        await self.release_route()
+        async def ambiguous(*args):
+            self.calls.append(args)
+            raise TimeoutError('native response lost')
+        self.physical.native_executor.send = ambiguous
+        self.assertEqual((await self.step())['status'],'uncertain')
+        self.assertTrue(self.journal.load_record('battery_obligation')['pending'])
+
     async def test_lost_writer_keeps_the_last_settings(self):
         # A closed app session, a restart, a settings revision or an expired
         # grant all leave HA without a current writer. None of them is a release.

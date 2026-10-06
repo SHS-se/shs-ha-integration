@@ -396,6 +396,8 @@ class GatewayJournal:
                 if command_row['route_id']:
                     if status == 'service_returned':
                         db.execute('UPDATE routes SET next_step=next_step+1 WHERE id=? AND next_step=?', (command_row['route_id'], command_row['step_index']))
+                        route = db.execute('SELECT payload,next_step FROM routes WHERE id=?', (command_row['route_id'],)).fetchone()
+                        self._complete_battery_release(db,json.loads(route['payload']),route['next_step'])
                     else:
                         db.execute('UPDATE routes SET status=? WHERE id=?', (status, command_row['route_id']))
                 self._append(db, 'outcome', {'command_id': command.id, 'status': status, 'reason': reason})
@@ -410,6 +412,19 @@ class GatewayJournal:
                     raise GatewayConflict('Route identity reused with different admission')
                 return
             db.execute("INSERT INTO routes VALUES (?,?,?,0,'active')", (route_id, session, content))
+            self._complete_battery_release(db,payload,0)
+
+    @staticmethod
+    def _complete_battery_release(db, payload, completed_steps):
+        # Admission verifies the native baseline. Completion belongs in the
+        # same transaction as the last outcome, so a lost reply or a restart
+        # cannot leave HA believing an app-completed handback is still due.
+        if payload['effect']['purpose'] != 'release' or completed_steps != len(payload['proposal']['steps']):
+            return
+        row = db.execute("SELECT payload FROM records WHERE name='battery_obligation'").fetchone()
+        obligation = json.loads(row['payload'])
+        obligation['pending'] = False
+        db.execute("UPDATE records SET payload=? WHERE name='battery_obligation'", (encoded(obligation),))
 
     def read_route(self, session, route_id):
         with closing(self.connect(readonly=True)) as db:

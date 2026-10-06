@@ -430,6 +430,32 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.native_calls),calls)  # Verification itself writes nothing.
         self.assertIsNotNone(client.socket)
 
+    async def test_completed_verification_handback_preserves_later_manual_limits(self):
+        rig = self.battery_rig()
+        socket,client,writer = await self.remote_battery(rig)
+        await rig.runtime.open()
+        await rig.runtime.refresh()
+        await asyncio.wait_for(rig.runtime.host.idle(),2)
+        await rig.advance(5000)
+        rig.options['device_modes']['$battery'] = 'control_verification'
+        self.service.invalidate_configuration()
+        self.service.configuration_pending = False
+        for _ in range(12):
+            await rig.advance(5000)
+            if rig.runtime.host is None:
+                break
+        self.assertEqual(float(rig.rows['number.discharge']['state']),4.0)
+        self.assertFalse(self.service.battery.obligation['pending'])
+        rig.rows['number.discharge']['state'] = '0'
+        calls = len(self.native_calls)
+        for _ in range(3):
+            await rig.advance(5000)
+        await client.close()
+        rig.now += 900000
+        await self.service.battery.maintain_obligation()
+        self.assertEqual(len(self.native_calls),calls)
+        self.assertEqual(rig.rows['number.discharge']['state'],'0')
+
     async def test_controlling_runtime_uses_remote_admission_and_durable_native_gateway(self):
         from shs_app.physical_ports import RemoteBattery
         rig = self.battery_rig()
