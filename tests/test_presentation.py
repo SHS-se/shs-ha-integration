@@ -37,6 +37,8 @@ class PresentationTests(unittest.TestCase):
         status = operational_status(plan, 'live', [], self.now, options=options)
         self.assertEqual(status['state'], 'ready')
         self.assertIn('retained schedule', status['reason'])
+        self.assertIn('manual replan is recommended', status['reason'])
+        self.assertNotIn('is requested', status['reason'])
         self.assertTrue(status['actionable'])
         self.assertEqual(status['plan_id'], plan['plan_id'])
         self.assertTrue(timeline(plan, status)['slots'])

@@ -44,7 +44,7 @@ def operational_status(plan, mode, missing, now, *, options=None, validate=valid
             elif selected["status"] != "ready":
                 result.update(state=selected["status"], reason=LABELS[selected["status"]])
             elif scope_changed:
-                result.update(state="ready", reason="Using the retained schedule while an updated plan is requested", actionable=True)
+                result.update(state="ready", reason="Using the retained schedule; operating modes changed, so a manual replan is recommended", actionable=True)
             elif now >= datetime.fromisoformat(plan["binding_until"]):
                 result.update(state="ready", reason="Executing cached schedule using estimated prices", actionable=True)
             else:
