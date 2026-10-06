@@ -2029,6 +2029,10 @@ class Household:
         statistics = await self._statistics_changes(
             all_entities, start, end, "5minute"
         )
+        return self._category_changes(entities_by_category, statistics)
+
+    @staticmethod
+    def _category_changes(entities_by_category, statistics):
         result: dict[str, list[tuple[datetime, float]]] = {}
         for category, entity_ids in entities_by_category.items():
             per_entity = [
@@ -2188,6 +2192,10 @@ class Household:
         soc_by_start = await self._measured_soc_quarters(start, end)
         for row in rows:
             row.update(soc_by_start.get(row["start"], {}))
+        return self._complete_actual_quarters(rows, entities_by_category)
+
+    def _complete_actual_quarters(self, rows, entities_by_category):
+        """Reconstruct the measured load before applying sharing exclusions."""
         configured = {
             category for category, values in entities_by_category.items() if values
         }
@@ -2228,19 +2236,36 @@ class Household:
         end: datetime,
     ) -> list[dict[str, Any]]:
         """Return complete per-device Energy Dashboard quarters."""
-        from .configuration_schema import shared_devices
-        devices = shared_devices(devices, dict(self.ports.options()))
-        statistic_by_key = {
-            str(device["key"]): str(device["statistic_id"])
-            for device in devices
-        }
+        statistic_by_key = self._device_statistics(devices)
         statistics = await self._statistics_changes(
             sorted(set(statistic_by_key.values())), start, end, "5minute"
         )
+        return self._device_changes(statistic_by_key, statistics)
+
+    def _device_statistics(self, devices):
+        from .configuration_schema import shared_devices
+        return {
+            str(device["key"]): str(device["statistic_id"])
+            for device in shared_devices(devices, dict(self.ports.options()))
+        }
+
+    @staticmethod
+    def _device_changes(statistic_by_key, statistics):
         return aggregate_device_changes({
             key: statistics.get(statistic_id, [])
             for key, statistic_id in statistic_by_key.items()
         })
+
+    async def _planning_actual_quarters(self, entities_by_category, devices, start, end):
+        """Read the model's energy evidence once, without display-only SOC."""
+        categories = {key: list(values) for key, values in entities_by_category.items()}
+        statistic_by_key = self._device_statistics(devices)
+        entity_ids = {entity for values in categories.values() for entity in values}
+        entity_ids.update(statistic_by_key.values())
+        statistics = await self._statistics_changes(sorted(entity_ids), start, end, "5minute")
+        rows = aggregate_category_changes(self._category_changes(categories, statistics))
+        return (self._complete_actual_quarters(rows, categories),
+                self._device_changes(statistic_by_key, statistics))
 
     async def _daily_meter_totals(
         self,
@@ -2463,9 +2488,8 @@ class Household:
         profile_start = profile_end - timedelta(
             days=OPTIMISATION_PROFILE_DAYS
         )
-        profile_actuals, device_profile_actuals = await asyncio.gather(
-            self._actual_quarters(entities_by_category, profile_start, profile_end),
-            self._device_actual_quarters(devices, profile_start, profile_end),
+        profile_actuals, device_profile_actuals = await self._planning_actual_quarters(
+            entities_by_category, devices, profile_start, profile_end
         )
         control_mappings = options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
         if not isinstance(control_mappings, dict):
