@@ -472,7 +472,8 @@ class AppEngine:
                 self.spawn(self.planning()),
                 self.spawn(self.periodic(self.household.async_request_refresh,60),'cloud_refresh'),
                 self.spawn(self.periodic(self.resources,60),'runtime_resources'),self.spawn(self.calendar(),'calendar'),
-                self.spawn(self.household.async_replan_listener(),'replan_listener')]
+                self.spawn(self.household.async_replan_listener(),'replan_listener'),
+                self.spawn(self.household.async_planning_delivery(),'planning_delivery')]
             done,_ = await asyncio.wait(jobs,return_when=asyncio.FIRST_EXCEPTION)
             for task in done: task.result()
         finally:

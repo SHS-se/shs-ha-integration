@@ -36,6 +36,7 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
         self.hass = SimpleNamespace(data={})
         self.entry = SimpleNamespace(entry_id='entry', state='loaded')
         self.coordinator = CoordinatorFixture(_recovering=False, _push_lock=asyncio.Lock(),
+            _planning_job_wake=asyncio.Event(),
             options_update_requires_reload=Mock(return_value=True),
             async_report_runtime=AsyncMock(), async_optimisation_push=AsyncMock())
         self.entry.runtime_data = self.coordinator
@@ -73,6 +74,7 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(refresh_in_progress(self.hass, self.entry))
                 raise RuntimeError('Planner unavailable')
         self.assertEqual(states, [True, False])
+        self.assertTrue(self.coordinator._planning_job_wake.is_set())
         self.assertFalse(refresh_in_progress(self.hass, self.entry))
 
 class ManualReplanTests(unittest.IsolatedAsyncioTestCase):

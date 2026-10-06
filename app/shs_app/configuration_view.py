@@ -130,6 +130,8 @@ async def configuration_payload(editor, *, refresh_roles):
             **device_readiness(devices),
             "missing_inputs": list(coordinator.optimisation_missing_inputs),
             "last_plan_error": coordinator.last_optimisation_error,
+            "planning_job": exchange_status.get("planning_job"),
+            "planning_submission": exchange_status.get("planning_submission"),
             "last_plan_attempt": coordinator.last_optimisation_attempt or exchange_status.get("last_optimisation_attempt"),
             "last_plan_push": (
                 coordinator.last_optimisation_push

@@ -93,35 +93,67 @@ class ApiTrafficTests(unittest.IsolatedAsyncioTestCase):
         await self.call(path="energy-optimisation-ingest")
         self.assertEqual(self.last_timeout, 150)
 
-    async def test_pending_planning_continues_identical_payload_until_ready(self):
+    async def test_acceptance_returns_receipt_without_waiting_or_resending_capture(self):
         client = self.api["ShsApiClient"](None, "https://example", "secret")
-        ready = {"plan": {"plan_id": "finished"}, "actual_slots_accepted": 1}
-        client._request = AsyncMock(side_effect=[
-            {"pending": True, "retry_after_ms": 1000},
-            {"pending": True, "retry_after_ms": 2345}, ready,
-        ])
-        with patch.object(self.api["asyncio"], "sleep", new_callable=AsyncMock) as sleep:
-            result = await client.push_optimisation([{"start_ts": "quarter"}],
-                {"snapshot_id": "frozen"}, replan_request_id="manual")
-        self.assertEqual(result, ready)
-        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2.345])
-        calls = client._request.call_args_list
-        self.assertEqual(len(calls), 3)
-        self.assertEqual(calls[0], calls[1])
-        self.assertEqual(calls[1], calls[2])
-        self.assertEqual(calls[0].kwargs["json_body"]["replan_request_id"], "manual")
+        receipt = {"job_id": "job", "state": "pending", "pending": True, "retry_after_ms": 1000, "actual_slots_accepted": 1}
+        client._request = AsyncMock(return_value=receipt)
+        self.assertEqual(await client.push_optimisation([{"start_ts": "quarter"}],
+            {"snapshot_id": "frozen"}, replan_request_id="manual"), receipt)
+        client._request.assert_awaited_once()
+        body = client._request.call_args.kwargs["json_body"]
+        self.assertEqual(body["planning_exchange_version"], 2)
+        self.assertEqual(body["replan_request_id"], "manual")
+        self.assertEqual(body["snapshot"], {"snapshot_id": "frozen"})
 
-    async def test_pending_planning_does_not_retry_failed_or_invalid_responses(self):
-        for invalid in [-1, float("nan"), True, "1", None]:
+    async def test_status_sends_only_receipt_identity_and_protocol(self):
+        client = self.api["ShsApiClient"](None, "https://example", "secret")
+        client._request = AsyncMock(return_value={"job_id": "job", "state": "superseded", "pending": False})
+        await client.planning_status("job")
+        self.assertEqual(client._request.call_args.kwargs["json_body"], {
+            "api_version": 1, "planning_exchange_version": 2, "job_id": "job",
+        })
+        client._request.return_value = {"job_id": "different", "state": "superseded", "pending": False}
+        with self.assertRaisesRegex(self.api["ShsApiError"], "another job"):
+            await client.planning_status("job")
+
+    async def test_submission_lookup_sends_only_captured_snapshot_identity(self):
+        client = self.api["ShsApiClient"](None, "https://example", "secret")
+        client._request = AsyncMock(return_value={"job_id": "job", "snapshot_id": "snapshot", "state": "pending", "pending": True, "retry_after_ms": 1000})
+        await client.planning_submission_status("snapshot")
+        self.assertEqual(client._request.call_args.kwargs["json_body"], {
+            "api_version": 1, "planning_exchange_version": 2, "snapshot_id": "snapshot",
+        })
+        client._request.return_value["snapshot_id"] = "different"
+        with self.assertRaisesRegex(self.api["ShsApiError"], "another job"):
+            await client.planning_submission_status("snapshot")
+
+    async def test_invalid_receipts_and_errors_are_not_retried(self):
+        for invalid in [-1, 0, float("nan"), True, "1", None]:
             client = self.api["ShsApiClient"](None, "https://example", "secret")
-            client._request = AsyncMock(return_value={"pending": True, "retry_after_ms": invalid})
-            with self.assertRaisesRegex(self.api["ShsApiError"], "continuation delay"):
+            client._request = AsyncMock(return_value={"job_id": "job", "state": "pending", "pending": True, "retry_after_ms": invalid})
+            with self.assertRaisesRegex(self.api["ShsApiError"], "job receipt"):
                 await client.push_optimisation([], {"snapshot_id": "frozen"})
             self.assertEqual(client._request.await_count, 1)
         client._request = AsyncMock(side_effect=self.api["ShsApiError"]("worker failed"))
         with self.assertRaisesRegex(self.api["ShsApiError"], "worker failed"):
             await client.push_optimisation([], {"snapshot_id": "frozen"})
         self.assertEqual(client._request.await_count, 1)
+
+    async def test_synchronous_plan_response_without_durable_receipt_is_refused(self):
+        client = self.api["ShsApiClient"](None, "https://example", "secret")
+        client._request = AsyncMock(return_value={"plan": {"plan_id": "legacy"}})
+        with self.assertRaisesRegex(self.api["ShsApiError"], "job receipt"):
+            await client.push_optimisation([], {"snapshot_id": "frozen"})
+
+    async def test_published_receipt_binds_plan_identity(self):
+        client = self.api["ShsApiClient"](None, "https://example", "secret")
+        receipt = {"job_id": "job", "state": "published", "pending": False,
+                   "plan_id": "plan", "snapshot_id": "snapshot", "plan": {"plan_id": "plan", "snapshot_id": "snapshot"}}
+        client._request = AsyncMock(return_value=receipt)
+        self.assertEqual(await client.planning_status("job"), receipt)
+        receipt["plan_id"] = "other"
+        with self.assertRaisesRegex(self.api["ShsApiError"], "job receipt"):
+            await client.planning_status("job")
 
 
 if __name__ == "__main__":

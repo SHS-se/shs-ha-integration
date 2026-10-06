@@ -25,8 +25,8 @@ from .api_contract import (
 _LOGGER = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
-# The final household solve has a 120-second server deadline. Cost-curve
-# batches use explicit pending replies and do not hold this connection open.
+# Preparation may include history reads. Solving runs as a durable cloud job
+# and returns a receipt rather than keeping this connection open.
 PLANNING_REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=150)
 
 
@@ -344,28 +344,61 @@ class ShsApiClient:
             body["pool_slots"] = pool_slots
         if snapshot is not None:
             body["snapshot"] = snapshot
+            body["planning_exchange_version"] = 2
             # Only a snapshot can answer a request, because only a snapshot
             # produces a plan. The server refuses the pair without one.
             if replan_request_id is not None:
                 body["replan_request_id"] = replan_request_id
-        while True:
-            result = await self._request(
-                "POST",
-                "energy-optimisation-ingest",
-                json_body=body,
-            )
-            if result.get("pending") is not True:
-                return result
+        result = await self._request(
+            "POST", "energy-optimisation-ingest", json_body=body,
+        )
+        if "job_id" in result or result.get("pending") is True or result.get("plan") is not None:
+            self._validate_planning_receipt(result)
+        return result
+
+    @staticmethod
+    def _validate_planning_receipt(result: dict[str, Any]) -> None:
+        """Reject receipts which cannot identify and deliver accepted work."""
+        state = result.get("state")
+        valid = (
+            isinstance(result.get("job_id"), str) and bool(result["job_id"])
+            and state in ("pending", "published", "failed", "superseded")
+            and result.get("pending") is (state == "pending")
+        )
+        if state == "pending":
             delay = result.get("retry_after_ms")
-            if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay < 0:
-                raise ShsApiError(
-                    "planning response has an invalid continuation delay",
-                    code="invalid_response_envelope",
-                    path="energy-optimisation-ingest",
-                )
-            # This is continuation of accepted work, not a retry of a failure.
-            # Keep the exact snapshot and replan identity until it completes.
-            await asyncio.sleep(delay / 1000)
+            valid = (valid and not isinstance(delay, bool)
+                     and isinstance(delay, (int, float))
+                     and math.isfinite(delay) and delay > 0)
+        if state == "published":
+            plan = result.get("plan")
+            valid = (valid and isinstance(plan, dict)
+                     and isinstance(result.get("plan_id"), str) and bool(result["plan_id"])
+                     and isinstance(result.get("snapshot_id"), str) and bool(result["snapshot_id"])
+                     and result["plan_id"] == plan.get("plan_id")
+                     and result["snapshot_id"] == plan.get("snapshot_id"))
+        if not valid:
+            raise ShsApiError("planning response has an invalid job receipt", code="invalid_response_envelope", path="energy-optimisation-ingest")
+
+    async def _planning_status(self, identity: str, value: str) -> dict[str, Any]:
+        result = await self._request("POST", "energy-optimisation-ingest", json_body={
+            "api_version": API_VERSION, "planning_exchange_version": 2,
+            identity: value,
+        })
+        self._validate_planning_receipt(result)
+        if (identity == "job_id" and result["job_id"] != value) or (
+            identity == "snapshot_id" and result.get("snapshot_id") != value
+        ):
+            raise ShsApiError("planning response belongs to another job", code="invalid_response_envelope", path="energy-optimisation-ingest")
+        return result
+
+    async def planning_status(self, job_id: str) -> dict[str, Any]:
+        """Read accepted work without repeating capture or telemetry."""
+        return await self._planning_status("job_id", job_id)
+
+    async def planning_submission_status(self, snapshot_id: str) -> dict[str, Any]:
+        """Recover an acceptance whose response was lost in transport."""
+        return await self._planning_status("snapshot_id", snapshot_id)
 
 
     async def acknowledge_optimisation_plan(

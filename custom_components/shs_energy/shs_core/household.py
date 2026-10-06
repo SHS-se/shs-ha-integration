@@ -248,6 +248,7 @@ class Household:
         self.tariff_components: dict[str, dict[str, str]] = {}
         self._push_lock = asyncio.Lock()
         self._replan_lock = asyncio.Lock()
+        self._planning_job_wake = asyncio.Event()
         self._runtime_lock = asyncio.Lock()
         self._battery_native_context = None
         self._battery_inputs_lock = asyncio.Lock()
@@ -476,6 +477,8 @@ class Household:
         self._plan_configuration_changed = stored.get("plan_configuration_changed", False)
         self.last_optimisation_push = stored.get("last_optimisation_push")
         self.last_optimisation_attempt = stored.get("last_optimisation_attempt")
+        pending = stored.get("optimisation_pending_submission") or stored.get("optimisation_pending_job", {})
+        self._answered_replan_request_id = pending.get("replan_request_id") or stored.get("answered_replan_request_id")
 
     async def async_battery_planned_devices(self):
         """Preserve website membership even when local control setup is invalid."""
@@ -599,12 +602,16 @@ class Household:
                 try:
                     await self.async_optimisation_push(force_plan=True, replan_request_id=requested)
                     if self.last_optimisation_error is not None:
-                        await self._report_replan_failure(requested, self.last_optimisation_error)
+                        record = await self._store.async_read()
+                        pending = record.get("optimisation_pending_submission") or record.get("optimisation_pending_job", {})
+                        if requested != self._answered_replan_request_id and pending.get("replan_request_id") != requested:
+                            await self._report_replan_failure(requested, self.last_optimisation_error)
                 except Exception as error:
-                    await self._report_replan_failure(requested, str(error))
+                    if requested != self._answered_replan_request_id:
+                        await self._report_replan_failure(requested, str(error))
                     raise
             self._answered_replan_request_id = requested
-            _LOGGER.info("Requested replan %s completed in %.0f ms", requested, (monotonic() - started) * 1000)
+            _LOGGER.info("Requested replan %s capture answered in %.0f ms", requested, (monotonic() - started) * 1000)
             return mode == PLANNING_MODE_LIVE
 
     async def _report_replan_failure(self, request_id: str, detail: str) -> None:
@@ -1237,6 +1244,14 @@ class Household:
             "last_optimisation_push": stored.get("last_optimisation_push"),
             "last_optimisation_attempt": stored.get("last_optimisation_attempt"),
             "actuals_accepted_until": stored.get("optimisation_actuals_accepted_until"),
+            "planning_job": (
+                {"job_id": stored["optimisation_pending_job"]["job_id"], "state": "pending"}
+                if stored.get("optimisation_pending_job") else None
+            ),
+            "planning_submission": (
+                {"snapshot_id": stored["optimisation_pending_submission"]["snapshot_id"], "state": "pending"}
+                if stored.get("optimisation_pending_submission") else None
+            ),
         }
 
     async def _statistics_changes(
@@ -2854,6 +2869,201 @@ class Household:
         stored.pop("optimisation_pending_plan_ack", None)
         return True
 
+    @staticmethod
+    def _planning_receipt_identity(pending: dict[str, Any]) -> tuple:
+        return pending.get("job_id"), pending.get("snapshot_id")
+
+    async def _journal_planning_acceptance(self, stored, result, pending) -> None:
+        stored.pop("optimisation_pending_submission", None)
+        if result["state"] == "pending":
+            stored["optimisation_pending_job"] = {
+                key: value for key, value in pending.items()
+                if key not in ("snapshot_id", "devices")
+            }
+            stored["optimisation_pending_job"]["job_id"] = result["job_id"]
+        else:
+            stored.pop("optimisation_pending_job", None)
+        if pending.get("replan_request_id"):
+            stored["answered_replan_request_id"] = pending["replan_request_id"]
+            self._answered_replan_request_id = pending["replan_request_id"]
+        await self._store.async_save(stored)
+        self._planning_job_wake.set()
+
+    async def _poll_planning_job(self, pending: dict[str, Any]) -> float:
+        """Read outside the exchange lock; install only the still-current receipt."""
+        recovering_submission = "job_id" not in pending
+        record_key = "optimisation_pending_submission" if recovering_submission else "optimisation_pending_job"
+        try:
+            result = await (
+                self.client.planning_submission_status(pending["snapshot_id"])
+                if recovering_submission else self.client.planning_status(pending["job_id"])
+            )
+        except ShsApiError as error:
+            async with self._push_lock:
+                stored = await self._store.async_read() or {}
+                if self._planning_receipt_identity(stored.get(record_key, {})) != self._planning_receipt_identity(pending):
+                    return 0
+                self.last_optimisation_error = str(error)
+                if error.code == "planning_job_not_found":
+                    stored = await self._store.async_load()
+                    stored.pop(record_key, None)
+                    await self._store.async_save(stored)
+                    self.async_update_listeners()
+                else:
+                    self.async_update_listeners()
+                    return 5
+            if recovering_submission and pending.get("replan_request_id"):
+                await self._report_replan_failure(pending["replan_request_id"], str(error))
+            return 0
+        if result["state"] == "pending" and not recovering_submission:
+            return result["retry_after_ms"] / 1000
+        async with self._push_lock:
+            stored = await self._store.async_load() or {}
+            if self._planning_receipt_identity(stored.get(record_key, {})) != self._planning_receipt_identity(pending):
+                return 0
+            if recovering_submission:
+                await self._journal_planning_acceptance(stored, result, pending)
+                try:
+                    await self._record_device_exchange(stored, pending["devices"], result)
+                except (ShsApiError, HouseholdReadError, OptimisationInputError, KeyError, TypeError, ValueError) as error:
+                    self.last_optimisation_error = str(error)
+                    pending = {**pending, "configuration_unconfirmed": True}
+                    if stored.get("optimisation_pending_job"):
+                        stored["optimisation_pending_job"]["configuration_unconfirmed"] = True
+                else:
+                    self.last_optimisation_error = None
+                for remote, local in (
+                    ("actuals_accepted_until", "optimisation_actuals_accepted_until"),
+                    ("thermal_slots_accepted_until", "thermal_slots_accepted_until"),
+                ):
+                    if result.get(remote):
+                        stored[local] = result[remote]
+                self.last_actual_slots_accepted = int(result.get("actual_slots_accepted") or 0)
+                self.last_thermal_slots_accepted = int(result.get("thermal_slots_accepted") or 0)
+                self.actuals_accepted_until = stored.get("optimisation_actuals_accepted_until")
+                self.replan_recommendations = stored["replan_recommendations"] = result.get("replan_recommendations", [])
+                self.last_optimisation_push = stored["last_optimisation_push"] = self.ports.utcnow().isoformat()
+            if result["state"] == "published":
+                changed = (
+                    pending.get("configuration_unconfirmed", False)
+                    or dict(self.ports.options()) != pending["options"]
+                    or stored.get("optimisation_device_configuration", {}) != pending["device_configuration"]
+                    or stored.get("home_planning_configuration") != pending["home_configuration"]
+                )
+                await self._accept_returned_plan(stored, result["plan"], configuration_changed=changed)
+            elif result["state"] == "failed":
+                self.last_optimisation_error = result.get("detail") or result.get("code") or "planning failed"
+            if result["state"] != "pending":
+                # Superseded work supplies no replacement. Keep the accepted plan.
+                stored.pop("optimisation_pending_job", None)
+            await self._store.async_save(stored)
+            if await self._retry_pending_plan_ack(stored):
+                await self._store.async_save(stored)
+            self.async_update_listeners()
+        await self.async_report_runtime()
+        await self.async_battery_inputs_refresh()
+        return result["retry_after_ms"] / 1000 if result["state"] == "pending" else 0
+
+    async def async_planning_delivery(self) -> None:
+        """Host-owned delivery loop resumes journalled jobs after activation."""
+        while True:
+            self._planning_job_wake.clear()
+            async with self._push_lock:
+                stored = await self._store.async_read() or {}
+                pending = stored.get("optimisation_pending_submission") or stored.get("optimisation_pending_job")
+            if not pending:
+                await self._planning_job_wake.wait()
+                continue
+            delay = await self._poll_planning_job(pending)
+            if delay:
+                try:
+                    await asyncio.wait_for(self._planning_job_wake.wait(), timeout=delay)
+                except asyncio.TimeoutError:
+                    pass
+
+    async def _accept_returned_plan(self, stored, returned_plan, *, configuration_changed: bool) -> None:
+        """Validate, retain or install and journal the exact plan acknowledgement."""
+        plan_error: str | None = None
+        acknowledgement_plan = (
+            {
+                key: returned_plan.get(key)
+                for key in ("plan_id", "snapshot_id", "schema_version")
+            }
+            if isinstance(returned_plan, dict)
+            else None
+        )
+        if returned_plan:
+            runtime=getattr(self,"battery_runtime",None)
+            try:
+                validate_plan_contract(returned_plan, self.ports.utcnow())
+                if self.optimisation_plan and any(
+                    branch.get("status") != "ready"
+                    for branch in (returned_plan, returned_plan.get("execution_plan", returned_plan))
+                ):
+                    raise OptimisationInputError("The replacement has no ready schedule; retaining the previous plan")
+                if runtime is not None:
+                    try:
+                        runtime.validate_plan_response(returned_plan)
+                    except (KeyError, TypeError, ValueError, OverflowError) as error:
+                        raise OptimisationInputError(str(error)) from error
+            except OptimisationInputError as err:
+                plan_error = str(err)
+                if runtime is not None and isinstance(returned_plan, dict) and (
+                    returned_plan.get("battery") or "battery_execution" in returned_plan
+                ):
+                    await runtime.reject_plan_response(returned_plan, plan_error)
+                _LOGGER.warning("Optimisation plan refused: %s", err)
+
+        if plan_error is not None:
+            # Keep whatever plan is already cached rather than replacing it
+            # with one that failed its contract, and say so loudly enough
+            # to be noticed while the executor continues its previous plan.
+            self.last_optimisation_error = plan_error
+            self._sync_plan_refused_issue(plan_error)
+            stored["optimisation_pending_plan_ack"] = {
+                "plan": acknowledgement_plan,
+                "outcome": "rejected",
+                "error": {
+                    "code": "plan_contract_rejected",
+                    "message": plan_error,
+                    "path": None,
+                    "details": [plan_error],
+                },
+            }
+        elif returned_plan and not configuration_changed:
+            self.last_optimisation_error = None
+            self._plan_configuration_changed = stored["plan_configuration_changed"] = False
+            self.optimisation_plan = returned_plan
+            stored["optimisation_plan"] = self.optimisation_plan
+            self._sync_plan_refused_issue(None)
+            stored["optimisation_pending_plan_ack"] = {
+                "plan": acknowledgement_plan,
+                "outcome": "accepted",
+                "error": None,
+            }
+        elif configuration_changed:
+            # The returned plan was built from the preceding website
+            # request. Never expose it after a role/control change; the
+            # next exchange replans using the new effective base split.
+            self._plan_configuration_changed = stored["plan_configuration_changed"] = True
+            self.last_optimisation_error = "device configuration changed; manual replan recommended"
+            if returned_plan:
+                stored["optimisation_pending_plan_ack"] = {
+                    "plan": acknowledgement_plan,
+                    "outcome": "rejected",
+                    "error": {
+                        "code": "local_configuration_changed",
+                        "message": (
+                            "Home Assistant device configuration changed while "
+                            "the plan was generated"
+                        ),
+                        "path": None,
+                        "details": None,
+                    },
+                }
+        elif self.optimisation_plan is None:
+            self.optimisation_plan = stored.get("optimisation_plan")
+
     @asynccontextmanager
     async def _planning_exchange(self):
         try:
@@ -2861,6 +3071,7 @@ class Household:
                 await self.async_report_runtime()
                 yield
         finally:
+            self._planning_job_wake.set()
             await self.async_report_runtime()
 
     async def async_optimisation_push(
@@ -2978,7 +3189,7 @@ class Household:
                     self.ports.utcnow(),
                     force=force_plan,
                     retry_after_error=bool(self.last_optimisation_error),
-                )
+                ) and (force_plan or not (stored.get("optimisation_pending_job") or stored.get("optimisation_pending_submission")))
                 snapshot = None
                 if plan_due:
                     mode = self.resolved_options()[OPT_PLANNING_MODE]
@@ -3053,6 +3264,16 @@ class Household:
                     return
                 if dict(self.ports.options()) != exchange_options:
                     raise OptimisationInputError("Configuration changed while preparing the exchange; retry with current participation")
+                if snapshot is not None and snapshot.get("snapshot_id"):
+                    stored["optimisation_pending_submission"] = {
+                        "snapshot_id": snapshot["snapshot_id"],
+                        "options": exchange_options,
+                        "device_configuration": previous_configuration,
+                        "home_configuration": previous_home,
+                        "replan_request_id": replan_request_id,
+                        "devices": devices,
+                    }
+                    await self._store.async_save(stored)
                 ingest_started = monotonic()
                 result = await self.client.push_optimisation(
                     actuals,
@@ -3067,11 +3288,26 @@ class Household:
                         if force_plan and replan_request_id is None else None,
                     equipment=self.equipment_presence(),
                 )
+                if result.get("job_id"):
+                    await self._journal_planning_acceptance(stored, result, {
+                        "options": exchange_options,
+                        "device_configuration": previous_configuration,
+                        "home_configuration": previous_home,
+                        "replan_request_id": replan_request_id,
+                    })
+                else:
+                    # The server accepted telemetry without starting a solve.
+                    if snapshot is not None:
+                        stored.pop("optimisation_pending_submission", None)
                 self.replan_recommendations = stored["replan_recommendations"] = result.get("replan_recommendations", [])
                 _LOGGER.info("Replan %s cloud ingest completed in %.0f ms", replan_request_id, (monotonic() - ingest_started) * 1000)
-                configuration = await self._record_device_exchange(
-                    stored, devices, result
-                )
+                try:
+                    configuration = await self._record_device_exchange(stored, devices, result)
+                except (ShsApiError, HouseholdReadError, OptimisationInputError, KeyError, TypeError, ValueError):
+                    if result.get("job_id") and stored.get("optimisation_pending_job"):
+                        stored["optimisation_pending_job"]["configuration_unconfirmed"] = True
+                        await self._store.async_save(stored)
+                    raise
                 configuration_changed = configuration != previous_configuration or previous_home != stored.get("home_planning_configuration")
                 self.last_actual_slots_accepted = int(
                     result.get("actual_slots_accepted") or 0
@@ -3095,38 +3331,6 @@ class Household:
             # actuals and thermal watermarks and the plan-due cache, so the same
             # quarters were re-uploaded and a full replan was requested every
             # quarter. An unusable plan must cost the plan, and nothing else.
-            plan_error: str | None = None
-            returned_plan = result.get("plan")
-            acknowledgement_plan = (
-                {
-                    key: returned_plan.get(key)
-                    for key in ("plan_id", "snapshot_id", "schema_version")
-                }
-                if isinstance(returned_plan, dict)
-                else None
-            )
-            if returned_plan:
-                runtime=getattr(self,"battery_runtime",None)
-                try:
-                    validate_plan_contract(returned_plan, self.ports.utcnow())
-                    if self.optimisation_plan and any(
-                        branch.get("status") != "ready"
-                        for branch in (returned_plan, returned_plan.get("execution_plan", returned_plan))
-                    ):
-                        raise OptimisationInputError("The replacement has no ready schedule; retaining the previous plan")
-                    if runtime is not None:
-                        try:
-                            runtime.validate_plan_response(returned_plan)
-                        except (KeyError, TypeError, ValueError, OverflowError) as error:
-                            raise OptimisationInputError(str(error)) from error
-                except OptimisationInputError as err:
-                    plan_error = str(err)
-                    if runtime is not None and isinstance(returned_plan, dict) and (
-                        returned_plan.get("battery") or "battery_execution" in returned_plan
-                    ):
-                        await runtime.reject_plan_response(returned_plan, plan_error)
-                    _LOGGER.warning("Optimisation plan refused: %s", err)
-
             self.last_optimisation_error = snapshot_error
             self.last_optimisation_push = self.ports.utcnow().isoformat()
             if result.get("actuals_accepted_until"):
@@ -3140,55 +3344,11 @@ class Household:
             self.last_thermal_slots_accepted = int(
                 result.get("thermal_slots_accepted") or 0
             )
-            if plan_error is not None:
-                # Keep whatever plan is already cached rather than replacing it
-                # with one that failed its contract, and say so loudly enough
-                # to be noticed while the executor continues its previous plan.
-                self.last_optimisation_error = plan_error
-                self._sync_plan_refused_issue(plan_error)
-                stored["optimisation_pending_plan_ack"] = {
-                    "plan": acknowledgement_plan,
-                    "outcome": "rejected",
-                    "error": {
-                        "code": "plan_contract_rejected",
-                        "message": plan_error,
-                        "path": None,
-                        "details": [plan_error],
-                    },
-                }
-            elif result.get("plan") and not configuration_changed:
+            await self._accept_returned_plan(stored, result.get("plan"), configuration_changed=configuration_changed)
+            if result.get("state") == "pending":
                 self.last_optimisation_error = None
-                self._plan_configuration_changed = stored["plan_configuration_changed"] = False
-                self.optimisation_plan = result["plan"]
-                stored["optimisation_plan"] = self.optimisation_plan
-                self._sync_plan_refused_issue(None)
-                stored["optimisation_pending_plan_ack"] = {
-                    "plan": acknowledgement_plan,
-                    "outcome": "accepted",
-                    "error": None,
-                }
-            elif configuration_changed:
-                # The returned plan was built from the preceding website
-                # request. Never expose it after a role/control change; the
-                # next exchange replans using the new effective base split.
-                self._plan_configuration_changed = stored["plan_configuration_changed"] = True
-                self.last_optimisation_error = "device configuration changed; manual replan recommended"
-                if returned_plan:
-                    stored["optimisation_pending_plan_ack"] = {
-                        "plan": acknowledgement_plan,
-                        "outcome": "rejected",
-                        "error": {
-                            "code": "local_configuration_changed",
-                            "message": (
-                                "Home Assistant device configuration changed while "
-                                "the plan was generated"
-                            ),
-                            "path": None,
-                            "details": None,
-                        },
-                    }
-            elif self.optimisation_plan is None:
-                self.optimisation_plan = stored.get("optimisation_plan")
+            elif result.get("state") == "failed":
+                self.last_optimisation_error = result.get("detail") or result.get("code") or "planning failed"
             stored["last_optimisation_push"] = self.last_optimisation_push
             await self._store.async_save(stored)
             if await self._retry_pending_plan_ack(stored):
