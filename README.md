@@ -91,6 +91,11 @@ keeps the existing daily energy/tariff exchange and adds a home-scoped,
   attempts retry through later exchanges. Accepted local slot changes do not require a network call.
   Per-second states and
   raw recorder rows never leave HA.
+- **Durable planning delivery**: accepted cloud jobs are polled across restarts.
+  A result keeps its original issue time and can be received after a long solve;
+  receipt age does not invalidate it. Home Assistant checks its actual remaining
+  schedule validity, contract, identity and local configuration before accepting
+  it. Commands still apply only to the current schedule interval.
 - **Forecast truth**: PV is an explicit timestamped Home Assistant source.
   Supplier import and export are distinct server-calculated series based on
   public Swedish spot prices and the supplier selected on the SHS home profile;

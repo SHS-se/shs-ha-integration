@@ -1,7 +1,7 @@
 """Durable planning acceptance and delivery through the real household owner."""
 import asyncio
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import sys
@@ -65,6 +65,18 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.h.optimisation_plan, self.candidate)
         self.assertNotIn('optimisation_pending_job', self.rig.records.saved)
         self.h.client.acknowledge_optimisation_plan.assert_awaited_once()
+        self.assertEqual(self.h.client.acknowledge_optimisation_plan.call_args.args[1], 'accepted')
+
+    async def test_delayed_durable_result_is_installed_and_acknowledged_with_its_original_issue_time(self):
+        pending = await self.accept('manual')
+        issued = self.candidate['issued_at']
+        self.rig.now += timedelta(minutes=32)
+        self.h.client.planning_status.return_value = self.published()
+        await self.h._poll_planning_job(pending)
+        self.assertEqual(self.h.optimisation_plan, self.candidate)
+        self.assertEqual(self.h.optimisation_plan['issued_at'], issued)
+        self.assertEqual(self.rig.records.saved['optimisation_plan'], self.candidate)
+        self.assertNotIn('optimisation_pending_job', self.rig.records.saved)
         self.assertEqual(self.h.client.acknowledge_optimisation_plan.call_args.args[1], 'accepted')
 
     async def test_normal_exchange_does_not_recapture_accepted_work_and_keeps_settings_available(self):

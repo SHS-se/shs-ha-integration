@@ -30,8 +30,8 @@ class PlanContractCacheTests(unittest.TestCase):
 
         self.cache = PlanContractCache(lambda: self.current, validate)
 
-    def check(self, plan, at=None, **kwargs):
-        self.cache(plan, at or self.now, **{'require_recent_issue': False, **kwargs})
+    def check(self, plan, at=None):
+        self.cache(plan, at or self.now)
 
     def test_repeated_reads_check_each_branch_once(self):
         for _ in range(3):
@@ -48,13 +48,13 @@ class PlanContractCacheTests(unittest.TestCase):
         self.check(self.plan)
         self.assertEqual(len(self.checked), 3)
 
-    def test_recent_issue_requirement_is_part_of_the_verdict(self):
-        late = instant(self.plan['issued_at']) + timedelta(minutes=20)
-        self.check(self.plan, late)
-        with self.assertRaisesRegex(OptimisationInputError, 'not issued recently'):
-            self.check(self.plan, late, require_recent_issue=True)
-        self.check(self.plan, late)
-        self.assertEqual(len(self.checked), 3)
+    def test_issue_age_and_remote_clock_skew_do_not_change_a_valid_verdict(self):
+        issued = instant(self.plan['issued_at'])
+        for at in (issued - timedelta(minutes=10), issued,
+                   issued + timedelta(minutes=32), issued + timedelta(minutes=5)):
+            validate_plan_contract(self.plan, at)
+            self.check(self.plan, at)
+        self.assertEqual(len(self.checked), 1)
 
     def test_failures_are_reused_with_the_same_error(self):
         self.plan['services'] = 'not a list'

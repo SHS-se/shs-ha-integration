@@ -30,7 +30,7 @@ def operational_status(plan, mode, missing, now, *, options=None, validate=valid
             # Validate structure even for an expired plan, without treating it as executable.
             valid_until = datetime.fromisoformat(plan["valid_until"])
             check_at = issued if now >= valid_until else now
-            validate(plan, check_at, require_recent_issue=False)
+            validate(plan, check_at)
             selected = plan
             scope_changed = False
             if options is not None:

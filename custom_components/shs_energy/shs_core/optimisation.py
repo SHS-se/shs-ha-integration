@@ -1041,7 +1041,7 @@ from .device_commands import validate_commands
 
 
 def validate_plan_contract(
-    plan: Any, now: datetime, *, require_recent_issue: bool = True
+    plan: Any, now: datetime
 ) -> None:
     """Validate the cached server plan before exposing any local request."""
     if not isinstance(plan, dict):
@@ -1100,7 +1100,7 @@ def validate_plan_contract(
         if any(execution.get(key) != plan.get(key) for key in
                ("device_models", "capabilities", "battery", "pool", "ev_battery", "plans")):
             raise OptimisationInputError("displayed schedule differs from execution plan")
-        validate_plan_contract(execution, now, require_recent_issue=require_recent_issue)
+        validate_plan_contract(execution, now)
         starts = [slot["start"] for slot in execution["plans"]["priority"]["slots"]]
         for scenario in ("baseline", "priority", "cost"):
             if [s.get("start") for s in plan.get("plans", {}).get(scenario, {}).get("slots", [])] != starts:
@@ -1146,10 +1146,8 @@ def validate_plan_contract(
     binding_until = _timestamp(plan.get("binding_until"))
     if issued is None or valid_until is None or binding_until is None:
         raise OptimisationInputError("optimisation plan timestamps are invalid")
-    if issued > current + timedelta(minutes=5) or (
-        require_recent_issue and current - issued > timedelta(minutes=15)
-    ):
-        raise OptimisationInputError("optimisation plan was not issued recently")
+    # A durable solve can outlive its issue quarter. Receipt age and remote
+    # issue-clock skew do not invalidate the schedule's actual remaining horizon.
     if valid_until <= current:
         raise OptimisationInputError("optimisation plan is already expired")
     if valid_until <= issued:
@@ -1730,12 +1728,12 @@ def validate_plan_contract(
 
 
 def _clock_regime(
-    plan: dict[str, Any], now: datetime, require_recent_issue: bool
-) -> tuple[bool, bool, bool] | None:
+    plan: dict[str, Any], now: datetime
+) -> bool | None:
     """The only validation outcomes that can differ for an unchanged plan.
 
-    `validate_plan_contract` reads the clock solely for its issue and expiry
-    checks. An execution branch must carry its parent's timestamps, so the
+    `validate_plan_contract` reads the clock solely for expiry.
+    An execution branch must carry its parent's timestamps, so the
     nested validation always falls in the parent's regime.
     """
     issued = _timestamp(plan.get("issued_at"))
@@ -1743,11 +1741,7 @@ def _clock_regime(
     if issued is None or valid_until is None:
         return None
     current = now.astimezone(timezone.utc)
-    return (
-        issued > current + timedelta(minutes=5),
-        require_recent_issue and current - issued > timedelta(minutes=15),
-        valid_until <= current,
-    )
+    return valid_until <= current
 
 
 class PlanContractCache:
@@ -1771,7 +1765,7 @@ class PlanContractCache:
         self._verdicts: dict[int, tuple[Any, Any, Exception | None]] = {}
 
     def __call__(
-        self, plan: Any, now: datetime, *, require_recent_issue: bool = True
+        self, plan: Any, now: datetime
     ) -> None:
         root = self._current_plan()
         if root is not self._plan:
@@ -1779,16 +1773,16 @@ class PlanContractCache:
         if not isinstance(root, dict) or not isinstance(plan, dict) or (
             plan is not root and plan is not root.get("execution_plan")
         ):
-            self._validate(plan, now, require_recent_issue=require_recent_issue)
+            self._validate(plan, now)
             return
-        regime = _clock_regime(plan, now, require_recent_issue)
+        regime = _clock_regime(plan, now)
         cached = self._verdicts.get(id(plan))
         if cached is not None and cached[0] is plan and cached[1] == regime:
             if cached[2] is not None:
                 raise cached[2].with_traceback(None)
             return
         try:
-            self._validate(plan, now, require_recent_issue=require_recent_issue)
+            self._validate(plan, now)
         except Exception as error:
             self._verdicts[id(plan)] = (plan, regime, error)
             raise
