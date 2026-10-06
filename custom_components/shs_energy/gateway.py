@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
+from time import perf_counter, thread_time
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
@@ -277,7 +278,13 @@ class HomeAssistantSource:
             return wire(await self.history.hourly_forecast(body['entity']))
         start, end = (datetime.fromisoformat(body[key]) for key in ('start','end'))
         if operation == 'statistics':
-            return wire(await self.history.statistics(start,end,set(body['entities']),body['period'],body['units'],set(body['kinds'])))
+            rows = await self.history.statistics(start,end,set(body['entities']),body['period'],body['units'],set(body['kinds']))
+            started, cpu = perf_counter(), thread_time()
+            value = wire(rows)
+            _LOGGER.info('Recorder statistics wire conversion: period=%s rows=%s wall_ms=%.1f cpu_ms=%.1f',
+                         body['period'], sum(len(values) for values in rows.values()),
+                         (perf_counter()-started)*1000, (thread_time()-cpu)*1000)
+            return value
         return wire(await self.history.states(start,end,body['entities'],with_attributes=body['with_attributes']))
 
     async def publish(self, value):

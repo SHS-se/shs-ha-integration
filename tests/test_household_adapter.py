@@ -3,6 +3,7 @@ import ast
 from datetime import datetime, timezone
 import json
 import logging
+from time import perf_counter, thread_time
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -80,3 +81,18 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.hass.services.async_call.side_effect = HomeAssistantError('offline')
         with self.assertRaises(HouseholdReadError):
             await self.source.hourly_forecast('weather.home')
+
+    async def test_statistics_keeps_recorder_arguments_and_result_unchanged(self):
+        rows = {'sensor.energy': [{'start': 1, 'change': 0.125}]}
+        self.statistics.return_value = rows
+        now, entities, units, kinds = self.rig.now, {'sensor.energy'}, {'energy':'kWh'}, {'change'}
+        with self.assertLogs(__name__, level='INFO') as logs:
+            result = await self.source.statistics(now, now, entities, '5minute', units, kinds)
+        self.assertIs(result, rows)
+        self.statistics.assert_called_once_with(self.hass, now, now, entities, '5minute', units, kinds)
+        self.assertIn('requested_ids=1 returned_ids=1 rows=1', logs.output[0])
+        self.assertNotIn('sensor.energy', logs.output[0])
+        self.assertNotIn('0.125', logs.output[0])
+        self.statistics.side_effect = HomeAssistantError('recorder unavailable')
+        with self.assertRaises(HouseholdReadError):
+            await self.source.statistics(now, now, entities, '5minute', units, kinds)

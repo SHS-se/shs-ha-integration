@@ -6,7 +6,9 @@ import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
+from time import perf_counter, thread_time
 import unittest
+from unittest.mock import AsyncMock
 
 import test_battery_gateway as battery_fixtures
 from gateway_fixture import IDENTITY
@@ -54,7 +56,8 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         passthrough = lambda function:function
         registry = SimpleNamespace(async_get=lambda entity:None)
         adapter = load_adapter('gateway.py', dict(asyncio=asyncio, datetime=datetime, timezone=timezone, json=json,
-            logging=logging, Path=Path, callback=passthrough, vol=SimpleNamespace(Required=lambda key:key),
+            logging=logging, Path=Path, perf_counter=perf_counter, thread_time=thread_time,
+            callback=passthrough, vol=SimpleNamespace(Required=lambda key:key),
             websocket_api=SimpleNamespace(require_admin=passthrough, async_response=passthrough,
                 websocket_command=lambda schema:passthrough),
             er=SimpleNamespace(async_get=lambda hass:registry, EVENT_ENTITY_REGISTRY_UPDATED=REGISTRY_UPDATED),
@@ -77,6 +80,20 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             value=dict(revision=1, digest=digest(installed)))
         self.source.attach()
         await self.source.refresh_configuration()
+
+    async def test_statistics_wire_preserves_rows_and_logs_only_counts(self):
+        rows = {'sensor.energy': [{'start': 1, 'end': 301, 'change': 0.125}]}
+        self.source.history = SimpleNamespace(statistics=AsyncMock(return_value=rows))
+        at = datetime.now(timezone.utc)
+        body = dict(start=at.isoformat(), end=at.isoformat(), entities=['sensor.energy'],
+                    period='5minute', units={'energy':'kWh'}, kinds=['change'])
+        with self.assertLogs(level='INFO') as logs:
+            result = await self.source.request('statistics', body)
+        self.assertEqual(result, rows)
+        self.source.history.statistics.assert_awaited_once_with(at, at, {'sensor.energy'}, '5minute', {'energy':'kWh'}, {'change'})
+        self.assertIn('period=5minute rows=1', logs.output[0])
+        self.assertNotIn('sensor.energy', logs.output[0])
+        self.assertNotIn('0.125', logs.output[0])
 
     async def test_retained_owned_controls_and_overrides_stay_ordered_until_release(self):
         self.source.install_bindings(dict(revision=1,pool_pause=None,

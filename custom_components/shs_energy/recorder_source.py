@@ -1,9 +1,13 @@
 """Read-only Home Assistant history and forecast adapters."""
+import logging
+from time import perf_counter, thread_time
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.history import get_significant_states
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.exceptions import HomeAssistantError
 from .shs_core.household_ports import HouseholdReadError
+
+_LOGGER = logging.getLogger(__name__)
 
 class RecorderSource:
     """Read source rows; aggregation and planning belong to the household."""
@@ -12,11 +16,17 @@ class RecorderSource:
         self.hass = hass
 
     async def statistics(self, start, end, entities, period, units, kinds):
+        requested = perf_counter()
+        def read():
+            started, cpu = perf_counter(), thread_time()
+            rows = statistics_during_period(self.hass, start, end, entities, period, units, kinds)
+            _LOGGER.info('Recorder statistics: period=%s requested_ids=%s returned_ids=%s rows=%s '
+                         'executor_wait_ms=%.1f read_wall_ms=%.1f read_cpu_ms=%.1f',
+                         period, len(entities), len(rows), sum(len(values) for values in rows.values()),
+                         (started-requested)*1000, (perf_counter()-started)*1000, (thread_time()-cpu)*1000)
+            return rows
         try:
-            return await get_instance(self.hass).async_add_executor_job(
-                statistics_during_period, self.hass, start, end, entities,
-                period, units, kinds,
-            )
+            return await get_instance(self.hass).async_add_executor_job(read)
         except HomeAssistantError as error:
             raise HouseholdReadError(str(error)) from error
 
@@ -51,4 +61,3 @@ class RecorderSource:
         except HomeAssistantError as error:
             raise HouseholdReadError(str(error)) from error
         return ((response or {}).get(entity) or {}).get('forecast') or []
-
