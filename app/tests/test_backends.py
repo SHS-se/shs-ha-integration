@@ -191,3 +191,49 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         await engine.request_plan(h)
         h.client.request_replan.assert_not_awaited()
         h.async_optimisation_push.assert_not_awaited()
+
+    async def test_settled_source_startup_preserves_inflight_execution_request(self):
+        engine,h=await self.selected_engine()
+        await self.backends.settled()
+        engine.periodic=AsyncMock()
+        h.async_replan_poll=AsyncMock()
+        for key in ('planning_job','planning_submission'):
+            with self.subTest(key=key):
+                h._plan_configuration_changed=True
+                exchange={'planning_job':None,'planning_submission':None}
+                exchange[key]={'id':'existing'}
+                h.async_cached_exchange_status.return_value=exchange
+                async def delivered(delay):
+                    if delay==5:h._plan_configuration_changed=False
+                with patch('shs_app.engine.asyncio.sleep',side_effect=delivered):
+                    await engine.planning(h)
+                self.assertEqual(exchange[key],{'id':'existing'})
+        h.client.request_replan.assert_not_awaited()
+        h.async_optimisation_push.assert_not_awaited()
+
+    async def test_settled_source_startup_requests_executable_replacement(self):
+        engine,h=await self.selected_engine()
+        await self.backends.settled()
+        engine.periodic=AsyncMock()
+        h.async_replan_poll=AsyncMock()
+        async def accepted(request):
+            h._plan_configuration_changed=False
+            return True
+        h.async_answer_replan.side_effect=accepted
+        with patch('shs_app.engine.asyncio.sleep',new=AsyncMock()):
+            await engine.planning(h)
+        h.client.request_replan.assert_awaited_once()
+        h.async_optimisation_push.assert_not_awaited()
+
+    async def test_configuration_replan_preserves_selected_job_and_updates_observer(self):
+        engine,h=await self.selected_engine()
+        h.async_cached_exchange_status.return_value={'planning_job':{'job_id':'existing'},'planning_submission':None}
+        observer=SimpleNamespace(_plan_configuration_changed=False,async_optimisation_push=AsyncMock())
+        engine.households={'production':h,'test':observer}
+        tasks=[]
+        engine.spawn=lambda work,name:tasks.append(asyncio.create_task(work,name=name))
+        await engine.replan_all()
+        await asyncio.gather(*tasks)
+        h.client.request_replan.assert_not_awaited()
+        h.async_optimisation_push.assert_not_awaited()
+        observer.async_optimisation_push.assert_awaited_once_with(force_plan=True)

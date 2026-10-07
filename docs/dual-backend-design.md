@@ -27,6 +27,10 @@ and jobs across restarts; background refresh recommendations cannot complete it.
 If the server retains a request answered by an observer but not acknowledged for
 execution, explicit replanning reuses that request identity with fresh physical
 feedback. A job admitted by the notification listener is retained.
+The same explicit request path handles selected-source startup and configuration
+replanning. It waits for a pending submission or job instead of capturing a new
+battery generation while that work is solving. Observer refreshes cannot advance
+the physical battery generation.
 
 Observer plans omit the optional battery execution feedback under the same
 contract. After selection the battery holds its last setting until a freshly

@@ -418,7 +418,7 @@ class AppEngine:
         await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)
         await self.complete_backend_selection(household)
         while household._plan_configuration_changed:
-            await household.async_optimisation_push(force_plan=True)
+            await self.request_plan(household)
             if household._plan_configuration_changed:
                 await asyncio.sleep(5)
         await self.periodic(household.async_replan_poll,PLAN_EXCHANGE_INTERVAL_MINUTES*60)
@@ -439,6 +439,9 @@ class AppEngine:
         await self.backends.settled()
 
     async def request_plan(self, household):
+        if household is not self.household:
+            await household.async_optimisation_push(force_plan=True)
+            return True
         exchange = await household.async_cached_exchange_status()
         if exchange['planning_job'] or exchange['planning_submission']:
             return True
@@ -475,7 +478,7 @@ class AppEngine:
     async def replan_all(self):
         for environment, household in self.households.items():
             household._plan_configuration_changed = True
-            self.spawn(self.cloud_job(environment,lambda h=household:h.async_optimisation_push(force_plan=True)),
+            self.spawn(self.cloud_job(environment,lambda h=household:self.request_plan(h)),
                 'configuration_replan_'+environment)
 
     async def select_backend(self, body):
