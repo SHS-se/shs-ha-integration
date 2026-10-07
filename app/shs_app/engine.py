@@ -433,11 +433,25 @@ class AppEngine:
         while household._plan_configuration_changed:
             exchange = await household.async_cached_exchange_status()
             if not (exchange['planning_job'] or exchange['planning_submission']):
-                request_id = await household.client.request_replan()
-                await household.async_answer_replan(request_id)
+                await self.request_plan(household)
             if household._plan_configuration_changed:
                 await asyncio.sleep(5)
         await self.backends.settled()
+
+    async def request_plan(self, household):
+        exchange = await household.async_cached_exchange_status()
+        if exchange['planning_job'] or exchange['planning_submission']:
+            return True
+        request_id = await household.client.request_replan()
+        if await household.async_answer_replan(request_id):
+            return True
+        # The server retains an unacknowledged observer request. Re-answer it
+        # with current execution evidence after promotion; never discard its
+        # identity or replace a job concurrently admitted by the listener.
+        exchange = await household.async_cached_exchange_status()
+        if not (exchange['planning_job'] or exchange['planning_submission']):
+            await household.async_optimisation_push(force_plan=True,replan_request_id=request_id)
+        return True
 
     async def cloud_job(self, environment, operation):
         """A failed cloud session cannot stop its sibling or the physical owner."""
@@ -527,8 +541,7 @@ class AppEngine:
             elif op == 'cached_exchange': result = await h.async_cached_exchange_status()
             elif op == 'report_mapping': result = await h.async_report_device_mapping(body['device_key'],body['mappings'])
             elif op == 'replan':
-                request_id = await h.client.request_replan()
-                result = await h.async_answer_replan(request_id)
+                result = await self.request_plan(h)
                 if h.last_optimisation_error: raise ValueError(h.last_optimisation_error)
             elif op == 'backfill_prices': result = await h.async_backfill_prices(body['days'])
             elif op == 'tick':

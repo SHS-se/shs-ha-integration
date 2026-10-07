@@ -24,6 +24,9 @@ completes admission transfer idempotently before any controller starts. The
 selection remains durably unsettled until the selected backend accepts a fresh
 plan. Startup explicitly requests that replan, preserving pending submissions
 and jobs across restarts; background refresh recommendations cannot complete it.
+If the server retains a request answered by an observer but not acknowledged for
+execution, explicit replanning reuses that request identity with fresh physical
+feedback. A job admitted by the notification listener is retained.
 
 Observer plans omit the optional battery execution feedback under the same
 contract. After selection the battery holds its last setting until a freshly

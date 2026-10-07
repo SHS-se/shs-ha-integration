@@ -118,7 +118,7 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         h=SimpleNamespace(_plan_configuration_changed=True,
             client=SimpleNamespace(request_replan=AsyncMock(return_value='request')),
             async_cached_exchange_status=AsyncMock(return_value={'planning_job':None,'planning_submission':None}),
-            async_answer_replan=AsyncMock())
+            async_answer_replan=AsyncMock(return_value=True),async_optimisation_push=AsyncMock())
         engine=AppEngine.__new__(AppEngine)
         engine.backends=self.backends
         engine.environment='production'
@@ -131,6 +131,7 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.backends.data['admitted_for'],'test')
             self.assertEqual(request,'request')
             h._plan_configuration_changed=False
+            return True
         h.async_answer_replan.side_effect=accepted
         await engine.complete_backend_selection(h)
         h.client.request_replan.assert_awaited_once()
@@ -167,3 +168,26 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         await reopened.load({})
         self.assertEqual(reopened.controlling,'production')
         self.assertEqual(reopened.data['admitted_for'],'test')
+
+    async def test_explicit_replan_reanswers_unacknowledged_observer_request(self):
+        engine,h=await self.selected_engine()
+        h.async_answer_replan.return_value=False
+        await engine.request_plan(h)
+        h.async_optimisation_push.assert_awaited_once_with(force_plan=True,replan_request_id='request')
+        self.assertEqual(self.backends.data['admitted_for'],'test')
+
+    async def test_listener_admitted_job_is_preserved_when_explicit_request_is_deduplicated(self):
+        engine,h=await self.selected_engine()
+        h.async_answer_replan.return_value=False
+        h.async_cached_exchange_status.side_effect=[
+            {'planning_job':None,'planning_submission':None},
+            {'planning_job':{'job_id':'listener-job'},'planning_submission':None}]
+        await engine.request_plan(h)
+        h.async_optimisation_push.assert_not_awaited()
+
+    async def test_explicit_request_preserves_existing_submission(self):
+        engine,h=await self.selected_engine()
+        h.async_cached_exchange_status.return_value={'planning_job':None,'planning_submission':{'snapshot_id':'existing'}}
+        await engine.request_plan(h)
+        h.client.request_replan.assert_not_awaited()
+        h.async_optimisation_push.assert_not_awaited()

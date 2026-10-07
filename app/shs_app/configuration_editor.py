@@ -97,8 +97,7 @@ class ConfigurationEditor:
         if operation == 'replan':
             if self.resolved_options().get(c.OPT_PLANNING_MODE) == c.PLANNING_MODE_DISABLED:
                 raise ValueError('Planning is turned off for this home')
-            request = await h.client.request_replan()
-            await h.async_answer_replan(request)
+            await self.engine.request_plan(h)
             if h.last_optimisation_error: raise ValueError(h.last_optimisation_error)
             return await self.view()
         existing = self.engine.configuration.options()
