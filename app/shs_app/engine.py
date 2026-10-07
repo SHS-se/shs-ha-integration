@@ -2,13 +2,14 @@
 import asyncio
 from contextlib import suppress
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
 from uuid import uuid4
 
-from shs_core.api import ShsApiClient
+from shs_core.api import ShsApiClient, ShsApiError
 from .runtime import AppBatteryRuntime
 from .profiling import AppProfiler, profiled
 from shs_core.command_journal import WriterLease
@@ -36,6 +37,10 @@ from .projection import DisplayPlan
 from .sources import ObservationMirror, RemoteHistory
 from .upgrades import open_runtime_schema
 from .configuration import Configuration
+from .backends import Backends, BackendChanged, BackendSetupError, URLS
+from shs_core.operating_modes import transfer_admissions
+from shs_core.api_contract import validate_server_contract
+from shs_core.optimisation import validate_plan_contract
 from .indexed_storage import IndexedStorage
 from .configuration_editor import ConfigurationEditor
 from .entities import project_entities
@@ -99,6 +104,9 @@ class AppEngine:
         self.configuration = None
         self.editor = ConfigurationEditor(self)
         self.record_stores = []
+        self.backends = None
+        self.households = {}
+        self.restart_requested = asyncio.Event()
 
     def spawn(self, work, name='shs_app_work'):
         task = asyncio.create_task(work, name=name)
@@ -147,7 +155,9 @@ class AppEngine:
             lambda body:history.source('configure',body),project=self.native_configuration)
         await self.configuration.load(dict(snapshot['configuration']['configuration_authority'],
             options=snapshot['configuration']['options']),lambda:history.source('credentials',{}))
-        credentials = self.configuration.credentials()
+        self.backends = Backends(self.root, self.identity)
+        await self.backends.load(self.configuration.credentials())
+        self.environment = self.backends.controlling
         ports = HouseholdPorts(self.mirror.home,self.configuration.options,self.configuration.admit,self.mirror.read,
             lambda:set(self.mirror.context['entity_ids']),lambda:self.mirror.context['entity_names'],
             lambda:self.mirror.context['area_names'],lambda:self.mirror.context['entity_areas'],
@@ -159,9 +169,30 @@ class AppEngine:
             store = RecordStore(stores/f'shs_energy.{prefix}{entry}')
             self.record_stores.append(store)
             return store
-        client = ShsApiClient(self.http,credentials[CONF_BASE_URL],credentials[CONF_DEVICE_TOKEN])
-        h = self.household = Household(ports,client,
-            store=DurableRecord(record(''),encode,json.loads),battery_inputs_store=record('battery_live_inputs.'))
+        async def refuse_admission(*_args):
+            raise GatewayConflict('An observing backend cannot change physical admission')
+        for environment, cloud_credentials in self.backends.data['credentials'].items():
+            authority = environment == self.environment
+            cloud_ports = ports if authority else replace(ports, admit=refuse_admission, repair=lambda *_args:None)
+            client = ShsApiClient(self.http,cloud_credentials[CONF_BASE_URL],cloud_credentials[CONF_DEVICE_TOKEN])
+            household = Household(cloud_ports,client,
+                store=DurableRecord(record(f'cloud.{environment}.'),encode,json.loads),
+                battery_inputs_store=record('battery_live_inputs.' if authority else f'cloud.{environment}.battery_inputs.'),
+                control_authority=authority)
+            self.households[environment] = household
+            await household.async_restore_plan()
+        h = self.household = self.households[self.environment]
+        if self.backends.data['admitted_for'] != self.environment:
+            choices = await h.async_cached_planning_configuration()
+            options = self.configuration.options()
+            transferred = transfer_admissions(options, choices['devices'], choices['home'])
+            if transferred != options:
+                await self.configuration.commit(self.configuration.revision,transferred,
+                    'backend-admission-'+str(self.backends.data['revision']))
+            await self.backends.settled()
+            # An observing plan has no physical battery generation. Keep the
+            # command journal, hold the last setting and request a fresh plan.
+            h._plan_configuration_changed = True
         self.devices = RemoteDevices(self.gateway,h)
         verification_store = VerificationStorage(stores/f'shs_energy.verification.{entry}.sqlite',asyncio.to_thread,
             record('verification.'),encode)
@@ -180,7 +211,6 @@ class AppEngine:
         self.battery.physical = self.writer
         self.battery.receipt_driven = True
         self.devices.reserve = self.battery.before_external_command
-        await h.async_restore_plan()
         await self.battery.load()
         self.battery.reconcile()
         self.checkpoint_digest = await asyncio.to_thread(self.battery.store.checkpoint_digest)
@@ -296,7 +326,7 @@ class AppEngine:
                     self.scheduler.request('configuration_update')
                     self.wake_projection.set()
                     if self.household.options_update_requires_reload():
-                        self.spawn(self.household.async_optimisation_push(force_plan=True),'shs_app_configuration_replan')
+                        await self.replan_all()
         if self.started:
             await self.battery.commit_evidence()
         saved=self.battery.store.source_checkpoint
@@ -385,9 +415,75 @@ class AppEngine:
                 LOGGER.warning('Background operation %s failed: %s: %s',operation.__name__,type(error).__name__,error,exc_info=LOGGER.isEnabledFor(logging.DEBUG))
             await asyncio.sleep(seconds)
 
-    async def planning(self):
+    async def planning(self, household):
         await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)
-        await self.periodic(self.household.async_replan_poll,PLAN_EXCHANGE_INTERVAL_MINUTES*60)
+        while household._plan_configuration_changed:
+            await household.async_optimisation_push(force_plan=True)
+            if household._plan_configuration_changed:
+                await asyncio.sleep(5)
+        await self.periodic(household.async_replan_poll,PLAN_EXCHANGE_INTERVAL_MINUTES*60)
+
+    async def cloud_job(self, environment, operation):
+        """A failed cloud session cannot stop its sibling or the physical owner."""
+        while True:
+            try:
+                self.backends.errors.pop(environment,None)
+                await operation()
+                return
+            except Exception as error:
+                self.backends.errors[environment] = str(error)
+                self.wake_projection.set()
+                await asyncio.sleep(5)
+
+    async def restart(self):
+        await self.restart_requested.wait()
+        raise BackendChanged()
+
+    def request_restart(self):
+        asyncio.get_running_loop().call_later(0.5,self.restart_requested.set)
+
+    async def replan_all(self):
+        for environment, household in self.households.items():
+            household._plan_configuration_changed = True
+            self.spawn(self.cloud_job(environment,lambda h=household:h.async_optimisation_push(force_plan=True)),
+                'configuration_replan_'+environment)
+
+    async def select_backend(self, body):
+        environment = body['environment']
+        if environment not in self.households:
+            raise BackendSetupError('Pair this backend before selecting its plan',
+                {f'backend_{environment}_pairing_code':'Pairing is required'})
+        h = self.households[environment]
+        status = await h.client.status()
+        validate_server_contract(status)
+        if not status.get('subscription_active'):
+            raise ValueError('Activate a subscription on the selected backend billing page')
+        await h.async_refresh_device_configuration()
+        choices = await h.async_cached_planning_configuration()
+        transfer_admissions(self.configuration.options(),choices['devices'],choices['home'])
+        if not h.optimisation_plan or h._plan_configuration_changed or h.optimisation_plan.get('status') != 'ready':
+            raise ValueError('Wait for this backend to finish a fresh plan before selecting it')
+        validate_plan_contract(h.optimisation_plan,datetime.now(timezone.utc))
+        await self.backends.change(environment,body['backend_revision'],body['request_id'])
+
+    async def pair_backend(self, body):
+        environment = body['environment']
+        if environment not in URLS:
+            raise ValueError('Choose production or test')
+        client = ShsApiClient(self.http,URLS[environment],'')
+        code = body.get('pairing_code')
+        if not isinstance(code,str) or not code.strip():
+            raise BackendSetupError('Enter the pairing code from this backend',
+                {f'backend_{environment}_pairing_code':'Pairing code is required'})
+        try:
+            result = await client.pair(code.strip(),'SHS Energy App '+environment)
+        except ShsApiError as error:
+            raise BackendSetupError(str(error),{f'backend_{environment}_pairing_code':str(error)}) from error
+        current_home = self.backends.credentials().get('home_id')
+        if not current_home or result.get('home_id') != current_home:
+            raise ValueError('Pair the same home on both backends')
+        await self.backends.change(environment,body['backend_revision'],body['request_id'],
+            credentials={**result,CONF_BASE_URL:URLS[environment]})
 
     async def resources(self):
         values = await asyncio.to_thread(process_resources)
@@ -449,11 +545,12 @@ class AppEngine:
             now = self.household.local_now()
             quarter = (now.date(),now.hour,now.minute//15,now.fold)
             if quarter != last_quarter:
-                await self.household.async_price_refresh()
+                for h in self.households.values():
+                    await h.async_price_refresh()
                 last_quarter = quarter
             if last_day != now.date() and (now.hour,now.minute) >= (PUSH_TIME_HOUR,PUSH_TIME_MINUTE):
                 with self.profiler.measure('history_upload'):
-                    await self.household.async_scheduled_push()
+                    await asyncio.gather(*(self.cloud_job(env,h.async_scheduled_push) for env,h in self.households.items()))
                 last_day = now.date()
             await asyncio.sleep(5)
 
@@ -469,11 +566,14 @@ class AppEngine:
             self.wake_projection.set()
             jobs = [self.spawn(self.receipts(),'receipts'),self.spawn(self.projections(),'projections'),
                 self.spawn(self.periodic(self.battery_inputs,5),'battery_inputs'),
-                self.spawn(self.planning()),
-                self.spawn(self.periodic(self.household.async_request_refresh,60),'cloud_refresh'),
                 self.spawn(self.periodic(self.resources,60),'runtime_resources'),self.spawn(self.calendar(),'calendar'),
-                self.spawn(self.household.async_replan_listener(),'replan_listener'),
-                self.spawn(self.household.async_planning_delivery(),'planning_delivery')]
+                self.spawn(self.restart(),'backend_restart')]
+            for environment, h in self.households.items():
+                operations = [('planning',lambda h=h:self.planning(h)),
+                    ('cloud_refresh',lambda h=h:self.periodic(h.async_request_refresh,60)),
+                    ('replan_listener',h.async_replan_listener),('planning_delivery',h.async_planning_delivery)]
+                for name, operation in operations:
+                    jobs.append(self.spawn(self.cloud_job(environment,operation),name+'_'+environment))
             done,_ = await asyncio.wait(jobs,return_when=asyncio.FIRST_EXCEPTION)
             for task in done: task.result()
         finally:
@@ -490,7 +590,7 @@ class AppEngine:
         if self.battery: await self.battery.close(release=False)
         if self.controller: await self.controller.async_stop()
         for store in self.record_stores: await store.async_close()
-        if self.household: self.household.battery_live_inputs.close()
+        for h in self.households.values(): h.battery_live_inputs.close()
         if self.gateway: await self.gateway.close()
         if self.inbox: await asyncio.to_thread(self.inbox.close)
         if self.lease: await asyncio.to_thread(self.lease.close)

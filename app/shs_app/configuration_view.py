@@ -87,7 +87,7 @@ async def configuration_payload(editor, *, refresh_roles):
         # The same list the website shows: devices this plan leaves out.
         "measurement_issues": [issue for issue in (plan or {}).get("measurement_issues") or [] if isinstance(issue, dict)],
         "timeline": timeline(plan, operation, command_preview=coordinator.controller.preview_commands, options=options),
-        "website_url": shs_const.website_url(editor.engine.configuration.credentials()[shs_const.CONF_BASE_URL], "/portal/energy-modeling?tab=devices"),
+        "website_url": shs_const.website_url(editor.engine.household.client.base_url, "/portal/energy-modeling?tab=devices"),
         "configured_keys": list(editor.engine.configuration.options()),
         "meter_inventory": [{"key": d["key"], "name": device_name(entity_names.get(d["key"]) or d["name"])} for d in requested],
         "entry": {
@@ -115,7 +115,7 @@ async def configuration_payload(editor, *, refresh_roles):
                     {
                         **item["fix"],
                         "url": shs_const.website_url(
-                            editor.engine.configuration.credentials()[shs_const.CONF_BASE_URL],
+                            editor.engine.household.client.base_url,
                             item["fix"].get("path", "/portal"),
                         ),
                     }

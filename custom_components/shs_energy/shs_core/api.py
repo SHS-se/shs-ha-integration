@@ -196,6 +196,10 @@ class ShsApiClient:
             self.traffic.record(method, path, json_body, status, response_bytes,
                                 failed, (monotonic() - started) * 1000)
 
+    @property
+    def base_url(self):
+        return self._base_url
+
     async def pair(
         self, pairing_code: str, device_name: str
     ) -> dict[str, Any]:

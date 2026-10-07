@@ -631,6 +631,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (!button) return;
     const action = button.dataset.action;
     if (!action) return;
+    if (action === "pair-backend") this._backendAction("pair_backend", button.dataset.environment);
+    if (action === "select-backend") this._backendAction("select_backend", button.dataset.environment);
     if (action === "edit-field") this._openField(button.dataset.fieldToken);
     if (action === "view-status") this._openStatus(button.dataset.issueKey);
     if (action === "inspect-entity") {
@@ -687,6 +689,49 @@ class ShsEnergyConfigPanel extends HTMLElement {
         button.dataset.deviceKey
       );
     }
+  }
+
+  async _backendAction(action, environment) {
+    if (this._backendBusy) return;
+    const pairingCode = this.shadowRoot.querySelector(`[data-backend-code="${environment}"]`)?.value.trim();
+    this._backendBusy = true; this._backendError = ""; this._backendFieldErrors = {}; this._render();
+    try {
+      const data = await this._request({ action, environment, pairing_code: pairingCode,
+        backend_revision: this._data.backends.revision });
+      this._mergePanel(data);
+      this._notice = action === "pair_backend" ? "Backend paired. Reconnecting to start delivery to both systems…"
+        : "Plan source saved. Reconnecting; the battery holds its last setting until a fresh execution plan arrives.";
+    } catch (error) {
+      this._backendError = this._errorMessage(error); this._backendFieldErrors = error.field_errors || {};
+    } finally {
+      this._backendBusy = false; this._render();
+      if (this._backendFieldErrors?.[`backend_${environment}_pairing_code`]) {
+        this.shadowRoot.querySelector(`[data-backend-code="${environment}"]`)?.focus();
+      }
+    }
+  }
+
+  _renderBackends() {
+    const backends = this._data.backends;
+    if (!backends) return "";
+    return `<section class="card" aria-label="Planning backends"><h2>Plan source</h2>
+      <p>Both paired systems receive your home data. Choose which system supplies the controlling plan.</p>
+      <div role="group" aria-label="Controlling plan source">${backends.environments.map(row => {
+        const label = row.environment === "production" ? "Production" : "Test";
+        const error = this._backendFieldErrors?.[`backend_${row.environment}_pairing_code`];
+        return `<div class="backend-row"><h3>${label}${row.selected ? " · Selected" : ""}</h3>
+          <p>${row.paired ? "Paired" : "Pairing required"} · ${row.subscription_active === true ? "Subscription active" : row.subscription_active === false ? "Subscription inactive" : "Subscription status pending"}</p>
+          <p>Last data delivery: ${this._escape(row.last_delivery ? this._time(row.last_delivery) : "Not yet")}</p>
+          ${row.error ? `<p role="alert">${this._escape(row.error)}</p>` : ""}
+          <a href="${this._escape(row.website_url)}" target="_blank" rel="noopener noreferrer">Open ${label.toLowerCase()} billing and pairing</a>
+          <div class="field"><label for="backend-code-${row.environment}">${label} pairing code</label>
+            <input id="backend-code-${row.environment}" data-backend-code="${row.environment}" type="text" autocomplete="off" ${error ? 'aria-invalid="true"' : ""}>
+            ${error ? `<p role="alert">${this._escape(error)}</p>` : ""}</div>
+          <div class="choices"><button type="button" class="secondary" data-action="pair-backend" data-environment="${row.environment}" ${this._backendBusy ? "disabled" : ""}>${row.paired ? "Replace pairing" : "Pair"} ${label.toLowerCase()}</button>
+            <button type="button" class="secondary" data-action="select-backend" data-environment="${row.environment}" aria-pressed="${row.selected}" ${this._backendBusy || row.selected ? "disabled" : ""}>Use ${label.toLowerCase()} plans</button></div>
+        </div>`;
+      }).join("")}</div>${this._backendBusy ? '<p role="status">Checking backend…</p>' : ""}
+      ${this._backendError ? `<p role="alert">${this._escape(this._backendError)}</p>` : ""}</section>`;
   }
 
   _statusBadge(status, label) {
@@ -1521,7 +1566,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
           <div data-refresh-progress>${this._refreshBanner()}</div>
           ${this._error ? `<div class="alert error"><strong>Could not save or refresh</strong><span>${this._escape(this._error)}</span></div>` : ""}
           ${this._notice ? `<div class="alert notice"><span>${this._escape(this._notice)}</span></div>` : ""}
-          ${this._renderMeasurementIssues()}${this._renderReplanRecommendations()}${this._renderBody()}
+          ${this._renderBackends()}${this._renderMeasurementIssues()}${this._renderReplanRecommendations()}${this._renderBody()}
         </section>
         <footer aria-live="polite"><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling.</span></footer>
         ${this._inspectedEntity ? this._entityInspector() : ""}

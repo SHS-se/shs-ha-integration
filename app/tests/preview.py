@@ -32,7 +32,12 @@ class Editor:
             configured_keys=list(self.options),labels=LABELS,sections=_configuration_sections(),devices=[],entities=[],
             entry=dict(entry_id='test-home',title='Test home',state='loaded'),attention=[],readiness={},thermal={},
             portal=dict(status='synchronised'),operation=entry['operation'],diagnostics={},meter_inventory=[],
-            replan_recommendations=[],measurement_issues=[],locale=dict(language='en',timezone='Europe/Stockholm'))
+            replan_recommendations=[],measurement_issues=[],locale=dict(language='en',timezone='Europe/Stockholm'),
+            backends=dict(revision=1,selected='test',environments=[
+                dict(environment=environment,paired=environment=='test',selected=environment=='test',
+                    subscription_active=environment=='test',last_delivery=None,error=None,
+                    website_url='https://'+('test.' if environment=='test' else '')+'smarthomesolutions.se/portal/account')
+                for environment in ('production','test')]))
 class Fixture:
     profiler=AppProfiler()
     editor=Editor()

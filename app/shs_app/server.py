@@ -78,6 +78,7 @@ class Dashboard:
         from hashlib import sha256
         from .companion import hashes
         from .engine import AppEngine
+        from .backends import BackendChanged
         from .migration_check import encoded
         from .records import RecordStore
         pair = dict(protocol=self.manifest['protocol'],integration_version=self.manifest['integration_version'],
@@ -103,6 +104,9 @@ class Dashboard:
                 await self.engine.run()
             except asyncio.CancelledError:
                 raise
+            except BackendChanged:
+                self.connection = {'state':'recovering','message':'Applying the selected plan backend.'}
+                continue
             except Exception as error:
                 LOGGER.error('Runtime disconnected: %s: %s; reconnecting in 5s',type(error).__name__,error,exc_info=LOGGER.isEnabledFor(logging.DEBUG))
                 self.connection = {'state':'disconnected','message':str(error)+'. Reconnecting with a new gateway session.'}
@@ -201,7 +205,8 @@ def create_app(observer, static, *, trusted_peer="172.30.32.2"):
             if type(body) is not dict:
                 raise ValueError('Configuration request must be an object')
             result = await runtime.editor.action(request.match_info['action'],body)
-            await runtime.project()
+            if request.match_info['action'] not in ('pair_backend','select_backend'):
+                await runtime.project()
             return web.json_response(result,headers={'Cache-Control':'no-store'})
         except (ValueError,TypeError,KeyError) as error:
             return web.json_response(dict(code='invalid_configuration',message=str(error),

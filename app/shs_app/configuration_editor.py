@@ -64,6 +64,7 @@ class ConfigurationEditor:
         await self.refresh_catalog()
         result = await configuration_payload(self,refresh_roles=refresh_roles)
         result.update(self.engine.configuration.status())
+        result['backends'] = self.engine.backends.public_status(self.engine.households)
         result['locale'] = {key:self.context['home'][key] for key in ('language','timezone')}
         return result
 
@@ -78,13 +79,18 @@ class ConfigurationEditor:
         self.engine.wake_projection.set()
         if replan:
             h._plan_configuration_changed = True
-            self.engine.spawn(h.async_optimisation_push(force_plan=True),'shs_configuration_replan')
+            await self.engine.replan_all()
         return result
 
     async def action(self, operation, body):
         h = self.engine.household
         if operation == 'get':
             return await self.view(refresh_roles=body.get('refresh_roles',False))
+        if operation in ('pair_backend','select_backend'):
+            await getattr(self.engine,operation)(body)
+            result = await self.view()
+            self.engine.request_restart()
+            return result
         await self.refresh_catalog()
         if operation == 'discover':
             return discover_configuration(self.catalog,self.engine.configuration.options())

@@ -102,7 +102,7 @@ class LoopbackSocket:
 class EngineTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await export_fixtures.ExportTests.asyncSetUp(self)
-        self.entry['data'] = {CONF_BASE_URL:'https://example.invalid',CONF_DEVICE_TOKEN:'fixture-secret'}
+        self.entry['data'] = {CONF_BASE_URL:'https://vxqpgbzseckgceopitpm.supabase.co/functions/v1',CONF_DEVICE_TOKEN:'fixture-secret'}
         self.entry['options'] = {'planning_mode':'off'}
         (self.storage/'core.config_entries').write_text(json.dumps({'data':{'entries':[self.entry]}}))
         writer = self.storage/'shs_energy.battery_writer.entry'

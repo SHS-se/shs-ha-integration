@@ -117,6 +117,24 @@ def reconcile_admissions(options, devices, home):
     return result
 
 
+def transfer_admissions(options, devices, home):
+    """Transfer only website revision identities, retaining every physical mode."""
+    proposed = reconcile_admissions(options, devices, home)
+    def owners(admissions):
+        return {owner: sorted([[key, control] for key, _revision, control in members])
+                for owner, members in admissions.items()}
+    previous = owners(options.get("planning_admissions", {}))
+    target = owners(proposed["planning_admissions"])
+    different = sorted(owner for owner in previous.keys() | target.keys() if previous.get(owner) != target.get(owner))
+    if different:
+        raise ValueError("Backend planning participation differs for: " + ", ".join(different))
+    result = deepcopy(options)
+    result["planning_admissions"] = proposed["planning_admissions"]
+    if reconcile_admissions(result, devices, home) != result:
+        raise ValueError("Backend admission transfer would change execution modes")
+    return result
+
+
 def execution_mode_options(options, devices, device_key, mode):
     """Persist the same local permission exposed on every Planned device card."""
     if mode not in MODES:

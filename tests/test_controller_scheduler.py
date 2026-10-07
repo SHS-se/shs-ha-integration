@@ -607,6 +607,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         namespace = {'Base': Base, 'resolved_options': lambda hass, options: options}
         exec(compile(ast.fix_missing_locations(ast.Module(body=[cls], type_ignores=[])), str(source), 'exec'), namespace)
         publisher = namespace['Household']()
+        publisher.control_authority = True
         publisher._control_listeners = set()
         publisher._battery_listeners = set()
         publisher.status_updates = 0

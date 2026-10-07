@@ -140,7 +140,7 @@ class SensorWiringTests(unittest.TestCase):
 
     def test_general_configuration_replans_in_the_app_after_a_receipt(self) -> None:
         self.assertIn("self.household.options_update_requires_reload()",ENGINE)
-        self.assertIn("self.household.async_optimisation_push(force_plan=True)",ENGINE)
+        self.assertIn("await self.replan_all()",ENGINE)
 
     def test_device_cards_have_an_independent_save_button(self) -> None:
         self.assertIn('data-action="save-device"', CONFIG_PANEL_FRONTEND)
@@ -148,7 +148,8 @@ class SensorWiringTests(unittest.TestCase):
 
     def test_app_owns_editors_and_replans(self):
         editor = (Path(__file__).parents[1]/'app/shs_app/configuration_editor.py').read_text()
-        self.assertIn('async_optimisation_push(force_plan=True)',editor)
+        self.assertIn('await self.engine.replan_all()',editor)
+        self.assertIn('h.async_optimisation_push(force_plan=True)',ENGINE)
         self.assertIn('self.engine.configuration.commit',editor)
         self.assertIn("webcomponent_name='shs-app-link'",CONFIG_PANEL)
 
@@ -166,10 +167,10 @@ class SensorWiringTests(unittest.TestCase):
         self.assertNotIn("async_reload(entry.entry_id)",listener)
 
     def test_startup_planning_waits_for_entity_providers(self) -> None:
-        helper = ENGINE[ENGINE.index('    async def planning(self):'):ENGINE.index('    async def resources(self):')]
+        helper = ENGINE[ENGINE.index('    async def planning(self, household):'):ENGINE.index('    async def resources(self):')]
         self.assertIn('await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)',helper)
-        self.assertIn('self.periodic(self.household.async_replan_poll,PLAN_EXCHANGE_INTERVAL_MINUTES*60)',helper)
-        self.assertIn('self.spawn(self.planning())',ENGINE)
+        self.assertIn('self.periodic(household.async_replan_poll,PLAN_EXCHANGE_INTERVAL_MINUTES*60)',helper)
+        self.assertIn('lambda h=h:self.planning(h)',ENGINE)
 
     def test_transient_startup_gaps_do_not_raise_an_immediate_repair(self) -> None:
         issue_sync = COORDINATOR[

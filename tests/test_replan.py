@@ -76,7 +76,7 @@ class ReplanWiringTests(unittest.TestCase):
         # Cloud exchange runs on one local interval; market-quarter callbacks
         # only advance local prices and commands.
         self.assertIn("PLAN_EXCHANGE_INTERVAL_MINUTES", CONST)
-        self.assertIn("self.household.async_replan_poll", ENGINE)
+        self.assertIn("household.async_replan_poll", ENGINE)
         self.assertIn(
             "PLAN_EXCHANGE_INTERVAL_MINUTES*60", ENGINE
         )

@@ -1,5 +1,23 @@
 import {test,expect} from '@playwright/test';
 
+test('backend pairing corrections focus their field and selection failures retain the current source',async({page})=>{
+  await page.route('**/api/configuration/select_backend',route=>route.fulfill({status:409,json:{message:'Pair this backend before selecting its plan',field_errors:{backend_production_pairing_code:'Pairing is required'}}}));
+  await page.route('**/api/configuration/pair_backend',route=>route.fulfill({status:409,json:{message:'Enter the pairing code from this backend',field_errors:{backend_production_pairing_code:'Pairing code is required'}}}));
+  await page.goto('./#settings');
+  const editor=page.locator('shs-configuration-editor');
+  await expect(editor.getByRole('heading',{name:'Plan source',exact:true})).toBeVisible();
+  await editor.getByRole('button',{name:'Use production plans',exact:true}).click();
+  const code=editor.getByLabel('Production pairing code',{exact:true});
+  await expect(code).toBeFocused();
+  await expect(code).toHaveAttribute('aria-invalid','true');
+  await expect(editor.getByRole('heading',{name:'Test · Selected'})).toBeVisible();
+  await expect(editor.getByRole('link',{name:'Open production billing and pairing'})).toHaveAttribute('href','https://smarthomesolutions.se/portal/account');
+  await editor.getByRole('button',{name:'Pair production',exact:true}).click();
+  await expect(editor.getByText('Pairing code is required',{exact:true})).toBeVisible();
+  await expect(code).toBeFocused();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+});
+
 test('app settings save without HA reload and expose revision conflicts',async({page},info)=>{
   await page.route('**/api/configuration/save',async route=>{const body=route.request().postDataJSON();await route.fulfill({json:{saved:true,refreshing:false,revision:body.expected_revision+1}});});
   await page.goto('./#settings');

@@ -272,7 +272,7 @@ class PresentationTests(unittest.TestCase):
         import asyncio
         from unittest.mock import AsyncMock
         calls = {}
-        fake = SimpleNamespace(hass=SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=lambda entry, **kw: setattr(entry, 'options', kw['options']))), entry=SimpleNamespace(options=self.options), optimisation_degraded_devices=[{'key': 'pool'}],
+        fake = SimpleNamespace(control_authority=True, hass=SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=lambda entry, **kw: setattr(entry, 'options', kw['options']))), entry=SimpleNamespace(options=self.options), optimisation_degraded_devices=[{'key': 'pool'}],
             _sync_device_control_issue=lambda *args: None, _sync_degraded_device_issue=lambda: None,
             _sync_unplanned_service_issue=lambda: None,
             _sync_battery_control_issue=lambda options, **kw: calls.update(battery=kw['included']),

@@ -63,4 +63,4 @@ class Rig:
             repair=lambda *args: self.repairs.append(args), publish=lambda: self.published.append(True), spawn=spawn,
         )
         self.household = Household(ports, self.client,
-            store=DurableRecord(self.records, json.dumps, json.loads), battery_inputs_store=self.battery_store)
+            store=DurableRecord(self.records, json.dumps, json.loads), battery_inputs_store=self.battery_store, control_authority=True)

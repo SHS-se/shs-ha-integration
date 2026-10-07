@@ -203,8 +203,9 @@ class Household:
 
     def __init__(
         self, ports: HouseholdPorts, client: ShsApiClient, *,
-        store: DurableRecord, battery_inputs_store: RecordStore,
+        store: DurableRecord, battery_inputs_store: RecordStore, control_authority: bool,
     ) -> None:
+        self.control_authority = control_authority
         self.ports = ports
         self.data = None
         self._control_listeners = set()
@@ -500,6 +501,8 @@ class Household:
         This runs every five seconds. It republishes battery status only; plan,
         price and other controller inputs are unchanged, so nothing else wakes.
         """
+        if not self.control_authority:
+            return
         async with self._battery_inputs_lock:
             try:
                 devices = await self.async_battery_planned_devices()
@@ -538,6 +541,8 @@ class Household:
 
     async def async_report_runtime(self) -> dict[str, Any]:
         """Serialize fresh reports so an older local read cannot win a race."""
+        if not self.control_authority:
+            return {"state": "advisory_only"}
         async with self._runtime_lock:
             operation = self.operational_status
             try:
@@ -1101,7 +1106,7 @@ class Household:
         from .operating_modes import reconcile_admissions
         expected = dict(self.ports.options())
         admitted = reconcile_admissions(expected, list(configuration.values()), home)
-        if admitted != expected:
+        if self.control_authority and admitted != expected:
             await self.ports.admit(expected, admitted)
             self._plan_configuration_changed = stored["plan_configuration_changed"] = True
         stored["home_planning_configuration"] = home
@@ -2349,7 +2354,7 @@ class Household:
     ) -> dict[str, Any]:
         from .configuration_schema import shared_devices
         from .operating_modes import planning_devices
-        runtime = getattr(self, "battery_runtime", None)
+        runtime = getattr(self, "battery_runtime", None) if self.control_authority else None
         execution_options = runtime.controller.options() if runtime is not None else None
         scope_devices = shared_devices(devices, options)
         requested = stored.get("optimisation_device_configuration", {})
@@ -2868,6 +2873,8 @@ class Household:
 
     async def _retry_pending_plan_ack(self, stored: dict[str, Any]) -> bool:
         """Retry one durable plan acknowledgement; return whether store changed."""
+        if not self.control_authority:
+            return stored.pop("optimisation_pending_plan_ack", None) is not None
         pending = stored.get("optimisation_pending_plan_ack")
         if not isinstance(pending, dict) or not isinstance(
             pending.get("plan"), dict
@@ -3017,7 +3024,7 @@ class Household:
             else None
         )
         if returned_plan:
-            runtime=getattr(self,"battery_runtime",None)
+            runtime=getattr(self,"battery_runtime",None) if self.control_authority else None
             try:
                 validate_plan_contract(returned_plan, self.ports.utcnow())
                 if self.optimisation_plan and any(
@@ -3060,11 +3067,12 @@ class Household:
             self.optimisation_plan = returned_plan
             stored["optimisation_plan"] = self.optimisation_plan
             self._sync_plan_refused_issue(None)
-            stored["optimisation_pending_plan_ack"] = {
-                "plan": acknowledgement_plan,
-                "outcome": "accepted",
-                "error": None,
-            }
+            if self.control_authority:
+                stored["optimisation_pending_plan_ack"] = {
+                    "plan": acknowledgement_plan,
+                    "outcome": "accepted",
+                    "error": None,
+                }
         elif configuration_changed:
             # The returned plan was built from the preceding website
             # request. Never expose it after a role/control change; the

@@ -13,7 +13,7 @@ class EntityContext:
     _shared_display_values = frozenset(('grid_prices','total_price_forecast','latest_display_components'))
     def __init__(self,engine):
         self.household=engine.household
-        self.entry=SimpleNamespace(entry_id=engine.identity['entry_id'],data=engine.configuration.credentials())
+        self.entry=SimpleNamespace(entry_id=engine.identity['entry_id'],data=engine.backends.credentials())
         self.mirror=engine.mirror
     def __getattr__(self,name):
         value=getattr(self.household,name)
