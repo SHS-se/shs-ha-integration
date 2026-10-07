@@ -438,22 +438,22 @@ class AppEngine:
                 await asyncio.sleep(5)
         await self.backends.settled()
 
-    async def request_plan(self, household):
-        if household is not self.household:
-            await household.async_optimisation_push(force_plan=True)
+    async def request_plan(self, h):
+        if h is not self.household:
+            await h.async_optimisation_push(force_plan=True)
             return True
-        exchange = await household.async_cached_exchange_status()
+        exchange = await h.async_cached_exchange_status()
         if exchange['planning_job'] or exchange['planning_submission']:
             return True
-        request_id = await household.client.request_replan()
-        if await household.async_answer_replan(request_id):
+        request_id = await h.client.request_replan()
+        if await h.async_answer_replan(request_id):
             return True
         # The server retains an unacknowledged observer request. Re-answer it
         # with current execution evidence after promotion; never discard its
         # identity or replace a job concurrently admitted by the listener.
-        exchange = await household.async_cached_exchange_status()
+        exchange = await h.async_cached_exchange_status()
         if not (exchange['planning_job'] or exchange['planning_submission']):
-            await household.async_optimisation_push(force_plan=True,replan_request_id=request_id)
+            await h.async_optimisation_push(force_plan=True,replan_request_id=request_id)
         return True
 
     async def cloud_job(self, environment, operation):
