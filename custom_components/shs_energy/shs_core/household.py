@@ -3216,12 +3216,15 @@ class Household:
                     _LOGGER.debug("Pool observations unavailable: %s", err)
                     pool_slots = []
                 last_plan = stored.get("optimisation_plan")
+                # Recommendations still upload telemetry; only an explicit
+                # request can supersede an in-flight battery generation.
                 plan_due = optimisation_plan_due(
                     last_plan,
                     self.ports.utcnow(),
                     force=force_plan,
                     retry_after_error=bool(self.last_optimisation_error),
-                ) and (force_plan or not (stored.get("optimisation_pending_job") or stored.get("optimisation_pending_submission")))
+                ) and (replan_request_id is not None or not (
+                    stored.get("optimisation_pending_job") or stored.get("optimisation_pending_submission")))
                 snapshot = None
                 if plan_due:
                     mode = self.resolved_options()[OPT_PLANNING_MODE]

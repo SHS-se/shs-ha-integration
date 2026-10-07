@@ -95,6 +95,29 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.h._build_optimisation_snapshot.assert_awaited_once()
         self.assertEqual(self.rig.records.saved['optimisation_pending_job']['job_id'], 'new-job')
 
+    async def test_controller_recommendation_preserves_pending_execution_snapshot(self):
+        pending = await self.accept('manual')
+        for key in ('optimisation_pending_job', 'optimisation_pending_submission'):
+            with self.subTest(key=key):
+                stored = await self.h._store.async_load()
+                stored.pop('optimisation_pending_job', None)
+                stored.pop('optimisation_pending_submission', None)
+                expected = deepcopy(pending)
+                if key == 'optimisation_pending_submission':
+                    expected.pop('job_id')
+                    expected['snapshot_id'] = 'snapshot'
+                stored[key] = expected
+                await self.h._store.async_save(stored)
+                self.h._build_optimisation_snapshot.reset_mock()
+                self.h.client.push_optimisation.reset_mock()
+                self.h.client.push_optimisation.return_value = {}
+                self.h._price_quarters = lambda *args: [{'start': self.rig.now.isoformat()}]
+                await self.h.async_optimisation_push(force_plan=True,
+                    replan_reason='Battery controller: execution_contract_required. Consider a manual replan.')
+                self.h._build_optimisation_snapshot.assert_not_awaited()
+                self.assertIsNone(self.h.client.push_optimisation.call_args.args[1])
+                self.assertEqual(self.rig.records.saved[key], expected)
+
     async def test_host_loop_restores_receipt_and_manual_answer_after_restart(self):
         await self.accept('manual')
         # Restoring the same durable record starts no task by itself.
@@ -220,7 +243,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         accepted = await self.accept()
         self.h._build_optimisation_snapshot.return_value = {'snapshot_id': 'new-snapshot'}
         self.h.client.push_optimisation.side_effect = ShsApiError('reply lost')
-        await self.h.async_optimisation_push(force_plan=True)
+        await self.h.async_optimisation_push(force_plan=True, replan_request_id='new-manual')
         submission = self.rig.records.saved['optimisation_pending_submission']
         self.assertEqual(self.rig.records.saved['optimisation_pending_job'], accepted)
         self.h.client.planning_submission_status.side_effect = ShsApiError('not accepted', code='planning_job_not_found')

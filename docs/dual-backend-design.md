@@ -31,6 +31,9 @@ The same explicit request path handles selected-source startup and configuration
 replanning. It waits for a pending submission or job instead of capturing a new
 battery generation while that work is solving. Observer refreshes cannot advance
 the physical battery generation.
+The shared household exchange enforces this for controller and website-choice
+recommendations too: only an explicit replan request can supersede a pending
+snapshot. Telemetry continues while its execution request is solving.
 
 Observer plans omit the optional battery execution feedback under the same
 contract. After selection the battery holds its last setting until a freshly
