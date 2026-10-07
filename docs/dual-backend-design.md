@@ -20,7 +20,10 @@ status, active subscription, valid ready candidate plan and equal participating
 physical owners/control methods. Revision identities can transfer between
 websites; device modes cannot change. The durable selected source then triggers
 an engine restart, with release disabled and physical journals retained. Startup
-completes admission transfer idempotently before any controller starts.
+completes admission transfer idempotently before any controller starts. The
+selection remains durably unsettled until the selected backend accepts a fresh
+plan. Startup explicitly requests that replan, preserving pending submissions
+and jobs across restarts; background refresh recommendations cannot complete it.
 
 Observer plans omit the optional battery execution feedback under the same
 contract. After selection the battery holds its last setting until a freshly

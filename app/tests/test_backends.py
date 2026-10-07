@@ -107,6 +107,63 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             server.assert_called_once()
             plan.assert_called_once()
         self.assertEqual(self.backends.controlling,'production')
-        self.assertEqual(self.backends.data['admitted_for'],'test','Admission settles before controllers start after restart')
+        self.assertEqual(self.backends.data['admitted_for'],'test','Selection settles after the executable plan is accepted')
         self.assertEqual(options,{'device_modes':{},'planning_admissions':{}})
         self.assertEqual(set(self.backends.data['credentials']),{'production','test'})
+
+    async def selected_engine(self):
+        await self.backends.change('production',1,'pair',credentials={
+            'base_url':URLS['production'],'device_token':'prod-private','home_id':'home'})
+        await self.backends.change('production',2,'select')
+        h=SimpleNamespace(_plan_configuration_changed=True,
+            client=SimpleNamespace(request_replan=AsyncMock(return_value='request')),
+            async_cached_exchange_status=AsyncMock(return_value={'planning_job':None,'planning_submission':None}),
+            async_answer_replan=AsyncMock())
+        engine=AppEngine.__new__(AppEngine)
+        engine.backends=self.backends
+        engine.environment='production'
+        engine.household=h
+        return engine,h
+
+    async def test_selection_explicitly_requests_executable_plan_before_settling(self):
+        engine,h=await self.selected_engine()
+        async def accepted(request):
+            self.assertEqual(self.backends.data['admitted_for'],'test')
+            self.assertEqual(request,'request')
+            h._plan_configuration_changed=False
+        h.async_answer_replan.side_effect=accepted
+        await engine.complete_backend_selection(h)
+        h.client.request_replan.assert_awaited_once()
+        self.assertEqual(self.backends.data['admitted_for'],'production')
+        reopened=Backends(self.root,self.identity)
+        await reopened.load({})
+        self.assertEqual(reopened.data['admitted_for'],'production')
+
+    async def test_selection_resumes_pending_job_and_submission_without_replacing_them(self):
+        engine,h=await self.selected_engine()
+        for key in ('planning_job','planning_submission'):
+            with self.subTest(key=key):
+                self.backends.data['admitted_for']='test'
+                h._plan_configuration_changed=True
+                pending={'planning_job':None,'planning_submission':None}
+                pending[key]={'id':'existing'}
+                h.async_cached_exchange_status.return_value=pending
+                async def delivered(_):h._plan_configuration_changed=False
+                with patch('shs_app.engine.asyncio.sleep',side_effect=delivered):
+                    await engine.complete_backend_selection(h)
+                self.assertEqual(pending[key],{'id':'existing'})
+                self.assertEqual(self.backends.data['admitted_for'],'production')
+        h.client.request_replan.assert_not_awaited()
+        h.async_answer_replan.assert_not_awaited()
+
+    async def test_interrupted_selection_stays_pending_and_observer_cannot_settle_it(self):
+        engine,h=await self.selected_engine()
+        await engine.complete_backend_selection(SimpleNamespace())
+        self.assertEqual(self.backends.data['admitted_for'],'test')
+        h.client.request_replan.side_effect=asyncio.CancelledError
+        with self.assertRaises(asyncio.CancelledError):
+            await engine.complete_backend_selection(h)
+        reopened=Backends(self.root,self.identity)
+        await reopened.load({})
+        self.assertEqual(reopened.controlling,'production')
+        self.assertEqual(reopened.data['admitted_for'],'test')

@@ -189,7 +189,6 @@ class AppEngine:
             if transferred != options:
                 await self.configuration.commit(self.configuration.revision,transferred,
                     'backend-admission-'+str(self.backends.data['revision']))
-            await self.backends.settled()
             # An observing plan has no physical battery generation. Keep the
             # command journal, hold the last setting and request a fresh plan.
             h._plan_configuration_changed = True
@@ -417,11 +416,28 @@ class AppEngine:
 
     async def planning(self, household):
         await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)
+        await self.complete_backend_selection(household)
         while household._plan_configuration_changed:
             await household.async_optimisation_push(force_plan=True)
             if household._plan_configuration_changed:
                 await asyncio.sleep(5)
         await self.periodic(household.async_replan_poll,PLAN_EXCHANGE_INTERVAL_MINUTES*60)
+
+    async def complete_backend_selection(self, household):
+        if household is not self.household or self.backends.data['admitted_for'] == self.environment:
+            return
+        # Selecting a source is an explicit request for its executable plan.
+        # A background force_plan exchange only recommends a manual replan.
+        # Keep the durable selection unsettled until the fresh plan is accepted,
+        # so a restart resumes pending work rather than losing the handover.
+        while household._plan_configuration_changed:
+            exchange = await household.async_cached_exchange_status()
+            if not (exchange['planning_job'] or exchange['planning_submission']):
+                request_id = await household.client.request_replan()
+                await household.async_answer_replan(request_id)
+            if household._plan_configuration_changed:
+                await asyncio.sleep(5)
+        await self.backends.settled()
 
     async def cloud_job(self, environment, operation):
         """A failed cloud session cannot stop its sibling or the physical owner."""
