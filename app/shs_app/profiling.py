@@ -41,14 +41,14 @@ class AppProfiler(ResourceProfiler):
     def log_sample(self):
         report = self.interval()
         if report is None:
-            LOGGER.info('Runtime resource baseline recorded; interval CPU and throughput available next minute')
+            LOGGER.debug('Runtime resource baseline recorded; interval CPU and throughput available next minute')
             return
         process, counters = report['process'], report['retained_delta']
         cpu = process.get('cpu_percent_one_core')
         cpu_text = 'unavailable' if cpu is None else f'{cpu:.1f}% of one core'
         retained = self.samples[-1]['retained']
         per_minute = 60 / report['seconds']
-        LOGGER.info('Runtime resources: CPU=%s RSS=%.1f MiB receipts=%.1f/min backlog=%s '
+        LOGGER.debug('Runtime resources: CPU=%s RSS=%.1f MiB receipts=%.1f/min backlog=%s '
                     'checkpoint_saves=%.1f/min evidence_query_groups=%.1f/min '
                     'decisions=%.1f/min reducer_events=%.1f/min interval=%.1fs',
                     cpu_text, process['rss_bytes'] / 1048576,
@@ -58,11 +58,11 @@ class AppProfiler(ResourceProfiler):
                     report['operations']['reduce']['calls'] * per_minute, report['seconds'])
         # Sorting fixed, small vocabularies is cheap; the evidence itself is never loaded.
         busy = sorted(report['operations'].items(), key=lambda item: item[1]['cpu_ms'], reverse=True)
-        LOGGER.info('Runtime CPU sections (overlapping): %s; storage_worker_cpu_ms=%.1f',
+        LOGGER.debug('Runtime CPU sections (overlapping): %s; storage_worker_cpu_ms=%.1f',
                     ', '.join(f'{name}={values["cpu_ms"]:.0f}ms/{values["calls"]} calls'
                               for name, values in busy[:3] if values['calls']),
                     counters.get('storage_worker_cpu_ms', 0))
-        LOGGER.info('Runtime intake: ordered=%.1f/min replaceable=%.1f/min native_fact_commits=%.1f/min; '
+        LOGGER.debug('Runtime intake: ordered=%.1f/min replaceable=%.1f/min native_fact_commits=%.1f/min; '
                     'app_disk_write_bytes=%s app_write_syscalls=%s',
                     counters.get('source_ordered',0)*per_minute, counters.get('source_replaceable',0)*per_minute,
                     counters.get('source_fact_commits',0)*per_minute,

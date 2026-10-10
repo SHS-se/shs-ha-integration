@@ -75,8 +75,8 @@ reset on restart; filesystem free space is shared storage, not a private allocat
 ## Logs and profiling
 
 In the app's Home Assistant **Configuration** tab, set **Log level**, save and
-restart the app. The default **Info** logs startup/recovery progress and a minute
-summary of process CPU (percent of one core), current resident memory, processed
+restart the app. The default **Info** logs startup, connection changes and recovery progress.
+**Debug** additionally logs a minute summary of process CPU (percent of one core), current resident memory, processed
 receipts, receipt backlog, checkpoint saves and evidence-query groups. The first
 sample establishes a baseline; rates start with the following sample. Each line
 states the actual interval. A runtime reconnect resets the profiler's counters.
@@ -89,7 +89,7 @@ restarts, with three rotated files and a total limit of 20 MiB. Download all
 retained files through the app's Ingress URL followed by
 `api/diagnostics/app-logs.zip`, even while the runtime is disconnected.
 
-Info also reports ordered and replaceable source rates, native fact transactions,
+Debug also reports ordered and replaceable source rates, native fact transactions,
 and the app process's disk-write bytes and write calls for each interval. These
 show whether irrelevant events are filtered and checkpoint work is reduced.
 Disk bytes come from Linux process I/O counters; write calls include sockets too.

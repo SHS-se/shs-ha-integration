@@ -93,7 +93,9 @@ class AppProfilerTests(unittest.TestCase):
             p.operations['decision']['calls'] = 6
             p.operations['reduce']['cpu_ms'] = 250
             p.sample(dict(process_cpu_seconds=15, rss_bytes=2097152), after)
-        with self.assertLogs('shs_app.profiling', level='INFO') as messages:
+        with self.assertNoLogs('shs_app.profiling', level='INFO'):
+            p.log_sample()
+        with self.assertLogs('shs_app.profiling', level='DEBUG') as messages:
             p.log_sample()
         output = '\n'.join(messages.output)
         self.assertIn('CPU=50.0% of one core', output)
@@ -117,7 +119,7 @@ class AppProfilerTests(unittest.TestCase):
         p = AppProfiler()
         p.sample(dict(process_cpu_seconds=1, rss_bytes=1048576), {})
         self.assertIsNone(p.interval())
-        with self.assertLogs('shs_app.profiling', level='INFO') as messages:
+        with self.assertLogs('shs_app.profiling', level='DEBUG') as messages:
             p.log_sample()
         self.assertIn('baseline recorded', messages.output[0])
         self.assertNotIn('CPU=0', messages.output[0])
