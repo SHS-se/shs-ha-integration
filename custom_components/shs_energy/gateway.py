@@ -343,7 +343,10 @@ class HomeAssistantSource:
                         self.pool_unavailable.add(entity)
             except Exception:
                 self.service.revoke()
-                _LOGGER.exception('SHS gateway observation persistence unavailable')
+                # The stream logs its initiating fault once with its traceback.
+                # Later source reports cannot recover it and must not flood HA.
+                if self.service.stream.failure is None:
+                    _LOGGER.exception('SHS gateway observation persistence unavailable')
         @callback
         def metadata_changed(event):
             if self.metadata_unchanged():

@@ -33,6 +33,21 @@ class GatewayTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.gateway.save_record('arbitrary_record', value)
 
+    def test_diagnostic_read_snapshot_cannot_block_receipt_commits(self):
+        # The app's storage census holds a read transaction across dbstat and
+        # table counts. Its snapshot must not lock the gateway's sole writer.
+        with closing(self.gateway.connect(readonly=True)) as reader:
+            before = reader.execute('SELECT high FROM transport').fetchone()[0]
+            ordinal = self.gateway.record('observation', {'entity_id':'sensor.power','state':'7'})
+            self.assertGreater(ordinal, before)
+            self.assertEqual(reader.execute('SELECT high FROM transport').fetchone()[0], before)
+        self.assertEqual(self.gateway.snapshot(self.session)['through'], ordinal)
+        self.gateway.close()
+        self.gateway.open()
+        with closing(self.gateway.connect()) as db:
+            self.assertEqual(db.execute('PRAGMA journal_mode').fetchone()[0], 'wal')
+            self.assertEqual(db.execute('PRAGMA synchronous').fetchone()[0], 2)
+
     def test_observation_and_run_ownership_commit_together(self):
         ownership = {'records':{},'runs':{'device':{'active':True}}}
         ordinal = self.gateway.record('observation',{'entity_id':'switch.device','state':'on'},ownership)

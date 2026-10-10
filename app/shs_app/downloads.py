@@ -1,7 +1,18 @@
 """App-owned diagnostic export; compression never blocks the controller loop."""
 import asyncio
 import json
+from io import BytesIO
+from zipfile import ZipFile, ZIP_DEFLATED
 from shs_core.controller_diagnostics import controller_diagnostics, report_parts, report_summary, gzip_report
+
+
+def app_log_download(directory):
+    output = BytesIO()
+    with ZipFile(output, 'w', compression=ZIP_DEFLATED) as archive:
+        for path in sorted(directory.glob('shs-energy.log*')):
+            if path.is_file():
+                archive.write(path, path.name)
+    return output.getvalue()
 
 def encode(value):
     return json.dumps(value,separators=(',',':'),allow_nan=False).encode()

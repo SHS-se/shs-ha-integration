@@ -3,6 +3,8 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from io import BytesIO
+from zipfile import ZipFile
 
 from aiohttp.test_utils import AioHTTPTestCase
 from shs_app.companion import hashes, install
@@ -108,6 +110,21 @@ class IngressTests(AioHTTPTestCase):
 
 
 class DashboardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_app_log_download_works_while_runtime_is_disconnected(self):
+        from aiohttp.test_utils import TestClient, TestServer
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'bundle.json').write_text(json.dumps({'protocol':2,'integration_version':'paired'}))
+            (root/'app.json').write_text('{"version":"app"}')
+            (root/'logs').mkdir()
+            (root/'logs/shs-energy.log').write_text('OperationalError: database is locked')
+            dashboard = Dashboard(root,root)
+            async with TestClient(TestServer(create_app(dashboard,root,trusted_peer='127.0.0.1'))) as client:
+                async with client.get('/api/diagnostics/app-logs.zip') as response:
+                    self.assertEqual(response.status,200)
+                    with ZipFile(BytesIO(await response.read())) as archive:
+                        self.assertIn('database is locked',archive.read('shs-energy.log').decode())
+
     async def test_dashboard_starts_without_claiming_control_or_a_loaded_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

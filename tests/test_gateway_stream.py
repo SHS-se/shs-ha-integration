@@ -88,15 +88,19 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_persistence_faults_queued_requests_and_never_publishes_receipt(self):
         await self.connect()
-        with patch.object(self.journal, 'record', side_effect=OSError('disk full')):
+        with self.assertLogs('shs_core.gateway_stream', level='ERROR') as logs, patch.object(self.journal, 'record', side_effect=OSError('disk full')):
             saving = self.stream.capture('observation', {'entity_id':'sensor.power'})
             request = asyncio.create_task(self.connection.request(dict(id=2, operation='snapshot', body={})))
             with self.assertRaises(OSError):
                 await saving
-            with self.assertRaises(GatewayConflict):
+            with self.assertRaisesRegex(GatewayConflict, 'OSError: disk full'):
                 await request
-        with self.assertRaises(GatewayConflict):
-            self.stream.capture('configuration', {})
+            with self.assertRaisesRegex(GatewayConflict, 'OSError: disk full') as rejected:
+                self.stream.capture('configuration', {})
+            self.assertIs(rejected.exception.__cause__, self.stream.failure)
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn('Traceback', logs.output[0])
+        self.assertIn('OSError: disk full', logs.output[0])
         self.assertEqual(self.journal.snapshot(self.connection.session)['observations'], {})
 
     async def test_bounded_queue_exhaustion_fails_closed_instead_of_silently_dropping(self):

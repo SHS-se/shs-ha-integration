@@ -81,6 +81,14 @@ receipts, receipt backlog, checkpoint saves and evidence-query groups. The first
 sample establishes a baseline; rates start with the following sample. Each line
 states the actual interval. A runtime reconnect resets the profiler's counters.
 
+Connection failures include their traceback at Info, including the companion's
+original receipt-persistence cause. A changed failure is logged immediately;
+unchanged failures are summarized every twelve retries, and successful recovery
+is logged once. App logs persist under `/data/logs/shs-energy.log` across app
+restarts, with three rotated files and a total limit of 20 MiB. Download all
+retained files through the app's Ingress URL followed by
+`api/diagnostics/app-logs.zip`, even while the runtime is disconnected.
+
 Info also reports ordered and replaceable source rates, native fact transactions,
 and the app process's disk-write bytes and write calls for each interval. These
 show whether irrelevant events are filtered and checkpoint work is reduced.

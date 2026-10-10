@@ -3,6 +3,9 @@ import asyncio
 from collections import deque
 import json
 import logging
+from logging.handlers import RotatingFileHandler
+from io import BytesIO
+from zipfile import ZipFile
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -10,7 +13,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from shs_app.logging_config import configure_logging, LEVELS
+from shs_app.logging_config import configure_logging, LEVELS, ConnectionLog
+from shs_app.downloads import app_log_download
 from shs_app.profiling import AppProfiler, profiled
 from shs_app.indexed_evidence import EvidenceDatabase
 from shs_app.sources import RemoteHistory
@@ -30,6 +34,51 @@ class LoggingTests(unittest.TestCase):
         for invalid in ('trace', 'DEBUG', 1, []):
             with self.assertRaisesRegex(ValueError, 'log_level must be one of'):
                 configure_logging(invalid)
+
+    def test_connection_failures_keep_tracebacks_changes_and_recovery_without_retry_flood(self):
+        connection = ConnectionLog(logging.getLogger('shs_app.server'))
+        with self.assertLogs('shs_app.server', level='INFO') as logs:
+            for _ in range(12):
+                connection.attempt()
+                try:
+                    raise RuntimeError('Receipt stream unavailable; OperationalError: database is locked')
+                except RuntimeError as error:
+                    connection.disconnected(error)
+            connection.attempt()
+            connection.disconnected(ConnectionError('socket closed'))
+            connection.connected()
+            connection.connected()
+            connection.attempt()
+            connection.disconnected(ConnectionError('socket closed'))
+        text = '\n'.join(logs.output)
+        self.assertEqual(text.count('Home Assistant connection failed'), 3)
+        self.assertEqual(text.count('still disconnected'), 1)
+        self.assertEqual(text.count('connection active'), 1)
+        self.assertIn('Traceback', text)
+        self.assertIn('OperationalError: database is locked', text)
+
+    def test_persistent_logs_survive_reconfiguration_and_download_includes_rotations(self):
+        root = logging.getLogger()
+        before = set(root.handlers)
+        def cleanup():
+            for handler in set(root.handlers)-before:
+                root.removeHandler(handler)
+                handler.close()
+        self.addCleanup(cleanup)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve()
+            configure_logging('info', path)
+            logger = logging.getLogger('shs_app.server')
+            logger.error('original connection failure')
+            handler = next(h for h in root.handlers if isinstance(h, RotatingFileHandler) and h.baseFilename == str(path/'shs-energy.log'))
+            handler.doRollover()
+            configure_logging('info', path)
+            logger.error('later reconnect attempt')
+            self.assertEqual(sum(isinstance(h, RotatingFileHandler) and h.baseFilename == handler.baseFilename for h in root.handlers), 1)
+            with ZipFile(BytesIO(app_log_download(path))) as archive:
+                self.assertIn('original connection failure', archive.read('shs-energy.log.1').decode())
+                self.assertIn('later reconnect attempt', archive.read('shs-energy.log').decode())
+            cleanup()
 
 
 class AppProfilerTests(unittest.TestCase):

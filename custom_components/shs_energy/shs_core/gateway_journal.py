@@ -55,7 +55,7 @@ class GatewayJournal:
         self.lease = None
         self.boot = None
 
-    def connect(self, *, readonly=False):
+    def _connect(self, *, readonly=False):
         if self.path.is_symlink() or not self.path.is_file():
             raise ValueError('Gateway journal must be a regular file')
         db = sqlite3.connect(self.path.resolve(strict=True).as_uri() +
@@ -67,8 +67,16 @@ class GatewayJournal:
         if db.execute('PRAGMA user_version').fetchone()[0] not in (1,2):
             db.close()
             raise ValueError('Unsupported gateway journal')
-        db.execute('BEGIN' if readonly else 'BEGIN IMMEDIATE')
         return db
+
+    def connect(self, *, readonly=False):
+        db = self._connect(readonly=readonly)
+        try:
+            db.execute('BEGIN' if readonly else 'BEGIN IMMEDIATE')
+            return db
+        except BaseException:
+            db.close()
+            raise
 
     @classmethod
     def seed(cls, path, identity, ownership, battery_writer, source_commands):
@@ -151,6 +159,13 @@ class GatewayJournal:
             raise RuntimeError('Gateway already open')
         lease = WriterLease(str(self.path)+'.lock')
         try:
+            # Diagnostic readers in the app share this local database. In
+            # rollback mode a long census blocks COMMIT and faults the stream.
+            # WAL keeps readers on their snapshot while FULL sync preserves
+            # durability. Select it under the writer lease, before BEGIN.
+            with closing(self._connect()) as db:
+                if db.execute('PRAGMA journal_mode=WAL').fetchone()[0] != 'wal':
+                    raise GatewayConflict('Gateway journal requires WAL mode')
             with closing(self.connect()) as db, db:
                 if db.execute('PRAGMA user_version').fetchone()[0] == 1:
                     db.execute('CREATE TABLE transport (id INTEGER PRIMARY KEY CHECK(id=1), floor INTEGER NOT NULL, high INTEGER NOT NULL)')

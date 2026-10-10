@@ -6,9 +6,12 @@ stream and prevents publication. There is no native-service or activation RPC he
 """
 import asyncio
 from copy import deepcopy
+import logging
 
 from .command_transport import settled
 from .gateway_journal import GatewayConflict
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class GatewayStream:
@@ -32,7 +35,7 @@ class GatewayStream:
     def capture(self, kind, payload, *, ownership=None):
         """Assign local queue order in the source callback, including equal timestamps."""
         if not self.accepting or self.failure:
-            raise GatewayConflict('Receipt stream unavailable; source coverage interrupted')
+            raise self.unavailable('source coverage interrupted') from self.failure
         # Copy now: mutable source attributes must not change a queued receipt.
         future = asyncio.get_running_loop().create_future()
         future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
@@ -42,7 +45,7 @@ class GatewayStream:
 
     async def call(self, operation, *args):
         if not self.accepting or self.failure:
-            raise GatewayConflict('Receipt stream unavailable; reconnect after recovery')
+            raise self.unavailable('reload the Home Assistant companion after correcting the cause') from self.failure
         if operation not in ('begin', 'disconnect', 'read', 'acknowledge_delivery', 'acknowledge_processed', 'snapshot',
                              'load_record', 'save_record', 'prepare_command', 'finish_command', 'admit_route', 'read_route', 'begin_operation', 'finish_operation', 'command_outcome', 'activate', 'resume'):
             raise ValueError('Unsupported gateway operation')
@@ -56,9 +59,20 @@ class GatewayStream:
         try:
             self.queue.put_nowait(item)
         except asyncio.QueueFull:
-            self.failure = GatewayConflict('Receipt queue exhausted; source coverage interrupted')
-            self.accepting = False
+            self.fail(GatewayConflict('Receipt queue exhausted; source coverage interrupted'), item[0])
             raise self.failure from None
+
+    def unavailable(self, reason):
+        cause = f'; {type(self.failure).__name__}: {self.failure}' if self.failure else ''
+        return GatewayConflict(f'Receipt stream unavailable; {reason}{cause}')
+
+    def fail(self, error, operation):
+        if self.failure is None:
+            self.failure = error
+            _LOGGER.error('SHS receipt stream failed during %s; queued=%s; %s: %s',
+                operation, self.queue.qsize(), type(error).__name__, error,
+                exc_info=(type(error), error, error.__traceback__))
+        self.accepting = False
 
     async def _run(self):
         pending = None
@@ -80,7 +94,7 @@ class GatewayStream:
                         batch.append(following)
                 if self.failure:
                     for _, _, receiver in batch:
-                        if not receiver.done(): receiver.set_exception(GatewayConflict('Receipt persistence failed'))
+                        if not receiver.done(): receiver.set_exception(self.unavailable('receipt persistence failed'))
                     continue
                 try:
                     if len(batch) > 1:
@@ -90,13 +104,11 @@ class GatewayStream:
                         results = [await settled(self.executor, getattr(self.journal, name), *args)]
                 except (GatewayConflict, ValueError) as error:
                     if name == 'record':
-                        self.failure = error
-                        self.accepting = False
+                        self.fail(error, name)
                     for _, _, receiver in batch:
                         if not receiver.done(): receiver.set_exception(error)
                 except Exception as error:
-                    self.failure = error
-                    self.accepting = False
+                    self.fail(error, name)
                     for _, _, receiver in batch:
                         if not receiver.done(): receiver.set_exception(error)
                 else:
@@ -110,7 +122,7 @@ class GatewayStream:
                     for (_, _, receiver), result in zip(batch, results):
                         if not receiver.done():
                             if self.failure:
-                                receiver.set_exception(GatewayConflict('Receipt stream faulted during persistence'))
+                                receiver.set_exception(self.unavailable('stream faulted during persistence'))
                             else:
                                 receiver.set_result(result)
             finally:

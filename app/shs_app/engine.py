@@ -588,7 +588,7 @@ class AppEngine:
 
     async def run(self):
         try:
-            LOGGER.info('Restoring saved runtime and connecting to the HA gateway')
+            LOGGER.debug('Restoring saved runtime and connecting to the HA gateway')
             await self.load()
             LOGGER.info('Runtime loaded; reconciling ownership and replaying queued observations')
             await self.activate()

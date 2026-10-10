@@ -15,7 +15,7 @@ from .companion import install
 from .storage import Diagnostics
 from .database_census import census
 from .profiling import AppProfiler, profiled
-from .logging_config import configure_logging
+from .logging_config import configure_logging, ConnectionLog
 from shs_wire.protocol import PROTOCOL
 
 LOGGER = logging.getLogger(__name__)
@@ -36,6 +36,7 @@ class Dashboard:
         self.session = None
         self.engine = None
         self.control_owner = "Migration pending"
+        self.connection_log = ConnectionLog(LOGGER)
 
     async def get(self, path):
         async with self.session.get(self.supervisor + path, headers={"Authorization":"Bearer "+self.token}) as response:
@@ -73,6 +74,7 @@ class Dashboard:
                 sampled_at=datetime.now(timezone.utc).isoformat(),entries=[entry])
             self.control_owner = 'SHS app'
             self.connection = {'state':'connected','message':'App runtime active; connected to the Home Assistant gateway'}
+            self.connection_log.connected()
 
     async def runtime(self):
         from hashlib import sha256
@@ -100,6 +102,7 @@ class Dashboard:
                 paired_release=pair,publish=self.publish_runtime,app_url='/app/'+self.app_info['slug'])
             self.profiler = self.engine.profiler
             self.connection = {'state':'recovering','message':'Restoring the saved SHS runtime and processing queued Home Assistant observations.'}
+            self.connection_log.attempt()
             try:
                 await self.engine.run()
             except asyncio.CancelledError:
@@ -108,7 +111,7 @@ class Dashboard:
                 self.connection = {'state':'recovering','message':'Applying the selected plan backend.'}
                 continue
             except Exception as error:
-                LOGGER.error('Runtime disconnected: %s: %s; reconnecting in 5s',type(error).__name__,error,exc_info=LOGGER.isEnabledFor(logging.DEBUG))
+                self.connection_log.disconnected(error)
                 self.connection = {'state':'disconnected','message':str(error)+'. Reconnecting with a new gateway session.'}
             await asyncio.sleep(5)
 
@@ -223,6 +226,12 @@ def create_app(observer, static, *, trusted_peer="172.30.32.2"):
     app.router.add_get("/api/state", state)
     app.router.add_post('/api/configuration/{action}',configuration)
     app.router.add_get('/api/diagnostics/controller.json.gz',diagnostics)
+    async def app_logs(request):
+        from .downloads import app_log_download
+        content = await asyncio.to_thread(app_log_download, observer.data/'logs')
+        return web.Response(body=content, content_type='application/zip', headers={
+            'Content-Disposition':'attachment; filename="shs-app-logs.zip"', 'Cache-Control':'no-store'})
+    app.router.add_get('/api/diagnostics/app-logs.zip', app_logs)
     app.router.add_get("/", index)
     app.router.add_static("/", static, show_index=False)
     return app
@@ -231,7 +240,7 @@ def create_app(observer, static, *, trusted_peer="172.30.32.2"):
 async def main():
     data, bundle = Path("/data"), Path("/opt/shs/companion")
     options = json.loads((data / 'options.json').read_text())
-    configure_logging(options.get('log_level','info'))
+    configure_logging(options.get('log_level','info'), data/'logs')
     observer = Dashboard(data, bundle, token=os.environ['SUPERVISOR_TOKEN'])
     LOGGER.info('Starting SHS app %s; companion=%s log_level=%s',observer.version,observer.manifest['integration_version'],options.get('log_level','info'))
     if options["install_companion"]:
