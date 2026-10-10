@@ -93,3 +93,18 @@ restart. Implementation status is tracked in [progress](app-consolidation-progre
 First unit: strict protocol negotiation and an explicit active-runtime schema
 upgrade. A changed app release/core must connect to unchanged companion protocol;
 missing capabilities and unsupported schemas must fail before command authority.
+
+## Gateway journal representation (schema 3)
+
+Routes, semantic operations/results and native command payloads use zlib-compressed
+UTF-8 JSON BLOBs. Identity hashes and equality still use the original canonical
+text; wire replies and retry results are unchanged. All rows, uncertain outcomes,
+physical obligations and captured settings survive the atomic table-copy upgrade.
+A durable maintenance marker resumes interrupted page reclamation before serving.
+There is no downgrade reader or age-based rejection. This reduces representation
+size; it does not implement bounded lifetime operational retention.
+
+The app caches exact table/range measurements for one hour, invalidating on inode
+or schema changes. Physical sizes, SQLite metadata and receipt watermarks are read
+fresh each minute. A failed refresh discards its cache and reports an explicit
+error. The System view labels the detailed measurement time.

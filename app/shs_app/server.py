@@ -13,7 +13,7 @@ from aiohttp import ClientSession, ClientTimeout, ClientError, web
 
 from .companion import install
 from .storage import Diagnostics
-from .database_census import census
+from .database_census import DatabaseCensus
 from .profiling import AppProfiler, profiled
 from .logging_config import configure_logging, ConnectionLog
 from shs_wire.protocol import PROTOCOL
@@ -28,6 +28,7 @@ class Dashboard:
         self.manifest = json.loads((bundle / "bundle.json").read_text())
         self.version = json.loads((bundle / "app.json").read_text())["version"]
         self.db = Diagnostics(data)
+        self.storage_census = DatabaseCensus()
         self.connection = {"state": "connecting", "message": "Connecting to Home Assistant"}
         self.snapshot = None
         self.system = {"sampled_at": None, "resources": None, "error": None, "database": None}
@@ -138,7 +139,7 @@ class Dashboard:
                         "plan_id": plan["plan_id"] if active else None}
             await asyncio.to_thread(self.db.record, sampled_at, {"resources": values, "telemetry": telemetry})
             database = await asyncio.to_thread(self.db.snapshot)
-            storage = await asyncio.to_thread(census,self.data,self.engine.root if self.engine else None,
+            storage = await asyncio.to_thread(self.storage_census.sample,self.data,self.engine.root if self.engine else None,
                 self.engine.identity["entry_id"] if self.engine and self.engine.identity else None)
             if self.engine and self.engine.battery:
                 storage["operations"] = self.engine.battery.store.resource_counts()

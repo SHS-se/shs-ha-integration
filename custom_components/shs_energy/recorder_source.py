@@ -20,7 +20,7 @@ class RecorderSource:
         def read():
             started, cpu = perf_counter(), thread_time()
             rows = statistics_during_period(self.hass, start, end, entities, period, units, kinds)
-            _LOGGER.info('Recorder statistics: period=%s requested_ids=%s returned_ids=%s rows=%s '
+            _LOGGER.debug('Recorder statistics: period=%s requested_ids=%s returned_ids=%s rows=%s '
                          'executor_wait_ms=%.1f read_wall_ms=%.1f read_cpu_ms=%.1f',
                          period, len(entities), len(rows), sum(len(values) for values in rows.values()),
                          (started-requested)*1000, (perf_counter()-started)*1000, (thread_time()-cpu)*1000)

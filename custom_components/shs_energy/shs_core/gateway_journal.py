@@ -6,16 +6,53 @@ these methods can unseal one, run a controller, or dispatch a native service.
 from contextlib import closing
 from hashlib import sha256
 import json
+import logging
 import os
 from pathlib import Path
 import sqlite3
+from time import perf_counter
 from uuid import uuid4
+import zlib
 
 from .command_journal import WriterLease, encoded, now_ms, RoutedCommand, ObligationCommand
 from .device_ownership import decode_ownership
 
 PROTOCOL = 2
 RECEIPT_KINDS = frozenset(('gap', 'session', 'configuration', 'observation', 'outcome', 'activation'))
+_LOGGER = logging.getLogger(__name__)
+_PACKED_TABLES = {
+    'commands': ("command_id TEXT PRIMARY KEY, digest TEXT NOT NULL, payload BLOB NOT NULL CHECK(typeof(payload)='blob'), session TEXT NOT NULL, status TEXT NOT NULL, prepared_at_ms INTEGER NOT NULL, finished_at_ms INTEGER, reason TEXT, route_id TEXT, step_index INTEGER", ('payload',)),
+    'operations': ("id TEXT PRIMARY KEY, session TEXT NOT NULL, payload BLOB NOT NULL CHECK(typeof(payload)='blob'), result BLOB CHECK(result IS NULL OR typeof(result)='blob')", ('payload', 'result')),
+    'routes': ("id TEXT PRIMARY KEY, session TEXT NOT NULL, payload BLOB NOT NULL CHECK(typeof(payload)='blob'), next_step INTEGER NOT NULL, status TEXT NOT NULL", ('payload',)),
+}
+
+
+class JournalStorageError(RuntimeError):
+    """Invalid durable evidence must fault the stream, not reject one request."""
+
+
+def _pack(text):
+    return zlib.compress(text.encode('utf-8'), level=6)
+
+
+def _unpack(blob):
+    if type(blob) is not bytes:
+        raise JournalStorageError('Gateway schema 3 requires compressed BLOB evidence')
+    try:
+        decoder = zlib.decompressobj()
+        text = decoder.decompress(blob) + decoder.flush()
+        if not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+            raise JournalStorageError('Incomplete or trailing compressed gateway evidence')
+        return text.decode('utf-8')
+    except (zlib.error, UnicodeError) as error:
+        raise JournalStorageError('Corrupt compressed gateway evidence') from error
+
+
+def _restored(blob):
+    try:
+        return json.loads(_unpack(blob))
+    except ValueError as error:
+        raise JournalStorageError('Invalid JSON in compressed gateway evidence') from error
 
 
 class GatewayConflict(ValueError):
@@ -64,7 +101,7 @@ class GatewayJournal:
         db.execute('PRAGMA busy_timeout=5000')
         if not readonly:
             db.execute('PRAGMA synchronous=FULL')
-        if db.execute('PRAGMA user_version').fetchone()[0] not in (1,2):
+        if db.execute('PRAGMA user_version').fetchone()[0] not in (1,2,3):
             db.close()
             raise ValueError('Unsupported gateway journal')
         return db
@@ -166,11 +203,9 @@ class GatewayJournal:
             with closing(self._connect()) as db:
                 if db.execute('PRAGMA journal_mode=WAL').fetchone()[0] != 'wal':
                     raise GatewayConflict('Gateway journal requires WAL mode')
+                self._upgrade_storage(db)
+                self._reclaim_storage(db)
             with closing(self.connect()) as db, db:
-                if db.execute('PRAGMA user_version').fetchone()[0] == 1:
-                    db.execute('CREATE TABLE transport (id INTEGER PRIMARY KEY CHECK(id=1), floor INTEGER NOT NULL, high INTEGER NOT NULL)')
-                    db.execute('INSERT INTO transport SELECT 1,0,coalesce(max(ordinal),0) FROM receipts')
-                    db.execute('PRAGMA user_version=2')
                 old = db.execute('SELECT boot,session FROM authority').fetchone()
                 self.boot = uuid4().hex
                 db.execute("UPDATE sessions SET status='revoked' WHERE status='connected'")
@@ -187,6 +222,59 @@ class GatewayJournal:
             lease.close()
             self.boot = None
             raise
+
+    @staticmethod
+    def _upgrade_storage(db):
+        """One atomic forward migration; exact text and scalar evidence survive."""
+        version = db.execute('PRAGMA user_version').fetchone()[0]
+        if version == 3:
+            return
+        db.execute('BEGIN IMMEDIATE')
+        with db:
+            if version == 1:
+                db.execute('CREATE TABLE transport (id INTEGER PRIMARY KEY CHECK(id=1), floor INTEGER NOT NULL, high INTEGER NOT NULL)')
+                db.execute('INSERT INTO transport SELECT 1,0,coalesce(max(ordinal),0) FROM receipts')
+            for table, (definition, packed) in _PACKED_TABLES.items():
+                db.execute('CREATE TABLE '+table+'_packed ('+definition+')')
+                rows = db.execute('SELECT * FROM '+table)
+                columns = [column[0] for column in rows.description]
+                positions = [columns.index(column) for column in packed]
+                count = 0
+                while batch := rows.fetchmany(256):
+                    converted = []
+                    for row in batch:
+                        values = list(row)
+                        for index in positions:
+                            if values[index] is not None:
+                                blob = _pack(values[index])
+                                if _unpack(blob) != values[index]:
+                                    raise JournalStorageError('Gateway migration changed evidence')
+                                values[index] = blob
+                        converted.append(values)
+                    db.executemany('INSERT INTO '+table+'_packed VALUES ('+','.join('?' for _ in columns)+')', converted)
+                    count += len(batch)
+                if db.execute('SELECT count(*) FROM '+table+'_packed').fetchone()[0] != count:
+                    raise JournalStorageError('Gateway migration lost evidence')
+                db.execute('DROP TABLE '+table)
+                db.execute('ALTER TABLE '+table+'_packed RENAME TO '+table)
+            db.execute('CREATE TABLE storage_maintenance (id INTEGER PRIMARY KEY CHECK(id=1), reclaim_pending INTEGER NOT NULL CHECK(reclaim_pending IN (0,1)))')
+            db.execute('INSERT INTO storage_maintenance VALUES (1,1)')
+            db.execute('PRAGMA user_version=3')
+
+    def _reclaim_storage(self, db):
+        # The marker commits with the migration. A crash during VACUUM or its
+        # checkpoint resumes this step; ordinary restarts do not rewrite the DB.
+        if not db.execute('SELECT reclaim_pending FROM storage_maintenance WHERE id=1').fetchone()[0]:
+            return
+        before, started = self.path.stat().st_size, perf_counter()
+        db.execute('VACUUM')
+        busy, _, _ = db.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+        if busy:
+            raise JournalStorageError('Gateway storage reclamation checkpoint blocked by a reader')
+        with db:
+            db.execute('UPDATE storage_maintenance SET reclaim_pending=0 WHERE id=1')
+        _LOGGER.info('Gateway evidence compressed losslessly: %.1f -> %.1f MiB in %.1fs; all records retained',
+                     before/1048576, self.path.stat().st_size/1048576, perf_counter()-started)
 
     def close(self):
         if self.lease:
@@ -396,7 +484,7 @@ class GatewayJournal:
                 if route is None or route['session'] != owner['session'] or route['status'] != 'active' or route['next_step'] != index:
                     raise GatewayConflict('Battery step is outside its admitted route')
             db.execute("INSERT INTO commands VALUES (?,?,?,?,'prepared',?,NULL,NULL,?,?)",
-                       (command.id, fingerprint, payload, ('physical:'+self.boot) if isinstance(command, ObligationCommand) else owner['session'], now_ms(), route_id, index))
+                       (command.id, fingerprint, _pack(payload), ('physical:'+self.boot) if isinstance(command, ObligationCommand) else owner['session'], now_ms(), route_id, index))
             return 'new'
 
     def finish_command(self, command, status, reason=None):
@@ -412,7 +500,7 @@ class GatewayJournal:
                     if status == 'service_returned':
                         db.execute('UPDATE routes SET next_step=next_step+1 WHERE id=? AND next_step=?', (command_row['route_id'], command_row['step_index']))
                         route = db.execute('SELECT payload,next_step FROM routes WHERE id=?', (command_row['route_id'],)).fetchone()
-                        self._complete_battery_release(db,json.loads(route['payload']),route['next_step'])
+                        self._complete_battery_release(db,_restored(route['payload']),route['next_step'])
                     else:
                         db.execute('UPDATE routes SET status=? WHERE id=?', (status, command_row['route_id']))
                 self._append(db, 'outcome', {'command_id': command.id, 'status': status, 'reason': reason})
@@ -423,10 +511,10 @@ class GatewayJournal:
             self._session(db, session)
             existing = db.execute('SELECT session,payload FROM routes WHERE id=?', (route_id,)).fetchone()
             if existing:
-                if existing['session'] != session or existing['payload'] != content:
+                if existing['session'] != session or _unpack(existing['payload']) != content:
                     raise GatewayConflict('Route identity reused with different admission')
                 return
-            db.execute("INSERT INTO routes VALUES (?,?,?,0,'active')", (route_id, session, content))
+            db.execute("INSERT INTO routes VALUES (?,?,?,0,'active')", (route_id, session, _pack(content)))
             self._complete_battery_release(db,payload,0)
 
     @staticmethod
@@ -447,7 +535,7 @@ class GatewayJournal:
             row = db.execute('SELECT * FROM routes WHERE id=?', (route_id,)).fetchone()
             if row is None or row['session'] != session:
                 raise GatewayConflict('Route is not admitted to this session')
-            return dict(payload=json.loads(row['payload']), next_step=row['next_step'], status=row['status'])
+            return dict(payload=_restored(row['payload']), next_step=row['next_step'], status=row['status'])
 
     def begin_operation(self, session, operation):
         """Reserve one whole semantic operation before capture or native preparation.
@@ -460,21 +548,21 @@ class GatewayJournal:
             self._session(db, session)
             prior = db.execute('SELECT payload,result FROM operations WHERE id=?', (operation['request_id'],)).fetchone()
             if prior:
-                if prior['payload'] != content:
+                if _unpack(prior['payload']) != content:
                     raise GatewayConflict('Operation identity reused with different content')
-                return {'state':'completed', 'result':json.loads(prior['result'])} if prior['result'] else {'state':'interrupted'}
-            db.execute('INSERT INTO operations VALUES (?,?,?,NULL)', (operation['request_id'], session, content))
+                return {'state':'completed', 'result':_restored(prior['result'])} if prior['result'] is not None else {'state':'interrupted'}
+            db.execute('INSERT INTO operations VALUES (?,?,?,NULL)', (operation['request_id'], session, _pack(content)))
             return {'state':'new'}
 
     def finish_operation(self, operation, result):
         with closing(self.connect()) as db, db:
             self._owner(db)
             prior = db.execute('SELECT payload,result FROM operations WHERE id=?', (operation['request_id'],)).fetchone()
-            if prior is None or prior['payload'] != encoded(operation):
+            if prior is None or _unpack(prior['payload']) != encoded(operation):
                 raise GatewayConflict('Operation was not reserved')
-            if prior['result'] is not None and prior['result'] != encoded(result):
+            if prior['result'] is not None and _unpack(prior['result']) != encoded(result):
                 raise GatewayConflict('Operation already has a different outcome')
-            db.execute('UPDATE operations SET result=? WHERE id=?', (encoded(result), operation['request_id']))
+            db.execute('UPDATE operations SET result=? WHERE id=?', (_pack(encoded(result)), operation['request_id']))
 
     def command_outcome(self, command_id):
         with closing(self.connect(readonly=True)) as db:

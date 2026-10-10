@@ -86,7 +86,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         rows = {'sensor.energy': [{'start': 1, 'change': 0.125}]}
         self.statistics.return_value = rows
         now, entities, units, kinds = self.rig.now, {'sensor.energy'}, {'energy':'kWh'}, {'change'}
-        with self.assertLogs(__name__, level='INFO') as logs:
+        with self.assertLogs(__name__, level='DEBUG') as logs:
             result = await self.source.statistics(now, now, entities, '5minute', units, kinds)
         self.assertIs(result, rows)
         self.statistics.assert_called_once_with(self.hass, now, now, entities, '5minute', units, kinds)

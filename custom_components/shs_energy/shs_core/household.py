@@ -616,7 +616,7 @@ class Household:
                         await self._report_replan_failure(requested, str(error))
                     raise
             self._answered_replan_request_id = requested
-            _LOGGER.info("Requested replan %s capture answered in %.0f ms", requested, (monotonic() - started) * 1000)
+            _LOGGER.debug("Requested replan %s capture answered in %.0f ms", requested, (monotonic() - started) * 1000)
             return mode == PLANNING_MODE_LIVE
 
     async def _report_replan_failure(self, request_id: str, detail: str) -> None:
@@ -3239,7 +3239,7 @@ class Household:
                             snapshot = await self._build_optimisation_snapshot(
                                 options, entities, actuals, stored, devices
                             )
-                            _LOGGER.info("Replan %s fresh snapshot captured in %.0f ms", replan_request_id, (monotonic() - capture_started) * 1000)
+                            _LOGGER.debug("Replan %s fresh snapshot captured in %.0f ms", replan_request_id, (monotonic() - capture_started) * 1000)
                         except OptimisationInputError as err:
                             snapshot_error = str(err)
                             if not self.optimisation_missing_inputs:
@@ -3335,7 +3335,7 @@ class Household:
                     if snapshot is not None:
                         stored.pop("optimisation_pending_submission", None)
                 self.replan_recommendations = stored["replan_recommendations"] = result.get("replan_recommendations", [])
-                _LOGGER.info("Replan %s cloud ingest completed in %.0f ms", replan_request_id, (monotonic() - ingest_started) * 1000)
+                _LOGGER.debug("Replan %s cloud ingest completed in %.0f ms", replan_request_id, (monotonic() - ingest_started) * 1000)
                 try:
                     configuration = await self._record_device_exchange(stored, devices, result)
                 except (ShsApiError, HouseholdReadError, OptimisationInputError, KeyError, TypeError, ValueError):

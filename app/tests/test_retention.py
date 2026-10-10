@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from shs_app.retention import RecentVerification
 from shs_app.storage import Diagnostics
-from shs_app.database_census import census
+from shs_app.database_census import DatabaseCensus
 
 class Store:
     def __init__(self):self.saved=None
@@ -36,7 +36,7 @@ class RetentionTests(unittest.IsolatedAsyncioTestCase):
             with db.operation('fixture') as connection:
                 connection.execute('INSERT INTO resource_samples VALUES (?,?)',((now-timedelta(days=4)).isoformat(),'{}'))
             db.record(now.isoformat(),{})
-            before=db.path.read_bytes();result=census(root)
+            before=db.path.read_bytes();result=DatabaseCensus().sample(root)
             self.assertEqual(db.path.read_bytes(),before)
             tables=result['databases'][0]['tables']
             self.assertEqual(next(r['rows'] for r in tables if r['name']=='resource_samples'),1)

@@ -153,3 +153,22 @@ test('temperature forecast gaps stay gaps and a missing forecast is explicit',as
   await expect(chart.locator('[data-temperature] path')).toHaveCount(0);
   await expect(chart.getByText('What it costs')).toHaveCount(0);
 });
+
+test('storage details show their measurement age separately from current gauges',async({page},info)=>{
+  const measured='2026-10-10T06:00:00Z';
+  await page.route('**/api/state',async route=>{
+    const response=await route.fetch();const data=await response.json();
+    data.system.storage={diagnostic_retention_days:3,archives:[],databases:[{name:'HA companion',file_bytes:165486592,
+      wal_bytes:0,shm_bytes:0,schema_version:3,journal_mode:'wal',free_pages:0,census_ms:1.5,
+      details_sampled_at:measured,tables:[{name:'routes',rows:68109,pages:100,bytes:409600}],
+      receipts:{received_through:100,processed_through:99,pending:1}}]};
+    await route.fulfill({json:data});
+  });
+  await page.goto('./#system');
+  await page.getByText('HA companion ·',{exact:false}).click();
+  await expect(page.locator('time[datetime="'+measured+'"]')).toBeVisible();
+  await expect(page.getByText(/refreshed hourly\. File sizes and receipt backlog update each minute/)).toBeVisible();
+  await expect(page.getByText('Received through 100 · Processed through 99 · Pending 1')).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+  await page.screenshot({path:`test-results/${info.project.name}-storage-details.png`,fullPage:true});
+});

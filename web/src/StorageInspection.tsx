@@ -6,6 +6,7 @@ export function StorageInspection({value}:{value:StorageCensus|undefined}) {
     {value.databases.map(db=><details key={db.name}><summary>{db.name} · {db.file_bytes===undefined?'Unavailable':size(db.file_bytes)}</summary>{db.error?<p className="notice error">{db.error}</p>:<>
       <p>Schema {db.schema_version} · {db.journal_mode} journal · {db.free_pages} reusable pages · WAL {size(db.wal_bytes||0)} · Shared memory {size(db.shm_bytes||0)} · Census {db.census_ms?.toFixed(1)} ms</p>
       {db.receipts&&<p>Received through {db.receipts.received_through} · Processed through {db.receipts.processed_through} · Pending {db.receipts.pending}</p>}
+      {db.details_sampled_at&&<p className="muted">Table counts, sizes and history ranges measured <time dateTime={db.details_sampled_at}>{new Date(db.details_sampled_at).toLocaleString()}</time>; refreshed hourly. File sizes and receipt backlog update each minute.</p>}
       <div className="table-wrap"><table><thead><tr><th>Table</th><th>Rows</th><th>Pages</th><th>Size</th></tr></thead><tbody>{db.tables?.map(t=><tr key={t.name}><td>{t.name}</td><td>{t.rows.toLocaleString()}</td><td>{t.pages}</td><td>{size(t.bytes)}</td></tr>)}</tbody></table></div>
       {db.retained_ranges&&Object.entries(db.retained_ranges).map(([name,range])=><p key={name}>{name}: {range.first===null?'Empty':`${typeof range.first==='number'?new Date(range.first).toLocaleString():range.first} — ${typeof range.last==='number'?new Date(range.last).toLocaleString():range.last}`}</p>)}
     </>}</details>)}

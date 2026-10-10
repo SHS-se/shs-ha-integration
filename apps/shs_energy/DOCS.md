@@ -72,6 +72,13 @@ configuration mount supports explicit companion installation and storage inspect
 Keep **Install companion** off during routine app updates. Container resource counters
 reset on restart; filesystem free space is shared storage, not a private allocation.
 
+The HA companion journal retains operational command identities, admissions and
+exact retry results. Those records have a separate lifetime from diagnostics.
+Schema 3 losslessly compresses their bulky JSON bodies; its first startup upgrades
+existing records and reclaims pages without discarding evidence. Routine storage
+samples update file sizes and receipt lag each minute. Exact table counts, sizes
+and history ranges refresh hourly, with their measurement time shown in System.
+
 ## Logs and profiling
 
 In the app's Home Assistant **Configuration** tab, set **Log level**, save and

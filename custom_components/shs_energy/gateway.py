@@ -281,7 +281,7 @@ class HomeAssistantSource:
             rows = await self.history.statistics(start,end,set(body['entities']),body['period'],body['units'],set(body['kinds']))
             started, cpu = perf_counter(), thread_time()
             value = wire(rows)
-            _LOGGER.info('Recorder statistics wire conversion: period=%s rows=%s wall_ms=%.1f cpu_ms=%.1f',
+            _LOGGER.debug('Recorder statistics wire conversion: period=%s rows=%s wall_ms=%.1f cpu_ms=%.1f',
                          body['period'], sum(len(values) for values in rows.values()),
                          (perf_counter()-started)*1000, (thread_time()-cpu)*1000)
             return value

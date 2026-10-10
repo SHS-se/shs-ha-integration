@@ -87,7 +87,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         at = datetime.now(timezone.utc)
         body = dict(start=at.isoformat(), end=at.isoformat(), entities=['sensor.energy'],
                     period='5minute', units={'energy':'kWh'}, kinds=['change'])
-        with self.assertLogs(level='INFO') as logs:
+        with self.assertLogs(level='DEBUG') as logs:
             result = await self.source.request('statistics', body)
         self.assertEqual(result, rows)
         self.source.history.statistics.assert_awaited_once_with(at, at, {'sensor.energy'}, '5minute', {'energy':'kWh'}, {'change'})
