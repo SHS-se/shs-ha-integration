@@ -28,6 +28,8 @@ from .const import (
     OPT_EV_ENERGY_REMAINING_ENTITY,
     OPT_EV_SOC_ENTITY,
     OPT_EV_TARGET_SOC_ENTITY,
+    OPT_POOL_START_TEMPERATURE_ENTITY,
+    OPT_POOL_STOP_TEMPERATURE_ENTITY,
     OPT_POOL_WATER_TEMPERATURE_ENTITY,
 )
 from .device_controls import mapped_planning_path
@@ -217,6 +219,12 @@ def device_measurement_issues(
         if read is not None and not POOL_WATER_RANGE_C[0] <= read[1] <= POOL_WATER_RANGE_C[1]:
             readings.issues.append(_issue("pool", "water_temperature_c", options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
                 read[1], f"The pool reported a water temperature of {read[1]:g} °C, outside −5–60 °C."))
+        # The heater's own settings are read like any other reading: one that
+        # cannot be read leaves the pool out rather than planning on a guess.
+        readings.number("pool", "heater_start_c", options.get(OPT_POOL_START_TEMPERATURE_ENTITY),
+                        "heater start temperature")
+        readings.number("pool", "heater_stop_c", options.get(OPT_POOL_STOP_TEMPERATURE_ENTITY),
+                        "heater stop temperature")
     if ev:
         _vehicle(readings, options, list(devices), known_ev_capacity_kwh)
     return readings.issues

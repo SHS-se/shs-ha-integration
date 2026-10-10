@@ -231,7 +231,8 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
                 device["mapping_error"] = "; ".join(gaps)
             device["mapping_readiness"] = {"state": device["mapping_status"], "reason": device["mapping_error"]}
             for field in device["system_fields"]:
-                if field["key"] == "pool_water_temperature_entity":
+                if field["key"] in ("pool_water_temperature_entity", "pool_start_temperature_entity",
+                                    "pool_stop_temperature_entity"):
                     field["required"] = included
 
         device["controller_explanation"] = controller_explanation(

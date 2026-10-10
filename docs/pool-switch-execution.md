@@ -1,9 +1,17 @@
 # Pool heater switch execution
 
 The configured Control entity is the pool actuator. The integration calls only
-`switch.turn_on/off` or `input_boolean.turn_on/off` for the pool. It never reads
-or writes hardware start/stop temperature registers and has no second accessory
+`switch.turn_on/off` or `input_boolean.turn_on/off` for the pool. It never
+writes hardware start/stop temperature registers and has no second accessory
 permission switch.
+
+The heat pump's own start and stop temperatures are read, never written. The
+Pool section selects the two entities (`pool_start_temperature_entity`,
+`pool_stop_temperature_entity`), and each planning snapshot carries their
+current values as `pool.hardware`, so the planner projects what the heat pump
+will actually do. Both are required while the pool is planned; a reading that is
+unavailable or not a number leaves the pool out of that snapshot as a
+measurement issue. They are planning inputs only: control needs neither.
 
 The planner owns the heating schedule (`slot.pool_w`). The website's **Preferred
 level** is an economic preference: inexpensive heating may carry the pool above

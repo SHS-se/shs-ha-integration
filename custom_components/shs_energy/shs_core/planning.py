@@ -30,6 +30,8 @@ from .const import (
     OPT_EV_TARGET_SOC_ENTITY,
     OPT_EV_ENABLED,
     OPT_POOL_ENABLED,
+    OPT_POOL_START_TEMPERATURE_ENTITY,
+    OPT_POOL_STOP_TEMPERATURE_ENTITY,
     OPT_POOL_WATER_TEMPERATURE_ENTITY,
     OPT_EV_CHARGE_EFFICIENCY,
     OPT_EV_KWH_PER_KM,
@@ -114,6 +116,34 @@ def pool_heating_running(models, mappings, entity_state, *, pool_water_entity=No
     if all(state == "on" or state is True for state in states):
         return True
     return None
+
+
+def pool_heater_settings(options, entity_payload) -> dict:
+    """The heater's own start and stop temperatures, as it is set right now.
+
+    The planner projects when the heat pump itself will stop, so it needs the
+    equipment's settings rather than a copy someone typed in once. SHS enables
+    the heater through its mapped switch and never writes either setting.
+    """
+    entities = {
+        "start": options.get(OPT_POOL_START_TEMPERATURE_ENTITY),
+        "stop": options.get(OPT_POOL_STOP_TEMPERATURE_ENTITY),
+    }
+    missing = [
+        key for end, key in (("start", OPT_POOL_START_TEMPERATURE_ENTITY), ("stop", OPT_POOL_STOP_TEMPERATURE_ENTITY))
+        if not (isinstance(entities[end], str) and entities[end].strip())
+    ]
+    if missing:
+        raise OptimisationInputError(
+            "Pool heater start and stop temperatures are not configured",
+            fix={"kind": "fields", "fields": [{"key": key} for key in missing]},
+        )
+    return {
+        "start_c": parse_number(entity_payload(entities["start"])["state"], entities["start"]),
+        "stop_c": parse_number(entity_payload(entities["stop"])["state"], entities["stop"]),
+        "control": "external_enable",
+        "source_entity_ids": entities,
+    }
 
 
 def pool_heating_runtime(entities, history, captured) -> dict:

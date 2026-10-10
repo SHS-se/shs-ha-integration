@@ -23,6 +23,7 @@ from shs_core.planning import (  # noqa: E402
     build_device_models,
     build_services,
     disabled_store_paths,
+    pool_heater_settings,
     pool_heating_running,
     unplanned_services,
 )
@@ -977,6 +978,41 @@ class StoreEnabledTests(unittest.TestCase):
             unplanned_services({**configured, "pool_enabled": False}, set(), {}),
             [],
         )
+
+
+class PoolHeaterSettingsTests(unittest.TestCase):
+    """The heat pump's own start and stop temperatures travel with every snapshot.
+
+    They were typed into the server once per environment, so production had
+    none and refused every plan, and the test copy went stale the day the
+    heat pump was adjusted.
+    """
+    options = {
+        "pool_start_temperature_entity": "number.pool_start",
+        "pool_stop_temperature_entity": "number.pool_stop",
+    }
+    states = {"number.pool_start": {"state": "33.5"}, "number.pool_stop": {"state": "34.0"}}
+
+    def test_current_settings_are_published_with_their_sources(self):
+        self.assertEqual(pool_heater_settings(self.options, self.states.__getitem__), {
+            "start_c": 33.5, "stop_c": 34.0, "control": "external_enable",
+            "source_entity_ids": {"start": "number.pool_start", "stop": "number.pool_stop"},
+        })
+
+    def test_every_unselected_setting_is_named_for_correction(self):
+        for options, missing in (
+            ({}, ["pool_start_temperature_entity", "pool_stop_temperature_entity"]),
+            ({"pool_start_temperature_entity": "number.pool_start"}, ["pool_stop_temperature_entity"]),
+            ({**self.options, "pool_start_temperature_entity": " "}, ["pool_start_temperature_entity"]),
+        ):
+            with self.subTest(missing=missing), self.assertRaises(OptimisationInputError) as raised:
+                pool_heater_settings(options, lambda entity: self.fail(f"read {entity} before setup was complete"))
+            self.assertEqual(raised.exception.fix, {"kind": "fields", "fields": [{"key": key} for key in missing]})
+
+    def test_a_setting_that_is_not_a_number_is_refused_rather_than_guessed(self):
+        states = {**self.states, "number.pool_stop": {"state": "auto"}}
+        with self.assertRaises(OptimisationInputError):
+            pool_heater_settings(self.options, states.__getitem__)
 
 
 class PoolRunningStateTests(unittest.TestCase):

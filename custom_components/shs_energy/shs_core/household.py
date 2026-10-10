@@ -126,6 +126,7 @@ from .planning import (
     build_device_models,
     build_services,
     disabled_store_paths,
+    pool_heater_settings,
     pool_heating_running,
     pool_heating_actuators,
     pool_heating_runtime,
@@ -2710,6 +2711,8 @@ class Household:
 
         if capabilities["pool"] and pool_state is None:
             raise OptimisationInputError("Pool water temperature is not configured", fix={"kind": "fields", "fields": [{"key": OPT_POOL_WATER_TEMPERATURE_ENTITY}]})
+        if capabilities["pool"]:
+            pool_state["hardware"] = pool_heater_settings(options, self._entity_payload)
 
         snapshot = {
             "schema_version": SNAPSHOT_SCHEMA_VERSION,

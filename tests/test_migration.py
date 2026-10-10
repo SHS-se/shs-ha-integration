@@ -67,8 +67,9 @@ class OptionMigrationTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertNotIn("pool_temperature_minimum", migrated)
         self.assertNotIn("pool_temperature_maximum", migrated)
-        self.assertNotIn("pool_start_temperature_entity", migrated)
-        self.assertNotIn("pool_stop_temperature_entity", migrated)
+        # The selected heat pump settings are kept: SHS reads them again, and no longer writes them.
+        self.assertEqual(migrated["pool_start_temperature_entity"], "number.nibe_start")
+        self.assertEqual(migrated["pool_stop_temperature_entity"], "number.nibe_stop")
         self.assertEqual(migrated["device_modes"], {})
         self.assertEqual(migrate_options(migrated, source_version=13), (migrated, False))
 

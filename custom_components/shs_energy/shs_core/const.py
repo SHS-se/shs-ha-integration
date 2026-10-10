@@ -181,6 +181,11 @@ OPT_TERMINAL_ENERGY_VALUE = "terminal_energy_value_sek_per_kwh"
 # the pool heater's already-metered energy, so none of it is asked for.
 OPT_POOL_WATER_TEMPERATURE_ENTITY = "pool_water_temperature_entity"
 OPT_POOL_VOLUME_M3 = "pool_volume_m3"
+# The heater's own start and stop temperatures: equipment settings SHS reads and
+# never writes. They belong to the store, not to each meter that heats it, since
+# a heater and its circulation pump share one pair of registers.
+OPT_POOL_START_TEMPERATURE_ENTITY = "pool_start_temperature_entity"
+OPT_POOL_STOP_TEMPERATURE_ENTITY = "pool_stop_temperature_entity"
 
 OPT_EV_CONNECTED_ENTITY = "ev_connected_entity"
 OPT_EV_SOC_ENTITY = "ev_soc_entity"

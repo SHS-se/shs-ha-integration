@@ -99,6 +99,17 @@ class MeasurementIssueTests(unittest.TestCase):
         self.assertEqual(values["soc"], "unavailable")
         self.assertEqual(values["water_temperature_c"], "warm")
 
+    def test_an_unreadable_heater_setting_leaves_out_the_pool(self) -> None:
+        options = {**OPTIONS, "pool_start_temperature_entity": "number.pool_start",
+                   "pool_stop_temperature_entity": "number.pool_stop"}
+        self.states["number.pool_start"] = state("33.5", "°C")
+        self.states["number.pool_stop"] = state("unavailable")
+        issues = device_measurement_issues(options, self.states.get, NOW, battery=False, pool=True, ev=False)
+        self.assertEqual([(issue["device"], issue["field"], issue["entity_id"]) for issue in issues],
+                         [("pool", "heater_stop_c", "number.pool_stop")])
+        self.states["number.pool_stop"] = state("34.0", "°C")
+        self.assertEqual(device_measurement_issues(options, self.states.get, NOW, battery=False, pool=True, ev=False), [])
+
     def test_a_stale_battery_reading_leaves_out_the_battery(self) -> None:
         self.states["sensor.battery_soc"] = state("40", "%", age=timedelta(minutes=20))
         [issue] = self.issues()
@@ -158,6 +169,9 @@ class SnapshotWiringTests(unittest.TestCase):
         self.assertIn('options[{"battery": OPT_BATTERY_ENABLED, "pool": OPT_POOL_ENABLED, "ev": OPT_EV_ENABLED}[device]] = False',
                       body)
         self.assertIn('snapshot["measurement_issues"] = measurement_issues', body)
+        # The heater's settings are read only for a pool that is being planned.
+        self.assertIn('if capabilities["pool"]:\n            pool_state["hardware"] = pool_heater_settings(options, self._entity_payload)',
+                      body)
         # Setup warnings keep describing the configuration, not this snapshot.
         self.assertIn("self._sync_battery_control_issue(configured,", body)
         self.assertIn("self._sync_pool_control_issue(\n            configured,", body)

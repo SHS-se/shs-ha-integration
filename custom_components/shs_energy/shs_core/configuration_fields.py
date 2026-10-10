@@ -538,6 +538,27 @@ def _configuration_sections(*, battery_control_required=False) -> list[dict[str,
                     minimum=0.5,
                     step=0.5,
                 ),
+                _field(
+                    c.OPT_POOL_START_TEMPERATURE_ENTITY,
+                    "Heater start temperature",
+                    "entity",
+                    domains=("number", "input_number", "sensor"),
+                    help_text=(
+                        "The heat pump's own setting for the water temperature it "
+                        "starts heating below. SHS only reads this, so the plan "
+                        "matches what the heat pump will do. Nothing writes to it."
+                    ),
+                ),
+                _field(
+                    c.OPT_POOL_STOP_TEMPERATURE_ENTITY,
+                    "Heater stop temperature",
+                    "entity",
+                    domains=("number", "input_number", "sensor"),
+                    help_text=(
+                        "The heat pump's own setting for the water temperature it "
+                        "stops heating at. SHS only reads this. Nothing writes to it."
+                    ),
+                ),
             ],
         },
         {
