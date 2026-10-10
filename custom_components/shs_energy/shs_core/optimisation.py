@@ -199,6 +199,20 @@ def optimisation_plan_due(
     return quarter_start(now) > quarter_start(issued_at)
 
 
+def fuse_import_limit_w(configuration: dict[str, Any] | None) -> float | None:
+    """What the home's main fuse carries, from the website's tariff configuration.
+
+    The grid import limit is the owner's answer in the home profile on the
+    website. The server applies it to every plan and ignores the figure a
+    snapshot carries, so this only has to describe the same fuse.
+    """
+    fuse_a = (configuration or {}).get("fuse_a")
+    if not fuse_a:
+        return None
+    phases = 1 if configuration.get("connection_type") == "single_phase" else 3
+    return float(fuse_a) * 230 * phases
+
+
 def parse_number(raw: Any, label: str) -> float:
     """Return one finite number; unknown and unit ambiguity fail fast."""
     try:

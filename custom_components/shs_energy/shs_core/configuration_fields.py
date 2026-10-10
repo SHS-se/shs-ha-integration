@@ -497,7 +497,12 @@ def _configuration_sections(*, battery_control_required=False) -> list[dict[str,
             "tab": "devices",
             "title": "Electrical and horizon limits",
             "fields": [
-                _field(c.OPT_GRID_IMPORT_LIMIT_W, "Grid import limit", "number", unit="W", minimum=1, step=1),
+                # Not the planner's limit: that is the main fuse answered in the home
+                # profile on the website, which the server applies to every plan.
+                # This saved figure only stands in while the tariff names no fuse,
+                # and the Settings tabs (Energy & planning, Devices) do not show it.
+                _field(c.OPT_GRID_IMPORT_LIMIT_W, "Grid import limit", "number", unit="W", minimum=1, step=1,
+                       help_text="Used only while the website has no main fuse for this home. The plan's limit is set in the home profile on the website."),
                 _field(c.OPT_GRID_EXPORT_LIMIT_W, "Grid export limit", "number", unit="W", minimum=1, step=1),
                 _field(c.OPT_TERMINAL_SOC_MIN, "Minimum charge at the end of the plan", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
                 _field(c.OPT_TERMINAL_ENERGY_VALUE, "Remaining battery value", "number", unit="SEK/kWh", minimum=0, step=0.01),

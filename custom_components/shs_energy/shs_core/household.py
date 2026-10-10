@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import hashlib
 import json
 import logging
-from math import isfinite, sqrt
+from math import isfinite
 from time import monotonic
 from typing import Any
 from uuid import uuid4
@@ -101,6 +101,7 @@ from .device_controls import (
 )
 from .optimisation import (
     OptimisationInputError,
+    fuse_import_limit_w,
     REMEDY_DEFECT,
     REMEDY_SETTING,
     REMEDY_WAITING,
@@ -1927,12 +1928,11 @@ class Household:
         """Resolve defaults and require only capabilities enabled for this home."""
         options = self.resolved_options()
         configuration = (self.tariff_catalog or {}).get("configuration") or {}
-        fuse_a = configuration.get("fuse_a")
-        if fuse_a and not options.get(OPT_GRID_IMPORT_LIMIT_W):
-            phases = 1 if configuration.get("connection_type") == "single_phase" else 3
-            options[OPT_GRID_IMPORT_LIMIT_W] = round(
-                float(fuse_a) * (230 if phases == 1 else sqrt(3) * 400), 1
-            )
+        # A saved figure is used only while the website names no fuse; nothing in
+        # this app sets the plan's grid import limit.
+        fuse_limit_w = fuse_import_limit_w(configuration)
+        if fuse_limit_w is not None:
+            options[OPT_GRID_IMPORT_LIMIT_W] = fuse_limit_w
         if not options.get(OPT_GRID_EXPORT_LIMIT_W) and options.get(
             OPT_GRID_IMPORT_LIMIT_W
         ):

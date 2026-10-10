@@ -18,6 +18,7 @@ sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energ
 from shs_core.optimisation import (  # noqa: E402
     OptimisationInputError,
     build_base_load_model,
+    fuse_import_limit_w,
 )
 from shs_core.planning import (  # noqa: E402
     build_device_models,
@@ -978,6 +979,30 @@ class StoreEnabledTests(unittest.TestCase):
             unplanned_services({**configured, "pool_enabled": False}, set(), {}),
             [],
         )
+
+
+class GridImportLimitTests(unittest.TestCase):
+    """The plan's import limit is the main fuse answered on the website.
+
+    Automatic setup used to fill it from the inverter's power rating, so a home
+    fused for 17.2 kW was planned to 13.2 with no setting on screen to correct.
+    """
+
+    def test_the_fuse_from_the_website_gives_the_limit(self):
+        self.assertEqual(fuse_import_limit_w({"fuse_a": 25, "connection_type": "three_phase"}), 17_250)
+        self.assertEqual(fuse_import_limit_w({"fuse_a": 20, "connection_type": "single_phase"}), 4_600)
+        for unknown in (None, {}, {"fuse_a": None}):
+            self.assertIsNone(fuse_import_limit_w(unknown))
+
+    def test_the_inverter_rating_is_an_export_limit_and_never_an_import_limit(self):
+        from types import SimpleNamespace
+        from shs_core.discovery import DiscoveryCatalog, discover_configuration
+        rating = SimpleNamespace(entity_id="sensor.sigen_plant_max_active_power", state="13.2",
+                                 attributes={"friendly_name": "Sigen Plant Max Active Power", "unit_of_measurement": "kW"})
+        result = discover_configuration(DiscoveryCatalog({rating.entity_id: rating}, {"energy_sources": []}, 59, 18), {})
+        self.assertEqual(result["configuration"]["grid_export_limit_w"], 13_200)
+        self.assertFalse(result["configuration"].get("grid_import_limit_w"))
+        self.assertNotIn("grid_import_limit_w", result["evidence"])
 
 
 class PoolHeaterSettingsTests(unittest.TestCase):

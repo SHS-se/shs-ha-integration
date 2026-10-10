@@ -15,7 +15,7 @@ RUN python scripts/build-companion.py /bundle
 COPY web/package.json /bundle/app.json
 
 FROM python:3.13.12-slim-bookworm AS runtime
-ARG BUILD_VERSION=0.1.0-beta.55
+ARG BUILD_VERSION=0.1.0-beta.56
 ARG TARGETARCH
 LABEL io.hass.version="${BUILD_VERSION}" io.hass.type="app" \
       org.opencontainers.image.source="https://github.com/SHS-se/shs-ha-integration" \

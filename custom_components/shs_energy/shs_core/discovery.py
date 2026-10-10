@@ -509,8 +509,12 @@ def discover_configuration(
             _as_watts,
             discharge_limit_ids,
         ),
+        # The inverter's rating bounds what the plant can send to the grid. It
+        # says nothing about what the house may draw: that is the main fuse,
+        # answered on the website, and it was proposed from this rating until
+        # a home fused for 17.2 kW was planned to 13.2.
         (
-            OPT_GRID_IMPORT_LIMIT_W,
+            OPT_GRID_EXPORT_LIMIT_W,
             _first_state(
                 states,
                 exact_ids=plant_limit_ids,
@@ -532,14 +536,6 @@ def discover_configuration(
             source="equipment_rating_entity",
             confidence="high" if exact else "medium",
             detail=f"Declared by {state.entity_id}",
-        )
-    if options.get(OPT_GRID_IMPORT_LIMIT_W):
-        record(
-            OPT_GRID_EXPORT_LIMIT_W,
-            options[OPT_GRID_IMPORT_LIMIT_W],
-            source="equipment_rating_entity",
-            confidence="medium",
-            detail="Proposed from the same plant limit; review if export is restricted",
         )
 
     # These device-specific names are discovery proposals, never hardcoded
