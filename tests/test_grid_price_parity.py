@@ -42,10 +42,10 @@ def _catalog(overrides: dict) -> dict:
     configuration = dict(FIXTURE["base_configuration"])
     configuration.update(overrides)
     return {
-        "schema_version": 2,
-        "calculation_version": 2,
+        "schema_version": 3,
+        "calculation_version": 3,
         "timezone": FIXTURE["timezone"],
-        "configuration": configuration,
+        "configuration": {**configuration, "fuse_periods": [{"valid_from": None, "fuse_a": configuration["fuse_a"]}]},
         "missing_inputs": [],
         "profiles": [FIXTURE["profile"]],
     }

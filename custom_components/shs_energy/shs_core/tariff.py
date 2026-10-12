@@ -16,8 +16,8 @@ import math
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-SCHEMA_VERSION = 2
-CALCULATION_VERSION = 2
+SCHEMA_VERSION = 3
+CALCULATION_VERSION = 3
 CALCULATION_MODEL = "se_grid_v1"
 EXPORT_SCHEDULE = "swedish_winter_weekday_06_22_v1"
 
@@ -154,6 +154,23 @@ class _Catalog:
         self.configuration = (
             None if configuration is None else _as_dict(configuration, "configuration")
         )
+        self.fuse_periods: list[tuple[date | None, int]] = []
+        if self.configuration is not None and self.configuration.get("connection_type") != "apartment":
+            periods = _as_list(self.configuration.get("fuse_periods"), "fuse_periods")
+            if not periods:
+                raise UnsupportedTariffError("fuse_periods must include a baseline")
+            for index, raw in enumerate(periods):
+                period = _as_dict(raw, "fuse period")
+                start = period.get("valid_from")
+                start = None if start is None else _parse_date(start, "fuse period.valid_from")
+                fuse = period.get("fuse_a")
+                if type(fuse) is not int or fuse not in (16, 20, 25, 35, 50, 63):
+                    raise UnsupportedTariffError("unsupported fuse period size")
+                if index == 0 and start is not None:
+                    raise UnsupportedTariffError("first fuse period must be the baseline")
+                if index and (start is None or (self.fuse_periods[-1][0] is not None and start <= self.fuse_periods[-1][0])):
+                    raise UnsupportedTariffError("fuse period dates must be strictly increasing")
+                self.fuse_periods.append((start, fuse))
         self.profiles: dict[str, dict[str, Any]] = {}
         for raw_profile in profiles:
             profile = _as_dict(raw_profile, "profile")
@@ -220,7 +237,10 @@ class _Catalog:
             revision=revision,
             profile=profile,
             version=version,
-            configuration=self.configuration,
+            configuration={**self.configuration, "fuse_a": next(
+                fuse for start, fuse in reversed(self.fuse_periods)
+                if start is None or start <= value
+            )} if self.fuse_periods else self.configuration,
             definition=definition,
         )
 
@@ -343,20 +363,21 @@ def display_components(
     if not isinstance(components, list):
         return []
 
-    # A month can span revisions, and each group carries its own VAT row.
-    rate_by_group: dict[tuple[Any, Any, Any], float] = {}
+    # A revision has one VAT rate. Its fixed-fee rows can span shorter fuse
+    # periods than its VAT row, so measurement-period dates are not VAT keys.
+    rate_by_revision: dict[str, float] = {}
     for component in components:
         if not isinstance(component, dict) or component.get("category") != "vat":
             continue
         rate = component.get("unit_price_sek")
         if isinstance(rate, (int, float)):
-            rate_by_group[_display_group(component)] = float(rate)
+            rate_by_revision[component["tariff_revision"]] = float(rate)
 
     displayed: list[dict[str, Any]] = []
     for component in components:
         if not isinstance(component, dict) or component.get("category") == "vat":
             continue
-        rate = rate_by_group.get(_display_group(component), 0.0)
+        rate = rate_by_revision.get(component.get("tariff_revision"), 0.0)
         if component.get("category") == "export_credit" and not export_vat_registered:
             rate = 0.0
         amount_ex_vat = component.get("amount_sek")
@@ -555,14 +576,6 @@ def grid_operator(payload: dict[str, Any]) -> dict[str, Any] | None:
             "currency": profile.get("currency"),
         }
     return None
-
-
-def _display_group(component: dict[str, Any]) -> tuple[Any, Any, Any]:
-    return (
-        component.get("tariff_revision"),
-        component.get("period_start"),
-        component.get("period_end"),
-    )
 
 
 def _expected_utc_hours(local_day: date, tariff_timezone: ZoneInfo) -> set[datetime]:
@@ -932,12 +945,6 @@ def calculate_month(
     # still only charges its own share.
     month_days = _date_range(month, _month_end(month))
     days_in_month = len(month_days)
-    tariff_days: dict[tuple[str, str], int] = {}
-    for value in month_days:
-        resolved_day = catalog.resolve_optional(value)
-        if resolved_day is not None:
-            tariff_days[resolved_day.key] = tariff_days.get(resolved_day.key, 0) + 1
-
     for key, days in grouped_days.items():
         resolved = resolved_by_key[key]
         if resolved.revision not in seen_revisions:
@@ -949,38 +956,43 @@ def calculate_month(
         import_kwh = sum(value.import_kwh for value in group_readings)
         export_kwh = sum(value.export_kwh for value in group_readings)
 
-        fixed_rate = _fixed_rate(plan, selector_value)
-        fixed_fraction = tariff_days.get(key, len(days)) / days_in_month
-        group_components = [
-            _component(
-                "fixed_grid_fee",
-                "fixed_fee",
-                "Fixed grid fee",
-                fixed_rate * fixed_fraction,
-                fixed_fraction,
-                "month",
-                fixed_rate,
-                period_start,
-                period_end,
+        # Fuse changes split fixed fees, while the demand group remains the
+        # published revision's full set of hours. Missing recorder hours never
+        # reduce the subscription fee for days the tariff covers.
+        fixed_segments: list[tuple[list[date], float]] = []
+        for local_day in month_days:
+            day_tariff = catalog.resolve_optional(local_day)
+            if day_tariff is None or day_tariff.key != key:
+                continue
+            day_plan, day_selector = _plan(day_tariff)
+            rate = _fixed_rate(day_plan, day_selector)
+            if fixed_segments and fixed_segments[-1][1] == rate and local_day == fixed_segments[-1][0][-1] + timedelta(days=1):
+                fixed_segments[-1][0].append(local_day)
+            else:
+                fixed_segments.append(([local_day], rate))
+        group_components = []
+        for segment, fixed_rate in fixed_segments:
+            fraction = len(segment) / days_in_month
+            group_components.append(_component(
+                "fixed_grid_fee", "fixed_fee", "Fixed grid fee",
+                fixed_rate * fraction, fraction, "month", fixed_rate,
+                period_start if len(fixed_segments) == 1 else segment[0],
+                period_end if len(fixed_segments) == 1 else segment[-1],
                 resolved.revision,
-            )
-        ]
+            ))
 
-        transfer_rate = _transfer_rate(plan, selector_value)
-        group_components.append(
-            _component(
-                "grid_energy_transfer",
-                "energy_transfer",
-                "Grid energy transfer",
-                import_kwh * transfer_rate,
-                import_kwh,
-                "kWh",
-                transfer_rate,
-                period_start,
-                period_end,
-                resolved.revision,
-            )
-        )
+        transfer_quantities: dict[float, float] = {}
+        for reading in group_readings:
+            day = reading.start.astimezone(catalog.timezone).date()
+            reading_plan, reading_selector = _plan(resolved_by_day[day])
+            rate = _transfer_rate(reading_plan, reading_selector)
+            transfer_quantities[rate] = transfer_quantities.get(rate, 0.0) + reading.import_kwh
+        for transfer_rate, quantity in transfer_quantities.items():
+            group_components.append(_component(
+                "grid_energy_transfer", "energy_transfer", "Grid energy transfer",
+                quantity * transfer_rate, quantity, "kWh", transfer_rate,
+                period_start, period_end, resolved.revision,
+            ))
 
         demand_raw = plan.get("demand")
         if demand_raw is not None:

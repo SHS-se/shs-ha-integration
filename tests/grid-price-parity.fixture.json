@@ -20,7 +20,13 @@
     "production_enabled": true,
     "energy_tax_reduced": false,
     "include_vat": true,
-    "export_vat_registered": false
+    "export_vat_registered": false,
+    "fuse_periods": [
+      {
+        "valid_from": null,
+        "fuse_a": 25
+      }
+    ]
   },
   "profile": {
     "id": "ellevio",

@@ -97,10 +97,10 @@ def definition(
 
 def catalog(configuration: dict) -> dict:
     return {
-        "schema_version": 2,
-        "calculation_version": 2,
+        "schema_version": 3,
+        "calculation_version": 3,
         "timezone": "Europe/Stockholm",
-        "configuration": {"profile_id": "profile", **configuration},
+        "configuration": {"profile_id": "profile", **configuration, "fuse_periods": [{"valid_from": None, "fuse_a": configuration["fuse_a"]}]},
         "missing_inputs": [],
         "profiles": [
             {
@@ -397,7 +397,7 @@ class TariffCalculationTests(unittest.TestCase):
 
     def test_unknown_schema_fails_instead_of_guessing(self) -> None:
         payload = catalog(config())
-        payload["schema_version"] = 3
+        payload["schema_version"] = 99
         day = date(2026, 6, 1)
         with self.assertRaises(UnsupportedTariffError):
             calculate_month(payload, hourly_readings(day, day), day)
