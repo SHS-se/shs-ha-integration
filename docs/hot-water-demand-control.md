@@ -34,3 +34,15 @@ See the [planner design](../../smart-home-solutions-t-by/docs/energy-optimisatio
 for threshold derivation and conditional forecasts. This change neither fixes
 winter baseload forecasts nor removes battery target warnings, and does not
 establish a hot-water thermal model or alter shared-compressor service priority.
+
+
+## Price scheduling
+
+The planner now evaluates water timing using the selected pool, car and home
+battery trajectory. An economic pause uses the existing `permit_inhibit: false`
+command, which remains inhibited even at low measured demand. Eligible quarters
+use `house_demand_permission` and still react to measured spikes and falls.
+Site-load thresholds include planned battery charging minus discharge, then
+translate back to the existing gross-house sensor frame. No new sensor or
+maximum-pause setting is required. The generated consumer fixture exercises
+both commands in one service window.

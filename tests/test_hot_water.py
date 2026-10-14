@@ -43,6 +43,21 @@ class HotWaterDemandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.heater'].state, 'on')
         self.assertEqual(self.calls, [], 'the heater does not toggle itself or receive duplicate writes')
 
+    async def test_price_pause_holds_at_low_load_then_resumes_measured_load_control(self):
+        self.slot['device_commands']['heater'] = {'type': 'permit_inhibit', 'permitted': False}
+        await self.controller.async_start()
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+        self.states['sensor.house_power'].state = '0'
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.heater'].state, 'off', 'low demand cannot overrule a price pause')
+        self.slot['device_commands']['heater'] = deepcopy(COMMAND)
+        self.states['sensor.house_power'].state = '1000'
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.heater'].state, 'on')
+        self.states['sensor.house_power'].state = '5000'
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.heater'].state, 'off', 'allowed quarters retain the live demand gate')
+
     async def test_inherited_pause_metadata_does_not_force_a_run(self):
         self.states['sensor.house_power'].state = '5000'
         await self.controller.async_start()
@@ -108,7 +123,9 @@ class HotWaterContractTests(unittest.TestCase):
         fixture = json.loads((Path(__file__).parent / 'fixtures/schema-8-hot-water-demand-plan.json').read_text())
         now = datetime.fromisoformat(fixture['validation_time'].replace('Z', '+00:00'))
         validate_plan_contract(fixture['plan'], now)
-        command = fixture['plan']['plans']['priority']['slots'][0]['device_commands']['water']
+        commands = [slot['device_commands']['water'] for slot in fixture['plan']['plans']['priority']['slots']]
+        self.assertTrue(any(c == {'type': 'permit_inhibit', 'permitted': False} for c in commands))
+        command = next(c for c in commands if c['type'] == 'house_demand_permission')
         self.assertTrue(validate_demand_command(command))
         command['inhibit_above_w'] = command['allow_below_w']
         with self.assertRaises(ValueError):
