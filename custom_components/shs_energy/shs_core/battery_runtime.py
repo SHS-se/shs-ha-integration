@@ -25,6 +25,7 @@ from .native_configuration import native_options
 from .resource_profiling import ResourceProfiler
 from .battery_live import native_surface, source_revision, planned_power_bindings
 from .battery_supply import SupplyScope, observe_supply, required_power_keys
+from .device_power import planned_switch_bindings
 from .configuration_schema import METADATA_KEYS
 from .configuration_values import resolve_battery_quantities
 from .energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
@@ -885,7 +886,7 @@ class BatteryRuntime:
         # in the physical reservation until its response catches up.
         envelope=rt.Envelope(max(native.import_w,self._model.grid_charge.input(max(0,battery))),
                             max(native.export_w,self._model.discharge.output(max(0,-battery))))
-        valid=min(times)+AGE_MS
+        valid=min(min(times)+AGE_MS, *(reading.valid_until_ms for reading in evidence))
         if not self.receipt_driven:
             for stream in self.host.state.ledger.streams:
                 row=read(stream.spec.stream_id)
@@ -914,14 +915,17 @@ class BatteryRuntime:
         requested=('charging' if readback['mode']=='Command Charging (PV First)' and readback['charge_limit_w']>100
                    else 'discharging' if readback['mode']=='Command Discharging (PV First)' and readback['discharge_limit_w']>100 else None)
         self._measurements={'physical_response':response,'requested_direction':requested,
-            'response_matches_direction':response==requested if requested else None,**asdict(accounting),'battery_dc_w':battery,'grid_w':grid,'at_ms':min(times),'valid_until_ms':valid}
+            'response_matches_direction':response==requested if requested else None,**asdict(accounting),'battery_dc_w':battery,'grid_w':grid,'at_ms':min(times),'valid_until_ms':valid,
+            'supply_evidence':[asdict(reading) for reading in evidence]}
         self._last_capture=capture
         return (rt.MeasurementsReceived(observed,frame.frame,conditions.conditions),)
 
     def capture_entities(self):
         """The exact dependencies used by the complete-frame acceptance below."""
         planned=planned_power_bindings(self._options,self._devices)
-        return set(self._control_entities())|{planned.get(key) for key in required_power_keys(self._scope,planned)}|{self._options.get(key) for key in
+        required=required_power_keys(self._scope,planned)
+        switches=planned_switch_bindings(self._options,self._devices)
+        return set(self._control_entities())|{planned.get(key) for key in required}|{entity for key in required for entity in switches.get(key,())}|{self._options.get(key) for key in
             ('house_consumption_power_entity','solar_production_power_entity','battery_power_measurement_entity','battery_soc_entity','grid_power_entity')}
 
     def _release_request(self,group,target=None):

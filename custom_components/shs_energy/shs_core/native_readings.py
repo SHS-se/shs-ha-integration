@@ -15,7 +15,7 @@ class BatteryPowerReadingError(ValueError):
     fix = {'kind': 'diagnostics'}
     next_step = 'Check that the named power sensor is reporting current measurements. Control retries automatically when fresh readings arrive.'
 
-def power(report, *, source, now_ms, signed=False):
+def power(report, *, source, now_ms, signed=False, max_age_ms=AGE_MS):
     if not isinstance(report,dict):
         raise BatteryPowerReadingError(f'{source}: configured power source is unavailable')
     attrs=report['attributes'];unit=attrs.get('unit_of_measurement')
@@ -25,6 +25,6 @@ def power(report, *, source, now_ms, signed=False):
         at=stamp(report['last_reported']);value=float(report['state'])*(1000 if unit=='kW' else 1)
     except (KeyError, TypeError, ValueError) as error:
         raise BatteryPowerReadingError(f'{source}: invalid physical power reading') from error
-    if not isfinite(value) or (value<0 and not signed) or not at<=now_ms<at+AGE_MS:
+    if not isfinite(value) or (value<0 and not signed) or not at<=now_ms<at+max_age_ms:
         raise BatteryPowerReadingError(f'{source}: power source is invalid or stale (last report: {report["last_reported"]})')
     return value,at

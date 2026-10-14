@@ -497,6 +497,48 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(r.calls)
         finally:await r.runtime.close()
 
+    async def test_switched_power_uses_off_state_and_two_quarter_on_window(self):
+        for switch_state, age_minutes, expected in (('off',240,'controlling'),('on',20,'controlling'),('on',30,'fault')):
+            with self.subTest(switch_state=switch_state,age_minutes=age_minutes):
+                r=Rig();r.add_pool();r.now=12*3600000
+                for value in r.rows.values():value['last_reported']=iso(r.now)
+                end=r.now+900000
+                r.plan['valid_until']=r.plan['binding_until']=iso(end)
+                r.plan['plans']['priority']['slots']=[{'start':iso(r.now),'duration_hours':.25}]
+                r.install_contract(start=r.now,end=end)
+                r.plan['battery_supply_scope']={'kind':'selected','include_base':False,'planned_device_keys':['pool']}
+                r.options['device_control_mappings']['pool']['actuator_entity_ids']=['switch.pool']
+                r.rows['switch.pool']={'state':switch_state,'attributes':{},'last_reported':iso(1000)}
+                r.rows['sensor.pool']['last_reported']=iso(r.now-age_minutes*60000)
+                await r.start()
+                try:
+                    status=r.runtime.snapshot()
+                    self.assertEqual(status['state'],expected,status)
+                    self.assertIn('switch.pool',r.runtime.capture_entities())
+                    if expected=='controlling':
+                        self.assertEqual(status['measurements']['eligible_gross_w'],0 if switch_state=='off' else 900)
+                        self.assertTrue(r.calls)
+                        evidence=next(row for row in status['measurements']['supply_evidence'] if row['source']=='sensor.pool')
+                        self.assertEqual(evidence['basis'],'switch_off' if switch_state=='off' else 'switched_ac')
+                        if switch_state=='off':
+                            settings=tuple(r.rows[key]['state'] for key in ('select.mode','number.charge','number.discharge'))
+                            r.calls.clear()
+                            r.rows['switch.pool']['state']='on'
+                            await r.runtime.refresh();await r.runtime.host.idle()
+                            self.assertEqual(r.runtime.snapshot()['state'],'fault')
+                            self.assertFalse(r.calls)
+                            self.assertEqual(tuple(r.rows[key]['state'] for key in ('select.mode','number.charge','number.discharge')),settings)
+                            self.assertTrue(r.runtime.host.state.groups[0].owned)
+                            self.assertFalse(r.runtime.host.state.groups[0].release_pending)
+                            r.rows['sensor.pool']['last_reported']=iso(r.now)
+                            await r.runtime.refresh();await r.runtime.host.idle()
+                            self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+                    else:
+                        self.assertIn('sensor.pool',status['reason'])
+                        self.assertFalse(r.calls)
+                    self.assertFalse(any(call[2]['entity_id']=='switch.pool' for call in r.calls))
+                finally:await r.runtime.close()
+
     async def test_charging_to_house_supply_ignores_stale_selected_pool_readings(self):
         r=Rig();r.add_pool()
         r.options['device_control_mappings']['ev']={'power':'sensor.ev'}

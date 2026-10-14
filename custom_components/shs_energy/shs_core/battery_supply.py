@@ -2,6 +2,8 @@
 from dataclasses import dataclass
 from math import isfinite
 
+from .device_power import planned_switch_bindings, read_device_power
+
 SOLAR_ATTRIBUTION = "proportional-self-consumed-pv-v1"
 
 
@@ -73,13 +75,15 @@ class PowerReading:
     valid_until_ms: int
     boundary: str
     basis: str = "instantaneous_ac"
+    reported_at_ms: int | None = None
+    switch_states: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self):
         _power(self.watts)
         if (not self.source or not self.boundary or type(self.at_ms) is not int
                 or type(self.valid_until_ms) is not int or not 0 <= self.at_ms < self.valid_until_ms):
             raise ValueError("power evidence requires source, boundary and absolute freshness")
-        if self.basis not in ("instantaneous_ac", "interval_average_ac"):
+        if self.basis not in ("instantaneous_ac", "interval_average_ac", "switch_off", "switched_ac"):
             raise ValueError("unknown power measurement basis")
 
 
@@ -111,7 +115,7 @@ def measured_supply(scope, house, pv, planned_readings, planned_keys, *, now_ms,
     readings = [house, pv, *(planned_readings[key] for key in sorted(required))]
     if any(not isinstance(r, PowerReading) for r in readings):
         raise ValueError("house and PV power measurements are required")
-    stale = [r.source for r in readings if r.basis != "instantaneous_ac" or not r.at_ms <= now_ms < r.valid_until_ms]
+    stale = [r.source for r in readings if r.basis == "interval_average_ac" or not r.at_ms <= now_ms < r.valid_until_ms]
     if stale:
         raise ValueError("scope requires fresh instantaneous AC measurements: " + ", ".join(stale))
     if len({r.boundary for r in readings}) != 1 or max(r.at_ms for r in readings) - min(r.at_ms for r in readings) > max_alignment_ms:
@@ -167,7 +171,13 @@ def observe_supply(scope, options, devices, read_entity, *, at_ms, max_age_ms,
                and d["key"] not in options.get("excluded_device_readings", [])}
     required = required_power_keys(scope, planned)
     mappings = options.get("device_control_mappings", {})
-    readings = {key: reading(mappings.get(key, {}).get("power")) for key in required}
+    switches = planned_switch_bindings(options, devices)
+    readings = {}
+    for key in required:
+        entity = mappings.get(key, {}).get("power")
+        value = read_device_power(entity, switches.get(key, ()), read_entity, now_ms=at_ms, max_age_ms=max_age_ms)
+        readings[key] = PowerReading(value.watts, entity, value.at_ms, value.valid_until_ms, boundary,
+                                     value.basis, value.reported_at_ms, value.switch_states)
     house = reading(options.get("house_consumption_power_entity"))
     pv = reading(options.get("solar_production_power_entity"))
     result = measured_supply(scope, house, pv, readings, tuple(sorted(planned)), now_ms=at_ms,

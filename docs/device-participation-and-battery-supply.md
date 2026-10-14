@@ -239,6 +239,21 @@ Grid headroom uses the gross house meter for every scope, independently of
 the supply-permission calculation. An unavailable meter that remains in the
 calculation still blocks control and holds the last settings.
 
+User requirement, 14 October 2026: validate switched-device demand against its
+actual configured switch state before applying a power-report age limit. All
+of its switches off establishes zero demand, even if its power sensor retains
+an old nonzero value or is unavailable. While any switch is on, the last power
+report is usable for **30 minutes (two quarters)**. An unavailable switch never
+establishes zero. Devices without a declared on/off switch retain their existing
+measurement checks; house, grid, PV and battery measurements are separate.
+
+Diagnostics distinguish switch-derived zero (`switch_off`) and accepted held
+power (`switched_ac`) from a freshly reported instantaneous measurement. The
+original power report is retained. Held device power is evaluated against the
+current switch state and is not rejected by the separate alignment limit for
+fresh house and battery measurements. A genuinely stale required reading still
+holds the last setting; it does not hand equipment back or change its switches.
+
 Energy-counter differences yield interval averages, not exact instantaneous power.
 Record sources, timestamps, interval/basis and uncertainty. Some houses support
 whole-house control before a reliable base/selected-device split is available.

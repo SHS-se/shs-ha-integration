@@ -82,6 +82,21 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(result['accounting']['eligible_gross_w'], 1000)
         self.assertAlmostEqual(result['accounting']['house_supply_bound_w'], 2000/3)
 
+    def test_old_device_power_is_zero_when_its_switch_is_off_in_capture_and_accounting(self):
+        self.options['device_control_mappings']['ev']['actuator_entity_ids'] = ['switch.ev']
+        self.reports['switch.ev'] = dict(state='off', last_reported='1970-01-01T00:00:01+00:00')
+        for entity in ('sensor.house', 'sensor.pv', 'sensor.battery', 'sensor.soc'):
+            self.reports[entity]['last_reported'] = '1970-01-01T01:00:00+00:00'
+        result = self.capture(now_ms=3600000, profile=profile(self.options, self.devices),
+                              scope=SupplyScope('selected', True))
+        row = result['sources']['planned:ev']
+        self.assertEqual(row['state'], 'reported')
+        self.assertEqual(row['watts'], 0)
+        self.assertEqual(row['basis'], 'switch_off')
+        self.assertEqual(row['raw_report']['last_reported'], '1970-01-01T00:00:01+00:00')
+        self.assertEqual(result['accounting']['eligible_gross_w'], 3000)
+        self.assertNotIn('planned:ev', [b['source'] for b in result['blockers']])
+
     def test_excluded_device_is_never_read_or_exported(self):
         self.options['excluded_device_readings'] = ['ev']
         seen = []

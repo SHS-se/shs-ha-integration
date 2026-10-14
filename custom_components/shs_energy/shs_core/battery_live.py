@@ -11,6 +11,7 @@ import json
 from math import isfinite
 
 from .battery_supply import SupplyScope, observe_supply, required_power_keys
+from .device_power import planned_switch_bindings, read_device_power
 
 
 POWER_OPTIONS = ("house_consumption_power_entity", "solar_production_power_entity", "battery_power_measurement_entity", "grid_power_entity")
@@ -138,16 +139,28 @@ def capture_battery_inputs(options, devices, read_entity, *, now_ms, profile=Non
     Power, SOC and native limits remain inspectable even when accounting is blocked.
     """
     planned = planned_power_bindings(options, devices)
+    switches = planned_switch_bindings(options, devices)
     bindings = {**{key: options.get(key) for key in POWER_OPTIONS},
                 **{"planned:" + key: entity for key, entity in planned.items()},
                 **{key: options.get(key) for key in CONTROL_OPTIONS},
                 "battery_soc_entity": options.get("battery_soc_entity")}
-    reports = {entity: deepcopy(read_entity(entity)) for entity in sorted({e for e in bindings.values() if isinstance(e, str)})}
+    reports = {entity: deepcopy(read_entity(entity)) for entity in sorted(
+        {e for e in bindings.values() if isinstance(e, str)} | {e for values in switches.values() for e in values})}
     sources, blockers = {}, []
     for role, entity in bindings.items():
         value = reports.get(entity) if isinstance(entity, str) else None
         row = {"entity_id": entity if isinstance(entity, str) else None}
         try:
+            if role.startswith('planned:'):
+                if not isinstance(entity, str):
+                    raise ValueError('source_not_configured')
+                demand = read_device_power(entity, switches.get(role.removeprefix('planned:'), ()), reports.get,
+                                           now_ms=now_ms, max_age_ms=DIAGNOSTIC_AGE_MS)
+                row.update(state='reported', watts=demand.watts, basis=demand.basis,
+                           reported_at_ms=demand.reported_at_ms, switch_states=demand.switch_states,
+                           valid_until_ms=demand.valid_until_ms, raw_report=value)
+                sources[role] = row
+                continue
             if not isinstance(value, dict):
                 raise ValueError("source_not_configured" if not isinstance(entity, str) else "source_unavailable")
             reported = _stamp(value.get("last_reported"))
@@ -202,6 +215,7 @@ def capture_battery_inputs(options, devices, read_entity, *, now_ms, profile=Non
                 max_age_ms=profile.max_age_ms, max_alignment_ms=profile.max_alignment_ms, boundary=profile.boundary,
                 membership_revision=revision, expected_membership_revision=profile.source_revision)
             accounting = {**asdict(result), "valid_until_ms": min(r.valid_until_ms for r in evidence),
+                          "evidence": [asdict(r) for r in evidence],
                           "measurement_revision": profile.revision, "supply_scope": asdict(scope)}
         except (ValueError, TypeError) as error:
             blockers.append({"source": "supply_accounting", "reason": str(error)})
