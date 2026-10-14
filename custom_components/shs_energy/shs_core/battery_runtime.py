@@ -320,6 +320,16 @@ class BatteryRuntime:
         value['display'] = battery_status_text(value)
         return value
 
+    def plan_feedback(self):
+        """Actual durable admission, independently of the coordinator's plan cache."""
+        session=self.host.state.execution if self.host else None
+        accepted=session.account.contract if session else self._bootstrap.contract
+        rejection=session.plan_rejection if session else self._bootstrap_rejection
+        return {'accepted': {'plan_id':accepted.plan_id,'contract_id':accepted.id,
+                             'scope_revision':accepted.scope_revision,'generation':accepted.generation} if accepted else None,
+                'rejection': {'contract_id':rejection.contract_id,'generation':rejection.generation,
+                              'reason':rejection.reason[:1000]} if rejection and rejection.contract_id is not None and rejection.generation is not None else None}
+
     async def reject_plan_response(self, plan, reason):
         """Publish pre-cache identity/contract rejection through the same journal."""
         wire=plan.get('battery_execution')
@@ -609,7 +619,7 @@ class BatteryRuntime:
                 await self._hold(f"The current plan leaves the battery out: {left_out.get('reason')}",mode)
                 return
             await self._hold('Waiting for the planner to provide battery execution instructions',mode)
-            self._request_replan('execution_contract_required')
+            self._notify_planning('execution_contract_required')
             return
         contract=execution.read_contract(contract_wire)
         scope=SupplyScope.read(plan['battery_supply_scope'])
@@ -686,9 +696,12 @@ class BatteryRuntime:
             await self.host.accept(rt.GrantConfirmed(group.spec.id,self._grant))
         for event in await self._observe(group.spec.id):
             await self.host.accept(event)
-        current=self.host.state.execution.account.contract
-        if current is None or current.id!=contract.id:
+        account=self.host.state.execution.account
+        current=account.contract
+        if (current is None or current.id!=contract.id) and contract.generation==account.requested_generation:
             await self.host.accept(rt.ExecutionPlanOffered(contract))
+            if self.host.state.execution.account.contract==contract:
+                self._notify_planning(None)  # Publish actual admission without requesting another plan.
         await self.host.accept(rt.Tick())
         session=self.host.state.execution
         self._status=({'state':'controlling' if mode=='controlling' else 'verified',
@@ -960,7 +973,8 @@ class BatteryRuntime:
             return await self.physical.propose(effect)
         return self.adapter.propose(effect)
 
-    def _request_replan(self,reason):
+    def _notify_planning(self,reason: str | None):
+        """Report admission/rejection, or publish another planner recommendation."""
         self._runtime_reason=reason
         self._replan_pending=True
         if self._replan_task is not None and not self._replan_task.done():
@@ -969,14 +983,17 @@ class BatteryRuntime:
             while self._replan_pending and not self._closed and not self._closing:
                 self._replan_pending=False
                 try:
-                    await self.coordinator.async_optimisation_push(force_plan=True, replan_reason=f"Battery controller: {self._runtime_reason}. Consider a manual replan.")
+                    if self._runtime_reason in (None,'plan_handover_rejected'):
+                        await self.coordinator.async_report_runtime()
+                    else:
+                        await self.coordinator.async_optimisation_push(force_plan=True, replan_reason=f"Battery controller: {self._runtime_reason}. Consider a manual replan.")
                 except Exception as error:
                     self._record_fault('replan',str(error))
                     return  # The existing coordinator retry/poll owns transport retry.
         self._replan_task=asyncio.create_task(run())
 
     async def _renew(self,state,reason):
-        self._request_replan(reason)
+        self._notify_planning(reason)
         return ()
 
     def _can_send(self,effect):

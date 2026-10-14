@@ -90,6 +90,11 @@ class Rig:
             binding_plan_for=lambda device,options:(self.plan,next((s for s in self.plan['plans']['priority']['slots']
                 if stamp(s['start'])<=self.now<min(stamp(s['start'])+900000,stamp(self.plan['valid_until']),stamp(self.plan['binding_until']))),None)),_battery_native_context=None)
         self.replans=[]
+        self.runtime_reports=[]
+        async def report_runtime():
+            self.runtime_reports.append(self.runtime.plan_feedback())
+            return {}
+        self.coordinator.async_report_runtime=report_runtime
         async def replan(**kw):self.replans.append(kw)
         self.coordinator.async_optimisation_push=replan
         self.plan['grid']={'import_limit_w':10000,'export_limit_w':10000}
@@ -130,6 +135,60 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_obsolete_cached_plan_is_not_offered_while_new_request_is_pending(self):
+        from unittest.mock import patch
+        from shs_core.home_runtime import ExecutionPlanOffered
+        r=Rig();await r.start()
+        try:
+            accepted=r.runtime.host.state.execution.account.contract
+            await r.runtime.capture_feedback(5000000,'next-request')
+            r.runtime_reports.clear()
+            r.plan['battery_execution']=contract_wire(replace(accepted,id='obsolete-cached-candidate'))
+            with patch.object(r.runtime.host,'accept',wraps=r.runtime.host.accept) as receive:
+                for _ in range(4):await r.advance(5000)
+                self.assertFalse(any(isinstance(call.args[0],ExecutionPlanOffered)
+                                     for call in receive.call_args_list))
+            self.assertEqual(r.runtime.plan_feedback()['accepted']['contract_id'],accepted.id)
+            self.assertIsNone(r.runtime.plan_feedback()['rejection'])
+            self.assertFalse(r.runtime_reports)
+            self.assertEqual(r.rows['select.mode']['state'],'Command Charging (PV First)')
+            self.assertTrue(r.runtime.host.state.groups[0].owned)
+            self.assertFalse(r.runtime.host.state.groups[0].release_pending)
+            await r.runtime.close()
+            restarted=Rig();restarted.now=r.now+1000;restarted.rows=deepcopy(r.rows)
+            for row in restarted.rows.values():row['last_reported']=iso(restarted.now)
+            restarted.plan=deepcopy(r.plan);restarted.runtime.store=r.store
+            restarted.fence_store.saved=deepcopy(r.fence_store.saved)
+            r=restarted
+            await r.start()
+            for _ in range(3):await r.advance(5000)
+            self.assertEqual(r.runtime.plan_feedback()['accepted']['contract_id'],accepted.id)
+            self.assertIsNone(r.runtime.plan_feedback()['rejection'])
+            self.assertFalse(r.runtime_reports)
+            self.assertTrue(r.runtime.host.state.groups[0].owned)
+            self.assertFalse(r.runtime.host.state.groups[0].release_pending)
+        finally:await r.runtime.close()
+
+    async def test_startup_waits_for_current_generation_then_accepts_the_replacement(self):
+        r=Rig()
+        feedback=await r.runtime.capture_feedback(5000000,'new-request-before-start')
+        await r.start()
+        try:
+            for _ in range(3):await r.advance(5000)
+            self.assertEqual(r.runtime.plan_feedback(),{'accepted':None,'rejection':None})
+            self.assertFalse(r.calls)
+            current=read_contract(r.plan['battery_execution'])
+            current=replace(current,id='current-candidate',generation=feedback['generation'],source_receipt=feedback['source_receipt'])
+            r.plan['battery_execution']=contract_wire(current)
+            await r.advance(5000)
+            self.assertEqual(r.runtime.plan_feedback()['accepted']['contract_id'],current.id)
+            self.assertIsNone(r.runtime.plan_feedback()['rejection'])
+            self.assertTrue(r.calls)
+            await r.runtime._replan_task
+            self.assertEqual(r.runtime_reports[-1]['accepted']['contract_id'],current.id)
+            self.assertFalse(r.replans)
+        finally:await r.runtime.close()
+
     async def test_a_plan_that_leaves_the_battery_out_says_why_and_requests_no_replan(self):
         async def run(issues):
             r=Rig();del r.plan['battery_execution']
@@ -1118,6 +1177,10 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             saved=r.store.session
             self.assertEqual(saved.plan_rejection.contract_id,'replacement')
             self.assertEqual(dump['fix'],{'kind':'diagnostics'})
+            await r.runtime._replan_task
+            self.assertEqual(r.runtime_reports[-1]['accepted']['contract_id'],original.id)
+            self.assertEqual(r.runtime_reports[-1]['rejection']['contract_id'],'replacement')
+            self.assertFalse(r.replans)
             await r.runtime.close()
             restarted=Rig('control_verification');restarted.now=r.now+1000
             for row in restarted.rows.values():row['last_reported']=iso(restarted.now)
@@ -1135,6 +1198,10 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(dump['plan_rejection'])
             self.assertFalse(dump['display']['plan_warning'])
             self.assertEqual(r.calls,[])
+            await r.runtime._replan_task
+            self.assertEqual(r.runtime_reports[-1]['accepted']['contract_id'],'replacement')
+            self.assertIsNone(r.runtime_reports[-1]['rejection'])
+            self.assertFalse(r.replans)
         finally:await r.runtime.close()
 
     async def test_pre_cache_rejection_survives_bootstrap_restart_and_valid_acceptance(self):

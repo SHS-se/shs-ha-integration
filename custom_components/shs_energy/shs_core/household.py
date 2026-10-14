@@ -548,6 +548,7 @@ class Household:
             return {"state": "advisory_only"}
         async with self._runtime_lock:
             operation = self.operational_status
+            runtime = getattr(self, 'battery_runtime', None)
             try:
                 status = await self.client.report_runtime({
                     "observed_at": operation["now"],
@@ -559,6 +560,7 @@ class Household:
                     "recovering": self.ports.recovering(),
                     "retry_at": operation["retry_at"],
                     "last_error": (self.last_optimisation_error or "")[:1000] or None,
+                    "battery_plan": runtime.plan_feedback() if runtime is not None else None,
                 })
                 validate_server_contract(status)
                 self.replan_recommendations = status.get("replan_recommendations", [])

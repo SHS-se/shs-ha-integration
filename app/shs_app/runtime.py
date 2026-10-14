@@ -21,7 +21,7 @@ class AppBatteryRuntime(BatteryRuntime):
         # The reducer retains the reason even if a restart interrupts the cloud
         # request. Resume it using the existing queue and writer readiness gate.
         if self.host is not None and self.host.state.execution.replan_reason is not None:
-            self._request_replan(self.host.state.execution.replan_reason)
+            self._notify_planning(self.host.state.execution.replan_reason)
 
     async def ingest_receipt(self, identity, receipt, *, replay=False):
         """Accept evidence promptly; ordinary decisions belong to the 5s clock."""
@@ -58,17 +58,17 @@ class AppBatteryRuntime(BatteryRuntime):
             return ()
         return await super()._confirm(group_id)
 
-    def _request_replan(self, reason):
+    def _notify_planning(self, reason):
         if self.physical is not None and not self.physical.enabled:
             self._runtime_reason = reason
             self._replan_pending = True
             return
-        super()._request_replan(reason)
+        super()._notify_planning(reason)
 
     async def refresh(self):
         await super().refresh()
         if self._replan_pending and (self.physical is None or self.physical.enabled):
-            self._request_replan(self._runtime_reason)
+            self._notify_planning(self._runtime_reason)
 
     async def _bootstrap_received(self,checkpoint):
         await super()._bootstrap_received(checkpoint)

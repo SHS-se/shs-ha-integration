@@ -317,6 +317,21 @@ SHS minimum-runtime timers or numeric switching thresholds.
 
 ## 6. Replanning, handover and restart
 
+A cached battery candidate is offered for admission only when its generation
+matches the account's current request. Older cached candidates are not new
+responses on each refresh or restart. The previously admitted reference remains
+in force within its existing permissions and lifetime; this does not release a
+device or change any continuity rule. Corrected candidates from the current
+generation still run through the full admission checks.
+
+Runtime reports carry `battery_plan` with the actually admitted plan/reference,
+scope revision and generation, plus any current rejection. Publication and cache
+validation do not establish battery admission. The server owns the dedicated
+`battery_plan_handover` recommendation: actual admission of its current exact
+plan clears resolved warnings in that scope, while newer and unrelated warnings
+remain. Recovery is reported after durable admission, without requesting another
+plan. Historical generic handover notices are classified once by migration.
+
 A replan request includes actuals watermark, current observed state, unsettled
 intervals, objective outcomes, pending physical effects and the reason for revision.
 Coalesce requests without losing their evidence or deadline. The backend MUST
