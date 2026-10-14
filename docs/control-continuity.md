@@ -62,16 +62,17 @@ Controlling then resumes from the current state.
 When an entity returns, SHS only carries out what the current plan and the select
 already require. If the device is already in the planned state, nothing is sent.
 
-## Hot-water demand permission
+## Hot-water scheduled permission
 
-User requirement, 14 October 2026: hot water follows planner-chosen high/low
-house-demand levels only. The inherited maximum-pause setting and forced
-15-minute permitted run are removed. Elapsed inhibition never changes a switch,
-including when no plan is available. This supersedes the earlier pause exception.
-See [hot-water demand control](hot-water-demand-control.md).
+User requirement, 14 October 2026: the planner supplies a binary daily allowance
+schedule. A scheduled inhibition waits while an already permitted heater draws
+at least 500 W, and applies once power falls strictly below 500 W. Meter events
+reevaluate this within the quarter. This supersedes the earlier house-demand
+gate. See [hot-water completion](hot-water-demand-control.md).
 
-Native equipment protections are unaffected. SHS minimum-on/off timers were
-retired on 4 October 2026; they no longer delay planned transitions or handover.
+This measured completion rule changes scheduled inhibition only. It does not
+introduce minimum-on/off timers or alter explicit mode handover, manual override,
+or continuity on missing plans/readings. Native equipment protections remain.
 
 ## Status values
 

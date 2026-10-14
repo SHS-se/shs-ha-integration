@@ -6,7 +6,7 @@ from .optimisation import validate_plan_contract, OptimisationInputError
 from .configuration_fields import _configuration_sections, _control_fields, LABELS
 from .device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_control_errors
 from .device_commands import execution_setup_errors
-from .hot_water import DEMAND_COMMAND, requires_house_power, hot_water_setup_errors
+from .hot_water import is_hot_water, hot_water_setup_errors
 
 
 
@@ -162,7 +162,7 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         included = key not in options.get("excluded_device_readings", [])
         planned = included and device.get("planning_role") == "controllable"
         water_errors = {}
-        water_gaps = hot_water_setup_errors(options, field_errors=water_errors) if planned and requires_house_power(device) else []
+        water_gaps = hot_water_setup_errors(mapping, field_errors=water_errors) if planned and is_hot_water(device) else []
         if water_gaps:
             device["field_errors"] = {**device.get("field_errors", {}), **water_errors}
             device["mapping_status"] = "invalid"
@@ -320,11 +320,10 @@ def controller_explanation(device, mode, status, slot=None):
             if kind == 'setpoint': planned = f"The plan requests a temperature of {command['target_c']:g} °C."
             elif kind == 'switch_schedule': planned = 'The plan requests this device to be on.' if command['on_seconds'] else 'The plan requests this device to be off.'
             elif kind == 'permit_inhibit': planned = 'The plan allows this device to run.' if command['permitted'] else 'The plan requests a pause.'
-            elif kind == DEMAND_COMMAND:
-                planned = (f"Hot water is allowed below {command['allow_below_w']/1000:.2f} kW of house demand and paused above {command['inhibit_above_w']/1000:.2f} kW. "
-                           "Between those levels its current permission is held.")
             elif kind == 'variable_power': planned = f"The plan requests {command['value']:g} {command['unit']}."
             elif kind == 'unavailable': planned = command.get('reason')
+    if status.get('decision', {}).get('finishing_heating'):
+        planned = 'Finishing heating: the scheduled pause waits until heater power falls below 500 W.'
     parts.append(planned or 'Waiting for a current plan for this device.')
     if status.get('next_step'): parts.append(status['next_step'])
     return {'explanation': '\n'.join(parts)}

@@ -1,52 +1,34 @@
-"""Apply planner-owned gross-house demand thresholds without replanning."""
+"""Finish a measured heating run before applying a scheduled inhibition."""
 from math import isfinite
 
-DEMAND_COMMAND = "house_demand_permission"
-HOUSE_POWER_FIELD = "house_consumption_power_entity"
+FINISH_HEATING_W = 500
 
 
-def requires_house_power(device):
+def is_hot_water(device):
     return device.get("category") == "hot_water" and device.get("control_type") == "permit_inhibit"
 
 
-def validate_demand_command(command):
-    if set(command) != {"type", "expected_permitted", "allow_below_w", "inhibit_above_w"}:
-        return False
-    low, high = command["allow_below_w"], command["inhibit_above_w"]
-    return (command["type"] == DEMAND_COMMAND and isinstance(command["expected_permitted"], bool)
-            and all(isinstance(w, (int, float)) and not isinstance(w, bool) and isfinite(w) for w in (low, high))
-            and 0 <= low < high)
+def heating_permission(planned, observed_on, power_w):
+    if not isinstance(planned, bool) or not isinstance(observed_on, bool) or not isfinite(power_w) or power_w < 0:
+        raise ValueError("Invalid hot-water permission or measured heater power")
+    # At exactly 500 W retain permission; completion requires strictly less.
+    return planned or observed_on and power_w >= FINISH_HEATING_W
 
 
-def demand_permission(command, house_w, previously_permitted):
-    """The deadband retains the observed switch permission, including after restart.
-
-    Expected permission is only a forecast. It never replaces a missing reading
-    or determines the first physical command.
-    """
-    if not validate_demand_command(command) or not isfinite(house_w) or house_w < 0:
-        raise ValueError("Invalid hot-water demand policy or house-power reading")
-    if house_w <= command["allow_below_w"]:
-        return True
-    if house_w > command["inhibit_above_w"]:
-        return False
-    return previously_permitted
-
-
-def hot_water_setup_errors(options, *, field_errors=None):
-    value = options.get(HOUSE_POWER_FIELD)
+def hot_water_setup_errors(mapping, *, field_errors=None):
+    value = mapping.get("power")
     if isinstance(value, str) and value.startswith("sensor."):
         return []
-    message = "Choose an instantaneous house-consumption power sensor for hot-water control"
+    message = "Choose the hot-water heater's instantaneous power sensor to detect when heating finishes"
     if field_errors is not None:
-        field_errors[HOUSE_POWER_FIELD] = [message]
+        field_errors["power"] = [message]
     return [message]
 
 
 class HotWaterConfigurationError(ValueError):
-    def __init__(self, options):
+    def __init__(self, mapping, key):
         fields = {}
-        super().__init__("; ".join(hot_water_setup_errors(options, field_errors=fields)))
+        super().__init__("; ".join(hot_water_setup_errors(mapping, field_errors=fields)))
         self.fix = {"kind": "fields", "fields": [
-            {"key": key, "message": "; ".join(messages)} for key, messages in fields.items()]}
-        self.next_step = "Open the highlighted Energy setting and choose gross house power in W or kW, excluding battery charging."
+            {"key": field, "scope": "mapping", "device_key": key, "message": "; ".join(messages)} for field, messages in fields.items()]}
+        self.next_step = "Open the highlighted device Power field and choose the heater's instantaneous W or kW sensor."

@@ -19,7 +19,7 @@ from .controller_metrics import ControllerMetrics, fingerprint, record_time
 from .battery_commands import validate_battery_command, battery_mode_key
 from .configuration_values import resolve_battery_quantities, resolve_quantity
 from .device_commands import actuator_targets, execution_setup_errors, validate_commands
-from .hot_water import DEMAND_COMMAND, HOUSE_POWER_FIELD, demand_permission, hot_water_setup_errors, HotWaterConfigurationError
+from .hot_water import is_hot_water, heating_permission, hot_water_setup_errors, HotWaterConfigurationError
 from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, planning_path
 from .device_controls import pool_requested_w
 
@@ -632,7 +632,7 @@ class DeviceOperations:
         if command["type"] == "unavailable":
             # A plan that cannot drive the device releases nothing; only the select does.
             return {"state": "unsupported", "reason": self.holding(device, command["reason"])}
-        kind = "permit_inhibit" if command["type"] == DEMAND_COMMAND else command["type"]
+        kind = command["type"]
         if kind != mapping["control_type"]:
             raise ValueError("the website command does not match the reviewed local method")
         errors = execution_setup_errors(mapping)
@@ -666,10 +666,11 @@ class DeviceOperations:
                 return {"state": "overridden", "reason": self.ownership.overrides[device]}
         values = {}
         demand = None
-        if command["type"] == DEMAND_COMMAND:
-            if hot_water_setup_errors(options):
-                raise HotWaterConfigurationError(options)
-            demand = self.watts(options[HOUSE_POWER_FIELD])
+        water = is_hot_water(next(m for m in models if m["key"] == key))
+        if water:
+            if hot_water_setup_errors(mapping):
+                raise HotWaterConfigurationError(mapping, key)
+            demand = self.watts(mapping["power"])
         if kind == "setpoint":
             low = max(mapping["minimum_temperature_c"], command["minimum_c"])
             high = min(mapping["maximum_temperature_c"], command["maximum_c"])
@@ -693,13 +694,12 @@ class DeviceOperations:
                     raise ValueError("no hardware temperature step fits the plan envelope")
                 values[entity] = value
         else:
-            if command["type"] == DEMAND_COMMAND:
+            on = command["permitted"] if kind == "permit_inhibit" else command["on_seconds"] == 900
+            if water:
                 permission = self.actuator_state(targets[0]).state
                 if permission not in ("on", "off"):
                     raise ValueError("Hot-water permission switch must report on or off")
-                on = demand_permission(command, demand, permission == "on")
-            else:
-                on = command["permitted"] if kind == "permit_inhibit" else command["on_seconds"] == 900
+                on = heating_permission(command["permitted"], permission == "on", demand)
             values = {entity: "on" if on else "off" for entity in targets}
         record = await self.capture(device, options, targets)
         for entity, value in values.items():
@@ -712,7 +712,7 @@ class DeviceOperations:
         else:
             decision = {"kind": kind, "permitted": on}
             if demand is not None:
-                decision.update(house_consumption_w=demand, allow_below_w=command["allow_below_w"], inhibit_above_w=command["inhibit_above_w"])
+                decision.update(heater_power_w=demand, planned_permitted=command["permitted"], finishing_heating=on and not command["permitted"])
         return {"state": "commanded", "reason": "actuator targets acknowledged; delivered heat or power is not inferred",
                 "decision": decision}
 

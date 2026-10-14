@@ -473,23 +473,19 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         await self.drain()
         self.assertEqual(self.states['switch.heater'].state, 'off')
 
-    async def test_hot_water_house_power_events_wake_control_without_a_battery(self):
+    async def test_hot_water_power_events_finish_heating_without_a_battery(self):
         self.configure_heater()
-        self.options['device_modes'] = {'heater': 'controlling'}
-        self.slot['device_commands']['heater'] = {'type': 'house_demand_permission', 'expected_permitted': True,
-            'allow_below_w': 1500, 'inhibit_above_w': 3500}
-        self.states['sensor.house_power'].state = '1000'
+        self.coordinator.optimisation_plan['device_models'][0]['category'] = 'hot_water'
+        self.coordinator.async_cached_device_configuration.return_value[0]['category'] = 'hot_water'
+        self.options['device_control_mappings']['heater']['power'] = 'sensor.water_power'
+        self.states['sensor.water_power'] = fixtures.State(3000, unit_of_measurement='W')
         await self.controller.async_start()
-        self.assertIn('sensor.house_power', self.scheduler.dependencies['device:heater'])
+        self.assertIn('sensor.water_power', self.scheduler.dependencies['device:heater'])
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.states['sensor.house_power'].state = '5000'
-        self.event('sensor.house_power')
+        self.states['sensor.water_power'].state = '499'
+        self.event('sensor.water_power')
         await self.drain()
         self.assertEqual(self.states['switch.heater'].state, 'off')
-        self.states['sensor.house_power'].state = '1000'
-        self.event('sensor.house_power')
-        await self.drain()
-        self.assertEqual(self.states['switch.heater'].state, 'on')
 
     async def test_omitted_timings_allow_initial_switching_transitions_and_restoration(self):
         self.configure_heater('switch_schedule')

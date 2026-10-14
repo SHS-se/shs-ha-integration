@@ -1,6 +1,5 @@
 """Schema-7 executable decisions and local capability validation."""
 from math import isfinite
-from .hot_water import DEMAND_COMMAND, validate_demand_command
 
 
 
@@ -18,8 +17,6 @@ def validate_commands(commands, models):
         kind = command.get('type')
         if kind == 'unavailable':
             valid = set(command) == {'type', 'reason'} and isinstance(command['reason'], str) and bool(command['reason'])
-        elif kind == DEMAND_COMMAND:
-            valid = kinds[key] == 'permit_inhibit' and validate_demand_command(command)
         elif kind != kinds[key]:
             valid = False
         elif kind == 'setpoint':

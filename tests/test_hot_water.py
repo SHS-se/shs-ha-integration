@@ -1,121 +1,99 @@
-"""Planner demand authority executed by the real controller and HA boundary."""
+"""Binary scheduling with measured finish-heating execution."""
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import json
 from pathlib import Path
 import unittest
-
-import test_device_commands as device_fixtures
-from shs_core.hot_water import demand_permission, validate_demand_command
+import test_device_commands as fixtures
+from shs_core.hot_water import heating_permission
 from shs_core.optimisation import validate_plan_contract
 from shs_core.controller import ScheduledController
 from command_fixture import controller_inputs, native_executor
 from shs_core.verification import VerificationJournal
 import test_controller as controller_fixtures
 
-COMMAND = {"type": "house_demand_permission", "expected_permitted": False,
-           "allow_below_w": 1500, "inhibit_above_w": 3500}
 
-
-class HotWaterDemandTests(unittest.IsolatedAsyncioTestCase):
+class HotWaterTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        device_fixtures.DeviceExecutionTests.setUp(self)
+        fixtures.DeviceExecutionTests.setUp(self)
         self.coordinator.optimisation_plan['device_models'][0]['category'] = 'hot_water'
         self.coordinator.async_cached_device_configuration.return_value[0]['category'] = 'hot_water'
-        self.slot['device_commands']['heater'] = deepcopy(COMMAND)
-        self.states['sensor.house_power'] = device_fixtures.State(1000, unit_of_measurement='W')
+        self.options['device_control_mappings']['heater']['power'] = 'sensor.water_power'
+        self.states['sensor.water_power'] = fixtures.State(3000, unit_of_measurement='W')
 
-    async def test_measured_spike_and_fall_change_permission_inside_the_same_slot(self):
+    async def test_heating_finishes_before_scheduled_block_in_same_quarter(self):
         await self.controller.async_start()
-        self.assertEqual(self.states['switch.heater'].state, 'on', 'expected permission is not execution authority')
-        self.states['sensor.house_power'].state = '5000'
-        await self.controller.async_tick()
-        self.assertEqual(self.states['switch.heater'].state, 'off')
-        self.states['sensor.house_power'].state = '2500'
-        await self.controller.async_tick()
-        self.assertEqual(self.states['switch.heater'].state, 'off', 'deadband holds permission')
-        self.states['sensor.house_power'].state = '1000'
+        self.assertEqual(self.states['switch.heater'].state, 'on')
+        self.assertTrue(self.controller.status['device:heater']['decision']['finishing_heating'])
+        self.states['sensor.water_power'].state = '500'
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.states['sensor.house_power'].state = '3000'  # Includes its own 2 kW draw.
+        self.states['sensor.water_power'].state = '499'
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.heater'].state, 'off')
         self.calls.clear()
         await self.controller.async_tick()
-        self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertEqual(self.calls, [], 'the heater does not toggle itself or receive duplicate writes')
-
-    async def test_price_pause_holds_at_low_load_then_resumes_measured_load_control(self):
-        self.slot['device_commands']['heater'] = {'type': 'permit_inhibit', 'permitted': False}
-        await self.controller.async_start()
-        self.assertEqual(self.states['switch.heater'].state, 'off')
-        self.states['sensor.house_power'].state = '0'
-        await self.controller.async_tick()
-        self.assertEqual(self.states['switch.heater'].state, 'off', 'low demand cannot overrule a price pause')
-        self.slot['device_commands']['heater'] = deepcopy(COMMAND)
-        self.states['sensor.house_power'].state = '1000'
-        await self.controller.async_tick()
-        self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.states['sensor.house_power'].state = '5000'
-        await self.controller.async_tick()
-        self.assertEqual(self.states['switch.heater'].state, 'off', 'allowed quarters retain the live demand gate')
-
-    async def test_inherited_pause_metadata_does_not_force_a_run(self):
-        self.states['sensor.house_power'].state = '5000'
-        await self.controller.async_start()
-        record = self.controller.ownership.records['device:heater']
-        record['inhibited_since'] = (datetime.now(timezone.utc) - timedelta(hours=10)).isoformat()
-        record['permit_forced_until'] = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
-        self.calls.clear()
-        await self.controller.async_tick()
-        self.assertEqual(self.states['switch.heater'].state, 'off')
         self.assertEqual(self.calls, [])
-        self.assertEqual(self.controller.status['device:heater']['state'], 'commanded')
 
-    async def test_missing_measurement_holds_the_last_command(self):
-        self.states['sensor.house_power'].state = '5000'
+    async def test_idle_heater_is_blocked_immediately(self):
+        self.states['sensor.water_power'].state = '0'
         await self.controller.async_start()
-        self.states['sensor.house_power'].state = 'unavailable'
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+
+    async def test_new_allow_resumes_permission(self):
+        self.states['sensor.water_power'].state = '0'
+        await self.controller.async_start()
+        self.slot['device_commands']['heater']['permitted'] = True
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.heater'].state, 'on')
+
+    async def test_unknown_power_holds_the_last_setting(self):
+        await self.controller.async_start()
+        self.states['sensor.water_power'].state = 'unavailable'
         self.calls.clear()
         await self.controller.async_tick()
-        self.assertEqual(self.states['switch.heater'].state, 'off')
+        self.assertEqual(self.states['switch.heater'].state, 'on')
         self.assertEqual(self.calls, [])
         self.assertEqual(self.controller.status['device:heater']['state'], 'pending')
 
-    async def test_missing_binding_links_to_shared_energy_field(self):
-        self.options.pop('house_consumption_power_entity')
+    async def test_restart_continues_finishing(self):
         await self.controller.async_start()
-        status = self.controller.status['device:heater']
-        self.assertEqual(status['state'], 'fault')
-        self.assertEqual(status['fix']['fields'][0]['key'], 'house_consumption_power_entity')
-        self.assertEqual(self.calls, [])
-
-    async def test_verification_observes_policy_without_writing(self):
-        self.controller.verification = VerificationJournal(controller_fixtures.Store(), controller_fixtures.Store())
-        self.options['device_modes']['heater'] = 'control_verification'
-        self.slot['device_commands']['heater']['expected_permitted'] = True
-        self.states['sensor.house_power'].state = '5000'
-        await self.controller.async_start()
-        self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertEqual(self.calls, [])
-        self.assertEqual(self.controller.status['device:heater']['state'], 'verified')
-        self.assertIn('inhibit', self.controller.verification.attempts[-1]['operations'])
-        self.states['sensor.house_power'].state = '5500'
-        await self.controller.async_tick()
-        self.assertEqual(len(self.controller.verification.attempts), 1, 'changing watts is supporting evidence, not a changed decision')
-        self.states['sensor.house_power'].state = '1000'
-        await self.controller.async_tick()
-        self.assertIn('permit', self.controller.verification.attempts[-1]['operations'])
-        self.assertEqual(self.calls, [])
-
-    async def test_restart_in_deadband_preserves_the_paused_switch(self):
-        self.states['sensor.house_power'].state = '5000'
-        await self.controller.async_start()
-        self.states['sensor.house_power'].state = '2500'
         self.calls.clear()
         other = ScheduledController(controller_inputs(self.hass), self.coordinator, self.store,
                                     lambda: deepcopy(self.options), native_executor=native_executor(self.hass))
         await other.async_start()
-        self.assertEqual(self.states['switch.heater'].state, 'off')
+        self.assertEqual(self.states['switch.heater'].state, 'on')
         self.assertEqual(self.calls, [])
+        self.states['sensor.water_power'].state = '0'
+        await other.async_tick()
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+
+    async def test_static_rating_is_not_completion_evidence_and_links_to_power_editor(self):
+        self.options['device_control_mappings']['heater']['power'] = 3000
+        await self.controller.async_start()
+        status = self.controller.status['device:heater']
+        self.assertEqual(status['state'], 'fault')
+        self.assertEqual(status['fix']['fields'][0]['key'], 'power')
+        self.assertEqual(status['fix']['fields'][0]['scope'], 'mapping')
+        self.assertEqual(self.calls, [])
+
+    async def test_verification_reports_finishing_without_writes(self):
+        self.controller.verification = VerificationJournal(controller_fixtures.Store(), controller_fixtures.Store())
+        self.options['device_modes']['heater'] = 'control_verification'
+        await self.controller.async_start()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.controller.status['device:heater']['state'], 'verified')
+        self.states['sensor.water_power'].state = '0'
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [])
+        self.assertIn('inhibit', self.controller.verification.attempts[-1]['operations'])
+
+    def test_boundary_and_no_start_when_already_blocked(self):
+        self.assertTrue(heating_permission(False, True, 501))
+        self.assertTrue(heating_permission(False, True, 500))
+        self.assertFalse(heating_permission(False, True, 499))
+        self.assertFalse(heating_permission(False, False, 3000))
+        self.assertTrue(heating_permission(True, False, 0))
 
 
 class HotWaterContractTests(unittest.TestCase):
@@ -123,18 +101,7 @@ class HotWaterContractTests(unittest.TestCase):
         fixture = json.loads((Path(__file__).parent / 'fixtures/schema-8-hot-water-demand-plan.json').read_text())
         now = datetime.fromisoformat(fixture['validation_time'].replace('Z', '+00:00'))
         validate_plan_contract(fixture['plan'], now)
-        commands = [slot['device_commands']['water'] for slot in fixture['plan']['plans']['priority']['slots']]
-        self.assertTrue(any(c == {'type': 'permit_inhibit', 'permitted': False} for c in commands))
-        command = next(c for c in commands if c['type'] == 'house_demand_permission')
-        self.assertTrue(validate_demand_command(command))
-        command['inhibit_above_w'] = command['allow_below_w']
-        with self.assertRaises(ValueError):
-            validate_plan_contract(fixture['plan'], now)
-
-    def test_boundaries_and_heater_draw_are_stable(self):
-        self.assertTrue(demand_permission(COMMAND, 1500, False))
-        self.assertTrue(demand_permission(COMMAND, 3500, True))
-        self.assertFalse(demand_permission(COMMAND, 3501, True))
-        self.assertFalse(demand_permission(COMMAND, 2500, False))
-        with self.assertRaises(ValueError):
-            demand_permission(COMMAND, float('nan'), True)
+        slots = fixture['plan']['plans']['priority']['slots']
+        self.assertEqual(sum(slot['boiler_permitted'] for slot in slots), 10)
+        for slot in slots:
+            self.assertEqual(slot['device_commands']['water'], {'type': 'permit_inhibit', 'permitted': slot['boiler_permitted']})

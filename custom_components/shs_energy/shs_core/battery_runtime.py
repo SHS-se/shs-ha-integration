@@ -622,7 +622,17 @@ class BatteryRuntime:
             self._notify_planning('execution_contract_required')
             return
         contract=execution.read_contract(contract_wire)
-        scope=SupplyScope.read(plan['battery_supply_scope'])
+        scope_wire = plan['battery_supply_scope']
+        if plan.get('capabilities', {}).get('boiler'):
+            allowed = slot['boiler_battery_allowed']
+            if type(allowed) is not bool:
+                raise ValueError('Hot-water battery permission is required')
+            if not allowed:
+                water_keys = {d['key'] for d in plan['device_models'] if d.get('category') == 'hot_water'}
+                if scope_wire['kind'] != 'selected':
+                    raise ValueError('Hot water requires an explicit battery supply partition')
+                scope_wire = {**scope_wire, 'planned_device_keys': [key for key in scope_wire['planned_device_keys'] if key not in water_keys]}
+        scope=SupplyScope.read(scope_wire)
         capacity=ratings['battery_capacity_kwh']
         cc=min(ratings['battery_charge_max_w'],surface['limits']['charge']['maximum_w'])
         dc=min(ratings['battery_discharge_max_w'],surface['limits']['discharge']['maximum_w'])

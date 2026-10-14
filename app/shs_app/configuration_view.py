@@ -4,7 +4,6 @@ from shs_core.api import ShsApiError
 from shs_core.configuration_fields import LABELS, _configuration_sections
 from shs_core.presentation import timeline, system_fields, device_name, device_readiness
 from shs_core.device_controls import room_thermal_zones
-from shs_core.hot_water import requires_house_power
 
 async def configuration_payload(editor, *, refresh_roles):
     coordinator = editor.engine.household
@@ -61,7 +60,6 @@ async def configuration_payload(editor, *, refresh_roles):
     plan = coordinator.optimisation_plan or {}
     operation = coordinator.operational_status
     battery_required = any(device.get("system") == "battery" and device["included"] for device in devices)
-    water_required = any(device.get("planned") and requires_house_power(device) for device in devices)
     coordinator._sync_battery_control_issue({**options, "battery_control_enabled": True}, included=battery_required)
     for device in devices:
         if device.get("system") == "battery":
@@ -98,7 +96,7 @@ async def configuration_payload(editor, *, refresh_roles):
             "state": 'loaded',
         },
         "configuration": options,
-        "sections": _configuration_sections(battery_control_required=battery_required, hot_water_control_required=water_required),
+        "sections": _configuration_sections(battery_control_required=battery_required),
         "entities": editor.entities(),
         "devices": devices,
         "portal": {

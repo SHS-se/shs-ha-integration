@@ -542,6 +542,22 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                     if invalid=='stale':self.assertEqual(r.rows['sensor.pool']['last_reported'],iso(0))
                 finally:await r.runtime.close()
 
+    async def test_hot_water_source_permission_uses_measured_power_even_while_finishing(self):
+        for allowed, expected in ((False, 100), (True, 1000)):
+            with self.subTest(surplus=allowed):
+                r=Rig(); r.add_pool()
+                r.plan['capabilities']={'boiler':True}
+                r.plan['device_models']=[{'key':'pool','category':'hot_water'}]
+                r.plan['battery_supply_scope']={'kind':'selected','include_base':True,'planned_device_keys':['pool']}
+                r.plan['plans']['priority']['slots'][0].update(boiler_permitted=False, boiler_battery_allowed=allowed)
+                r.rows['sensor.pool']['last_reported']=iso(r.now)
+                await r.start()
+                try:
+                    status=r.runtime.snapshot()
+                    self.assertEqual(status['state'],'controlling',status)
+                    self.assertEqual(status['measurements']['eligible_gross_w'],expected)
+                finally: await r.runtime.close()
+
     async def test_selected_scope_still_requires_fresh_individual_measurements(self):
         r=Rig();r.add_pool()
         r.plan['battery_supply_scope']={'kind':'selected','include_base':False,'planned_device_keys':['pool']}
