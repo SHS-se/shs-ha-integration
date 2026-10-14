@@ -52,9 +52,13 @@ class Dashboard:
             engine = self.engine
             values = value['values']
             operation = values['operational_status']
+            if not engine.started:
+                operation = {**operation,'actionable':False,'recovering':True,
+                    'label':'Accounting is catching up',
+                    'reason':'The saved schedule is available. New controller decisions wait for queued observations to be accounted.'}
             entry = {'id':engine.identity['entry_id'], 'title':'Smart Home Solutions', 'state':'loaded',
                 'operation':operation, 'schedule':schedule(values['optimisation_plan'],operation),
-                'controllers':value['controllers'], 'attention':attention_links(values['attention_items'],engine.identity['entry_id']),
+                'controllers':value['controllers'] if engine.started else {}, 'attention':attention_links(values['attention_items'],engine.identity['entry_id']),
                 'measurements':{}}
             options = engine.household.resolved_options()
             for name,key,unit in (('house','house_consumption_power_entity','W'),('solar','solar_production_power_entity','W'),
@@ -73,9 +77,13 @@ class Dashboard:
                     observed_at=row['last_reported'] if row else None)
             self.snapshot = dict(protocol=PROTOCOL,integration_version=engine.gateway.connected['contract']['companion_version'],
                 sampled_at=datetime.now(timezone.utc).isoformat(),entries=[entry])
-            self.control_owner = 'SHS app'
-            self.connection = {'state':'connected','message':'App runtime active; connected to the Home Assistant gateway'}
-            self.connection_log.connected()
+            if engine.activation is not None:
+                self.control_owner = 'SHS app'
+            if engine.started:
+                self.connection = {'state':'connected','message':'App runtime active; connected to the Home Assistant gateway'}
+                self.connection_log.connected()
+            else:
+                self.connection = {'state':'recovering','message':'Accounting is catching up. Devices keep the last settings SHS sent.'}
 
     async def runtime(self):
         from hashlib import sha256

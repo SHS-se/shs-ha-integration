@@ -36,6 +36,36 @@ changed rows at the committed prefix. Frozen live frames cannot overwrite a newe
 ordered value or a value from another configuration. Immutable plans are adapted
 once per replacement; display projection excludes the private policy tree.
 
+## Startup catch-up
+
+Startup uses the same ordered archival ingestion as live operation. It commits
+each bounded inbox page and the final suffix atomically with the source mirror,
+then acknowledges only that durable prefix. A partially committed counter keeps
+its sub-event checkpoint; a crash repeats only uncommitted work. No accepted
+counter or measurement is discarded to speed up replay.
+
+The existing writer fence stays disabled until the received prefix has been
+committed. Replay does not issue recovery decision ticks or acquire a writer.
+Cloud replan requests wait for accounting, and a persisted replan reason survives
+another restart. Native command admission, captured settings and ownership retain
+their existing rules.
+
+The dashboard publishes the saved schedule and timestamped source readings before
+catch-up. Its existing recovery indicator remains visible beside the schedule;
+controller decisions stay unavailable and settings edits remain gated until the
+runtime is ready. A failed batch leaves the display available with the error.
+Native entity publication still waits for completed startup. No new lifecycle
+state or second accounting owner is introduced.
+
+`python scripts/benchmark-startup.py --seconds 60` compares the old per-receipt
+path with startup batching using temporary SQLite and Verification mode. On
+14 October 2026, 540 synthetic observations took 1,223 ms and 776 checkpoint
+saves on the old path, versus 255 ms and 3 saves with batching (4.8× faster).
+Both retained 244 meter facts and 63 SOC facts, with identical evidence digest
+`85f8df26bf06e0a104548752994a80257264fe3aa72609d2238e3ef9ed51d90a`,
+completed receipt/source checkpoints of 540, and no native commands. These
+numbers are synthetic replay evidence, not a live restart-time guarantee.
+
 ## Reproducible evidence
 
 `scripts/benchmark-event-processing.py` uses temporary SQLite and fake native

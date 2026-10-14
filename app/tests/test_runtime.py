@@ -2,7 +2,8 @@
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from dataclasses import replace
+from dataclasses import asdict, replace
+from copy import deepcopy
 import json
 from shs_core.home_runtime import ExecutionTrace, TRACE_RETENTION_MS
 from shs_core.controller_diagnostics import report_parts, gzip_report
@@ -31,6 +32,179 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(runtime.close,release=False)
         self.assertFalse(any(group.attempts or group.transition_work for group in runtime.host.state.groups))
         return rig,runtime
+
+    async def test_startup_replay_keeps_counter_and_soc_facts_without_per_receipt_commits(self):
+        from shs_core import home_runtime as rt
+        fixtures = [await self.archival_runtime() for _ in range(2)]
+        for rig, runtime in fixtures:
+            runtime.host.state = replace(runtime.host.state, groups=tuple(
+                replace(group, grant_confirmed=False) for group in runtime.host.state.groups))
+            runtime.physical = SimpleNamespace(enabled=False)
+        writes = [len(rig.store.writes) for rig, runtime in fixtures]
+        selects = rt._refresh_execution
+        def no_selection(state, now, effects, *, select=True):
+            self.assertFalse(select, 'startup evidence requested economic selection')
+            return selects(state, now, effects, select=select)
+        with patch('shs_core.home_runtime._refresh_execution', side_effect=no_selection):
+            for ordinal in range(1,181):
+                for index,(rig,runtime) in enumerate(fixtures):
+                    rig.now += 1
+                    entity = ('sensor.soc','sensor.grid_import','sensor.grid_export')[ordinal % 3]
+                    row = rig.rows[entity]
+                    row['last_reported'] = iso(rig.now - (2 if ordinal % 17 == 0 else 0))
+                    if entity == 'sensor.soc':
+                        row['state'] = str(50 + ordinal / 10000)
+                    elif ordinal % 4:
+                        row['state'] = str(100 + ordinal / 10000)
+                    receipt = dict(ordinal=ordinal, kind='observation',
+                        payload=dict(row,entity_id=entity,kind='state_report'))
+                    if index == 0:
+                        await runtime.consume_receipt(IDENTITY, receipt)
+                    else:
+                        await runtime.ingest_receipt(IDENTITY, receipt, replay=True)
+            batched = fixtures[1][1]
+            self.assertIsNone(batched._processing)
+            self.assertEqual(len(fixtures[1][0].store.writes), writes[1])
+            await batched.commit_evidence(force=True)
+        for name in ('meters','observations'):
+            facts = [[asdict(row) for row in getattr(runtime.host.state.execution.account,name)]
+                     for rig,runtime in fixtures]
+            self.assertEqual(facts[0],facts[1])
+        self.assertEqual(len(fixtures[1][0].store.writes), writes[1] + 1)
+        self.assertGreater(len(fixtures[0][0].store.writes) - writes[0], 180)
+        self.assertEqual(batched._processing, batched.received_checkpoint())
+        self.assertEqual(batched._processing['receipt'], 180)
+
+    async def test_startup_recovery_and_control_reports_do_not_emit_an_economic_tick(self):
+        rig,runtime = await self.archival_runtime()
+        runtime.physical = SimpleNamespace(enabled=False)
+        runtime._observation_error = 'earlier unavailable reading'
+        def recovered(row):
+            runtime._observation_error = None
+            return ()
+        with (patch.object(runtime,'_receipt_observation',AsyncMock(side_effect=recovered)),
+              patch.object(runtime.host,'accept',AsyncMock(side_effect=AssertionError('startup emitted a Tick'))),
+              patch.object(runtime.host,'accept_received',AsyncMock(side_effect=AssertionError('startup used urgent decisions')))):
+            row = rig.rows['number.charge']
+            await runtime.ingest_receipt(IDENTITY,dict(ordinal=1,kind='observation',
+                payload=dict(row,entity_id='number.charge',kind='state_change')),replay=True)
+            await runtime.ingest_receipt(IDENTITY,dict(ordinal=2,kind='configuration',payload={}),replay=True)
+            await runtime.commit_evidence(force=True)
+        self.assertEqual(runtime._processing['receipt'], 2)
+
+    async def test_startup_expired_plan_defers_cloud_requests_until_accounting_is_committed(self):
+        rig,runtime = await self.archival_runtime()
+        runtime.physical = SimpleNamespace(enabled=False)
+        runtime.host.state = replace(runtime.host.state, groups=tuple(
+            replace(group,grant_confirmed=False) for group in runtime.host.state.groups))
+        rig.now = 900001
+        for row in rig.rows.values():
+            row['last_reported'] = iso(rig.now)
+        row = rig.rows['sensor.soc']
+        cloud = AsyncMock()
+        rig.coordinator.async_optimisation_push = cloud
+        await runtime.ingest_receipt(IDENTITY,dict(ordinal=1,kind='observation',
+            payload=dict(row,entity_id='sensor.soc',kind='state_report')),replay=True)
+        await runtime.host.idle()
+        self.assertTrue(runtime._replan_pending)
+        cloud.assert_not_awaited()
+        await runtime.commit_evidence(force=True)
+        async def request(**body):
+            self.assertEqual(rig.store.saved['gateway_processing']['receipt'], 1)
+        cloud.side_effect = request
+        runtime.physical.enabled = True
+        await runtime.refresh()
+        await runtime._replan_task
+        cloud.assert_awaited_once()
+
+    async def test_committed_deferred_replan_survives_a_second_restart(self):
+        rig,runtime = await self.archival_runtime()
+        runtime.physical = SimpleNamespace(enabled=False)
+        runtime.host.state = replace(runtime.host.state,groups=tuple(
+            replace(group,grant_confirmed=False) for group in runtime.host.state.groups))
+        rig.now = 900001
+        for row in rig.rows.values():
+            row['last_reported'] = iso(rig.now)
+        row = rig.rows['sensor.soc']
+        cloud = AsyncMock()
+        rig.coordinator.async_optimisation_push = cloud
+        await runtime.ingest_receipt(IDENTITY,dict(ordinal=1,kind='observation',
+            payload=dict(row,entity_id='sensor.soc',kind='state_report')),replay=True)
+        await runtime.host.idle()
+        await runtime.commit_evidence(force=True)
+        self.assertEqual(runtime.host.state.execution.replan_reason,'plan_expired')
+        cloud.assert_not_awaited()
+        await runtime.close(release=False)
+        replacement = rig.runtime = AppBatteryRuntime(rig.coordinator,rig.controller,rig.store,lambda:rig.now)
+        replacement.physical = SimpleNamespace(enabled=False)
+        self.addAsyncCleanup(replacement.close,release=False)
+        await replacement.open()
+        self.assertTrue(replacement._replan_pending)
+        self.assertEqual(replacement._processing['receipt'],1)
+        cloud.assert_not_awaited()
+        replacement.physical.enabled = True
+        await replacement.refresh()
+        await replacement._replan_task
+        cloud.assert_awaited_once()
+
+    async def test_startup_does_not_confirm_a_pending_release_until_the_writer_is_enabled(self):
+        rig,runtime = await self.archival_runtime()
+        group = runtime.host.state.groups[0]
+        release = runtime._release_request(group,tuple(zip(group.spec.control_keys,
+            ('Maximum Self Consumption',4000,4000))))
+        runtime.host.state = replace(runtime.host.state,groups=(replace(group,
+            owned=True,release=release,release_pending=True),))
+        before = deepcopy(runtime.host.state.groups[0])
+        runtime.physical = SimpleNamespace(enabled=False)
+        with patch.object(rig.fence,'take_over',AsyncMock(side_effect=AssertionError('startup acquired a writer'))):
+            self.assertEqual(await runtime._confirm('battery'),())
+        self.assertEqual(runtime.host.state.groups[0],before)
+
+    async def test_partial_counter_restart_finishes_receipt_without_duplicating_the_meter(self):
+        from shs_core.receipt_inbox import processing_checkpoint
+        rig,runtime = await self.archival_runtime()
+        rig.now += 1
+        row = rig.rows['sensor.grid_import']
+        row.update(state='100.2',last_reported=iso(rig.now))
+        receipt = dict(ordinal=1,kind='observation',
+            payload=dict(row,entity_id='sensor.grid_import',kind='state_report'))
+        checkpoint = processing_checkpoint(IDENTITY,1,0,complete=False)
+        await runtime._meter('sensor.grid_import',row['state'],row['attributes'],rig.now,
+            '1',processing=checkpoint,receiver=runtime.host.accept_received)
+        count = len(runtime.host.state.execution.account.meters)
+        await runtime.close(release=False)
+        replacement = rig.runtime = AppBatteryRuntime(rig.coordinator,rig.controller,rig.store,lambda:rig.now)
+        replacement.physical = SimpleNamespace(enabled=False)
+        self.addAsyncCleanup(replacement.close,release=False)
+        await replacement.open()
+        await replacement.ingest_receipt(IDENTITY,receipt,replay=True)
+        await replacement.commit_evidence(force=True)
+        self.assertEqual(len(replacement.host.state.execution.account.meters),count)
+        self.assertEqual(replacement._processing,processing_checkpoint(IDENTITY,1,1,complete=True))
+
+    async def test_crash_before_batch_commit_replays_the_counter_once(self):
+        rig,runtime = await self.archival_runtime()
+        rig.now += 1
+        row = rig.rows['sensor.grid_import']
+        row.update(state='100.3',last_reported=iso(rig.now))
+        receipt = dict(ordinal=1,kind='observation',
+            payload=dict(row,entity_id='sensor.grid_import',kind='state_report'))
+        count = len(runtime.host.state.execution.account.meters)
+        runtime.physical = SimpleNamespace(enabled=False)
+        await runtime.ingest_receipt(IDENTITY,receipt,replay=True)
+        self.assertIsNone(runtime._processing)
+        self.assertEqual(len(runtime.host.state.execution.account.meters),count+1)
+        await runtime.close(release=False)
+        replacement = rig.runtime = AppBatteryRuntime(rig.coordinator,rig.controller,rig.store,lambda:rig.now)
+        replacement.physical = SimpleNamespace(enabled=False)
+        self.addAsyncCleanup(replacement.close,release=False)
+        await replacement.open()
+        self.assertEqual(len(replacement.host.state.execution.account.meters),count)
+        await replacement.ingest_receipt(IDENTITY,receipt,replay=True)
+        await replacement.commit_evidence(force=True)
+        await replacement.ingest_receipt(IDENTITY,receipt,replay=True)
+        self.assertEqual(len(replacement.host.state.execution.account.meters),count+1)
+        self.assertEqual(replacement._processing['receipt'],1)
 
     async def test_archival_storm_keeps_every_soc_fact_without_reductions_or_saves_then_flushes_in_silence(self):
         rig,runtime=await self.archival_runtime()

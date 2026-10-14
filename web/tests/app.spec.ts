@@ -99,6 +99,44 @@ test('failed startup shows the connection error instead of recovery or installat
   await expect(page.getByRole('heading',{name:'SHS connection failed'})).toHaveCount(0);
 });
 
+test('saved dashboard stays open during accounting catch-up and exposes a later failure',async({page})=>{
+  let connection:'recovering'|'disconnected'|'connected'='recovering';
+  await page.route('**/api/state',async route=>{
+    const response=await route.fetch();const data=await response.json();
+    if(connection!=='connected'){
+      data.connection={state:connection,message:connection==='recovering'?'Accounting is catching up.':'Accounting batch could not be committed.'};
+      data.recovery=connection==='recovering'?{processed_receipt:42}:null;
+      // A retained snapshot may still contain the previous active controller.
+      // Catch-up must not present that report as a current decision.
+      data.snapshot.entries[0].operation={state:'ready',label:'Accounting is catching up',recovering:true,actionable:false,reason:'New decisions wait for queued observations.'};
+    }
+    await route.fulfill({json:data});
+  });
+  await page.goto('./#schedule');
+  await expect(page.getByRole('heading',{name:'Accounting is catching up',exact:true})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Your energy schedule'})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Connect your Home Assistant integration'})).toHaveCount(0);
+  await page.getByRole('link',{name:'Overview',exact:true}).click();
+  await expect(page.getByText('3.79 kW')).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Your app is running the home'})).toHaveCount(0);
+  await page.getByRole('link',{name:'Controller',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Controller decisions are pending'})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Latest controller decisions'})).toHaveCount(0);
+  await expect(page.locator('.controller-row')).toHaveCount(0);
+  connection='disconnected';
+  await page.reload();
+  await expect(page.getByText('Accounting batch could not be committed.')).toBeVisible();
+  await expect(page.locator('.connection')).toHaveText('Disconnected');
+  await expect(page.getByRole('heading',{name:'Accounting is catching up',exact:true})).toHaveCount(0);
+  await page.getByRole('link',{name:'Schedule',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Your energy schedule'})).toBeVisible();
+  connection='connected';
+  await page.reload();
+  await expect(page.locator('.connection')).toHaveText('Connected');
+  await page.getByRole('link',{name:'Controller',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Latest controller decisions'})).toBeVisible();
+});
+
 test('schedule chart explains an interval, selects it and narrows to one day',async({page},info)=>{
   await page.route('**/api/state',async route=>{
     const response=await route.fetch();const data=await response.json();

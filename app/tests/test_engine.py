@@ -240,6 +240,112 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(replacement.battery._processing['receipt'],consumed)
         self.assertFalse(self.native_calls)
 
+    async def queue_observations(self, count):
+        at = datetime.now(timezone.utc).isoformat()
+        await asyncio.gather(*(self.stream.capture('observation',dict(
+            entity_id='sensor.replay_power',state=str(index),attributes={'unit_of_measurement':'W'},
+            last_reported=at,last_changed=at,last_updated=at,kind='state_report')) for index in range(count)))
+
+    async def test_dashboard_opens_before_accounting_and_keeps_commands_and_settings_gated(self):
+        from shs_app.server import Dashboard, create_app
+        from aiohttp.test_utils import TestClient, TestServer
+        from unittest.mock import AsyncMock
+        from dataclasses import replace
+        engine = self.engine()
+        await engine.load()
+        engine.gateway.connected['contract'] = {'companion_version':'companion'}
+        fixture = json.loads((Path(__file__).parents[2]/'tests/fixtures/schema-9-mixed-mode-plan.json').read_text())
+        engine.household.optimisation_plan = fixture['plan']
+        engine.household.ports = replace(engine.household.ports,
+            utcnow=lambda:datetime.fromisoformat(fixture['validation_time']))
+        (self.root/'bundle.json').write_text(json.dumps({'protocol':2,'integration_version':'companion'}))
+        (self.root/'app.json').write_text('{"version":"app"}')
+        dashboard = Dashboard(self.root,self.root)
+        dashboard.engine = engine
+        engine.publish_ui = dashboard.publish_runtime
+        entered, proceed = asyncio.Event(), asyncio.Event()
+        consume = engine.consume
+        async def wait_for_accounting():
+            entered.set()
+            await proceed.wait()
+            return await consume()
+        task = None
+        with (patch.object(engine,'consume',side_effect=wait_for_accounting),
+              patch.object(engine.gateway,'project',AsyncMock()) as native_projection):
+            try:
+                task = asyncio.create_task(engine.activate())
+                await asyncio.wait_for(entered.wait(),3)
+                payload = dashboard.payload()
+                self.assertIsNotNone(payload['snapshot']['entries'][0]['schedule'])
+                self.assertEqual(payload['connection']['state'],'recovering')
+                self.assertFalse(payload['snapshot']['entries'][0]['operation']['actionable'])
+                self.assertEqual(payload['snapshot']['entries'][0]['controllers'],{})
+                self.assertIsNotNone(payload['recovery'])
+                self.assertFalse(engine.writer.enabled)
+                self.assertFalse(engine.started)
+                native_projection.assert_not_awaited()
+                async with TestClient(TestServer(create_app(dashboard,self.root,trusted_peer='127.0.0.1'))) as client:
+                    async with client.post('/api/configuration/save',json={}) as response:
+                        self.assertEqual(response.status,503)
+                self.assertFalse(self.native_calls)
+            finally:
+                proceed.set()
+                if task is not None:
+                    await task
+            await engine.project()
+            self.assertEqual(dashboard.payload()['connection']['state'],'connected')
+            self.assertIsNone(dashboard.payload()['recovery'])
+            native_projection.assert_awaited_once()
+
+    async def test_startup_replay_batches_a_backlog_and_recovers_lost_processing_ack(self):
+        await self.queue_observations(600)
+        engine = self.engine()
+        await engine.load()
+        call = engine.gateway.call
+        committed = []
+        async def lose_ack(operation, body):
+            if operation == 'ack_processed':
+                committed.append(engine.battery.store.source_checkpoint['receipt'])
+                self.assertEqual(committed[-1],body['through'])
+                raise OSError('processing acknowledgement lost')
+            return await call(operation, body)
+        with patch.object(engine.gateway,'call',side_effect=lose_ack):
+            with self.assertRaisesRegex(OSError,'acknowledgement lost'):
+                await engine.activate()
+        self.assertFalse(engine.writer.enabled)
+        self.assertGreater(committed[0],0)
+        self.assertEqual(engine.inbox.progress()['floor'],committed[0])
+        await engine.close()
+        replacement = self.engine()
+        await replacement.load()
+        self.assertEqual(replacement.battery.store.source_checkpoint['receipt'],committed[0])
+        before = replacement.battery.store.resource_counts()['storage_commits']
+        await replacement.activate()
+        self.assertTrue(replacement.started)
+        self.assertEqual(replacement.mirror.report('sensor.replay_power')['state'],'599')
+        self.assertEqual(replacement.inbox.progress()['floor'],replacement.battery._processing['receipt'])
+        self.assertLess(replacement.battery.store.resource_counts()['storage_commits'] - before,10)
+        self.assertFalse(self.native_calls)
+
+    async def test_startup_failed_batch_replays_uncommitted_prefix_without_retiring_it(self):
+        await self.queue_observations(300)
+        engine = self.engine()
+        await engine.load()
+        before = engine.battery.store.source_checkpoint
+        with patch.object(engine.battery.store,'_commit',side_effect=OSError('batch interrupted')):
+            with self.assertRaisesRegex(OSError,'batch interrupted'):
+                await engine.activate()
+        self.assertFalse(engine.writer.enabled)
+        self.assertEqual(engine.battery.store.source_checkpoint,before)
+        self.assertEqual(engine.inbox.progress()['floor'],0)
+        await engine.close()
+        replacement = self.engine()
+        await replacement.load()
+        await replacement.activate()
+        self.assertEqual(replacement.mirror.report('sensor.replay_power')['state'],'299')
+        self.assertEqual(replacement.inbox.progress()['floor'],replacement.battery._processing['receipt'])
+        self.assertFalse(self.native_calls)
+
     async def test_projection_upgrade_restarts_without_changing_ownership_or_sending_commands(self):
         from shs_core.native_configuration import native_options
         def previous_projection(options):

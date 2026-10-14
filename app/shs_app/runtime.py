@@ -16,7 +16,14 @@ class AppBatteryRuntime(BatteryRuntime):
         values = [value for value in (self._ingested, self._processing) if value is not None]
         return max(values, key=lambda value: (value['receipt'], value['sub_event'], value['complete'])) if values else None
 
-    async def ingest_receipt(self, identity, receipt):
+    async def start(self):
+        await super().start()
+        # The reducer retains the reason even if a restart interrupts the cloud
+        # request. Resume it using the existing queue and writer readiness gate.
+        if self.host is not None and self.host.state.execution.replan_reason is not None:
+            self._request_replan(self.host.state.execution.replan_reason)
+
+    async def ingest_receipt(self, identity, receipt, *, replay=False):
         """Accept evidence promptly; ordinary decisions belong to the 5s clock."""
         row = receipt['payload']
         recovering = self._observation_error is not None
@@ -24,26 +31,44 @@ class AppBatteryRuntime(BatteryRuntime):
             if event is None and not checkpoint['complete']:
                 return
             if self.host is None:
-                if receipt['kind'] != 'observation':
+                if not replay and receipt['kind'] != 'observation':
                     await self._bootstrap_received(checkpoint)
                 return
             overrides = {value for key,value in self.controller.options().items() if key.endswith('control_override_entity')}
             urgent = (receipt['kind'] != 'observation'
                       or (row['entity_id'] in set(self._control_entities()) | overrides and row.get('kind') == 'state_change')
                       or recovering and event is not None)
-            receiver = self.host.accept_received if urgent else self.host.ingest_received
+            receiver = self.host.accept_received if urgent and not replay else self.host.ingest_received
             await receiver(event, checkpoint)
         self._ingested = await self._consume_receipt(identity, receipt, receive, self.received_checkpoint)
-        if recovering and self._observation_error is None and self.host is not None:
+        if not replay and recovering and self._observation_error is None and self.host is not None:
             await self.host.accept(Tick())
 
-    async def commit_evidence(self):
+    async def commit_evidence(self, *, force=False):
         async with self._lock:
-            if self._ingested is not None and self._ingested != self._processing and self.now()-self._last_committed_at >= 5000:
+            if (self._ingested is not None and self._ingested != self._processing
+                    and (force or self.now()-self._last_committed_at >= 5000)):
                 if self.host is None:
                     await self._bootstrap_received(self._ingested)
                 else:
                     await self.host.commit_evidence()
+
+    async def _confirm(self, group_id):
+        if self.physical is not None and not self.physical.enabled:
+            return ()
+        return await super()._confirm(group_id)
+
+    def _request_replan(self, reason):
+        if self.physical is not None and not self.physical.enabled:
+            self._runtime_reason = reason
+            self._replan_pending = True
+            return
+        super()._request_replan(reason)
+
+    async def refresh(self):
+        await super().refresh()
+        if self._replan_pending and (self.physical is None or self.physical.enabled):
+            self._request_replan(self._runtime_reason)
 
     async def _bootstrap_received(self,checkpoint):
         await super()._bootstrap_received(checkpoint)

@@ -162,7 +162,7 @@ class AppEngine:
             lambda:set(self.mirror.context['entity_ids']),lambda:self.mirror.context['entity_names'],
             lambda:self.mirror.context['area_names'],lambda:self.mirror.context['entity_areas'],
             self.editor.inventory,self.mirror.report,history,
-            lambda:datetime.now(timezone.utc),lambda:False,self.repair,self.wake_projection.set,self.spawn)
+            lambda:datetime.now(timezone.utc),lambda:not self.started,self.repair,self.wake_projection.set,self.spawn)
         entry = self.identity['entry_id']
         stores = self.root/'stores'
         def record(prefix):
@@ -233,6 +233,9 @@ class AppEngine:
         self.mirror.install_snapshot(result['snapshot'])
         self.battery.reconcile()
         self.controller.adopt_ownership(result['ownership'])
+        # The reconciled snapshot can already display the saved plan and source
+        # readings. Native projections and commands still wait for accounting.
+        await self.project()
         await self.receive_through(reconciliation['proof']['through'], establish_delivery=True)
         previous = self.activation
         activation_id = previous['activation_id'] if previous else uuid4().hex
@@ -276,6 +279,8 @@ class AppEngine:
         # disabled until all the already received observations have been consumed.
         await self.battery.start()
         await self.consume()
+        if self.battery._processing != self.battery.received_checkpoint():
+            raise GatewayConflict('Startup accounting prefix is not durably committed')
         self.writer.enabled = True
         await self.devices.synchronize((self.household.optimisation_plan or {}).get('device_models',[]))
         self.started = True
@@ -302,7 +307,7 @@ class AppEngine:
 
     @profiled('receipt_consume')
     async def _consume(self):
-        previous = self.battery.received_checkpoint() if self.started else self.battery._processing
+        previous = self.battery.received_checkpoint()
         cursor = previous['receipt']-int(not previous['complete']) if previous else 0
         target = await asyncio.to_thread(self.inbox.through)
         while cursor < target:
@@ -314,10 +319,7 @@ class AppEngine:
                     break
                 with self.profiler.measure('receipt_apply'):
                     self.mirror.apply(row,notify=self.started)
-                if self.started:
-                    await self.battery.ingest_receipt(self.identity,row)
-                else:
-                    await self.battery.consume_receipt(self.identity,row)
+                await self.battery.ingest_receipt(self.identity,row,replay=not self.started)
                 cursor = row['ordinal']
                 self.processed_receipts += 1
                 if self.started and row['kind']=='configuration':
@@ -326,8 +328,15 @@ class AppEngine:
                     self.wake_projection.set()
                     if self.household.options_update_requires_reload():
                         await self.replan_all()
-        if self.started:
-            await self.battery.commit_evidence()
+            # Reuse the inbox's bounded pages. Startup saves once per page;
+            # live operation keeps its existing five-second durability cadence.
+            await self.battery.commit_evidence(force=not self.started)
+            await self.acknowledge_processed()
+        await self.battery.commit_evidence(force=not self.started)
+        await self.acknowledge_processed()
+        return cursor
+
+    async def acknowledge_processed(self):
         saved=self.battery.store.source_checkpoint
         if saved is not None:
             completed=saved['receipt']
@@ -335,7 +344,6 @@ class AppEngine:
                 await asyncio.to_thread(self.inbox.retire,completed)
                 await self.gateway.call('ack_processed',{'through':completed})
                 self._processed_ack = completed
-        return cursor
 
     async def receipts(self):
         after = {'receipts':0, 'requests':0}
@@ -384,13 +392,14 @@ class AppEngine:
             value = runtime_projection(h,self.cached,self.repairs,plan=self.display_plan.value)
         value['app_url'] = self.app_url
         value['configuration'] = self.configuration.status()
-        value['execution_devices'] = [{key:deepcopy(device.get(key)) for key in
-            ('key','name','planned','system_member','permission','mode')}
-            for device in await self.editor.devices(self.cached['planning'],include_suggestions=False)]
-        with self.profiler.measure('native_projection_build'):
-            native = project_entities(self,value['execution_devices'])
-        await self.gateway.project(dict(schema=2,entities=native,execution_devices=value["execution_devices"],
-            configuration=value["configuration"],repairs=value["repairs"],app_url=self.app_url))
+        if self.started:
+            value['execution_devices'] = [{key:deepcopy(device.get(key)) for key in
+                ('key','name','planned','system_member','permission','mode')}
+                for device in await self.editor.devices(self.cached['planning'],include_suggestions=False)]
+            with self.profiler.measure('native_projection_build'):
+                native = project_entities(self,value['execution_devices'])
+            await self.gateway.project(dict(schema=2,entities=native,execution_devices=value["execution_devices"],
+                configuration=value["configuration"],repairs=value["repairs"],app_url=self.app_url))
         self.publish_ui(value)
 
     async def projections(self):
