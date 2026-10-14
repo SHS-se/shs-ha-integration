@@ -42,6 +42,20 @@ class BatterySupplyTests(unittest.TestCase):
                 for pv in (house, house + 500):
                     self.assertEqual(proportional_supply(house, pv, eligible).house_supply_bound_w, 0)
 
+    def test_base_plus_selected_reads_only_the_unselected_complement(self):
+        scope = SupplyScope('selected', True, ('pool',))
+        result = self.measure(scope, planned_readings={'ev': self.devices['ev']})
+        self.assertEqual(result.eligible_gross_w, 1800)
+        self.assertEqual(result.attributed_pv_w, 600)
+        self.assertEqual(result.house_supply_bound_w, 1200)
+        for reading in (replace(self.devices['ev'], valid_until_ms=1500),
+                        replace(self.devices['ev'], watts=3100)):
+            with self.subTest(reading=reading), self.assertRaises(ValueError):
+                self.measure(scope, planned_readings={'ev': reading})
+        # Including every Planned device is algebraically whole-house supply.
+        result = self.measure(SupplyScope('selected', True, ('ev', 'pool')), planned_readings={})
+        self.assertEqual(result.house_supply_bound_w, 2000)
+
     def test_unavailable_inputs_never_substitute_forecasts_or_ratings(self):
         scope=SupplyScope('selected',True)
         for changes in [dict(house=None),dict(pv=None),dict(planned_readings={}),dict(now_ms=5000),

@@ -485,7 +485,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_selected_scope_still_requires_fresh_individual_measurements(self):
         r=Rig();r.add_pool()
-        r.plan['battery_supply_scope']={'kind':'selected','include_base':True,'planned_device_keys':['pool']}
+        r.plan['battery_supply_scope']={'kind':'selected','include_base':False,'planned_device_keys':['pool']}
         await r.start()
         try:
             self.assertEqual(r.calls,[])
@@ -495,6 +495,68 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
             self.assertNotIn('fix',r.runtime.snapshot())
             self.assertTrue(r.calls)
+        finally:await r.runtime.close()
+
+    async def test_charging_to_house_supply_ignores_stale_selected_pool_readings(self):
+        r=Rig();r.add_pool()
+        r.options['device_control_mappings']['ev']={'power':'sensor.ev'}
+        async def devices():
+            return [{'key':key,'planning_role':'controllable'} for key in ('ev','pool')]
+        r.coordinator.async_battery_planned_devices=devices
+        r.rows['sensor.ev']={'state':'0','attributes':{'unit_of_measurement':'W','state_class':'measurement'},
+                             'last_reported':iso(r.now)}
+        r.rows['sensor.pool']['state']='0'
+        await r.start()
+        try:
+            for _ in range(2):await r.advance(5000)
+            self.assertEqual(r.rows['select.mode']['state'],'Command Charging (PV First)')
+            self.assertGreater(float(r.rows['number.charge']['state']),0)
+            self.assertEqual(float(r.rows['number.discharge']['state']),0)
+            original=r.runtime.host.state.execution.account.contract
+            r.calls.clear()
+            r.extend_plan()
+            r.now=900000
+            r.rows['sensor.soc']['state']='100'
+            r.rows['sensor.house']['state']='2800'
+            r.rows['sensor.grid']['state']='2800'
+            r.rows['sensor.ev']['state']='800'
+            r.rows['sensor.pool']['last_reported']=iso(0)
+            r.plan['battery_supply_scope']={'kind':'selected','include_base':True,'planned_device_keys':['pool']}
+            row=ReferenceInterval(900000,1800000,10000000,9500000,
+                'supply_house','demand_following',False,False,0,4000,True,
+                0,500000,0,700000,200000,0,0,0,0)
+            for entity,value in r.rows.items():
+                if entity!='sensor.pool':value['last_reported']=iso(r.now)
+            feedback=await r.runtime.capture_feedback(10000000,'full-battery')
+            contract=replace(original,id='discharge-plan',generation=feedback['generation'],source_receipt=feedback['source_receipt'],
+                previous_contract_id=original.id,valid_until_ms=1800000,intervals=(row,),
+                objectives=(Objective('supply-house','demand_following',900000,1800000,0,'Supply current house demand'),),
+                dispositions=(Disposition(original.objectives[0].id,'retired',None,'Charging window finished'),))
+            r.plan['battery_execution']=contract_wire(contract)
+            for _ in range(5):
+                for entity,value in r.rows.items():
+                    if entity!='sensor.pool':value['last_reported']=iso(r.now)
+                await r.runtime.refresh();await r.runtime.host.idle()
+                r.now+=5000
+            status=r.runtime.snapshot()
+            self.assertEqual(status['state'],'controlling',status)
+            self.assertEqual(status['accepted_reference_id'],contract.id)
+            self.assertEqual(r.rows['select.mode']['state'],'Maximum Self Consumption')
+            # Self-consumption permits PV charging while enabling house discharge.
+            self.assertEqual(float(r.rows['number.charge']['state']),4)
+            self.assertGreater(float(r.rows['number.discharge']['state']),0)
+            self.assertLessEqual(float(r.rows['number.discharge']['state'])*1000*.95,2000)
+            self.assertEqual(status['measurements']['eligible_gross_w'],2000)
+            self.assertEqual(r.runtime.host.state.frame.external.import_w,2800)
+            self.assertEqual(sum(d.observed.import_w for d in r.runtime.host.state.frame.external_demands),2800)
+            self.assertEqual(r.rows['sensor.pool']['last_reported'],iso(0))
+            self.assertNotIn('sensor.pool',r.runtime.capture_entities())
+            self.assertIn('sensor.ev',r.runtime.capture_entities())
+            self.assertTrue(r.runtime.host.state.groups[0].owned)
+            self.assertFalse(r.runtime.host.state.groups[0].release_pending)
+            self.assertTrue(r.calls)
+            self.assertFalse(any(call[2].get('option')=='Command Charging (PV First)' for call in r.calls))
+            self.assertFalse(status['fault_history'])
         finally:await r.runtime.close()
     async def test_missing_measurements_are_actionable_before_policy_or_writes(self):
         r=Rig()

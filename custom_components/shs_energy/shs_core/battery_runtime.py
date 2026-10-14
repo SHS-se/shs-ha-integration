@@ -24,7 +24,7 @@ from .runtime_json import Records, runtime_digest as digest
 from .native_configuration import native_options
 from .resource_profiling import ResourceProfiler
 from .battery_live import native_surface, source_revision, planned_power_bindings
-from .battery_supply import SupplyScope, observe_supply
+from .battery_supply import SupplyScope, observe_supply, required_power_keys
 from .configuration_schema import METADATA_KEYS
 from .configuration_values import resolve_battery_quantities
 from .energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
@@ -168,14 +168,13 @@ class BatteryRuntime:
             state,checkpoint=self._loaded
             authority=state.authority
             await self._open_host(state,checkpoint)
-            if self._scope.kind=='whole_house':
-                participants=tuple(p for p in authority.scope.participants if p.owner=='new_runtime') + tuple(
-                    rt.ScopeParticipant(key,mode,1,'external',(entity,)) for key,entity,mode in self._demand_sources())
-                if participants!=authority.scope.participants:
-                    revision=digest({'previous_scope':authority.scope.revision,'participants':[asdict(p) for p in participants]})
-                    recovered=replace(authority,identity=replace(authority.identity,scope_revision=revision),
-                                      scope=replace(authority.scope,revision=revision,participants=participants))
-                    await self.host.accept(rt.AuthorityInstalled(recovered,self.host.state.authority_revision+1))
+            participants=tuple(p for p in authority.scope.participants if p.owner=='new_runtime') + tuple(
+                rt.ScopeParticipant(key,mode,1,'external',(entity,)) for key,entity,mode in self._demand_sources())
+            if participants!=authority.scope.participants:
+                revision=digest({'previous_scope':authority.scope.revision,'participants':[asdict(p) for p in participants]})
+                recovered=replace(authority,identity=replace(authority.identity,scope_revision=revision),
+                                  scope=replace(authority.scope,revision=revision,participants=participants))
+                await self.host.accept(rt.AuthorityInstalled(recovered,self.host.state.authority_revision+1))
             # Recover local ownership without waiting for a cloud plan. The old
             # configured sources remain available for this exact baseline release.
             try:
@@ -699,12 +698,10 @@ class BatteryRuntime:
             raise ValueError('battery command journal is unavailable')
 
     def _demand_sources(self):
-        # Whole-house permission and grid headroom use the gross meter, which
-        # already includes every appliance (Planned and Monitored alike).
-        if self._scope.kind=='whole_house':
-            return (('household-load',self._options['house_consumption_power_entity'],'monitoring'),)
-        return tuple(('load:'+key,entity,device_mode(self._options,'device:'+key))
-                     for key,entity in planned_power_bindings(self._options,self._devices).items())
+        # Grid headroom always uses the house meter, which already includes
+        # Planned and Monitored devices. Supply permission is accounted
+        # separately without requiring unrelated appliance reports.
+        return (('household-load',self._options['house_consumption_power_entity'],'monitoring'),)
 
     def _meter_specs(self,options):
         specs=[]
@@ -923,7 +920,8 @@ class BatteryRuntime:
 
     def capture_entities(self):
         """The exact dependencies used by the complete-frame acceptance below."""
-        return set(self._control_entities())|{entity for _,entity,_ in self._demand_sources()}|{self._options.get(key) for key in
+        planned=planned_power_bindings(self._options,self._devices)
+        return set(self._control_entities())|{planned.get(key) for key in required_power_keys(self._scope,planned)}|{self._options.get(key) for key in
             ('house_consumption_power_entity','solar_production_power_entity','battery_power_measurement_entity','battery_soc_entity','grid_power_entity')}
 
     def _release_request(self,group,target=None):

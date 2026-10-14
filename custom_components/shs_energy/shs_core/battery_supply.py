@@ -83,6 +83,14 @@ class PowerReading:
             raise ValueError("unknown power measurement basis")
 
 
+def required_power_keys(scope, planned_keys):
+    """Meters that remain after cancelling included components from the house total."""
+    planned, selected = set(planned_keys), set(scope.planned_device_keys)
+    if scope.kind == "selected" and not selected <= planned:
+        raise ValueError("scope selects a device outside Planned membership")
+    return tuple(sorted(planned - selected if scope.include_base else selected))
+
+
 def measured_supply(scope, house, pv, planned_readings, planned_keys, *, now_ms,
                     max_alignment_ms, membership_revision, expected_membership_revision):
     """Missing decomposition is unavailable; no forecast, rating or zero substitute.
@@ -97,10 +105,8 @@ def measured_supply(scope, house, pv, planned_readings, planned_keys, *, now_ms,
         raise ValueError("invalid measurement timing or duplicate Planned membership")
     if not membership_revision or membership_revision != expected_membership_revision:
         raise ValueError("supply membership revision changed")
-    if scope.kind == "selected" and not set(scope.planned_device_keys) <= set(planned_keys):
-        raise ValueError("scope selects a device outside Planned membership")
-    required = set(planned_keys) if scope.include_base else set(scope.planned_device_keys)
-    if not required <= set(planned_readings):
+    required = required_power_keys(scope, planned_keys)
+    if not set(required) <= set(planned_readings):
         raise ValueError("missing Planned power measurements")
     readings = [house, pv, *(planned_readings[key] for key in sorted(required))]
     if any(not isinstance(r, PowerReading) for r in readings):
@@ -116,11 +122,14 @@ def measured_supply(scope, house, pv, planned_readings, planned_keys, *, now_ms,
         eligible = 0.0
     elif scope.kind == "whole_house":
         eligible = house.watts
-    else:
-        base = house.watts - sum(planned_readings[k].watts for k in planned_keys) if scope.include_base else 0.0
-        if base < 0:
+    elif scope.include_base:
+        # Base + selected = house - unselected. Selected device measurements
+        # cancel exactly; their reporting cadence cannot block this scope.
+        eligible = house.watts - sum(planned_readings[k].watts for k in required)
+        if eligible < 0:
             raise ValueError("Planned meters exceed the house total")
-        eligible = base + sum(planned_readings[k].watts for k in scope.planned_device_keys)
+    else:
+        eligible = sum(planned_readings[k].watts for k in required)
     return proportional_supply(house.watts, pv.watts, eligible)
 
 
@@ -156,9 +165,7 @@ def observe_supply(scope, options, devices, read_entity, *, at_ms, max_age_ms,
 
     planned = {d["key"]: d for d in devices if d.get("planning_role") == "controllable"
                and d["key"] not in options.get("excluded_device_readings", [])}
-    required = set(planned) if scope.include_base else set(scope.planned_device_keys)
-    if not required <= set(planned):
-        raise ValueError("supply selects a device outside Planned membership")
+    required = required_power_keys(scope, planned)
     mappings = options.get("device_control_mappings", {})
     readings = {key: reading(mappings.get(key, {}).get("power")) for key in required}
     house = reading(options.get("house_consumption_power_entity"))

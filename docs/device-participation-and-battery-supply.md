@@ -231,6 +231,14 @@ or signed grid exchange plus AC battery discharge minus AC battery charge, can
 establish aggregate net demand. Individual scope decomposition additionally needs
 suitable non-overlapping device meters.
 
+For base plus selected devices, calculate eligible gross demand as the house
+total minus **unselected** Planned devices. Selected device terms cancel out;
+their individual meters are not required for that scope. A selected-only scope
+still needs its selected meters, and base-only needs every Planned meter.
+Grid headroom uses the gross house meter for every scope, independently of
+the supply-permission calculation. An unavailable meter that remains in the
+calculation still blocks control and holds the last settings.
+
 Energy-counter differences yield interval averages, not exact instantaneous power.
 Record sources, timestamps, interval/basis and uncertainty. Some houses support
 whole-house control before a reliable base/selected-device split is available.

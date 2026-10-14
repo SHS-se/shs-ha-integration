@@ -10,7 +10,7 @@ from hashlib import sha256
 import json
 from math import isfinite
 
-from .battery_supply import SupplyScope, observe_supply
+from .battery_supply import SupplyScope, observe_supply, required_power_keys
 
 
 POWER_OPTIONS = ("house_consumption_power_entity", "solar_production_power_entity", "battery_power_measurement_entity", "grid_power_entity")
@@ -194,7 +194,7 @@ def capture_battery_inputs(options, devices, read_entity, *, now_ms, profile=Non
             if not isinstance(scope, SupplyScope):
                 raise ValueError("explicit_supply_scope_required")
             required = {options.get("house_consumption_power_entity"), options.get("solar_production_power_entity")}
-            keys = set(planned) if scope.include_base else set(scope.planned_device_keys)
+            keys = required_power_keys(scope, planned)
             required.update(planned.get(key) for key in keys)
             if not required <= set(profile.source_entities):
                 raise ValueError("unreviewed_power_source")

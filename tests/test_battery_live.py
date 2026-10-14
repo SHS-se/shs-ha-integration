@@ -73,6 +73,15 @@ class CaptureTests(unittest.TestCase):
         self.assertIsNone(result['accounting'])
         self.assertIn('measurement_profile_configuration_changed', [b['reason'] for b in result['blockers']])
 
+    def test_base_plus_selected_profile_needs_only_unselected_meter(self):
+        self.devices.append(dict(key='pool', planning_role='controllable'))
+        self.options['device_control_mappings']['pool'] = {'power': 'sensor.pool'}
+        # The included pool is already measured by the gross house meter.
+        result = self.capture(profile=profile(self.options, self.devices),
+                              scope=SupplyScope('selected', True, ('pool',)))
+        self.assertEqual(result['accounting']['eligible_gross_w'], 1000)
+        self.assertAlmostEqual(result['accounting']['house_supply_bound_w'], 2000/3)
+
     def test_excluded_device_is_never_read_or_exported(self):
         self.options['excluded_device_readings'] = ['ev']
         seen = []
