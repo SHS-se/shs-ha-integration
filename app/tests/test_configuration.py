@@ -9,6 +9,7 @@ from shs_app.configuration import Configuration
 from shs_app.records import RecordStore
 from shs_core.execution_configuration import ExecutionConfiguration
 from shs_core.gateway_journal import digest
+from shs_core.native_configuration import native_options
 
 
 class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
@@ -80,7 +81,56 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError,'missing after adoption'):
             await app.load(self.gateway.value,self.credentials)
 
-    async def test_retired_hot_water_pause_setting_is_removed_without_changing_control_mode(self):
+    async def test_changed_native_projection_rolls_forward_once_preserving_saved_settings(self):
+        options = {'device_modes': {'water': 'controlling'},
+                   'house_consumption_power_entity': 'sensor.house_power',
+                   'device_control_mappings': {'water': {'control_type': 'permit_inhibit',
+                       'actuator_entity_ids': ['switch.water'], 'power': 3000}},
+                   'private_app_setting': 'retained'}
+        def previous_projection(value):
+            return {key: item for key, item in native_options(value).items()
+                    if key != 'house_consumption_power_entity'}
+        self.app.project = previous_projection
+        await self.app.commit(1, options, 'old-version-settings')
+        before = deepcopy(self.app.data)
+        installed = deepcopy(self.gateway.value)
+        reopened = Configuration(self.root, {'installation': 'original'},
+                                 self.gateway.install, project=native_options)
+        await reopened.load(installed, self.credentials)
+        self.assertEqual(reopened.revision, 3)
+        self.assertEqual(reopened.data, dict(before, revision=3, applied_revision=3))
+        self.assertEqual(reopened.options(), options)
+        self.assertEqual(self.gateway.options(), native_options(options))
+        self.assertEqual(self.gateway.options()['device_modes'], options['device_modes'])
+        self.assertEqual(self.credentials_calls, 1)
+        await reopened.load(self.gateway.value, self.credentials)
+        self.assertEqual(reopened.revision, 3)
+
+    async def test_projection_upgrade_recovers_lost_acknowledgement_without_another_revision(self):
+        async def lose_reply(body):
+            saved = await self.app.record.async_load()
+            self.assertEqual(saved['revision'], body['revision'])
+            self.assertEqual(saved['applied_revision'], 2)
+            await self.gateway.install(body)
+            raise OSError('upgrade reply lost')
+        # The previous release installed the full document; this release sends
+        # only the native execution subset, just as adding a field changes it.
+        reopened = Configuration(self.root, {'installation': 'original'},
+                                 lose_reply, project=native_options)
+        # Include an app-only value so the projection actually changes.
+        await self.app.commit(1, dict(self.app.options(), private_setting='retained'), 'app-only')
+        before = deepcopy(self.app.data)
+        with self.assertRaisesRegex(OSError, 'upgrade reply lost'):
+            await reopened.load(self.gateway.value, self.credentials)
+        self.assertEqual(reopened.status(), dict(revision=2, desired_revision=3, state='pending'))
+        self.assertEqual(reopened.options(), before['applied_options'])
+        replacement = Configuration(self.root, {'installation': 'original'},
+                                    self.gateway.install, project=native_options)
+        await replacement.load(self.gateway.value, self.credentials)
+        self.assertEqual(replacement.data, dict(before, revision=3, applied_revision=3))
+        self.assertEqual(self.gateway.value['revision'], 3)
+
+    async def test_startup_deletes_only_the_obsolete_hot_water_pause_setting(self):
         options = {'device_modes': {'water': 'controlling'}, 'device_control_mappings': {
             'water': {'control_type': 'permit_inhibit', 'actuator_entity_ids': ['switch.water'],
                       'power': 3000, 'max_inhibit_slots': 4}}}
@@ -88,35 +138,47 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
         reopened = Configuration(self.root, {'installation': 'original'}, self.gateway.install, project=deepcopy)
         await reopened.load(self.gateway.value, self.credentials)
         self.assertEqual(reopened.options()['device_modes'], options['device_modes'])
-        self.assertNotIn('max_inhibit_slots', reopened.options()['device_control_mappings']['water'])
+        expected = deepcopy(options)
+        expected['device_control_mappings']['water'].pop('max_inhibit_slots')
+        self.assertEqual(reopened.options(), expected)
         self.assertEqual(reopened.options(), self.gateway.options())
         revision = reopened.revision
         await reopened.load(self.gateway.value, self.credentials)
         self.assertEqual(reopened.revision, revision)
 
-    async def test_retire_live_four_hour_setting_once_preserving_modes_and_acknowledgement(self):
+    async def test_pause_setting_deletion_recovers_lost_reply_without_changing_other_settings(self):
+        options = {'device_modes': {'water': 'controlling'}, 'device_control_mappings': {
+            'water': {'control_type': 'permit_inhibit', 'actuator_entity_ids': ['switch.water'],
+                      'power': 3000, 'max_inhibit_slots': 4}}, 'private_setting': 'retained'}
+        await self.app.commit(1, options, 'old-water-settings')
+        async def lose_reply(body):
+            result = await self.gateway.install(body)
+            if body['revision'] == 3:
+                raise OSError('deletion reply lost')
+            return result
+        reopened = Configuration(self.root, {'installation': 'original'}, lose_reply, project=deepcopy)
+        with self.assertRaisesRegex(OSError, 'deletion reply lost'):
+            await reopened.load(self.gateway.value, self.credentials)
+        self.assertEqual(reopened.options(), options)
+        replacement = Configuration(self.root, {'installation': 'original'}, self.gateway.install, project=deepcopy)
+        await replacement.load(self.gateway.value, self.credentials)
+        expected = deepcopy(options)
+        expected['device_control_mappings']['water'].pop('max_inhibit_slots')
+        self.assertEqual(replacement.options(), expected)
+        self.assertEqual(replacement.revision, 3)
+        await replacement.load(self.gateway.value, self.credentials)
+        self.assertEqual(replacement.revision, 3)
+
+    async def test_startup_preserves_saved_appliance_settings_without_creating_a_revision(self):
         options = {'device_modes': {'pool': 'controlling'}, 'device_control_mappings': {
             'pool': {'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.pool'],
                      'power': 12000, 'minimum_on_seconds': 14400, 'minimum_off_seconds': 60}}}
         await self.app.commit(1, options, 'old-settings')
-        old = deepcopy(options)
-        async def lose_reply(body):
-            result = await self.gateway.install(body)
-            if body['revision'] == 3:
-                raise OSError('migration reply lost')
-            return result
-        reopened = Configuration(self.root, {'installation': 'original'}, lose_reply, project=deepcopy)
-        with self.assertRaisesRegex(OSError, 'migration reply lost'):
-            await reopened.load(self.gateway.value, self.credentials)
-        # The first retry reconciles an already-applied revision before migration.
-        reopened.install = self.gateway.install
+        before = deepcopy(self.app.data)
+        reopened = Configuration(self.root, {'installation': 'original'}, self.gateway.install, project=deepcopy)
         await reopened.load(self.gateway.value, self.credentials)
-        self.assertEqual(reopened.revision, 3)
-        self.assertEqual(reopened.options()['device_modes'], options['device_modes'])
-        mapping = reopened.options()['device_control_mappings']['pool']
-        self.assertEqual(mapping, {key: value for key, value in old['device_control_mappings']['pool'].items()
-                                  if key not in ('minimum_on_seconds', 'minimum_off_seconds')})
+        self.assertEqual(reopened.data, before)
+        self.assertEqual(reopened.options(), options)
         self.assertEqual(reopened.options(), self.gateway.options())
         await reopened.load(self.gateway.value, self.credentials)
-        self.assertEqual(reopened.revision, 3)
-        self.assertEqual(options, old)
+        self.assertEqual(reopened.data, before)

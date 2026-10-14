@@ -42,17 +42,22 @@ class Configuration:
                 await self.record.async_save(self.data)
             elif self.data.get('schema') != 1 or self.data.get('identity') != self.identity:
                 raise GatewayConflict('Unsupported app configuration schema or installation identity')
+            # An app update can change the native projection without changing
+            # saved settings. Already acknowledged revisions are immutable:
+            # persist the new revision before sending its changed projection.
+            if (installed['revision'] == self.data['revision'] == self.revision
+                    and installed['digest'] != digest(self.project(self.data['options']))):
+                updated = dict(self.data, revision=self.revision + 1)
+                await self.record.async_save(updated)
+                self.data = updated
             await self._apply()
-        # The app owns the current settings after adoption; HA config-entry
-        # migration cannot retire these fields. Roll forward once through the
-        # ordinary acknowledged revision writer, preserving modes and ownership.
+        # Explicitly retire the obsolete hot-water pause value through the same
+        # acknowledged writer, preserving every other setting and permission.
         cleaned = self.options()
         for mapping in cleaned.get('device_control_mappings', {}).values():
-            mapping.pop('minimum_on_seconds', None)
-            mapping.pop('minimum_off_seconds', None)
             mapping.pop('max_inhibit_slots', None)
         if cleaned != self.options():
-            await self.commit(self.revision, cleaned, 'retire-shs-control-timers')
+            await self.commit(self.revision, cleaned, 'retire-hot-water-pause-setting')
 
     async def _apply(self):
         desired = self.data

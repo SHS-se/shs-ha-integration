@@ -102,7 +102,7 @@ class Dashboard:
             self.engine = AppEngine(selected['path'],self.session,self.supervisor+'/core/websocket',self.token,
                 paired_release=pair,publish=self.publish_runtime,app_url='/app/'+self.app_info['slug'])
             self.profiler = self.engine.profiler
-            self.connection = {'state':'recovering','message':'Restoring the saved SHS runtime and processing queued Home Assistant observations.'}
+            self.connection = {'state':'recovering','message':'Loading saved settings and checking queued Home Assistant observations.'}
             self.connection_log.attempt()
             try:
                 await self.engine.run()
@@ -164,7 +164,7 @@ class Dashboard:
 
     def payload(self):
         recovery = None
-        if self.engine and not self.engine.started:
+        if self.connection['state'] == 'recovering' and self.engine and not self.engine.started:
             processing = self.engine.battery._processing if self.engine.battery else None
             recovery = {'processed_receipt': (processing['receipt'] - int(not processing['complete'])) if processing else None}
         return {"app_version": self.version, "required_companion": self.manifest["integration_version"],

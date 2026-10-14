@@ -56,7 +56,7 @@ test('keyboard navigation and reduced motion support',async({page})=>{
 });
 
 
-test('existing runtime recovery shows progress and then the live dashboard',async({page})=>{
+test('existing runtime startup shows progress and then the live dashboard',async({page})=>{
   let recovering=true;
   await page.route('**/api/state',async route=>{
     const response=await route.fetch();const data=await response.json();
@@ -64,13 +64,39 @@ test('existing runtime recovery shows progress and then the live dashboard',asyn
     await route.fulfill({json:data});
   });
   await page.goto('./');
-  await expect(page.getByRole('heading',{name:'Restoring SHS'})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Starting SHS'})).toBeVisible();
   await expect(page.getByText('Processed through observation 42.')).toBeVisible();
   await expect(page.getByRole('heading',{name:'Connect your Home Assistant integration'})).toHaveCount(0);
   recovering=false;
   await page.reload();
   await expect(page.getByRole('heading',{name:'Your app is running the home'})).toBeVisible();
-  await expect(page.getByRole('heading',{name:'Restoring SHS'})).toHaveCount(0);
+  await expect(page.getByRole('heading',{name:'Starting SHS'})).toHaveCount(0);
+});
+
+test('failed startup shows the connection error instead of recovery or installation',async({page})=>{
+  let failed=true;
+  await page.route('**/api/state',async route=>{
+    const response=await route.fetch();const data=await response.json();
+    if(failed){data.snapshot=null;data.recovery=null;data.connection={state:'disconnected',message:'Execution configuration revision reused with different content.'};}
+    await route.fulfill({json:data});
+  });
+  await page.goto('./#schedule');
+  await expect(page.getByRole('heading',{name:'SHS connection failed'})).toBeVisible();
+  await expect(page.locator('.connection')).toHaveText('Disconnected');
+  await expect(page.getByText('Execution configuration revision reused with different content.')).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Starting SHS'})).toHaveCount(0);
+  await expect(page.getByText('Restoring SHS')).toHaveCount(0);
+  await expect(page.getByRole('heading',{name:'Connect your Home Assistant integration'})).toHaveCount(0);
+  await page.getByRole('link',{name:'View system diagnostics'}).click();
+  await expect(page.getByRole('heading',{name:'Diagnostic downloads'})).toBeVisible();
+  await expect(page.getByRole('link',{name:'Download connection logs'})).toHaveAttribute('href','./api/diagnostics/app-logs.zip');
+  await expect(page.getByRole('link',{name:'Download connection logs'})).toHaveAttribute('download','');
+  failed=false;
+  await page.reload();
+  await page.getByRole('link',{name:'Schedule',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Your energy schedule'})).toBeVisible();
+  await expect(page.locator('.connection')).toHaveText('Connected');
+  await expect(page.getByRole('heading',{name:'SHS connection failed'})).toHaveCount(0);
 });
 
 test('schedule chart explains an interval, selects it and narrows to one day',async({page},info)=>{

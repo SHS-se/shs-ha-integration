@@ -138,10 +138,15 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             from types import SimpleNamespace
             self.assertIsNone(dashboard.payload()['recovery'])
             engine=dashboard.engine=SimpleNamespace(started=False,battery=None)
+            dashboard.connection={'state':'recovering','message':'Loading saved settings'}
             self.assertEqual(dashboard.payload()['recovery'],{'processed_receipt':None})
             engine.battery=SimpleNamespace(_processing={'receipt':42,'complete':False})
             self.assertEqual(dashboard.payload()['recovery'],{'processed_receipt':41})
             engine.battery._processing['complete']=True
             self.assertEqual(dashboard.payload()['recovery'],{'processed_receipt':42})
+            dashboard.connection={'state':'disconnected','message':'Configuration revision conflict'}
+            self.assertIsNone(dashboard.payload()['recovery'])
+            self.assertEqual(dashboard.payload()['connection'],dashboard.connection)
+            dashboard.connection={'state':'recovering','message':'Loading saved settings'}
             engine.started=True
             self.assertIsNone(dashboard.payload()['recovery'])

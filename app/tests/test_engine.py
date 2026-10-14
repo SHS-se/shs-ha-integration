@@ -240,6 +240,34 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(replacement.battery._processing['receipt'],consumed)
         self.assertFalse(self.native_calls)
 
+    async def test_projection_upgrade_restarts_without_changing_ownership_or_sending_commands(self):
+        from shs_core.native_configuration import native_options
+        def previous_projection(options):
+            return {key: value for key, value in native_options(options).items()
+                    if key != 'house_consumption_power_entity'}
+        engine = self.engine()
+        with (patch('shs_app.engine.native_options', previous_projection),
+              patch('shs_app.physical_ports.native_options', previous_projection),
+              patch('shs_core.gateway_service.native_options', previous_projection)):
+            await engine.load()
+            await engine.configuration.commit(engine.configuration.revision,
+                dict(engine.configuration.options(), house_consumption_power_entity='sensor.house_power'),
+                'saved-house-power')
+            await engine.activate()
+        saved = deepcopy(engine.configuration.options())
+        revision = engine.configuration.revision
+        activation = engine.activation['activation_id']
+        ownership = deepcopy(self.service.physical.ownership.records)
+        await engine.close()
+        replacement = self.engine()
+        await replacement.load()
+        await replacement.activate()
+        self.assertEqual(replacement.configuration.revision, revision + 1)
+        self.assertEqual(replacement.configuration.options(), saved)
+        self.assertEqual(replacement.activation['activation_id'], activation)
+        self.assertEqual(self.service.physical.ownership.records, ownership)
+        self.assertFalse(self.native_calls)
+
     def battery_rig(self):
         from test_battery_runtime import Rig
         rig = Rig()
