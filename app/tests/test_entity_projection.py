@@ -67,7 +67,8 @@ class EntityProjectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_native_configuration_excludes_app_connection_and_tariff_settings(self):
         source=dict(device_modes={'$battery':'controlling'},device_control_mappings={'heater':{'control_entity_id':'switch.heater'}},
             battery_charge_max_w=4000,device_token='private',base_url='https://example.invalid',supplier_price_entity='sensor.price',
-            home_latitude=59,_observed_entities=['sensor.house'],discovery_evidence={'all':'metadata'})
+            home_latitude=59,_observed_entities=['sensor.house'],discovery_evidence={'all':'metadata'},
+            house_consumption_power_entity='sensor.house')
         native=native_options(source)
-        self.assertEqual(set(native),{'device_modes','device_control_mappings','battery_charge_max_w'})
+        self.assertEqual(set(native),{'device_modes','device_control_mappings','battery_charge_max_w','house_consumption_power_entity'})
         native['device_modes'].clear();self.assertTrue(source['device_modes'])

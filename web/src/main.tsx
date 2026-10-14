@@ -19,6 +19,13 @@ function HA({href,children}:{href:string;children:React.ReactNode}){return <a cl
 function Json({value}:{value:unknown}){return <pre>{JSON.stringify(value,null,2)}</pre>;}
 function Command({value}:{value:unknown}) {
   if(!value||typeof value!=='object')return <span>Unavailable</span>;
+  if('type' in value&&value.type==='house_demand_permission') {
+    if(!('allow_below_w' in value)||typeof value.allow_below_w!=='number'||
+       !('inhibit_above_w' in value)||typeof value.inhibit_above_w!=='number'||
+       !('expected_permitted' in value)||typeof value.expected_permitted!=='boolean')throw new Error('Invalid hot-water demand command');
+    return <div><p>Allow at {number(value.allow_below_w/1000,2)} kW of house demand or lower. Pause above {number(value.inhibit_above_w/1000,2)} kW.</p>
+      <p>Between these levels, keep the current permission.</p><p>Forecast for this interval: {value.expected_permitted?'allowed':'paused'}. Control follows measured house power.</p></div>;
+  }
   return <dl className="command">{Object.entries(value).filter(([key])=>key!=='schema_version').map(([key,v])=><div key={key}><dt>{key.replaceAll('_',' ')}</dt><dd>{typeof v==='boolean'?(v?'Yes':'No'):typeof v==='object'?JSON.stringify(v):String(v).replaceAll('_',' ')}</dd></div>)}</dl>;
 }
 

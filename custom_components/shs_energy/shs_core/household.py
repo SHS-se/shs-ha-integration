@@ -99,6 +99,7 @@ from .device_controls import (
     planning_path,
     requested_controllable_devices,
 )
+from .hot_water import HOUSE_POWER_FIELD, requires_house_power, hot_water_setup_errors
 from .optimisation import (
     OptimisationInputError,
     fuse_import_limit_w,
@@ -866,8 +867,14 @@ class Household:
                 pool_control=mapped_planning_path(device, active_mappings.get(device["key"], {}),
                     self.resolved_options().get("pool_water_temperature_entity")) == "pool",
             )
+            if requires_house_power(device):
+                fields = {}
+                errors = hot_water_setup_errors(self.resolved_options(), field_errors=fields)
+                if errors:
+                    report["mapping_status"] = "invalid"
+                    report["field_errors"] = {**report.get("field_errors", {}), **fields}
             if report["mapping_status"] != "ready":
-                field_targets.extend({"key": key, "scope": "configuration" if key == "pool_water_temperature_entity" else "mapping", "device_key": device["key"],
+                field_targets.extend({"key": key, "scope": "configuration" if key in ("pool_water_temperature_entity", HOUSE_POWER_FIELD) else "mapping", "device_key": device["key"],
                                       "message": "; ".join(messages)}
                                      for key, messages in report.get("field_errors", {}).items())
                 self.device_control_mapping_gaps.append(

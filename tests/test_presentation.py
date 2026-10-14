@@ -10,6 +10,26 @@ from shs_core.planning import unplanned_services
 
 
 class PresentationTests(unittest.TestCase):
+    def test_hot_water_requires_shared_house_power_without_an_included_battery(self):
+        from shs_core.configuration_fields import _configuration_sections
+        water = deepcopy(self.device)
+        water.update(category='hot_water', control_type='permit_inhibit',
+                     mapping={'control_type': 'permit_inhibit', 'actuator_entity_ids': ['switch.water']},
+                     mapping_status='ready', mapping_error=None)
+        self.options.pop('house_consumption_power_entity', None)
+        view = self.view([water])[0]
+        self.assertFalse(view['execution_eligibility']['eligible'])
+        self.assertIn('house_consumption_power_entity', view['field_errors'])
+        fields = {field['key']: field for section in _configuration_sections(hot_water_control_required=True)
+                  for field in section['fields']}
+        self.assertTrue(fields['house_consumption_power_entity']['required'])
+        self.assertFalse(fields['solar_production_power_entity']['required'])
+        self.options['house_consumption_power_entity'] = 'sensor.house'
+        corrected = self.view([water])[0]
+        self.assertEqual(corrected['mapping_readiness']['state'], 'ready')
+        self.assertNotIn('house_consumption_power_entity', corrected.get('field_errors', {}))
+        self.assertNotIn('max_inhibit_slots', {f['key'] for f in corrected['fields']})
+
     def test_no_forecast_or_old_website_refresh_does_not_block_permission_correction(self):
         from test_device_controls import _battery
         from shs_core.operating_modes import execution_mode_options

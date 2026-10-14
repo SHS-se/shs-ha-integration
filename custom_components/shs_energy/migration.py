@@ -206,7 +206,7 @@ def migrate_options(
         report["removed"].update(f"{path}.{field}" for field in set(raw) - allowed)
         required = {
             "variable_power": ("control_entity_id", "minimum_value", "maximum_value"),
-            "permit_inhibit": ("actuator_entity_ids", "max_inhibit_slots"),
+            "permit_inhibit": ("actuator_entity_ids",),
             "setpoint": ("actuator_entity_ids", "temperature_entity_id"),
             "switch_schedule": ("actuator_entity_ids",),
         }.get(draft.get("control_type"))

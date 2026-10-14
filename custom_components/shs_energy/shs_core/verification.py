@@ -35,7 +35,7 @@ def operation_name(device, kind, slot, result):
         return "setpoint"
     command = slot["device_commands"][device.removeprefix("device:")]
     if kind == "permit_inhibit":
-        return "permit" if command["permitted"] else "inhibit"
+        return "permit" if result["decision"]["permitted"] else "inhibit"
     return "on" if command["on_seconds"] else "off"
 
 
@@ -51,6 +51,9 @@ def _signature(record):
     # reasons and command values still distinguish decisions.
     signature["result"] = {key: value for key, value in record.get("result", {}).items()
                            if key != "water_temperature_c"}
+    if "decision" in signature["result"]:
+        signature["result"]["decision"] = {key: value for key, value in signature["result"]["decision"].items()
+                                           if key != "house_consumption_w"}
     return signature
 
 

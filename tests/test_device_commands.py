@@ -69,12 +69,12 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.controller.status['device:heater']['state'], 'fault')
 
-    async def test_maximum_inhibit_permits_while_keeping_control(self):
+    async def test_elapsed_pause_never_overrides_planner_permission(self):
         await self.controller.async_start()
         self.controller.ownership.records['device:heater']['inhibited_since'] = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
         await self.controller.async_tick()
-        self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertEqual(self.controller.status['device:heater']['state'], 'limited')
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+        self.assertEqual(self.controller.status['device:heater']['state'], 'commanded')
         self.assertIn('device:heater', self.controller.ownership.records)
 
     async def test_setpoint_and_mapping_edit_restore_original_target(self):

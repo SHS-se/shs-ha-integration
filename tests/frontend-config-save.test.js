@@ -1575,3 +1575,32 @@ test('manual replan failure is readable and allows retry', async () => {
   assert.match(panel._renderReplanRecommendations(), /Could not replan: Planning unavailable/);
   assert.match(panel._renderReplanRecommendations(), /aria-busy="false"/);
 });
+
+test('hot-water house-power correction opens Energy, highlights its field and clears after correction', () => {
+  const panel = splitPanel();
+  const field = {key: 'house_consumption_power_entity', label: 'Instantaneous house consumption', kind: 'entity', required: true};
+  const section = {id: 'prices_forecasts', tab: 'energy', title: 'Solar and electrical measurements', fields: [field]};
+  panel._data.sections = [section];
+  const fix = {kind: 'fields', fields: [{key: field.key, scope: 'configuration', message: 'Choose house power for hot-water control'}]};
+  const water = {key: 'water', name: 'Hot water', category: 'hot_water', control_type: 'permit_inhibit', included: true,
+    planned: true, fields: [], system_fields: [], permission: {}, mapping_status: 'invalid',
+    field_errors: {[field.key]: ['Choose house power for hot-water control']}, execution_status: {state: 'fault', fix}};
+  panel._data.devices = [water];
+  panel._data.attention = [{key: 'device_control_mapping', severity: 'warning', title: 'Hot-water setup needs attention', fix}];
+  assert.match(panel._renderAttention(), /data-field-token="configuration::house_consumption_power_entity"/);
+  assert.match(panel._renderSection(section), /aria-invalid="true"/);
+  assert.doesNotMatch(panel._renderSection(section), /Add a setting/);
+  assert.doesNotMatch(panel._renderDevice(water), /Controls configured/);
+  let focused = false;
+  panel.shadowRoot = {querySelectorAll: () => [{dataset: {fieldToken: 'configuration::' + field.key},
+    scrollIntoView() {}, querySelector: () => ({focus() {focused = true;}})}]};
+  panel._openField('configuration::' + field.key);
+  assert.equal(panel._tab, 'energy');
+  assert.ok(panel._expanded.has('section:prices_forecasts'));
+  assert.equal(focused, true);
+  panel._data.attention = [];
+  water.execution_status = {};
+  water.field_errors = {};
+  water.mapping_status = 'ready';
+  assert.equal(panel._fieldProblems(field.key).length, 0);
+});

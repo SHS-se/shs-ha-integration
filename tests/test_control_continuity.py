@@ -145,29 +145,29 @@ class GenericDeviceTests(Continuity):
         self.assertIn('device:heater', self.controller.ownership.records)
         self.assertEqual(self.calls, [])
 
-    async def test_the_maximum_pause_allows_a_quarter_of_running_while_keeping_control(self):
+    async def test_elapsed_pause_keeps_the_planner_permission_without_a_forced_run(self):
         await self.start()
         self.controller.ownership.records['device:heater']['inhibited_since'] = (
             datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
         await self.controller.async_tick()
-        self.assertEqual(self.status()['state'], 'limited', self.status())
-        self.assertEqual(self.calls, [('switch.heater', 'on')])
+        self.assertEqual(self.status()['state'], 'commanded', self.status())
+        self.assertEqual(self.calls, [])
         self.assertIn('device:heater', self.controller.ownership.records, 'control is kept')
         self.calls.clear()
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [], 'it may run for the rest of that quarter')
+        self.assertEqual(self.calls, [])
         later(self, 16)
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.heater', 'off')])
+        self.assertEqual(self.calls, [])
 
-    async def test_the_maximum_pause_also_applies_while_no_plan_is_available(self):
+    async def test_elapsed_pause_without_a_plan_holds_the_last_command(self):
         await self.start()
         self.coordinator.current_plan_slot = None
         self.controller.ownership.records['device:heater']['inhibited_since'] = (
             datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.heater', 'on')])
-        self.assertEqual(self.status()['state'], 'limited', self.status())
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.status()['state'], 'idle', self.status())
 
 
 class EvTests(Continuity):

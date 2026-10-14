@@ -62,13 +62,16 @@ Controlling then resumes from the current state.
 When an entity returns, SHS only carries out what the current plan and the select
 already require. If the device is already in the planned state, nothing is sent.
 
-## Limits that still apply while holding
+## Hot-water demand permission
 
-- A permit/inhibit device that reaches its reviewed maximum pause
-  (`max_inhibit_slots`) is allowed to run for one quarter while SHS keeps control,
-  including when no plan is available. This used to be a fault that handed the
-  device back until the plan changed.
-- Native equipment protections are unaffected. SHS minimum-on/off timers were retired on 4 October 2026; they no longer delay planned transitions or explicit handover.
+User requirement, 14 October 2026: hot water follows planner-chosen high/low
+house-demand levels only. The inherited maximum-pause setting and forced
+15-minute permitted run are removed. Elapsed inhibition never changes a switch,
+including when no plan is available. This supersedes the earlier pause exception.
+See [hot-water demand control](hot-water-demand-control.md).
+
+Native equipment protections are unaffected. SHS minimum-on/off timers were
+retired on 4 October 2026; they no longer delay planned transitions or handover.
 
 ## Status values
 
@@ -77,7 +80,6 @@ already require. If the device is already in the planned state, nothing is sent.
 | `pending` (Waiting to resume) | An interrupted reading within the five-minute grace, or a handover waiting for its actuator. |
 | `fault` | Needs attention. The device still holds its last setting. |
 | `idle` | Holding with no current plan, or with unreadable website choices. |
-| `limited` | Running for a quarter after the maximum pause. |
 
 ## Removing the integration
 
@@ -88,8 +90,8 @@ that it is handed back to its own settings.
 
 `controller.py`: `inactive_status` lists the only release reasons, `hold_reason`
 holds on unreadable website choices, `report_gap` reports interrupted readings,
-`check_targets` refuses a changed control entity, and `inhibit_limit` enforces the
-maximum pause. `async_start` and `async_stop` send nothing. Tests:
+`check_targets` refuses a changed control entity. `async_start` and `async_stop`
+send nothing. Tests:
 `tests/test_control_continuity.py` and `tests/test_pool_switch_gap.py`.
 
 ## Battery

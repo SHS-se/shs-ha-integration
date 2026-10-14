@@ -18,6 +18,7 @@ from .device_operations import (DeviceOperations, ControlDeadlineError, ControlO
                                 correction_details, EXTERNAL_CHANGE)
 from .device_ownership import DeviceOwnership
 from .operating_modes import device_mode
+from .hot_water import HotWaterConfigurationError
 from .gateway_journal import GatewayConflict
 
 
@@ -39,7 +40,7 @@ class DeviceIntent:
         result = cls(**deepcopy(value))
         if (type(result.request_id) is not str or not result.request_id or
                 type(result.device) is not str or not result.device or
-                result.operation not in ('apply', 'release', 'inhibit') or
+                result.operation not in ('apply', 'release') or
                 type(result.parameters) is not dict or type(result.headroom_reserved) is not bool or
                 any(type(v) is not int or v < 0 for v in (result.configuration_revision, result.policy_revision))):
             raise ValueError('Invalid device intention')
@@ -120,7 +121,7 @@ class DeviceGateway(DeviceOperations):
         if self.local_obligation:
             if self.closed or self.options() != self.active_options:
                 raise GatewayConflict('Physical obligation permission changed')
-            if not self.restoring and self.intent.operation != 'inhibit':
+            if not self.restoring:
                 raise GatewayConflict('Only restoration and maximum-inhibit obligations run locally')
             return
         self.authorize(self.intent)
@@ -201,7 +202,7 @@ class DeviceGateway(DeviceOperations):
         return super().make_command(identity, phase, action)
 
     async def maintain_obligations(self):
-        """Continue captured restoration and maximum-inhibit promises offline.
+        """Finish explicitly requested restoration offline.
 
         No schedule is selected here. A lost app session alone does not restore
         ordinary devices; their captured settings survive a restart as before.
@@ -236,15 +237,14 @@ class DeviceGateway(DeviceOperations):
                 release = mode != 'controlling' or excluded or bool(override and row.state != 'off') or bool(global_override and global_row.state != 'off')
                 if not release and record.pop('restoration_pending', None) is not None:
                     await self.ownership.save()
-                self.intent = DeviceIntent(uuid4().hex,device,'release' if release else 'inhibit',0,0,{},True)
+                if not release:
+                    continue
+                self.intent = DeviceIntent(uuid4().hex,device,'release',0,0,{},True)
                 self.device = device
                 self.sequence = 0
                 self.local_obligation = True
                 try:
-                    if release:
-                        await self.restore(device)
-                    else:
-                        await self.hold_inhibit_limit(device,options)
+                    await self.restore(device)
                 except Exception as error:
                     self.report(device,'pending',reason=str(error),**correction_details(error))
                 finally:
@@ -277,16 +277,14 @@ class DeviceGateway(DeviceOperations):
                     await self.restore(intent.device)
                 else:
                     self.check_authority()
-                    if intent.operation == 'inhibit':
-                        result = await self.hold_inhibit_limit(intent.device, self.active_options)
-                    elif intent.device == 'pool':
+                    if intent.device == 'pool':
                         result = await self.execute_pool(self.active_options, self.slot)
                     elif intent.device == 'ev':
                         result = await self.execute_ev(self.active_options, self.slot)
                     else:
                         result = await self.execute_device(intent.device, self.active_options, self.slot)
             except Exception as exception:
-                error = {'message':str(exception), 'kind':'deadline' if isinstance(exception, ControlDeadlineError) else 'observation' if isinstance(exception, ControlObservationError) else 'rejected',
+                error = {'message':str(exception), 'kind':'deadline' if isinstance(exception, ControlDeadlineError) else 'observation' if isinstance(exception, ControlObservationError) else 'configuration' if isinstance(exception, HotWaterConfigurationError) else 'rejected',
                          'details':correction_details(exception)}
                 if isinstance(exception, ControlObservationError):
                     error.update(entity=exception.entity, unavailable=exception.unavailable, stale=exception.stale)

@@ -464,16 +464,32 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.slot['device_commands'] = {'heater': ({'type': kind, 'permitted': False} if kind == 'permit_inhibit'
                                                   else {'type': kind, 'on_seconds': 0})}
 
-    async def test_maximum_inhibit_is_enforced_at_its_deadline(self):
+    async def test_paused_device_has_no_maximum_pause_deadline(self):
         self.configure_heater()
         await self.controller.async_start()
         self.assertEqual(self.states['switch.heater'].state, 'off')
-        self.assertIn(('device:heater', 'maximum_inhibit'), self.scheduler.deadlines)
+        self.assertNotIn(('device:heater', 'maximum_inhibit'), self.scheduler.deadlines)
         self.advance(1800)
         await self.drain()
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+
+    async def test_hot_water_house_power_events_wake_control_without_a_battery(self):
+        self.configure_heater()
+        self.options['device_modes'] = {'heater': 'controlling'}
+        self.slot['device_commands']['heater'] = {'type': 'house_demand_permission', 'expected_permitted': True,
+            'allow_below_w': 1500, 'inhibit_above_w': 3500}
+        self.states['sensor.house_power'].state = '1000'
+        await self.controller.async_start()
+        self.assertIn('sensor.house_power', self.scheduler.dependencies['device:heater'])
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.assertEqual(self.controller.status['device:heater']['state'], 'limited')
-        self.assertIn('maximum of 2 quarters', self.controller.status['device:heater']['reason'])
+        self.states['sensor.house_power'].state = '5000'
+        self.event('sensor.house_power')
+        await self.drain()
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+        self.states['sensor.house_power'].state = '1000'
+        self.event('sensor.house_power')
+        await self.drain()
+        self.assertEqual(self.states['switch.heater'].state, 'on')
 
     async def test_omitted_timings_allow_initial_switching_transitions_and_restoration(self):
         self.configure_heater('switch_schedule')

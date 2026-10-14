@@ -50,8 +50,9 @@ class Configuration:
         for mapping in cleaned.get('device_control_mappings', {}).values():
             mapping.pop('minimum_on_seconds', None)
             mapping.pop('minimum_off_seconds', None)
+            mapping.pop('max_inhibit_slots', None)
         if cleaned != self.options():
-            await self.commit(self.revision, cleaned, 'retire-shs-run-timers')
+            await self.commit(self.revision, cleaned, 'retire-shs-control-timers')
 
     async def _apply(self):
         desired = self.data

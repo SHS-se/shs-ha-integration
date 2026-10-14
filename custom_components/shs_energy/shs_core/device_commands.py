@@ -1,5 +1,6 @@
 """Schema-7 executable decisions and local capability validation."""
 from math import isfinite
+from .hot_water import DEMAND_COMMAND, validate_demand_command
 
 
 
@@ -17,6 +18,8 @@ def validate_commands(commands, models):
         kind = command.get('type')
         if kind == 'unavailable':
             valid = set(command) == {'type', 'reason'} and isinstance(command['reason'], str) and bool(command['reason'])
+        elif kind == DEMAND_COMMAND:
+            valid = kinds[key] == 'permit_inhibit' and validate_demand_command(command)
         elif kind != kinds[key]:
             valid = False
         elif kind == 'setpoint':
@@ -63,10 +66,6 @@ def execution_setup_errors(mapping, contract=None):
         return ['configure combined switching in Home Assistant using one control entity']
     if len(mapping.get('actuator_entity_ids', [])) > 1:
         return ['choose exactly one control entity']
-    if kind == 'permit_inhibit':
-        maximum = mapping.get('max_inhibit_slots')
-        if not numeric(maximum) or maximum < 1 or maximum != int(maximum):
-            return ['choose the maximum number of quarters this device may be paused']
     targets = actuator_targets(mapping)
     if not targets:
         return ['choose the switch or temperature control SHS should use']

@@ -1227,7 +1227,6 @@ def validate_plan_contract(
         elif control.get("type") == "duty_cycle":
             rated_power_w = control.get("rated_power_w")
             expected_power = control.get("expected_power_w_by_slot")
-            maximum_inhibit = control.get("max_consecutive_inhibit_slots")
             if (
                 device != "boiler"
                 or isinstance(rated_power_w, bool)
@@ -1242,9 +1241,6 @@ def validate_plan_contract(
                     or value < 0
                     for value in expected_power
                 )
-                or isinstance(maximum_inhibit, bool)
-                or not isinstance(maximum_inhibit, int)
-                or maximum_inhibit < 1
             ):
                 raise OptimisationInputError(
                     "optimisation duty-cycle service is invalid"
@@ -1253,7 +1249,6 @@ def validate_plan_contract(
                 "type": "duty_cycle",
                 "rated_power_w": float(rated_power_w),
                 "expected_power_w_by_slot": [float(value) for value in expected_power],
-                "max_consecutive_inhibit_slots": maximum_inhibit,
             }
         else:
             raise OptimisationInputError("optimisation service control is unsupported")
@@ -1633,7 +1628,6 @@ def validate_plan_contract(
                         f"{key} scenario {service_id} inhibit slots are invalid"
                     )
                 inhibited_set = set(inhibited)
-                consecutive = 0
                 delivered = 0.0
                 for index, start in enumerate(starts):
                     in_window = (
@@ -1643,11 +1637,6 @@ def validate_plan_contract(
                     if not in_window:
                         continue
                     is_inhibited = index in inhibited_set
-                    consecutive = consecutive + 1 if is_inhibited else 0
-                    if consecutive > control["max_consecutive_inhibit_slots"]:
-                        raise OptimisationInputError(
-                            f"{key} scenario {service_id} inhibit duration is unsafe"
-                        )
                     if is_inhibited != (slots[index]["boiler_permitted"] is False):
                         raise OptimisationInputError(
                             f"{key} scenario {service_id} permission does not match inhibit slots"

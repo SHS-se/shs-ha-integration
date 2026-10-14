@@ -172,3 +172,21 @@ test('storage details show their measurement age separately from current gauges'
   expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
   await page.screenshot({path:`test-results/${info.project.name}-storage-details.png`,fullPage:true});
 });
+
+test('hot-water planned actions explain measured-demand permission in household units',async({page},info)=>{
+  await page.route('**/api/state',async route=>{
+    const response=await route.fetch();const data=await response.json();
+    const schedule=data.snapshot.entries[0].schedule;
+    schedule.devices.push({key:'water',name:'Hot water',category:'hot_water'});
+    for(const slot of schedule.household)slot.device_commands={...slot.device_commands,
+      water:{type:'house_demand_permission',expected_permitted:false,allow_below_w:1500,inhibit_above_w:3500}};
+    await route.fulfill({json:data});
+  });
+  await page.goto('./#schedule');
+  const row=page.getByRole('row').filter({has:page.getByRole('cell',{name:'Hot water',exact:true})});
+  await expect(row).toContainText('Allow at 1.5 kW of house demand or lower. Pause above 3.5 kW.');
+  await expect(row).toContainText('Forecast for this interval: paused. Control follows measured house power.');
+  await expect(row).not.toContainText('house_demand_permission');
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+  await page.screenshot({path:`test-results/${info.project.name}-hot-water.png`,fullPage:true});
+});

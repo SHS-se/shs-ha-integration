@@ -80,6 +80,20 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError,'missing after adoption'):
             await app.load(self.gateway.value,self.credentials)
 
+    async def test_retired_hot_water_pause_setting_is_removed_without_changing_control_mode(self):
+        options = {'device_modes': {'water': 'controlling'}, 'device_control_mappings': {
+            'water': {'control_type': 'permit_inhibit', 'actuator_entity_ids': ['switch.water'],
+                      'power': 3000, 'max_inhibit_slots': 4}}}
+        await self.app.commit(1, options, 'old-water-settings')
+        reopened = Configuration(self.root, {'installation': 'original'}, self.gateway.install, project=deepcopy)
+        await reopened.load(self.gateway.value, self.credentials)
+        self.assertEqual(reopened.options()['device_modes'], options['device_modes'])
+        self.assertNotIn('max_inhibit_slots', reopened.options()['device_control_mappings']['water'])
+        self.assertEqual(reopened.options(), self.gateway.options())
+        revision = reopened.revision
+        await reopened.load(self.gateway.value, self.credentials)
+        self.assertEqual(reopened.revision, revision)
+
     async def test_retire_live_four_hour_setting_once_preserving_modes_and_acknowledgement(self):
         options = {'device_modes': {'pool': 'controlling'}, 'device_control_mappings': {
             'pool': {'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.pool'],

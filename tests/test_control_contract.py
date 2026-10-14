@@ -215,7 +215,7 @@ class RegressionTests(unittest.TestCase):
         )
         self.assertEqual(
             keys("permit_inhibit", "boiler"),
-            ["actuator_entity_ids", "power", "max_inhibit_slots",
+            ["actuator_entity_ids", "power",
              "control_override_entity"],
         )
 

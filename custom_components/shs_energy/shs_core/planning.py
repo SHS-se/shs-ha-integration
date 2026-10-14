@@ -277,18 +277,6 @@ def build_services(
         # Demand is a forecast, while active watts can be a current sensor
         # reading or a learned running level. Their difference is not a
         # configuration failure and must not discard the household plan.
-        inhibit_values: list[int] = []
-        for model, mapping in boiler_controls:
-            maximum_inhibit = parse_number(
-                mapping.get("max_inhibit_slots"),
-                f"{model['name']} maximum inhibit",
-            )
-            if not maximum_inhibit.is_integer() or maximum_inhibit < 1:
-                raise OptimisationInputError(
-                    f"{model['name']} maximum inhibit must be a positive whole number"
-                )
-            inhibit_values.append(int(maximum_inhibit))
-        maximum_inhibit = min(inhibit_values)
         samples["hot_water"] = sum(
             int(model["profile_sample_count"]) for model in boiler_models
         )
@@ -309,7 +297,6 @@ def build_services(
                     "type": "duty_cycle",
                     "rated_power_w": rated_power_w,
                     "expected_power_w_by_slot": expected_w,
-                    "max_consecutive_inhibit_slots": maximum_inhibit,
                 },
                 "priority": 1,
             })

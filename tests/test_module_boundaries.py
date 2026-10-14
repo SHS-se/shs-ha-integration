@@ -41,6 +41,7 @@ PURE_MODULES = (
     "shs_core.const", "shs_core.replan_listener",
     "shs_core.device_controls",
     "shs_core.device_commands",
+    "shs_core.hot_water",
     "migration",
     "shs_core.network_traffic",
     "shs_core.controller_metrics", "shs_core.resource_profiling",

@@ -19,6 +19,7 @@ from .controller_metrics import ControllerMetrics, fingerprint, record_time
 from .battery_commands import validate_battery_command, battery_mode_key
 from .configuration_values import resolve_battery_quantities, resolve_quantity
 from .device_commands import actuator_targets, execution_setup_errors, validate_commands
+from .hot_water import DEMAND_COMMAND, HOUSE_POWER_FIELD, demand_permission, hot_water_setup_errors, HotWaterConfigurationError
 from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, planning_path
 from .device_controls import pool_requested_w
 
@@ -32,7 +33,6 @@ EV_MAX_AGE_SECONDS = 15 * 60
 # Restarts and reconnects hide an entity for about a minute; longer needs attention.
 OBSERVATION_GRACE_SECONDS = 5 * 60
 EXTERNAL_CHANGE = "Actuator changed outside SHS; set this device to Verification and back to Controlling to resume"
-INHIBIT_LIMIT = "Paused for its maximum of {:g} quarters, so it may run for a quarter before the plan can pause it again"
 
 
 class ControlObservationError(ValueError):
@@ -67,6 +67,8 @@ class ControlDeadlineError(ValueError):
 
 
 def correction_details(error):
+    if isinstance(error, HotWaterConfigurationError):
+        return {"fix": error.fix, "next_step": error.next_step}
     return error.details if isinstance(error, (ControlObservationError, PlanChangedError)) else {}
 
 
@@ -514,40 +516,6 @@ class DeviceOperations:
             raise ValueError("The control entity changed while this device was Controlling; set it to "
                              "Verification and back to Controlling to apply the change")
 
-    def inhibit_limit(self, record, mapping, now):
-        """Once a paused device reaches its reviewed maximum pause, it may run for a quarter.
-
-        SHS enforces this itself and keeps control. It used to be a fault whose
-        handover to the device's own settings lasted until the plan changed.
-        """
-        forced = record.get("permit_forced_until")
-        if forced and now < datetime.fromisoformat(forced):
-            return datetime.fromisoformat(forced)
-        record.pop("permit_forced_until", None)
-        since = record.get("inhibited_since")
-        if not since or (now - datetime.fromisoformat(since)).total_seconds() < mapping["max_inhibit_slots"] * 900:
-            return None
-        until = now + timedelta(seconds=900)
-        record["permit_forced_until"] = until.isoformat()
-        return until
-
-    async def hold_inhibit_limit(self, device, options):
-        """Without a plan every setting is held, but a paused device still gets its permitted run."""
-        record = self.ownership.records.get(device)
-        mapping = options.get("device_control_mappings", {}).get(device.removeprefix("device:"), {})
-        if not device.startswith("device:") or not record or mapping.get("control_type") != "permit_inhibit":
-            return False
-        until = self.inhibit_limit(record, mapping, datetime.now(timezone.utc))
-        if until is None:
-            return False
-        for entity in actuator_targets(mapping):
-            await self.command(entity, "on")
-        record.pop("inhibited_since", None)
-        await self.save()
-        self.device_deadline("permitted_run", until)
-        self.report(device, "limited", reason=INHIBIT_LIMIT.format(mapping["max_inhibit_slots"]), retry_automatically=True)
-        return True
-
     def battery_measurement(self, options):
         """Direction comes from explicit observations, magnitude from either power sign."""
         observed = []
@@ -664,7 +632,8 @@ class DeviceOperations:
         if command["type"] == "unavailable":
             # A plan that cannot drive the device releases nothing; only the select does.
             return {"state": "unsupported", "reason": self.holding(device, command["reason"])}
-        if command["type"] != mapping["control_type"]:
+        kind = "permit_inhibit" if command["type"] == DEMAND_COMMAND else command["type"]
+        if kind != mapping["control_type"]:
             raise ValueError("the website command does not match the reviewed local method")
         errors = execution_setup_errors(mapping)
         if errors:
@@ -696,8 +665,11 @@ class DeviceOperations:
                 await self.restore(device)
                 return {"state": "overridden", "reason": self.ownership.overrides[device]}
         values = {}
-        limited = None
-        kind = command["type"]
+        demand = None
+        if command["type"] == DEMAND_COMMAND:
+            if hot_water_setup_errors(options):
+                raise HotWaterConfigurationError(options)
+            demand = self.watts(options[HOUSE_POWER_FIELD])
         if kind == "setpoint":
             low = max(mapping["minimum_temperature_c"], command["minimum_c"])
             high = min(mapping["maximum_temperature_c"], command["maximum_c"])
@@ -721,23 +693,15 @@ class DeviceOperations:
                     raise ValueError("no hardware temperature step fits the plan envelope")
                 values[entity] = value
         else:
-            on = command["permitted"] if kind == "permit_inhibit" else command["on_seconds"] == 900
-            values = {entity: "on" if on else "off" for entity in targets}
-            now = datetime.now(timezone.utc)
-            if record and kind == "permit_inhibit" and not on and (limited := self.inhibit_limit(record, mapping, now)):
-                on = True
-                values = {entity: "on" for entity in targets}
-                self.device_deadline("permitted_run", limited)
-        record = await self.capture(device, options, targets)
-        now = datetime.now(timezone.utc).isoformat()
-        if kind == "permit_inhibit":
-            if on:
-                record.pop("inhibited_since", None)
-                self.device_deadline("maximum_inhibit", None)
+            if command["type"] == DEMAND_COMMAND:
+                permission = self.actuator_state(targets[0]).state
+                if permission not in ("on", "off"):
+                    raise ValueError("Hot-water permission switch must report on or off")
+                on = demand_permission(command, demand, permission == "on")
             else:
-                record.setdefault("inhibited_since", now)
-                self.device_deadline("maximum_inhibit", datetime.fromisoformat(record["inhibited_since"])
-                                     + timedelta(seconds=mapping["max_inhibit_slots"] * 900))
+                on = command["permitted"] if kind == "permit_inhibit" else command["on_seconds"] == 900
+            values = {entity: "on" if on else "off" for entity in targets}
+        record = await self.capture(device, options, targets)
         for entity, value in values.items():
             await self.command(entity, value)
         await self.save()
@@ -747,9 +711,8 @@ class DeviceOperations:
             decision = {"kind": kind, "on": command["on_seconds"] > 0}
         else:
             decision = {"kind": kind, "permitted": on}
-        if limited:
-            return {"state": "limited", "reason": INHIBIT_LIMIT.format(mapping["max_inhibit_slots"]),
-                    "decision": decision, "retry_automatically": True}
+            if demand is not None:
+                decision.update(house_consumption_w=demand, allow_below_w=command["allow_below_w"], inhibit_above_w=command["inhibit_above_w"])
         return {"state": "commanded", "reason": "actuator targets acknowledged; delivered heat or power is not inferred",
                 "decision": decision}
 

@@ -24,13 +24,14 @@ from .controller_metrics import ControllerMetrics, fingerprint, record_time
 from .battery_commands import validate_battery_command, battery_mode_key
 from .configuration_values import resolve_battery_quantities, resolve_quantity
 from .device_commands import actuator_targets, execution_setup_errors, validate_commands
+from .hot_water import HotWaterConfigurationError
 from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
 
 _LOGGER = logging.getLogger(__name__)
 from .device_operations import (DeviceOperations, ControlObservationError, ActuatorUnavailableError,
     PlanChangedError, ControlDeadlineError, correction_details, checked_state, battery_limit_value,
     DEVICES, CONFIRM_SECONDS, BATTERY_MAX_AGE_SECONDS, POOL_MAX_AGE_SECONDS, EV_MAX_AGE_SECONDS,
-    OBSERVATION_GRACE_SECONDS, EXTERNAL_CHANGE, INHIBIT_LIMIT)
+    OBSERVATION_GRACE_SECONDS, EXTERNAL_CHANGE)
 
 
 class ScheduledController(DeviceOperations):
@@ -91,6 +92,8 @@ class ScheduledController(DeviceOperations):
             self.diagnostic_evaluation['observations'].update(response['diagnostics']['observations'])
         error = response['error']
         if error:
+            if error['kind'] == 'configuration':
+                raise HotWaterConfigurationError(options)
             if error['kind'] == 'deadline':
                 raise ControlDeadlineError(error['message'])
             if error['kind'] == 'observation':
@@ -120,12 +123,6 @@ class ScheduledController(DeviceOperations):
         if self.devices is not None and not self.verifying:
             return await self._physical(device, 'release', self.options())
         return await super().restore(device)
-
-    async def hold_inhibit_limit(self, device, options):
-        if self.devices is not None and not self.verifying:
-            return await self._physical(device, 'inhibit', options)
-        return await super().hold_inhibit_limit(device, options)
-
 
     async def save(self):
         if self.devices is not None and not self.verifying:
@@ -561,9 +558,7 @@ class ScheduledController(DeviceOperations):
                     supported = (plan.get("schema_version", 0) >= 7 and device.removeprefix("device:") in slot.get("device_commands", {})
                                  if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device))
                     if not slot or not supported:
-                        # A missing plan holds every setting, except a pause that reached its limit.
-                        if not await self.hold_inhibit_limit(device, options):
-                            self.report(device, "idle", reason=self.holding(device, "No current plan for this device"))
+                        self.report(device, "idle", reason=self.holding(device, "No current plan for this device"))
                         continue
                     if self.failed.get(device) == key:
                         continue

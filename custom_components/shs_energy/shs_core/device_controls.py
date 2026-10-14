@@ -272,8 +272,6 @@ def mapping_errors(
     elif control_type == "permit_inhibit":
         if not _entities(mapping, "actuator_entity_ids"):
             _field_error(errors, field_errors, "one permit/inhibit actuator is required", "actuator_entity_ids")
-        if not _positive_number(mapping, "max_inhibit_slots"):
-            _field_error(errors, field_errors, "maximum inhibit slots must be positive", "max_inhibit_slots")
     elif control_type == "switch_schedule":
         if not _entities(mapping, "actuator_entity_ids"):
             _field_error(errors, field_errors, "one switch actuator is required", "actuator_entity_ids")
@@ -439,7 +437,6 @@ def mapping_report(
             for key in (
                 *active_entity_fields,
                 "power",
-                "max_inhibit_slots",
                 "minimum_value",
                 "maximum_value",
                 "offset_minimum",

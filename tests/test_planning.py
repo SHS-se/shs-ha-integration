@@ -189,9 +189,7 @@ class BoilerServiceTests(unittest.TestCase):
         for service in services:
             self.assertEqual(service["device"], "boiler")
             self.assertEqual(service["control"]["type"], "duty_cycle")
-            self.assertEqual(
-                service["control"]["max_consecutive_inhibit_slots"], 20
-            )
+            self.assertNotIn("max_consecutive_inhibit_slots", service["control"])
 
     def test_expected_power_above_running_watts_preserves_forecast_demand(self) -> None:
         boiler = device(
