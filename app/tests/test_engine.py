@@ -170,6 +170,36 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(engine.close)
         return engine
 
+    async def test_source_admission_finishes_before_a_new_configuration_is_installed(self):
+        engine=self.engine()
+        await engine.load();await engine.activate()
+        engine._source_admission=None
+        entered,finish=asyncio.Event(),asyncio.Event()
+        request=self.service.source.request
+        async def delayed(operation,body):
+            if operation=='admission':
+                entered.set();await finish.wait()
+            return await request(operation,body)
+        self.service.source.request=delayed
+        admission=asyncio.create_task(engine.admit_sources())
+        await asyncio.wait_for(entered.wait(),1)
+        revision=engine.configuration.revision
+        edit=asyncio.create_task(engine.configuration.commit(revision,
+            dict(engine.configuration.options(),pool_volume_m3=25),'edit-during-source-admission'))
+        try:
+            done,_=await asyncio.wait({edit},timeout=.05)
+            self.assertFalse(done,'HA configuration changed while old source bindings were being admitted')
+        finally:
+            finish.set()
+            results=await asyncio.gather(admission,edit,return_exceptions=True)
+        for result in results:
+            if isinstance(result,BaseException):raise result
+        self.assertEqual(engine.configuration.revision,revision+1)
+        await engine.admit_sources()
+        self.assertEqual(engine._source_admission['revision'],revision+1)
+        self.assertEqual(engine.configuration.options()['pool_volume_m3'],25)
+        self.assertFalse(self.native_calls)
+
     async def test_sensor_projection_shares_calculations_only_within_one_pass(self):
         from contextlib import ExitStack
         from unittest.mock import PropertyMock

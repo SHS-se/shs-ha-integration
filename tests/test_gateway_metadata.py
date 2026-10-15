@@ -17,6 +17,7 @@ from test_execution_mode_select import load_adapter
 from shs_core.controller_inputs import configured_entity_ids
 from shs_core.gateway_journal import digest
 from shs_core.gateway_service import GatewayService
+from shs_core.native_readings import power
 from shs_core.source_admission import (validate_bindings, ordered, FACT_ATTRIBUTES, native_pool_idle, owned_device_sources,
     validate_pool_pause, temperature_available, temperature_metadata)
 
@@ -66,7 +67,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             json_bytes=lambda value:json.dumps(value).encode(), json_loads=json.loads,
             entity_display_name_by_id=lambda hass:dict(hass.names), area_name_by_id=lambda hass:dict(hass.areas),
             entity_area_id_by_id=lambda hass:{}, RecorderSource=lambda hass:None,
-            filter_sources=filter_sources, configured_entity_ids=configured_entity_ids))
+            filter_sources=filter_sources, configured_entity_ids=configured_entity_ids, power=power))
         for key,value in dict(validate_bindings=validate_bindings,ordered=ordered,FACT_ATTRIBUTES=FACT_ATTRIBUTES,
                 native_pool_idle=native_pool_idle,owned_device_sources=owned_device_sources,validate_pool_pause=validate_pool_pause,
                 temperature_available=temperature_available,temperature_metadata=temperature_metadata).items():
@@ -80,6 +81,55 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             value=dict(revision=1, digest=digest(installed)))
         self.source.attach()
         await self.source.refresh_configuration()
+
+    async def test_planned_pool_starts_after_battery_charge_ceiling_and_flow_clear(self):
+        import test_controller as pool_fixtures
+        from test_device_gateway import MemoryOperations
+        from command_fixture import controller_inputs
+        from shs_core.device_gateway import DeviceGateway
+
+        pool = pool_fixtures.ControllerTests()
+        pool.setUp()
+        pool.options['device_modes']['$pool'] = 'controlling'
+        self.source.report = self.rows.get
+        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        self.rows['number.charge']['state'] = '2'
+        self.rows['sensor.battery']['state'] = '2'
+        # An unchanged, available reading remains usable at final dispatch too.
+        self.rows['sensor.battery']['last_reported'] = '2026-01-01T00:00:00Z'
+        gateway = DeviceGateway(controller_inputs(pool.hass), pool.controller.options, pool.store,
+            pool.controller.native_executor, authorize=lambda intent:None,
+            before_external=self.source.external_ready, operations=MemoryOperations())
+        await gateway.load()
+        request = dict(request_id='waiting', device='pool', operation='apply',
+            configuration_revision=1, policy_revision=1, headroom_reserved=True,
+            parameters=dict(start=datetime.now(timezone.utc).isoformat(), heating_w=3300,
+                stop_temperature_c=30, models=pool.coordinator.optimisation_plan['device_models']))
+        waiting = await gateway.perform(request)
+        self.assertEqual(waiting['error']['kind'], 'deadline')
+        self.assertFalse(pool.calls)
+        self.rows['number.charge']['state'] = '0'
+        self.rows['sensor.battery']['state'] = '500'
+        waiting = await gateway.perform({**request, 'request_id':'physical-response'})
+        self.assertEqual(waiting['error']['kind'], 'deadline')
+        self.assertFalse(pool.calls)
+        self.rows['sensor.battery']['state'] = '2'
+        started = await gateway.perform({**request, 'request_id':'start'})
+        self.assertIsNone(started['error'])
+        self.assertEqual(pool.calls, [('switch.pool', 'on')])
+        self.assertEqual(started['ownership']['records']['pool']['originals'], {'switch.pool':'off'})
+
+    async def test_external_load_check_refuses_unavailable_or_invalid_battery_power(self):
+        self.source.report = self.rows.get
+        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        self.rows['number.charge']['state'] = '0'
+        for value in ('unavailable', 'unknown', 'nan'):
+            with self.subTest(value=value):
+                self.rows['sensor.battery']['state'] = value
+                self.assertFalse(self.source.external_ready('pool'))
+        self.rows['sensor.battery']['state'] = '0'
+        self.rows['sensor.battery']['attributes']['unit_of_measurement'] = 'kWh'
+        self.assertFalse(self.source.external_ready('pool'))
 
     async def test_statistics_wire_preserves_rows_and_logs_only_counts(self):
         rows = {'sensor.energy': [{'start': 1, 'end': 301, 'change': 0.125}]}

@@ -300,7 +300,7 @@ class HomeAssistantSource:
         options = battery.installation[3]
         try:
             watts, _ = power(self.report(options['battery_power_measurement_entity']),
-                source=options['battery_power_measurement_entity'], now_ms=int(datetime.now(timezone.utc).timestamp()*1000), signed=True)
+                source=options['battery_power_measurement_entity'], signed=True)
             mode = self.report(options['battery_mode_entity'])['state']
             limit = self.report(options['battery_charge_limit_entity'])
             ceiling = float(limit['state'])*(1000 if limit['attributes']['unit_of_measurement'] == 'kW' else 1)

@@ -760,6 +760,40 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(allowed,r.runtime.snapshot())
         finally:await r.runtime.close()
 
+    async def test_pool_reservation_ends_after_response_window_with_unchanged_soc(self):
+        r=Rig();r.rows['sensor.soc']['last_reported']=iso(0)
+        r.rows['sensor.battery']['state']='2'
+        await r.start()
+        try:
+            self.assertFalse(r.runtime.before_external_command('pool'))
+            allowed=False
+            for _ in range(10):
+                r.now+=5000
+                for entity,row in r.rows.items():
+                    if entity!='sensor.soc':row['last_reported']=iso(r.now)
+                await r.runtime.refresh();await r.runtime.host.idle()
+                allowed=r.runtime.before_external_command('pool')
+                if allowed:break
+            self.assertTrue(allowed,r.runtime.snapshot())
+            # The pool now starts. Its observed load replaces the temporary
+            # reservation; quiet SOC must not leave all grid capacity reserved.
+            r.rows['sensor.house']['state']='4300'
+            r.now+=25000
+            await r.runtime.refresh();await r.runtime.host.idle()
+            self.assertGreater(r.runtime.host.state.execution.live.pending_import_w,0)
+            # No source changes between these captures. Expiry itself must
+            # invalidate capture reuse, rather than waiting for another report.
+            r.now+=5001
+            await r.runtime.refresh();await r.runtime.host.idle()
+            status=r.runtime.snapshot()
+            self.assertEqual(status['assessment']['operation'],'grid_charge',status)
+            self.assertEqual(r.runtime.host.state.execution.live.pending_import_w,0)
+            self.assertEqual(r.rows['select.mode']['state'],'Command Charging (PV First)')
+            self.assertGreater(float(r.rows['number.charge']['state']),0)
+            self.assertTrue(r.runtime.host.state.groups[0].owned)
+            self.assertFalse(r.runtime.host.state.groups[0].release_pending)
+        finally:await r.runtime.close()
+
     async def test_release_and_readmission_have_distinct_scope_identity(self):
         r=Rig();await r.start()
         try:

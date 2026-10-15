@@ -874,6 +874,9 @@ class BatteryRuntime:
         if None in entities:
             raise ValueError('house, solar, signed grid/battery, SOC and Planned power bindings are required')
         reports={entity:read(entity) for entity in entities}
+        # This is a local response window, not a sensor report-age gate. Expiry
+        # changes the capture identity even when every source is unchanged.
+        self._external_pending={key:until for key,until in self._external_pending.items() if now<until}
         capture=digest({'reports':reports,'authority':asdict(self.host.state.authority.identity),'pending':self._external_pending})
         if capture==self._last_capture:
             conditions=self.host.state.conditions
@@ -888,8 +891,8 @@ class BatteryRuntime:
                 boundary='configured_household_reported_power',membership_revision=source,expected_membership_revision=self._model_sources)
         except ValueError as error:
             raise BatteryPowerReadingError(str(error)) from error
-        battery,bat_at=power(reports[options['battery_power_measurement_entity']],source=options['battery_power_measurement_entity'],signed=True)
-        grid,grid_at=power(reports[options['grid_power_entity']],source=options['grid_power_entity'],signed=True)
+        battery,_=power(reports[options['battery_power_measurement_entity']],source=options['battery_power_measurement_entity'],signed=True)
+        grid,_=power(reports[options['grid_power_entity']],source=options['grid_power_entity'],signed=True)
         soc=reports[options['battery_soc_entity']];soc_at=stamp(soc['last_reported'])
         fraction=float(soc['state'])/100
         if soc['attributes'].get('unit_of_measurement')!='%' or not isfinite(fraction) or not 0<=fraction<=1:
@@ -897,9 +900,9 @@ class BatteryRuntime:
         readback=surface['readback']
         # Setting values remain current until HA reports a change or makes the
         # entity unavailable. Source report ages are diagnostic information only.
-        external=[];times=[bat_at,grid_at,soc_at,*(r.at_ms for r in evidence)]
+        external=[]
         for key,entity,_ in self._demand_sources():
-            value,at=power(reports[entity],source=entity);times.append(at)
+            value,_=power(reports[entity],source=entity)
             external.append(rt.ExternalDemand(key,rt.Envelope(value,0),rt.Envelope(0,0)))
         if sum(e.observed.import_w for e in external)>accounting.house_w+1e-6:
             raise ValueError('Planned device meters exceed gross house consumption')
@@ -926,7 +929,6 @@ class BatteryRuntime:
         observed=rt.Observed(group_id,rt.Observation(revision,now,valid,controls,(),envelope))
         # Gross nonbattery load is a conservative import frame. PV is included
         # separately as possible export, and never erased by a planned device.
-        self._external_pending={key:until for key,until in self._external_pending.items() if min(times)<until}
         frame=rt.FrameObserved(rt.Frame(revision,now,valid,
             rt.Envelope(max(accounting.house_w,authority.plant.import_limit_w if self._external_pending else 0), max(0,accounting.pv_w-accounting.house_w)),
             rt.Envelope(authority.plant.import_limit_w,authority.plant.export_limit_w),tuple(external)))
@@ -1062,7 +1064,7 @@ class BatteryRuntime:
     def before_external_command(self,device):
         """Reserve unknown pending demand before another adapter changes a load.
 
-        The reservation is intentionally conservative until a house report after
+        The reservation is intentionally conservative until a local capture after
         the response window. It never substitutes scheduled watts for actual load.
         Caller holds the shared household lock and retries after battery relief.
         """

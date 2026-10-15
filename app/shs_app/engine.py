@@ -288,18 +288,21 @@ class AppEngine:
         await self.admit_sources()
 
     async def admit_sources(self):
-        h = self.household
-        slot = h.current_plan_slot
-        paused = pool_paused(self.controller.status.get('pool',{}),slot,h.optimisation_plan,
-            self.mirror.read,self.controller.ownership)
-        value = dict(revision=self.configuration.revision,
-            bindings=source_bindings(h.resolved_options(),(h.optimisation_plan or {}).get('device_models', [])),
-            pool_pause=(dict(entity=self.controller.status['pool']['control_entity'],
-                until=(datetime.fromisoformat(slot['start'].replace('Z','+00:00'))+timedelta(minutes=15)).isoformat()) if paused else None))
-        if value != self._source_admission:
-            await self.gateway.call('source',dict(operation='admission',body=value))
-            self._source_admission = value
-            self.live_revision = None
+        # Bindings and the configuration revision form one installation. A
+        # settings save must not overtake this request on its way to HA.
+        async with self.configuration.lock:
+            h = self.household
+            slot = h.current_plan_slot
+            paused = pool_paused(self.controller.status.get('pool',{}),slot,h.optimisation_plan,
+                self.mirror.read,self.controller.ownership)
+            value = dict(revision=self.configuration.revision,
+                bindings=source_bindings(h.resolved_options(),(h.optimisation_plan or {}).get('device_models', [])),
+                pool_pause=(dict(entity=self.controller.status['pool']['control_entity'],
+                    until=(datetime.fromisoformat(slot['start'].replace('Z','+00:00'))+timedelta(minutes=15)).isoformat()) if paused else None))
+            if value != self._source_admission:
+                await self.gateway.call('source',dict(operation='admission',body=value))
+                self._source_admission = value
+                self.live_revision = None
 
     async def consume(self):
         async with self.consume_lock:
