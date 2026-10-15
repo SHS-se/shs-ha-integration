@@ -26,7 +26,7 @@ current validation pass and provide a direct correction action for each field.
 - Use the same field errors on Status, the affected device, and the owning editor.
   Suppress duplicate runtime configuration warnings only when the corresponding
   setup warning already provides the correction. Keep unrelated failures visible.
-- Distinguish missing configuration, invalid/duplicate sources, stale or unavailable
+- Distinguish missing configuration, invalid/duplicate sources, unavailable
   readings, insufficient history, and service failures. “Waiting for measurements”
   must not describe an unconfigured source. Do not route non-configuration failures
   to arbitrary setup fields; provide source-specific or diagnostic actions instead.
@@ -55,8 +55,7 @@ remain optional. SHS minimum continuous on/off settings were retired on 4 Octobe
 
 ## Measurement issues are not configuration errors
 
-A reading that is unavailable, not a number, stale (the battery's state of charge)
-or physically impossible is a source problem, not a setup failure. It leaves only
+A reading that is unavailable, not a number or physically impossible is a source problem, not a setup failure. It leaves only
 its own device out of the snapshot and the plan, exactly as that store's switch
 would; the rest of the home is planned as usual. The plan's `measurement_issues`
 name each reading. The panel shows them above every tab with **Inspect source
@@ -65,6 +64,11 @@ has no plan. Do not route these to setup fields or block unrelated readiness. A
 missing or mistyped entity, or a sensor with the wrong unit, remains a
 configuration error with its field targets. When the reading recovers, the server
 recommends a manual replan, because plans are kept between price releases.
+
+Source timestamps and report ages are diagnostic information only (user
+requirement, 15 October 2026). They must not create field errors, source-repair
+warnings, readiness failures, verification faults or planning exclusions. An
+available unchanged reading does not need periodic reports to remain usable.
 
 ## Required regression coverage
 

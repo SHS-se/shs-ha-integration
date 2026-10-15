@@ -17,7 +17,7 @@ class BatterySupplyTests(unittest.TestCase):
 
     def measure(self, scope, **changes):
         args = dict(scope=scope, house=self.house, pv=self.pv, planned_readings=self.devices,
-                    planned_keys=('ev','pool'), now_ms=2000, max_alignment_ms=100,
+                    planned_keys=('ev','pool'), now_ms=2000,
                     membership_revision='roles-1', expected_membership_revision='roles-1')
         args.update(changes)
         return measured_supply(**args)
@@ -48,8 +48,7 @@ class BatterySupplyTests(unittest.TestCase):
         self.assertEqual(result.eligible_gross_w, 1800)
         self.assertEqual(result.attributed_pv_w, 600)
         self.assertEqual(result.house_supply_bound_w, 1200)
-        for reading in (replace(self.devices['ev'], valid_until_ms=1500),
-                        replace(self.devices['ev'], watts=3100)):
+        for reading in (replace(self.devices['ev'], watts=3100),):
             with self.subTest(reading=reading), self.assertRaises(ValueError):
                 self.measure(scope, planned_readings={'ev': reading})
         # Including every Planned device is algebraically whole-house supply.
@@ -58,8 +57,7 @@ class BatterySupplyTests(unittest.TestCase):
 
     def test_unavailable_inputs_never_substitute_forecasts_or_ratings(self):
         scope=SupplyScope('selected',True)
-        for changes in [dict(house=None),dict(pv=None),dict(planned_readings={}),dict(now_ms=5000),
-                dict(pv=replace(self.pv,at_ms=500)),dict(pv=replace(self.pv,boundary='dc')),
+        for changes in [dict(house=None),dict(pv=None),dict(planned_readings={}),dict(pv=replace(self.pv,boundary='dc')),
                 dict(house=replace(self.house,basis='interval_average_ac')),
                 dict(membership_revision='roles-2'),dict(house=replace(self.house,watts=100)),
                 dict(planned_readings={**self.devices,'ev':replace(self.devices['ev'],source='house')})]:
@@ -67,6 +65,11 @@ class BatterySupplyTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.measure(SupplyScope('selected',False,('excluded',)))
         # Whole-house permission does not require individual decomposition.
         self.assertEqual(self.measure(SupplyScope('whole_house'),planned_readings={}).house_supply_bound_w,2000)
+
+    def test_report_age_and_different_report_times_do_not_block_supply(self):
+        result = self.measure(SupplyScope('selected', True), now_ms=999999999,
+                              pv=replace(self.pv, at_ms=500))
+        self.assertAlmostEqual(result.house_supply_bound_w, 2000 / 3)
 
     def test_live_sensor_bindings_require_instant_power_and_acknowledged_roles(self):
         options = {'house_consumption_power_entity': 'sensor.house', 'solar_production_power_entity': 'sensor.pv',
@@ -76,7 +79,7 @@ class BatterySupplyTests(unittest.TestCase):
                   for key, w in [('sensor.house', 3), ('sensor.pv', 1), ('sensor.ev', 1.2)]}
         kwargs = dict(scope=SupplyScope('selected', False, ('ev',)), options=options,
                       devices=[{'key': 'ev', 'planning_role': 'controllable'}], read_entity=values.get,
-                      at_ms=2000, max_age_ms=4000, max_alignment_ms=100, boundary='house-ac',
+                      at_ms=2000, capture_lifetime_ms=4000, boundary='house-ac',
                       membership_revision='roles-1', expected_membership_revision='roles-1')
         result, evidence = observe_supply(**kwargs)
         self.assertAlmostEqual(result.house_supply_bound_w, 800)

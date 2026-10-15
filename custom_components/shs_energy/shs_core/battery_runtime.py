@@ -33,15 +33,15 @@ from .device_controls import battery_measurement_errors, BatteryMeasurementConfi
 from .operating_modes import device_mode
 from .presentation import battery_status_text
 
-from .native_readings import AGE_MS, stamp, power, BatteryPowerReadingError
-ALIGNMENT_MS=15000
+from .native_readings import stamp, power, BatteryPowerReadingError
+CAPTURE_LIFETIME_MS=30000
 # Entities, the mode select and controller status all read one refresh's account.
 ACCOUNTING_REUSE_MS=1000
-# Journal/lock waits share the existing measurement lifetime. Freshness and
+# Journal/lock waits share the local capture lifetime. Capture validity and
 # authority are still checked after the lock, immediately before each write.
 # Route admission is one of those waits: through the app it is a round trip to
 # HA's durable journal, and its proposal is unusable once the observation expires.
-RUNTIME_LIMITS=rt.Limits(AGE_MS,1000,30000,AGE_MS)
+RUNTIME_LIMITS=rt.Limits(CAPTURE_LIFETIME_MS,1000,30000,CAPTURE_LIFETIME_MS)
 ADAPTER_REVISION='sigen-ess-dc-v2'
 OWNER='shs-household-battery'
 
@@ -876,31 +876,31 @@ class BatteryRuntime:
         reports={entity:read(entity) for entity in entities}
         capture=digest({'reports':reports,'authority':asdict(self.host.state.authority.identity),'pending':self._external_pending})
         if capture==self._last_capture:
-            return ()
+            conditions=self.host.state.conditions
+            if conditions and conditions.valid_until_ms>now+CAPTURE_LIFETIME_MS//2:
+                return ()
         surface=native_surface(options,reports)
         if surface['revision']!=self._surface['revision']:
             raise ValueError('native control metadata changed')
         source=source_revision(options,self._devices)
         try:
-            accounting,evidence=observe_supply(self._scope,options,self._devices,reports.get,at_ms=now,max_age_ms=AGE_MS,max_alignment_ms=ALIGNMENT_MS,
+            accounting,evidence=observe_supply(self._scope,options,self._devices,reports.get,at_ms=now,capture_lifetime_ms=CAPTURE_LIFETIME_MS,
                 boundary='configured_household_reported_power',membership_revision=source,expected_membership_revision=self._model_sources)
         except ValueError as error:
             raise BatteryPowerReadingError(str(error)) from error
-        battery,bat_at=power(reports[options['battery_power_measurement_entity']],source=options['battery_power_measurement_entity'],now_ms=now,signed=True)
-        grid,grid_at=power(reports[options['grid_power_entity']],source=options['grid_power_entity'],now_ms=now,signed=True)
+        battery,bat_at=power(reports[options['battery_power_measurement_entity']],source=options['battery_power_measurement_entity'],signed=True)
+        grid,grid_at=power(reports[options['grid_power_entity']],source=options['grid_power_entity'],signed=True)
         soc=reports[options['battery_soc_entity']];soc_at=stamp(soc['last_reported'])
         fraction=float(soc['state'])/100
-        if soc['attributes'].get('unit_of_measurement')!='%' or not isfinite(fraction) or not 0<=fraction<=1 or not soc_at<=now<soc_at+AGE_MS:
-            raise ValueError('fresh percentage battery SOC required')
+        if soc['attributes'].get('unit_of_measurement')!='%' or not isfinite(fraction) or not 0<=fraction<=1:
+            raise ValueError('percentage battery SOC required')
         readback=surface['readback']
         # Setting values remain current until HA reports a change or makes the
-        # entity unavailable. Only physical measurements have a freshness age.
+        # entity unavailable. Source report ages are diagnostic information only.
         external=[];times=[bat_at,grid_at,soc_at,*(r.at_ms for r in evidence)]
         for key,entity,_ in self._demand_sources():
-            value,at=power(reports[entity],source=entity,now_ms=now);times.append(at)
+            value,at=power(reports[entity],source=entity);times.append(at)
             external.append(rt.ExternalDemand(key,rt.Envelope(value,0),rt.Envelope(0,0)))
-        if max(times)-min(times)>ALIGNMENT_MS:
-            raise ValueError('battery source reports are not aligned')
         if sum(e.observed.import_w for e in external)>accounting.house_w+1e-6:
             raise ValueError('Planned device meters exceed gross house consumption')
         controls=tuple(zip(self._control_entities(),(readback['mode'],readback['charge_limit_w'],readback['discharge_limit_w'])))
@@ -909,7 +909,7 @@ class BatteryRuntime:
         # in the physical reservation until its response catches up.
         envelope=rt.Envelope(max(native.import_w,self._model.grid_charge.input(max(0,battery))),
                             max(native.export_w,self._model.discharge.output(max(0,-battery))))
-        valid=min(min(times)+AGE_MS, *(reading.valid_until_ms for reading in evidence))
+        valid=now+CAPTURE_LIFETIME_MS
         if not self.receipt_driven:
             for stream in self.host.state.ledger.streams:
                 row=read(stream.spec.stream_id)
@@ -923,22 +923,23 @@ class BatteryRuntime:
             state.groups[0].observation_revision, state.frame.revision if state.frame else 0)+1
         revision=self._capture_revision
         authority=state.authority
-        observed=rt.Observed(group_id,rt.Observation(revision,min(times),valid,controls,(),envelope))
+        observed=rt.Observed(group_id,rt.Observation(revision,now,valid,controls,(),envelope))
         # Gross nonbattery load is a conservative import frame. PV is included
         # separately as possible export, and never erased by a planned device.
         self._external_pending={key:until for key,until in self._external_pending.items() if min(times)<until}
-        frame=rt.FrameObserved(rt.Frame(revision,min(times),valid,
+        frame=rt.FrameObserved(rt.Frame(revision,now,valid,
             rt.Envelope(max(accounting.house_w,authority.plant.import_limit_w if self._external_pending else 0), max(0,accounting.pv_w-accounting.house_w)),
             rt.Envelope(authority.plant.import_limit_w,authority.plant.export_limit_w),tuple(external)))
         self._frame_pending={frame.frame.revision:digest(self._external_pending)}
         energy=fraction*self._ratings['battery_capacity_kwh']
-        conditions=rt.ConditionsObserved(ExecutionConditions(revision,min(times),valid,energy,
+        conditions=rt.ConditionsObserved(ExecutionConditions(revision,now,valid,energy,
             accounting.pv_w,accounting.house_w,max(0,grid),authority.identity,authority.permissions,accounting.eligible_gross_w,soc_at))
         response=('charging' if battery>100 else 'discharging' if battery < -100 else 'idle')
         requested=('charging' if readback['mode']=='Command Charging (PV First)' and readback['charge_limit_w']>100
                    else 'discharging' if readback['mode']=='Command Discharging (PV First)' and readback['discharge_limit_w']>100 else None)
         self._measurements={'physical_response':response,'requested_direction':requested,
-            'response_matches_direction':response==requested if requested else None,**asdict(accounting),'battery_dc_w':battery,'grid_w':grid,'at_ms':min(times),'valid_until_ms':valid,
+            'response_matches_direction':response==requested if requested else None,**asdict(accounting),'battery_dc_w':battery,'grid_w':grid,'at_ms':now,'valid_until_ms':valid,
+            'source_report_ages_ms':{entity:now-stamp(row['last_reported']) for entity,row in reports.items() if row},
             'supply_evidence':[asdict(reading) for reading in evidence]}
         self._last_capture=capture
         return (rt.MeasurementsReceived(observed,frame.frame,conditions.conditions),)
@@ -1073,7 +1074,7 @@ class BatteryRuntime:
             return False
         report=self.coordinator.ports.battery_report(self._options['battery_power_measurement_entity'])
         try:
-            watts,_=power(report,source=self._options['battery_power_measurement_entity'],now_ms=self.now(),signed=True)
+            watts,_=power(report,source=self._options['battery_power_measurement_entity'],signed=True)
             mode=self.coordinator.ports.battery_report(self._options['battery_mode_entity'])['state']
             limit=self.coordinator.ports.battery_report(self._options['battery_charge_limit_entity'])
             ceiling=float(limit['state'])*(1000 if limit['attributes']['unit_of_measurement']=='kW' else 1)

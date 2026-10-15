@@ -9,6 +9,9 @@ On 25 September 2026 the handover assertions below were rewritten to expect no
 write, for a change no requirement asked for; they were restored on 3 October
 (docs/control-continuity.md, History). If a change makes these tests fail, stop
 and ask the user; do not edit the expectations.
+
+15 October 2026: the user explicitly removed source-age rejection. Available
+old readings retain control; release and no-write assertions still apply.
 """
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -191,11 +194,11 @@ class EvTests(Continuity):
         self.assertEqual(self.controller.status['ev']['state'], 'commanded', self.controller.status['ev'])
         self.assertEqual(self.calls, [])
 
-    async def test_stale_vehicle_readings_hold_the_charger(self):
+    async def test_old_vehicle_readings_preserve_control(self):
         await self.start()
         self.states['sensor.ev_soc'].last_reported -= timedelta(minutes=16)
         await self.controller.async_tick()
-        self.assertEqual(self.controller.status['ev']['state'], 'pending', self.controller.status['ev'])
+        self.assertEqual(self.controller.status['ev']['state'], 'commanded', self.controller.status['ev'])
         self.assertIn('ev', self.controller.ownership.records)
         self.assertEqual(self.calls, [])
 
@@ -227,15 +230,15 @@ class PoolTests(Continuity):
         self.assertEqual(self.calls, [])
         self.assertEqual(controller.status['pool']['state'], 'scheduled', controller.status['pool'])
 
-    async def test_stale_water_holds_the_heater(self):
+    async def test_old_water_reading_preserves_control(self):
         await self.start()
         self.states['sensor.water'].last_reported -= timedelta(minutes=16)
         await self.controller.async_tick()
-        self.assertEqual(self.controller.status['pool']['state'], 'pending', self.controller.status['pool'])
+        self.assertEqual(self.controller.status['pool']['state'], 'scheduled', self.controller.status['pool'])
         self.assertIn('pool', self.controller.ownership.records)
         later(self, 6)
         await self.controller.async_tick()
-        self.assertEqual(self.controller.status['pool']['state'], 'fault', self.controller.status['pool'])
+        self.assertEqual(self.controller.status['pool']['state'], 'scheduled', self.controller.status['pool'])
         self.assertEqual(self.calls, [])
 
     async def test_a_missing_plan_holds_the_heater(self):

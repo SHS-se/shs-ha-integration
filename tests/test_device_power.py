@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
-from shs_core.device_power import read_device_power, planned_switch_bindings, SWITCHED_POWER_MAX_AGE_MS
+from shs_core.device_power import read_device_power, planned_switch_bindings
 from shs_core.native_readings import BatteryPowerReadingError
 
 
@@ -17,7 +17,7 @@ class DevicePowerTests(unittest.TestCase):
         }
 
     def read(self, switches=('switch.pool',)):
-        return read_device_power('sensor.pool', switches, self.reports.get, now_ms=self.now, max_age_ms=30000)
+        return read_device_power('sensor.pool', switches, self.reports.get, now_ms=self.now, capture_lifetime_ms=30000)
 
     def test_off_is_zero_even_if_power_is_old_nonzero_or_unavailable(self):
         for state in ('3', 'unavailable'):
@@ -29,23 +29,23 @@ class DevicePowerTests(unittest.TestCase):
         self.reports.pop('sensor.pool')
         self.assertEqual(self.read().watts, 0)
 
-    def test_on_uses_last_report_for_two_quarters_and_preserves_its_time(self):
+    def test_on_uses_available_power_and_preserves_its_original_report_time(self):
         self.reports['switch.pool']['state'] = 'on'
-        value = self.read()
-        self.assertEqual(value.watts, 3000)
-        self.assertEqual(value.reported_at_ms, 9_000_000)
-        self.assertEqual(value.at_ms, self.now)
-        self.assertEqual(value.basis, 'switched_ac')
-        self.now = 9_000_000 + SWITCHED_POWER_MAX_AGE_MS - 1
-        self.assertEqual(self.read().valid_until_ms, self.now + 1)
-        self.now += 1
-        with self.assertRaises(BatteryPowerReadingError):
-            self.read()
+        for offset in (0, 30 * 60 * 1000, 3 * 86400 * 1000):
+            self.now += offset
+            value = self.read()
+            self.assertEqual(value.watts, 3000)
+            self.assertEqual(value.reported_at_ms, 9_000_000)
+            self.assertEqual(value.at_ms, self.now)
+            self.assertEqual(value.valid_until_ms, self.now + 30000)
+            self.assertEqual(value.basis, 'switched_ac')
 
     def test_switch_state_is_checked_again_when_it_turns_on(self):
-        self.now += SWITCHED_POWER_MAX_AGE_MS
+        self.now += 3 * 86400 * 1000
         self.assertEqual(self.read().watts, 0)
         self.reports['switch.pool']['state'] = 'on'
+        self.assertEqual(self.read().watts, 3000)
+        self.reports['sensor.pool']['state'] = 'unavailable'
         with self.assertRaises(BatteryPowerReadingError):
             self.read()
 
@@ -64,9 +64,10 @@ class DevicePowerTests(unittest.TestCase):
         self.reports['switch.pump']['state'] = 'off'
         self.assertEqual(self.read(('switch.pool', 'switch.pump')).watts, 0)
 
-    def test_unswitched_measurements_keep_their_existing_reporting_limit(self):
-        with self.assertRaises(BatteryPowerReadingError):
-            self.read(())
+    def test_unswitched_available_measurements_have_no_reporting_age_limit(self):
+        value = self.read(())
+        self.assertEqual(value.watts, 3000)
+        self.assertEqual(value.reported_at_ms, 9_000_000)
 
     def test_bindings_use_declared_switches_and_ev_charge_switch_without_exclusions(self):
         devices = [{'key': key, 'planning_role': 'controllable', 'category': category}

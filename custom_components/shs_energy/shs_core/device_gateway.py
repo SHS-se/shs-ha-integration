@@ -99,10 +99,10 @@ class DeviceGateway(DeviceOperations):
             raise GatewayConflict('Device operation changed')
         return self.plan, self.slot
 
-    def observed_state(self, entity, *, max_age=None):
+    def observed_state(self, entity):
         if entity:
             self.reads.add(entity)
-        return super().observed_state(entity, max_age=max_age)
+        return super().observed_state(entity)
 
     def report(self, device, state, **details):
         self.reports[device] = {'state': state, **details}
@@ -287,7 +287,7 @@ class DeviceGateway(DeviceOperations):
                 error = {'message':str(exception), 'kind':'deadline' if isinstance(exception, ControlDeadlineError) else 'observation' if isinstance(exception, ControlObservationError) else 'configuration' if isinstance(exception, HotWaterConfigurationError) else 'rejected',
                          'details':correction_details(exception)}
                 if isinstance(exception, ControlObservationError):
-                    error.update(entity=exception.entity, unavailable=exception.unavailable, stale=exception.stale)
+                    error.update(entity=exception.entity, unavailable=exception.unavailable)
             finally:
                 self.restoring = False
             response = dict(result=result, error=error, reservation_required=self.reservation_required, ownership=self.ownership.snapshot(),

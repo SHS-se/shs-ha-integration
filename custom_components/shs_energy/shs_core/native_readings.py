@@ -2,8 +2,6 @@
 from datetime import datetime
 from math import isfinite
 
-AGE_MS = 30000
-
 def stamp(value):
     parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
     if parsed.tzinfo is None:
@@ -13,9 +11,9 @@ def stamp(value):
 class BatteryPowerReadingError(ValueError):
     """A failed live source is distinct from an actuator configuration error."""
     fix = {'kind': 'diagnostics'}
-    next_step = 'Check that the named power sensor is reporting current measurements. Control retries automatically when fresh readings arrive.'
+    next_step = 'Inspect the named power sensor for an unavailable value, invalid number or incorrect unit. Control retries automatically when it is usable.'
 
-def power(report, *, source, now_ms, signed=False, max_age_ms=AGE_MS):
+def power(report, *, source, signed=False):
     if not isinstance(report,dict):
         raise BatteryPowerReadingError(f'{source}: configured power source is unavailable')
     attrs=report['attributes'];unit=attrs.get('unit_of_measurement')
@@ -25,6 +23,6 @@ def power(report, *, source, now_ms, signed=False, max_age_ms=AGE_MS):
         at=stamp(report['last_reported']);value=float(report['state'])*(1000 if unit=='kW' else 1)
     except (KeyError, TypeError, ValueError) as error:
         raise BatteryPowerReadingError(f'{source}: invalid physical power reading') from error
-    if not isfinite(value) or (value<0 and not signed) or not at<=now_ms<at+max_age_ms:
-        raise BatteryPowerReadingError(f'{source}: power source is invalid or stale (last report: {report["last_reported"]})')
+    if not isfinite(value) or (value<0 and not signed):
+        raise BatteryPowerReadingError(f'{source}: power source has an invalid value')
     return value,at

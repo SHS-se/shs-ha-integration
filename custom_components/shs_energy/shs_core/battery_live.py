@@ -74,27 +74,26 @@ class MeasurementProfile:
     source_revision: str
     boundary: str
     evidence_reference: str
-    max_age_ms: int
-    max_alignment_ms: int
+    capture_lifetime_ms: int
     source_entities: tuple[str, ...]
 
     @classmethod
     def read(cls, value):
-        fields = {"schema", "revision", "source_revision", "boundary", "evidence_reference", "max_age_ms", "max_alignment_ms", "source_entities"}
+        fields = {"schema", "revision", "source_revision", "boundary", "evidence_reference", "capture_lifetime_ms", "source_entities"}
         if not isinstance(value, dict) or set(value) != fields or value["schema"] != "battery-measurements-v1":
             raise ValueError("unsupported measurement profile")
         for key in ("revision", "source_revision", "boundary", "evidence_reference"):
             if type(value[key]) is not str or not 0 < len(value[key]) <= 128:
                 raise ValueError("measurement profile requires bounded provenance")
-        age, alignment = value["max_age_ms"], value["max_alignment_ms"]
-        if type(age) is not int or type(alignment) is not int or not 0 <= alignment <= age <= 120_000 or age == 0:
-            raise ValueError("invalid measurement timing profile")
+        lifetime = value["capture_lifetime_ms"]
+        if type(lifetime) is not int or lifetime <= 0:
+            raise ValueError("invalid local capture lifetime")
         entities = value["source_entities"]
         if (type(entities) is not list or not 2 <= len(entities) <= 34 or
                 any(type(e) is not str or not e.startswith("sensor.") for e in entities) or
                 entities != sorted(set(entities))):
             raise ValueError("measurement profile requires disjoint canonical power sources")
-        return cls(*(value[k] for k in ("revision", "source_revision", "boundary", "evidence_reference", "max_age_ms", "max_alignment_ms")), tuple(entities))
+        return cls(*(value[k] for k in ("revision", "source_revision", "boundary", "evidence_reference", "capture_lifetime_ms")), tuple(entities))
 
 
 def native_surface(options, reports):
@@ -155,7 +154,7 @@ def capture_battery_inputs(options, devices, read_entity, *, now_ms, profile=Non
                 if not isinstance(entity, str):
                     raise ValueError('source_not_configured')
                 demand = read_device_power(entity, switches.get(role.removeprefix('planned:'), ()), reports.get,
-                                           now_ms=now_ms, max_age_ms=DIAGNOSTIC_AGE_MS)
+                                           now_ms=now_ms, capture_lifetime_ms=DIAGNOSTIC_AGE_MS)
                 row.update(state='reported', watts=demand.watts, basis=demand.basis,
                            reported_at_ms=demand.reported_at_ms, switch_states=demand.switch_states,
                            valid_until_ms=demand.valid_until_ms, raw_report=value)
@@ -165,8 +164,6 @@ def capture_battery_inputs(options, devices, read_entity, *, now_ms, profile=Non
                 raise ValueError("source_not_configured" if not isinstance(entity, str) else "source_unavailable")
             reported = _stamp(value.get("last_reported"))
             row.update(reported_at_ms=reported, age_ms=now_ms - reported)
-            if reported > now_ms:
-                raise ValueError("future_report")
             attributes = value.get("attributes", {})
             if role not in CONTROL_OPTIONS:
                 unit = attributes.get("unit_of_measurement")
@@ -185,9 +182,9 @@ def capture_battery_inputs(options, devices, read_entity, *, now_ms, profile=Non
                     if not isfinite(watts):
                         raise ValueError("nonfinite power after unit conversion")
                     row["watts"] = watts
-            row["state"] = "reported" if now_ms - reported < DIAGNOSTIC_AGE_MS else "stale_report"
-            if row["state"] != "reported":
-                blockers.append({"source": role, "reason": row["state"]})
+            row["state"] = "reported"
+            row["report_timing"] = ("future" if reported > now_ms else
+                                    "old" if now_ms - reported >= DIAGNOSTIC_AGE_MS else "recent")
         except (ValueError, KeyError, TypeError, OverflowError) as error:
             row.update(state="unavailable", reason=str(error))
             blockers.append({"source": role, "reason": str(error)})
@@ -212,7 +209,7 @@ def capture_battery_inputs(options, devices, read_entity, *, now_ms, profile=Non
             if not required <= set(profile.source_entities):
                 raise ValueError("unreviewed_power_source")
             result, evidence = observe_supply(scope, options, devices, reports.get, at_ms=now_ms,
-                max_age_ms=profile.max_age_ms, max_alignment_ms=profile.max_alignment_ms, boundary=profile.boundary,
+                capture_lifetime_ms=profile.capture_lifetime_ms, boundary=profile.boundary,
                 membership_revision=revision, expected_membership_revision=profile.source_revision)
             accounting = {**asdict(result), "valid_until_ms": min(r.valid_until_ms for r in evidence),
                           "evidence": [asdict(r) for r in evidence],

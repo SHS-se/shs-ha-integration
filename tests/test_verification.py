@@ -108,35 +108,24 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.controller.metrics.active)
         self.assertEqual(self.calls, [])
 
-    async def test_stale_sources_and_invalid_modes_are_logged_as_blocked(self):
+    async def test_old_available_sources_are_verified_and_timestamps_are_logged(self):
         self.options['device_modes']['$battery'] = 'control_verification'
-        self.states['binary_sensor.charging'].last_reported = datetime.now(timezone.utc) - timedelta(minutes=3)
+        old = datetime.now(timezone.utc) - timedelta(days=3)
+        self.states['binary_sensor.charging'].last_reported = old
         await self.controller.async_start()
         row = self.journal.attempts[0]
-        self.assertEqual(row['outcome'], 'blocked')
-        self.assertIn('stale', row['reason'])
-        self.assertFalse(row['commands'])
-        self.assertFalse(self.journal.export()['coverage'][0]['observed'])
+        self.assertEqual(row['outcome'], 'verified', row)
+        self.assertEqual(row['observations']['binary_sensor.charging']['last_reported'], str(old))
+        self.assertNotIn('fix', self.controller.status['battery'])
         self.assertEqual(self.calls, [])
 
-    async def test_pool_stale_warning_carries_inspection_and_clears_on_fresh_data(self):
+    async def test_old_available_pool_reading_does_not_create_configuration_attention(self):
         self.options['device_modes']['$pool'] = 'control_verification'
-        self.states['sensor.water'].last_reported = datetime.now(timezone.utc) - timedelta(minutes=16)
+        self.states['sensor.water'].last_reported -= timedelta(days=3)
         await self.controller.async_start()
-        status = self.controller.status['pool']
-        self.assertEqual(status['state'], 'pending')
-        self.assertTrue(status['retry_automatically'])
-        self.assertEqual(status['fix'], {'kind': 'entity', 'entity_id': 'sensor.water'})
-        self.assertIn('900 seconds', status['next_step'])
-        self.assertIn(self.states['sensor.water'].last_reported.isoformat(), status['reason'])
-        row = self.journal.export()['attempts'][0]
-        self.assertEqual(row['fix'], status['fix'])
-        # The status starts from the journalled reading and adds what SHS does meanwhile.
-        self.assertTrue(status['reason'].startswith(row['reason']))
-        self.states['sensor.water'].last_reported = datetime.now(timezone.utc)
-        await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'verified')
         self.assertNotIn('fix', self.controller.status['pool'])
+        self.assertEqual(self.journal.attempts[-1]['outcome'], 'verified')
         self.assertEqual(self.calls, [])
 
     async def test_pool_deferral_uses_switch_even_below_old_hardware_temperature_limits(self):
@@ -342,17 +331,13 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                          {'sensor.water', 'sensor.raw_water'})
         self.assertEqual(self.calls, [])
 
-    async def test_filter_stale_source_blocks_and_recovers_without_changing_filter(self):
+    async def test_old_available_filter_source_does_not_block_verification(self):
         self.configure_pool_filter()
-        self.states['sensor.raw_water'].last_reported -= timedelta(minutes=16)
+        self.states['sensor.raw_water'].last_reported -= timedelta(days=3)
         await self.controller.async_start()
-        status = self.controller.status['pool']
-        self.assertEqual(status['state'], 'pending')
-        self.assertEqual(status['fix']['entity_id'], 'sensor.raw_water')
-        self.assertIn('sensor.raw_water is stale', status['reason'])
-        self.states['sensor.raw_water'].last_reported = datetime.now(timezone.utc)
-        await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'verified')
+        self.assertNotIn('fix', self.controller.status['pool'])
+        self.assertEqual(self.journal.attempts[-1]['result']['water_temperature_c'], 29)
 
     async def test_filter_unavailable_entities_cannot_be_hidden(self):
         self.configure_pool_filter()
@@ -375,10 +360,12 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.configure_pool_filter()
         self.registry['sensor.water'].platform = 'template'
         await self.controller.async_start()
-        self.assertIn('sensor.water is stale', self.controller.status['pool']['reason'])
+        self.assertEqual(self.controller.status['pool']['state'], 'verified')
+        self.assertNotIn('sensor.raw_water', self.journal.attempts[-1]['observations'])
         self.registry.clear()
         await self.controller.async_tick()
-        self.assertIn('sensor.water is stale', self.controller.status['pool']['reason'])
+        self.assertEqual(self.controller.status['pool']['state'], 'verified')
+        self.assertNotIn('sensor.raw_water', self.journal.attempts[-1]['observations'])
 
     async def test_filter_chains_validate_sources_and_reject_cycles(self):
         from types import SimpleNamespace
@@ -402,12 +389,12 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.slot['pool_w'] = 0
         await self.controller.async_start()
         self.assertEqual(self.states['switch.pool'].state, 'off')
-        self.states['sensor.raw_water'].last_reported -= timedelta(minutes=16)
+        self.states['sensor.raw_water'].state = 'unavailable'
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'pending')
         self.assertIn('pool', self.controller.ownership.records)
         self.assertEqual(float(self.states['number.stop'].state), 30)
-        self.states['sensor.raw_water'].last_reported = datetime.now(timezone.utc)
+        self.states['sensor.raw_water'].state = '29'
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
         self.assertEqual(self.states['switch.pool'].state, 'off')

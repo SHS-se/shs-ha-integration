@@ -558,23 +558,23 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.store.saved['records'])
         self.assertEqual(self.states['number.current'].state, '8.0')
 
-    async def test_stale_water_holds_without_affecting_ev(self):
+    async def test_old_water_remains_usable_without_affecting_ev(self):
         self.options['device_modes'].update({'$pool': 'controlling', '$ev': 'controlling'})
         await self.controller.async_start()
         self.states['sensor.water'].last_reported -= timedelta(minutes=16)
         await self.controller.async_tick()
-        self.assertEqual(self.controller.status['pool']['state'], 'pending')
-        self.assertIn('stale', self.controller.status['pool']['reason'])
+        self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
+        self.assertNotIn('fix', self.controller.status['pool'])
         self.assertEqual(self.controller.status['ev']['state'], 'commanded')
 
-    async def test_stale_pool_holds_and_recovers_in_same_slot(self):
+    async def test_unavailable_pool_holds_and_recovers_in_same_slot(self):
         self.options['device_modes']['$pool'] = 'controlling'
         self.slot['pool_w'] = 0
         self.states['sensor.water'].last_reported -= timedelta(minutes=14)
         await self.controller.async_start()
         self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
         self.assertEqual(self.states['switch.pool'].state, 'off')
-        self.states['sensor.water'].last_reported -= timedelta(minutes=2)
+        self.states['sensor.water'].state = 'unavailable'
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'pending')
         self.assertTrue(self.controller.status['pool']['retry_automatically'])
@@ -584,13 +584,13 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.calls.clear()
         await self.controller.async_tick()
         self.assertEqual(self.calls, [], 'stale input must not command anything')
-        self.states['sensor.water'].last_reported = datetime.now(timezone.utc)
+        self.states['sensor.water'].state = '29'
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
         self.assertNotIn('retry_automatically', self.controller.status['pool'])
         self.assertEqual(self.states['switch.pool'].state, 'off')
 
-    async def test_ev_telemetry_allows_15_minutes_and_target_has_no_age_limit(self):
+    async def test_available_ev_readings_have_no_reporting_age_limit(self):
         self.options['device_modes']['$ev'] = 'controlling'
         for entity in ('sensor.ev_soc', 'binary_sensor.connected'):
             self.states[entity].last_reported -= timedelta(minutes=14)
@@ -601,8 +601,8 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(entity=entity):
                 self.states[entity].last_reported = datetime.now(timezone.utc) - timedelta(minutes=16)
                 await self.controller.async_tick()
-                self.assertEqual(self.controller.status['ev']['state'], 'pending')
-                self.assertIn(entity, self.controller.status['ev']['reason'])
+                self.assertEqual(self.controller.status['ev']['state'], 'commanded')
+                self.assertNotIn('fix', self.controller.status['ev'])
                 self.states[entity].last_reported = datetime.now(timezone.utc)
                 await self.controller.async_tick()
                 self.assertEqual(self.controller.status['ev']['state'], 'commanded')
@@ -613,17 +613,12 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.controller.status['ev']['state'], 'commanded')
 
-    async def test_battery_keeps_short_freshness_limit_and_recovers(self):
+    async def test_available_battery_power_has_no_reporting_age_limit(self):
         self.options['device_modes']['$battery'] = 'controlling'
-        self.states['sensor.battery_power'].last_reported -= timedelta(minutes=3)
+        self.states['sensor.battery_power'].last_reported -= timedelta(days=3)
         await self.controller.async_start()
-        self.assertEqual(self.controller.status['battery']['state'], 'pending')
-        self.assertIn('120 seconds', self.controller.status['battery']['reason'])
-        self.assertEqual(self.calls, [])
-        self.states['sensor.battery_power'].last_reported = datetime.now(timezone.utc)
-        await self.controller.async_tick()
         self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
-
+        self.assertNotIn('fix', self.controller.status['battery'])
     async def test_invalid_plan_is_not_retried_on_every_tick(self):
         self.options['device_modes']['$ev'] = 'controlling'
         self.slot['ev_target_current_a'] = 100

@@ -7,6 +7,9 @@ settings change all leave it in the mode the controller last set.
 This rule has been lost before through unrelated work whose tests were rewritten
 to match (docs/control-continuity.md, History). If a change makes these tests
 fail, stop and ask the user; do not edit the expectations.
+
+15 October 2026: the user explicitly removed source-age rejection. Available
+old readings retain control; release and no-write assertions still apply.
 """
 from copy import deepcopy
 import unittest
@@ -66,7 +69,7 @@ class BatteryContinuityTests(unittest.IsolatedAsyncioTestCase):
         self.held(r, before)
         self.assertTrue(r.replans)
 
-    async def test_stale_measurements_hold_the_last_settings(self):
+    async def test_unchanged_available_measurements_preserve_control(self):
         r, before = await self.commanded()
         for _ in range(12):
             r.now += 10000  # No source reports again.
@@ -74,8 +77,8 @@ class BatteryContinuityTests(unittest.IsolatedAsyncioTestCase):
             await r.runtime.host.idle()
         self.held(r, before)
         status = r.runtime.snapshot()
-        self.assertEqual(status['state'], 'limited', status)
-        self.assertIn('holding the last settings SHS sent', status['reason'])
+        self.assertEqual(status['state'], 'controlling', status)
+        self.assertNotIn('fix', status)
 
     async def test_failing_refresh_holds_the_last_settings(self):
         r, before = await self.commanded()

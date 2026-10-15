@@ -96,15 +96,14 @@ def required_power_keys(scope, planned_keys):
 
 
 def measured_supply(scope, house, pv, planned_readings, planned_keys, *, now_ms,
-                    max_alignment_ms, membership_revision, expected_membership_revision):
+                    membership_revision, expected_membership_revision):
     """Missing decomposition is unavailable; no forecast, rating or zero substitute.
 
     A supplied meter is one disjoint physical component. Hosts must establish
     parent/child non-overlap before constructing this map; duplicate source IDs
     are rejected here as well. Interval averages cannot authorize instant power.
     """
-    if (type(max_alignment_ms) is not int or max_alignment_ms < 0
-            or type(now_ms) is not int or now_ms < 0
+    if (type(now_ms) is not int or now_ms < 0
             or len(set(planned_keys)) != len(planned_keys)):
         raise ValueError("invalid measurement timing or duplicate Planned membership")
     if not membership_revision or membership_revision != expected_membership_revision:
@@ -115,11 +114,10 @@ def measured_supply(scope, house, pv, planned_readings, planned_keys, *, now_ms,
     readings = [house, pv, *(planned_readings[key] for key in sorted(required))]
     if any(not isinstance(r, PowerReading) for r in readings):
         raise ValueError("house and PV power measurements are required")
-    stale = [r.source for r in readings if r.basis == "interval_average_ac" or not r.at_ms <= now_ms < r.valid_until_ms]
-    if stale:
-        raise ValueError("scope requires fresh instantaneous AC measurements: " + ", ".join(stale))
-    if len({r.boundary for r in readings}) != 1 or max(r.at_ms for r in readings) - min(r.at_ms for r in readings) > max_alignment_ms:
-        raise ValueError("unaligned power measurements")
+    if any(r.basis == "interval_average_ac" for r in readings):
+        raise ValueError("scope requires instantaneous AC measurements")
+    if len({r.boundary for r in readings}) != 1:
+        raise ValueError("power measurement boundaries differ")
     if len({r.source for r in readings}) != len(readings):
         raise ValueError("overlapping power measurement sources")
     if scope.kind == "none":
@@ -137,12 +135,12 @@ def measured_supply(scope, house, pv, planned_readings, planned_keys, *, now_ms,
     return proportional_supply(house.watts, pv.watts, eligible)
 
 
-def observe_supply(scope, options, devices, read_entity, *, at_ms, max_age_ms,
-                   max_alignment_ms, boundary, membership_revision, expected_membership_revision):
+def observe_supply(scope, options, devices, read_entity, *, at_ms, capture_lifetime_ms,
+                   boundary, membership_revision, expected_membership_revision):
     """Resolve declared live bindings into one inspectable accounting result.
 
     `devices` is the acknowledged Included inventory. The host supplies its
-    commissioned freshness/alignment budget and metering boundary. Sensor names
+    local capture lifetime and metering boundary. Sensor names
     and reviewed running-power estimates cannot establish instantaneous power.
     """
     from datetime import datetime
@@ -165,7 +163,7 @@ def observe_supply(scope, options, devices, read_entity, *, at_ms, max_age_ms,
             watts = _power(float(value["state"])) * (1000 if unit == "kW" else 1)
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"{entity}: invalid physical power reading") from error
-        return PowerReading(watts, entity, report_ms, report_ms + max_age_ms, boundary)
+        return PowerReading(watts, entity, at_ms, at_ms + capture_lifetime_ms, boundary, reported_at_ms=report_ms)
 
     planned = {d["key"]: d for d in devices if d.get("planning_role") == "controllable"
                and d["key"] not in options.get("excluded_device_readings", [])}
@@ -175,12 +173,12 @@ def observe_supply(scope, options, devices, read_entity, *, at_ms, max_age_ms,
     readings = {}
     for key in required:
         entity = mappings.get(key, {}).get("power")
-        value = read_device_power(entity, switches.get(key, ()), read_entity, now_ms=at_ms, max_age_ms=max_age_ms)
+        value = read_device_power(entity, switches.get(key, ()), read_entity, now_ms=at_ms, capture_lifetime_ms=capture_lifetime_ms)
         readings[key] = PowerReading(value.watts, entity, value.at_ms, value.valid_until_ms, boundary,
                                      value.basis, value.reported_at_ms, value.switch_states)
     house = reading(options.get("house_consumption_power_entity"))
     pv = reading(options.get("solar_production_power_entity"))
     result = measured_supply(scope, house, pv, readings, tuple(sorted(planned)), now_ms=at_ms,
-        max_alignment_ms=max_alignment_ms, membership_revision=membership_revision,
+        membership_revision=membership_revision,
         expected_membership_revision=expected_membership_revision)
     return result, (house, pv, *tuple(readings[key] for key in sorted(readings)))

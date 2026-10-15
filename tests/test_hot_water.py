@@ -35,6 +35,21 @@ class HotWaterTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
 
+    async def test_old_available_power_never_becomes_a_setup_or_verification_error(self):
+        from datetime import timedelta
+        self.states['sensor.water_power'].last_reported -= timedelta(days=3)
+        await self.controller.async_start()
+        self.assertTrue(self.controller.status['device:heater']['decision']['finishing_heating'])
+        self.assertNotIn('fix', self.controller.status['device:heater'])
+        self.states['sensor.water_power'].state = '0'
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+        self.controller.verification = VerificationJournal(controller_fixtures.Store(), controller_fixtures.Store())
+        self.options['device_modes']['heater'] = 'control_verification'
+        await self.controller.async_tick()
+        self.assertEqual(self.controller.status['device:heater']['state'], 'verified')
+        self.assertNotIn('fix', self.controller.status['device:heater'])
+
     async def test_compressor_preheat_cannot_extend_boiler_permission(self):
         self.states['sensor.compressor_power'] = fixtures.State(1274, unit_of_measurement='W')
         self.states['sensor.water_power'].state = '0'

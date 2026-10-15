@@ -17,7 +17,7 @@ The ranges are physical and match the planner's own isolation.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from math import isfinite
 from typing import Any, Callable
 
@@ -35,8 +35,6 @@ from .const import (
 from .device_controls import mapped_planning_path
 
 UNREADABLE = frozenset({"unknown", "unavailable"})
-# The age the snapshot already required of the battery's state of charge.
-BATTERY_SOC_MAX_AGE = timedelta(minutes=15)
 POOL_WATER_RANGE_C = (-5.0, 60.0)
 _NAMES = {"battery": "The home battery", "ev": "The car", "pool": "The pool"}
 
@@ -131,16 +129,9 @@ class _Readings:
         return state, value
 
 
-def _battery(readings: _Readings, options: dict[str, Any], now: datetime) -> None:
+def _battery(readings: _Readings, options: dict[str, Any]) -> None:
     entity = options.get(OPT_BATTERY_SOC_ENTITY)
-    read = readings.fraction("battery", "soc", entity, "state of charge")
-    if read is not None:
-        state, value = read
-        reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
-        if isinstance(reported, datetime) and now - reported > BATTERY_SOC_MAX_AGE:
-            minutes = int((now - reported).total_seconds() // 60)
-            readings.issues.append(_issue("battery", "soc", entity, value,
-                f"The home battery's state of charge has not been reported for {minutes} minutes."))
+    readings.fraction("battery", "soc", entity, "state of charge")
     for key, (unit, minimum, maximum) in BATTERY_QUANTITIES.items():
         source = options.get(key)
         if not isinstance(source, str) or not source.strip().startswith("sensor."):
@@ -212,7 +203,7 @@ def device_measurement_issues(
     """
     readings = _Readings(state_of)
     if battery:
-        _battery(readings, options, now)
+        _battery(readings, options)
     if pool:
         read = readings.number("pool", "water_temperature_c", options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
                                "water temperature")

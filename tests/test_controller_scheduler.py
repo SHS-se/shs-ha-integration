@@ -309,7 +309,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.pool'].state, 'on', 'the accepted write is not undone')
         self.assertEqual(self.states['number.start'].state, '29.5')
 
-    async def test_stale_raw_source_behind_a_missing_filter_is_surfaced_once_the_filter_returns(self):
+    async def test_old_raw_source_does_not_block_recovery_of_a_missing_filter(self):
         self.controller.inputs = replace(self.controller.inputs, platform=lambda entity:
             'filter' if entity == 'sensor.water' else None)
         self.states['sensor.water'].attributes['entity_id'] = 'sensor.raw'
@@ -324,8 +324,8 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.states['sensor.water'].state = '29'
         self.event('sensor.water')
         await self.drain()
-        self.assertEqual(self.controller.status['pool']['state'], 'pending')
-        self.assertEqual(self.controller.status['pool']['fix']['entity_id'], 'sensor.raw')
+        self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
+        self.assertNotIn('fix', self.controller.status['pool'])
         self.assertIn('pool', self.controller.ownership.records)
         self.assertEqual(self.calls, [])
 
@@ -346,7 +346,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats['device_dispatches'], 1)
         self.assertEqual(self.calls, [])
 
-    async def test_unchanged_reports_extend_freshness_without_decisions_and_recover_staleness(self):
+    async def test_unchanged_reports_never_schedule_age_faults_or_extra_decisions(self):
         self.options['device_modes']['$battery'] = 'planning'
         await self.controller.async_start()
         for _ in range(30):
@@ -354,15 +354,12 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
             self.event('sensor.water', 'state_report')
         await self.drain()
         self.assertEqual(self.evaluations('pool'), 1)
-        expiry = self.scheduler.deadlines[('pool', 'freshness:sensor.water')][0]
-        self.assertEqual(expiry, self.now + timedelta(seconds=900, milliseconds=1))
+        self.assertFalse(any(key[1].startswith('freshness:') for key in self.scheduler.deadlines))
         self.advance(901)
         await self.drain()
-        self.assertEqual(self.controller.status['pool']['state'], 'pending')
-        self.assertIn('stale', self.controller.status['pool']['reason'])
-        self.event('sensor.water', 'state_report')
-        await self.drain()
         self.assertEqual(self.controller.status['pool']['state'], 'verified')
+        self.assertNotIn('fix', self.controller.status['pool'])
+        self.assertEqual(self.evaluations('pool'), 2)  # Normal next-quarter evaluation.
         self.assertEqual(self.calls, [])
 
     async def test_busy_events_are_coalesced_and_not_lost(self):

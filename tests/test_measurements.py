@@ -110,11 +110,9 @@ class MeasurementIssueTests(unittest.TestCase):
         self.states["number.pool_stop"] = state("34.0", "°C")
         self.assertEqual(device_measurement_issues(options, self.states.get, NOW, battery=False, pool=True, ev=False), [])
 
-    def test_a_stale_battery_reading_leaves_out_the_battery(self) -> None:
-        self.states["sensor.battery_soc"] = state("40", "%", age=timedelta(minutes=20))
-        [issue] = self.issues()
-        self.assertEqual((issue["device"], issue["field"], issue["value"]), ("battery", "soc", 0.4))
-        self.assertIn("20 minutes", issue["reason"])
+    def test_an_old_available_battery_reading_remains_in_planning(self) -> None:
+        self.states["sensor.battery_soc"] = state("40", "%", age=timedelta(days=3))
+        self.assertEqual(self.issues(), [])
 
     def test_an_empty_car_needs_a_known_battery_size(self) -> None:
         self.states["sensor.car_soc"] = state("0", "%")

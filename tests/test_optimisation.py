@@ -26,7 +26,6 @@ from shs_core.optimisation import (  # noqa: E402
     discrete_current_control,
     extract_timestamped_forecast,
     optimisation_plan_due,
-    require_fresh_source,
     service_daily_energy,
     service_energy_today,
     suggested_device_planning,
@@ -510,15 +509,7 @@ class ForecastTests(unittest.TestCase):
             plan, datetime(2026, 8, 17, 13, 30, 22, tzinfo=timezone.utc)
         ))
 
-    def test_stale_forecast_is_rejected(self) -> None:
-        captured = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
-        with self.assertRaisesRegex(OptimisationInputError, "stale"):
-            require_fresh_source(
-                captured - timedelta(hours=13),
-                captured,
-                max_age=timedelta(hours=12),
-                label="PV forecast",
-            )
+
 
     def test_discrete_current_capability_uses_number_entity_bounds(self) -> None:
         control = discrete_current_control(5, 16, 1, 3, 230)

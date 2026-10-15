@@ -1034,22 +1034,6 @@ def calibration_summary(
     }
 
 
-def require_fresh_source(
-    issued_at: datetime,
-    captured_at: datetime,
-    *,
-    max_age: timedelta,
-    label: str,
-) -> None:
-    """Reject old or future-dated forecast provenance."""
-    issued = issued_at.astimezone(timezone.utc)
-    captured = captured_at.astimezone(timezone.utc)
-    if issued > captured + timedelta(minutes=5):
-        raise OptimisationInputError(f"{label} is future-dated")
-    if captured - issued > max_age:
-        raise OptimisationInputError(f"{label} is stale")
-
-
 from .battery_commands import validate_battery_command
 from .device_commands import validate_commands
 

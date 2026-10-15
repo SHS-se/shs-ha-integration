@@ -31,7 +31,7 @@ def fixture():
 def profile(options, devices):
     return MeasurementProfile.read(dict(schema='battery-measurements-v1', revision='synthetic-ac-evidence',
         source_revision=source_revision(options, devices), boundary='house-ac', evidence_reference='synthetic-test-only',
-        max_age_ms=4000, max_alignment_ms=100, source_entities=['sensor.ev','sensor.house','sensor.pv']))
+        capture_lifetime_ms=4000, source_entities=['sensor.ev','sensor.house','sensor.pv']))
 
 
 class CaptureTests(unittest.TestCase):
@@ -53,12 +53,15 @@ class CaptureTests(unittest.TestCase):
         self.assertFalse(result['control_authority'])
         self.assertIn('ac_boundary_unverified', [b['reason'] for b in result['blockers']])
 
-    def test_stale_zero_remains_stale_without_borrowing_house_report_time(self):
+    def test_old_zero_keeps_its_report_time_without_blocking(self):
         self.reports['sensor.pv']['state'] = '0'
         self.reports['sensor.pv']['last_reported'] = '1970-01-01T00:00:00+00:00'
         self.reports['sensor.house']['last_reported'] = '1970-01-01T00:01:00+00:00'
         result = self.capture(now_ms=60000)
-        self.assertEqual(result['sources']['solar_production_power_entity']['state'], 'stale_report')
+        self.assertEqual(result['sources']['solar_production_power_entity']['state'], 'reported')
+        self.assertEqual(result['sources']['solar_production_power_entity']['report_timing'], 'old')
+        self.assertEqual(result['sources']['solar_production_power_entity']['reported_at_ms'], 0)
+        self.assertFalse(any(b['source'] == 'solar_production_power_entity' for b in result['blockers']))
         self.assertEqual(result['sources']['house_consumption_power_entity']['state'], 'reported')
         self.reports['sensor.pv']['last_reported'] = self.reports['sensor.house']['last_reported']
         self.assertEqual(self.capture(now_ms=60000)['sources']['solar_production_power_entity']['state'], 'reported')

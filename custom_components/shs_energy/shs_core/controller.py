@@ -30,7 +30,7 @@ from .device_controls import battery_control_errors, pool_control_errors, pool_c
 _LOGGER = logging.getLogger(__name__)
 from .device_operations import (DeviceOperations, ControlObservationError, ActuatorUnavailableError,
     PlanChangedError, ControlDeadlineError, correction_details, checked_state, battery_limit_value,
-    DEVICES, CONFIRM_SECONDS, BATTERY_MAX_AGE_SECONDS, POOL_MAX_AGE_SECONDS, EV_MAX_AGE_SECONDS,
+    DEVICES, CONFIRM_SECONDS,
     OBSERVATION_GRACE_SECONDS, EXTERNAL_CHANGE)
 
 
@@ -98,7 +98,7 @@ class ScheduledController(DeviceOperations):
                 raise ControlDeadlineError(error['message'])
             if error['kind'] == 'observation':
                 exception = ControlObservationError(error['message'], error['entity'],
-                    error['details'].get('next_step', ''), unavailable=error['unavailable'], stale=error['stale'])
+                    error['details'].get('next_step', ''), unavailable=error['unavailable'])
                 exception.details = error['details']
                 raise exception
             raise ValueError(error['message'])

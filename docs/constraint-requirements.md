@@ -52,3 +52,13 @@ configured range or block household planning. In particular, a saved 5–16 A
 range remains valid when `number.tesla_model_y_charge_current` reports `max: 5`.
 Use the configured range in the planning snapshot; retain the unit, step and
 command checks for their existing purposes.
+
+User requirement, 15 October 2026: source-report age is diagnostic information,
+not a configuration error or an admission gate. An available, valid reading
+remains usable even when its source timestamp is old or differs from the other
+sensors. Do not require unchanged sensors to report on an invented cadence.
+This applies to device execution and verification, battery capture/supply, and
+planning inputs, including forecasts and SOC. Retain source timestamps and ages
+in diagnostics. Unknown/unavailable readings, invalid values/units, local
+transport/session validity, command acknowledgement and plan expiry keep their
+existing purposes. Only explicit user settings release equipment.

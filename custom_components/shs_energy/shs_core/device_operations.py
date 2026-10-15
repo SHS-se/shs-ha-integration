@@ -26,10 +26,6 @@ from .device_controls import pool_requested_w
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
 CONFIRM_SECONDS = 15
-# Battery feedback gates power commands; pool and EV telemetry may report more slowly.
-BATTERY_MAX_AGE_SECONDS = 120
-POOL_MAX_AGE_SECONDS = 15 * 60
-EV_MAX_AGE_SECONDS = 15 * 60
 # Restarts and reconnects hide an entity for about a minute; longer needs attention.
 OBSERVATION_GRACE_SECONDS = 5 * 60
 EXTERNAL_CHANGE = "Actuator changed outside SHS; set this device to Verification and back to Controlling to resume"
@@ -37,18 +33,17 @@ EXTERNAL_CHANGE = "Actuator changed outside SHS; set this device to Verification
 
 class ControlObservationError(ValueError):
     """An unusable observation with a concrete inspection destination."""
-    def __init__(self, message, entity, next_step, *, unavailable=False, stale=False):
+    def __init__(self, message, entity, next_step, *, unavailable=False):
         super().__init__(message)
         self.entity = entity
         self.unavailable = unavailable
-        self.stale = stale
         self.details = {"next_step": next_step,
                         "fix": {"kind": "entity", "entity_id": entity} if entity else {"kind": "device"}}
 
     @property
     def transient(self):
         """A reading interrupted by a restart or reconnect, which returns by itself."""
-        return self.unavailable or self.stale
+        return self.unavailable
 
 
 class ActuatorUnavailableError(ControlObservationError):
@@ -72,7 +67,7 @@ def correction_details(error):
     return error.details if isinstance(error, (ControlObservationError, PlanChangedError)) else {}
 
 
-def checked_state(state, entity, max_age=None):
+def checked_state(state, entity):
     if state is None or state.state in ("unknown", "unavailable"):
         raise ControlObservationError(
             f"{entity or 'required entity'} is unavailable", entity,
@@ -80,17 +75,6 @@ def checked_state(state, entity, max_age=None):
             "If the entity was replaced, select its replacement in this device's setup.",
             unavailable=True,
         )
-    if max_age is not None:
-        reported = getattr(state, "last_reported", state.last_updated)
-        age = (datetime.now(timezone.utc) - reported).total_seconds()
-        if not 0 <= age <= max_age:
-            raise ControlObservationError(
-                f"{entity} is stale (last reported {reported.isoformat()}; maximum age {max_age} seconds)",
-                entity,
-                f"Check that this sensor and its source integration report at least every {max_age} seconds, "
-                "including while its value is unchanged.",
-                stale=True,
-            )
     return state
 
 
@@ -122,7 +106,7 @@ class DeviceOperations:
     def make_command(self, identity, phase, action):
         return Command(identity, 'controller', self.device, phase, action)
 
-    def observed_state(self, entity, *, max_age=None):
+    def observed_state(self, entity):
         state = self.inputs.read(entity) if entity else None
         if self.diagnostic_evaluation is not None and not self.verifying and entity:
             value = observation(state)
@@ -130,14 +114,14 @@ class DeviceOperations:
             self.diagnostic_evaluation.setdefault("final_observations", {})[entity] = value
         self.metrics.observe(entity, state)
         if self.scheduler is not None:
-            self.scheduler.observe(self.device, entity, state, max_age)
+            self.scheduler.observe(self.device, entity, state)
         return state
 
-    def state(self, entity, *, max_age=None):
-        state = (self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity, max_age=max_age)
+    def state(self, entity):
+        state = (self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)
         if self.verifying and entity not in self.shadow:
             self.verification_observations[entity] = observation(state)
-        return checked_state(state, entity, max_age)
+        return checked_state(state, entity)
 
     def actuator_state(self, entity):
         try:
@@ -147,18 +131,18 @@ class DeviceOperations:
                 raise
             raise ActuatorUnavailableError(str(error), entity, error.details["next_step"], unavailable=True) from None
 
-    def number(self, entity, *, max_age=None):
-        return finite(self.state(entity, max_age=max_age).state)
+    def number(self, entity):
+        return finite(self.state(entity).state)
 
     def watts(self, entity):
-        state = self.state(entity, max_age=BATTERY_MAX_AGE_SECONDS)
+        state = self.state(entity)
         unit = state.attributes.get("unit_of_measurement")
         if unit not in ("W", "kW"):
             raise ValueError(f"{entity} must report W or kW")
         return finite(state.state) * (1000 if unit == "kW" else 1)
 
-    def fraction(self, entity, *, max_age=None):
-        state = self.state(entity, max_age=max_age)
+    def fraction(self, entity):
+        state = self.state(entity)
         value = finite(state.state)
         if state.attributes.get("unit_of_measurement") == "%":
             value /= 100
@@ -268,7 +252,7 @@ class DeviceOperations:
             self.scheduler.device_deadline(self.device, name, when)
 
     def measurement_after_commands(self, entity, *actuators):
-        state = self.state(entity, max_age=BATTERY_MAX_AGE_SECONDS)
+        state = self.state(entity)
         reported = getattr(state, "last_reported", state.last_updated)
         return all(reported >= self.command_times[actuator]
                    for actuator in actuators if actuator in self.command_times)
@@ -393,10 +377,10 @@ class DeviceOperations:
         entity, low, high = self.ev_mapping(options)
         switch = options.get("ev_charge_switch_entity")
         self.actuator_state(switch)
-        connected = self.state(options.get("ev_connected_entity"), max_age=EV_MAX_AGE_SECONDS).state
+        connected = self.state(options.get("ev_connected_entity")).state
         if connected not in ("on", "off", "true", "false", "connected", "disconnected"):
             raise ValueError("EV connection state is not a supported boolean")
-        soc = self.fraction(options.get("ev_soc_entity"), max_age=EV_MAX_AGE_SECONDS)
+        soc = self.fraction(options.get("ev_soc_entity"))
         target_soc = self.fraction(options.get("ev_target_soc_entity"))
         current = finite(slot["ev_target_current_a"])
         if current and not low <= current <= high:
@@ -420,7 +404,7 @@ class DeviceOperations:
                 "decision": {"kind": "ev", "charging": True, "current_a": current}}
 
     def pool_temperature(self, entity, *, read_state=None):
-        """Use the filtered temperature, but require reports from its raw source."""
+        """Use the filtered temperature and validate availability of its raw source."""
         reader = read_state or self.state
         selected = entity
         visited = set()
@@ -440,9 +424,8 @@ class DeviceOperations:
             if entity == selected:
                 temperature = value
             if self.inputs.platform(entity) != "filter":
-                raw = reader(entity, max_age=POOL_MAX_AGE_SECONDS)
                 sources[entity] = None
-                return temperature, sources, raw.last_reported + timedelta(seconds=POOL_MAX_AGE_SECONDS)
+                return temperature, sources
             source = state.attributes.get("entity_id")
             if not isinstance(source, str) or not source.startswith("sensor."):
                 raise ControlObservationError(
@@ -477,7 +460,7 @@ class DeviceOperations:
             error.details["fix"] = {"kind": "diagnostics"}
             raise error
         target = finite(target)
-        water, sources, fresh_until = self.pool_temperature(options.get("pool_water_temperature_entity"), read_state=reader)
+        water, sources = self.pool_temperature(options.get("pool_water_temperature_entity"), read_state=reader)
         requested = finite(pool_requested_w(plan, slot))
         heating = requested > 0
         on = heating and water < target
@@ -488,10 +471,10 @@ class DeviceOperations:
                 "water_temperature_c": water, "stop_temperature_c": target,
                 "requested_power_w": requested, "reason": reason,
                 "decision": {"kind": "pool", "heating": on, "water_temperature_c": water,
-                             "stop_temperature_c": target}}, sources, fresh_until
+                             "stop_temperature_c": target}}, sources
 
     async def execute_pool(self, options, slot):
-        request, _, _ = self.pool_request(options, slot)
+        request, _ = self.pool_request(options, slot)
         entity = request["control_entity"]
         # Refuse shared targets before either controller can acquire ownership.
         for key, mapping in options.get("device_control_mappings", {}).items():
@@ -523,7 +506,7 @@ class DeviceOperations:
             entity = options[key]
             if not entity.startswith("binary_sensor."):
                 raise ValueError(f"{entity} must be a battery direction binary sensor")
-            state = self.state(entity, max_age=BATTERY_MAX_AGE_SECONDS).state
+            state = self.state(entity).state
             if state not in ("on", "off"):
                 raise ValueError(f"{entity} must report on or off")
             observed.append(state == "on")
@@ -554,7 +537,7 @@ class DeviceOperations:
         errors = battery_control_errors({**options, "battery_control_enabled": True})
         if errors:
             raise ValueError("; ".join(errors))
-        soc = self.fraction(options["battery_soc_entity"], max_age=BATTERY_MAX_AGE_SECONDS)
+        soc = self.fraction(options["battery_soc_entity"])
         limits = self.battery_ratings(options)
         command = validate_battery_command(slot)
         operation = command["operation"]
@@ -716,10 +699,10 @@ class DeviceOperations:
         return {"state": "commanded", "reason": "actuator targets acknowledged; delivered heat or power is not inferred",
                 "decision": decision}
 
-    def preview_state(self, entity, *, max_age=None):
+    def preview_state(self, entity):
         """Read real HA state without scheduling observations or changing journals."""
         state = self.inputs.read(entity) if entity else None
-        return checked_state(state, entity, max_age)
+        return checked_state(state, entity)
 
 
     def preview_commands(self, slot, *, plan=None, options=None):
@@ -749,7 +732,7 @@ class DeviceOperations:
                 previews["battery"] = {"error": str(err)}
         if slot.get("pool_w") is not None and options.get("pool_enabled"):
             try:
-                request, _, _ = self.pool_request(options, slot, read_state=self.preview_state, plan=plan)
+                request, _ = self.pool_request(options, slot, read_state=self.preview_state, plan=plan)
                 fields = [{"label": "Pool heater", "value": request["requested_switch_state"].capitalize()},
                           {"label": "Water temperature", "value": request["water_temperature_c"], "unit": "°C"},
                           {"label": "Stop at", "value": request["stop_temperature_c"], "unit": "°C"}]

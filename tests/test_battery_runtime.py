@@ -252,7 +252,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             current=r.runtime.host.state.conditions
             self.assertEqual(r.runtime.snapshot()['state'],'verified',r.runtime.snapshot())
             self.assertGreater(current.revision,previous.revision)
-            self.assertLess(current.at_ms,previous.at_ms)
+            self.assertEqual(current.at_ms,r.now)
+            self.assertEqual(r.runtime.snapshot()['measurements']['source_report_ages_ms']['sensor.house'],1000)
             self.assertEqual(current.residual_load_w,1100)
             self.assertEqual(r.runtime.snapshot()['fault_history'],[])
         finally:await r.runtime.close()
@@ -498,24 +499,31 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(r.calls,[])
             self.assertEqual(r.fence.snapshot()['owner'],'legacy')
         finally:await r.runtime.close()
-    async def test_required_stale_sources_block_then_recover_with_sensor_diagnostics(self):
-        for entity in ('sensor.house','sensor.pv','sensor.grid','sensor.battery'):
-            with self.subTest(entity=entity):
-                r=Rig();r.rows[entity]['last_reported']=iso(0)
-                await r.start()
-                try:
-                    self.assertEqual(r.calls,[])
-                    status=r.runtime.snapshot()
-                    self.assertEqual(status['state'],'fault')
-                    self.assertEqual(status['fix'],{'kind':'diagnostics'})
-                    self.assertIn(entity,status['reason'])
-                    self.assertTrue(status['retry_automatically'])
-                    for _ in range(5):await r.advance()
-                    self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
-                    self.assertNotIn('fix',r.runtime.snapshot())
-                    self.assertTrue(any(entity in f['reason'] for f in r.runtime.snapshot()['fault_history']))
-                    self.assertTrue(r.calls)
-                finally:await r.runtime.close()
+    async def test_available_old_and_future_source_timestamps_do_not_block_control(self):
+        for entity in ('sensor.house','sensor.pv','sensor.grid','sensor.battery','sensor.soc'):
+            for reported in (0, 86400000):
+                with self.subTest(entity=entity,reported=reported):
+                    r=Rig();r.rows[entity]['last_reported']=iso(reported)
+                    await r.start()
+                    try:
+                        self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+                        self.assertNotIn('fix',r.runtime.snapshot())
+                        self.assertEqual(r.runtime.snapshot()['measurements']['source_report_ages_ms'][entity],r.now-reported)
+                        self.assertTrue(r.calls)
+                    finally:await r.runtime.close()
+
+    async def test_unavailable_required_power_still_blocks_and_recovers(self):
+        r=Rig();r.rows['sensor.house']['state']='unavailable'
+        await r.start()
+        try:
+            self.assertEqual(r.calls,[])
+            self.assertEqual(r.runtime.snapshot()['fix'],{'kind':'diagnostics'})
+            self.assertIn('sensor.house',r.runtime.snapshot()['reason'])
+            r.rows['sensor.house']['state']='1000'
+            await r.runtime.refresh();await r.runtime.host.idle()
+            self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
+            self.assertNotIn('fix',r.runtime.snapshot())
+        finally:await r.runtime.close()
 
     async def test_whole_house_controls_with_unusable_individual_pool_readings(self):
         for invalid in ('stale','missing','unavailable'):
@@ -558,22 +566,19 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(status['measurements']['eligible_gross_w'],expected)
                 finally: await r.runtime.close()
 
-    async def test_selected_scope_still_requires_fresh_individual_measurements(self):
+    async def test_selected_scope_accepts_old_available_individual_measurements(self):
         r=Rig();r.add_pool()
         r.plan['battery_supply_scope']={'kind':'selected','include_base':False,'planned_device_keys':['pool']}
         await r.start()
         try:
-            self.assertEqual(r.calls,[])
-            self.assertEqual(r.runtime.snapshot()['fix'],{'kind':'diagnostics'})
-            self.assertIn('sensor.pool',r.runtime.snapshot()['reason'])
-            for _ in range(5):await r.advance()
             self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
             self.assertNotIn('fix',r.runtime.snapshot())
+            self.assertEqual(r.rows['sensor.pool']['last_reported'],iso(0))
             self.assertTrue(r.calls)
         finally:await r.runtime.close()
 
-    async def test_switched_power_uses_off_state_and_two_quarter_on_window(self):
-        for switch_state, age_minutes, expected in (('off',240,'controlling'),('on',20,'controlling'),('on',30,'fault')):
+    async def test_switched_power_uses_available_values_without_report_age_windows(self):
+        for switch_state, age_minutes, expected in (('off',240,'controlling'),('on',20,'controlling'),('on',240,'controlling')):
             with self.subTest(switch_state=switch_state,age_minutes=age_minutes):
                 r=Rig();r.add_pool();r.now=12*3600000
                 for value in r.rows.values():value['last_reported']=iso(r.now)
@@ -596,18 +601,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                         evidence=next(row for row in status['measurements']['supply_evidence'] if row['source']=='sensor.pool')
                         self.assertEqual(evidence['basis'],'switch_off' if switch_state=='off' else 'switched_ac')
                         if switch_state=='off':
-                            settings=tuple(r.rows[key]['state'] for key in ('select.mode','number.charge','number.discharge'))
-                            r.calls.clear()
                             r.rows['switch.pool']['state']='on'
                             await r.runtime.refresh();await r.runtime.host.idle()
-                            self.assertEqual(r.runtime.snapshot()['state'],'fault')
-                            self.assertFalse(r.calls)
-                            self.assertEqual(tuple(r.rows[key]['state'] for key in ('select.mode','number.charge','number.discharge')),settings)
+                            self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
                             self.assertTrue(r.runtime.host.state.groups[0].owned)
                             self.assertFalse(r.runtime.host.state.groups[0].release_pending)
-                            r.rows['sensor.pool']['last_reported']=iso(r.now)
-                            await r.runtime.refresh();await r.runtime.host.idle()
-                            self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
                     else:
                         self.assertIn('sensor.pool',status['reason'])
                         self.assertFalse(r.calls)

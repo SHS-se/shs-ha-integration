@@ -118,7 +118,6 @@ from .optimisation import (
     parse_number,
     PlanContractCache,
     quarter_start,
-    require_fresh_source,
     SNAPSHOT_SCHEMA_VERSION,
     utc_slots,
     validate_plan_contract,
@@ -2478,24 +2477,6 @@ class Household:
                     f"{payload['entity_id']} forecast location does not match the configured home",
                     fix={"kind": "entity", "entity_id": payload["entity_id"]}
                 )
-        if pv_entities:
-            require_fresh_source(
-                pv_issued, captured, max_age=timedelta(hours=12), label="PV forecast"
-            )
-        require_fresh_source(
-            price_issued,
-            captured,
-            max_age=timedelta(hours=48),
-            label="server supplier price forecast",
-        )
-        if battery_entity:
-            require_fresh_source(
-                battery_entity["last_reported"],
-                captured,
-                max_age=timedelta(minutes=15),
-                label="battery SOC",
-            )
-
         # Include every completed quarter. The aggregators require all three
         # five-minute samples and omit incomplete recorder buckets.
         profile_end = quarter_start(captured)

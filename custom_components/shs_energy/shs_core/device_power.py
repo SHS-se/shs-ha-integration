@@ -1,9 +1,7 @@
 """Switch-aware validity of device demand, independent of control authority."""
 from dataclasses import dataclass
 
-from .native_readings import BatteryPowerReadingError, power, stamp
-
-SWITCHED_POWER_MAX_AGE_MS = 30 * 60 * 1000
+from .native_readings import BatteryPowerReadingError, power
 
 
 def planned_switch_bindings(options, devices):
@@ -32,7 +30,7 @@ class DevicePower:
     switch_states: tuple[tuple[str, str], ...]
 
 
-def read_device_power(source, switches, read_entity, *, now_ms, max_age_ms):
+def read_device_power(source, switches, read_entity, *, now_ms, capture_lifetime_ms):
     if not isinstance(source, str) or not source.startswith('sensor.'):
         raise BatteryPowerReadingError('instantaneous power sensor is not configured')
     states = []
@@ -46,12 +44,8 @@ def read_device_power(source, switches, read_entity, *, now_ms, max_age_ms):
     if switch_states and all(state == 'off' for _, state in switch_states):
         # This is evidence from the actual switch state, not a zero substitute
         # for a failed sensor. The sensor's raw report remains in diagnostics.
-        return DevicePower(0.0, now_ms, now_ms + max_age_ms, None, 'switch_off', switch_states)
-    age = SWITCHED_POWER_MAX_AGE_MS if switch_states else max_age_ms
-    watts, reported = power(read_entity(source), source=source, now_ms=now_ms, max_age_ms=age)
-    # An on switch permits holding its last power report for two quarters.
-    # Keep that report time separate from the switch-aware evaluation time.
-    at = now_ms if switch_states else reported
-    valid = min(at + max_age_ms, reported + age)
-    return DevicePower(watts, at, valid, reported,
+        return DevicePower(0.0, now_ms, now_ms + capture_lifetime_ms, None, 'switch_off', switch_states)
+    watts, reported = power(read_entity(source), source=source)
+    # Availability is observed now; retain the sensor's timestamp as provenance.
+    return DevicePower(watts, now_ms, now_ms + capture_lifetime_ms, reported,
                        'switched_ac' if switch_states else 'instantaneous_ac', switch_states)

@@ -13,8 +13,6 @@ class ControllerScheduler:
         self.watchers = {}
         self.dependencies = {}
         self.reads = {}
-        self.freshness = {}
-        self.stale = set()
         self.metadata = {}
         self.deadlines = {}
         self.pending = {}
@@ -69,7 +67,7 @@ class ControllerScheduler:
             stats["dispatch_latency_ms"] += elapsed
             stats["max_dispatch_latency_ms"] = max(stats["max_dispatch_latency_ms"], elapsed)
 
-    def observe(self, device, entity, state, max_age=None):
+    def observe(self, device, entity, state):
         if self.closed or not entity:
             return
         self.reads.setdefault(device, set()).add(entity)
@@ -77,30 +75,6 @@ class ControllerScheduler:
         if entity not in self.watchers:
             self.watchers[entity] = self.subscribe(entity, self.entity_event)
             self.metadata[entity] = temperature_metadata(state)
-        if max_age is not None:
-            key = (device, entity)
-            self.freshness[key] = max_age
-            self._refresh_freshness(key, state)
-
-    def _refresh_freshness(self, key, state):
-        device, entity = key
-        timer_key = (device, "freshness:" + entity)
-        if state is None or state.state in ("unknown", "unavailable"):
-            self.cancel(timer_key)
-            self.stale.add(key)
-            return
-        expires = state.last_reported + timedelta(seconds=self.freshness[key], milliseconds=1)
-        if expires <= self.now():
-            self.cancel(timer_key)
-            self.stale.add(key)
-            return
-        self.stale.discard(key)
-
-        def expired():
-            self.stale.add(key)
-            self.request("freshness_deadline", {device})
-
-        self._schedule(timer_key, expires, expired)
 
     def entity_event(self, entity, state, kind):
         if self.closed:
@@ -118,17 +92,9 @@ class ControllerScheduler:
                 and pool_paused(controller.status.get('pool',{}), controller.coordinator.current_plan_slot,
                     controller.coordinator.optimisation_plan, controller.inputs.read, controller.ownership)):
             affected.discard('pool')
-        recovered = set()
-        for device in affected:
-            key = (device, entity)
-            if key in self.freshness:
-                was_stale = key in self.stale
-                self._refresh_freshness(key, state)
-                if was_stale and key not in self.stale:
-                    recovered.add(device)
-        # An unchanged report refreshes deadlines and wakes an active confirmer,
-        # but does not need a new full decision unless a stale source recovered.
-        targets = affected if kind != "state_report" else recovered
+        # Unchanged reports wake an active confirmer; only state changes need
+        # a new decision. Source timestamps never expire an available value.
+        targets = affected if kind != "state_report" else set()
         if targets:
             self.request("state_report" if kind == "state_report" else "state_change", targets)
 
@@ -139,10 +105,6 @@ class ControllerScheduler:
         if not current and device in self.controller.failed:
             current = old
         self.dependencies[device] = current
-        for entity in old - current:
-            self.freshness.pop((device, entity), None)
-            self.stale.discard((device, entity))
-            self.cancel((device, "freshness:" + entity))
         in_use = set().union(*self.dependencies.values())
         for entity in set(self.watchers) - in_use:
             self.watchers.pop(entity)()
@@ -241,4 +203,3 @@ class ControllerScheduler:
             unsubscribe()
         self.watchers.clear()
         self.dependencies.clear()
-        self.freshness.clear()

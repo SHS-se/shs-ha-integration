@@ -50,7 +50,7 @@ Controlling then resumes from the current state.
 | Situation | Behaviour |
 |---|---|
 | HA restart, integration update, reload or unload | No handover at stop and none at start. Ownership and the captured baseline stay journalled, and control resumes from them. |
-| An unavailable or stale reading, actuators included | Hold: nothing is written. `pending` with `unavailable_since` for five minutes, then `fault`, which needs attention. |
+| An unavailable reading, actuators included | Hold: nothing is written. `pending` with `unavailable_since` for five minutes, then `fault`, which needs attention. |
 | The entity returns | Its own state change starts the next evaluation immediately. |
 | An unavailable actuator | Unknown, never an external change. |
 | No current plan, a plan with no command for the device, or website choices that cannot be read | Hold, with the reason on the device card. |
@@ -73,6 +73,16 @@ gate. See [hot-water completion](hot-water-demand-control.md).
 This measured completion rule changes scheduled inhibition only. It does not
 introduce minimum-on/off timers or alter explicit mode handover, manual override,
 or continuity on missing plans/readings. Native equipment protections remain.
+
+## Available readings do not expire by report age
+
+User requirement, 15 October 2026: an old source timestamp must not interrupt
+execution or verification, create configuration attention, or exclude equipment
+from planning. An available value remains current until HA changes it or reports
+it unavailable. Preserve report times/ages in diagnostics. This supersedes the
+older source-age holds described in the historical requirements and tests; it
+does not change ownership, explicit release or handover. Local transport and
+command deadlines still distinguish a lost app/session from a quiet sensor.
 
 ## Status values
 
@@ -111,7 +121,7 @@ follow the rule:
 |---|---|
 | The app stops, restarts, crashes or loses its connection; HA stops or restarts; the integration reloads | Nothing is written. HA fences the writer, so no stale command can be sent, and leaves the settings alone. The runtime resumes from them when it returns. |
 | No current plan or slot, a plan without battery instructions, an expired plan reference | Hold, status `idle` with the reason. |
-| Stale or missing measurements, a failing refresh | Hold, status `limited` or `fault` with the reason. |
+| Missing/unavailable measurements, a failing refresh | Hold, status `limited` or `fault` with the reason. |
 | A settings change that keeps the battery Controlling | The new settings are bound in place. Changed meters keep the command journal. A changed control entity is refused with a fault until the select goes to Verification and back. |
 | A manual-override entity that cannot be read | Hold. |
 
