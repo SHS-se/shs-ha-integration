@@ -236,9 +236,6 @@ POOL_POWER_SETTING_FIELD = _field(
 
 OBSERVATION_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
     "pool": (POOL_POWER_SETTING_FIELD,),
-    "boiler": (_field("running_power_w", "Boiler running power", "number", unit="W", minimum=1,
-        required=True, step=1,
-        help_text="Electrical rating of the switched boiler only. Exclude heat-pump preheating. The Power sensor separately measures when this boiler finishes heating."),),
 }
 
 # What a path's own executor runs, whatever method the website shows.

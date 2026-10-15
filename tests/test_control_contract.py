@@ -216,7 +216,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(
             keys("permit_inhibit", "boiler"),
             ["actuator_entity_ids", "power",
-             "control_override_entity", "running_power_w"],
+             "control_override_entity"],
         )
 
     def test_an_unrouted_device_keeps_its_plain_contract(self):

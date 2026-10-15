@@ -13,15 +13,15 @@ from shs_core.device_controls import BatteryMeasurementConfigurationError
 
 
 class HouseholdTests(unittest.IsolatedAsyncioTestCase):
-    async def test_missing_boiler_rating_attention_targets_its_real_editor(self):
+    async def test_missing_boiler_power_attention_targets_its_sensor_editor(self):
         rig = Rig()
         h = rig.household
         h.optimisation_degraded_devices = [{"key": "boiler", "statistic_id": "sensor.boiler_energy",
-            "name": "Water boiler", "reason": "needs configured boiler running power",
-            "status": "quiet", "fix_field": "running_power_w"}]
-        h._sync_degraded_group("boiler_rating", "quiet", "Running power", "Configure boiler rating")
+            "name": "Water boiler", "reason": "needs a measured heating cycle",
+            "status": "quiet"}]
+        h._sync_degraded_group("boiler_power", "quiet", "Power", "Check boiler power sensor")
         field = h.attention_items[0]["fix"]["fields"][0]
-        self.assertEqual(field["key"], "running_power_w")
+        self.assertEqual(field["key"], "power")
         self.assertEqual(field["device_key"], "sensor.boiler_energy")
 
     async def test_dormant_construction_restore_and_first_status_failure_have_no_jobs(self):

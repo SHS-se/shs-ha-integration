@@ -51,13 +51,14 @@ class Configuration:
                 await self.record.async_save(updated)
                 self.data = updated
             await self._apply()
-        # Explicitly retire the obsolete hot-water pause value through the same
+        # Explicitly retire obsolete hot-water fields through the same
         # acknowledged writer, preserving every other setting and permission.
         cleaned = self.options()
         for mapping in cleaned.get('device_control_mappings', {}).values():
             mapping.pop('max_inhibit_slots', None)
+            mapping.pop('running_power_w', None)
         if cleaned != self.options():
-            await self.commit(self.revision, cleaned, 'retire-hot-water-pause-setting')
+            await self.commit(self.revision, cleaned, 'retire-hot-water-running-power-setting')
 
     async def _apply(self):
         desired = self.data

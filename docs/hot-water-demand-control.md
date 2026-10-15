@@ -16,6 +16,12 @@ A configured fixed rating cannot detect completion. Setup/readiness corrections
 name the device Power editor, not the house-consumption field. A shared meter
 must not be presented as isolated heater demand without evidence.
 
+User requirement, 15 October 2026: the configured Power sensor is sufficient;
+there is no separate manual boiler running-power field. Planning uses measured
+power and the existing measured consumption profile, including when the boiler
+is currently idle. The app removes the retired field from saved settings without
+changing device modes or actuator bindings.
+
 Unavailable readings hold the last setting under existing continuity rules.
 The rule applies to scheduled inhibition, leaving explicit mode handover,
 manual override and actuator ownership unchanged. Verification observes the same

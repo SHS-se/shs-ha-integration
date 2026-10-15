@@ -130,16 +130,17 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replacement.data, dict(before, revision=3, applied_revision=3))
         self.assertEqual(self.gateway.value['revision'], 3)
 
-    async def test_startup_deletes_only_the_obsolete_hot_water_pause_setting(self):
+    async def test_startup_deletes_obsolete_hot_water_fields_and_keeps_the_power_sensor(self):
         options = {'device_modes': {'water': 'controlling'}, 'device_control_mappings': {
             'water': {'control_type': 'permit_inhibit', 'actuator_entity_ids': ['switch.water'],
-                      'power': 3000, 'max_inhibit_slots': 4}}}
+                      'power': 'sensor.water_power', 'max_inhibit_slots': 4, 'running_power_w': 3000}}}
         await self.app.commit(1, options, 'old-water-settings')
         reopened = Configuration(self.root, {'installation': 'original'}, self.gateway.install, project=deepcopy)
         await reopened.load(self.gateway.value, self.credentials)
         self.assertEqual(reopened.options()['device_modes'], options['device_modes'])
         expected = deepcopy(options)
         expected['device_control_mappings']['water'].pop('max_inhibit_slots')
+        expected['device_control_mappings']['water'].pop('running_power_w')
         self.assertEqual(reopened.options(), expected)
         self.assertEqual(reopened.options(), self.gateway.options())
         revision = reopened.revision
@@ -149,7 +150,7 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
     async def test_pause_setting_deletion_recovers_lost_reply_without_changing_other_settings(self):
         options = {'device_modes': {'water': 'controlling'}, 'device_control_mappings': {
             'water': {'control_type': 'permit_inhibit', 'actuator_entity_ids': ['switch.water'],
-                      'power': 3000, 'max_inhibit_slots': 4}}, 'private_setting': 'retained'}
+                      'power': 'sensor.water_power', 'max_inhibit_slots': 4, 'running_power_w': 3000}}, 'private_setting': 'retained'}
         await self.app.commit(1, options, 'old-water-settings')
         async def lose_reply(body):
             result = await self.gateway.install(body)
@@ -164,6 +165,7 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
         await replacement.load(self.gateway.value, self.credentials)
         expected = deepcopy(options)
         expected['device_control_mappings']['water'].pop('max_inhibit_slots')
+        expected['device_control_mappings']['water'].pop('running_power_w')
         self.assertEqual(replacement.options(), expected)
         self.assertEqual(replacement.revision, 3)
         await replacement.load(self.gateway.value, self.credentials)

@@ -537,10 +537,10 @@ class DeviceModelTests(unittest.TestCase):
         self.assertEqual(models, [])
         self.assertIn("configured running power", degraded[0]["reason"])
 
-    def test_boiler_rating_alone_does_not_supply_hot_water_demand(self) -> None:
+    def test_boiler_power_sensor_alone_does_not_supply_hot_water_energy_history(self) -> None:
         devices = [inventory_device("sensor.boiler", "controllable", "permit_inhibit",
                                     category="hot_water")]
-        models, degraded = self.build_with_degraded(devices, [], mappings={"sensor.boiler": {"running_power_w": 3000}}, watts=3000)
+        models, degraded = self.build_with_degraded(devices, [], mappings={"sensor.boiler": {"power": "sensor.boiler_power"}}, watts=3000)
         self.assertEqual(models, [])
         self.assertIn("hot-water demand", degraded[0]["reason"])
 
@@ -704,21 +704,21 @@ class DeviceModelTests(unittest.TestCase):
         )
         self.assertEqual(devices[0]["inference"]["source"], "test")
 
-    def test_boiler_running_rating_is_independent_of_instantaneous_power(self):
+    def test_boiler_power_uses_its_sensor_and_measured_history_when_idle(self):
         key = "sensor.boiler_energy"
         for live_w in (0, 200, 1500, 3000):
             with self.subTest(live_w=live_w):
                 devices = [inventory_device(key, "controllable", "permit_inhibit", category="hot_water")]
                 models, degraded = self.build_with_degraded(devices, complete_history(key),
-                    mappings={key: {"control_type": "permit_inhibit", "power": "sensor.boiler_power", "running_power_w": 3000}},
-                    watts=live_w)
+                    mappings={key: {"control_type": "permit_inhibit", "power": "sensor.boiler_power"}},
+                    watts=live_w or None)
                 self.assertEqual(degraded, [])
-                self.assertEqual(models[0]["active_power_w"], 3000)
+                self.assertEqual(models[0]["active_power_w"], live_w or 1000)
         devices = [inventory_device(key, "controllable", "permit_inhibit", category="hot_water")]
         models, degraded = self.build_with_degraded(devices, complete_history(key),
             mappings={key: {"power": "sensor.boiler_power"}}, watts=1274)
-        self.assertEqual(models, [])
-        self.assertEqual(len(degraded), 1)
+        self.assertEqual(models[0]["active_power_w"], 1274)
+        self.assertEqual(degraded, [])
 
     def test_reviewed_watts_win_over_the_learned_average(self) -> None:
         devices = [inventory_device("sensor.heater", "controllable", "setpoint")]

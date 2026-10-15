@@ -21,12 +21,8 @@ class PresentationTests(unittest.TestCase):
         self.assertIn('power', view['field_errors'])
         self.assertNotIn('house_consumption_power_entity', view['field_errors'])
         water['mapping']['power'] = 'sensor.water_power'
-        rating_gap = self.view([water])[0]
-        self.assertIn('running_power_w', rating_gap['field_errors'])
-        field = next(f for f in rating_gap['fields'] if f['key'] == 'running_power_w')
-        self.assertTrue(field['required'])
-        water['mapping']['running_power_w'] = 3000
         corrected = self.view([water])[0]
+        self.assertNotIn('running_power_w', [f['key'] for f in corrected['fields']])
         self.assertEqual(corrected['mapping_readiness']['state'], 'ready')
         self.assertNotIn('power', corrected.get('field_errors', {}))
 
