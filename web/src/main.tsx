@@ -6,6 +6,7 @@ import {PlanChart} from './plan-chart/PlanChart';
 import type {State, Entry, Plan, Slot} from './types';
 import './style.css';
 import {Configuration} from './Configuration';
+import {fetchApp} from './ingress';
 
 const screens=['Overview','Schedule','Controller','System','Settings'] as const;
 type Screen=typeof screens[number];
@@ -73,8 +74,19 @@ function App() {
   useEffect(()=>{const media=matchMedia('(prefers-color-scheme: dark)');const change=()=>setSystemDark(media.matches);media.addEventListener('change',change);return()=>media.removeEventListener('change',change);},[]);
   useEffect(()=>{const change=()=>setScreen(route());window.addEventListener('hashchange',change);return()=>window.removeEventListener('hashchange',change);},[]);
   useEffect(()=>{
-    const controller=new AbortController();let active=true;
-    async function update(){if(document.hidden)return;try{const response=await fetch('./api/state',{signal:controller.signal,cache:'no-store'});if(!response.ok)throw new Error(`App request failed (${response.status})`);const next:State=await response.json();if(active){setState(next);setError('');}}catch(e){if(active)setError(e instanceof Error?e.message:'App connection lost');}}
+    const controller=new AbortController();let active=true,pending=false;
+    async function update(){
+      if(document.hidden||pending)return;
+      pending=true;
+      try{
+        const response=await fetchApp('./api/state',{signal:controller.signal,cache:'no-store'});
+        if(!response.ok)throw new Error(`App request failed (${response.status})`);
+        const next:State=await response.json();
+        if(active){setState(next);setError('');}
+      }catch(e){
+        if(active)setError(e instanceof Error?e.message:'App connection lost');
+      }finally{pending=false;}
+    }
     void update();const interval=setInterval(update,15000);document.addEventListener('visibilitychange',update);return()=>{active=false;controller.abort();clearInterval(interval);document.removeEventListener('visibilitychange',update);};
   },[]);
   const entry:Entry|undefined=state?.snapshot?.entries.find(e=>e.id===entryId)||state?.snapshot?.entries[0];

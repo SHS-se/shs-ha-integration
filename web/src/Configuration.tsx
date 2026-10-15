@@ -1,11 +1,12 @@
 import {useEffect, useRef} from 'react';
 import './configuration-editor.js';
+import {fetchApp} from './ingress';
 
 type Editor = HTMLElement & {backend:typeof backend;dark:boolean};
 const backend = {
   async request(body:Record<string,unknown>) {
     const {action,...data}=body;
-    const response=await fetch(`./api/configuration/${action}`,{
+    const response=await fetchApp(`./api/configuration/${action}`,{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data),
     });
     if(!response.ok) {
@@ -16,7 +17,7 @@ const backend = {
     }
     return response.json();
   },
-  download() {return fetch('./api/diagnostics/controller.json.gz',{cache:'no-store'});},
+  download() {return fetchApp('./api/diagnostics/controller.json.gz',{cache:'no-store'});},
 };
 
 export function Configuration({dark}:{dark:boolean}) {
