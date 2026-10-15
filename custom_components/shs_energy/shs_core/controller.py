@@ -514,7 +514,7 @@ class ScheduledController(DeviceOperations):
                 "requested_systems": sorted(self.requested_systems, key=str),
             }).hex()
             for device in (*DEVICES, *sorted(generic)):
-                if device == "battery" and getattr(self,"battery_runtime",None) is not None:
+                if device == "battery":
                     self.publish_battery_status()
                     continue
                 if devices is not None and device not in devices:

@@ -105,7 +105,8 @@ class ShsPlanRequestSensor(ShsBaseSensor):
         duty_service = next((service for service in plan.get('services', []) if service.get('device') == 'boiler' and service.get('control', {}).get('type') == 'duty_cycle'), None)
         if duty_service is None:
             return None
-        rated_power_w = float(duty_service['control']['rated_power_w'])
+        rating=duty_service['control']['rated_power_w']
+        rated_power_w = float(rating) if rating is not None else None
         return rated_power_w if slot.get('boiler_permitted') is True else 0.0
 
     @property

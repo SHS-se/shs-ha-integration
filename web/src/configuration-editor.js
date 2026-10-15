@@ -1066,8 +1066,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         const token = `${scope}:${deviceKey}:${field.key}`;
         const required = field.required || dependent.has(field.key);
         const populated = this._present(values[field.key]);
-        const inheritedLocation = ["pv_forecast_latitude", "pv_forecast_longitude"].includes(field.key) && !this._data.configured_keys?.includes(field.key);
-        if (required || this._fieldProblems(field.key, scope, deviceKey).length || (values[field.key] !== null && (["power", "quantity"].includes(field.kind) || (populated && !inheritedLocation))) || this._added.has(token)) visible.push(this._renderField({ ...field, required }, values[field.key], scope, deviceKey));
+        if (required || this._fieldProblems(field.key, scope, deviceKey).length || (values[field.key] !== null && (["power", "quantity"].includes(field.kind) || populated)) || this._added.has(token)) visible.push(this._renderField({ ...field, required }, values[field.key], scope, deviceKey));
         else {
           optional.push(`<button class="text" data-action="add-field" data-token="${this._escape(token)}">Add ${this._escape(field.label.toLowerCase())}</button>`);
         }
@@ -1105,7 +1104,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         return `<li><strong>${this._escape(field?.label || "Source")}</strong>: ${this._escape(JSON.stringify(this._savedDraft[key] ?? []))} → ${this._escape(JSON.stringify(value))}</li>`;
       }).join("")}</ul>` : "No source changes proposed."}<p>Save changes to apply, or Cancel to retain your current sources.</p></section>` : ""}
       ${sections.map(s => this._renderSection(s)).join("")}
-      <p class="muted">Solar location ${this._data.configured_keys?.some(k => ["pv_forecast_latitude", "pv_forecast_longitude"].includes(k)) ? "uses your configured override" : "comes from Home Assistant"}. An override can be added in Solar and electrical measurements.</p>
+      <p class="muted">Planning weather and location use the installation address saved on the SHS website.</p>
       <details class="card compact"><summary>Current readings · ${selected.length} selected sources</summary><div class="table-wrap"><table><thead><tr><th>Source</th><th>Used for</th><th>Reading</th><th>Last update</th><th>Selected in</th></tr></thead><tbody>${selected.map(({ field, entity, id }) => `<tr><td>${this._escape(entity?.name || id)}</td><td>${this._escape(field.label)}</td><td>${this._escape(entity ? `${entity.state} ${entity.unit || ""}` : "Unavailable")}</td><td>${this._time(entity?.last_updated)}</td><td>${this._data.configured_keys?.includes(field.key) ? "SHS configuration" : "HA Energy / discovery"}</td></tr>`).join("")}</tbody></table></div></details>`;
   }
 

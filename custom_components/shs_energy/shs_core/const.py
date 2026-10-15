@@ -99,8 +99,6 @@ ROOM_AREA_FIELD = "room_area_id"
 # Live optimisation inputs. Forecast entities must expose timestamped values;
 # the integration does not infer a provider, unit, location or missing series.
 OPT_PV_FORECAST_ENTITIES = "pv_forecast_entities"
-OPT_PV_FORECAST_LATITUDE = "pv_forecast_latitude"
-OPT_PV_FORECAST_LONGITUDE = "pv_forecast_longitude"
 OPT_BATTERY_SOC_ENTITY = "battery_soc_entity"
 OPT_GRID_EXPORT_POWER_ENTITY = "grid_export_power_entity"
 

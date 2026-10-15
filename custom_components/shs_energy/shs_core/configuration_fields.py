@@ -393,8 +393,6 @@ def _configuration_sections(*, battery_control_required=False) -> list[dict[str,
                 _field("grid_power_entity", "Signed grid power", "entity", domains=("sensor",), required=battery_control_required,
                        help_text="Instantaneous W or kW: positive importing, negative exporting. Used for battery control and measured conversion losses."),
                 _field(c.OPT_GRID_EXPORT_POWER_ENTITY, "Instantaneous grid-export power", "entity", domains=("sensor",)),
-                _field(c.OPT_PV_FORECAST_LATITUDE, "Solar forecast latitude", "number", step=0.00001),
-                _field(c.OPT_PV_FORECAST_LONGITUDE, "Solar forecast longitude", "number", step=0.00001),
             ],
         },
         {

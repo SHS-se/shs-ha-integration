@@ -56,55 +56,52 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.options['device_modes'])
 
     async def test_live_and_simulated_commands_are_separate_and_persisted(self):
-        self.options['device_modes'] = {'$battery': 'controlling', '$pool': 'control_verification', '$ev': 'planning'}
+        self.options['device_modes'] = {'$ev': 'controlling', '$pool': 'control_verification'}
         await self.controller.async_start()
         export = self.journal.export()
         self.assertEqual({row['device'] for row in export['attempts']}, {'pool'})
         self.assertEqual({row['device'] for row in export['coverage']}, {'pool'})
-        live = next(row for row in export['evaluations'] if row['device'] == 'battery')
+        live = next(row for row in export['evaluations'] if row['device'] == 'ev')
         self.assertEqual(live['mode'], 'controlling')
-        self.assertEqual(live['result']['state'], 'confirmed')
+        self.assertEqual(live['result']['state'], 'commanded')
         self.assertEqual([(c['data']['entity_id'], c['value']) for c in live['commands'] if c['called']], self.calls)
         self.assertTrue(all(c['transport'] == 'accepted' for c in live['commands'] if c['called']))
         self.assertTrue(all(c['settings_confirmation'] == 'not_checked' for c in live['commands']))
-        self.assertEqual(live['observations']['select.mode']['state'], 'Baseline')
+        self.assertEqual(live['observations']['number.current']['state'], '8')
         # The command no longer polls the select after HA completes its service.
         # Diagnostics retain the last actual read instead of inventing a report.
-        self.assertEqual(live['final_observations']['select.mode']['state'], 'Baseline')
+        self.assertEqual(live['final_observations']['number.current']['state'], '8')
         simulated = next(row for row in export['evaluations'] if row['device'] == 'pool')
         self.assertEqual(simulated['commands'], [])
-        passive = next(row for row in export['evaluations'] if row['device'] == 'ev')
-        self.assertEqual(passive['mode'], 'planning')
-        self.assertEqual(passive['commands'], [])
         reloaded = VerificationJournal(self.audit_store, self.sample_store)
         await reloaded.load()
         self.assertEqual(reloaded.export()['evaluations'], export['evaluations'])
 
     async def test_failed_live_send_is_not_reported_as_delivery(self):
-        self.options['device_modes']['$battery'] = 'controlling'
+        self.options['device_modes']['$ev'] = 'controlling'
         self.hass.services.async_call = AsyncMock(side_effect=TimeoutError('service outcome unknown'))
         await self.controller.async_start()
-        row = next(row for row in self.journal.evaluations if row['device'] == 'battery')
+        row = next(row for row in self.journal.evaluations if row['device'] == 'ev')
         self.assertEqual(row['result']['state'], 'fault')
         sent = [c for c in row['commands'] if c['called']]
         self.assertTrue(sent)
         self.assertTrue(all(c['transport'] == 'ambiguous' for c in sent))
-        self.assertTrue(all(c['settings_confirmation'] != 'confirmed' for c in sent))
+        self.assertTrue(all(c['settings_confirmation'] != 'scheduled' for c in sent))
         self.assertTrue(all(c['error'] == 'service outcome unknown' for c in sent))
         self.assertEqual(self.journal.export()['coverage'], [])
 
     async def test_diagnostics_failure_does_not_restore_successful_live_control(self):
-        self.options['device_modes']['$battery'] = 'controlling'
+        self.options['device_modes']['$ev'] = 'controlling'
         await self.controller.async_start()
         self.journal.append = AsyncMock(side_effect=OSError('disk full'))
         self.calls.clear()
         await self.controller.async_tick()
-        self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
-        self.assertEqual(self.states['select.mode'].state, 'Charge')
+        self.assertEqual(self.controller.status['ev']['state'], 'commanded')
+        self.assertEqual(self.states['switch.charge'].state, 'on')
         self.assertEqual(self.calls, [])
         self.assertEqual(self.controller.diagnostics_error, 'disk full')
-        self.assertEqual(self.controller.diagnostics_failed_evaluations, 3)
-        self.assertEqual(controller_diagnostics(self.controller, self.panel())['current']['failed_evaluations_this_session'], 3)
+        self.assertEqual(self.controller.diagnostics_failed_evaluations, 2)
+        self.assertEqual(controller_diagnostics(self.controller, self.panel())['current']['failed_evaluations_this_session'], 2)
 
     async def test_mode_exit_records_real_handover_without_fake_verification(self):
         self.states['switch.pool'].state = 'on'

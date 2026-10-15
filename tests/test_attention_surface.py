@@ -76,17 +76,12 @@ class AttentionSurfaceTests(unittest.TestCase):
         self.assertEqual(rest.count('{"kind": "none"}'), 2)
 
 
-    def test_a_gap_no_setting_can_answer_is_tagged_at_the_raise(self) -> None:
-        """Classification belongs where the reason is known, not in a matcher.
-
-        Deciding this by matching the message text downstream is how the
-        base-load shortfall came to be announced as a missing panel field.
-        """
-        optimisation = (PACKAGE / "shs_core/optimisation.py").read_text(encoding="utf-8")
-        self.assertIn("remedy: str = REMEDY_SETTING", optimisation)
-        start = optimisation.index("lacks {minimum_samples} samples")
-        raise_call = optimisation[start : optimisation.index("\n        )", start)]
-        self.assertIn("remedy=REMEDY_WAITING", raise_call)
+    def test_sparse_history_is_nonblocking_diagnostic_attention(self):
+        from shs_core.planning_warnings import planning_warning, warning_attention
+        warning=planning_warning('profile_estimated','base','Sparse history','Planning uses an estimate')
+        item=warning_attention([warning])[0]
+        self.assertEqual(item['fix']['kind'],'diagnostics')
+        self.assertNotIn('execution_blocked',item)
 
     def test_an_attention_item_is_built_from_persisted_state(self) -> None:
         """State that only a device exchange fills is empty on every restart.

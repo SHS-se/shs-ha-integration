@@ -37,7 +37,16 @@ CONTROL_TYPES = (
 def pool_requested_w(plan, slot):
     """Transient models distinguish enabled nominal command from expected electricity."""
     response = (plan.get("pool") or {}).get("heater_response")
-    return slot["pool_command_w"] if response and response["kind"] == "bergvarme" else slot["pool_w"]
+    return slot["pool_command_w"] if (plan.get("pool") or {}).get("planning_basis") == "empirical" or response and response["kind"] == "bergvarme" else slot["pool_w"]
+
+
+def pool_permission(plan, slot):
+    """Permission is independent of forecast watts while a model is learning."""
+    if 'pool_permitted' in slot:
+        if type(slot['pool_permitted']) is not bool:
+            raise ValueError('pool permission must be a boolean')
+        return slot['pool_permitted']
+    return pool_requested_w(plan, slot) > 0
 
 from .const import ROOM_AREA_FIELD
 

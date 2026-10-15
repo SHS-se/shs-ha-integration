@@ -73,10 +73,9 @@ class RemoteBattery:
         return {'owner':'app' if self.enabled else 'fenced', 'epoch':self.grant.epoch if self.grant else 0,
                 'grant_current':self.is_current(self.grant, self.runtime.identity()), 'fault':None}
 
-    async def take_over(self, identity, expires_at_ms, release):
+    async def take_over(self, identity, expires_at_ms):
         if not self.enabled:
             raise GatewayConflict('Battery writer is dormant until receipt reconciliation completes')
-        await release()
         catalog = self.runtime.adapter.catalog
         wire = await self.gateway.call('battery_grant', dict(identity=encode_value(identity),
             catalog=encode_value(catalog), conversion=self.runtime.adapter.conversion.wire(), expires_at_ms=expires_at_ms))

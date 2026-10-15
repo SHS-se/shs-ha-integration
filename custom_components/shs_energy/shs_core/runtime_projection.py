@@ -1,6 +1,7 @@
 """Compact app-owned values projected into stable HA entities and editors."""
 from copy import deepcopy
 from .operational_attention import execution_attention, merge_attention
+from .planning_warnings import warning_attention
 
 FIELDS = (
     'configuration_busy', 'data', 'actuals_accepted_until', 'demand_charge', 'grid_operator', 'grid_price_forecast', 'grid_prices',
@@ -13,6 +14,7 @@ FIELDS = (
     'supplier_cost_days', 'supplier_prices', 'tariff_catalog', 'tariff_components', 'tariff_status',
     'total_price_forecast', 'last_thermal_slots_accepted', 'last_runtime_report', 'last_runtime_error',
     'attention_items', 'device_control_mapping_gaps', 'replan_recommendations',
+    'optimisation_warnings', 'exchange_warnings',
 )
 
 
@@ -20,7 +22,8 @@ def runtime_projection(household, cached, repairs, *, plan):
     battery = household.battery_runtime
     status = battery.snapshot()
     values = {key:plan if key == 'optimisation_plan' else deepcopy(getattr(household,key)) for key in FIELDS}
-    values['attention_items'] = merge_attention(values['attention_items'], execution_attention(household.controller.status,status,cached['devices']))
+    values['attention_items'] = merge_attention(values['attention_items'], execution_attention(household.controller.status,status,cached['devices']),
+        warning_attention(plan.get('planning_warnings', []) if plan else [], household.optimisation_warnings, household.exchange_warnings, status.get('planning_warnings', [])))
     return dict(schema=1, values=values,
         controllers=deepcopy(household.controller.status), cached=deepcopy(cached), repairs=deepcopy(repairs),
         battery=status, battery_live_inputs=household.battery_live_inputs.snapshot(),

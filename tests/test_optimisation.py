@@ -898,6 +898,13 @@ class ModelVersionToleranceTests(unittest.TestCase):
 
         validate_plan_contract(fixture["plan"], now)
 
+    def test_unobserved_boiler_contract_retains_permissions_with_unknown_power(self):
+        fixture = json.loads((Path(__file__).parent / "fixtures/schema-8-unobserved-hot-water-plan.json").read_text())
+        now = datetime.fromisoformat(fixture["validation_time"].replace("Z", "+00:00"))
+        validate_plan_contract(fixture["plan"], now)
+        self.assertIsNone(fixture["plan"]["services"][0]["control"]["rated_power_w"])
+        self.assertTrue(any(slot["boiler_permitted"] for slot in fixture["plan"]["plans"]["priority"]["slots"]))
+
     def test_real_schema8_battery_contract_and_corrupt_commands(self):
         fixture = json.loads((Path(__file__).parent / 'fixtures/schema-8-battery-plan.json').read_text())
         now = datetime.fromisoformat(fixture['validation_time'].replace('Z', '+00:00'))
@@ -1107,8 +1114,7 @@ class RemedyClassificationTests(unittest.TestCase):
         self.assertEqual(str(error), "a; b")
         self.assertEqual(error.remedy, REMEDY_DEFECT)
 
-    def test_thin_base_load_history_is_something_to_wait_for(self) -> None:
-        """The reported case: 'base-load profile lacks 2 samples for N quarters'."""
+    def test_thin_base_load_history_remains_usable(self) -> None:
         start = datetime(2026, 8, 30, tzinfo=timezone.utc)
         # One day of quarters cannot give two samples per quarter-of-day.
         slots = [
@@ -1119,11 +1125,25 @@ class RemedyClassificationTests(unittest.TestCase):
             for index in range(96)
         ]
 
-        with self.assertRaises(OptimisationInputError) as caught:
-            build_base_load_model(slots, "UTC", minimum_samples=2)
+        model = build_base_load_model(slots, "UTC", minimum_samples=2)
+        self.assertEqual(model['by_weekday'][0][0]['median_w'], 800)
+        self.assertEqual(model['planning_warnings'][0]['severity'], 'warning')
+        self.assertEqual(model['planning_warnings'][0]['evidence']['thin_quarters'], 96)
 
-        self.assertEqual(caught.exception.remedy, REMEDY_WAITING)
-        self.assertIn("lacks 2 samples", str(caught.exception))
+    def test_one_and_five_missing_quarters_do_not_abort(self):
+        start = datetime(2026, 8, 30, tzinfo=timezone.utc)
+        for missing in (1, 5):
+            slots = [{'start':(start+timedelta(minutes=15*i)).isoformat(), 'total_load_kwh':.2}
+                     for i in range(96*2) if i % 96 >= missing]
+            model = build_base_load_model(slots, 'UTC', minimum_samples=2)
+            self.assertEqual(len(model['by_weekday'][0]), 96)
+            self.assertTrue(all(row['median_w'] == 800 for row in model['by_weekday'][0]))
+            self.assertEqual(model['planning_warnings'][0]['severity'], 'error' if missing == 5 else 'warning')
+
+    def test_no_history_uses_current_measured_residual_with_visible_warning(self):
+        model = build_base_load_model([], 'UTC', current_residual_w=1234)
+        self.assertEqual(model['by_weekday'][0][0]['median_w'], 1234)
+        self.assertEqual(model['planning_warnings'][0]['severity'], 'error')
 
     def test_an_unreadable_plan_is_a_defect_to_report(self) -> None:
         with self.assertRaises(OptimisationInputError) as caught:

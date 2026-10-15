@@ -34,7 +34,7 @@ async function homeAssistant(page:Page,options:{rejectRenewal?:boolean;rejectRet
     if(path==='api/configuration/save') {
       saved++;
       const body=request.postDataJSON();
-      expect(body.configuration.pv_forecast_latitude).toBe(60);
+      expect(body.configuration.outdoor_temperature_entity).toBe('sensor.outdoor_new');
       await route.fulfill({json:{saved:true,refreshing:false,revision:body.expected_revision+1}});
       return;
     }
@@ -82,9 +82,9 @@ test('dashboard and settings share renewal and preserve an unsaved draft through
   const harness=await homeAssistant(page,{holdRenewal:new Promise<void>(resolve=>{release=resolve;})}),{app}=harness;
   await app.getByRole('link',{name:'Settings',exact:true}).click();
   const editor=app.locator('shs-configuration-editor');
-  await editor.locator('summary').filter({hasText:'Solar and electrical measurements'}).click();
-  const latitude=editor.getByLabel('Solar forecast latitude',{exact:true});
-  await latitude.fill('60');
+  await editor.locator('summary').filter({hasText:'Shared outdoor conditions'}).click();
+  const latitude=editor.getByLabel('Measured outdoor temperature',{exact:true});
+  await latitude.fill('sensor.outdoor_new');
   await visibility(app,true);harness.expire();await visibility(app,false);
   await expect.poll(()=>harness.counts().renewals).toBe(1);
   await editor.getByRole('button',{name:'Save changes',exact:true}).click();
@@ -92,10 +92,10 @@ test('dashboard and settings share renewal and preserve an unsaved draft through
   // Returning again while renewal is pending must not launch another poll.
   await visibility(app,false);
   expect(harness.counts().renewals).toBe(1);
-  await expect(latitude).toHaveValue('60');
+  await expect(latitude).toHaveValue('sensor.outdoor_new');
   release();
   await expect(editor.getByText('All changes saved')).toBeVisible();
-  await expect(latitude).toHaveValue('60');
+  await expect(latitude).toHaveValue('sensor.outdoor_new');
   await expect(app.locator('.connection')).toHaveText('Connected');
   expect(harness.counts()).toEqual({renewals:1,rejected:2,saved:1});
 });

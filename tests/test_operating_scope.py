@@ -146,7 +146,7 @@ class ScopeTests(unittest.TestCase):
         coordinator._plan_contract = PlanContractCache(lambda: coordinator.optimisation_plan, validate)
         options = {'device_modes': deepcopy(plan['operating_scope']['modes'])}
         select = lambda device: namespace['binding_plan_for'](coordinator, device, options)
-        self.assertIs(select('battery')[0], plan['execution_plan'])
+        self.assertEqual(select('battery')[0], {**plan['execution_plan'], 'battery_execution': plan['battery_execution']})
         self.assertIs(select('battery')[1], plan['execution_plan']['plans']['priority']['slots'][0])
         self.assertIs(select('pool')[0], plan)
         for _ in range(5):
@@ -159,7 +159,7 @@ class ScopeTests(unittest.TestCase):
         self.assertIsNotNone(select('pool')[1])
         plan['execution_plan']['status'] = 'infeasible'
         self.assertIsNone(select('battery')[1])
-        self.assertIs(select('battery')[0], plan['execution_plan'])
+        self.assertEqual(select('battery')[0], {**plan['execution_plan'], 'battery_execution': plan['battery_execution']})
 
     def test_runtime_status_uses_execution_feasibility_and_current_modes(self):
         from shs_core.presentation import operational_status
@@ -288,15 +288,15 @@ class ScopeControllerTests(unittest.IsolatedAsyncioTestCase):
         from shs_core.verification import VerificationJournal
         self.controller.verification = VerificationJournal(fixtures.Store(), fixtures.Store())
         await self.controller.async_start()
-        self.assertIn(('number.charge_limit', .5), self.calls)
+        self.assertFalse(any(key in ('number.charge_limit','number.discharge_limit','select.mode') for key,_ in self.calls))
         self.assertNotIn(('number.charge_limit', 2), self.calls)
         self.assertFalse(any(key in ('number.start', 'number.stop', 'switch.pool') for key, _ in self.calls))
-        self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
+        self.assertNotIn('battery', self.controller.ownership.records)
 
     async def test_entering_control_executes_retained_schedule_with_explicit_permission(self):
         self.options['device_modes']['$pool'] = 'controlling'
         await self.controller.async_start()
-        self.assertIn(('number.charge_limit', .5), self.calls)
+        self.assertFalse(any(key in ('number.charge_limit','number.discharge_limit','select.mode') for key,_ in self.calls))
         self.assertIn('pool', self.controller.ownership.records)
 
     async def test_scope_change_during_awaited_command_stops_remaining_optimisation_writes(self):

@@ -48,9 +48,10 @@ class BatterySupplyTests(unittest.TestCase):
         self.assertEqual(result.eligible_gross_w, 1800)
         self.assertEqual(result.attributed_pv_w, 600)
         self.assertEqual(result.house_supply_bound_w, 1200)
-        for reading in (replace(self.devices['ev'], watts=3100),):
-            with self.subTest(reading=reading), self.assertRaises(ValueError):
-                self.measure(scope, planned_readings={'ev': reading})
+        result = self.measure(scope, planned_readings={'ev':replace(self.devices['ev'], watts=3100)})
+        self.assertEqual(result.eligible_gross_w, 0)
+        self.assertEqual(result.raw_eligible_gross_w, -100)
+        self.assertEqual(len(result.planning_warnings), 1)
         # Including every Planned device is algebraically whole-house supply.
         result = self.measure(SupplyScope('selected', True, ('ev', 'pool')), planned_readings={})
         self.assertEqual(result.house_supply_bound_w, 2000)
@@ -59,7 +60,7 @@ class BatterySupplyTests(unittest.TestCase):
         scope=SupplyScope('selected',True)
         for changes in [dict(house=None),dict(pv=None),dict(planned_readings={}),dict(pv=replace(self.pv,boundary='dc')),
                 dict(house=replace(self.house,basis='interval_average_ac')),
-                dict(membership_revision='roles-2'),dict(house=replace(self.house,watts=100)),
+                dict(membership_revision='roles-2'),
                 dict(planned_readings={**self.devices,'ev':replace(self.devices['ev'],source='house')})]:
             with self.subTest(changes=changes), self.assertRaises(ValueError):self.measure(scope,**changes)
         with self.assertRaises(ValueError): self.measure(SupplyScope('selected',False,('excluded',)))
@@ -89,7 +90,7 @@ class BatterySupplyTests(unittest.TestCase):
             observe_supply(**kwargs)
 
     def test_invalid_partition_and_scope_keys_fail_closed(self):
-        for values in [(1,0,2),(-1,0,0),(1,float('nan'),1)]:
+        for values in [(-1,0,0),(1,float('nan'),1)]:
             with self.assertRaises(ValueError): proportional_supply(*values)
         for scope in [dict(kind='all'),dict(kind='whole_house',include_base=True),
                 dict(kind='selected',include_base=False,planned_device_keys=['ev','ev'])]:

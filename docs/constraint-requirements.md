@@ -62,3 +62,26 @@ planning inputs, including forecasts and SOC. Retain source timestamps and ages
 in diagnostics. Unknown/unavailable readings, invalid values/units, local
 transport/session validity, command acknowledgement and plan expiry keep their
 existing purposes. Only explicit user settings release equipment.
+
+User requirement, 15 October 2026: imperfect history and model quality produce
+nonblocking diagnostic warnings, never missing configuration fields. Preserve
+single usable quarter observations; interpolate empty historical profile quarters
+and disclose estimates. With no history, use current measured residual demand as
+an explicitly uncertain estimate. Five empty quarters elevate severity, not
+admission. Incoming ignored-history warnings and plan warnings share the same
+attention surface and clear when current evidence is usable.
+
+Disagreeing device and household power meters must not stop the native battery
+runtime. Preserve raw excluded demand, reconcile eligible supply within the
+existing permission partition, log the discrepancy and show diagnostic attention.
+The scheduled device executor no longer executes battery plans or confirms them
+against source timestamps. Only the durable native battery runtime may write
+battery settings. Explicit mode exit, including Verification, still performs its
+native handover; restart, metadata changes, missing plans and data gaps hold the
+last settings. Retired writer journals are fenced on load, never re-enabled as an
+alternative executor.
+
+The planner installation address owns location. HA has no competing PV coordinate
+editors or coordinate mismatch gate. Pool intent transports an explicit permission
+separately from forecast watts so missing statistical evidence cannot fabricate an
+OFF request. Known physical limits and permission boundaries remain enforced.

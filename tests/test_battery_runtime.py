@@ -497,7 +497,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(r.runtime.snapshot()['state'],'fault',r.runtime.snapshot())
             self.assertIsNotNone(r.runtime.snapshot()['assessment'])
             self.assertEqual(r.calls,[])
-            self.assertEqual(r.fence.snapshot()['owner'],'legacy')
+            self.assertEqual(r.fence.snapshot()['owner'],'fenced')
         finally:await r.runtime.close()
     async def test_available_old_and_future_source_timestamps_do_not_block_control(self):
         for entity in ('sensor.house','sensor.pv','sensor.grid','sensor.battery','sensor.soc'):
@@ -1309,3 +1309,17 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
                 for row in r.runtime.snapshot()['fault_history']))
             self.assertEqual(r.calls,[])
         finally:await r.runtime.close()
+
+class MeasurementWarningTests(unittest.IsolatedAsyncioTestCase):
+    async def test_disagreeing_device_meter_warns_without_stopping_and_recovers(self):
+        r=Rig();r.add_pool();r.rows['sensor.pool']['state']='3000'
+        r.plan['battery_supply_scope']={'kind':'selected','include_base':True,'planned_device_keys':[]}
+        await r.start();self.addAsyncCleanup(r.runtime.close)
+        for _ in range(2):await r.advance(5000)
+        self.assertTrue(r.runtime.snapshot()['planning_warnings'])
+        self.assertTrue(r.runtime.host.state.groups[0].owned)
+        before=r.runtime.host.state.groups[0].release_pending
+        r.rows['sensor.pool']['state']='500'
+        await r.advance(5000)
+        self.assertFalse(r.runtime.snapshot()['planning_warnings'])
+        self.assertEqual(r.runtime.host.state.groups[0].release_pending,before)

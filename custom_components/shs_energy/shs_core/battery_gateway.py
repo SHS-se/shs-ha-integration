@@ -92,10 +92,7 @@ class BatteryGateway:
             if options != self.options():
                 raise GatewayConflict('Configuration changed during battery admission')
             self.installation = identity, catalog, conversion, deepcopy(options)
-        async def released():
-            if 'battery' in self.physical.ownership.records:
-                raise GatewayConflict('Legacy battery ownership has not been released')
-        grant = await self.fence.take_over(identity, expires_at_ms, released)
+        grant = await self.fence.take_over(identity, expires_at_ms)
         # A grant used only to finish handback must not create another handback
         # after the app has already completed it.
         self.obligation = {'pending':self.obligation['pending'] or not self.released(options),

@@ -17,11 +17,10 @@ from .operating_modes import device_mode, EXECUTING_MODES
 from .verification import OPERATIONS, operation_name, evaluation_record, observation
 from .controller_metrics import ControllerMetrics, fingerprint, record_time
 from .battery_commands import validate_battery_command, battery_mode_key
-from .configuration_values import resolve_battery_quantities, resolve_quantity
 from .device_commands import actuator_targets, execution_setup_errors, validate_commands
 from .hot_water import is_hot_water, heating_permission, hot_water_setup_errors, HotWaterConfigurationError
-from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, planning_path
-from .device_controls import pool_requested_w
+from .device_controls import pool_control_errors, pool_control_mapping, planning_path
+from .device_controls import pool_requested_w, pool_permission
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -152,7 +151,7 @@ class DeviceOperations:
 
     async def command(self, entity, value):
         if self.battery_writer_fence is not None and not self.verifying:
-            self.battery_writer_fence.check_legacy(entity)
+            self.battery_writer_fence.check_device_command(entity)
         self.check_authority()
         domain = entity.split(".")[0]
         state = ((self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)) if getattr(self, "device", None) == "battery" and domain == "number" else self.actuator_state(entity)
@@ -188,7 +187,7 @@ class DeviceOperations:
             self.check_authority()
             if not equal:
                 if self.battery_writer_fence is not None:
-                    self.battery_writer_fence.check_legacy(entity)
+                    self.battery_writer_fence.check_device_command(entity)
                 if self.device!="battery" and not self.before_external_command(self.device):
                     if self.scheduler is not None:
                         self.scheduler.device_deadline(self.device,"battery_headroom",datetime.now(timezone.utc)+timedelta(seconds=5))
@@ -198,7 +197,7 @@ class DeviceOperations:
                     if self.device != 'battery' and not self.before_external_command(self.device):
                         raise ControlDeadlineError('Waiting for battery charging to release grid capacity')
                     if self.battery_writer_fence is not None:
-                        self.battery_writer_fence.check_legacy(entity)
+                        self.battery_writer_fence.check_device_command(entity)
 
                 def sent():
                     self.command_times[entity] = datetime.now(timezone.utc)
@@ -251,12 +250,6 @@ class DeviceOperations:
         if self.scheduler is not None and not self.verifying:
             self.scheduler.device_deadline(self.device, name, when)
 
-    def measurement_after_commands(self, entity, *actuators):
-        state = self.state(entity)
-        reported = getattr(state, "last_reported", state.last_updated)
-        return all(reported >= self.command_times[actuator]
-                   for actuator in actuators if actuator in self.command_times)
-
     async def save(self):
         if self.verifying:
             return
@@ -302,27 +295,10 @@ class DeviceOperations:
                     if entity not in record.get("externally_changed", []):
                         await self.command(entity, value)
             elif device == "battery":
-                charge = options.get("battery_charge_limit_entity")
-                discharge = options.get("battery_discharge_limit_entity")
-                normal_w = {direction: resolve_quantity(
-                    options[f"battery_{direction}_max_w"], self.battery_quantity,
-                    unit="W", minimum=0, maximum=100000, label=f"rated battery {direction} power",
-                ) for direction in ("charge", "discharge")}
-                targets = [(entity, self.battery_limit(entity, normal_w[direction]))
-                           for direction, entity in (("charge", charge), ("discharge", discharge))]
-                await self.command(charge, 0)
-                await self.command(discharge, 0)
-                await self.command(options["battery_mode_entity"], options["battery_mode_baseline"])
-                for entity, value in targets:
+                # One-time handover of a persisted pre-native ownership record.
+                # This is not a battery policy or a physical-response gate.
+                for entity, value in original.items():
                     await self.command(entity, value)
-                await self.confirm(
-                    lambda: self.battery_within_ceilings(options, normal_w["charge"], normal_w["discharge"],
-                        options["battery_mode_entity"], charge, discharge),
-                    "no fresh battery response within normal ceilings after baseline restoration",
-                )
-                measured = self.battery_measurement(options)
-                self.report(device, "baseline", measured_power_w=measured,
-                            reason="baseline mode and normal limits confirmed; power is measured")
             elif device == "pool":
                 # Never write temperature registers, even from a pre-upgrade journal.
                 if any(entity.split(".")[0] not in ("switch", "input_boolean") for entity in original):
@@ -462,7 +438,7 @@ class DeviceOperations:
         target = finite(target)
         water, sources = self.pool_temperature(options.get("pool_water_temperature_entity"), read_state=reader)
         requested = finite(pool_requested_w(plan, slot))
-        heating = requested > 0
+        heating = pool_permission(plan, slot)
         on = heating and water < target
         reason = ("The pool heater is allowed to run as planned." if on else
                   "The water has reached your Stop at temperature; the pool heater is off." if heating else
@@ -498,112 +474,6 @@ class DeviceOperations:
         if owned != set(targets):
             raise ValueError("The control entity changed while this device was Controlling; set it to "
                              "Verification and back to Controlling to apply the change")
-
-    def battery_measurement(self, options):
-        """Direction comes from explicit observations, magnitude from either power sign."""
-        observed = []
-        for key in ("battery_charging_entity", "battery_discharging_entity"):
-            entity = options[key]
-            if not entity.startswith("binary_sensor."):
-                raise ValueError(f"{entity} must be a battery direction binary sensor")
-            state = self.state(entity).state
-            if state not in ("on", "off"):
-                raise ValueError(f"{entity} must report on or off")
-            observed.append(state == "on")
-        magnitude = abs(self.watts(options["battery_power_measurement_entity"]))
-        if all(observed) or (not any(observed) and magnitude > 100):
-            raise ValueError("battery direction observations disagree with measured power")
-        return magnitude if observed[0] else -magnitude if observed[1] else 0.0
-
-    def battery_within_ceilings(self, options, charge, discharge, *actuators):
-        measured = self.battery_measurement(options)
-        sources = (options["battery_power_measurement_entity"], options["battery_charging_entity"],
-                   options["battery_discharging_entity"])
-        return (all(self.measurement_after_commands(source, *actuators) for source in sources)
-                and -discharge - 100 <= measured <= charge + 100)
-
-    def battery_quantity(self, entity):
-        state = self.state(entity)
-        return {"state": state.state, "attributes": state.attributes}
-
-    def battery_ratings(self, options):
-        return resolve_battery_quantities(options, self.battery_quantity)
-
-    def battery_limit(self, entity, watts):
-        """Validate the outgoing ceiling; the old register value is irrelevant."""
-        return battery_limit_value(entity, watts, self.observed_state(entity))
-
-    async def execute_battery(self, options, slot):
-        errors = battery_control_errors({**options, "battery_control_enabled": True})
-        if errors:
-            raise ValueError("; ".join(errors))
-        soc = self.fraction(options["battery_soc_entity"])
-        limits = self.battery_ratings(options)
-        command = validate_battery_command(slot)
-        operation = command["operation"]
-        charge, discharge = command["charge_limit_w"], command["discharge_limit_w"]
-        if charge > limits["battery_charge_max_w"] or discharge > limits["battery_discharge_max_w"]:
-            raise ValueError("planned battery ceiling exceeds the current rated power")
-        # A permission ceiling is not a request, so a full or empty pack does not
-        # contradict it; only a sized purchase or sale has to be deliverable.
-        if (operation in ("supply_house", "export") and soc <= limits["battery_min_soc"]) or (operation == "grid_charge" and soc >= 1):
-            raise ValueError("battery SOC protection blocks the planned request")
-        if operation == "export":
-            price = slot.get("export_price_sek_per_kwh")
-            if not slot.get("binding") or price is None or finite(price) < finite(options["battery_export_min_price_sek_per_kwh"]):
-                raise ValueError("battery export is not permitted at this price")
-            reserve = finite(options["battery_export_reserve_soc"])
-            end = datetime.fromisoformat(slot["start"].replace("Z", "+00:00")) + timedelta(minutes=15)
-            remaining_hours = min(.25, max(0, (end - datetime.now(timezone.utc)).total_seconds() / 3600))
-            projected = soc - discharge / 1000 * remaining_hours / finite(options["battery_discharge_efficiency"]) / limits["battery_capacity_kwh"]
-            if projected < reserve - 1e-6:
-                raise ValueError("battery export would consume reserved charge")
-        self.battery_measurement(options)
-        charge_entity = options["battery_charge_limit_entity"]
-        discharge_entity = options["battery_discharge_limit_entity"]
-        targets = [(charge_entity, self.battery_limit(charge_entity, charge)),
-                   (discharge_entity, self.battery_limit(discharge_entity, discharge))]
-        mode_entity = options["battery_mode_entity"]
-        supported = self.state(mode_entity).attributes.get("options", [])
-        for key in ("battery_mode_charge", "battery_mode_discharge", "battery_mode_idle", "battery_mode_baseline"):
-            if options.get(key) not in supported:
-                raise ValueError(f"{key}: choose a supported option from {mode_entity}")
-        # Journal the mapping before the first write. Handover uses configured
-        # rated sources, never arbitrary or sentinel pre-existing register values.
-        await self.capture("battery", options, [])
-        mode = options[battery_mode_key(command)]
-        # Close both ceilings for a mode transition; do not interrupt an
-        # unchanged request on every scheduler tick.
-        if self.state(mode_entity).state != mode:
-            for entity, _ in targets:
-                await self.command(entity, 0)
-        await self.command(mode_entity, mode)
-        for entity, value in sorted(targets, key=lambda target: target[1]):
-            await self.command(entity, value)
-        def delivered_within_ceiling():
-            measured = self.battery_measurement(options)
-            within = self.battery_within_ceilings(options, charge, discharge, mode_entity, charge_entity, discharge_entity)
-            responding = (charge <= 100 or measured > 100 if operation == "grid_charge" else
-                          discharge <= 100 or measured < -100 if operation == "export" else True)
-            return within and responding
-        if self.verifying:
-            return {"state": "verified", "operation": operation, "physical_confirmation": "not_tested",
-                    "decision": {"kind": "battery", "operation": operation,
-                                 "charge_limit_w": charge, "discharge_limit_w": discharge}}
-        await self.confirm(delivered_within_ceiling, "battery did not confirm the requested operation and power ceilings within 15 seconds; check inverter control availability")
-        measured = self.battery_measurement(options)
-        requested = finite(slot["battery_charge_w"]) - finite(slot["battery_discharge_w"])
-        # Native regulation follows available surplus/demand, not forecast watts.
-        limited = operation in ("grid_charge", "export") and abs(measured - requested) > 100
-        return {"state": "limited" if limited else "confirmed",
-                **({"reason": f"Battery power differs from the plan: requested {requested:g} W, measured {measured:g} W",
-                    "next_step": "Inspect the inverter's operating limits and state of charge, and other automations controlling it. "
-                    "If those do not explain the difference, download diagnostics for controller/planner review.",
-                    "fix": {"kind": "device"}} if limited else {}),
-                "operation": operation, "charge_limit_w": charge, "discharge_limit_w": discharge,
-                "forecast_power_w": requested, "measured_power_w": measured,
-                "decision": {"kind": "battery", "operation": operation,
-                             "charge_limit_w": charge, "discharge_limit_w": discharge}}
 
     async def execute_device(self, device, options, slot):
         key = device.removeprefix("device:")

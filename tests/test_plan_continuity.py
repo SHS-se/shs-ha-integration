@@ -18,7 +18,7 @@ sys.path.append(str(ROOT))
 from refresh import refresh_in_progress
 from shs_core import const
 from shs_core.optimisation import OptimisationInputError, validate_plan_contract, optimisation_plan_due, quarter_start
-from household_fixture import Rig
+from household_fixture import Rig, replacement_plan
 from shs_core.api import ShsApiError
 
 
@@ -68,8 +68,7 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
     async def test_unusable_replacements_preserve_cache_and_acknowledge_rejection(self):
         for failure in ('invalid','infeasible','execution_infeasible','battery_handover'):
             with self.subTest(failure=failure):
-                candidate=deepcopy(self.plan)
-                candidate['plan_id']=candidate['execution_plan']['plan_id']='c0debabe-1111-4222-8333-123456789abc'
+                candidate=replacement_plan(self.plan)
                 self.c.battery_runtime=None
                 if failure=='invalid':candidate['schema_version']=999
                 elif failure=='infeasible':candidate['status']='infeasible'
@@ -96,8 +95,7 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.c.last_optimisation_error,'Price input unavailable')
 
     async def test_ready_replacement_replaces_the_cache_and_clears_refresh_pending(self):
-        candidate=deepcopy(self.plan)
-        candidate['plan_id']=candidate['execution_plan']['plan_id']='c0debabe-1111-4222-8333-123456789abc'
+        candidate=replacement_plan(self.plan)
         self.c._plan_configuration_changed=True
         self.c.client.push_optimisation.return_value={'plan':candidate}
         await self.c.async_optimisation_push(force_plan=True)

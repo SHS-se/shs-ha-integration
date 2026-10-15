@@ -1,4 +1,4 @@
-"""Durable battery writer fence shared by legacy commands and runtime grants."""
+"""Durable exclusive writer grants for the native battery runtime."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -6,9 +6,9 @@ from copy import deepcopy
 from .native_records import WriterGrant, WriterIdentity
 
 class BatteryWriterFence:
-    """The existing controller lock drains all legacy writes before a handover.
+    """The shared controller lock serializes durable writer admission.
 
-    A crash after fencing never resurrects legacy ownership. A grant must be
+    A crash leaves every battery control fenced. A grant must be
     explicitly renewed against current configuration and physical evidence.
     """
     def __init__(self, store, lock, read_options, now_ms, read_identity):
@@ -37,7 +37,7 @@ class BatteryWriterFence:
             try:
                 value = await self._store.async_load()
                 if value is None:
-                    value = {"schema": "battery-writer-v1", "owner": "legacy", "epoch": 0, "surfaces": self._surfaces()}
+                    value = {"schema": "battery-writer-v1", "owner": "fenced", "epoch": 0, "surfaces": self._surfaces()}
                 if (type(value) is not dict or set(value) != {"schema", "owner", "epoch", "surfaces"}
                         or value["schema"] != "battery-writer-v1" or value["owner"] not in ("legacy", "fenced", "runtime")
                         or type(value["epoch"]) is not int or not 0 <= value["epoch"] < 2**53
@@ -46,7 +46,7 @@ class BatteryWriterFence:
                         or value["surfaces"] != sorted(set(value["surfaces"]))):
                     raise ValueError("invalid battery writer journal")
                 self._record = deepcopy(value)
-                if value["owner"] == "runtime":
+                if value["owner"] in ("runtime", "legacy"):
                     self._record["owner"] = "fenced"
                 await self._store.async_save(deepcopy(self._record))
             except Exception as error:
@@ -54,16 +54,16 @@ class BatteryWriterFence:
                 self._record = {"schema": "battery-writer-v1", "owner": "fenced", "epoch": 0, "surfaces": self._surfaces()}
                 raise
 
-    def check_legacy(self, entity):
+    def check_device_command(self, entity):
         surfaces = set(self._surfaces()) | set(self._record["surfaces"] if self._record else ())
-        if entity in surfaces and (self._closed or self._fault or self._record is None or self._record["owner"] != "legacy"):
-            raise ValueError("battery writer is fenced; legacy command and restoration are disabled")
+        if entity in surfaces:
+            raise ValueError("battery settings are exclusively owned by the native battery runtime")
 
-    async def take_over(self, identity: WriterIdentity, expires_at_ms: int, release):
+    async def take_over(self, identity: WriterIdentity, expires_at_ms: int):
         """Caller must admit installation evidence before requesting a writer.
 
-        release runs under the shared lock and must confirm the old owner's
-        restoration is complete. Returning a grant does not install a policy.
+        Admission runs under the shared lock. Returning a grant does not
+        install a policy or change a device setting.
         """
         if not isinstance(identity, WriterIdentity) or identity != self._identity():
             raise ValueError("an exact writer identity is required")
@@ -75,8 +75,6 @@ class BatteryWriterFence:
                 raise ValueError("writer grant must expire within this admission window")
             if identity != self._identity():
                 raise ValueError("writer configuration changed before handover")
-            if self._record["owner"] == "legacy":
-                await release()
             # Fence in memory before awaiting persistence. Uncertain writes
             # retain the fence; they cannot fall back to the legacy controller.
             self._grant = None

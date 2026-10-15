@@ -46,7 +46,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
                     self.states[entity].last_reported = self.now
 
         self.hass.services.async_call = clocked_service
-        self.options['device_modes'] = {'$battery': 'control_verification', '$pool': 'control_verification'}
+        self.options['device_modes'] = {'$ev': 'control_verification', '$pool': 'control_verification'}
         self.coordinator.optimisation_plan['valid_until'] = (self.now + timedelta(hours=2)).isoformat()
         self.scheduler = ControllerScheduler(self.controller, self.subscribe, self.at,
                                             asyncio.create_task, now=lambda: self.now)
@@ -123,13 +123,13 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.pool'].state,'on')
 
     async def test_live_plan_replacement_queues_reconciliation_without_handover(self):
-        self.options['device_modes'] = {'$battery': 'controlling'}
+        self.options['device_modes'] = {'$pool': 'controlling'}
         self.slot['start'] = self.now.isoformat()
         self.slot.update(battery_charge_w=0, battery_discharge_w=0,
                          battery_command=fixtures.battery_command('hold', 0, 0))
         await self.controller.async_start()
         self.calls.clear()
-        execute = self.controller.execute_battery
+        execute = self.controller.execute_pool
         replaced = False
 
         async def revise(options, slot):
@@ -140,13 +140,13 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
                 self.controller.check_authority()
             return await execute(options, slot)
 
-        self.controller.execute_battery = revise
+        self.controller.execute_pool = revise
         await self.controller.async_tick()
         await self.drain()
-        self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
+        self.assertEqual(self.controller.status['pool']['state'], 'scheduled')
         self.assertEqual(self.calls, [])
         self.assertIn('plan_replaced', self.controller.metrics.triggers)
-        self.assertIn('battery', self.controller.ownership.records)
+        self.assertIn('pool', self.controller.ownership.records)
 
     async def test_short_pool_temperature_gaps_hold_without_reapplying(self):
         await self.start_live_pool()
@@ -339,7 +339,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
             self.event('sensor.water')
         await self.drain()
         self.assertEqual(self.evaluations('pool'), 2)
-        self.assertEqual(self.evaluations('battery'), 1)
+        self.assertEqual(self.evaluations('ev'), 1)
         stats = self.controller.metrics.snapshot()['scheduling']
         self.assertEqual(stats['state_change_events'], 10)
         self.assertEqual(stats['coalesced_notifications'], 9)
@@ -393,7 +393,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         release.set()
         await self.drain()
         self.assertEqual(self.evaluations('pool'), 3)
-        self.assertEqual(self.evaluations('battery'), 1)
+        self.assertEqual(self.evaluations('ev'), 1)
 
     async def test_expiry_and_slot_deadlines_work_without_cloud_updates(self):
         self.coordinator.optimisation_plan['valid_until'] = (self.now + timedelta(seconds=10)).isoformat()
@@ -587,10 +587,10 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         fire('state_changed', 'sensor.water')
         await self.drain()
         self.assertEqual(self.evaluations('pool'), 2)
-        self.assertEqual(self.evaluations('battery'), 1)
+        self.assertEqual(self.evaluations('ev'), 1)
         fire('core_config', '')
         await self.drain()
-        self.assertEqual(self.evaluations('battery'), 2)
+        self.assertEqual(self.evaluations('ev'), 2)
         self.assertEqual(len(battery_listeners), 1)
         for remove in unload:
             remove()
@@ -674,15 +674,15 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
 
     async def test_shared_authority_failure_during_one_device_event_holds_all_owners(self):
-        self.options['device_modes'] = {'$pool': 'controlling', '$battery': 'controlling'}
+        self.options['device_modes'] = {'$pool': 'controlling', '$ev': 'controlling'}
         await self.controller.async_start()
-        self.assertEqual(set(self.controller.ownership.records), {'pool', 'battery'})
+        self.assertEqual(set(self.controller.ownership.records), {'pool', 'ev'})
         self.calls.clear()
         self.coordinator.async_cached_device_configuration.side_effect = ValueError('bad cache')
         self.event('sensor.water')
         await self.drain()
-        self.assertEqual(set(self.controller.ownership.records), {'pool', 'battery'})
-        for device in ('battery', 'pool'):
+        self.assertEqual(set(self.controller.ownership.records), {'pool', 'ev'})
+        for device in ('ev', 'pool'):
             self.assertIn('could not be read', self.controller.status[device]['reason'])
         self.assertEqual(self.calls, [])
 

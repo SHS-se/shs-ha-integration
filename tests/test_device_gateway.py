@@ -43,7 +43,7 @@ class PhysicalGatewayTests(unittest.IsolatedAsyncioTestCase):
 
     def request(self, operation='apply', **parameters):
         body = dict(start=(datetime.now(timezone.utc)-timedelta(seconds=30)).isoformat(),
-                    heating_w=2000, stop_temperature_c=30, models=self.models) if operation == 'apply' else {}
+                    heating_w=2000, pool_permitted=True, stop_temperature_c=30, models=self.models) if operation == 'apply' else {}
         return dict(request_id='one', device='pool', operation=operation, configuration_revision=1,
                     policy_revision=1, headroom_reserved=True, parameters={**body, **parameters})
 
@@ -96,7 +96,7 @@ class PhysicalGatewayTests(unittest.IsolatedAsyncioTestCase):
         await self.gateway.synchronize(self.models)
         result = await self.gateway.perform(self.request())
         self.assertIsNone(result['error'])
-        stopped = await self.gateway.perform({**self.request(heating_w=0), 'request_id':'stop'})
+        stopped = await self.gateway.perform({**self.request(heating_w=0,pool_permitted=False), 'request_id':'stop'})
         self.assertIsNone(stopped['error'])
         self.assertFalse(stopped['deadlines'])
         self.assertEqual(self.states['switch.pool'].state, 'off')
@@ -107,3 +107,11 @@ class PhysicalGatewayTests(unittest.IsolatedAsyncioTestCase):
             await self.gateway.perform({**self.request(), 'parameters':{'service':'turn_on','entity':'switch.pool'}})
         with self.assertRaises(ValueError):
             await self.gateway.perform({**self.request(), 'device':'battery'})
+
+    async def test_explicit_pool_permission_does_not_require_an_invented_power_forecast(self):
+        result=await self.gateway.perform(self.request(heating_w=0,pool_permitted=True))
+        self.assertIsNone(result['error'])
+        self.assertEqual(self.states['switch.pool'].state,'on')
+        result=await self.gateway.perform({**self.request(heating_w=2000,pool_permitted=False),'request_id':'explicit-off'})
+        self.assertIsNone(result['error'])
+        self.assertEqual(self.states['switch.pool'].state,'off')

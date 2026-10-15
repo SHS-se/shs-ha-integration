@@ -26,17 +26,17 @@ test('app settings save without HA reload and expose revision conflicts',async({
   await expect(editor.getByText('Settings are applied')).toBeVisible();
   await page.screenshot({path:`test-results/${info.project.name}-settings.png`,fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
-  await editor.locator('summary').filter({hasText:'Solar and electrical measurements'}).click();
-  const mode=editor.getByLabel('Solar forecast latitude',{exact:true});
-  await mode.fill('60');
+  await editor.locator('summary').filter({hasText:'Shared outdoor conditions'}).click();
+  const mode=editor.getByLabel('Measured outdoor temperature',{exact:true});
+  await mode.fill('sensor.outdoor_new');
   await editor.getByRole('button',{name:'Save changes',exact:true}).click();
   await expect(editor.getByText('All changes saved')).toBeVisible();
-  await expect(mode).toHaveValue('60');
-  await mode.fill('61');
+  await expect(mode).toHaveValue('sensor.outdoor_new');
+  await mode.fill('sensor.outdoor_another');
   await page.route('**/api/configuration/save',route=>route.fulfill({status:409,json:{message:'Configuration changed in another window; refresh before saving'}}));
   await editor.getByRole('button',{name:'Save changes',exact:true}).click();
   await expect(editor.getByText('Configuration changed in another window; refresh before saving',{exact:true})).toBeVisible();
-  await expect(mode).toHaveValue('61');
+  await expect(mode).toHaveValue('sensor.outdoor_another');
 });
 
 test('configuration field deep link opens the section and focuses its real editor',async({page})=>{

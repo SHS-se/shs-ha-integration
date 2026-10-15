@@ -166,6 +166,16 @@ class PoolServiceTests(unittest.TestCase):
 
 
 class BoilerServiceTests(unittest.TestCase):
+    def test_unknown_boiler_power_retains_its_permission_service(self):
+        boiler = device("sensor.water", "hot_water", "permit_inhibit", watts=None)
+        services, _samples, _ev = build_services(
+            {"device_control_mappings": {"sensor.water": {
+                "control_type": "permit_inhibit", "actuator_entity_ids": ["switch.water"]}}},
+            HORIZON, [boiler], read_entity=lambda _: None, local_tz=timezone.utc)
+        self.assertTrue(services)
+        self.assertTrue(all(s["control"]["rated_power_w"] is None for s in services))
+        self.assertTrue(all(s["required_kwh"] == 0 for s in services))
+
     def test_a_permit_inhibit_water_heater_becomes_a_duty_cycle_service(self) -> None:
         boiler = device(
             "sensor.hot_water_energy", "hot_water", "permit_inhibit",
@@ -534,15 +544,21 @@ class DeviceModelTests(unittest.TestCase):
         devices = [inventory_device("sensor.pool", "controllable", "switch_schedule",
                                     category="pool_heating")]
         models, degraded = self.build_with_degraded(devices, [])
-        self.assertEqual(models, [])
-        self.assertIn("configured running power", degraded[0]["reason"])
+        self.assertEqual(len(models), 1)
+        self.assertEqual(degraded, [])
+        self.assertIsNone(models[0]["active_power_w"])
+        self.assertIn("running_power_unknown", {w["code"] for w in models[0]["planning_warnings"]})
 
     def test_boiler_power_sensor_alone_does_not_supply_hot_water_energy_history(self) -> None:
         devices = [inventory_device("sensor.boiler", "controllable", "permit_inhibit",
                                     category="hot_water")]
         models, degraded = self.build_with_degraded(devices, [], mappings={"sensor.boiler": {"power": "sensor.boiler_power"}}, watts=3000)
-        self.assertEqual(models, [])
-        self.assertIn("hot-water demand", degraded[0]["reason"])
+        self.assertEqual(len(models), 1)
+        self.assertEqual(degraded, [])
+        self.assertEqual(models[0]["active_power_w"], 3000)
+        self.assertEqual(models[0]["profile_sample_count"], 0)
+        self.assertEqual(set(models[0]["forecast_w_by_slot"]), {0})
+        self.assertIn("device_history_estimated", {w["code"] for w in models[0]["planning_warnings"]})
 
     def test_eleven_hours_of_history_can_supply_running_power(self) -> None:
         devices = [inventory_device("sensor.new", "controllable", "switch_schedule",

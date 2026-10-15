@@ -10,6 +10,7 @@ from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
+import logging
 from math import floor, isfinite
 
 from .command_journal import Command, NativeAction
@@ -44,6 +45,7 @@ ACCOUNTING_REUSE_MS=1000
 RUNTIME_LIMITS=rt.Limits(CAPTURE_LIFETIME_MS,1000,30000,CAPTURE_LIFETIME_MS)
 ADAPTER_REVISION='sigen-ess-dc-v2'
 OWNER='shs-household-battery'
+_LOGGER=logging.getLogger(__name__)
 
 class NativeReadbackPending(Exception):
     """The provider has not published its configured controls during startup."""
@@ -209,6 +211,7 @@ class BatteryRuntime:
         value={**self._status,'loss_model':self._model.wire() if self._model else None,'loss_evidence':self._fits,
             'input_errors':dict(self._counter_errors),'planning_error':self._replan_error,
             'runtime_reason':getattr(self,'_runtime_reason',None),'measurements':getattr(self,'_measurements',None),
+            'planning_warnings':getattr(self,'_measurements',{}).get('planning_warnings', []),
             'writer_current':self.coordinator.battery_writer.is_current(self._grant,self.identity()),
             'fault_history':[dict(row) for row in self._fault_history],
             'fault_history_scope':'Last 64 distinct faults since integration load'}
@@ -699,11 +702,7 @@ class BatteryRuntime:
         # Admission/takeover is outside the controller lock. The fence acquires
         # it, drains old work and retains the fence through crashes.
         if mode=='controlling' and (not self.coordinator.battery_writer.is_current(self._grant,self.identity()) or self._grant.expires_at_ms-self.now()<60000):
-            async def release_old():
-                await self.controller.restore('battery')
-                if 'battery' in self.controller.ownership.records:
-                    raise ValueError('previous battery owner has not released its commands')
-            self._grant=await self.coordinator.battery_writer.take_over(self._identity,self.now()+900000,release_old)
+            self._grant=await self.coordinator.battery_writer.take_over(self._identity,self.now()+900000)
         if self._grant and self.coordinator.battery_writer.is_current(self._grant,self.identity()):
             await self.host.accept(rt.GrantConfirmed(group.spec.id,self._grant))
         for event in await self._observe(group.spec.id):
@@ -911,8 +910,11 @@ class BatteryRuntime:
         for key,entity,_ in self._demand_sources():
             value,_=power(reports[entity],source=entity)
             external.append(rt.ExternalDemand(key,rt.Envelope(value,0),rt.Envelope(0,0)))
-        if sum(e.observed.import_w for e in external)>accounting.house_w+1e-6:
-            raise ValueError('Planned device meters exceed gross house consumption')
+        external_w=sum(e.observed.import_w for e in external)
+        warnings = list(accounting.planning_warnings)
+        if warnings!=getattr(self,'_measurements',{}).get('planning_warnings', []):
+            for warning in warnings:
+                _LOGGER.warning('Battery measurement reconciliation: %s', warning)
         controls=tuple(zip(self._control_entities(),(readback['mode'],readback['charge_limit_w'],readback['discharge_limit_w'])))
         native=self.adapter.envelope(controls)
         # HA settings can be optimistic. Preserve actual measured battery flow
@@ -937,7 +939,7 @@ class BatteryRuntime:
         # Gross nonbattery load is a conservative import frame. PV is included
         # separately as possible export, and never erased by a planned device.
         frame=rt.FrameObserved(rt.Frame(revision,now,valid,
-            rt.Envelope(max(accounting.house_w,authority.plant.import_limit_w if self._external_pending else 0), max(0,accounting.pv_w-accounting.house_w)),
+            rt.Envelope(max(accounting.house_w,external_w,authority.plant.import_limit_w if self._external_pending else 0), max(0,accounting.pv_w-accounting.house_w)),
             rt.Envelope(authority.plant.import_limit_w,authority.plant.export_limit_w),tuple(external)))
         self._frame_pending={frame.frame.revision:digest(self._external_pending)}
         energy=fraction*self._ratings['battery_capacity_kwh']
@@ -949,7 +951,7 @@ class BatteryRuntime:
         self._measurements={'physical_response':response,'requested_direction':requested,
             'response_matches_direction':response==requested if requested else None,**asdict(accounting),'battery_dc_w':battery,'grid_w':grid,'at_ms':now,'valid_until_ms':valid,
             'source_report_ages_ms':{entity:now-stamp(row['last_reported']) for entity,row in reports.items() if row},
-            'supply_evidence':[asdict(reading) for reading in evidence]}
+            'supply_evidence':[asdict(reading) for reading in evidence], 'planning_warnings':warnings}
         self._last_capture=capture
         return (rt.MeasurementsReceived(observed,frame.frame,conditions.conditions),)
 
@@ -980,10 +982,7 @@ class BatteryRuntime:
             if release!=group.release:
                 events.append(rt.ReleaseApproved(group_id,release))
         if group.release_pending and self.identity() and not self.coordinator.battery_writer.is_current(self._grant,self.identity()):
-            async def released():
-                if 'battery' in self.controller.ownership.records:
-                    raise ValueError('legacy owner still present during runtime release')
-            self._grant=await self.coordinator.battery_writer.take_over(self.identity(),self.now()+900000,released)
+            self._grant=await self.coordinator.battery_writer.take_over(self.identity(),self.now()+900000)
         if self._grant and self.coordinator.battery_writer.is_current(self._grant,self.identity()):
             events.append(rt.GrantConfirmed(group_id,self._grant))
         return tuple(events)
@@ -1111,10 +1110,7 @@ class BatteryRuntime:
             await self.host.accept(rt.AuthorityChanged(group.spec.id,'monitoring',self._mode_revision,None))
         if group.owned or group.attempts or group.release_pending:
             if self.identity() and not self.coordinator.battery_writer.is_current(self._grant,self.identity()):
-                async def already_released():
-                    if 'battery' in self.controller.ownership.records:
-                        raise ValueError('legacy owner still present during runtime release')
-                self._grant=await self.coordinator.battery_writer.take_over(self.identity(),self.now()+900000,already_released)
+                self._grant=await self.coordinator.battery_writer.take_over(self.identity(),self.now()+900000)
             if self._grant:
                 await self.host.accept(rt.GrantConfirmed(group.spec.id,self._grant))
             for event in await self._observe(group.spec.id):

@@ -13,6 +13,18 @@ from shs_core.device_controls import BatteryMeasurementConfigurationError
 
 
 class HouseholdTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cold_start_keeps_unrepresented_running_device_demand_in_residual(self):
+        rig = Rig(options={"house_consumption_power_entity": "sensor.house"})
+        rig.states["sensor.house"] = SimpleNamespace(state="3500", attributes={"unit_of_measurement": "W"})
+        rig.household._mapped_power_w = lambda _: 3000
+        model = {"key": "boiler", "active_power_w": 3000, "profile_sample_count": 0,
+                 "forecast_w_by_slot": [0] * 96}
+        mapping = {"boiler": {"power": "sensor.boiler_power"}}
+        self.assertEqual(rig.household._current_base_load_w([model], mapping), 3500)
+        model["forecast_w_by_slot"] = [500] * 96
+        self.assertEqual(rig.household._current_base_load_w([model], mapping), 3000)
+
+
     async def test_missing_boiler_power_attention_targets_its_sensor_editor(self):
         rig = Rig()
         h = rig.household

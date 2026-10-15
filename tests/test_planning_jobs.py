@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
-from household_fixture import Rig
+from household_fixture import Rig, replacement_plan
 from shs_core.api import ShsApiError
 
 
@@ -40,8 +40,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
             'job_id': 'job', 'state': 'pending', 'pending': True, 'retry_after_ms': 1000,
             'actuals_accepted_until': self.rig.now.isoformat(),
         }), planning_status=AsyncMock(), planning_submission_status=AsyncMock(), acknowledge_optimisation_plan=AsyncMock(), report_replan_failure=AsyncMock())
-        self.candidate = deepcopy(self.plan)
-        self.candidate['plan_id'] = self.candidate['execution_plan']['plan_id'] = 'c0debabe-1111-4222-8333-123456789abc'
+        self.candidate = replacement_plan(self.plan)
 
     def published(self, job_id='job'):
         return {'job_id': job_id, 'state': 'published', 'pending': False, 'plan': self.candidate}

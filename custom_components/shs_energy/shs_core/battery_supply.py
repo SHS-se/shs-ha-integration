@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from math import isfinite
 
 from .device_power import planned_switch_bindings, read_device_power
+from .planning_warnings import planning_warning
 
 SOLAR_ATTRIBUTION = "proportional-self-consumed-pv-v1"
 
@@ -56,15 +57,23 @@ class SupplyAccounting:
     eligible_gross_w: float
     attributed_pv_w: float
     house_supply_bound_w: float
+    raw_eligible_gross_w: float
+    planning_warnings: tuple[dict, ...] = ()
 
 
 def proportional_supply(house_w, pv_w, eligible_gross_w):
-    house, pv, eligible = map(_power, (house_w, pv_w, eligible_gross_w))
-    if eligible > house:
-        raise ValueError("eligible consumption exceeds the measured house total")
+    house, pv = map(_power, (house_w, pv_w))
+    if type(eligible_gross_w) not in (int, float) or not isfinite(eligible_gross_w):
+        raise ValueError("eligible power must be finite AC watts")
+    raw = float(eligible_gross_w)
+    eligible = min(house, max(0.0, raw))
+    warnings = () if eligible == raw else (planning_warning('meter_disagreement', 'battery_supply',
+        'Device power meters disagree with the measured household total.',
+        'Execution continues with battery-eligible demand bounded by the house total and raw excluded demand.',
+        evidence={'house_w':house, 'raw_eligible_w':raw, 'eligible_w':eligible}),)
     attributed = min(pv, house) * eligible / house if house else 0.0
     return SupplyAccounting(house, pv, eligible, attributed,
-                            max(0.0, min(eligible - attributed, house - pv)))
+                            max(0.0, min(eligible - attributed, house - pv)), raw, warnings)
 
 
 @dataclass(frozen=True)
@@ -128,8 +137,6 @@ def measured_supply(scope, house, pv, planned_readings, planned_keys, *, now_ms,
         # Base + selected = house - unselected. Selected device measurements
         # cancel exactly; their reporting cadence cannot block this scope.
         eligible = house.watts - sum(planned_readings[k].watts for k in required)
-        if eligible < 0:
-            raise ValueError("Planned meters exceed the house total")
     else:
         eligible = sum(planned_readings[k].watts for k in required)
     return proportional_supply(house.watts, pv.watts, eligible)

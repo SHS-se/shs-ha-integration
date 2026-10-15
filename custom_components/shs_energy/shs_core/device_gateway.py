@@ -167,9 +167,11 @@ class DeviceGateway(DeviceOperations):
             return {'device_models': p['models']}, dict(start=p['start'], ev_target_current_a=p['current_a'],
                 ev_min_current_a=p['minimum_a'], ev_max_current_a=p['maximum_a'], device_loads_w={m['key']:0 for m in p['models']})
         if intent.device == 'pool':
-            if set(p) != {'start', 'heating_w', 'stop_temperature_c', 'models'}:
+            if set(p) != {'start', 'heating_w', 'pool_permitted', 'stop_temperature_c', 'models'}:
                 raise ValueError('Invalid pool intention')
-            return {'device_models':p['models'], 'pool':{'stop_temperature_c':p['stop_temperature_c']}}, dict(start=p['start'], pool_w=p['heating_w'])
+            if type(p['pool_permitted']) is not bool:
+                raise ValueError('pool permission must be a boolean')
+            return {'device_models':p['models'], 'pool':{'stop_temperature_c':p['stop_temperature_c']}}, dict(start=p['start'], pool_w=p['heating_w'], pool_permitted=p['pool_permitted'])
         if intent.device.startswith('device:'):
             key = intent.device.removeprefix('device:')
             if set(p) != {'start', 'commands', 'models'} or key not in p['commands']:

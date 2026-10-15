@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .planning_warnings import merge_warnings
+
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timedelta, timezone
@@ -55,8 +57,6 @@ from .const import (
     OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_PREFIX_ENTITIES,
     OPT_PV_FORECAST_ENTITIES,
-    OPT_PV_FORECAST_LATITUDE,
-    OPT_PV_FORECAST_LONGITUDE,
     OPT_BATTERY_ENABLED,
     OPT_BATTERY_SOC_ENTITY,
     OPT_EV_CONNECTED_ENTITY,
@@ -240,6 +240,8 @@ class Household:
         self.last_thermal_slots_accepted = 0
         self.optimisation_missing_inputs: list[str] = []
         self.optimisation_degraded_devices: list[dict[str, str]] = []
+        self.optimisation_warnings: list[dict[str, Any]] = []
+        self.exchange_warnings: list[dict[str, Any]] = []
         self.optimisation_missing_remedy: str = REMEDY_SETTING
         self.optimisation_missing_fix: dict[str, Any] | None = None
         self.optimisation_unplanned_services: list[str] = []
@@ -282,8 +284,7 @@ class Household:
         return result
 
     def resolved_options(self):
-        home = self.ports.home()
-        return resolve_configuration(dict(self.ports.options()), home.latitude, home.longitude)
+        return resolve_configuration(dict(self.ports.options()))
 
     def local_now(self):
         return self.ports.utcnow().astimezone(self.ports.home().timezone)
@@ -1076,6 +1077,30 @@ class Household:
         if state.attributes.get("unit_of_measurement") == "kW":
             watts *= 1_000
         return watts if isfinite(watts) and watts > 0 else None
+
+    def _current_base_load_w(self, models, mappings):
+        """Measured residual for a home with no recorder profile yet."""
+        entity = self.resolved_options().get("house_consumption_power_entity")
+        state = self.ports.read_state(entity) if isinstance(entity, str) else None
+        if state is None or state.attributes.get("unit_of_measurement") not in ("W", "kW"):
+            return None
+        try:
+            watts = float(state.state) * (1000 if state.attributes["unit_of_measurement"] == "kW" else 1)
+        except (TypeError, ValueError):
+            return None
+        if not isfinite(watts) or watts < 0:
+            return None
+        # Deduct only demand represented in the device forecast. A newly
+        # observed running cycle with no history must remain in the residual;
+        # its capacity is not an all-day consumption forecast.
+        for model in models:
+            mapping = mappings.get(model["key"], {})
+            if isinstance(mapping.get("power"), str):
+                forecast = model.get("forecast_w_by_slot", [])
+                represented = forecast[0] if forecast else 0
+                if type(represented) in (int, float) and isfinite(represented):
+                    watts -= min(self._mapped_power_w(mapping) or 0, max(0, represented))
+        return max(0.0, watts)
 
     async def _prepared_device_inventory(
         self,
@@ -2001,8 +2026,6 @@ class Household:
         can_derive_total = bool(entities.get("grid_import"))
         if not entities.get("total_consumption") and not can_derive_total:
             required.append("a whole-home meter or Energy Dashboard grid meter")
-        if options.get(OPT_PV_FORECAST_ENTITIES):
-            required.extend([OPT_PV_FORECAST_LATITUDE, OPT_PV_FORECAST_LONGITUDE])
         if options.get(OPT_BATTERY_SOC_ENTITY) and options.get("device_modes", {}).get("$battery", "monitoring") != "monitoring":
             required.extend([
                 OPT_BATTERY_CAPACITY_KWH,
@@ -2497,34 +2520,6 @@ class Household:
             raise OptimisationInputError(
                 "server supplier prices have no valid issue time"
             ) from err
-        pv_latitude = parse_number(
-            options[OPT_PV_FORECAST_LATITUDE], OPT_PV_FORECAST_LATITUDE
-        )
-        pv_longitude = parse_number(
-            options[OPT_PV_FORECAST_LONGITUDE], OPT_PV_FORECAST_LONGITUDE
-        )
-        if abs(pv_latitude - self.ports.home().latitude) > 0.05 or abs(
-            pv_longitude - self.ports.home().longitude
-        ) > 0.05:
-            raise OptimisationInputError(
-                "PV forecast coordinates do not match the Home Assistant home location",
-                fix={"kind": "fields", "fields": [{"key": OPT_PV_FORECAST_LATITUDE}, {"key": OPT_PV_FORECAST_LONGITUDE}]}
-            )
-        for payload in pv_entities:
-            attributes = payload["attributes"]
-            declared_latitude = attributes.get("latitude")
-            declared_longitude = attributes.get("longitude")
-            if declared_latitude is not None and declared_longitude is not None and (abs(
-                parse_number(declared_latitude, f"{payload['entity_id']} latitude")
-                - pv_latitude
-            ) > 0.05 or abs(
-                parse_number(declared_longitude, f"{payload['entity_id']} longitude")
-                - pv_longitude
-            ) > 0.05):
-                raise OptimisationInputError(
-                    f"{payload['entity_id']} forecast location does not match the configured home",
-                    fix={"kind": "entity", "entity_id": payload["entity_id"]}
-                )
         # Include every completed quarter. The aggregators require all three
         # five-minute samples and omit incomplete recorder buckets.
         profile_end = quarter_start(captured)
@@ -2561,7 +2556,12 @@ class Household:
             modelled_device_keys=modelled_device_keys,
             minimum_samples=2,
             now=captured,
+            current_residual_w=self._current_base_load_w(device_models, control_mappings),
         )
+        self.optimisation_warnings = merge_warnings(base_load["planning_warnings"],
+            *[model.get("planning_warnings",[]) for model in device_models])
+        if self.optimisation_warnings:
+            _LOGGER.warning("Planning with estimated history: %s", self.optimisation_warnings)
         profiles = base_load["by_weekday"]
 
         services, service_samples, ev_battery = self._build_services(
@@ -2759,15 +2759,6 @@ class Household:
             "snapshot_id": str(uuid4()),
             "captured_at": captured.isoformat(),
             "timezone": str(self.ports.home().timezone),
-            # Where the house is, as a property of the home rather than of any
-            # one forecast. It used to be published only inside `sources.pv`,
-            # which quietly made weather a privilege of homes that generate:
-            # a house without panels still sits in the same weather, and its
-            # rooms still gain heat from the same sun.
-            "location": {
-                "latitude": round(self.ports.home().latitude, 5),
-                "longitude": round(self.ports.home().longitude, 5),
-            },
             "slot_minutes": 15,
             "slots": slots,
             "sources": {
@@ -2780,10 +2771,6 @@ class Household:
                     "sample_count": len(observations),
                     "mape_percent": round(sum(errors) / len(errors), 2) if errors else None,
                     "bias_percent": round(sum(biases) / len(biases), 2) if biases else None,
-                    "location": {
-                        "latitude": round(pv_latitude, 5),
-                        "longitude": round(pv_longitude, 5),
-                    },
                 } if pv_entities else None),
                 "base_load": base_load_source(
                     base_load,
@@ -2867,6 +2854,7 @@ class Household:
             "device_models": device_models,
             "services": services,
             "service_requirement_sample_days": service_samples,
+            "planning_warnings": self.optimisation_warnings,
         }
         if measurement_issues:
             snapshot["measurement_issues"] = measurement_issues
@@ -3017,6 +3005,7 @@ class Household:
                 ):
                     if result.get(remote):
                         stored[local] = result[remote]
+                self.exchange_warnings = merge_warnings(result.get("planning_warnings", []))
                 self.last_actual_slots_accepted = int(result.get("actual_slots_accepted") or 0)
                 self.last_thermal_slots_accepted = int(result.get("thermal_slots_accepted") or 0)
                 self.actuals_accepted_until = stored.get("optimisation_actuals_accepted_until")
@@ -3421,6 +3410,7 @@ class Household:
                     raise
                 self._pipeline_error('configuration', None)
                 configuration_changed = configuration != previous_configuration or previous_home != stored.get("home_planning_configuration")
+                self.exchange_warnings = merge_warnings(result.get("planning_warnings", []))
                 self.last_actual_slots_accepted = int(
                     result.get("actual_slots_accepted") or 0
                 )

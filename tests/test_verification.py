@@ -34,53 +34,41 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.pool'].state,'off')
         self.assertEqual(self.controller.status['pool']['state'],'verified',self.controller.status['pool'])
 
-    async def test_shared_log_captures_pool_and_battery_without_writes(self):
-        self.options['device_modes'] = {'$pool': 'control_verification', '$battery': 'control_verification'}
-        before = {key: (value.state, dict(value.attributes)) for key, value in self.states.items()}
+    async def test_shared_log_captures_pool_and_ev_without_writes(self):
+        self.options['device_modes']={'$pool':'control_verification','$ev':'control_verification'}
+        before={key:(value.state,dict(value.attributes)) for key,value in self.states.items()}
         await self.controller.async_start()
-        self.assertEqual(self.calls, [])
+        self.assertEqual(self.calls,[])
         self.assertFalse(self.controller.ownership.records)
-        self.assertEqual(self.controller.status['battery']['decision'],
-                         {'kind': 'battery', 'operation': 'grid_charge',
-                          'charge_limit_w': 2000, 'discharge_limit_w': 0})
-        self.assertIsNone(self.store.saved, 'verification must not persist restoration ownership')
-        self.assertEqual(before, {key: (value.state, dict(value.attributes)) for key, value in self.states.items()})
-        export = self.journal.export()
-        self.assertEqual({row['device'] for row in export['attempts']}, {'pool', 'battery'})
-        for row in export['attempts']:
-            self.assertEqual(row['outcome'], 'verified', row)
-            self.assertEqual(row['plan_id'], 'test')
-            self.assertEqual(row['slot_start'], self.slot['start'])
-            self.assertTrue(row['commands'])
-            self.assertEqual({c['phase'] for c in row['commands']}, {'plan', 'handover'})
-        battery = next(row for row in export['attempts'] if row['device'] == 'battery')
-        mode = next(c for c in battery['commands'] if c['service'] == 'select_option' and c['phase'] == 'plan')
-        self.assertEqual(mode['data'], {'entity_id': 'select.mode', 'option': 'Charge'})
-        self.assertIn('export', next(c for c in export['coverage'] if c['device'] == 'battery')['missing'])
+        self.assertIsNone(self.store.saved)
+        self.assertEqual(before,{key:(value.state,dict(value.attributes)) for key,value in self.states.items()})
+        self.assertEqual({row['device'] for row in self.journal.attempts},{'pool','ev'})
+        for row in self.journal.attempts:
+            self.assertEqual(row['outcome'],'verified',row)
+            self.assertEqual({c['phase'] for c in row['commands']},{'plan','handover'})
         await self.controller.async_tick()
-        self.assertEqual(len(self.journal.attempts), 2, 'identical attempts in the same quarter are deduplicated')
+        self.assertEqual(len(self.journal.attempts),2)
         await self.journal.flush()
-        restored = VerificationJournal(self.audit_store, self.sample_store)
-        await restored.load()
-        self.assertEqual(restored.attempts, self.journal.attempts)
+        restored=VerificationJournal(self.audit_store,self.sample_store);await restored.load()
+        self.assertEqual(restored.attempts,self.journal.attempts)
 
     async def test_verified_commands_equal_live_service_calls(self):
-        self.options['device_modes']['$battery'] = 'control_verification'
+        self.options['device_modes']['$ev'] = 'control_verification'
         await self.controller.async_start()
         dry = self.journal.attempts[0]
         expected = [(c['data']['entity_id'], c['value']) for c in dry['commands'] if c['phase'] == 'plan' and c['would_call']]
-        self.options['device_modes']['$battery'] = 'controlling'
+        self.options['device_modes']['$ev'] = 'controlling'
         await self.controller.async_tick()
         self.assertEqual(self.calls, expected)
-        self.assertEqual(self.controller.status['battery']['state'], 'confirmed')
+        self.assertEqual(self.controller.status['ev']['state'], 'commanded')
 
     async def test_metrics_measure_real_inputs_without_changing_verification(self):
-        self.options['device_modes'] = {'$battery': 'control_verification', '$pool': 'control_verification'}
+        self.options['device_modes'] = {'$ev': 'control_verification', '$pool': 'control_verification'}
         await self.controller.async_start()
         await self.controller.async_tick(trigger='timer')
-        self.states['sensor.battery_soc'].last_reported = datetime.now(timezone.utc)
+        self.states['sensor.ev_soc'].last_reported = datetime.now(timezone.utc)
         await self.controller.async_tick(trigger='timer')
-        self.states['sensor.battery_soc'].state = '51'
+        self.states['sensor.ev_soc'].state = '51'
         await self.controller.async_tick(trigger='slot_boundary')
         async with self.controller.lock:
             await self.controller.async_tick(trigger='timer')
@@ -89,7 +77,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report['triggers']['timer']['requested'], 3)
         self.assertEqual(report['triggers']['timer']['completed'], 2)
         self.assertEqual(report['triggers']['timer']['skipped_busy'], 1)
-        battery = report['devices']['battery']
+        battery = report['devices']['ev']
         self.assertEqual(battery['completed'], 4)
         self.assertEqual(battery['unchanged_inputs'], 2)
         self.assertEqual(battery['unchanged_inputs_new_reports'], 1)
@@ -99,24 +87,24 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.controller.ownership.records)
 
     async def test_metrics_complete_when_sensor_is_unavailable(self):
-        self.options['device_modes']['$battery'] = 'control_verification'
-        self.states['sensor.battery_soc'].state = 'unavailable'
+        self.options['device_modes']['$ev'] = 'control_verification'
+        self.states['sensor.ev_soc'].state = 'unavailable'
         await self.controller.async_start()
         await self.controller.async_tick(trigger='timer')
-        self.assertEqual(self.controller.status['battery']['state'], 'pending')
-        self.assertEqual(self.controller.metrics.snapshot()['devices']['battery']['completed'], 2)
+        self.assertEqual(self.controller.status['ev']['state'], 'pending')
+        self.assertEqual(self.controller.metrics.snapshot()['devices']['ev']['completed'], 2)
         self.assertIsNone(self.controller.metrics.active)
         self.assertEqual(self.calls, [])
 
     async def test_old_available_sources_are_verified_and_timestamps_are_logged(self):
-        self.options['device_modes']['$battery'] = 'control_verification'
+        self.options['device_modes']['$ev'] = 'control_verification'
         old = datetime.now(timezone.utc) - timedelta(days=3)
-        self.states['binary_sensor.charging'].last_reported = old
+        self.states['binary_sensor.connected'].last_reported = old
         await self.controller.async_start()
         row = self.journal.attempts[0]
         self.assertEqual(row['outcome'], 'verified', row)
-        self.assertEqual(row['observations']['binary_sensor.charging']['last_reported'], str(old))
-        self.assertNotIn('fix', self.controller.status['battery'])
+        self.assertEqual(row['observations']['binary_sensor.connected']['last_reported'], str(old))
+        self.assertNotIn('fix', self.controller.status['ev'])
         self.assertEqual(self.calls, [])
 
     async def test_old_available_pool_reading_does_not_create_configuration_attention(self):
@@ -200,16 +188,19 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.journal.export()['coverage']), 2)
 
     async def test_verifying_one_device_does_not_restore_another_live_controller(self):
-        self.options['device_modes']['$battery'] = 'controlling'
+        from test_battery_runtime import Rig
+        r=Rig();await r.start();self.addAsyncCleanup(r.runtime.close)
+        for _ in range(2):await r.advance(5000)
+        self.controller.battery_runtime=r.runtime
+        before=deepcopy(r.runtime.host.state.groups[0])
+        mode=r.rows['select.mode']['state'];r.calls.clear()
+        self.options['device_modes']['$pool']='control_verification'
         await self.controller.async_start()
-        self.assertEqual(self.states['select.mode'].state, 'Charge')
-        self.calls.clear()
-        self.options['device_modes']['$pool'] = 'control_verification'
-        await self.controller.async_tick()
-        self.assertEqual(self.calls, [])
-        self.assertEqual(self.states['select.mode'].state, 'Charge')
-        self.assertIn('battery', self.controller.ownership.records)
-        self.assertNotIn('pool', self.controller.ownership.records)
+        self.assertEqual(self.calls,[]);self.assertEqual(r.calls,[])
+        self.assertEqual(r.rows['select.mode']['state'],mode)
+        self.assertEqual(r.runtime.host.state.groups[0],before)
+        self.assertTrue(before.owned)
+        self.assertNotIn('pool',self.controller.ownership.records)
 
     async def test_ev_verifies_current_then_switch_and_handover_without_writes(self):
         self.options['device_modes']['$ev'] = 'control_verification'
@@ -243,16 +234,16 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
 
     async def test_telemetry_changes_aggregate_but_command_and_failure_transitions_do_not(self):
-        self.options['device_modes']['$battery'] = 'control_verification'
+        self.options['device_modes']['$ev'] = 'control_verification'
         await self.controller.async_start()
         self.audit_store.async_save = AsyncMock(wraps=self.audit_store.async_save)
-        self.states['sensor.battery_power'].state = '0.1'
+        self.states['sensor.ev_soc'].state = '0.1'
         await self.controller.async_tick()
         row = self.journal.attempts[0]
         self.assertEqual(len(self.journal.attempts), 1)
         self.assertEqual(row['count'], 2)
-        self.assertEqual(row['observations']['sensor.battery_power']['state'], '0')
-        self.assertEqual(row['last_observations']['sensor.battery_power']['state'], '0.1')
+        self.assertEqual(row['observations']['sensor.ev_soc']['state'], '30')
+        self.assertEqual(row['last_observations']['sensor.ev_soc']['state'], '0.1')
         # The first runtime follow-up records a new trigger/status context.
         # Subsequent equivalent checks still batch journal writes.
         self.audit_store.async_save.reset_mock()
@@ -260,13 +251,13 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.audit_store.async_save.assert_not_awaited()
         self.assertNotIn('slot', row)
         self.assertEqual(self.journal.export()['slots'][row['slot_id']], self.slot)
-        self.states['select.mode'].state = 'Charge'
+        self.states['number.current'].state = '10'
         await self.controller.async_tick()
         self.assertEqual(len(self.journal.attempts), 2, 'would_call changed')
-        self.states['sensor.battery_soc'].state = 'unavailable'
+        self.states['sensor.ev_soc'].state = 'unavailable'
         await self.controller.async_tick()
         self.assertEqual(self.journal.attempts[-1]['outcome'], 'blocked')
-        self.states['sensor.battery_soc'].state = '50'
+        self.states['sensor.ev_soc'].state = '50'
         await self.controller.async_tick()
         self.assertEqual(self.journal.attempts[-1]['outcome'], 'verified')
         self.assertEqual(len(self.journal.attempts), 4, 'recovery must not merge across a failure')
@@ -275,7 +266,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_repeat_checkpoint_and_shutdown_persist_counts(self):
         from unittest.mock import patch
-        self.options['device_modes']['$battery'] = 'control_verification'
+        self.options['device_modes']['$ev'] = 'control_verification'
         await self.controller.async_start()
         with patch('shs_core.verification.monotonic', return_value=self.journal.last_saved + 61):
             await self.controller.async_tick()
@@ -286,7 +277,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.audit_store.saved['attempts'][0]['count'], 3)
 
     async def test_existing_journal_is_compacted_once_and_survives_reload(self):
-        self.options['device_modes']['$battery'] = 'control_verification'
+        self.options['device_modes']['$ev'] = 'control_verification'
         await self.controller.async_start()
         original = deepcopy(self.journal.attempts[0])
         original['slot'] = self.journal.slots[original.pop('slot_id')]
@@ -294,7 +285,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         original.pop('last_at')
         later = deepcopy(original)
         later['at'] = '2026-09-11T15:00:00+00:00'
-        later['observations']['sensor.battery_power']['state'] = '0.1'
+        later['observations']['sensor.ev_soc']['state'] = '0.1'
         self.audit_store.saved = {'attempts': [original, later],
                                  'configurations': self.journal.configurations, 'discarded_attempts': 7}
         migrated = VerificationJournal(self.audit_store, self.sample_store)

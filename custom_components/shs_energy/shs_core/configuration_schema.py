@@ -60,8 +60,6 @@ def configuration_defaults(latitude: float, longitude: float) -> dict[str, Any]:
         c.OPT_DEVICE_CONTROL_MAPPINGS: {},
         "rooms": {},
         c.OPT_FORECAST_RESOLUTION_MINUTES: c.DEFAULT_FORECAST_RESOLUTION_MINUTES,
-        c.OPT_PV_FORECAST_LATITUDE: latitude,
-        c.OPT_PV_FORECAST_LONGITUDE: longitude,
         # Every store is part of the home until someone says otherwise, so an
         # installation that predates these keys is unchanged by them.
         c.OPT_BATTERY_ENABLED: True,
@@ -224,6 +222,8 @@ def resolve_configuration(options, latitude=0.0, longitude=0.0):
     """Produce a detached runtime view from current records and shared defaults."""
     resolved = configuration_defaults(latitude, longitude)
     resolved.update(deepcopy(options))
+    resolved.pop("pv_forecast_latitude", None)
+    resolved.pop("pv_forecast_longitude", None)
     resolved.pop("battery_export_enabled", None)
     from .operating_modes import device_mode
     resolved["planning_mode"] = "live"

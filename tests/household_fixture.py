@@ -14,6 +14,17 @@ from shs_core.household_ports import HomeFacts, HouseholdPorts, ConfigurationCha
 from shs_core.api_contract import API_VERSION, SUPPORTED_PLAN_SCHEMA_VERSIONS, SNAPSHOT_SCHEMA_VERSION
 
 
+def replacement_plan(plan, plan_id="c0debabe-1111-4222-8333-123456789abc"):
+    """Give a generated replacement consistent envelope and native identities."""
+    result = deepcopy(plan)
+    result["plan_id"] = result["execution_plan"]["plan_id"] = plan_id
+    contract = result.get("battery_execution")
+    if contract is not None:
+        contract["plan_id"] = plan_id
+        contract["id"] = f"{plan_id}:battery:{contract['generation']}"
+    return result
+
+
 class Store:
     def __init__(self, value=None):
         self.saved = deepcopy(value or {})

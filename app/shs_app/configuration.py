@@ -54,11 +54,13 @@ class Configuration:
         # Explicitly retire obsolete hot-water fields through the same
         # acknowledged writer, preserving every other setting and permission.
         cleaned = self.options()
+        for key in ('pv_forecast_latitude', 'pv_forecast_longitude'):
+            cleaned.pop(key, None)
         for mapping in cleaned.get('device_control_mappings', {}).values():
             mapping.pop('max_inhibit_slots', None)
             mapping.pop('running_power_w', None)
         if cleaned != self.options():
-            await self.commit(self.revision, cleaned, 'retire-hot-water-running-power-setting')
+            await self.commit(self.revision, cleaned, 'retire-obsolete-planning-fields-v2')
 
     async def _apply(self):
         desired = self.data

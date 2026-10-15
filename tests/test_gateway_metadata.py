@@ -103,7 +103,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         await gateway.load()
         request = dict(request_id='waiting', device='pool', operation='apply',
             configuration_revision=1, policy_revision=1, headroom_reserved=True,
-            parameters=dict(start=datetime.now(timezone.utc).isoformat(), heating_w=3300,
+            parameters=dict(start=datetime.now(timezone.utc).isoformat(), heating_w=3300,pool_permitted=True,
                 stop_temperature_c=30, models=pool.coordinator.optimisation_plan['device_models']))
         waiting = await gateway.perform(request)
         self.assertEqual(waiting['error']['kind'], 'deadline')

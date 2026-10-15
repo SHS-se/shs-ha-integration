@@ -21,7 +21,7 @@ entry = {"id": "test-home", "title": "Test home", "state": "loaded", "operation"
 history = [{"sampled_at": s["start"], "resources": {"cpu_percent": 2.5, "memory_usage": 48000000}, "telemetry": {"test-home": {"measured_w": s["load_w"] * .95, "planned_w": s["load_w"], "plan_id": plan["plan_id"]}}} for s in plan["plans"]["priority"]["slots"]]
 class Editor:
     revision=1
-    options={'planning_mode':'live','pv_forecast_latitude':59.0}
+    options={'planning_mode':'live','outdoor_temperature_entity':'sensor.outdoor'}
     async def action(self,action,body):
         if action=='save':
             if body['expected_revision']!=self.revision:raise ValueError('Configuration changed in another window')

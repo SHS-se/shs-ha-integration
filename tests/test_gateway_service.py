@@ -86,7 +86,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     def intention(self):
         return dict(request_id='pool-operation',device='pool',operation='apply',headroom_reserved=True,
             configuration_revision=self.service.configuration_revision,policy_revision=self.service.policy_revision,
-            parameters=dict(start=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat(),heating_w=2000,
+            parameters=dict(start=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat(),heating_w=2000,pool_permitted=True,
                 stop_temperature_c=30,models=self.coordinator.optimisation_plan['device_models']))
 
     async def test_dormant_socket_cannot_dispatch_then_active_semantic_operation_is_durable(self):

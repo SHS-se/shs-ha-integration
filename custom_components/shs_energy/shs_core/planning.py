@@ -17,6 +17,9 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Callable, Optional
+from math import isfinite
+
+from .planning_warnings import planning_warning
 
 from .const import (
     EV_CHARGE_EFFICIENCY,
@@ -243,24 +246,25 @@ def build_services(
         category = "pool_heating"
         device = "pool"
         rated_power_w = sum(
-            parse_number(model.get("active_power_w"), f"{model['name']} power")
+            (model.get("active_power_w") or 0)
             for model, _mapping in pool_controls
         )
-        if rated_power_w <= 0:
+        if rated_power_w < 0:
             raise OptimisationInputError("Pool heating power must be positive")
         samples[category] = 0  # No historical daily energy requirement.
         # Carry the hardware contract even with no history or heat demand.
         # Temperature and the value curve determine energy in the store planner.
-        services.append({
-            "id": f"{device}:{first.isoformat()}",
-            "device": device,
-            "earliest_start": first.isoformat(),
-            "deadline": end.isoformat(),
-            "required_kwh": 0.0,
-            "control": {"type": "fixed_power", "power_w": rated_power_w},
-            "priority": 2,
-            "baseline_preferred_start": first.isoformat(),
-        })
+        if rated_power_w > 0:
+            services.append({
+                "id": f"{device}:{first.isoformat()}",
+                "device": device,
+                "earliest_start": first.isoformat(),
+                "deadline": end.isoformat(),
+                "required_kwh": 0.0,
+                "control": {"type": "fixed_power", "power_w": rated_power_w},
+                "priority": 2,
+                "baseline_preferred_start": first.isoformat(),
+            })
 
     boiler_controls = mapped_controls("boiler")
     if boiler_controls:
@@ -270,10 +274,11 @@ def build_services(
                       for model in boiler_models), 2)
             for index in range(len(horizon))
         ]
-        rated_power_w = sum(
-            parse_number(model.get("active_power_w"), f"{model['name']} power")
-            for model in boiler_models
-        )
+        ratings = [model.get("active_power_w") for model in boiler_models]
+        rated_power_w = (sum(ratings) if all(
+            type(watts) in (int, float) and isfinite(watts) and watts > 0
+            for watts in ratings
+        ) else None)
         # Demand is a forecast, while active watts can be a current sensor
         # reading or a learned running level. Their difference is not a
         # configuration failure and must not discard the household plan.
@@ -621,24 +626,6 @@ def unplanned_services(
     return reports
 
 
-def _degraded_device(
-    device: dict[str, Any], reason: str, *, status: str
-) -> dict[str, str]:
-    """Name a device left out of the plan, and the meter behind it.
-
-    ``status`` separates a meter that has gone quiet from one that is merely
-    new. Both leave the device unplanned, but only the first is something a
-    person can act on, so they must not share a notification.
-    """
-    return {
-        "key": str(device["key"]),
-        "name": str(device["name"]),
-        "statistic_id": str(device.get("statistic_id") or device["key"]),
-        "reason": reason,
-        "status": status,
-    }
-
-
 def build_device_models(
     devices: list[dict[str, Any]],
     device_actuals: list[dict[str, Any]],
@@ -695,10 +682,14 @@ def build_device_models(
         reviewed_power_w = mapped_power_w(
             mapping if isinstance(mapping, dict) else {}
         )
+        previous_power_w = device.get("active_power_w")
+        if not (type(previous_power_w) in (int, float)
+                and isfinite(previous_power_w) and previous_power_w > 0):
+            previous_power_w = None
         active_power_w = (
-            round(reviewed_power_w, 1)
-            if reviewed_power_w is not None
-            else empirical_active_power_w
+            round(reviewed_power_w, 1) if reviewed_power_w is not None
+            else empirical_active_power_w if empirical_active_power_w is not None
+            else previous_power_w
         )
         device["active_power_w"] = active_power_w
         device["profile_sample_count"] = int(empirical["sample_count"])
@@ -709,18 +700,21 @@ def build_device_models(
         }
         if planning_role == "base_load":
             continue
+        warnings = []
         if path != "ev" and (active_power_w is None or active_power_w <= 0):
-            degraded.append(_degraded_device(
-                device, "needs configured running power or a measured heating cycle",
-                status="quiet",
+            warnings.append(planning_warning(
+                "running_power_unknown", str(device["key"]),
+                device["name"] + ": running power has not been observed yet.",
+                "Control intent remains in the plan; electrical demand is explicitly uncertain.",
             ))
-            continue
-        if path == "boiler" and empirical["sample_count"] == 0:
-            degraded.append(_degraded_device(
-                device, "needs consumption readings to estimate hot-water demand",
-                status="warming",
+        if path != "ev" and empirical["method"] != "pooled_shape_weekday_level_v1":
+            warnings.append(planning_warning(
+                "device_history_estimated", str(device["key"]),
+                device["name"] + ": historical demand has incomplete coverage.",
+                "Planning keeps the device and uses the available history rather than a measured full profile.",
+                evidence={"observations": empirical["sample_count"]},
             ))
-            continue
+        device["planning_warnings"] = warnings
         forecast_w: list[float] = []
         for start in horizon:
             local = start.astimezone(local_tz)

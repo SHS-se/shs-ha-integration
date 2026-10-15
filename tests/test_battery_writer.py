@@ -30,34 +30,34 @@ class WriterTests(unittest.IsolatedAsyncioTestCase):
         async def persist(value):
             writes.append(deepcopy(value))
             self.assertFalse(self.fence.snapshot()['grant_current'])
-            with self.assertRaises(ValueError): self.fence.check_legacy('select.mode')
+            with self.assertRaises(ValueError): self.fence.check_device_command('select.mode')
             await save(value)
         self.store.async_save=persist
         release=AsyncMock()
         await self.lock.acquire()
-        task=asyncio.create_task(self.fence.take_over(self.identity,5000,release))
+        task=asyncio.create_task(self.fence.take_over(self.identity,5000))
         await asyncio.sleep(0)
         release.assert_not_awaited()
-        self.fence.check_legacy('select.mode')
+        with self.assertRaises(ValueError): self.fence.check_device_command('select.mode')
         self.lock.release()
         grant=await task
-        release.assert_awaited_once()
+        release.assert_not_awaited()
         self.assertEqual([r['owner'] for r in writes],['fenced','runtime'])
         self.assertTrue(self.fence.is_current(grant,self.identity))
-        self.fence.check_legacy('switch.unrelated')
-        with self.assertRaises(ValueError): self.fence.check_legacy('select.mode')
+        self.fence.check_device_command('switch.unrelated')
+        with self.assertRaises(ValueError): self.fence.check_device_command('select.mode')
         self.now=5000
         self.assertFalse(self.fence.is_current(grant,self.identity))
-        with self.assertRaises(ValueError): self.fence.check_legacy('select.mode')
+        with self.assertRaises(ValueError): self.fence.check_device_command('select.mode')
 
     async def test_restart_fences_old_runtime_and_does_not_restore_legacy(self):
-        await self.fence.take_over(self.identity,5000,AsyncMock())
+        await self.fence.take_over(self.identity,5000)
         restarted=self.make()
         await restarted.open()
         self.assertEqual(self.store.saved['owner'],'fenced')
         self.assertFalse(restarted.snapshot()['grant_current'])
-        with self.assertRaises(ValueError): restarted.check_legacy('number.charge')
-        with self.assertRaises(ValueError): await restarted.take_over(WriterIdentity('host','wrong','surface-1'),5000,AsyncMock())
+        with self.assertRaises(ValueError): restarted.check_device_command('number.charge')
+        with self.assertRaises(ValueError): await restarted.take_over(WriterIdentity('host','wrong','surface-1'),5000)
 
     async def test_configuration_change_during_persistence_rejects_grant(self):
         async def persist(value):
@@ -65,21 +65,21 @@ class WriterTests(unittest.IsolatedAsyncioTestCase):
             self.identity=WriterIdentity('host','config-2','surface-2')
         self.store.async_save=persist
         with self.assertRaises(ValueError):
-            await self.fence.take_over(self.identity,5000,AsyncMock())
+            await self.fence.take_over(self.identity,5000)
         self.assertFalse(self.fence.snapshot()['grant_current'])
-        with self.assertRaises(ValueError): self.fence.check_legacy('select.mode')
+        with self.assertRaises(ValueError): self.fence.check_device_command('select.mode')
 
     async def test_configuration_change_after_grant_invalidates_final_check(self):
         old=self.identity
-        grant=await self.fence.take_over(old,5000,AsyncMock())
+        grant=await self.fence.take_over(old,5000)
         self.identity=WriterIdentity('host','config-2','surface-2')
         self.assertFalse(self.fence.is_current(grant,old))
         self.assertFalse(self.fence.snapshot()['grant_current'])
 
     async def test_failed_save_and_shutdown_never_resurrect_old_owner(self):
         self.store.async_save=AsyncMock(side_effect=OSError('uncertain disk write'))
-        with self.assertRaises(OSError): await self.fence.take_over(self.identity,5000,AsyncMock())
-        with self.assertRaises(ValueError): self.fence.check_legacy('select.mode')
+        with self.assertRaises(OSError): await self.fence.take_over(self.identity,5000)
+        with self.assertRaises(ValueError): self.fence.check_device_command('select.mode')
         self.fence.close()
         self.assertFalse(self.fence.snapshot()['grant_current'])
 
@@ -87,31 +87,27 @@ class WriterTests(unittest.IsolatedAsyncioTestCase):
         self.store.saved={'owner':'legacy'}
         fence=self.make()
         with self.assertRaises(ValueError): await fence.open()
-        with self.assertRaises(ValueError): fence.check_legacy('select.mode')
+        with self.assertRaises(ValueError): fence.check_device_command('select.mode')
         self.store.async_load=AsyncMock(side_effect=OSError('unreadable'))
         fence=self.make()
         with self.assertRaises(OSError): await fence.open()
-        with self.assertRaises(ValueError): fence.check_legacy('select.mode')
+        with self.assertRaises(ValueError): fence.check_device_command('select.mode')
 
     async def test_no_admitted_identity_cannot_acquire_writer(self):
         self.identity=None
         with self.assertRaises(ValueError):
-            await self.fence.take_over(WriterIdentity('host','config','surface'),5000,AsyncMock())
-        self.assertEqual(self.fence.snapshot()['owner'],'legacy')
+            await self.fence.take_over(WriterIdentity('host','config','surface'),5000)
+        self.assertEqual(self.fence.snapshot()['owner'],'fenced')
 
-    async def test_legacy_shutdown_restoration_is_fenced_but_other_devices_continue(self):
-        fixture=fixtures.ControllerTests()
-        fixture.setUp()
-        self.options=fixture.options
-        self.lock=fixture.controller.lock
-        self.fence=self.make()
-        await self.fence.open()
+    async def test_scheduled_controller_never_writes_native_battery_settings(self):
+        fixture=fixtures.ControllerTests(); fixture.setUp()
+        self.options=fixture.options; self.lock=fixture.controller.lock
+        self.fence=self.make(); await self.fence.open()
         fixture.controller.battery_writer_fence=self.fence
         fixture.options['device_modes']['$battery']='controlling'
+        before=fixture.states['select.mode'].state
         await fixture.controller.async_start()
-        self.assertTrue(fixture.calls)
-        await self.fence.take_over(self.identity,5000,AsyncMock())
-        fixture.calls.clear()
+        self.assertFalse(fixture.calls)
         await fixture.controller.async_stop()
         self.assertFalse(fixture.calls)
-        self.assertEqual(fixture.states['select.mode'].state,'Charge')
+        self.assertEqual(fixture.states['select.mode'].state,before)

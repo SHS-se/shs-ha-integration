@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from .api_contract import SNAPSHOT_SCHEMA_VERSION, SUPPORTED_PLAN_SCHEMA_VERSIONS
 from .measurements import fraction
+from .planning_warnings import planning_warning
 
 SLOT_SECONDS = 900
 SLOT_HOURS = 0.25
@@ -584,6 +585,7 @@ def _pooled_weekday_series(
     minimum_samples: int,
     label: str,
     quiet_threshold_w: float = 25.0,
+    current_residual_w: float | None = None,
 ) -> dict[str, Any]:
     """Pool a quarter-of-day shape, then let each weekday depart from it.
 
@@ -621,12 +623,30 @@ def _pooled_weekday_series(
         quarter for quarter in range(96)
         if len(pooled[quarter]) < minimum_samples
     ]
+    observed = {quarter: centre(pairs) for quarter, pairs in pooled.items() if pairs}
+    # Thin evidence is still evidence. Only empty positions need estimation;
+    # interpolate around the daily clock rather than discarding a whole home.
+    shape = []
+    for quarter in range(96):
+        if quarter in observed:
+            shape.append(observed[quarter])
+        elif observed:
+            left = next(d for d in range(1, 97) if (quarter-d) % 96 in observed)
+            right = next(d for d in range(1, 97) if (quarter+d) % 96 in observed)
+            shape.append((observed[(quarter-left) % 96]*right + observed[(quarter+right) % 96]*left)/(left+right))
+        else:
+            shape.append(current_residual_w or 0.0)
+    unobserved = [quarter for quarter in range(96) if quarter not in observed]
+    warnings = []
     if missing:
-        raise OptimisationInputError(
-            f"{label} lacks {minimum_samples} samples for {len(missing)} quarters",
-            remedy=REMEDY_WAITING,
-        )
-    shape = [centre(pooled[quarter]) for quarter in range(96)]
+        basis = ('nearby measured quarters' if observed else 'the current measured residual'
+                 if current_residual_w is not None else 'an unknown base-load estimate')
+        warnings.append(planning_warning('profile_estimated', label,
+            f'{label}: {len(unobserved)} unobserved and {len(missing)-len(unobserved)} thin quarter-of-day buckets.',
+            f'Planning continues using {basis}; individual observed quarters remain usable.',
+            severity='error' if len(unobserved) >= 5 else 'warning',
+            evidence={'unobserved_quarters': len(unobserved), 'thin_quarters':len(missing)-len(unobserved),
+                      'minimum_samples':minimum_samples, 'basis':basis}))
 
     # A quarter that is reliably near zero carries no usable ratio, so it is
     # excluded from every ratio below rather than dividing by almost nothing.
@@ -693,6 +713,7 @@ def _pooled_weekday_series(
         "level": level,
         "deviation": deviation,
         "counts": counts,
+        "planning_warnings": warnings,
     }
 
 
@@ -704,6 +725,7 @@ def build_base_load_model(
     modelled_device_keys: tuple[str, ...] = (),
     minimum_samples: int = 3,
     now: datetime | None = None,
+    current_residual_w: float | None = None,
 ) -> dict[str, Any]:
     """Forecast residual base load per weekday and quarter.
 
@@ -754,7 +776,7 @@ def build_base_load_model(
     for row in actual_slots:
         total = row.get("total_load_kwh")
         when = _timestamp(row.get("start"))
-        if when is None or not isinstance(total, (int, float)) or not isfinite(float(total)):
+        if when is None or type(total) not in (int, float) or not isfinite(float(total)) or total < 0:
             continue
         device_values = device_energy_by_start.get(when.astimezone(timezone.utc), {})
         local = when.astimezone(local_tz)
@@ -781,9 +803,7 @@ def build_base_load_model(
 
     reference = now or latest
     if reference is None:
-        raise OptimisationInputError(
-            "base-load profile has no usable samples", remedy=REMEDY_WAITING
-        )
+        reference = datetime.now(timezone.utc)
 
     fitted = _pooled_weekday_series(
         observations,
@@ -791,6 +811,7 @@ def build_base_load_model(
         centre=lambda pairs: _weighted_quantile(pairs, 0.5),
         minimum_samples=minimum_samples,
         label="base-load profile",
+        current_residual_w=current_residual_w,
     )
     shape = fitted["shape"]
     level = fitted["level"]
@@ -818,6 +839,7 @@ def build_base_load_model(
             weekday: round(value, 4) for weekday, value in level.items()
         },
         "method": "pooled_shape_weekday_level_v1",
+        "planning_warnings": fitted["planning_warnings"],
     }
 
 
@@ -1216,10 +1238,10 @@ def validate_plan_contract(
             expected_power = control.get("expected_power_w_by_slot")
             if (
                 device != "boiler"
-                or isinstance(rated_power_w, bool)
-                or not isinstance(rated_power_w, (int, float))
-                or not isfinite(rated_power_w)
-                or not 100 <= rated_power_w <= 100_000
+                or (rated_power_w is not None and (isinstance(rated_power_w, bool)
+                    or not isinstance(rated_power_w, (int, float))
+                    or not isfinite(rated_power_w)
+                    or not 0 < rated_power_w <= 100_000))
                 or not isinstance(expected_power, list)
                 or any(
                     isinstance(value, bool)
@@ -1234,7 +1256,7 @@ def validate_plan_contract(
                 )
             normalized_control = {
                 "type": "duty_cycle",
-                "rated_power_w": float(rated_power_w),
+                "rated_power_w": float(rated_power_w) if rated_power_w is not None else None,
                 "expected_power_w_by_slot": [float(value) for value in expected_power],
             }
         else:
