@@ -5,6 +5,7 @@ derive one, so this is the single source
 (ENERGY_OPTIMISATION_ARCHITECTURE.md §1.3.7).
 """
 
+import ast
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -110,10 +111,13 @@ class PricePushWiringTests(unittest.TestCase):
 
     def test_every_exchange_pushes_prices(self) -> None:
         self.assertIn("price_slots = self._price_quarters(", COORDINATOR)
-        self.assertIn(
-            "actuals,\n                    snapshot,\n                    devices,\n                    thermal_slots,\n                    price_slots",
-            COORDINATOR,
-        )
+        calls = [node for node in ast.walk(ast.parse(COORDINATOR))
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                 and node.func.attr == "push_optimisation"]
+        self.assertTrue(any(
+            [arg.id if isinstance(arg, ast.Name) else None for arg in call.args[:5]]
+            == ["actuals", "snapshot", "devices", "thermal_slots", "price_slots"]
+            for call in calls))
         self.assertIn("device_inventory_complete=True", COORDINATOR)
 
     def test_prices_alone_are_worth_a_push(self) -> None:

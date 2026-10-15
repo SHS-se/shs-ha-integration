@@ -169,7 +169,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
             self.h.client.acknowledge_optimisation_plan.assert_not_awaited()
 
     async def test_lost_acceptance_reply_recovers_by_snapshot_and_then_polls_job_only(self):
-        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost')
+        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
         await self.h.async_answer_replan('manual')
         pending = (await self.h._store.async_read())['optimisation_pending_submission']
         self.assertEqual(pending['snapshot_id'], 'snapshot')
@@ -194,7 +194,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.h.client.push_optimisation.assert_awaited_once()
 
     async def test_restart_recovers_a_lost_acceptance_reply_without_resending_capture(self):
-        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost')
+        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
         await self.h.async_answer_replan('manual')
         rig = Rig(now=self.rig.now, options=self.rig.options, stored=self.rig.records.saved)
         restarted = rig.household
@@ -220,7 +220,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
             await task
 
     async def test_never_accepted_submission_is_terminal_and_reports_only_that_capture(self):
-        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost')
+        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
         await self.h.async_answer_replan('manual')
         pending = (await self.h._store.async_read())['optimisation_pending_submission']
         self.h.client.planning_submission_status.side_effect = ShsApiError('not accepted', code='planning_job_not_found')
@@ -228,6 +228,19 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('optimisation_pending_submission', self.rig.records.saved)
         self.assertEqual(self.h.optimisation_plan, self.plan)
         self.h.client.report_replan_failure.assert_awaited_once_with('manual', 'not accepted')
+
+    async def test_rejected_submission_reports_the_original_error_without_receipt_recovery(self):
+        accepted = await self.accept()
+        self.h._build_optimisation_snapshot.return_value = {'snapshot_id': 'replacement'}
+        error = ShsApiError('invalid snapshot (Committed owner removed: old-meter)', code='invalid_snapshot')
+        self.h.client.push_optimisation.side_effect = error
+        await self.h.async_answer_replan('manual')
+        self.assertNotIn('optimisation_pending_submission', self.rig.records.saved)
+        self.assertEqual(self.rig.records.saved['optimisation_pending_job'], accepted)
+        self.assertEqual(self.h.optimisation_plan, self.plan)
+        self.assertEqual(self.h.last_optimisation_error, str(error))
+        self.h.client.report_replan_failure.assert_awaited_once_with('manual', str(error))
+        self.h.client.planning_submission_status.assert_not_awaited()
 
     async def test_forced_telemetry_only_exchange_retains_existing_accepted_job(self):
         accepted = await self.accept()
@@ -242,7 +255,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
     async def test_lost_replacement_lookup_not_found_retains_existing_accepted_job(self):
         accepted = await self.accept()
         self.h._build_optimisation_snapshot.return_value = {'snapshot_id': 'new-snapshot'}
-        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost')
+        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
         await self.h.async_optimisation_push(force_plan=True, replan_request_id='new-manual')
         submission = self.rig.records.saved['optimisation_pending_submission']
         self.assertEqual(self.rig.records.saved['optimisation_pending_job'], accepted)

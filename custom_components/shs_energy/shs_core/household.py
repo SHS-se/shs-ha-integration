@@ -3325,19 +3325,27 @@ class Household:
                     }
                     await self._store.async_save(stored)
                 ingest_started = monotonic()
-                result = await self.client.push_optimisation(
-                    actuals,
-                    snapshot,
-                    devices,
-                    thermal_slots,
-                    price_slots,
-                    pool_slots,
-                    device_inventory_complete=True,
-                    replan_request_id=replan_request_id,
-                    replan_recommendation=(replan_reason or "Integration configuration or controller conditions changed. Review the retained schedule and consider a manual replan.")
-                        if force_plan and replan_request_id is None else None,
-                    equipment=self.equipment_presence(),
-                )
+                try:
+                    result = await self.client.push_optimisation(
+                        actuals,
+                        snapshot,
+                        devices,
+                        thermal_slots,
+                        price_slots,
+                        pool_slots,
+                        device_inventory_complete=True,
+                        replan_request_id=replan_request_id,
+                        replan_recommendation=(replan_reason or "Integration configuration or controller conditions changed. Review the retained schedule and consider a manual replan.")
+                            if force_plan and replan_request_id is None else None,
+                        equipment=self.equipment_presence(),
+                    )
+                except ShsApiError as error:
+                    # A definitive rejection has no job to recover. Keep the
+                    # original reason instead of replacing it with a later 404.
+                    if not error.retryable and snapshot is not None:
+                        stored.pop("optimisation_pending_submission", None)
+                        await self._store.async_save(stored)
+                    raise
                 if result.get("job_id"):
                     await self._journal_planning_acceptance(stored, result, {
                         "options": exchange_options,
