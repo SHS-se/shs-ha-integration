@@ -289,6 +289,8 @@ def mapping_errors(
             and float(mapping["minimum_value"]) >= float(mapping["maximum_value"])
         ):
             _field_error(errors, field_errors, "minimum control value must be below maximum control value", "minimum_value", "maximum_value")
+    if _present(mapping.get("running_power_w")) and not _positive_number(mapping, "running_power_w"):
+        _field_error(errors, field_errors, "boiler running power must be positive watts", "running_power_w")
     if not _power_source(mapping):
         _field_error(errors, field_errors, "power must be a power entity or a positive watt value", "power")
     return errors
@@ -437,6 +439,7 @@ def mapping_report(
             for key in (
                 *active_entity_fields,
                 "power",
+                "running_power_w",
                 "minimum_value",
                 "maximum_value",
                 "offset_minimum",

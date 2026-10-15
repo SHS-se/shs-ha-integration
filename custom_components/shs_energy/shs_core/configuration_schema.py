@@ -322,6 +322,7 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
     pool = (device.get("system") == "pool" or device.get("planning_system") == "pool"
             or mapped_planning_path(device, submitted, existing.get("pool_water_temperature_entity")) == "pool")
     validate_mapping_keys(submitted, pool=pool)
+    device = {**device, "planning_system": "pool" if pool else mapped_planning_path(device, submitted, existing.get("pool_water_temperature_entity"))}
     if pool:
         device = {**device, "system": "pool"}
     mapping = {"control_type": kind}

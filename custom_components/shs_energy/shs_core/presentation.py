@@ -228,8 +228,9 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         device["planning_system"] = mapped_planning_path(
             device, mapping, options.get("pool_water_temperature_entity")
         )
-        if system == "pool":
+        if system == "pool" or is_hot_water(device):
             device["fields"] = list(_control_fields(device))
+        if system == "pool":
             errors = {}
             gaps = pool_control_errors(options, mapping, field_errors=errors)
             device["field_errors"] = {**device.get("field_errors", {}), **errors}

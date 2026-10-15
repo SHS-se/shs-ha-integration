@@ -101,6 +101,19 @@ class CurrentConfigurationTests(unittest.TestCase):
 
 
 
+    def test_boiler_rating_saves_separately_from_its_completion_sensor(self):
+        device = {"control_type": "permit_inhibit", "category": "hot_water", "name": "Boiler"}
+        entities = {"switch.boiler": {"state": "on", "attributes": {}},
+                    "sensor.boiler_power": {"state": "0", "attributes": {"unit_of_measurement": "W"}}}
+        mapping = {"control_type": "permit_inhibit", "actuator_entity_ids": ["switch.boiler"],
+                   "power": "sensor.boiler_power", "running_power_w": 3000}
+        saved = save_device({}, "boiler", mapping, device, entities.get,
+            entity_names={key: key for key in entities}, area_names={}, entity_area_ids={})
+        self.assertEqual(saved["device_control_mappings"]["boiler"], mapping)
+        with self.assertRaisesRegex(ValueError, "Boiler running power"):
+            save_device({}, "boiler", {**mapping, "running_power_w": -1}, device, entities.get,
+                entity_names={key: key for key in entities}, area_names={}, entity_area_ids={})
+
     def test_control_cards_use_one_actuator_and_a_consistent_field_order(self):
         for kind in ("setpoint", "switch_schedule", "permit_inhibit", "variable_power"):
             fields = _control_fields({"control_type": kind, "category": "heating"})

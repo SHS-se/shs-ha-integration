@@ -18,7 +18,7 @@ class HotWaterTests(unittest.IsolatedAsyncioTestCase):
         fixtures.DeviceExecutionTests.setUp(self)
         self.coordinator.optimisation_plan['device_models'][0]['category'] = 'hot_water'
         self.coordinator.async_cached_device_configuration.return_value[0]['category'] = 'hot_water'
-        self.options['device_control_mappings']['heater']['power'] = 'sensor.water_power'
+        self.options['device_control_mappings']['heater'].update(power='sensor.water_power', running_power_w=3000)
         self.states['sensor.water_power'] = fixtures.State(3000, unit_of_measurement='W')
 
     async def test_heating_finishes_before_scheduled_block_in_same_quarter(self):
@@ -33,6 +33,20 @@ class HotWaterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.heater'].state, 'off')
         self.calls.clear()
         await self.controller.async_tick()
+        self.assertEqual(self.calls, [])
+
+    async def test_compressor_preheat_cannot_extend_boiler_permission(self):
+        self.states['sensor.compressor_power'] = fixtures.State(1274, unit_of_measurement='W')
+        self.states['sensor.water_power'].state = '0'
+        await self.controller.async_start()
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+
+    async def test_missing_rating_names_its_correction_field_and_holds(self):
+        self.options['device_control_mappings']['heater'].pop('running_power_w')
+        await self.controller.async_start()
+        status = self.controller.status['device:heater']
+        self.assertEqual(status['state'], 'fault')
+        self.assertEqual(status['fix']['fields'][0]['key'], 'running_power_w')
         self.assertEqual(self.calls, [])
 
     async def test_idle_heater_is_blocked_immediately(self):

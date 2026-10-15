@@ -15,6 +15,8 @@ service actually controls, never from the whole meter category.
 
 from __future__ import annotations
 
+from .hot_water import boiler_running_power
+
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Callable, Optional
 
@@ -622,7 +624,7 @@ def unplanned_services(
 
 
 def _degraded_device(
-    device: dict[str, Any], reason: str, *, status: str
+    device: dict[str, Any], reason: str, *, status: str, fix_field: str | None = None
 ) -> dict[str, str]:
     """Name a device left out of the plan, and the meter behind it.
 
@@ -636,6 +638,7 @@ def _degraded_device(
         "statistic_id": str(device.get("statistic_id") or device["key"]),
         "reason": reason,
         "status": status,
+        **({"fix_field": fix_field} if fix_field else {}),
     }
 
 
@@ -691,13 +694,14 @@ def build_device_models(
         # Named apart from the `mapped_power_w` reader deliberately: binding the
         # result to the reader's own name works for the first device and then
         # calls a float on the second.
-        reviewed_power_w = mapped_power_w(
+        path = mapped_planning_path(device, mapping, pool_water_entity)
+        reviewed_power_w = (boiler_running_power(mapping) if path == "boiler" else mapped_power_w(
             mapping if isinstance(mapping, dict) else {}
-        )
+        ))
         active_power_w = (
             round(reviewed_power_w, 1)
             if reviewed_power_w is not None
-            else empirical_active_power_w
+            else None if path == "boiler" else empirical_active_power_w
         )
         device["active_power_w"] = active_power_w
         device["profile_sample_count"] = int(empirical["sample_count"])
@@ -708,11 +712,10 @@ def build_device_models(
         }
         if planning_role == "base_load":
             continue
-        path = mapped_planning_path(device, mapping, pool_water_entity)
         if path != "ev" and (active_power_w is None or active_power_w <= 0):
             degraded.append(_degraded_device(
-                device, "needs configured running power or a measured heating cycle",
-                status="quiet",
+                device, "needs configured boiler running power" if path == "boiler" else "needs configured running power or a measured heating cycle",
+                status="quiet", fix_field="running_power_w" if path == "boiler" else None,
             ))
             continue
         if path == "boiler" and empirical["sample_count"] == 0:

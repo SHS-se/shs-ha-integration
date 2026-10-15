@@ -99,7 +99,7 @@ from .device_controls import (
     planning_path,
     requested_controllable_devices,
 )
-from .hot_water import is_hot_water, hot_water_setup_errors
+from .hot_water import is_hot_water, hot_water_setup_errors, boiler_running_power
 from .optimisation import (
     OptimisationInputError,
     fuse_import_limit_w,
@@ -730,11 +730,11 @@ class Household:
             (
                 ISSUE_DEGRADED_DEVICE,
                 "quiet",
-                "Devices need a running-power value or a measured heating cycle",
+                "Devices need running-power information",
                 (
                     "These devices remain in base load. In each device's Controls card, "
-                    "check Power: select a sensor that reports the running load or enter "
-                    "its known watt rating. If relying on learned power, allow a normal "
+                    "follow the highlighted fields. Boilers require their own reviewed electrical "
+                    "running power, excluding preheating. For devices using learned power, allow a normal "
                     "heating cycle to be recorded. The items below identify the affected devices."
                 ),
             ),
@@ -773,9 +773,10 @@ class Household:
             items=items,
             fix={"kind": "none"} if status == "warming" else {
                 "kind": "fields", "fields": [
-                    {"key": "power", "scope": "mapping", "device_key": device["statistic_id"],
-                     "message": device["reason"] + ". Select a sensor reporting the running load or enter the heater's known watt rating. "
-                     "If a sensor is already selected, allow a normal heating cycle to be recorded so SHS can learn the running power."}
+                    {"key": device.get("fix_field", "power"), "scope": "mapping", "device_key": device["statistic_id"],
+                     "message": device["reason"] + (". Enter this boiler’s electrical rating in watts, excluding heat-pump preheating."
+                         if device.get("fix_field") == "running_power_w" else ". Select a sensor reporting the running load or enter the heater's known watt rating. "
+                     "If a sensor is already selected, allow a normal heating cycle to be recorded so SHS can learn the running power.")}
                     for device in self.optimisation_degraded_devices if device.get("status", "quiet") == status
                 ]},
             placeholders={"devices": "\n".join(f"- {line}" for line in items)},
@@ -1019,6 +1020,8 @@ class Household:
 
     def _mapped_power_w(self, mapping: dict[str, Any]) -> float | None:
         """Resolve the card's reviewed watts or current W/kW sensor value."""
+        if "running_power_w" in mapping:
+            return boiler_running_power(mapping)
         value = mapping.get("power")
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             watts = float(value)
@@ -1071,7 +1074,7 @@ class Household:
             if device["key"] in self.ports.options().get("excluded_device_readings", []):
                 continue
             mapping = active_mappings.get(device["key"], {})
-            watts = self._mapped_power_w(mapping)
+            watts = boiler_running_power(mapping) if is_hot_water(device) else self._mapped_power_w(mapping)
             if watts is not None:
                 device["active_power_w"] = round(watts, 1)
         from .configuration_schema import shared_devices

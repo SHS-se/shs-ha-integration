@@ -477,7 +477,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.configure_heater()
         self.coordinator.optimisation_plan['device_models'][0]['category'] = 'hot_water'
         self.coordinator.async_cached_device_configuration.return_value[0]['category'] = 'hot_water'
-        self.options['device_control_mappings']['heater']['power'] = 'sensor.water_power'
+        self.options['device_control_mappings']['heater'].update(power='sensor.water_power', running_power_w=3000)
         self.states['sensor.water_power'] = fixtures.State(3000, unit_of_measurement='W')
         await self.controller.async_start()
         self.assertIn('sensor.water_power', self.scheduler.dependencies['device:heater'])
