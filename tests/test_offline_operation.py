@@ -31,7 +31,7 @@ class OfflineTests(unittest.IsolatedAsyncioTestCase):
             _LOGGER=SimpleNamespace(warning=lambda *args: None)))
         status = {'subscription_active': True}
         plan = {'plan_id': 'last-good'}
-        coordinator = SimpleNamespace(data=status, optimisation_plan=plan,
+        coordinator = SimpleNamespace(data=status, optimisation_plan=plan, _pipeline_error=lambda *args:None,
             client=SimpleNamespace(status=AsyncMock(side_effect=ValueError('504 timeout'))))
         for _ in range(10):
             self.assertIs(await namespace['_async_update_data'](coordinator), status)
@@ -51,7 +51,7 @@ class OfflineTests(unittest.IsolatedAsyncioTestCase):
             dt_util=SimpleNamespace(utcnow=lambda: now),
             _LOGGER=SimpleNamespace(warning=lambda *args: None)))
         tariff, prices = {'revision': 1}, {'slots': ['cached']}
-        coordinator = SimpleNamespace(data={'subscription_active': True},
+        coordinator = SimpleNamespace(data={'subscription_active': True}, _pipeline_error=lambda *args:None,
             ports=SimpleNamespace(utcnow=lambda: now), tariff_catalog=tariff, supplier_prices=prices, tariff_status='configured',
             tariff_components={'fee': 'cached'}, _sync_subscription_issue=lambda _: None,
             _sync_missing_input_issue=lambda: None,

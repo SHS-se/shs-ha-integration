@@ -45,10 +45,13 @@ def schedule(plan, operation):
     }
 
 
-def attention_links(items, entry_id):
+def attention_links(items, entry_id, base_url):
     """Carry every structured correction target to the app editor."""
     result = deepcopy(items)
     for item in result:
+        if item.get('fix',{}).get('kind') == 'website':
+            from .const import website_url
+            item['fix']['url'] = website_url(base_url,item['fix'].get('path','/portal'))
         for field in item.get("fix", {}).get("fields", []):
             field["url"] = "#settings?" + urlencode({
                 "config_entry": entry_id, "field": field["key"],

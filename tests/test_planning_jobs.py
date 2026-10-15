@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import sys
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
 
@@ -49,6 +49,98 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
     async def accept(self, manual=None):
         await self.h.async_optimisation_push(force_plan=True, replan_request_id=manual)
         return (await self.h._store.async_load())['optimisation_pending_job']
+
+    def failures(self):
+        return {item['key']:item for item in self.h.attention_items}
+
+    async def test_failed_solve_survives_telemetry_and_new_pending_work_until_a_plan_is_accepted(self):
+        pending=await self.accept('manual')
+        self.h.client.planning_status.return_value={'state':'failed','detail':'Committed owner removed: old-meter'}
+        await self.h._poll_planning_job(pending)
+        self.assertIn('pipeline:planning',self.failures())
+        self.assertEqual(self.h.optimisation_plan,self.plan)
+        self.assertTrue(self.h.operational_status['actionable'])
+        self.h.client.push_optimisation.return_value={}
+        self.h._price_quarters=lambda *args:[{'start':self.rig.now.isoformat()}]
+        await self.h.async_optimisation_push()
+        self.assertIn('pipeline:planning',self.failures())
+        self.h.client.push_optimisation.return_value={'job_id':'replacement','state':'pending','pending':True,'retry_after_ms':1000}
+        pending=await self.accept('corrected')
+        self.assertIn('pipeline:planning',self.failures())
+        self.h.client.planning_status.return_value=self.published('replacement')
+        await self.h._poll_planning_job(pending)
+        self.assertNotIn('pipeline:planning',self.failures())
+        self.assertEqual(self.h.optimisation_plan,self.candidate)
+
+    async def test_delivery_upload_and_acknowledgement_recover_independently(self):
+        pending=await self.accept('manual')
+        self.h.client.planning_status.side_effect=ShsApiError('Plan delivery timed out')
+        await self.h._poll_planning_job(pending)
+        self.assertIn('pipeline:delivery',self.failures())
+        self.h._price_quarters=lambda *args:[{'start':self.rig.now.isoformat()}]
+        self.h.client.push_optimisation.side_effect=ShsApiError('Upload refused')
+        await self.h.async_optimisation_push()
+        self.assertIn('pipeline:upload',self.failures())
+        self.assertIn('pipeline:delivery',self.failures())
+        self.h.client.push_optimisation.side_effect=None
+        self.h.client.push_optimisation.return_value={}
+        await self.h.async_optimisation_push()
+        self.assertNotIn('pipeline:upload',self.failures())
+        self.assertIn('pipeline:delivery',self.failures())
+        self.h.client.planning_status.side_effect=None
+        self.h.client.planning_status.return_value={'state':'pending','retry_after_ms':1000}
+        await self.h._poll_planning_job(pending)
+        self.assertNotIn('pipeline:delivery',self.failures())
+        self.h.client.acknowledge_optimisation_plan.side_effect=ShsApiError('Acknowledgement failed')
+        self.h.client.planning_status.return_value=self.published()
+        await self.h._poll_planning_job(pending)
+        self.assertIn('pipeline:acknowledgement',self.failures())
+        self.assertEqual(self.h.optimisation_plan,self.candidate)
+        stored=await self.h._store.async_load()
+        self.h.client.acknowledge_optimisation_plan.side_effect=None
+        await self.h._retry_pending_plan_ack(stored)
+        self.assertNotIn('pipeline:acknowledgement',self.failures())
+
+    async def test_old_delivery_completion_cannot_clear_the_current_receipts_failure(self):
+        pending=await self.accept('manual')
+        entered,finish=asyncio.Event(),asyncio.Event()
+        async def delayed(_job):
+            entered.set();await finish.wait()
+            return {'state':'pending','retry_after_ms':1000}
+        self.h.client.planning_status.side_effect=delayed
+        task=asyncio.create_task(self.h._poll_planning_job(pending))
+        await entered.wait()
+        stored=await self.h._store.async_load()
+        stored['optimisation_pending_job']['job_id']='new-job'
+        await self.h._store.async_save(stored)
+        self.h._pipeline_error('delivery','The new job could not be received')
+        finish.set();await task
+        self.assertEqual(self.failures()['pipeline:delivery']['detail'],'The new job could not be received')
+
+    async def test_source_failure_is_visible_despite_successful_upload_and_keeps_its_source_action(self):
+        from shs_core.optimisation import OptimisationInputError
+        self.h._build_optimisation_snapshot.side_effect=OptimisationInputError(
+            'sensor.pv_forecast has no timestamped watts',fix={'kind':'entity','entity_id':'sensor.pv_forecast'})
+        await self.h.async_optimisation_push(force_plan=True,replan_request_id='missing-forecast')
+        issue=self.failures()['pipeline:inputs']
+        self.assertIn('sensor.pv_forecast',issue['detail'])
+        self.assertEqual(issue['fix'],{'kind':'entity','entity_id':'sensor.pv_forecast'})
+        self.assertNotIn('pipeline:upload',self.failures())
+        self.h._build_optimisation_snapshot.side_effect=None
+        await self.h.async_optimisation_push(force_plan=True,replan_request_id='corrected-forecast')
+        self.assertNotIn('pipeline:inputs',self.failures())
+
+    async def test_a_rejected_replacement_stays_visible_after_an_unrelated_exchange(self):
+        stored=await self.h._store.async_load()
+        bad=deepcopy(self.candidate);bad['schema_version']=-1
+        self.h._sync_plan_refused_issue=MethodType(type(self.h)._sync_plan_refused_issue,self.h)
+        await self.h._accept_returned_plan(stored,bad,configuration_changed=False)
+        key=next(item['key'] for item in self.h.attention_items if item['title']=='The latest plan was refused')
+        await self.h._accept_returned_plan(stored,None,configuration_changed=False)
+        self.assertIn(key,self.failures())
+        self.assertEqual(self.h.optimisation_plan,self.plan)
+        await self.h._accept_returned_plan(stored,self.candidate,configuration_changed=False)
+        self.assertNotIn(key,self.failures())
 
     async def test_acceptance_advances_watermarks_and_returns_before_delivery(self):
         pending = await self.accept('manual')

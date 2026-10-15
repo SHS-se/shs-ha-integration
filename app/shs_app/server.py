@@ -17,6 +17,7 @@ from .database_census import DatabaseCensus
 from .profiling import AppProfiler, profiled
 from .logging_config import configure_logging, ConnectionLog
 from shs_wire.protocol import PROTOCOL
+from shs_core.operational_attention import execution_attention, merge_attention, pipeline_issue
 
 LOGGER = logging.getLogger(__name__)
 
@@ -58,8 +59,13 @@ class Dashboard:
                     'reason':'The saved schedule is available. New controller decisions wait for queued observations to be accounted.'}
             entry = {'id':engine.identity['entry_id'], 'title':'Smart Home Solutions', 'state':'loaded',
                 'operation':operation, 'schedule':schedule(values['optimisation_plan'],operation),
-                'controllers':value['controllers'] if engine.started else {}, 'attention':attention_links(values['attention_items'],engine.identity['entry_id']),
+                'controllers':value['controllers'] if engine.started else {}, 'attention':attention_links(values['attention_items'],engine.identity['entry_id'],engine.household.client.base_url),
                 'measurements':{}}
+            entry['attention'] = merge_attention(entry['attention'], execution_attention(
+                value['controllers'], value['battery'], value['cached']['devices']))
+            if not engine.started and self.snapshot:
+                retained = next((item['attention'] for item in self.snapshot['entries'] if item['id']==entry['id']), [])
+                entry['attention'] = merge_attention(retained, entry['attention'])
             options = engine.household.resolved_options()
             for name,key,unit in (('house','house_consumption_power_entity','W'),('solar','solar_production_power_entity','W'),
                 ('grid','grid_power_entity','W'),('battery','battery_power_measurement_entity','W'),('battery_soc','battery_soc_entity','%')):
@@ -175,7 +181,27 @@ class Dashboard:
         if self.connection['state'] == 'recovering' and self.engine and not self.engine.started:
             processing = self.engine.battery._processing if self.engine.battery else None
             recovery = {'processed_receipt': (processing['receipt'] - int(not processing['complete'])) if processing else None}
+        attention = [item for entry in (self.snapshot or {}).get('entries',[]) for item in entry.get('attention',[])]
+        engine = self.engine
+        if engine is not None:
+            if engine.started:
+                # Read current owners even if building/publishing a snapshot
+                # failed. Recovery removes only that owner's active failure.
+                controllers = engine.controller.status
+                battery = controllers.get('battery',{})
+                battery = battery.get('battery_runtime',battery)
+                attention = execution_attention(controllers,battery,engine.cached.get('devices',[]))
+                operation = engine.household.operational_status
+                if operation['state'] in ('unavailable','expired','not_configured'):
+                    attention.append(pipeline_issue('plan', operation['reason']))
+            attention = merge_attention(attention,engine.operational_attention())
+        if self.system['error']:
+            attention = merge_attention(attention,[pipeline_issue('background',self.system['error'],key='app:diagnostics')])
+        from shs_core.app_projection import attention_links
+        attention = attention_links(attention, engine.identity['entry_id'] if engine and engine.identity else '',
+                                    engine.household.client.base_url if engine and engine.household else None)
         return {"app_version": self.version, "required_companion": self.manifest["integration_version"],
+                "attention":attention,
                 "recovery": recovery,
                 "protocol": PROTOCOL, "connection": self.connection,
                 "snapshot": self.snapshot, "system": self.system, "companion": self.companion,

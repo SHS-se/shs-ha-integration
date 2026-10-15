@@ -100,6 +100,7 @@ class BatteryRuntime:
         self._bootstrap_rejection=None;self._bootstrap_captured=None
         self._fault_history=[]
         self._observation_error=None
+        self._counter_errors={};self._replan_error=None
         self._live_accounting=None
         self._loaded=None;self._started=False;self._processing=None
         self.receipt_driven=False
@@ -206,6 +207,7 @@ class BatteryRuntime:
     def snapshot(self, *, include_evidence=False):
         """Current status; with evidence, the journals as immutable Records to encode later."""
         value={**self._status,'loss_model':self._model.wire() if self._model else None,'loss_evidence':self._fits,
+            'input_errors':dict(self._counter_errors),'planning_error':self._replan_error,
             'runtime_reason':getattr(self,'_runtime_reason',None),'measurements':getattr(self,'_measurements',None),
             'writer_current':self.coordinator.battery_writer.is_current(self._grant,self.identity()),
             'fault_history':[dict(row) for row in self._fault_history],
@@ -513,7 +515,7 @@ class BatteryRuntime:
             self._mode_revision=group.mode_revision+1
             self._mode=mode
             await self.host.accept(rt.AuthorityChanged(group.spec.id,mode,self._mode_revision,None))
-        self._status={'state':'idle','reason':self._holding(reason)}
+        self._status={'state':'idle','reason':self._holding(reason),'execution_blocked':mode in ('controlling','control_verification')}
 
     async def _retire_changed_configuration(self, options):
         """Bind to changed settings without changing what the battery is doing."""
@@ -834,6 +836,11 @@ class BatteryRuntime:
                                           str(ordinal),processing=checkpoint,receiver=receiver)
                     except (ValueError,KeyError,TypeError) as error:
                         self._record_fault('receipt_counter',str(error))
+                        self._counter_errors[row['entity_id']]=f"{row['entity_id']}: {error}"
+                    else:
+                        self._counter_errors.pop(row['entity_id'],None)
+                elif row['entity_id'] in streams:
+                    self._counter_errors[row['entity_id']]=f"{row['entity_id']}: energy counter is unavailable"
                 if not accepted:
                     await receiver(None,checkpoint)
             checkpoint=processing_checkpoint(identity,ordinal,1,complete=True)
@@ -1000,7 +1007,9 @@ class BatteryRuntime:
                         await self.coordinator.async_report_runtime()
                     else:
                         await self.coordinator.async_optimisation_push(force_plan=True, replan_reason=f"Battery controller: {self._runtime_reason}. Consider a manual replan.")
+                    self._replan_error=None
                 except Exception as error:
+                    self._replan_error=str(error)
                     self._record_fault('replan',str(error))
                     return  # The existing coordinator retry/poll owns transport retry.
         self._replan_task=asyncio.create_task(run())

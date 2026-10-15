@@ -4,6 +4,7 @@ from shs_core.api import ShsApiError
 from shs_core.configuration_fields import LABELS, _configuration_sections
 from shs_core.presentation import timeline, system_fields, device_name, device_readiness
 from shs_core.device_controls import room_thermal_zones
+from shs_core.operational_attention import execution_attention, merge_attention
 
 async def configuration_payload(editor, *, refresh_roles):
     coordinator = editor.engine.household
@@ -123,7 +124,8 @@ async def configuration_payload(editor, *, refresh_roles):
                     else item["fix"]
                 ),
             }
-            for item in coordinator.attention_items
+            for item in merge_attention(coordinator.attention_items,execution_attention(
+                coordinator.controller.status,coordinator.battery_runtime.snapshot(),devices))
         ],
         "readiness": {
             "planning_mode": options.get(shs_const.OPT_PLANNING_MODE),

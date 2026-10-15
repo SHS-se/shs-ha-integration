@@ -2,7 +2,7 @@ import {useEffect, useRef} from 'react';
 import './configuration-editor.js';
 import {fetchApp} from './ingress';
 
-type Editor = HTMLElement & {backend:typeof backend;dark:boolean};
+type Editor = HTMLElement & {backend:typeof backend;dark:boolean;openCorrection:(query:string)=>void};
 const backend = {
   async request(body:Record<string,unknown>) {
     const {action,...data}=body;
@@ -24,13 +24,15 @@ export function Configuration({dark}:{dark:boolean}) {
   const mount=useRef<HTMLDivElement>(null),editor=useRef<Editor|null>(null);
   useEffect(()=>{
     let active=true;
+    const correction=()=>editor.current?.openCorrection(location.hash.split('?')[1]||'');
+    window.addEventListener('hashchange',correction);
     void customElements.whenDefined('shs-configuration-editor').then(()=>{
       if(!active)return;
       const element=document.createElement('shs-configuration-editor') as Editor;
       element.backend=backend;element.dark=dark;editor.current=element;
       mount.current?.append(element);
     });
-    return()=>{active=false;editor.current?.remove();editor.current=null;};
+    return()=>{active=false;window.removeEventListener('hashchange',correction);editor.current?.remove();editor.current=null;};
   },[]);
   useEffect(()=>{if(editor.current)editor.current.dark=dark;},[dark]);
   return <div ref={mount} className="configuration-editor"/>;

@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from .replan_listener import listen_for_replans
+from .operational_attention import pipeline_issue
 from .battery_live import BatteryLiveInputs
 from .durable_record import DurableRecord
 from .operating_modes import device_mode, operating_mode_identity
@@ -253,6 +254,7 @@ class Household:
         self._replan_lock = asyncio.Lock()
         self._planning_job_wake = asyncio.Event()
         self._runtime_lock = asyncio.Lock()
+        self._refresh_lock = asyncio.Lock()
         self._battery_native_context = None
         self._battery_inputs_lock = asyncio.Lock()
         self._battery_inputs_store = battery_inputs_store
@@ -290,8 +292,9 @@ class Household:
         return self.local_now().replace(hour=0, minute=0, second=0, microsecond=0)
 
     async def async_request_refresh(self):
-        self.data = await self._async_update_data()
-        self.async_update_listeners()
+        async with self._refresh_lock:
+            self.data = await self._async_update_data()
+            self.async_update_listeners()
 
     def async_add_control_listener(self, listener):
         """Subscribe to shared control inputs, separately from live status."""
@@ -318,6 +321,7 @@ class Household:
             validate_server_contract(status)
         except (ShsApiError, ApiContractError) as err:
             self.last_connection_error = str(err)
+            self._pipeline_error('cloud_status', err)
             if self.data is None:
                 raise HouseholdRefreshError(str(err)) from err
             _LOGGER.warning("Cloud status refresh failed; retaining cached data: %s", err)
@@ -325,6 +329,7 @@ class Household:
 
         self.last_connection_success = self.ports.utcnow().isoformat()
         self.last_connection_error = None
+        self._pipeline_error('cloud_status', None)
 
         active = bool(status.get("subscription_active"))
         self._sync_subscription_issue(active)
@@ -352,11 +357,13 @@ class Household:
             if self.tariff_catalog is None:
                 self.tariff_status = "error"
             self.last_tariff_error = str(err)
+            self._pipeline_error('tariff', err)
             _LOGGER.warning("Tariff catalogue refresh failed: %s", err)
         else:
             self.tariff_catalog = catalog
             self.tariff_components = tariff_component_definitions(catalog)
             self.last_tariff_error = None
+            self._pipeline_error('tariff', None)
             if catalog.get("configuration") is None:
                 self.tariff_status = "missing_customer_input"
                 self.missing_questions = missing_input_labels(
@@ -377,10 +384,12 @@ class Household:
             self._sync_subscription_issue(False)
         except (ShsApiError, SupplierPriceError) as err:
             self.last_price_error = str(err)
+            self._pipeline_error('prices', err)
             _LOGGER.warning("Supplier price refresh failed: %s", err)
         else:
             self.supplier_prices = prices
             self.last_price_error = None
+            self._pipeline_error('prices', None)
             price_questions = missing_input_labels(
                 prices, self.ports.home().language
             )
@@ -412,10 +421,26 @@ class Household:
         control on the website" turned out to be.
         """
         order = {"error": 0, "warning": 1}
+        blocked = {item['covered_by']:item['stage'] for item in self._attention.values() if item.get('covered_by')}
         return sorted(
-            self._attention.values(),
+            ({**item,'severity':'error','stage':blocked[item['key']]} if item['key'] in blocked else item
+             for item in self._attention.values() if item.get('covered_by') not in self._attention),
             key=lambda item: (order.get(item["severity"], 2), item["title"]),
         )
+
+    def _pipeline_error(self, stage, error, *, fix=None, covered_by=None):
+        """Each serialized stage clears only the failure its own success proves."""
+        key = 'pipeline:'+stage
+        previous = self._attention.get(key)
+        if error is None:
+            self._attention.pop(key, None)
+        else:
+            item = pipeline_issue(stage, error, fix=fix)
+            if covered_by:
+                item['covered_by'] = covered_by
+            self._attention[key] = item
+        if previous != self._attention.get(key):
+            self.ports.publish()
 
     def _set_attention(
         self,
@@ -565,9 +590,11 @@ class Household:
                 self.replan_recommendations = status.get("replan_recommendations", [])
                 self.last_runtime_report = self.ports.utcnow().isoformat()
                 self.last_runtime_error = None
+                self._pipeline_error('runtime_report', None)
                 return status
             except (ShsApiError, ShsAuthError, ApiContractError) as err:
                 self.last_runtime_error = str(err)
+                self._pipeline_error('runtime_report', err)
                 _LOGGER.debug("Runtime report failed: %s", err)
                 return {}
             finally:
@@ -591,8 +618,16 @@ class Household:
 
     async def async_replan_listener(self) -> None:
         """Keep an authenticated wakeup request open independently of quarter exchange."""
+        async def wait(after):
+            try:
+                requested = await self.client.wait_for_replan(after)
+            except Exception as error:
+                self._pipeline_error('notifications', error)
+                raise
+            self._pipeline_error('notifications', None)
+            return requested
         await listen_for_replans(
-            self.client.wait_for_replan,
+            wait,
             self.async_answer_replan,
             lambda error: _LOGGER.warning("Replan notification connection: %s", error),
         )
@@ -616,9 +651,11 @@ class Household:
                         if requested != self._answered_replan_request_id and pending.get("replan_request_id") != requested:
                             await self._report_replan_failure(requested, self.last_optimisation_error)
                 except Exception as error:
+                    self._pipeline_error('replan_request', error)
                     if requested != self._answered_replan_request_id:
                         await self._report_replan_failure(requested, str(error))
                     raise
+                self._pipeline_error('replan_request', None)
             self._answered_replan_request_id = requested
             _LOGGER.debug("Requested replan %s capture answered in %.0f ms", requested, (monotonic() - started) * 1000)
             return mode == PLANNING_MODE_LIVE
@@ -628,7 +665,10 @@ class Household:
         try:
             await self.client.report_replan_failure(request_id, detail)
         except (ShsApiError, ShsAuthError) as err:
+            self._pipeline_error('failure_report', err)
             _LOGGER.debug("Replan failure report skipped: %s", err)
+        else:
+            self._pipeline_error('failure_report', None)
 
     def _sync_subscription_issue(self, active: bool) -> None:
         """Raise or clear the subscription repair issue."""
@@ -662,8 +702,9 @@ class Household:
             severity="error",
             title="The latest plan was refused",
             detail=(
-                "Home Assistant received a plan it will not execute, so no "
-                "planned control is running. Download diagnostics and report the refusal below; changing device settings will not repair an invalid plan."
+                "The new plan will not be executed. The previous accepted plan, if available, "
+                "keeps its existing validity. Download diagnostics and report the refusal below; "
+                "changing device settings will not repair an invalid plan."
             ),
             items=[reason],
             fix={"kind": "diagnostics"},
@@ -694,6 +735,8 @@ class Household:
                 detail = "Correct the website settings named below. There is no local Energy or Devices field to change."
             elif fix.get("kind") == "fields":
                 detail = "Open the highlighted fields below and correct the reported values."
+            elif fix.get('kind') in ('entity','entities'):
+                detail = 'Inspect the named source entities. Their current readings could not be used for planning.'
             elif fix.get("kind") == "none":
                 detail = "No local field needs changing. The integration retries the download automatically; see the reason below."
         self._set_attention(
@@ -1883,7 +1926,10 @@ class Household:
             supplier_costs_completed = False
             supplier_costs = []
             self.last_price_error = str(err)
+            self._pipeline_error('history_pricing', err)
             _LOGGER.warning("Supplier-cost pricing failed: %s", err)
+        else:
+            self._pipeline_error('history_pricing', None)
         self.supplier_cost_days = len(supplier_costs)
         if not readings and not calculations and not supplier_costs:
             if tariff_attempted and catalog_hash:
@@ -1903,10 +1949,12 @@ class Household:
             return
         except ShsApiError as err:
             self.last_push_error = str(err)
+            self._pipeline_error('history_upload', err)
             _LOGGER.warning("Push failed: %s", err)
             return
 
         self.last_push_error = None
+        self._pipeline_error('history_upload', None)
         if per_day:
             self.last_push_date = max(per_day)
             stored["last_push_date"] = self.last_push_date
@@ -2879,16 +2927,20 @@ class Household:
                 pending.get("error"),
             )
         except (KeyError, TypeError) as err:
+            self._pipeline_error('acknowledgement', err)
             _LOGGER.error("Cannot acknowledge plan without contract identifiers: %s", err)
             stored.pop("optimisation_pending_plan_ack", None)
             return True
         except ShsApiError as err:
             if err.code == "stale_plan_ack":
+                self._pipeline_error('acknowledgement', None)
                 _LOGGER.info("Discarding acknowledgement for superseded plan: %s", err)
                 stored.pop("optimisation_pending_plan_ack", None)
                 return True
+            self._pipeline_error('acknowledgement', err)
             _LOGGER.warning("Plan acknowledgement will be retried: %s", err)
             return False
+        self._pipeline_error('acknowledgement', None)
         stored.pop("optimisation_pending_plan_ack", None)
         return True
 
@@ -2927,6 +2979,7 @@ class Household:
                 if self._planning_receipt_identity(stored.get(record_key, {})) != self._planning_receipt_identity(pending):
                     return 0
                 self.last_optimisation_error = str(error)
+                self._pipeline_error('delivery', error)
                 if error.code == "planning_job_not_found":
                     stored = await self._store.async_load()
                     stored.pop(record_key, None)
@@ -2938,23 +2991,26 @@ class Household:
             if recovering_submission and pending.get("replan_request_id"):
                 await self._report_replan_failure(pending["replan_request_id"], str(error))
             return 0
-        if result["state"] == "pending" and not recovering_submission:
-            return result["retry_after_ms"] / 1000
         async with self._push_lock:
             stored = await self._store.async_load() or {}
             if self._planning_receipt_identity(stored.get(record_key, {})) != self._planning_receipt_identity(pending):
                 return 0
+            self._pipeline_error('delivery', None)
+            if result["state"] == "pending" and not recovering_submission:
+                return result["retry_after_ms"] / 1000
             if recovering_submission:
                 await self._journal_planning_acceptance(stored, result, pending)
                 try:
                     await self._record_device_exchange(stored, pending["devices"], result)
                 except (ShsApiError, HouseholdReadError, OptimisationInputError, KeyError, TypeError, ValueError) as error:
                     self.last_optimisation_error = str(error)
+                    self._pipeline_error('configuration', error, fix=getattr(error,'fix',None))
                     pending = {**pending, "configuration_unconfirmed": True}
                     if stored.get("optimisation_pending_job"):
                         stored["optimisation_pending_job"]["configuration_unconfirmed"] = True
                 else:
                     self.last_optimisation_error = None
+                    self._pipeline_error('configuration', None)
                 for remote, local in (
                     ("actuals_accepted_until", "optimisation_actuals_accepted_until"),
                     ("thermal_slots_accepted_until", "thermal_slots_accepted_until"),
@@ -2976,6 +3032,7 @@ class Household:
                 await self._accept_returned_plan(stored, result["plan"], configuration_changed=changed)
             elif result["state"] == "failed":
                 self.last_optimisation_error = result.get("detail") or result.get("code") or "planning failed"
+                self._pipeline_error('planning', self.last_optimisation_error)
             if result["state"] != "pending":
                 # Superseded work supplies no replacement. Keep the accepted plan.
                 stored.pop("optimisation_pending_job", None)
@@ -3054,6 +3111,8 @@ class Household:
                 },
             }
         elif returned_plan and not configuration_changed:
+            self._pipeline_error('planning', None)
+            self._pipeline_error('acceptance', None)
             self.last_optimisation_error = None
             self._plan_configuration_changed = stored["plan_configuration_changed"] = False
             self.optimisation_plan = returned_plan
@@ -3071,6 +3130,7 @@ class Household:
             # next exchange replans using the new effective base split.
             self._plan_configuration_changed = stored["plan_configuration_changed"] = True
             self.last_optimisation_error = "device configuration changed; manual replan recommended"
+            self._pipeline_error('acceptance', self.last_optimisation_error)
             if returned_plan:
                 stored["optimisation_pending_plan_ack"] = {
                     "plan": acknowledgement_plan,
@@ -3128,6 +3188,7 @@ class Household:
                 "optimisation_plan"
             )
             snapshot_error: str | None = None
+            stage = 'collection'
             try:
                 exchange_options = dict(self.ports.options())
                 devices = await self._prepared_device_inventory(stored)
@@ -3199,14 +3260,22 @@ class Household:
                     # A missing thermal sensor must never stop the electrical
                     # plan; the website reports the gap on its readiness panel.
                     _LOGGER.debug("Thermal observations unavailable: %s", err)
+                    self._pipeline_error('thermal_inputs', err, fix=getattr(err,'fix',None))
                     thermal_slots = []
+                else:
+                    if replan_request_id is None:
+                        self._pipeline_error('thermal_inputs', None)
                 try:
                     pool_slots = (await self._pool_quarters(
                         thermal_options, thermal_start, complete_end
                     )) if replan_request_id is None and any(d.get("category") == "pool_heating" for d in devices) else []
                 except (HouseholdReadError, OptimisationInputError, ValueError) as err:
                     _LOGGER.debug("Pool observations unavailable: %s", err)
+                    self._pipeline_error('pool_inputs', err, fix=getattr(err,'fix',None))
                     pool_slots = []
+                else:
+                    if replan_request_id is None and any(d.get('category')=='pool_heating' for d in devices):
+                        self._pipeline_error('pool_inputs', None)
                 last_plan = stored.get("optimisation_plan")
                 # Recommendations still upload telemetry; only an explicit
                 # request can supersede an in-flight battery generation.
@@ -3231,9 +3300,11 @@ class Household:
                             snapshot = await self._build_optimisation_snapshot(
                                 options, entities, actuals, stored, devices
                             )
+                            self._pipeline_error('inputs', None)
                             _LOGGER.debug("Replan %s fresh snapshot captured in %.0f ms", replan_request_id, (monotonic() - capture_started) * 1000)
                         except OptimisationInputError as err:
                             snapshot_error = str(err)
+                            self._pipeline_error('inputs', err, fix=err.fix, covered_by=ISSUE_OPTIMISATION_CONFIGURATION)
                             if not self.optimisation_missing_inputs:
                                 self.optimisation_missing_inputs = list(
                                     err.reasons or [snapshot_error]
@@ -3252,6 +3323,7 @@ class Household:
                                 f"({type(err).__name__}: {err}); the Home "
                                 "Assistant log holds the traceback"
                             )
+                            self._pipeline_error('inputs', snapshot_error, covered_by=ISSUE_OPTIMISATION_CONFIGURATION)
                             if not self.optimisation_missing_inputs:
                                 self.optimisation_missing_inputs = [snapshot_error]
                                 self.optimisation_missing_remedy = REMEDY_DEFECT
@@ -3278,6 +3350,7 @@ class Household:
                         hours=OPTIMISATION_HORIZON_HOURS
                     ),
                 )
+                self._pipeline_error('collection', None)
                 if (
                     not actuals
                     and snapshot is None
@@ -3302,6 +3375,7 @@ class Household:
                     }
                     await self._store.async_save(stored)
                 ingest_started = monotonic()
+                stage = 'upload'
                 try:
                     result = await self.client.push_optimisation(
                         actuals,
@@ -3323,6 +3397,8 @@ class Household:
                         stored.pop("optimisation_pending_submission", None)
                         await self._store.async_save(stored)
                     raise
+                self._pipeline_error('upload', None)
+                stage = 'configuration'
                 if result.get("job_id"):
                     await self._journal_planning_acceptance(stored, result, {
                         "options": exchange_options,
@@ -3343,6 +3419,7 @@ class Household:
                         stored["optimisation_pending_job"]["configuration_unconfirmed"] = True
                         await self._store.async_save(stored)
                     raise
+                self._pipeline_error('configuration', None)
                 configuration_changed = configuration != previous_configuration or previous_home != stored.get("home_planning_configuration")
                 self.last_actual_slots_accepted = int(
                     result.get("actual_slots_accepted") or 0
@@ -3356,6 +3433,7 @@ class Household:
                 return
             except (ShsApiError, HouseholdReadError, OptimisationInputError, KeyError, TypeError, ValueError) as err:
                 self.last_optimisation_error = str(err)
+                self._pipeline_error(stage, err, fix=getattr(err,'fix',None))
                 _LOGGER.warning("Optimisation push skipped: %s", err)
                 self.async_update_listeners()
                 return
@@ -3384,6 +3462,7 @@ class Household:
                 self.last_optimisation_error = None
             elif result.get("state") == "failed":
                 self.last_optimisation_error = result.get("detail") or result.get("code") or "planning failed"
+                self._pipeline_error('planning', self.last_optimisation_error)
             stored["last_optimisation_push"] = self.last_optimisation_push
             await self._store.async_save(stored)
             if await self._retry_pending_plan_ack(stored):

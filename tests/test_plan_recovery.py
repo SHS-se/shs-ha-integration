@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 import unittest
 from time import monotonic
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 import sys
 
 ROOT = Path(__file__).parents[1] / 'custom_components/shs_energy'
@@ -21,6 +21,52 @@ from shs_core.api import ShsApiError
 
 
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unexpected_replan_answer_failure_remains_until_that_request_succeeds(self):
+        self.c.async_optimisation_push.side_effect=RuntimeError('Source admission crashed')
+        with self.assertRaisesRegex(RuntimeError,'Source admission crashed'):
+            await self.c.async_answer_replan('request')
+        self.assertTrue(any(i['key']=='pipeline:replan_request' for i in self.c.attention_items))
+        self.c._pipeline_error('notifications',None)
+        self.assertTrue(any(i['key']=='pipeline:replan_request' for i in self.c.attention_items))
+        self.assertIsNone(self.c._answered_replan_request_id)
+        self.c.async_optimisation_push.side_effect=None
+        await self.c.async_answer_replan('request')
+        self.assertFalse(any(i['key']=='pipeline:replan_request' for i in self.c.attention_items))
+
+    async def test_failed_runtime_report_is_visible_until_that_report_recovers(self):
+        self.c.client.report_runtime.side_effect=ShsApiError('Controller status upload failed')
+        await self.c.async_report_runtime()
+        self.assertTrue(any(i['key']=='pipeline:runtime_report' for i in self.c.attention_items))
+        self.c._pipeline_error('upload',None)
+        self.assertTrue(any(i['key']=='pipeline:runtime_report' for i in self.c.attention_items))
+        self.c.client.report_runtime.side_effect=None
+        await self.c.async_report_runtime()
+        self.assertFalse(any(i['key']=='pipeline:runtime_report' for i in self.c.attention_items))
+
+    async def test_notification_failure_clears_only_after_the_long_poll_succeeds(self):
+        from shs_core.replan_listener import listen_for_replans
+        retry,release,connected=asyncio.Event(),asyncio.Event(),asyncio.Event()
+        calls=0
+        async def wait(_after):
+            nonlocal calls
+            calls+=1
+            if calls==1:raise ShsApiError('Notification connection lost')
+            if calls==2:
+                retry.set();await release.wait();return None
+            connected.set();await asyncio.Future()
+        self.c.client.wait_for_replan=wait
+        async def listen(wait,answer,report):
+            await listen_for_replans(wait,answer,report,retry_seconds=0)
+        with patch('shs_core.household.listen_for_replans',listen):
+            task=asyncio.create_task(self.c.async_replan_listener())
+            try:
+                await asyncio.wait_for(retry.wait(),1)
+                self.assertTrue(any(i['key']=='pipeline:notifications' for i in self.c.attention_items))
+                release.set();await asyncio.wait_for(connected.wait(),1)
+                self.assertFalse(any(i['key']=='pipeline:notifications' for i in self.c.attention_items))
+            finally:
+                task.cancel();await asyncio.gather(task,return_exceptions=True)
+
     async def test_runtime_report_carries_actual_battery_admission_instead_of_cached_plan(self):
         feedback={'accepted':{'plan_id':'admitted','contract_id':'reference','scope_revision':'scope','generation':3},'rejection':None}
         self.c.battery_runtime=SimpleNamespace(plan_feedback=lambda:feedback)

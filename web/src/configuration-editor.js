@@ -200,9 +200,28 @@ class ShsEnergyConfigPanel extends HTMLElement {
     }
   }
 
+  openCorrection(query) {
+    this._linkedField = new URLSearchParams(query);
+    this._linkedFieldOpened = false;
+    this._openLinkedField();
+  }
+
   _openLinkedField() {
     if (!this._linkedField || this._linkedFieldOpened || !this._data || this._data.requires_entry_selection) return;
     const query = this._linkedField;
+    if (query.has("entity")) {
+      this._linkedFieldOpened = true;
+      this._inspectedEntity = query.get("entity");
+      this._render();
+      this.shadowRoot.querySelector("dialog")?.showModal();
+      return;
+    }
+    if (query.get("tab") === "status") {
+      this._linkedFieldOpened = true;
+      this._tab = "status";
+      this._render();
+      return;
+    }
     if (!query.has("field")) return;
     const target = this._fieldLocations().find(location => location.field.key === query.get("field")
       && location.scope === (query.get("scope") || "configuration")
@@ -1447,6 +1466,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     let primary = "";
     if (fix.url) primary = `<a href="${this._escape(fix.url)}" target="_blank" rel="noreferrer">Open website settings</a>`;
     else if (fix.kind === "entity" && fix.entity_id) primary = `<button class="text" data-action="inspect-entity" data-entity-id="${this._escape(fix.entity_id)}">Inspect source entity</button>`;
+    else if (fix.kind === "entities") primary = fix.entity_ids.map(entity => `<button class="text" data-action="inspect-entity" data-entity-id="${this._escape(entity)}">Inspect ${this._escape(entity)}</button>`).join("");
     else if (fix.kind === "diagnostics") primary = `<button class="secondary" data-action="download">Download diagnostics</button>`;
     else if (fix.kind === "refresh_choices") primary = `<button class="secondary" data-action="refresh">Refresh website choices</button>`;
     else if (fix.kind === "refresh") primary = `<button class="secondary" data-action="retry">Retry status refresh</button>`;

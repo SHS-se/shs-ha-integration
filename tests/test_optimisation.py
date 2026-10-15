@@ -455,6 +455,19 @@ class ForecastTests(unittest.TestCase):
                 value_keys=("price", "value"),
             )
 
+    def test_unusable_forecasts_name_every_source_and_preserve_inspection_actions(self):
+        entities=[{'entity_id':entity,'attributes':{'watts':{}},'last_updated':'2026-08-10T08:00:00Z'}
+                  for entity in ('sensor.pv_today','sensor.pv_tomorrow')]
+        with self.assertRaises(OptimisationInputError) as failed:
+            extract_timestamped_forecast(entities,attribute_names=('watts',),value_keys=('watts',))
+        self.assertEqual(failed.exception.fix,{'kind':'entities','entity_ids':['sensor.pv_today','sensor.pv_tomorrow']})
+        self.assertIn('sensor.pv_today',str(failed.exception))
+        self.assertIn('sensor.pv_tomorrow',str(failed.exception))
+        for index,entity in enumerate(entities):entity['attributes']['watts']={'2026-08-10T08:00:00Z':100*(index+1)}
+        values,sources,_=extract_timestamped_forecast(entities,attribute_names=('watts',),value_keys=('watts',),combine='sum')
+        self.assertEqual(list(values.values()),[300])
+        self.assertEqual(sources,['sensor.pv_today','sensor.pv_tomorrow'])
+
     def test_multiple_pv_arrays_are_summed_without_double_counting_attributes(self) -> None:
         entities = [
             {

@@ -385,8 +385,11 @@ def extract_timestamped_forecast(
             if updated is not None:
                 issued.append(updated)
     if not result:
+        sources = [entity['entity_id'] for entity in entities]
         raise OptimisationInputError(
-            f"none of {', '.join(attribute_names)} contained timestamped values"
+            f"none of {', '.join(attribute_names)} contained timestamped values in {', '.join(sources)}",
+            fix=({'kind':'entity','entity_id':sources[0]} if len(sources)==1
+                 else {'kind':'entities','entity_ids':sources}),
         )
     if not issued:
         raise OptimisationInputError("forecast source has no last_updated timestamp")

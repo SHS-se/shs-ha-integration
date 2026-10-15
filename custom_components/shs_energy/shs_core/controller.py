@@ -284,7 +284,7 @@ class ScheduledController(DeviceOperations):
         if purpose is None:
             purpose = "hand it back" if self.ownership.records.get(device, {}).get("restoration_pending") else "resume the plan"
         hold = "SHS holds the last setting it sent and will" if device in self.ownership.records else "SHS will"
-        details = {"retry_automatically": True, "unavailable_since": since.isoformat(),
+        details = {"retry_automatically": True, "execution_blocked": True, "unavailable_since": since.isoformat(),
                    **({"plan_id": plan.get("plan_id"), "slot_start": slot["start"]} if slot and plan else {})}
         if now < deadline:
             if self.scheduler is not None:
@@ -553,12 +553,12 @@ class ScheduledController(DeviceOperations):
                         self.report(device, **inactive)
                         continue
                     if hold := self.hold_reason(device, options):
-                        self.report(device, "idle", reason=self.holding(device, hold))
+                        self.report(device, "idle", reason=self.holding(device, hold), execution_blocked=True)
                         continue
                     supported = (plan.get("schema_version", 0) >= 7 and device.removeprefix("device:") in slot.get("device_commands", {})
                                  if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device))
                     if not slot or not supported:
-                        self.report(device, "idle", reason=self.holding(device, "No current plan for this device"))
+                        self.report(device, "idle", reason=self.holding(device, "No current plan for this device"), execution_blocked=True)
                         continue
                     if self.failed.get(device) == key:
                         continue
@@ -575,7 +575,7 @@ class ScheduledController(DeviceOperations):
                 except Exception as err:
                     if isinstance(err,ControlDeadlineError):
                         self.failed.pop(device,None)
-                        self.report(device,"pending",reason=str(err),retry_automatically=True)
+                        self.report(device,"pending",reason=str(err),retry_automatically=True,execution_blocked=True)
                         continue
                     if (isinstance(err, PlanChangedError)
                             and self.coordinator.current_plan_slot is not None

@@ -57,8 +57,11 @@ class HouseholdTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(h.data, previous)
         self.assertEqual(h.last_connection_error, 'offline')
         h._sync_subscription_issue(True)
-        self.assertFalse(h.attention_items)
+        self.assertEqual([item['key'] for item in h.attention_items], ['pipeline:cloud_status'])
         self.assertEqual(rig.repairs[-1], ('subscription_inactive', None, {}))
+        rig.client.status.side_effect = None
+        await h.async_request_refresh()
+        self.assertFalse(any(item['key']=='pipeline:cloud_status' for item in h.attention_items))
 
     async def test_energy_statistics_stay_utc_half_open_and_use_existing_change_rules(self):
         rig = Rig()

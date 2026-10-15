@@ -7,3 +7,7 @@
 
 .command{display:block;margin:0}.command>div{display:flex;gap:16px;padding:3px 0}.command dt{min-width:140px;text-transform:capitalize}.command dd{flex:1}
 @media(max-width:540px){.command>div{display:block}.command dt{min-width:0}}
+
+.notice.critical{border-color:var(--error);border-left-width:5px}.operational-attention.critical h2{color:var(--error)}.operational-attention h3{margin:0 0 8px}.operational-attention .issue{padding:16px 0;overflow-wrap:anywhere}.operational-attention .issue:first-of-type{padding-top:0}.issue-actions{display:flex;gap:8px;flex-wrap:wrap}.issue-actions .button{white-space:normal;text-align:left}
+
+.dot.problem{background:var(--error)}

@@ -19,6 +19,22 @@ from gateway_fixture import IDENTITY
 
 
 class ReplayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_bad_counter_receipt_is_visible_until_the_same_counter_is_valid(self):
+        from shs_core.operational_attention import execution_attention
+        rig,runtime=await self.archival_runtime()
+        entity='sensor.grid_import'
+        row=dict(rig.rows[entity],state='not-a-number',entity_id=entity,kind='state_report')
+        await runtime.consume_receipt(IDENTITY,dict(ordinal=1,kind='observation',payload=row))
+        errors=execution_attention({},runtime.snapshot(),[])
+        issue=next(item for item in errors if item['key']=='pipeline:battery-input:'+entity)
+        self.assertEqual(issue['fix'],{'kind':'entity','entity_id':entity})
+        await runtime.consume_receipt(IDENTITY,dict(ordinal=2,kind='observation',payload=dict(
+            rig.rows['sensor.grid_export'],entity_id='sensor.grid_export',kind='state_report')))
+        self.assertIn(entity,runtime.snapshot()['input_errors'])
+        await runtime.consume_receipt(IDENTITY,dict(ordinal=3,kind='observation',payload=dict(
+            rig.rows[entity],entity_id=entity,kind='state_report')))
+        self.assertNotIn(entity,runtime.snapshot()['input_errors'])
+
     async def archival_runtime(self):
         from shs_core.battery_writer import BatteryWriterFence
         rig=Rig()

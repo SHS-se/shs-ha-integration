@@ -53,7 +53,7 @@ class AppProjectionTests(unittest.TestCase):
         fields = [{"key": key, "scope": "configuration", "message": "Required"} for key in
                   ("battery_power_measurement_entity", "house_consumption_power_entity", "solar_production_power_entity", "grid_power_entity")]
         source = [{"fix": {"fields": fields}}]
-        result = attention_links(source, "entry with spaces")
+        result = attention_links(source, "entry with spaces", "https://test.smarthomesolutions.se")
         self.assertEqual(len(result[0]["fix"]["fields"]), 4)
         for field in result[0]["fix"]["fields"]:
             query = parse_qs(field["url"].split("?",1)[1])

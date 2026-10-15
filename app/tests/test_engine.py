@@ -16,7 +16,7 @@ from shs_app.migration_import import import_export
 from shs_app.gateway_seed import seed_gateway
 from shs_app.engine import AppEngine
 from shs_core.const import CONF_BASE_URL, CONF_DEVICE_TOKEN
-from shs_core.gateway_journal import GatewayJournal
+from shs_core.gateway_journal import GatewayJournal, GatewayConflict
 from shs_core.gateway_service import GatewayService, AppConnection
 from shs_core.gateway_stream import GatewayStream, GatewayRecord, GatewayOperations, GatewayCommands
 from shs_core.device_gateway import DeviceGateway
@@ -169,6 +169,77 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         engine = AppEngine(self.imported,object(),'fixture','fixture',paired_release=self.pair,publish=self.published.append)
         self.addAsyncCleanup(engine.close)
         return engine
+
+    def dashboard(self, engine):
+        from shs_app.server import Dashboard
+        (self.root/'bundle.json').write_text(json.dumps({'protocol':2,'integration_version':'companion'}))
+        (self.root/'app.json').write_text('{"version":"app"}')
+        dashboard=Dashboard(self.root,self.root)
+        dashboard.engine=engine
+        engine.publish_ui=dashboard.publish_runtime
+        return dashboard
+
+    async def test_ha_projection_failure_is_visible_without_a_successful_ha_publication(self):
+        from unittest.mock import AsyncMock
+        engine=self.engine()
+        await engine.load();await engine.activate()
+        engine.gateway.connected['contract']={'companion_version':'companion'}
+        dashboard=self.dashboard(engine)
+        engine.gateway.project=AsyncMock(side_effect=GatewayConflict('HA projection rejected'))
+        with self.assertRaisesRegex(GatewayConflict,'HA projection rejected'):
+            await engine.project()
+        self.assertIsNotNone(dashboard.snapshot,'Local dashboard publication was held behind HA')
+        issue=next(i for i in dashboard.payload()['attention'] if i['key']=='pipeline:app:projection')
+        self.assertIn('HA projection rejected',issue['detail'])
+        engine.gateway.project.side_effect=None
+        await engine.project()
+        self.assertFalse(any(i['key']=='pipeline:app:projection' for i in dashboard.payload()['attention']))
+
+    async def test_background_failure_is_visible_during_startup_and_a_replacement_clears_it(self):
+        engine=self.engine();dashboard=self.dashboard(engine)
+        async def broken():raise ValueError('Receipt ingestion stopped')
+        task=engine.spawn(broken(),'receipt-fixture')
+        with self.assertRaises(ValueError):await task
+        await asyncio.sleep(0)
+        self.assertIsNone(dashboard.snapshot)
+        self.assertIn('Receipt ingestion stopped',dashboard.payload()['attention'][0]['detail'])
+        async def restored():return None
+        await engine.spawn(restored(),'receipt-fixture');await asyncio.sleep(0)
+        self.assertEqual(dashboard.payload()['attention'],[])
+
+    async def test_a_superseded_task_failure_cannot_overwrite_its_successful_replacement(self):
+        engine=self.engine();dashboard=self.dashboard(engine)
+        entered,release=asyncio.Event(),asyncio.Event()
+        async def old():
+            entered.set();await release.wait();raise ValueError('Superseded task failed')
+        previous=engine.spawn(old(),'replaceable')
+        await entered.wait()
+        async def current():return None
+        await engine.spawn(current(),'replaceable');await asyncio.sleep(0)
+        release.set()
+        with self.assertRaises(ValueError):await previous
+        await asyncio.sleep(0)
+        self.assertEqual(dashboard.payload()['attention'],[])
+
+    async def test_periodic_failure_is_retained_while_retry_is_running_and_then_clears(self):
+        engine=self.engine();dashboard=self.dashboard(engine)
+        retry,release,recovered=asyncio.Event(),asyncio.Event(),asyncio.Event()
+        calls=0
+        async def operation():
+            nonlocal calls
+            calls+=1
+            if calls==1:raise ValueError('Source bindings could not be installed')
+            if calls==2:
+                retry.set();await release.wait();return
+            recovered.set();await asyncio.Future()
+        task=asyncio.create_task(engine.periodic(operation,0))
+        try:
+            await asyncio.wait_for(retry.wait(),1)
+            self.assertIn('Source bindings could not be installed',dashboard.payload()['attention'][0]['detail'])
+            release.set();await asyncio.wait_for(recovered.wait(),1)
+            self.assertEqual(dashboard.payload()['attention'],[])
+        finally:
+            task.cancel();await asyncio.gather(task,return_exceptions=True)
 
     async def test_source_admission_finishes_before_a_new_configuration_is_installed(self):
         engine=self.engine()

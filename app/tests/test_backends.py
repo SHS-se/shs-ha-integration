@@ -58,19 +58,21 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         engine=AppEngine.__new__(AppEngine)
         engine.backends=self.backends
         engine.wake_projection=asyncio.Event()
+        from household_fixture import Rig
+        engine.households={name:Rig().household for name in ('production','test')}
         failed=asyncio.Event()
         delivered=asyncio.Event()
         async def bad():
             failed.set()
             raise HouseholdRefreshError('inactive account')
         async def good(): delivered.set()
-        task=asyncio.create_task(engine.cloud_job('production',bad))
+        task=asyncio.create_task(engine.cloud_job('production',bad,stage='cloud_status'))
         try:
             await failed.wait()
-            await engine.cloud_job('test',good)
+            await engine.cloud_job('test',good,stage='cloud_status')
             self.assertTrue(delivered.is_set())
             self.assertFalse(task.done())
-            self.assertEqual(self.backends.errors['production'],'inactive account')
+            self.assertEqual(engine.households['production'].attention_items[0]['detail'],'inactive account')
         finally:
             task.cancel()
             await asyncio.gather(task,return_exceptions=True)

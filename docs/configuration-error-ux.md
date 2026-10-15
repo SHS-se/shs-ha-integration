@@ -78,3 +78,24 @@ conditional required visibility, error highlighting, correct tab/card/focus navi
 and warning clearance. Runtime tests must prove that a configuration failure retains
 structured correction targets and cannot issue commands. Cross-section prerequisites
 must have explicit coverage using the battery case above or the affected feature.
+
+## Every failed stage is visible
+
+User requirement, 15 October 2026: any failure SHS can observe while collecting
+or sending inputs, obtaining a server plan, receiving or accepting it, reporting
+acceptance, or carrying out its commands must be shown prominently in the UI.
+Logs and diagnostic attributes alone do not satisfy this requirement.
+
+The global attention notice remains above Overview, Schedule, Controller,
+System and Settings, including retained snapshots and interrupted startup.
+Identify the affected stage or device and the reason, with the existing field,
+source-entity, website or diagnostic action. A retained valid plan is still
+shown, alongside failures affecting its execution or replacement.
+
+Clear each failure only when that same stage succeeds or its own execution
+status recovers. A telemetry upload does not prove plan delivery, acceptance or
+execution. Beginning a retry proves no recovery. Existing receipt identities
+and serialized owners prevent stale completions from clearing newer failures.
+Ordinary Verification, deliberately stopped devices and unchanged available
+sensor timestamps do not create failure notices. Failed command/deadline waits
+are visible immediately; their reporting does not change control or handover.

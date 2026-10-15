@@ -46,6 +46,7 @@ from .configuration_editor import ConfigurationEditor
 from .entities import project_entities
 from shs_core.native_configuration import native_options
 from shs_core.source_admission import source_bindings, pool_paused
+from shs_core.operational_attention import pipeline_issue, merge_attention
 from shs_core.configuration_schema import resolve_configuration
 from shs_core.controller_inputs import configured_entity_ids
 
@@ -84,11 +85,14 @@ class AppEngine:
         self.paired_release, self.publish_ui = paired_release, publish
         self.app_url = app_url
         self.tasks = set()
+        self._task_roles = {}
+        self.operation_errors = {}
         self.timers = set()
         self.wake_projection = asyncio.Event()
         self.closed = False
         self.lease = None
         self.inbox = None
+        self.identity = None
         self.gateway = None
         self.household = None
         self.controller = None
@@ -111,12 +115,34 @@ class AppEngine:
     def spawn(self, work, name='shs_app_work'):
         task = asyncio.create_task(work, name=name)
         self.tasks.add(task)
+        self._task_roles[name] = task
         def completed(task):
             self.tasks.discard(task)
-            if not task.cancelled() and (error := task.exception()) is not None:
-                LOGGER.error('App task %s failed: %s: %s',task.get_name(),type(error).__name__,error,exc_info=(type(error),error,error.__traceback__))
+            if not task.cancelled() and self._task_roles.get(name) is task:
+                error = task.exception()
+                self.operation_error('task:'+name, error)
+                if error is not None:
+                    LOGGER.error('App task %s failed: %s: %s',task.get_name(),type(error).__name__,error,exc_info=(type(error),error,error.__traceback__))
         task.add_done_callback(completed)
         return task
+
+    def operation_error(self, key, error, *, stage='background'):
+        previous = self.operation_errors.get(key)
+        if error is None:
+            self.operation_errors.pop(key, None)
+        else:
+            self.operation_errors[key] = pipeline_issue(stage, f'{key}: {type(error).__name__}: {error}', key='app:'+key)
+        if previous != self.operation_errors.get(key):
+            self.wake_projection.set()
+
+    def operational_attention(self):
+        items = list(self.household.attention_items) if self.household else []
+        for environment, household in self.households.items():
+            if household is self.household:
+                continue
+            items.extend({**item, 'key':environment+':'+item['key'], 'severity':'warning',
+                          'title':environment.capitalize()+': '+item['title']} for item in household.attention_items)
+        return merge_attention(items, self.operation_errors.values())
 
     def at(self, when, action):
         loop = asyncio.get_running_loop()
@@ -385,25 +411,38 @@ class AppEngine:
 
     @profiled('projection')
     async def project(self):
-        h = self.household
-        self.cached = dict(devices=await h.async_cached_device_configuration(),home=await h.async_cached_home_configuration(),
-            planning=await h.async_cached_planning_configuration(),exchange=await h.async_cached_exchange_status())
-        if h.optimisation_plan is not self.display_plan.source:
-            with self.profiler.measure('display_plan_build'):
-                self.display_plan.get(h.optimisation_plan)
-        with self.profiler.measure('projection_build'):
-            value = runtime_projection(h,self.cached,self.repairs,plan=self.display_plan.value)
-        value['app_url'] = self.app_url
-        value['configuration'] = self.configuration.status()
+        try:
+            h = self.household
+            self.cached = dict(devices=await h.async_cached_device_configuration(),home=await h.async_cached_home_configuration(),
+                planning=await h.async_cached_planning_configuration(),exchange=await h.async_cached_exchange_status())
+            if h.optimisation_plan is not self.display_plan.source:
+                with self.profiler.measure('display_plan_build'):
+                    self.display_plan.get(h.optimisation_plan)
+            with self.profiler.measure('projection_build'):
+                value = runtime_projection(h,self.cached,self.repairs,plan=self.display_plan.value)
+            value['app_url'] = self.app_url
+            value['configuration'] = self.configuration.status()
+            if self.started:
+                value['execution_devices'] = [{key:deepcopy(device.get(key)) for key in
+                    ('key','name','planned','system_member','permission','mode')}
+                    for device in await self.editor.devices(self.cached['planning'],include_suggestions=False)]
+                with self.profiler.measure('native_projection_build'):
+                    native = project_entities(self,value['execution_devices'])
+            self.publish_ui(value)
+        except Exception as error:
+            self.operation_error('projection_build', error)
+            raise
+        else:
+            self.operation_error('projection_build', None)
         if self.started:
-            value['execution_devices'] = [{key:deepcopy(device.get(key)) for key in
-                ('key','name','planned','system_member','permission','mode')}
-                for device in await self.editor.devices(self.cached['planning'],include_suggestions=False)]
-            with self.profiler.measure('native_projection_build'):
-                native = project_entities(self,value['execution_devices'])
-            await self.gateway.project(dict(schema=2,entities=native,execution_devices=value["execution_devices"],
-                configuration=value["configuration"],repairs=value["repairs"],app_url=self.app_url))
-        self.publish_ui(value)
+            try:
+                await self.gateway.project(dict(schema=2,entities=native,execution_devices=value['execution_devices'],
+                    configuration=value['configuration'],repairs=value['repairs'],app_url=self.app_url))
+            except Exception as error:
+                self.operation_error('projection', error, stage='projection')
+                raise
+            else:
+                self.operation_error('projection', None, stage='projection')
 
     async def projections(self):
         while True:
@@ -421,7 +460,9 @@ class AppEngine:
                         await operation()
                 else:
                     await operation()
+                self.operation_error('periodic:'+operation.__name__, None)
             except (ValueError, OSError) as error:
+                self.operation_error('periodic:'+operation.__name__, error)
                 if isinstance(error, GatewayConflict): raise
                 LOGGER.warning('Background operation %s failed: %s: %s',operation.__name__,type(error).__name__,error,exc_info=LOGGER.isEnabledFor(logging.DEBUG))
             await asyncio.sleep(seconds)
@@ -468,15 +509,14 @@ class AppEngine:
             await h.async_optimisation_push(force_plan=True,replan_request_id=request_id)
         return True
 
-    async def cloud_job(self, environment, operation):
+    async def cloud_job(self, environment, operation, *, stage):
         """A failed cloud session cannot stop its sibling or the physical owner."""
         while True:
             try:
-                self.backends.errors.pop(environment,None)
                 await operation()
                 return
             except Exception as error:
-                self.backends.errors[environment] = str(error)
+                self.households[environment]._pipeline_error(stage, error)
                 self.wake_projection.set()
                 await asyncio.sleep(5)
 
@@ -490,7 +530,7 @@ class AppEngine:
     async def replan_all(self):
         for environment, household in self.households.items():
             household._plan_configuration_changed = True
-            self.spawn(self.cloud_job(environment,lambda h=household:self.request_plan(h)),
+            self.spawn(self.cloud_job(environment,lambda h=household:self.request_plan(h),stage='upload'),
                 'configuration_replan_'+environment)
 
     async def select_backend(self, body):
@@ -594,7 +634,7 @@ class AppEngine:
                 last_quarter = quarter
             if last_day != now.date() and (now.hour,now.minute) >= (PUSH_TIME_HOUR,PUSH_TIME_MINUTE):
                 with self.profiler.measure('history_upload'):
-                    await asyncio.gather(*(self.cloud_job(env,h.async_scheduled_push) for env,h in self.households.items()))
+                    await asyncio.gather(*(self.cloud_job(env,h.async_scheduled_push,stage='history_upload') for env,h in self.households.items()))
                 last_day = now.date()
             await asyncio.sleep(5)
 
@@ -613,11 +653,11 @@ class AppEngine:
                 self.spawn(self.periodic(self.resources,60),'runtime_resources'),self.spawn(self.calendar(),'calendar'),
                 self.spawn(self.restart(),'backend_restart')]
             for environment, h in self.households.items():
-                operations = [('planning',lambda h=h:self.planning(h)),
-                    ('cloud_refresh',lambda h=h:self.periodic(h.async_request_refresh,60)),
-                    ('replan_listener',h.async_replan_listener),('planning_delivery',h.async_planning_delivery)]
-                for name, operation in operations:
-                    jobs.append(self.spawn(self.cloud_job(environment,operation),name+'_'+environment))
+                operations = [('planning','upload',lambda h=h:self.planning(h)),
+                    ('cloud_refresh','cloud_status',lambda h=h:self.periodic(h.async_request_refresh,60)),
+                    ('replan_listener','notifications',h.async_replan_listener),('planning_delivery','delivery',h.async_planning_delivery)]
+                for name, stage, operation in operations:
+                    jobs.append(self.spawn(self.cloud_job(environment,operation,stage=stage),name+'_'+environment))
             done,_ = await asyncio.wait(jobs,return_when=asyncio.FIRST_EXCEPTION)
             for task in done: task.result()
         finally:

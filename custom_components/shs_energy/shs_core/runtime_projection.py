@@ -1,5 +1,6 @@
 """Compact app-owned values projected into stable HA entities and editors."""
 from copy import deepcopy
+from .operational_attention import execution_attention, merge_attention
 
 FIELDS = (
     'configuration_busy', 'data', 'actuals_accepted_until', 'demand_charge', 'grid_operator', 'grid_price_forecast', 'grid_prices',
@@ -17,9 +18,12 @@ FIELDS = (
 
 def runtime_projection(household, cached, repairs, *, plan):
     battery = household.battery_runtime
-    return dict(schema=1, values={key:plan if key == 'optimisation_plan' else deepcopy(getattr(household,key)) for key in FIELDS},
+    status = battery.snapshot()
+    values = {key:plan if key == 'optimisation_plan' else deepcopy(getattr(household,key)) for key in FIELDS}
+    values['attention_items'] = merge_attention(values['attention_items'], execution_attention(household.controller.status,status,cached['devices']))
+    return dict(schema=1, values=values,
         controllers=deepcopy(household.controller.status), cached=deepcopy(cached), repairs=deepcopy(repairs),
-        battery=battery.snapshot(), battery_live_inputs=household.battery_live_inputs.snapshot(),
+        battery=status, battery_live_inputs=household.battery_live_inputs.snapshot(),
         battery_writer=household.battery_writer.snapshot(),
         diagnostics={'network_traffic':household.client.traffic.snapshot(),
             'controller_metrics':household.controller.metrics.snapshot(),

@@ -137,7 +137,8 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
 
             from types import SimpleNamespace
             self.assertIsNone(dashboard.payload()['recovery'])
-            engine=dashboard.engine=SimpleNamespace(started=False,battery=None)
+            engine=dashboard.engine=SimpleNamespace(started=False,battery=None,identity=None,household=None,
+                operational_attention=lambda:[],controller=SimpleNamespace(status={}),cached={'devices':[]})
             dashboard.connection={'state':'recovering','message':'Loading saved settings'}
             self.assertEqual(dashboard.payload()['recovery'],{'processed_receipt':None})
             engine.battery=SimpleNamespace(_processing={'receipt':42,'complete':False})
@@ -149,4 +150,6 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(dashboard.payload()['connection'],dashboard.connection)
             dashboard.connection={'state':'recovering','message':'Loading saved settings'}
             engine.started=True
+            engine.household=SimpleNamespace(operational_status={'state':'disabled'},
+                client=SimpleNamespace(base_url='https://test.smarthomesolutions.se'))
             self.assertIsNone(dashboard.payload()['recovery'])
