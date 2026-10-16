@@ -1718,7 +1718,12 @@ class Household:
             return []
 
         current_catalog = self.supplier_prices
-        if not current_catalog or current_catalog.get("configuration") is None:
+        if current_catalog is None:
+            # Startup history and the periodic cloud refresh run independently.
+            # An empty cache is not evidence that there is nothing to price.
+            current_catalog = await self.client.prices()
+            validate_supplier_prices(current_catalog)
+        if current_catalog.get("configuration") is None:
             return []
         terms_valid_from = current_catalog.get("terms_valid_from")
         if not isinstance(terms_valid_from, str):

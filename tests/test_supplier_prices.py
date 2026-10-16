@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 
@@ -58,3 +60,28 @@ class SupplierPriceContractTests(unittest.TestCase):
         payload["forecast"][1]["end"] = "2026-08-13T12:35:00+00:00"
         with self.assertRaisesRegex(SupplierPriceError, "gap"):
             validate_supplier_prices(payload)
+
+
+class HistoryStartupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_history_prices_its_readings_before_the_periodic_cache_is_loaded(self):
+        from household_fixture import Rig
+        h = Rig().household
+        start = datetime(2026, 8, 13, 12, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 13, 13, tzinfo=timezone.utc)
+        h._hourly_grid_readings = AsyncMock(return_value=[
+            SimpleNamespace(start=start, import_kwh=2, export_kwh=1)])
+        h.client.prices = AsyncMock(return_value=_payload())
+        result = await h._supplier_daily_costs({}, start, end)
+        self.assertEqual(result, [{'date': '2026-08-13', 'import_kwh': 2,
+            'import_cost_sek': 2.6, 'export_kwh': 1, 'export_credit_sek': 0.8, 'priced_hours': 1}])
+        self.assertEqual(h.client.prices.await_args_list[0].args, ())
+        self.assertEqual(h.client.prices.await_args_list[1].args, ('2026-08-13', '2026-08-13'))
+
+    async def test_startup_price_download_failure_is_not_successful_empty_history(self):
+        from household_fixture import Rig
+        from shs_core.api import ShsApiError
+        h = Rig().household
+        h._hourly_grid_readings = AsyncMock(return_value=[object()])
+        h.client.prices = AsyncMock(side_effect=ShsApiError('price lookup failed'))
+        with self.assertRaisesRegex(ShsApiError, 'price lookup failed'):
+            await h._supplier_daily_costs({}, h.ports.utcnow(), h.ports.utcnow())
