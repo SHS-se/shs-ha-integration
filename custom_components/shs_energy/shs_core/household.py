@@ -3050,6 +3050,7 @@ class Household:
             else None
         )
         if returned_plan:
+            self._pipeline_error('delivery', None)
             runtime=getattr(self,"battery_runtime",None) if self.control_authority else None
             try:
                 validate_plan_contract(returned_plan, self.ports.utcnow())

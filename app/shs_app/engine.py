@@ -628,13 +628,19 @@ class AppEngine:
         while True:
             now = self.household.local_now()
             quarter = (now.date(),now.hour,now.minute//15,now.fold)
-            if quarter != last_quarter:
+            new_quarter = quarter != last_quarter
+            if new_quarter:
                 for h in self.households.values():
                     await h.async_price_refresh()
                 last_quarter = quarter
-            if last_day != now.date() and (now.hour,now.minute) >= (PUSH_TIME_HOUR,PUSH_TIME_MINUTE):
+            daily_due = last_day != now.date() and (now.hour,now.minute) >= (PUSH_TIME_HOUR,PUSH_TIME_MINUTE)
+            history = [(env,h) for env,h in self.households.items() if daily_due or (
+                new_quarter and any(item.get('stage') in ('history_pricing','history_upload')
+                                    for item in h.attention_items))]
+            if history:
                 with self.profiler.measure('history_upload'):
-                    await asyncio.gather(*(self.cloud_job(env,h.async_scheduled_push,stage='history_upload') for env,h in self.households.items()))
+                    await asyncio.gather(*(self.cloud_job(env,h.async_scheduled_push,stage='history_upload') for env,h in history))
+            if daily_due:
                 last_day = now.date()
             await asyncio.sleep(5)
 

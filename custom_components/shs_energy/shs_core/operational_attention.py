@@ -22,7 +22,7 @@ STAGES = {
     'replan_request': ('The requested replan could not be completed', 'Inspect the reported failure. SHS retries the request automatically.'),
     'failure_report': ('The planning failure could not be reported', 'Check the server connection. The website has not received the failure reason.'),
     'history_upload': ('Energy history could not be sent', 'Check the server connection. SHS retries the history upload.'),
-    'history_pricing': ('Energy history could not be priced', 'Inspect the reported price source. SHS retries this calculation.'),
+    'history_pricing': ('Energy history could not be priced', 'Inspect the reported price source. SHS retries this calculation at the next quarter-hour exchange.'),
     'background': ('An app operation failed', 'Inspect the failure below. Download app logs if it persists.'),
     'projection': ('Home Assistant status could not be updated', 'Check the Home Assistant connection. Its displayed controller status may be out of date.'),
 }
@@ -30,6 +30,8 @@ STAGES = {
 
 def pipeline_issue(stage, detail, *, fix=None, key=None):
     title, next_step = STAGES[stage]
+    if stage == 'delivery' and getattr(detail, 'code', None) == 'planning_job_not_found':
+        next_step = 'The server no longer has this job. Request a new plan. Devices hold the last settings SHS sent.'
     return dict(key='pipeline:'+(key or stage), stage=stage, severity='error', title=title,
                 detail=str(detail), next_step=next_step, fix=deepcopy(fix or {'kind':'diagnostics'}))
 

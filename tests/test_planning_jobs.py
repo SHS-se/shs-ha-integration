@@ -365,6 +365,23 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.h.optimisation_plan, self.plan)
         self.assertNotIn('optimisation_pending_job', self.rig.records.saved)
         self.assertIn('no longer available', self.h.last_optimisation_error)
+        notice = self.failures()['pipeline:delivery']
+        self.assertIn('Request a new plan', notice['next_step'])
+        self.assertNotIn('retries delivery', notice['next_step'])
+
+    async def test_fresh_inline_plan_clears_missing_job_notice_but_telemetry_does_not(self):
+        pending = await self.accept()
+        self.h.client.planning_status.side_effect = ShsApiError('job missing', code='planning_job_not_found')
+        await self.h._poll_planning_job(pending)
+        self.h.client.push_optimisation.return_value = {}
+        self.h._price_quarters = lambda *args: [{'start': self.rig.now.isoformat()}]
+        await self.h.async_optimisation_push()
+        self.assertIn('pipeline:delivery', self.failures())
+        self.assertEqual(self.h.optimisation_plan, self.plan)
+        self.h.client.push_optimisation.return_value = self.published('replacement')
+        await self.h.async_optimisation_push(force_plan=True, replan_request_id='replacement')
+        self.assertNotIn('pipeline:delivery', self.failures())
+        self.assertEqual(self.h.optimisation_plan, self.candidate)
 
     async def test_configuration_changed_during_solve_accepts_candidate(self):
         pending = await self.accept()
