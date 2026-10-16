@@ -341,6 +341,23 @@ Locally assigned request generations identify superseded work. A response for a
 superseded generation MUST NOT displace a newer accepted plan; source timestamps
 are not used to decide that ordering. Repeated delivery of the same accepted
 contract is idempotent, including its objective dispositions.
+
+User requirement, 16 October 2026: a solve or delivery that crosses an objective's
+deadline must not discard the remaining battery instructions. Keep the offered
+contract and objective versions in the audit, but freeze an expired objective's
+effective target at its last accepted value. Recalculate its measured outcome only
+from actual-energy evidence and corrections, never from a late proposed target.
+The tuple account, pending indexed deltas, persisted catalog and historical reads
+must all produce the same effective target and outcome after restart. The new
+reference applies at its actual acceptance instant; elapsed instructions are not
+replayed and physical actuals are not rebased.
+
+The final battery send guard follows the execution account's accepted contract.
+A different household candidate, including one refused only for the battery,
+does not invalidate that contract's still-current commands. Current mode,
+exclusions, overrides, writer grant, correlated request, measurements, equipment
+limits and contract validity continue to govern each send. No release is implied.
+
 An omitted disposition cannot clear an outstanding outcome: retain it as unresolved
 and request a corrected handover. Do not guess that a new target incorporated it.
 

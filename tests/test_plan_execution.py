@@ -38,6 +38,22 @@ def opening_account(plan=None, energy=5_000_000):
     return admit_plan(account, plan or contract(), 0, StateObservation(0, energy, "SOC"))
 
 
+def delayed_replacement(account, target=5_300_000):
+    """A solve retains the expiring objective and adds usable future work."""
+    old = account.contract
+    tail = replace(old.intervals[-1], start_ms=QUARTER, end_ms=2 * QUARTER,
+                   stored_start_mwh=old.intervals[-1].stored_end_mwh,
+                   stored_end_mwh=old.intervals[-1].stored_end_mwh + 500_000)
+    return replace(old, id='delayed-replacement', plan_id='delayed-replacement',
+        generation=account.requested_generation, previous_contract_id=old.id,
+        source_receipt=account.requests[-1].source_receipt, valid_until_ms=2 * QUARTER,
+        intervals=(*old.intervals, tail),
+        objectives=(replace(old.objectives[0], target_mwh=target),
+                    Objective('next-window', 'stored_energy', QUARTER, 2 * QUARTER,
+                              tail.stored_end_mwh, 'Future charging')),
+        dispositions=(Disposition(old.objectives[0].id, 'retained', None, 'Revised target'),))
+
+
 class ContractTests(unittest.TestCase):
     def test_real_server_fixture_is_read_without_field_translation(self):
         import json
@@ -229,6 +245,32 @@ class AccountTests(unittest.TestCase):
         row = objective_history(account, QUARTER)[0]
         self.assertEqual(row["outcome"], "fulfilled")
         self.assertEqual([v["objective"]["target_mwh"] for v in row["versions"]], [5_500_000, 5_300_000])
+
+    def test_deadline_crossing_accepts_future_work_without_rewriting_expired_accounting(self):
+        for arrival in (QUARTER, QUARTER + 14_000):
+            with self.subTest(arrival=arrival):
+                account = opening_account()
+                account = meter(account, 'charge', QUARTER, 400_000)
+                account = meter(account, 'discharge', QUARTER, 0)
+                account = observe_state(account, StateObservation(QUARTER, 5_400_000, 'SOC'))
+                before = objective_history(account, QUARTER)[0]
+                past_balance = balance(account, QUARTER)
+                account = request_replan(account)
+                offered = delayed_replacement(account)
+                previous = account
+                account = admit_plan(account, offered, arrival, StateObservation(arrival, 5_400_000, 'SOC'))
+                self.assertEqual(account.contract, offered)
+                self.assertEqual(account.meters, previous.meters)
+                row = objective_history(account, arrival)[0]
+                self.assertEqual(row['objective'], before['objective'])
+                self.assertEqual((row['outcome'], row['shortfall_mwh']), ('missed', 100_000))
+                self.assertEqual(balance(account, QUARTER), past_balance)
+                self.assertEqual([v['objective']['target_mwh'] for v in row['versions']], [5_500_000, 5_300_000])
+                self.assertEqual(admit_plan(account, offered, arrival, account.observed), account)
+                corrected = meter(account, 'charge', QUARTER, 405_000)
+                corrected = observe_state(corrected, StateObservation(QUARTER, 5_405_000, 'corrected SOC'))
+                self.assertEqual(objective_history(corrected, arrival)[0]['shortfall_mwh'], 95_000)
+                self.assertEqual(meter(corrected, 'charge', QUARTER, 405_000), corrected)
 
     def test_missing_disposition_retains_prior_outcome(self):
         account = request_replan(opening_account())

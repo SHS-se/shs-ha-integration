@@ -662,7 +662,7 @@ def admit_plan(account, contract, at_ms, observation):
     amendment = contract.stored_at(at_ms) - previous
     # Omitted dispositions never erase an outcome; objective_history retains it.
     old_objectives = (account._evidence.objective_catalog() if '_evidence' in account.__dict__
-                      else {o.id:o for a in account.admissions for o in a.contract.objectives})
+                      else _objective_catalog(account, at_ms)[0])
     history_ids = old_objectives.keys()
     if any(d.objective_id not in history_ids for d in contract.dispositions):
         raise ValueError("disposition names an unknown prior objective")
@@ -671,9 +671,7 @@ def admit_plan(account, contract, at_ms, observation):
             prior = old_objectives.get(objective.id)
             if prior and (prior.kind, prior.deadline_ms) != (objective.kind, objective.deadline_ms):
                 raise ValueError("stable objective identity cannot move its original deadline")
-            if prior and prior.target_mwh != objective.target_mwh:
-                if at_ms >= prior.deadline_ms:
-                    raise ValueError("a planner amendment cannot rewrite a past deadline target")
+            if prior and prior.target_mwh != objective.target_mwh and at_ms < prior.deadline_ms:
                 if not any(d.objective_id == objective.id and d.outcome == "retained" for d in contract.dispositions):
                     raise ValueError("changed objective target needs an explicit retained amendment")
     number = account.receipt + 1
@@ -746,6 +744,19 @@ def _objective_outcome(account, objective, closed_at_ms, at_ms, observed):
     return result
 
 
+def effective_objective(previous, offered, admitted_at_ms):
+    """Keep expired targets authoritative while retaining the offered contract.
+
+    Generation and delivery can cross an objective's deadline. Its proposed
+    amendment stays in the audit, but cannot revise the target already owed.
+    This does not prevent accepting the reference's remaining instructions.
+    """
+    if (previous is not None and admitted_at_ms >= previous.deadline_ms
+            and previous.target_mwh != offered.target_mwh):
+        return previous
+    return offered
+
+
 def objective_history(account, at_ms):
     """Planner dispositions and measured outcomes remain distinct and replayable."""
     if '_evidence' in account.__dict__:
@@ -761,8 +772,9 @@ def objective_history(account, at_ms):
                 row = records[objective.id] = {"objective": version, "origin_contract_id": admission.contract.id,
                                                "versions": [], "dispositions": []}
             row["versions"].append({"objective": version, "contract_id": admission.contract.id, "at_ms": admission.at_ms})
-            row["objective"] = version
-            latest[objective.id] = objective
+            effective = effective_objective(latest.get(objective.id), objective, admission.at_ms)
+            row["objective"] = asdict(effective)
+            latest[objective.id] = effective
         for disposition in admission.contract.dispositions:
             records[disposition.objective_id]["dispositions"].append({**asdict(disposition),
                 "contract_id": admission.contract.id, "at_ms": admission.at_ms})
@@ -804,7 +816,7 @@ def _objective_catalog(account, at_ms):
         if admission.at_ms > at_ms:
             continue
         for objective in admission.contract.objectives:
-            latest[objective.id] = objective
+            latest[objective.id] = effective_objective(latest.get(objective.id), objective, admission.at_ms)
         for disposition in admission.contract.dispositions:
             if disposition.objective_id not in latest:
                 raise KeyError(disposition.objective_id)

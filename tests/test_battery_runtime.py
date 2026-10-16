@@ -735,8 +735,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await r.start()
         try:
             self.assertTrue(captured)
-            r.plan['battery_execution']['id']='superseding-plan'
-            self.assertFalse(r.runtime._can_send(captured[0]))
+            r.plan['battery_execution']['id']='unaccepted-candidate'
+            self.assertTrue(r.runtime._can_send(captured[0]))
             r.plan['battery_execution']['id']='c0'
             r.runtime._closing=True
             self.assertFalse(r.runtime._can_send(captured[0]))
@@ -919,6 +919,57 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(r.runtime.host.state.execution.account.contract,original)
             self.assertEqual(r.runtime.snapshot()['state'],'controlling',r.runtime.snapshot())
             self.assertEqual(r.plan['battery_execution']['id'],original.id)
+        finally:await r.runtime.close()
+
+    async def test_rejected_household_candidate_does_not_block_accepted_battery_commands(self):
+        r=Rig();await r.start()
+        try:
+            original=r.runtime.host.state.execution.account.contract
+            captured=await r.runtime.capture_feedback(5000000,'snapshot')
+            revised=replace(original,id='rejected-household-candidate',generation=captured['generation'],
+                source_receipt=captured['source_receipt'],previous_contract_id=original.id,
+                objectives=(replace(original.objectives[0],target_mwh=original.objectives[0].target_mwh+100),))
+            r.plan['battery_execution']=contract_wire(revised)
+            await r.advance(1000)
+            self.assertEqual(r.runtime.snapshot()['plan_status'],'rejected')
+            r.calls.clear()
+            r.rows['sensor.house']['state']='9900'
+            r.rows['sensor.grid']['state']='9900'
+            for _ in range(4):await r.advance(1000)
+            self.assertEqual(r.runtime.host.state.execution.account.contract,original)
+            self.assertTrue(r.calls,r.runtime.snapshot())
+            self.assertFalse(any('Write not sent' in fault['reason'] for fault in r.runtime.snapshot()['fault_history']))
+            self.assertEqual(r.runtime.snapshot()['state'],'controlling')
+        finally:await r.runtime.close()
+
+    async def test_plan_arriving_after_charge_deadline_is_admitted_and_executes_future_supply(self):
+        r=Rig();await r.start()
+        try:
+            original=r.runtime.host.state.execution.account.contract
+            captured=await r.runtime.capture_feedback(5000000,'snapshot')
+            last=original.intervals[-1]
+            supply=ReferenceInterval(last.end_ms,1800000,last.stored_end_mwh,last.stored_end_mwh-500000,
+                'supply_house','demand_following',False,False,4000,4000,True,
+                0,500000,0,500000,0,0,0,0,0)
+            proposed=replace(original,id='late-but-usable',generation=captured['generation'],
+                source_receipt=captured['source_receipt'],previous_contract_id=original.id,valid_until_ms=1800000,
+                intervals=(*original.intervals,supply),
+                objectives=(replace(original.objectives[0],target_mwh=original.objectives[0].target_mwh+100),
+                            Objective('future-supply','demand_following',last.end_ms,1800000,supply.stored_end_mwh,'Supply the house')),
+                dispositions=(Disposition(original.objectives[0].id,'retained',None,'Revised target'),))
+            r.extend_plan()
+            r.plan['battery_execution']=contract_wire(proposed)
+            r.now=last.end_ms+14
+            r.calls.clear()
+            for _ in range(4):await r.advance(1000)
+            account=r.runtime.host.state.execution.account
+            self.assertEqual(account.contract,proposed)
+            self.assertIsNone(r.runtime.snapshot()['plan_rejection'])
+            self.assertEqual(objective_history(account,r.now)[0]['objective']['target_mwh'],original.objectives[0].target_mwh)
+            self.assertTrue(r.calls,r.runtime.snapshot())
+            self.assertEqual(r.rows['select.mode']['state'],'Maximum Self Consumption')
+            self.assertGreater(float(r.rows['number.discharge']['state']),0)
+            self.assertFalse(any('Write not sent' in fault['reason'] for fault in r.runtime.snapshot()['fault_history']))
         finally:await r.runtime.close()
 
     async def test_verified_dump_replays_account_without_commands(self):

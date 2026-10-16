@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.append(str(Path(__file__).parents[2]/'tests'))
-from test_plan_execution import contract,meter,QUARTER
+from test_plan_execution import contract,delayed_replacement,meter,QUARTER
 from test_execution_storage import META,session
 from shs_core import plan_execution as ex
 from shs_core.execution_storage import ExecutionStorage
@@ -30,6 +30,45 @@ class IndexedTests(unittest.IsolatedAsyncioTestCase):
 
     async def save(self,account):
         await self.store.save(META,ExecutionSession(account=account))
+
+    async def test_deadline_crossing_preserves_objective_history_before_and_after_checkpoint_and_restart(self):
+        reference=ex.Account();indexed=self.account
+        for direction in ('charge','discharge'):
+            reference=meter(reference,direction,0,0);indexed=meter(indexed,direction,0,0)
+        reference=ex.admit_plan(reference,contract(),0,ex.StateObservation(0,5000000,'SOC'))
+        indexed=ex.admit_plan(indexed,contract(),0,ex.StateObservation(0,5000000,'SOC'))
+        for direction,total in (('charge',400000),('discharge',0)):
+            reference=meter(reference,direction,QUARTER,total);indexed=meter(indexed,direction,QUARTER,total)
+        await self.save(indexed)
+        retained=indexed
+        reference=ex.request_replan(reference);indexed=ex.request_replan(indexed)
+        offered=delayed_replacement(reference)
+        at=QUARTER+14000
+        reference=ex.admit_plan(reference,offered,at,ex.StateObservation(at,5400000,'SOC'))
+        indexed=ex.admit_plan(indexed,offered,at,ex.StateObservation(at,5400000,'SOC'))
+        def check(account):
+            for time in (QUARTER,at,2*QUARTER):
+                self.assertEqual(ex.feedback(account,time),ex.feedback(reference,time))
+                self.assertEqual(ex.planner_feedback(account,time),ex.planner_feedback(reference,time))
+                self.assertEqual(ex.live_feedback(account,time),ex.live_feedback(reference,time))
+            row=ex.objective_history(account,at)[0]
+            self.assertEqual((row['objective']['target_mwh'],row['shortfall_mwh']),(5500000,100000))
+            self.assertEqual(row['versions'][-1]['objective']['target_mwh'],5300000)
+        check(indexed)
+        await self.save(indexed)
+        check(indexed)
+        reopened=IndexedStorage(self.path,asyncio.to_thread,ObservationMirror())
+        _,restored=await reopened.load()
+        check(restored.account)
+        self.assertEqual(ex.objective_history(retained,at)[0]['objective']['target_mwh'],5500000)
+        self.assertEqual(len(ex.objective_history(retained,at)[0]['versions']),1)
+        for direction,total in (('charge',405000),('discharge',0)):
+            reference=meter(reference,direction,QUARTER,total)
+            indexed=meter(restored.account,direction,QUARTER,total)
+            await reopened.save(META,ExecutionSession(account=indexed))
+            restored=reopened._session
+        self.assertEqual(ex.planner_feedback(restored.account,at),ex.planner_feedback(reference,at))
+        self.assertEqual(ex.objective_history(restored.account,at)[0]['shortfall_mwh'],95000)
 
     async def test_daily_layout_upgrade_preserves_checkpoint_and_interval_bounds(self):
         indexed=self.account;reference=ex.Account()

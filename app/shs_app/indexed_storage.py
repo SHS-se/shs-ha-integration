@@ -71,8 +71,10 @@ def index_admission(db,ordinal,admission):
     for position,objective in enumerate(contract.objectives):
         payload=encode(asdict(objective))
         db.execute('INSERT INTO objective_versions VALUES (?,?,?,?,?,?)',(ordinal,position,objective.id,payload,contract.id,admission.at_ms))
+        previous=db.execute('SELECT payload FROM objective_catalog WHERE id=?',(objective.id,)).fetchone()
+        effective=ex.effective_objective(ex.Objective(**json.loads(previous[0])) if previous else None,objective,admission.at_ms)
         db.execute("INSERT INTO objective_catalog VALUES (?,?,?,?,?,'outstanding',NULL) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-            (objective.id,payload,contract.id,ordinal,position))
+            (objective.id,encode(asdict(effective)),contract.id,ordinal,position))
     for position,disposition in enumerate(contract.dispositions):
         db.execute('INSERT INTO objective_dispositions VALUES (?,?,?,?,?,?)',(ordinal,position,disposition.objective_id,encode(asdict(disposition)),contract.id,admission.at_ms))
         closed=admission.at_ms if disposition.outcome in ('incorporated','retired') else None

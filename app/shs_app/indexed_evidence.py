@@ -331,9 +331,10 @@ class AccountEvidence:
                 rows={}
                 clause='admission<?'+(' AND at_ms<=?' if at_ms is not None else '')
                 parameters=(count,at_ms) if at_ms is not None else (count,)
-                for key,payload in db.execute('SELECT id,payload FROM objective_versions WHERE '+clause+' ORDER BY admission,position',parameters):
+                for key,payload,at in db.execute('SELECT id,payload,at_ms FROM objective_versions WHERE '+clause+' ORDER BY admission,position',parameters):
                     row=rows.setdefault(key,dict(id=key,responsibility='outstanding',closed_at=None))
-                    row['objective']=json.loads(payload)
+                    previous=ex.Objective(**row['objective']) if 'objective' in row else None
+                    row['objective']=asdict(ex.effective_objective(previous,ex.Objective(**json.loads(payload)),at))
                 for key,payload,at in db.execute('SELECT id,payload,at_ms FROM objective_dispositions WHERE '+clause+' ORDER BY admission,position',parameters):
                     row=rows[key];owner=json.loads(payload)['outcome'];row['responsibility']=owner
                     if owner in ('incorporated','retired') and row['closed_at'] is None:row['closed_at']=at
@@ -348,7 +349,8 @@ class AccountEvidence:
                     if at_ms is not None and admission.at_ms>at_ms:continue
                     for objective in admission.contract.objectives:
                         row=mapping.setdefault(objective.id,dict(id=objective.id,responsibility='outstanding',closed_at=None))
-                        row['objective']=asdict(objective)
+                        previous=ex.Objective(**row['objective']) if 'objective' in row else None
+                        row['objective']=asdict(ex.effective_objective(previous,objective,admission.at_ms))
                     for disposition in admission.contract.dispositions:
                         row=mapping[disposition.objective_id];row['responsibility']=disposition.outcome
                         if disposition.outcome in ('incorporated','retired') and row['closed_at'] is None:row['closed_at']=admission.at_ms

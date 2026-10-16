@@ -1055,8 +1055,10 @@ class BatteryRuntime:
                 return False
         plan,slot=self.coordinator.binding_plan_for('battery',options)
         accepted=self.host.state.execution.account.contract
-        wire=plan.get('battery_execution')
-        return bool(slot and accepted and wire and wire['id']==accepted.id
+        # The execution account owns the accepted battery reference. A newer
+        # household plan can be pending or rejected for this battery alone.
+        # Its identity cannot revoke the still-valid accepted commands.
+        return bool(slot and accepted
                     and options==self._options and self.now()<accepted.valid_until_ms)
 
 
