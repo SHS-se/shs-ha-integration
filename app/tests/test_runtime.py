@@ -56,6 +56,12 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
             runtime.host.state = replace(runtime.host.state, groups=tuple(
                 replace(group, grant_confirmed=False) for group in runtime.host.state.groups))
             runtime.physical = SimpleNamespace(enabled=False)
+            # This trace advances its controlled clock by only 180 ms. A real
+            # startup timer must not inject a later wake merely because replay
+            # takes more than a second on a busy CI runner.
+            if runtime.host._wake is not None:
+                self.assertGreater(runtime.host._wake_at, rig.now + 180)
+                runtime.host._wake.cancel()
         writes = [len(rig.store.writes) for rig, runtime in fixtures]
         selects = rt._refresh_execution
         def no_selection(state, now, effects, *, select=True):
