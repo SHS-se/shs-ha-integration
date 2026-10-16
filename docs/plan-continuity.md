@@ -6,10 +6,15 @@ changed. Forecast provenance is not local permission to operate equipment.
 
 ## Retained forecast operation
 
-A failed planner request, missing snapshot inputs, an unusable replacement or a
-rejected battery handover must not displace the last usable plan in Home Assistant.
-Keep its persistent cache and the battery's accepted reference and accounting.
-Requesting a replacement is independent of executing that retained plan.
+A failed planner request, missing snapshot inputs or an unreadable replacement
+must not displace the last usable household plan in Home Assistant. Keep its
+persistent cache. Requesting a replacement is independent of executing that
+retained plan.
+
+User requirement, 16 October 2026: accept usable instructions from partial plans.
+An individual device's unreadable command holds only that device. A rejected
+battery handover keeps the battery's accepted reference and accounting, while the
+household cache can advance with other devices' replacement instructions.
 
 Each device keeps the forecast branch it had when the plan was produced. An
 explicit switch from Verification to Controlling can execute that previously
@@ -27,8 +32,9 @@ errors still enumerate their actual fields and correction actions.
 Current local permissions, exclusions, overrides, equipment bounds, supply
 membership, measurements and command checks continue to apply. A settings change
 reconciles existing command ownership and rebinds the controller to the current
-settings. A forecast is never a grant to bypass these checks. Battery plan updates
-must pass the actual handover validation before replacing the coordinator cache.
+settings. A forecast is never a grant to bypass these checks. Battery references
+must pass actual handover validation before replacing the battery's accepted
+account; this is independent of the coordinator's household plan cache.
 
 ## Remaining gap: no forecast slots
 

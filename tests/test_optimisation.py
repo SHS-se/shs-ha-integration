@@ -538,7 +538,7 @@ class ForecastTests(unittest.TestCase):
         with self.assertRaisesRegex(OptimisationInputError, "not aligned"):
             discrete_current_control(5, 16.5, 1, 3, 230)
 
-    def test_cached_plan_accepts_and_verifies_ev_current_steps(self) -> None:
+    def test_cached_plan_does_not_recalculate_ev_service_workloads(self) -> None:
         now = datetime(2026, 8, 10, 8, 0, tzinfo=timezone.utc)
         currents = [5] * 7 + [6, 6]
         slots = [
@@ -611,15 +611,13 @@ class ForecastTests(unittest.TestCase):
         plan["mode"] = "live"
 
         plan["plans"]["priority"]["slots"][0]["ev_max_current_a"] = 17
-        with self.assertRaisesRegex(OptimisationInputError, "charger capability"):
-            validate_plan_contract(plan, now)
+        validate_plan_contract(plan, now)
         plan["plans"]["priority"]["slots"][0]["ev_max_current_a"] = 16
 
         plan["plans"]["priority"]["service_currents_a"]["ev:departure"][0] = 5.5
-        with self.assertRaisesRegex(OptimisationInputError, "current step"):
-            validate_plan_contract(plan, now)
+        validate_plan_contract(plan, now)
 
-    def test_cached_plan_requires_matching_contiguous_scenarios(self) -> None:
+    def test_comparison_scenario_timing_does_not_block_selected_schedule(self) -> None:
         now = datetime(2026, 8, 10, 8, 0, tzinfo=timezone.utc)
         slots = [
             {
@@ -673,10 +671,9 @@ class ForecastTests(unittest.TestCase):
         plan["plans"]["cost"]["slots"][2]["start"] = (
             now + timedelta(minutes=60)
         ).isoformat()
-        with self.assertRaisesRegex(OptimisationInputError, "not contiguous"):
-            validate_plan_contract(plan, now)
+        validate_plan_contract(plan, now)
 
-    def test_cached_plan_binding_flags_must_match_the_boundary(self) -> None:
+    def test_per_slot_advisory_metadata_does_not_block_selected_schedule(self) -> None:
         now = datetime(2026, 8, 10, 8, 0, tzinfo=timezone.utc)
         slots = [
             {
@@ -728,10 +725,9 @@ class ForecastTests(unittest.TestCase):
         validate_plan_contract(plan, now)
 
         plan["plans"]["priority"]["slots"][2]["binding"] = True
-        with self.assertRaisesRegex(OptimisationInputError, "different binding"):
-            validate_plan_contract(plan, now)
+        validate_plan_contract(plan, now)
 
-    def test_cached_plan_rejects_expected_boiler_draw_while_inhibited(self) -> None:
+    def test_boiler_forecast_does_not_override_explicit_permission(self) -> None:
         now = datetime(2026, 8, 10, 8, 0, tzinfo=timezone.utc)
         slots = [
             {
@@ -804,8 +800,7 @@ class ForecastTests(unittest.TestCase):
 
         plan["plans"]["priority"]["slots"][0]["boiler_permitted"] = False
         plan["plans"]["priority"]["service_inhibited_slots"]["boiler:today"] = [0]
-        with self.assertRaisesRegex(OptimisationInputError, "draws power while inhibited"):
-            validate_plan_contract(plan, now)
+        validate_plan_contract(plan, now)
 
 
 if __name__ == "__main__":
@@ -905,7 +900,7 @@ class ModelVersionToleranceTests(unittest.TestCase):
         self.assertIsNone(fixture["plan"]["services"][0]["control"]["rated_power_w"])
         self.assertTrue(any(slot["boiler_permitted"] for slot in fixture["plan"]["plans"]["priority"]["slots"]))
 
-    def test_real_schema8_battery_contract_and_corrupt_commands(self):
+    def test_bad_battery_slot_commands_do_not_reject_household_instructions(self):
         fixture = json.loads((Path(__file__).parent / 'fixtures/schema-8-battery-plan.json').read_text())
         now = datetime.fromisoformat(fixture['validation_time'].replace('Z', '+00:00'))
         validate_plan_contract(fixture['plan'], now)
@@ -915,8 +910,7 @@ class ModelVersionToleranceTests(unittest.TestCase):
                          {**original, 'charge_limit_w': -1}, {**original, 'operation': 'guess'},
                          {**original, 'schema_version': True}, {**original, 'schema_version': 1}):
             slot['battery_command'] = mutation
-            with self.assertRaises(OptimisationInputError):
-                validate_plan_contract(fixture['plan'], now)
+            validate_plan_contract(fixture['plan'], now)
 
     def test_any_planner_name_is_executable_on_a_known_contract(self) -> None:
         now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
@@ -965,23 +959,18 @@ class ModelVersionToleranceTests(unittest.TestCase):
 
         validate_plan_contract(plan, now)
 
-    def test_a_dispatched_scenario_still_declares_its_devices(self) -> None:
+    def test_dispatch_descriptions_do_not_gate_execution(self) -> None:
         now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
         plan = self._plan(schema_version=6)
         for scenario in plan["plans"].values():
             scenario["dispatched_devices"] = "pool"
 
-        with self.assertRaises(OptimisationInputError):
-            validate_plan_contract(plan, now)
+        validate_plan_contract(plan, now)
 
-    def test_dispatched_ev_envelope_is_checked_against_its_zero_work_service(
+    def test_comparison_ev_envelope_does_not_gate_selected_commands(
         self,
     ) -> None:
-        """Regression for the plan refused on 2026-08-20.
-
-        Marginal dispatch owns EV power even after departure work reaches zero;
-        the empty service schedule still carries the physical charger bounds.
-        """
+        """Equipment bounds are checked locally when the selected command executes."""
         now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
         issued = datetime(2026, 8, 16, 12, 0, tzinfo=timezone.utc)
         plan = self._plan(
@@ -1024,14 +1013,12 @@ class ModelVersionToleranceTests(unittest.TestCase):
         validate_plan_contract(plan, now)
 
         plan["plans"]["baseline"]["slots"][0]["ev_max_current_a"] = 17
-        with self.assertRaisesRegex(OptimisationInputError, "charger capability"):
-            validate_plan_contract(plan, now)
+        validate_plan_contract(plan, now)
 
     def test_an_unreadable_contract_is_still_refused(self) -> None:
         now = datetime(2026, 8, 16, 12, 5, tzinfo=timezone.utc)
         for field, value in (
-            # 7 is beyond this build; 5 and 6 are both readable.
-            ("schema_version", 7),
+            ("schema_version", 999),
             ("slot_minutes", 60),
             ("mode", "shadow"),
         ):

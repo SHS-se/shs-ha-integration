@@ -5,7 +5,7 @@ import re
 from .optimisation import validate_plan_contract, OptimisationInputError
 from .configuration_fields import _configuration_sections, _control_fields, LABELS
 from .device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_control_errors
-from .device_commands import execution_setup_errors
+from .device_commands import execution_setup_errors, slot_command
 from .hot_water import is_hot_water, hot_water_setup_errors
 
 
@@ -36,14 +36,14 @@ def operational_status(plan, mode, missing, now, *, options=None, validate=valid
             scope_changed = False
             if options is not None:
                 from .operating_modes import operating_mode_identity
-                modes = operating_mode_identity(options, plan.get("operating_scope", {}).get("device_owners", {}).values())
+                modes = operating_mode_identity(options, plan.get("operating_scope", {}).get("modes", {}))
                 scope_changed = plan.get("operating_scope", {}).get("modes") != modes
                 if "controlling" in plan.get("operating_scope", {}).get("modes", {}).values():
                     selected = plan["execution_plan"]
             if now >= valid_until:
                 result.update(state="expired", reason="The last plan has expired")
-            elif selected["status"] != "ready":
-                result.update(state=selected["status"], reason=LABELS[selected["status"]])
+            elif selected.get("status") != "ready":
+                result.update(state="ready", reason="Using available device instructions from a partial plan", actionable=True)
             elif scope_changed:
                 result.update(state="ready", reason="Using the retained schedule; operating modes changed, so a manual replan is recommended", actionable=True)
             elif now >= datetime.fromisoformat(plan["binding_until"]):
@@ -61,9 +61,10 @@ def timeline(plan, status, *, command_preview=None, options=None):
     if status["state"] not in {"ready", "advisory_only"}:
         return {"capabilities": {}, "slots": [], "reason": status["reason"]}
     execution = timeline(plan["execution_plan"], status, command_preview=command_preview, options=options) if plan.get("execution_plan") else None
+    execution_slots = {slot["start"]: slot for slot in execution["slots"]} if execution else {}
     return {"capabilities": deepcopy(plan.get("capabilities", {})), "slots": [
-        {"start": slot["start"], "binding": slot["binding"],
-         **({"execution": {**execution["slots"][i], "capabilities": execution["capabilities"]},
+        {"start": slot["start"], "binding": slot.get("binding"),
+         **({"execution": {**execution_slots.get(slot["start"], {}), "capabilities": execution["capabilities"]},
              "execution_owners": [owner for owner, mode in plan["operating_scope"]["modes"].items() if mode == "controlling"]} if execution else {}),
          "commands": deepcopy(slot.get("device_commands", {})),
          "battery_command": deepcopy(slot.get("battery_command")),
@@ -72,7 +73,7 @@ def timeline(plan, status, *, command_preview=None, options=None):
          # published price where one exists, otherwise the server's estimate.
          **{key: slot.get(key) for key in ("duration_hours", "load_w", "battery_charge_w", "battery_discharge_w", "ev_target_current_a", "pool_w",
                                            "shadow_import_sek_per_kwh", "shadow_export_sek_per_kwh")}}
-        for i, slot in enumerate(plan["plans"]["priority"]["slots"])
+        for slot in plan["plans"]["priority"]["slots"]
     ], "reason": None}
 
 
@@ -206,7 +207,11 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         device["execution_status"] = execution_view(mode, controllers.get(controller_id))
         device["optimisation_included"] = planned
         device["mapping_readiness"] = {"state": device.get("mapping_status"), "reason": device.get("mapping_error")}
-        command = (active or {}).get("device_commands", {}).get(key)
+        try:
+            command = slot_command(active or {}, key)
+            command_error = None
+        except ValueError as error:
+            command, command_error = None, str(error)
         if not status["actionable"]:
             planning_reason = status["reason"]
         elif system or member:
@@ -216,7 +221,7 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
                                else "Left out of the current plan: " + " ".join(left_out) if left_out
                                else "Waiting for a plan for this device")
         else:
-            planning_reason = command.get("reason") if command and command.get("type") == "unavailable" else None if command else "Waiting for instructions for this device"
+            planning_reason = (command_error or (command.get("reason") if command.get("type") == "unavailable" else None))
         device["planning_support"] = {"state": "available" if planning_reason is None else "unavailable",
                                       "reason": planning_reason, "path": system or member or "device_commands"}
         device["execution_reason"] = planning_reason
@@ -309,20 +314,23 @@ def controller_explanation(device, mode, status, slot=None):
     if status.get('measured_power_w') is not None:
         parts.append(f"This device is using {status['measured_power_w']/1000:.2f} kW.")
     planned = None
-    if slot:
-        if device == 'ev' and 'ev_target_current_a' in slot:
-            current = slot['ev_target_current_a']
-            planned = f'The plan requests charging at {current:g} A.' if current else 'The plan requests no car charging now.'
-        elif device == 'pool' and 'pool_w' in slot:
-            planned = 'The plan requests pool heating now.' if slot['pool_w'] > 0 else 'The plan requests no pool heating now.'
-        else:
-            command = slot.get('device_commands', {}).get(device.removeprefix('device:'), {})
-            kind = command.get('type')
-            if kind == 'setpoint': planned = f"The plan requests a temperature of {command['target_c']:g} °C."
-            elif kind == 'switch_schedule': planned = 'The plan requests this device to be on.' if command['on_seconds'] else 'The plan requests this device to be off.'
-            elif kind == 'permit_inhibit': planned = 'The plan allows this device to run.' if command['permitted'] else 'The plan requests a pause.'
-            elif kind == 'variable_power': planned = f"The plan requests {command['value']:g} {command['unit']}."
-            elif kind == 'unavailable': planned = command.get('reason')
+    try:
+        if slot:
+            if device == 'ev' and 'ev_target_current_a' in slot:
+                current = slot['ev_target_current_a']
+                planned = f'The plan requests charging at {current:g} A.' if current else 'The plan requests no car charging now.'
+            elif device == 'pool' and 'pool_w' in slot:
+                planned = 'The plan requests pool heating now.' if slot['pool_w'] > 0 else 'The plan requests no pool heating now.'
+            else:
+                command = slot_command(slot, device.removeprefix('device:'))
+                kind = command.get('type')
+                if kind == 'setpoint': planned = f"The plan requests a temperature of {command['target_c']:g} °C."
+                elif kind == 'switch_schedule': planned = 'The plan requests this device to be on.' if command['on_seconds'] else 'The plan requests this device to be off.'
+                elif kind == 'permit_inhibit': planned = 'The plan allows this device to run.' if command['permitted'] else 'The plan requests a pause.'
+                elif kind == 'variable_power': planned = f"The plan requests {command['value']:g} {command['unit']}."
+                elif kind == 'unavailable': planned = command.get('reason')
+    except (KeyError, TypeError, ValueError) as error:
+        planned = f"The device's plan command is unreadable: {error}"
     if status.get('decision', {}).get('finishing_heating'):
         planned = 'Finishing heating: the scheduled pause waits until heater power falls below 500 W.'
     parts.append(planned or 'Waiting for a current plan for this device.')

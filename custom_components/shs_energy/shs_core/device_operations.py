@@ -17,7 +17,7 @@ from .operating_modes import device_mode, EXECUTING_MODES
 from .verification import OPERATIONS, operation_name, evaluation_record, observation
 from .controller_metrics import ControllerMetrics, fingerprint, record_time
 from .battery_commands import validate_battery_command, battery_mode_key
-from .device_commands import actuator_targets, execution_setup_errors, validate_commands
+from .device_commands import actuator_targets, execution_setup_errors, slot_command
 from .hot_water import is_hot_water, heating_permission, hot_water_setup_errors, HotWaterConfigurationError
 from .device_controls import pool_control_errors, pool_control_mapping, planning_path
 from .device_controls import pool_requested_w, pool_permission
@@ -480,8 +480,7 @@ class DeviceOperations:
         mapping = options["device_control_mappings"][key]
         selected, _ = self.binding_execution_plan(device, options)
         models = selected["device_models"]
-        validate_commands(slot["device_commands"], models)
-        command = slot["device_commands"][key]
+        command = slot_command(slot, key)
         if command["type"] == "unavailable":
             # A plan that cannot drive the device releases nothing; only the select does.
             return {"state": "unsupported", "reason": self.holding(device, command["reason"])}

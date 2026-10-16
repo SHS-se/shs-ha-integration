@@ -133,12 +133,12 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         stored=await self.h._store.async_load()
         bad=deepcopy(self.candidate);bad['schema_version']=-1
         self.h._sync_plan_refused_issue=MethodType(type(self.h)._sync_plan_refused_issue,self.h)
-        await self.h._accept_returned_plan(stored,bad,configuration_changed=False)
+        await self.h._accept_returned_plan(stored,bad)
         key=next(item['key'] for item in self.h.attention_items if item['title']=='The latest plan was refused')
-        await self.h._accept_returned_plan(stored,None,configuration_changed=False)
+        await self.h._accept_returned_plan(stored,None)
         self.assertIn(key,self.failures())
         self.assertEqual(self.h.optimisation_plan,self.plan)
-        await self.h._accept_returned_plan(stored,self.candidate,configuration_changed=False)
+        await self.h._accept_returned_plan(stored,self.candidate)
         self.assertNotIn(key,self.failures())
 
     async def test_acceptance_advances_watermarks_and_returns_before_delivery(self):
@@ -366,15 +366,29 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('optimisation_pending_job', self.rig.records.saved)
         self.assertIn('no longer available', self.h.last_optimisation_error)
 
-    async def test_configuration_changed_during_solve_rejects_candidate_and_retains_plan(self):
+    async def test_configuration_changed_during_solve_accepts_candidate(self):
         pending = await self.accept()
         self.rig.options['another_setting'] = True
         self.h.client.planning_status.return_value = self.published()
         await self.h._poll_planning_job(pending)
-        self.assertEqual(self.h.optimisation_plan, self.plan)
+        self.assertEqual(self.h.optimisation_plan, self.candidate)
         ack = self.h.client.acknowledge_optimisation_plan.call_args.args
-        self.assertEqual(ack[1], 'rejected')
-        self.assertEqual(ack[2]['code'], 'local_configuration_changed')
+        self.assertEqual(ack[1], 'accepted')
+        self.assertIsNone(ack[2])
+
+    async def test_published_plan_survives_configuration_confirmation_failure(self):
+        self.h._record_device_exchange.side_effect = ShsApiError('configuration unavailable')
+        self.h.client.push_optimisation.return_value = self.published()
+        await self.h.async_optimisation_push(force_plan=True)
+        self.assertEqual(self.h.optimisation_plan, self.candidate)
+        self.assertIn('pipeline:configuration', self.failures())
+        self.assertNotIn('pipeline:acceptance', self.failures())
+        self.assertEqual(self.h.client.acknowledge_optimisation_plan.call_args.args[1], 'accepted')
+        self.h._record_device_exchange.side_effect = None
+        self.h._price_quarters = lambda *args: [{'start': self.rig.now.isoformat()}]
+        self.h.client.push_optimisation.return_value = {}
+        await self.h.async_optimisation_push()
+        self.assertNotIn('pipeline:configuration', self.failures())
 
     async def test_older_local_poll_cannot_install_after_new_acceptance(self):
         pending = await self.accept()
@@ -396,5 +410,5 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         pending = (await self.h._store.async_read())['optimisation_pending_job']
         self.h.client.planning_status.return_value = self.published()
         await self.h._poll_planning_job(pending)
-        self.assertEqual(self.h.optimisation_plan, self.plan)
-        self.assertEqual(self.h.client.acknowledge_optimisation_plan.call_args.args[1], 'rejected')
+        self.assertEqual(self.h.optimisation_plan, self.candidate)
+        self.assertEqual(self.h.client.acknowledge_optimisation_plan.call_args.args[1], 'accepted')

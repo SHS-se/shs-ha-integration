@@ -22,7 +22,7 @@ def validate_commands(commands, models):
         elif kind == 'setpoint':
             valid = (set(command) == {'type', 'target_c', 'minimum_c', 'maximum_c'}
                 and all(numeric(command.get(k)) for k in ('target_c', 'minimum_c', 'maximum_c'))
-                and 5 <= command['minimum_c'] <= command['target_c'] <= command['maximum_c'] <= 35)
+                and command['minimum_c'] <= command['target_c'] <= command['maximum_c'])
         elif kind == 'permit_inhibit':
             valid = set(command) == {'type', 'permitted'} and isinstance(command['permitted'], bool)
         elif kind == 'switch_schedule':
@@ -30,11 +30,20 @@ def validate_commands(commands, models):
             # forecasts require a discrete optimiser, not local PWM inference.
             valid = set(command) == {'type', 'on_seconds'} and numeric(command.get('on_seconds')) and command['on_seconds'] in (0, 900)
         elif kind == 'variable_power':
-            valid = set(command) == {'type', 'value', 'unit'} and numeric(command.get('value')) and 0 <= command['value'] <= 100 and command.get('unit') == 'A'
+            valid = set(command) == {'type', 'value', 'unit'} and numeric(command.get('value')) and command['value'] >= 0 and command.get('unit') == 'A'
         else:
             valid = False
         if not valid:
             raise ValueError(f'{key}: invalid {kind} device command')
+
+
+def slot_command(slot, key):
+    """Read one command; errors in another device cannot affect this reader."""
+    commands = slot.get('device_commands')
+    command = commands.get(key) if isinstance(commands, dict) else None
+    kind = command.get('type') if isinstance(command, dict) else None
+    validate_commands({key: command}, [{'key': key, 'control_type': kind}])
+    return command
 
 
 def actuator_targets(mapping):
@@ -68,7 +77,7 @@ def execution_setup_errors(mapping, contract=None):
         return ['choose the switch or temperature control SHS should use']
     if kind == 'setpoint':
         low, high = mapping.get('minimum_temperature_c'), mapping.get('maximum_temperature_c')
-        if not numeric(low) or not numeric(high) or not 5 <= low < high <= 35:
+        if not numeric(low) or not numeric(high) or not low < high:
             return ['reviewed minimum and maximum temperatures are required']
         if mapping.get('companion_actuator_entity_ids') or any(mapping.get(k) for k in ('permit_entity_id', 'mode_entity_id', 'offset_entity_id')):
             return ['this combination of temperature controls is not supported yet']

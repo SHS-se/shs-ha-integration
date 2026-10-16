@@ -180,8 +180,24 @@ class PresentationTests(unittest.TestCase):
         self.assertNotIn('temperature_entity_id', {f['key'] for f in view['fields']})
         self.assertEqual(heater['fields'][0]['label'], 'Room temperature')
 
-    def test_invalid_cached_ready_plan_never_exposes_timeline(self):
-        self.plan['plans']['priority']['slots'][0]['device_commands'] = {}
+    def test_unreadable_device_command_is_visible_and_corrected_command_restores_support(self):
+        key = self.device['key']
+        slot = self.plan['plans']['priority']['slots'][0]
+        for command in (None, [], {'type':'setpoint', 'target_c':'bad'}):
+            with self.subTest(command=command):
+                slot['device_commands'] = {key:command}
+                self.assertTrue(operational_status(self.plan, 'live', [], self.now)['actionable'])
+                view = self.view()[0]
+                self.assertEqual(view['planning_support']['state'], 'unavailable')
+                self.assertIn('invalid', view['planning_support']['reason'])
+                text = controller_explanation('device:'+key, 'controlling', {'state':'fault'}, slot)
+                self.assertIn('unreadable', text['explanation'])
+        slot['device_commands'][key] = {'type':'setpoint', 'target_c':21, 'minimum_c':18, 'maximum_c':24}
+        self.assertEqual(self.view()[0]['planning_support']['state'], 'available')
+        self.assertIsNone(self.view()[0]['planning_support']['reason'])
+
+    def test_unreadable_cached_schedule_never_exposes_timeline(self):
+        self.plan['plans']['priority']['slots'][0]['start'] = 'unreadable'
         status = operational_status(self.plan, 'live', [], self.now)
         self.assertEqual(status['state'], 'invalid')
         self.assertFalse(status['actionable'])

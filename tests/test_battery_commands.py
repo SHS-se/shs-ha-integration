@@ -20,16 +20,16 @@ class BatteryCommandTests(unittest.TestCase):
         self.slot['battery_command']['discharge_limit_w'] = 405.6
         self.assertEqual(validate_battery_command(self.slot)['discharge_limit_w'], 405.6)
 
-    def test_permission_does_not_relax_direction_or_forecast_bounds(self):
+    def test_permission_does_not_relax_direction_or_export_authority(self):
         for change in ({'charge_limit_w': 100}, {'allow_battery_export': True},
-                       {'allow_grid_charge': True}, {'discharge_limit_w': 400}):
+                       {'allow_grid_charge': True}):
             with self.subTest(change=change):
                 slot = deepcopy(self.slot)
                 slot['battery_command'].update(change)
                 with self.assertRaises(ValueError):
                     validate_battery_command(slot)
 
-    def test_forced_operations_still_require_the_allocated_power(self):
+    def test_forecast_does_not_determine_forced_operation_ceiling(self):
         for operation, charge, discharge in (('export', 0, 9600), ('grid_charge', 8800, 0)):
             with self.subTest(operation=operation):
                 slot = deepcopy(self.slot)
@@ -38,8 +38,13 @@ class BatteryCommandTests(unittest.TestCase):
                 slot['battery_command'].update(operation=operation, charge_limit_w=charge,
                     discharge_limit_w=discharge, allow_grid_charge=bool(charge),
                     allow_battery_export=bool(discharge))
-                with self.assertRaisesRegex(ValueError, 'ceilings disagree'):
-                    validate_battery_command(slot)
+                self.assertEqual(validate_battery_command(slot), slot['battery_command'])
+
+    def test_forecast_values_do_not_invalidate_an_understood_permission(self):
+        for changes in ({'battery_discharge_w': 10000}, {'battery_charge_w': 100},
+                        {'battery_discharge_w': float('nan')}, {'battery_discharge_w': None}):
+            slot = {**deepcopy(self.slot), **changes}
+            self.assertEqual(validate_battery_command(slot), slot['battery_command'])
 
 
 class SchemaThreeTests(unittest.TestCase):

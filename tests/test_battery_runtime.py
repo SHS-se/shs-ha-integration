@@ -1064,9 +1064,30 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
                     r.runtime.validate_plan_response(candidate)
                     # A changed setup still belongs to a different plan.
                     r.options['battery_capacity_kwh']=12
-                    with self.assertRaisesRegex(ValueError,'different local setup'):
+                    with self.assertRaisesRegex(ValueError,'current battery capacity'):
                         r.runtime.validate_plan_response(candidate)
                 finally:await r.runtime.close()
+
+    async def test_unrelated_options_do_not_reject_a_captured_battery_reference(self):
+        r=Rig('control_verification');await r.start()
+        try:
+            original=r.runtime.host.state.execution.account.contract
+            feedback=await r.runtime.capture_feedback(5000000,'snapshot')
+            candidate=deepcopy(r.plan)
+            revised=replace(original,id='next',generation=feedback['generation'],
+                source_receipt=feedback['source_receipt'],previous_contract_id=original.id)
+            candidate['battery_execution']=contract_wire(revised)
+            r.options['unrelated_setting']='changed'
+            r.runtime.validate_plan_response(candidate)
+            candidate['plan_id']='different-plan'
+            with self.assertRaisesRegex(ValueError,'another plan'):
+                r.runtime.validate_plan_response(candidate)
+            r.plan=candidate
+            await r.advance()
+            self.assertEqual(r.runtime.plan_feedback()['accepted']['contract_id'],original.id)
+            self.assertIn('another plan',r.runtime.snapshot()['reason'])
+            self.assertEqual(r.calls,[])
+        finally:await r.runtime.close()
 
     async def test_mode_change_without_matching_plan_preserves_account_and_rebinds(self):
         for capture_first in (False, True):

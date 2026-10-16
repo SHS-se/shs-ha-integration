@@ -85,3 +85,16 @@ The planner installation address owns location. HA has no competing PV coordinat
 editors or coordinate mismatch gate. Pool intent transports an explicit permission
 separately from forecast watts so missing statistical evidence cannot fabricate an
 OFF request. Known physical limits and permission boundaries remain enforced.
+
+User requirement, 16 October 2026: whole-house plan rejection is reserved for
+unreadable or ambiguous executable contracts. Admission must not re-run the
+planner's economic/service workload decisions or gate on configuration snapshots,
+forecast completeness, comparison scenarios, descriptive copies, arbitrary
+horizon lengths, statistical values or forecast-to-command equality. A partial
+plan's usable instructions remain executable. Per-device command errors hold and
+report only that device; current permissions and configured/native equipment
+limits remain authoritative. Battery contract, receipt and objective accounting
+checks retain their purpose, but a failed battery handover retains its accepted
+account and must not discard other devices' replacement instructions. Report
+configuration confirmation failures independently of accepting a delivered plan.
+Only explicit mode/exclusion/override actions release equipment.

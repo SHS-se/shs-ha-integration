@@ -48,6 +48,14 @@ class PlanContractCacheTests(unittest.TestCase):
         self.check(self.plan)
         self.assertEqual(len(self.checked), 3)
 
+    def test_nested_expiry_invalidates_cached_root_even_when_parent_has_time_left(self):
+        expiry = self.now + timedelta(minutes=5)
+        self.plan['execution_plan']['valid_until'] = expiry.isoformat()
+        self.check(self.plan)
+        with self.assertRaisesRegex(OptimisationInputError, 'already expired'):
+            self.check(self.plan, expiry)
+        self.assertEqual(len(self.checked), 2)
+
     def test_issue_age_and_remote_clock_skew_do_not_change_a_valid_verdict(self):
         issued = instant(self.plan['issued_at'])
         for at in (issued - timedelta(minutes=10), issued,
@@ -57,7 +65,7 @@ class PlanContractCacheTests(unittest.TestCase):
         self.assertEqual(len(self.checked), 1)
 
     def test_failures_are_reused_with_the_same_error(self):
-        self.plan['services'] = 'not a list'
+        self.plan['slot_minutes'] = 60
         messages = []
         for _ in range(3):
             with self.assertRaises(OptimisationInputError) as caught:
@@ -91,7 +99,7 @@ class PlanContractCacheTests(unittest.TestCase):
                    expiry - timedelta(seconds=1), expiry, expiry + timedelta(hours=6))
         for invalid in (False, True):
             if invalid:
-                self.plan['execution_plan']['plans']['priority']['slots'][0]['binding'] = 'yes'
+                self.plan['execution_plan']['plans']['priority']['slots'][0]['start'] = 'unreadable'
                 self.current = self.plan = deepcopy(self.plan)
             for _ in range(2):
                 for at in moments:

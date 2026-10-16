@@ -25,7 +25,7 @@ class ControllerDetailsTests(unittest.TestCase):
         self.options={'device_modes':{'$battery':'control_verification','$pool':'controlling',
             '$ev':'control_verification','heater':'control_verification','relay':'controlling'}}
         self.slot={'pool_w':1000,'ev_target_current_a':0,'device_commands':{
-            'heater':{'type':'setpoint','target_c':21},'relay':{'type':'permit_inhibit','permitted':False}}}
+            'heater':{'type':'setpoint','target_c':21,'minimum_c':18,'maximum_c':24},'relay':{'type':'permit_inhibit','permitted':False}}}
         self.status={'battery':{'state':'verified'},'pool':{'state':'scheduled','water_temperature_c':28.8},
             'ev':{'state':'verified'},'device:heater':{'state':'verified'},'device:relay':{'state':'commanded'}}
         self.coordinator=SimpleNamespace(controller=SimpleNamespace(status=self.status,options=lambda:self.options),

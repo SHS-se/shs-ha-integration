@@ -2434,7 +2434,6 @@ class Household:
         from .configuration_schema import shared_devices
         from .operating_modes import planning_devices
         runtime = getattr(self, "battery_runtime", None) if self.control_authority else None
-        execution_options = runtime.controller.options() if runtime is not None else None
         scope_devices = shared_devices(devices, options)
         requested = stored.get("optimisation_device_configuration", {})
         unready = [d for d in scope_devices if requested.get(d["key"], {}).get("planning_role") == "controllable"
@@ -2891,8 +2890,6 @@ class Household:
             self._record_forecast_ledger(
                 stored, {start: pv[start] for start in horizon}, captured
             )
-        if runtime is not None and runtime.controller.options()!=execution_options:
-            raise OptimisationInputError("Battery configuration changed while the planning snapshot was being captured")
         if runtime is not None and snapshot.get("battery") and device_mode(options, "battery") in ("controlling", "control_verification"):
             battery = snapshot["battery"]
             snapshot["battery_execution_feedback"] = await runtime.capture_feedback(
@@ -2993,9 +2990,6 @@ class Household:
                 except (ShsApiError, HouseholdReadError, OptimisationInputError, KeyError, TypeError, ValueError) as error:
                     self.last_optimisation_error = str(error)
                     self._pipeline_error('configuration', error, fix=getattr(error,'fix',None))
-                    pending = {**pending, "configuration_unconfirmed": True}
-                    if stored.get("optimisation_pending_job"):
-                        stored["optimisation_pending_job"]["configuration_unconfirmed"] = True
                 else:
                     self.last_optimisation_error = None
                     self._pipeline_error('configuration', None)
@@ -3012,13 +3006,7 @@ class Household:
                 self.replan_recommendations = stored["replan_recommendations"] = result.get("replan_recommendations", [])
                 self.last_optimisation_push = stored["last_optimisation_push"] = self.ports.utcnow().isoformat()
             if result["state"] == "published":
-                changed = (
-                    pending.get("configuration_unconfirmed", False)
-                    or dict(self.ports.options()) != pending["options"]
-                    or stored.get("optimisation_device_configuration", {}) != pending["device_configuration"]
-                    or stored.get("home_planning_configuration") != pending["home_configuration"]
-                )
-                await self._accept_returned_plan(stored, result["plan"], configuration_changed=changed)
+                await self._accept_returned_plan(stored, result["plan"])
             elif result["state"] == "failed":
                 self.last_optimisation_error = result.get("detail") or result.get("code") or "planning failed"
                 self._pipeline_error('planning', self.last_optimisation_error)
@@ -3050,7 +3038,7 @@ class Household:
                 except asyncio.TimeoutError:
                     pass
 
-    async def _accept_returned_plan(self, stored, returned_plan, *, configuration_changed: bool) -> None:
+    async def _accept_returned_plan(self, stored, returned_plan) -> None:
         """Validate, retain or install and journal the exact plan acknowledgement."""
         plan_error: str | None = None
         acknowledgement_plan = (
@@ -3065,16 +3053,6 @@ class Household:
             runtime=getattr(self,"battery_runtime",None) if self.control_authority else None
             try:
                 validate_plan_contract(returned_plan, self.ports.utcnow())
-                if self.optimisation_plan and any(
-                    branch.get("status") != "ready"
-                    for branch in (returned_plan, returned_plan.get("execution_plan", returned_plan))
-                ):
-                    raise OptimisationInputError("The replacement has no ready schedule; retaining the previous plan")
-                if runtime is not None:
-                    try:
-                        runtime.validate_plan_response(returned_plan)
-                    except (KeyError, TypeError, ValueError, OverflowError) as error:
-                        raise OptimisationInputError(str(error)) from error
             except OptimisationInputError as err:
                 plan_error = str(err)
                 if runtime is not None and isinstance(returned_plan, dict) and (
@@ -3099,7 +3077,12 @@ class Household:
                     "details": [plan_error],
                 },
             }
-        elif returned_plan and not configuration_changed:
+        elif returned_plan:
+            if runtime is not None:
+                try:
+                    runtime.validate_plan_response(returned_plan)
+                except (KeyError, TypeError, ValueError, OverflowError) as error:
+                    await runtime.reject_plan_response(returned_plan, str(error))
             self._pipeline_error('planning', None)
             self._pipeline_error('acceptance', None)
             self.last_optimisation_error = None
@@ -3112,27 +3095,6 @@ class Household:
                     "plan": acknowledgement_plan,
                     "outcome": "accepted",
                     "error": None,
-                }
-        elif configuration_changed:
-            # The returned plan was built from the preceding website
-            # request. Never expose it after a role/control change; the
-            # next exchange replans using the new effective base split.
-            self._plan_configuration_changed = stored["plan_configuration_changed"] = True
-            self.last_optimisation_error = "device configuration changed; manual replan recommended"
-            self._pipeline_error('acceptance', self.last_optimisation_error)
-            if returned_plan:
-                stored["optimisation_pending_plan_ack"] = {
-                    "plan": acknowledgement_plan,
-                    "outcome": "rejected",
-                    "error": {
-                        "code": "local_configuration_changed",
-                        "message": (
-                            "Home Assistant device configuration changed while "
-                            "the plan was generated"
-                        ),
-                        "path": None,
-                        "details": None,
-                    },
                 }
         elif self.optimisation_plan is None:
             self.optimisation_plan = stored.get("optimisation_plan")
@@ -3169,17 +3131,12 @@ class Household:
             self.last_optimisation_attempt = self.ports.utcnow().isoformat()
             stored["last_optimisation_attempt"] = self.last_optimisation_attempt
             await self._store.async_save(stored)
-            previous_home = stored.get("home_planning_configuration")
-            previous_configuration = dict(
-                stored.get("optimisation_device_configuration", {})
-            )
             self.optimisation_plan = self.optimisation_plan or stored.get(
                 "optimisation_plan"
             )
             snapshot_error: str | None = None
             stage = 'collection'
             try:
-                exchange_options = dict(self.ports.options())
                 devices = await self._prepared_device_inventory(stored)
                 entities = category_meters(self._configured_entities(), devices)
                 # Query through the last completed quarter. Aggregation rejects
@@ -3351,14 +3308,9 @@ class Household:
                     self.last_optimisation_error = snapshot_error
                     self.async_update_listeners()
                     return
-                if dict(self.ports.options()) != exchange_options:
-                    raise OptimisationInputError("Configuration changed while preparing the exchange; retry with current participation")
                 if snapshot is not None and snapshot.get("snapshot_id"):
                     stored["optimisation_pending_submission"] = {
                         "snapshot_id": snapshot["snapshot_id"],
-                        "options": exchange_options,
-                        "device_configuration": previous_configuration,
-                        "home_configuration": previous_home,
                         "replan_request_id": replan_request_id,
                         "devices": devices,
                     }
@@ -3390,9 +3342,6 @@ class Household:
                 stage = 'configuration'
                 if result.get("job_id"):
                     await self._journal_planning_acceptance(stored, result, {
-                        "options": exchange_options,
-                        "device_configuration": previous_configuration,
-                        "home_configuration": previous_home,
                         "replan_request_id": replan_request_id,
                     })
                 else:
@@ -3402,14 +3351,11 @@ class Household:
                 self.replan_recommendations = stored["replan_recommendations"] = result.get("replan_recommendations", [])
                 _LOGGER.debug("Replan %s cloud ingest completed in %.0f ms", replan_request_id, (monotonic() - ingest_started) * 1000)
                 try:
-                    configuration = await self._record_device_exchange(stored, devices, result)
-                except (ShsApiError, HouseholdReadError, OptimisationInputError, KeyError, TypeError, ValueError):
-                    if result.get("job_id") and stored.get("optimisation_pending_job"):
-                        stored["optimisation_pending_job"]["configuration_unconfirmed"] = True
-                        await self._store.async_save(stored)
-                    raise
-                self._pipeline_error('configuration', None)
-                configuration_changed = configuration != previous_configuration or previous_home != stored.get("home_planning_configuration")
+                    await self._record_device_exchange(stored, devices, result)
+                except (ShsApiError, HouseholdReadError, OptimisationInputError, KeyError, TypeError, ValueError) as error:
+                    self._pipeline_error('configuration', error, fix=getattr(error, 'fix', None))
+                else:
+                    self._pipeline_error('configuration', None)
                 self.exchange_warnings = merge_warnings(result.get("planning_warnings", []))
                 self.last_actual_slots_accepted = int(
                     result.get("actual_slots_accepted") or 0
@@ -3447,7 +3393,7 @@ class Household:
             self.last_thermal_slots_accepted = int(
                 result.get("thermal_slots_accepted") or 0
             )
-            await self._accept_returned_plan(stored, result.get("plan"), configuration_changed=configuration_changed)
+            await self._accept_returned_plan(stored, result.get("plan"))
             if result.get("state") == "pending":
                 self.last_optimisation_error = None
             elif result.get("state") == "failed":

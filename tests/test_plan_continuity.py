@@ -65,26 +65,95 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
         await self.c.async_restore_plan()
         self.assert_retained()
 
-    async def test_unusable_replacements_preserve_cache_and_acknowledge_rejection(self):
-        for failure in ('invalid','infeasible','execution_infeasible','battery_handover'):
-            with self.subTest(failure=failure):
+    async def test_unreadable_replacement_preserves_cache_and_acknowledges_rejection(self):
+        candidate=replacement_plan(self.plan)
+        candidate['schema_version']=999
+        self.c.client.push_optimisation.return_value={'plan':candidate,'actuals_accepted_until':self.now.isoformat()}
+        await self.c.async_optimisation_push(force_plan=True)
+        self.assert_retained()
+        self.assertEqual(self.c._store.saved['optimisation_pending_plan_ack']['outcome'],'rejected')
+        self.assertEqual(self.c._store.saved['optimisation_actuals_accepted_until'],self.now.isoformat())
+
+    async def test_partial_replacements_keep_available_device_instructions(self):
+        for branch in ('root', 'execution_plan'):
+            with self.subTest(branch=branch):
                 candidate=replacement_plan(self.plan)
-                self.c.battery_runtime=None
-                if failure=='invalid':candidate['schema_version']=999
-                elif failure=='infeasible':candidate['status']='infeasible'
-                elif failure=='execution_infeasible':candidate['execution_plan']['status']='infeasible'
-                else:
-                    self.c.battery_runtime=SimpleNamespace(validate_plan_response=Mock(side_effect=ValueError('Invalid handover')),
-                        reject_plan_response=AsyncMock())
-                self.c.client.push_optimisation.return_value={'plan':candidate,'actuals_accepted_until':self.now.isoformat()}
+                (candidate if branch=='root' else candidate[branch])['status']='infeasible'
+                self.c.client.push_optimisation.return_value={'plan':candidate}
                 await self.c.async_optimisation_push(force_plan=True)
-                self.assert_retained()
-                self.assertEqual(self.c._store.saved['optimisation_pending_plan_ack']['outcome'],'rejected')
-                self.assertEqual(self.c._store.saved['optimisation_actuals_accepted_until'],self.now.isoformat())
-                if failure in ('infeasible','execution_infeasible'):
-                    self.assertIn('no ready schedule',self.c.last_optimisation_error)
-                elif failure=='battery_handover':
-                    self.assertEqual(self.c.last_optimisation_error,'Invalid handover')
+                self.assertEqual(self.c.optimisation_plan,candidate)
+                self.assertEqual(self.c._store.saved['optimisation_pending_plan_ack']['outcome'],'accepted')
+                self.assertTrue(self.c.operational_status['actionable'])
+                self.assertIsNotNone(self.c.binding_plan_for('pool',self.rig.options)[1])
+
+    async def test_battery_handover_failure_accepts_household_and_reports_only_battery(self):
+        candidate=replacement_plan(self.plan)
+        self.c.battery_runtime=SimpleNamespace(validate_plan_response=Mock(side_effect=ValueError('Invalid handover')),
+            reject_plan_response=AsyncMock())
+        self.c.client.push_optimisation.return_value={'plan':candidate}
+        await self.c.async_optimisation_push(force_plan=True)
+        self.assertEqual(self.c.optimisation_plan,candidate)
+        self.assertEqual(self.c._store.saved['optimisation_pending_plan_ack']['outcome'],'accepted')
+        self.c.battery_runtime.reject_plan_response.assert_awaited_once_with(candidate,'Invalid handover')
+        self.assertIsNotNone(self.c.binding_plan_for('pool',self.rig.options)[1])
+        self.assertIsNone(self.c.last_optimisation_error)
+
+    async def test_real_battery_account_survives_rejected_amendment_while_household_advances(self):
+        from dataclasses import replace
+        import test_battery_runtime as battery_fixtures
+        from shs_core.plan_execution import contract_wire, Disposition
+        battery=battery_fixtures.Rig('control_verification')
+        battery.plan['plan_id']=self.plan['plan_id']
+        battery.install_contract()
+        await battery.start()
+        try:
+            account=battery.runtime.host.state.execution.account
+            old=account.contract
+            feedback=await battery.runtime.capture_feedback(5000000,'snapshot')
+            revised=replace(old,id='amendment',generation=feedback['generation'],
+                source_receipt=feedback['source_receipt'],previous_contract_id=old.id,
+                objectives=(replace(old.objectives[0],target_mwh=old.objectives[0].target_mwh+1000),))
+            candidate=deepcopy(self.plan)
+            candidate['battery_execution']=contract_wire(revised)
+            self.c.battery_runtime=battery.runtime
+            stored=await self.c._store.async_load()
+            await self.c._accept_returned_plan(stored,candidate)
+            self.assertEqual(self.c.optimisation_plan,candidate)
+            self.assertEqual(stored['optimisation_pending_plan_ack']['outcome'],'accepted')
+            self.assertEqual(battery.runtime.host.state.execution.account.contract,old)
+            self.assertIn('explicit retained amendment',battery.runtime.snapshot()['plan_rejection']['reason'])
+            self.assertIsNotNone(self.c.binding_plan_for('pool',self.rig.options)[1])
+            revised=replace(revised,dispositions=(Disposition(old.objectives[0].id,'retained',None,'Amend target'),))
+            candidate['battery_execution']=contract_wire(revised)
+            await self.c._accept_returned_plan(stored,candidate)
+            battery.plan['battery_execution']=candidate['battery_execution']
+            await battery.advance()
+            self.assertEqual(battery.runtime.host.state.execution.account.contract.id,'amendment')
+            self.assertIsNone(battery.runtime.snapshot()['plan_rejection'])
+            self.assertEqual(battery.calls,[])
+        finally:await battery.runtime.close()
+
+    async def test_failed_battery_journal_does_not_block_household_acceptance(self):
+        import test_battery_runtime as battery_fixtures
+        battery=battery_fixtures.Rig('control_verification')
+        await battery.start()
+        try:
+            old=battery.runtime.plan_feedback()['accepted']
+            battery.store.save=AsyncMock(side_effect=OSError('disk full'))
+            candidate=replacement_plan(self.plan)
+            candidate['battery_execution']={'id':'unreadable','generation':1}
+            self.c.battery_runtime=battery.runtime
+            stored=await self.c._store.async_load()
+            await self.c._accept_returned_plan(stored,candidate)
+            self.assertEqual(self.c.optimisation_plan,candidate)
+            self.assertEqual(stored['optimisation_pending_plan_ack']['outcome'],'accepted')
+            self.assertEqual(battery.runtime.plan_feedback()['accepted'],old)
+            self.assertEqual(battery.runtime.snapshot()['state'],'fault')
+            self.assertEqual(battery.runtime.snapshot()['technical_error'],'disk full')
+            self.assertEqual(battery.runtime.snapshot()['fix'],{'kind':'diagnostics'})
+            self.assertIsNotNone(battery.runtime.host._fault)
+            self.assertEqual(battery.calls,[])
+        finally:await battery.runtime.close()
 
     async def test_no_replacement_or_missing_snapshot_inputs_keep_the_running_plan(self):
         self.c._build_optimisation_snapshot.side_effect=OptimisationInputError('Price input unavailable')

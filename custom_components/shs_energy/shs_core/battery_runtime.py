@@ -68,6 +68,14 @@ def plan_scope(options):
     """
     return digest({k:v for k,v in options.items() if k!='device_modes' and k not in METADATA_KEYS})
 
+def plan_contract(plan):
+    """Read this plan's battery reference without granting command authority."""
+    contract = execution.read_contract(plan['battery_execution'])
+    if contract.plan_id != plan.get('plan_id'):
+        raise ValueError('Battery execution belongs to another plan')
+    return contract
+
+
 def exact_start(slot):
     return stamp(slot['start'])+900000-round(slot['duration_hours']*3600000)
 
@@ -342,15 +350,22 @@ class BatteryRuntime:
         contract_id=wire.get('id') if isinstance(wire.get('id'),str) else None
         generation=wire.get('generation') if type(wire.get('generation')) is int else None
         rejection=rt.PlanRejection(self.now(),contract_id,generation,reason)
-        async with self._lock:
-            if self.host:
-                await self.host.accept(rt.ExecutionPlanRejected(rejection))
-            else:
-                session=rt.record_plan_rejection(rt.ExecutionSession(account=self._bootstrap,
-                    plan_rejection=self._bootstrap_rejection),rejection)
-                self._bootstrap_rejection=session.plan_rejection
-                await self._persist_bootstrap()
-            self.coordinator.async_update_listeners()
+        try:
+            async with self._lock:
+                if self.host:
+                    await self.host.accept(rt.ExecutionPlanRejected(rejection))
+                else:
+                    session=rt.record_plan_rejection(rt.ExecutionSession(account=self._bootstrap,
+                        plan_rejection=self._bootstrap_rejection),rejection)
+                    self._bootstrap_rejection=session.plan_rejection
+                    await self._persist_bootstrap()
+        except Exception as error:
+            # A broken battery journal fences that writer, never the other devices.
+            self._last_error=f'Battery plan rejection could not be recorded: {error}'
+            self._record_fault('plan_rejection',self._last_error)
+            self._status={'state':'fault','reason':self._holding(self._last_error),
+                          'fix':{'kind':'diagnostics'}}
+        self.coordinator.async_update_listeners()
 
     async def _persist_bootstrap(self):
         session=rt.ExecutionSession(account=self._bootstrap,
@@ -361,29 +376,29 @@ class BatteryRuntime:
                 **({'gateway_processing':self._processing} if self._processing is not None else {})},session)
 
     def validate_plan_response(self,plan):
-        """Reject stale response identity before replacing the coordinator's cache."""
+        """Validate battery handover independently of household admission."""
         wire=plan.get('battery_execution')
         if wire is None:
             if plan.get('battery') and device_mode(self.controller.options(),'battery') in ('controlling','control_verification'):
                 raise ValueError('The planner did not provide battery execution instructions')
             return
-        contract=execution.read_contract(wire)
+        contract=plan_contract(plan)
         options=self.controller.options()
         account=self.host.state.execution.account if self.host else self._bootstrap
         if account.contract and contract.id==account.contract.id:
             if contract!=account.contract:raise ValueError('Accepted battery reference was changed')
             return
-        if contract.scope_revision!=plan_scope(options):
-            raise ValueError('Battery plan belongs to a different local setup')
         anchor=next((r for r in account.requests if r.generation==contract.generation),None)
         if contract.generation!=account.requested_generation or anchor is None or anchor.source_receipt!=contract.source_receipt:
             raise ValueError('Battery plan belongs to a superseded request or different actuals prefix')
         if contract.previous_contract_id!=(account.contract.id if account.contract else None):
             raise ValueError('Battery plan does not acknowledge the accepted reference')
-        # Run the real handover checks before the new plan can replace the
-        # coordinator cache. This is a pure transition: no journal or commands.
+        # Check the actual battery handover without changing its journal or
+        # commands. A failure belongs to this battery, not the household plan.
         now=self.now()
         ratings=resolve_battery_quantities(options,self.coordinator.ports.battery_report)
+        if contract.capacity_mwh != round(ratings['battery_capacity_kwh'] * 1e6):
+            raise ValueError('Battery plan differs from current battery capacity')
         soc=self.coordinator.ports.battery_report(options['battery_soc_entity'])
         stored=round(float(soc['state']) / 100 * ratings['battery_capacity_kwh'] * 1e6)
         execution.admit_plan(account,contract,now,execution.StateObservation(now,stored,'live_soc_at_validation',False))
@@ -626,7 +641,7 @@ class BatteryRuntime:
             await self._hold('Waiting for the planner to provide battery execution instructions',mode)
             self._notify_planning('execution_contract_required')
             return
-        contract=execution.read_contract(contract_wire)
+        contract=plan_contract(plan)
         scope_wire = plan['battery_supply_scope']
         if plan.get('capabilities', {}).get('boiler'):
             allowed = slot['boiler_battery_allowed']
