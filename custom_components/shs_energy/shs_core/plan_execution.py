@@ -118,9 +118,12 @@ class ReferenceInterval:
             raise ValueError("nominal electrical account does not conserve energy")
         if self.unserved_mwh > self.load_mwh:
             raise ValueError("unserved energy exceeds total demand")
-        if (self.operation in ("hold", "idle") and (self.charge_ac_mwh or self.discharge_ac_mwh)
-                or self.operation in ("grid_charge", "solar_charge") and self.discharge_ac_mwh
-                or self.operation in ("supply_house", "export") and self.charge_ac_mwh):
+        # Hold and household supply use the automatic surplus-absorbing mode.
+        # Only Idle closes that charge permission; forecast solar charging is
+        # compatible with Hold and Supply house, as it is on the equipment.
+        if (self.operation == "idle" and (self.charge_ac_mwh or self.discharge_ac_mwh)
+                or self.operation in ("hold", "grid_charge", "solar_charge") and self.discharge_ac_mwh
+                or self.operation == "export" and self.charge_ac_mwh):
             raise ValueError("nominal role contradicts directional flows")
 
     def stored_at(self, at_ms):

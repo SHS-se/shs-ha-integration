@@ -90,7 +90,24 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "capacity"):
             replace(contract(), maximum_mwh=5_100_000)
         with self.assertRaisesRegex(ValueError, "directional"):
-            replace(row, operation="hold")
+            replace(row, operation="idle")
+
+    def test_automatic_surplus_charging_is_valid_for_hold_and_household_supply(self):
+        row = replace(contract().intervals[0], operation='solar_charge', pv_mwh=800_000,
+                      import_mwh=0, grid_charge_allowed=False)
+        for operation in ('hold', 'supply_house'):
+            with self.subTest(operation=operation):
+                offered = replace(contract(), intervals=(replace(row, operation=operation),))
+                wire = contract_wire(offered)
+                restored = read_contract(wire)
+                self.assertEqual(restored, offered)
+                self.assertEqual(restored.intervals[0].charge_ac_mwh, 550_000)
+                account = admit_plan(Account(), restored, 0, StateObservation(0, 5_000_000, 'SOC'))
+                self.assertEqual(balance(account, QUARTER).reference_mwh, 5_500_000)
+        discharging = replace(row, operation='supply_house', charge_ac_mwh=0, discharge_ac_mwh=550_000,
+                             pv_mwh=0, export_mwh=300_000, stored_end_mwh=4_500_000)
+        with self.assertRaisesRegex(ValueError, 'directional'):
+            replace(discharging, operation='hold')
 
     def test_recovery_cannot_escape_deadline_or_duplicate_headroom(self):
         r = Recovery("cheap-window", 0, QUARTER, 500_000, 2000, 0, "household", "nominal_first_then_earliest", "Same cheap window")
