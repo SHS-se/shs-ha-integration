@@ -59,41 +59,6 @@ def required_import(house_w, devices):
         max(measured,bound) for measured,bound in devices)
 
 
-def ev_demand(options, records, read, *, entity=None, value=None):
-    """Current native and owned settings, never a forecast or learned median."""
-    record = records.get('ev', {})
-    owned = record.get('options', options)
-    switch = owned.get('ev_charge_switch_entity')
-    if not switch:
-        return 0.0, 0.0
-    mappings = [m for m in owned.get('device_control_mappings', {}).values()
-                if m.get('control_type') == 'variable_power' and m.get('control_entity_id')
-                and (not record or m['control_entity_id'] in record['originals'])]
-    observed = read(switch)
-    if observed is None or observed.get('state') not in ('on','off'):
-        raise ValueError('EV charging switch is unavailable for house import accounting')
-    enabled = observed['state'] == 'on' or (entity == switch and value == 'on')
-    measured = 0.0
-    bound = 0.0
-    for mapping in mappings:
-        sensor = mapping.get('power')
-        if isinstance(sensor, str) and sensor.startswith('sensor.'):
-            watts, _ = power(read(sensor), source=sensor)
-            measured = max(measured, watts)
-        if enabled:
-            control = mapping['control_entity_id']
-            row = read(control)
-            if row['attributes'].get('unit_of_measurement') != 'A':
-                raise ValueError('EV current control must report amperes')
-            amps = _current(row['state'])
-            if entity == control:
-                amps = max(amps, _current(value))
-            bound = max(bound, amps * EV_WATTS_PER_AMP)
-    if enabled and not mappings:
-        raise ValueError('EV current control is unavailable for house import accounting')
-    return measured, bound
-
-
 def empty_capacity():
     return {'schema': 1, 'revision': 0, 'devices': {}}
 

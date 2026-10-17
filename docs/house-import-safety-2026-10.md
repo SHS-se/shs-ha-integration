@@ -36,6 +36,14 @@ the accepted plan as capacity changes. This read is advisory: the unchanged
 runtime, preparation and final native dispatch checks still govern every write,
 including when demand changes after sizing or an older battery write is unresolved.
 
+Multiple energy counters mapped to one EV current control describe the same
+physical load. Admission resolves that control once; if the aliases retain
+different power sources, the explicitly admitted battery-capture binding selects
+the physical meter. Distinct controls or multiple capture meters remain ambiguous
+and are refused. Native import accounting and command envelopes share this
+resolution, so retired counter mappings cannot independently block the battery's
+capacity query or count the charger more than once.
+
 ## Complexity and practical limits
 
 The old EV/battery coordination was spread between the app's reservations, native battery transitions and HA's final device gate. The aggregate check is now shared at the common transport boundary, with one durable demand ledger in the existing journal. The ledger adds necessary state for outstanding effects; replacing it with a meter-only comparison would recreate the lag bugs. The battery's native multi-register transition state machine remains necessary and is not replaced by another executor.

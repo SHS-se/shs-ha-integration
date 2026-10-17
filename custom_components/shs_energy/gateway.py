@@ -26,7 +26,7 @@ from .shs_core.api_contract import INTEGRATION_VERSION
 from .shs_core.battery_gateway import BatteryGateway
 from .shs_core.battery_native_adapter import SigenAdapter
 from .shs_core.native_readings import power
-from .shs_core.grid_capacity import (battery_released, ev_demand, required_import, import_limit,
+from .shs_core.grid_capacity import (battery_released, required_import, import_limit,
     empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, CHARGING_MODES)
 from .shs_core.device_commands import actuator_targets
 from .shs_core.command_transport import CommandTransport
@@ -458,14 +458,23 @@ class HomeAssistantSource:
             switch = options['ev_charge_switch_entity']
             ev = [(key,m) for key,m in mappings.items() if m.get('control_type') == 'variable_power'
                   and m.get('control_entity_id') and (not record or m.get('control_entity_id') in record['originals'])]
-            if len(ev) != 1:
+            currents = {mapping['control_entity_id'] for _, mapping in ev}
+            if len(currents) != 1:
                 raise ValueError('EV import accounting requires one reviewed current control')
-            key, mapping = ev[0]
-            current = mapping['control_entity_id']
+            current = currents.pop()
+            sensors = {self.power_source(mapping, key) for key, mapping in ev}
+            if len(sensors) > 1:
+                # Energy-counter aliases can retain different power mappings.
+                # The admitted battery capture names the current physical meter;
+                # choose that explicit binding, never whichever reports first.
+                sensors = {sensor for sensor in sensors if 'capture' in self.bindings.get(sensor, ())}
+            if len(sensors) != 1:
+                raise ValueError('EV import accounting requires one admitted power source')
+            sensor = sensors.pop()
             if self.report(switch)['state'] == 'off' and entity == switch and value == 'off':
                 return {**base,'device':capacity_key('ev',(switch,current)),
                     'before_w':0.0,'commanded_before_w':0.0,'after_w':0.0,'possible_w':0.0,
-                    'controls':{switch:'off'},'sensor':self.power_source(mapping,key)}
+                    'controls':{switch:'off'},'sensor':sensor}
             if self.report(current)['attributes'].get('unit_of_measurement') != 'A':
                 raise ValueError('EV current control must report amperes')
             controls = {switch:self.report(switch)['state'], current:_current(self.report(current)['state'])}
@@ -476,7 +485,6 @@ class HomeAssistantSource:
             expected = {**commanded, entity:value}
             def demand(values):
                 return _current(values[current])*EV_WATTS_PER_AMP if values[switch] == 'on' else 0.0
-            sensor = self.power_source(mapping, key)
             return {**base, 'device':identity, 'before_w':demand(controls), 'commanded_before_w':demand(commanded), 'after_w':demand(expected),
                     'possible_w':max(demand(expected),demand({**controls,entity:value})),
                     'controls':expected, 'sensor':sensor}
@@ -540,9 +548,8 @@ class HomeAssistantSource:
         if switch:
             # Read/validate available native settings independently of desired
             # ownership values; outstanding effects have their own journal.
-            _, native = ev_demand(options, self.service.physical.ownership.records, self.report)
             descriptor = self.describe_import('ev', switch, self.report(switch)['state'])
-            include(descriptor, native)
+            include(descriptor, descriptor['before_w'])
         mappings = [(key, mapping, 'device:'+key) for key, mapping in options.get('device_control_mappings', {}).items()]
         for owner, record in self.service.physical.ownership.records.items():
             mappings.extend((key, mapping, owner) for key, mapping in record.get('options', {}).get('device_control_mappings', {}).items()

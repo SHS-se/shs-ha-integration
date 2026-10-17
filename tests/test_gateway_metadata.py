@@ -18,7 +18,7 @@ from shs_core.controller_inputs import configured_entity_ids
 from shs_core.gateway_journal import digest
 from shs_core.gateway_service import GatewayService
 from shs_core.native_readings import power
-from shs_core.grid_capacity import (battery_released, ev_demand, required_import, import_limit,
+from shs_core.grid_capacity import (battery_released, required_import, import_limit,
     empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, CHARGING_MODES)
 from shs_core.device_commands import actuator_targets
 from shs_core.connection_health import RetryBackoff
@@ -74,7 +74,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             entity_display_name_by_id=lambda hass:dict(hass.names), area_name_by_id=lambda hass:dict(hass.areas),
             entity_area_id_by_id=lambda hass:{}, RecorderSource=lambda hass:None,
             filter_sources=filter_sources, configured_entity_ids=configured_entity_ids, power=power, battery_released=battery_released,
-            ev_demand=ev_demand, required_import=required_import, import_limit=import_limit, SigenAdapter=SigenAdapter,
+            required_import=required_import, import_limit=import_limit, SigenAdapter=SigenAdapter,
             ControlDeadlineError=ControlDeadlineError, empty_capacity=empty_capacity, capacity_bound=capacity_bound,
             commanded_controls=commanded_controls, _current=_current, EV_WATTS_PER_AMP=EV_WATTS_PER_AMP, actuator_targets=actuator_targets, device_power_bound=device_power_bound, PowerHistoryError=PowerHistoryError,
             observe_power_peak=observe_power_peak, merge_power_peaks=merge_power_peaks, RetryBackoff=RetryBackoff, capacity_key=capacity_key, house_meter_errors=house_meter_errors,

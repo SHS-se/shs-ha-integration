@@ -130,6 +130,50 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(self.source.import_required(), before['external_import_w'])
         self.assertEqual(await self.source.request('battery_capacity', {}), before)
 
+    async def test_ev_meter_aliases_use_one_current_control_and_the_admitted_power_source(self):
+        self.configure_ev()
+        options = self.source.configuration.options()
+        mapping = options['device_control_mappings']['ev']
+        # The capture contains three energy-counter aliases of one Tesla
+        # current control. The first alias retains a retired power source.
+        options['device_control_mappings'] = {
+            'sensor.car_lifetime': {**mapping, 'power': 'sensor.retired_ev'},
+            'sensor.car_total': deepcopy(mapping),
+            'sensor.car_added': deepcopy(mapping),
+        }
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.physical.ownership.records['ev']['options'] = deepcopy(options)
+        self.source.bindings = {'sensor.ev': frozenset(('capture', 'device'))}
+        self.service.import_limit_w = 15000
+        self.assertEqual(await self.source.request('battery_capacity', {}),
+                         {'external_import_w': 1000, 'import_limit_w': 15000})
+        descriptor = self.source.describe_import('ev', 'switch.ev', 'on')
+        self.assertEqual(descriptor['sensor'], 'sensor.ev')
+        await self.native('aliased-ev-start', 'ev', 'switch.ev', 'turn_on')
+        self.assertEqual(await self.source.request('battery_capacity', {}),
+                         {'external_import_w': 12040, 'import_limit_w': 15000})
+        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        with self.assertRaises(ControlDeadlineError):
+            await self.native('battery-over-pending-ev', 'battery', 'number.charge', 'set_value', 4)
+        self.assertEqual(len(self.calls), 1)
+
+    async def test_ev_alias_resolution_still_refuses_distinct_controls_or_capture_meters(self):
+        self.configure_ev()
+        options = self.source.configuration.options()
+        mapping = options['device_control_mappings']['ev']
+        options['device_control_mappings']['other'] = {**mapping, 'control_entity_id': 'number.other_ev'}
+        self.source.configuration.options = lambda:deepcopy(options)
+        record = self.physical.ownership.records['ev']
+        record['options'] = options
+        record['originals']['number.other_ev'] = '16'
+        with self.assertRaisesRegex(ValueError, 'one reviewed current control'):
+            self.source.describe_import('ev', 'switch.ev', 'on')
+        options['device_control_mappings']['other'] = {**mapping, 'power': 'sensor.other_ev'}
+        self.source.bindings = {key:frozenset(('capture',)) for key in ('sensor.ev', 'sensor.other_ev')}
+        with self.assertRaisesRegex(ValueError, 'one admitted power source'):
+            self.source.describe_import('ev', 'switch.ev', 'on')
+        self.assertFalse(self.calls)
+
     async def test_generic_switch_adds_its_reviewed_power_to_current_house_demand(self):
         self.configure_ev()
         options = self.source.configuration.options()
