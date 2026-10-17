@@ -102,7 +102,7 @@ from .device_controls import (
     planning_path,
     requested_controllable_devices,
 )
-from .hot_water import is_hot_water, hot_water_setup_errors
+from .hot_water import FINISH_HEATING_W, is_hot_water, hot_water_setup_errors
 from .optimisation import (
     OptimisationInputError,
     REMEDY_DEFECT,
@@ -120,6 +120,7 @@ from .optimisation import (
     parse_number,
     PlanContractCache,
     quarter_start,
+    usable_device_quarter_kwh,
     SNAPSHOT_SCHEMA_VERSION,
     utc_slots,
     validate_plan_contract,
@@ -1163,7 +1164,7 @@ class Household:
                 continue
             mapping = active_mappings.get(device["key"], {})
             watts = self._mapped_power_w(mapping)
-            if watts is not None:
+            if watts is not None and not is_hot_water(device):
                 device["active_power_w"] = round(watts, 1)
         from .configuration_schema import shared_devices
         return shared_devices(prepared, self.ports.options()) if included_only else prepared
@@ -2413,6 +2414,7 @@ class Household:
         horizon: list[datetime],
         device_models: list[dict[str, Any]],
         ev_capacity_kwh: float | None = None,
+        device_actuals: list[dict[str, Any]] = (),
     ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any] | None]:
         """Inject Home Assistant's clock and entity reads into pure planning."""
         return build_services(
@@ -2422,7 +2424,70 @@ class Household:
             read_entity=self._entity_payload,
             local_tz=self.ports.home().timezone,
             ev_capacity_kwh=ev_capacity_kwh,
+            device_actuals=device_actuals,
         )
+
+    async def _boiler_running_power_w(self, devices, mappings, start, end):
+        """Median on-cycle peaks retain element watts despite short cycles.
+
+        A five-minute or quarter-hour mean dilutes a 3 kW element that heats
+        for only a few minutes. Recorder maxima preserve its running draw.
+        """
+        from statistics import median
+        sensors = {device["key"]: mappings.get(device["key"], {}).get("power")
+                   for device in devices if is_hot_water(device)}
+        sensors = {key: sensor for key, sensor in sensors.items() if isinstance(sensor, str)}
+        if not sensors:
+            return {}
+        statistics = await self.ports.history.statistics(
+            start, end, set(sensors.values()), "hour", {"power": "W"}, {"max"},
+        )
+        result = {}
+        for key, sensor in sensors.items():
+            peaks = [row["max"] for row in statistics.get(sensor, [])
+                     if type(row.get("max")) in (int, float) and isfinite(row["max"])
+                     and row["max"] >= FINISH_HEATING_W]
+            if peaks:
+                result[key] = round(median(peaks), 1)
+        return result
+
+    async def _boiler_delivered_current_quarter(self, models, captured):
+        """Measure elapsed current-quarter kWh from the same owned counters.
+
+        Completed quarter totals end at its start. Recorder's last completed
+        five-minute counter state supplies that boundary, while the live
+        counter includes electricity consumed since then.
+        """
+        start = quarter_start(captured)
+        if captured == start:
+            return []
+        sensors = {model["key"]: model["statistic_id"] for model in models if is_hot_water(model)}
+        if not sensors:
+            return []
+        boundary = start - timedelta(minutes=5)
+        statistics = await self.ports.history.statistics(
+            boundary, start, set(sensors.values()), "5minute", {"energy": "kWh"}, {"state"},
+        )
+        energy = {}
+        for key, sensor in sensors.items():
+            live = self.ports.read_state(sensor)
+            if live is None:
+                continue
+            factor = {"kWh": 1, "Wh": .001, "MWh": 1000}.get(live.attributes.get("unit_of_measurement"))
+            if factor is None:
+                continue
+            try:
+                current = float(live.state) * factor
+            except (ValueError, TypeError):
+                continue
+            for row in statistics.get(sensor, []):
+                at = row.get("start")
+                if type(at) in (int, float):
+                    at = datetime.fromtimestamp(at, timezone.utc)
+                previous = row.get("state")
+                if at == boundary and type(previous) in (int, float) and isfinite(previous) and isfinite(current) and usable_device_quarter_kwh(current - previous):
+                    energy[key] = current - previous
+        return [{"start": start.isoformat(), "device_energy_kwh": energy}] if energy else []
 
     @staticmethod
     def _observe_calibration(
@@ -2581,6 +2646,9 @@ class Household:
             mapped_power_w=self._mapped_power_w,
             local_tz=self.ports.home().timezone,
             pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
+            boiler_running_power_w=await self._boiler_running_power_w(
+                devices, control_mappings, profile_start, captured,
+            ),
         )
         self.optimisation_degraded_devices = degraded_devices
         self._sync_degraded_device_issue()
@@ -2607,6 +2675,7 @@ class Household:
             horizon,
             device_models,
             stored.get("ev_capacity_kwh"),
+            [*device_profile_actuals, *await self._boiler_delivered_current_quarter(device_models, captured)],
         )
         if ev_battery and 1 <= ev_battery["capacity_kwh"] <= 500:
             # Remembered for a later reading at 0 %, when none can be derived.

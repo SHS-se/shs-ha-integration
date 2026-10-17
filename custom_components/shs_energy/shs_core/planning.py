@@ -49,6 +49,8 @@ from .optimisation import (
     REMEDY_DEFECT,
     REMEDY_WAITING,
     build_device_load_model,
+    boiler_daily_energy_forecast,
+    service_energy_today,
     discrete_current_control,
     normalized_fraction,
     parse_number,
@@ -260,6 +262,7 @@ def build_services(
     read_entity: EntityReader,
     local_tz: tzinfo,
     ev_capacity_kwh: float | None = None,
+    device_actuals: list[dict[str, Any]] = (),
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any] | None]:
     """Build the deferrable services, their sample counts and EV battery state.
 
@@ -358,7 +361,17 @@ def build_services(
         for index, slot in enumerate(horizon):
             by_day.setdefault(slot.astimezone(local_tz).date(), []).append(index)
         for day, indices in sorted(by_day.items()):
-            required_kwh = sum(expected_w[index] for index in indices) / 4_000
+            # A packed run can deliver the day's energy before its historical
+            # clock-time profile. Replanning must subtract measured delivery,
+            # not simply schedule the remaining tail of that old profile again.
+            target_kwh = sum(
+                model["inference"]["daily_energy_kwh_by_weekday"][day.weekday()]
+                for model in boiler_models
+            )
+            delivered_kwh = service_energy_today(
+                device_actuals, (model["key"] for model in boiler_models), day, local_tz,
+            )
+            required_kwh = max(0.0, target_kwh - delivered_kwh)
             services.append({
                 "id": f"boiler:{day.isoformat()}",
                 "device": "boiler",
@@ -704,6 +717,7 @@ def build_device_models(
     mapped_power_w: PowerReader,
     local_tz: tzinfo,
     pool_water_entity: str | None = None,
+    boiler_running_power_w: dict[str, float] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Build control models independently of historical profile readiness.
 
@@ -760,12 +774,26 @@ def build_device_models(
             else empirical_active_power_w if empirical_active_power_w is not None
             else previous_power_w
         )
+        if path == "boiler":
+            # Quarter means describe energy, not an element's running draw.
+            # Preserve observed on-cycle power while its live sensor is idle.
+            previous = device["inference"].get("running_power_w")
+            previous = previous if type(previous) in (int, float) and isfinite(previous) and previous > 0 else 0
+            live = reviewed_power_w if reviewed_power_w is not None and reviewed_power_w >= 500 else 0
+            active_power_w = (boiler_running_power_w or {}).get(device["key"]) or max(previous, live) or None
         device["active_power_w"] = active_power_w
         device["profile_sample_count"] = int(empirical["sample_count"])
         device["inference"] = {
             **device["inference"],
             "history_days": OPTIMISATION_PROFILE_DAYS,
             "profile": empirical["method"],
+            "daily_energy_kwh_by_weekday": boiler_daily_energy_forecast(
+                device_actuals, device["key"], str(local_tz), horizon[0], empirical["by_weekday"],
+            ) if path == "boiler" else {
+                weekday: sum(profile) / 4_000
+                for weekday, profile in empirical["by_weekday"].items()
+            },
+            **({"running_power_w": active_power_w} if path == "boiler" else {}),
         }
         if planning_role == "base_load":
             continue

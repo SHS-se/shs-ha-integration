@@ -847,6 +847,11 @@ def base_load_source(
     }
 
 
+def usable_device_quarter_kwh(value):
+    """The existing device electrical domain: a 0..100 kW quarter mean."""
+    return type(value) in (int, float) and isfinite(value) and 0 <= value * 4000 <= 100_000
+
+
 def build_device_load_model(
     device_slots: list[dict[str, Any]],
     device_key: str,
@@ -879,16 +884,10 @@ def build_device_load_model(
         if when is None or not isinstance(values, dict) or device_key not in values:
             continue
         energy = values[device_key]
-        if not isinstance(energy, (int, float)) or not isfinite(float(energy)):
+        if not usable_device_quarter_kwh(energy):
             continue
         local = when.astimezone(local_tz)
         power_w = float(energy) * 4_000
-        # The device contract supports 0..100 kW. Counter corrections and
-        # unit errors outside that range are not observations of a running
-        # device. Exclude them from both the profile and the active estimate;
-        # clipping would invent consumption and still distort scheduling.
-        if isinstance(energy, bool) or not 0 <= power_w <= 100_000:
-            continue
         observations.append((
             local,
             local.weekday(),
@@ -983,6 +982,42 @@ def service_daily_energy(
         if measured and len(measured) == len(wanted):
             totals[day] = sum(measured)
     return totals
+
+
+def boiler_daily_energy_forecast(device_slots, key, timezone_name, reference, profiles):
+    """Calibrate daily kWh from complete days, preserving weekday differences.
+
+    Trimming a sparse quarter-hour profile can remove most thermostat bursts.
+    Fit the daily level from daily meter totals instead. Incomplete days stay
+    in the quarter profile; they are not treated as zero-consumption days.
+    """
+    local_tz = ZoneInfo(timezone_name)
+    days = {}
+    for row in device_slots:
+        when = _timestamp(row.get("start"))
+        value = (row.get("device_energy_kwh") or {}).get(key)
+        if when is None or not usable_device_quarter_kwh(value):
+            continue
+        day = when.astimezone(local_tz).date()
+        days.setdefault(day, {})[when] = value
+    samples = []
+    for day, quarters in days.items():
+        start = datetime.combine(day, datetime.min.time(), local_tz)
+        end = start + timedelta(days=1)
+        hours = (end.astimezone(timezone.utc) - start.astimezone(timezone.utc)).total_seconds() / 3600
+        if end > reference or len(quarters) != round(hours * 4):
+            continue
+        weight = 0.5 ** (max(0, (reference - end).total_seconds()) / 86400 / BASE_LOAD_RECENCY_HALFLIFE_DAYS)
+        samples.append((day.weekday(), sum(quarters.values()), weight))
+    if not samples:
+        return {day: sum(profile) / 4000 for day, profile in profiles.items()}
+    shared = sum(kwh * weight for _, kwh, weight in samples) / sum(weight for _, _, weight in samples)
+    result = {}
+    for weekday in range(7):
+        own = [(kwh, weight) for day, kwh, weight in samples if day == weekday]
+        weight = sum(w for _, w in own)
+        result[weekday] = (shared * BASE_LOAD_LEVEL_SHRINKAGE_DAYS + sum(kwh * w for kwh, w in own)) / (BASE_LOAD_LEVEL_SHRINKAGE_DAYS + weight)
+    return result
 
 
 def service_energy_today(

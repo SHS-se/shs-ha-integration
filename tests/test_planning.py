@@ -51,6 +51,7 @@ def device(
         "active_power_w": watts,
         "profile_sample_count": 1_000,
         "forecast_w_by_slot": [forecast_w] * len(HORIZON),
+        "inference": {"daily_energy_kwh_by_weekday": {day: forecast_w * 24 / 1000 for day in range(7)}},
     }
 
 
@@ -165,6 +166,17 @@ class PoolServiceTests(unittest.TestCase):
 
 
 class BoilerServiceTests(unittest.TestCase):
+    def test_replan_subtracts_delivered_boiler_energy_from_the_whole_day(self):
+        boiler = device("boiler", "hot_water", "permit_inhibit", forecast_w=5000 / 24)
+        horizon = HORIZON[48:]
+        actuals = [{"start": HORIZON[10].isoformat(), "device_energy_kwh": {"boiler": 3, "preheat": 9}}]
+        services, _, _ = build_services({"device_control_mappings": {"boiler": {
+            "control_type": "permit_inhibit", "actuator_entity_ids": ["switch.water"]}}},
+            horizon, [boiler], device_actuals=actuals, read_entity=lambda _: None, local_tz=timezone.utc)
+        self.assertAlmostEqual(services[0]["required_kwh"], 2)
+        self.assertAlmostEqual(services[1]["required_kwh"], 5)
+        self.assertAlmostEqual(services[2]["required_kwh"], 5)
+
     def test_unknown_boiler_power_retains_its_permission_service(self):
         boiler = device("sensor.water", "hot_water", "permit_inhibit", watts=None)
         services, _samples, _ev = build_services(
@@ -477,7 +489,7 @@ class DeviceModelTests(unittest.TestCase):
         )
         return models
 
-    def build_with_degraded(self, devices, actuals, mappings=None, watts=None):
+    def build_with_degraded(self, devices, actuals, mappings=None, watts=None, running_power=None):
         return build_device_models(
             devices,
             actuals,
@@ -485,6 +497,7 @@ class DeviceModelTests(unittest.TestCase):
             mappings or {},
             mapped_power_w=lambda mapping: watts,
             local_tz=timezone.utc,
+            boiler_running_power_w=running_power,
         )
 
     def test_every_devices_gap_is_reported_in_one_pass(self) -> None:
@@ -719,21 +732,51 @@ class DeviceModelTests(unittest.TestCase):
         )
         self.assertEqual(devices[0]["inference"]["source"], "test")
 
-    def test_boiler_power_uses_its_sensor_and_measured_history_when_idle(self):
+    def test_boiler_running_power_uses_sensor_peaks_instead_of_quarter_means_or_idle_watts(self):
         key = "sensor.boiler_energy"
         for live_w in (0, 200, 1500, 3000):
             with self.subTest(live_w=live_w):
                 devices = [inventory_device(key, "controllable", "permit_inhibit", category="hot_water")]
                 models, degraded = self.build_with_degraded(devices, complete_history(key),
                     mappings={key: {"control_type": "permit_inhibit", "power": "sensor.boiler_power"}},
-                    watts=live_w or None)
+                    watts=live_w or None, running_power={key: 3063})
                 self.assertEqual(degraded, [])
-                self.assertEqual(models[0]["active_power_w"], live_w or 1000)
+                self.assertEqual(models[0]["active_power_w"], 3063)
+                self.assertEqual(devices[0]["inference"]["running_power_w"], 3063)
         devices = [inventory_device(key, "controllable", "permit_inhibit", category="hot_water")]
         models, degraded = self.build_with_degraded(devices, complete_history(key),
             mappings={key: {"power": "sensor.boiler_power"}}, watts=1274)
         self.assertEqual(models[0]["active_power_w"], 1274)
         self.assertEqual(degraded, [])
+
+    def test_an_observed_boiler_rating_survives_idle_refreshes(self):
+        key = "sensor.boiler_energy"
+        devices = [inventory_device(key, "controllable", "permit_inhibit", category="hot_water")]
+        mapping = {key: {"control_type": "permit_inhibit", "power": "sensor.boiler_power"}}
+        self.build_with_degraded(devices, complete_history(key), mappings=mapping,
+                                 running_power={key: 3070})
+        models, _ = self.build_with_degraded(devices, complete_history(key), mappings=mapping, watts=200)
+        self.assertEqual(models[0]["active_power_w"], 3070)
+
+    def test_boiler_daily_energy_uses_day_totals_without_trimming_away_short_heating_bursts(self):
+        key = "boiler"
+        devices = [inventory_device(key, "controllable", "permit_inhibit", category="hot_water")]
+        actuals = []
+        for day in range(14):
+            when = START - timedelta(days=day + 1)
+            kwh = 7 if when.weekday() in (5, 6) else 3
+            for quarter in range(96):
+                # Short 3 kW runs shift clock position from day to day.
+                active = (quarter + day * 7) % 96 < round(kwh / .75)
+                actuals.append({"start": (when + timedelta(minutes=15 * quarter)).isoformat(),
+                                "device_energy_kwh": {key: kwh / round(kwh / .75) if active else 0}})
+        models, _ = self.build_with_degraded(devices, actuals,
+            mappings={key: {"power": "sensor.boiler_power", "control_type": "permit_inhibit"}},
+            running_power={key: 3000})
+        daily_kwh = models[0]["inference"]["daily_energy_kwh_by_weekday"]
+        self.assertGreater(daily_kwh[5], daily_kwh[0])
+        self.assertGreater(min(daily_kwh.values()), 2.9)
+        self.assertLess(max(daily_kwh.values()), 7.1)
 
     def test_reviewed_watts_win_over_the_learned_average(self) -> None:
         devices = [inventory_device("sensor.heater", "controllable", "setpoint")]
