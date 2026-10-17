@@ -852,7 +852,7 @@ def execution_live(state, now):
     pending = max(0, state.frame.external.import_w - c.residual_load_w) if state.frame else 0
     return execution.LiveState(now, round(c.energy_kwh * 1e6), c.residual_load_w, c.pv_w,
         c.eligible_load_w if c.eligible_load_w is not None else c.residual_load_w,
-        int(a.plant.charge_max_w), int(a.plant.discharge_max_w), a.plant.import_limit_w,
+        int(a.plant.charge_max_w), int(a.plant.discharge_max_w), min(a.plant.import_limit_w, state.frame.limits.import_w),
         a.plant.export_limit_w, pending, a.permissions.available,
         a.permissions.grid_charge_allowed, a.permissions.battery_export_allowed,
         round(a.permissions.export_reserve_kwh * 1e6), round(a.plant.cutoff_kwh * 1e6))

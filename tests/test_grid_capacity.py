@@ -90,6 +90,46 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         await self.native('battery-relief', 'battery', 'number.charge', 'set_value', 0)
         self.assertEqual(len(self.calls), 1)
 
+    async def test_adapted_solar_backed_charge_passes_the_unchanged_native_guard(self):
+        from test_plan_execution import opening_account
+        from shs_core.plan_execution import LiveState, assess_execution
+
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        self.rows['sensor.house']['state'] = '13000'
+        self.rows['sensor.pv']['state'] = '4000'
+        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        live = LiveState(0, 5000000, 13000, 4000, 13000, 4000, 4000, 15000, 10000)
+        assessment = assess_execution(opening_account(), live, self.conversion)
+        self.assertEqual(assessment.reason, 'import_headroom_reduced')
+        self.assertGreater(assessment.charge_dc_w, 0)
+        self.assertLess(assessment.charge_dc_w, assessment.nominal_charge_dc_w)
+        with self.assertRaises(ControlDeadlineError):
+            await self.native('oversized-charge', 'battery', 'number.charge', 'set_value',
+                              assessment.nominal_charge_dc_w / 1000)
+        self.assertFalse(self.calls)
+        await self.native('adapted-charge', 'battery', 'number.charge', 'set_value',
+                          assessment.charge_dc_w / 1000)
+        self.assertEqual(len(self.calls), 1)
+
+        # Another load changing after sizing must still fail the final check.
+        self.rows['sensor.house']['state'] = '14000'
+        with self.assertRaises(ControlDeadlineError):
+            await self.native('changed-capacity', 'battery', 'number.charge', 'set_value',
+                              assessment.charge_dc_w / 1000)
+        self.assertEqual(len(self.calls), 1)
+
+    async def test_battery_capacity_includes_pending_ev_but_excludes_its_own_envelope(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        await self.native('ev-start', 'ev', 'switch.ev', 'turn_on')
+        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        before = await self.source.request('battery_capacity', {})
+        self.assertEqual(before, {'external_import_w': 12040, 'import_limit_w': 15000})
+        await self.native('battery-start', 'battery', 'number.charge', 'set_value', 1)
+        self.assertGreater(self.source.import_required(), before['external_import_w'])
+        self.assertEqual(await self.source.request('battery_capacity', {}), before)
+
     async def test_generic_switch_adds_its_reviewed_power_to_current_house_demand(self):
         self.configure_ev()
         options = self.source.configuration.options()

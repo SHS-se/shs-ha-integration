@@ -390,6 +390,16 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.reason, "import_headroom_reduced")
         self.assertLessEqual(self.model.net_grid(result.charge_dc_w, 0, 0, 1000) + 1500, 3000)
 
+    def test_solar_cannot_spend_capacity_reserved_for_pending_demand(self):
+        account = opening_account()
+        for pending, expected in ((1500, 435), (2000, 0)):
+            with self.subTest(pending_import_w=pending):
+                live = replace(self.live, import_limit_w=3000, pv_w=4000,
+                               pending_import_w=pending)
+                result = assess_execution(account, live, self.model)
+                self.assertEqual(result.charge_dc_w, expected)
+                self.assertEqual(result.reason, 'import_headroom_reduced')
+
     def test_grid_permission_is_never_inferred_from_shortfall(self):
         result = assess_execution(opening_account(), replace(self.live, grid_charge_allowed=False), self.model)
         self.assertEqual(result.charge_dc_w, 0)

@@ -27,6 +27,15 @@ Preparing a command stores its possible demand in the existing gateway SQLite tr
 
 EV bounds use configured current controls and the existing AC profile. Battery bounds use the native charging envelope and installation conversion. Other mapped equipment uses its Power sensor's greatest recorded electrical watts, or the existing literal Power watts. The user required history-derived peaks and removal of the separate maximum-power field on 17 October 2026. HA aggregates all available long- and short-term Recorder maxima in watts, then retains increasing peaks durably with source observations. This is observed evidence, not a guaranteed physical rating; a later higher reading raises the retained peak. It is never a mean, guessed margin or age-based bound. Missing positive evidence holds only that device's demand increase and identifies its sensor; it does not become a missing configuration field. Stopping remains possible, and house consumption still links to Energy.
 
+Battery charging also sizes its requested DC rate to this gross import budget,
+without solar credit. Each refresh reads HA's existing native and durable demand
+reservations for the rest of the house, excluding only this battery's current
+actuator set so its proposed charging envelope is not counted twice. The runtime
+includes that demand in its physical frame and reduces or raises charging within
+the accepted plan as capacity changes. This read is advisory: the unchanged
+runtime, preparation and final native dispatch checks still govern every write,
+including when demand changes after sizing or an older battery write is unresolved.
+
 ## Complexity and practical limits
 
 The old EV/battery coordination was spread between the app's reservations, native battery transitions and HA's final device gate. The aggregate check is now shared at the common transport boundary, with one durable demand ledger in the existing journal. The ledger adds necessary state for outstanding effects; replacing it with a meter-only comparison would recreate the lag bugs. The battery's native multi-register transition state machine remains necessary and is not replaced by another executor.

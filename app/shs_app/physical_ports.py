@@ -64,6 +64,9 @@ class RemoteBattery:
     def close(self):
         self.revoke()
 
+    async def import_capacity(self):
+        return await self.gateway.call('source', {'operation':'battery_capacity', 'body':{}})
+
     def is_current(self, grant, identity):
         return bool(self.enabled and self.gateway.connected and grant and grant == self.grant and identity
             and (grant.owner_id, grant.config_revision, grant.control_surface_revision) ==

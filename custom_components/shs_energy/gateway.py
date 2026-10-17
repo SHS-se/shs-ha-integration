@@ -225,7 +225,7 @@ class HomeAssistantSource:
     async def request(self, operation, body):
         fields = {'credentials':set(),
             'admission':{'revision','bindings','pool_pause'}, 'live':{'after'},
-            'catalog':set(),
+            'catalog':set(), 'battery_capacity':set(),
             'configure':{'expected_revision','revision','options','digest'},
             'statistics':{'start','end','entities','period','units','kinds'},
             'states':{'start','end','entities','with_attributes'}, 'forecast':{'entity'}}
@@ -233,6 +233,17 @@ class HomeAssistantSource:
             raise ValueError('Unsupported source request')
         if operation == 'credentials':
             return dict(self.entry.data)
+        if operation == 'battery_capacity':
+            async with self.service.physical.lock:
+                await self.refresh_capacity()
+                options = self.options()
+                controls = [options[key] for key in ('battery_mode_entity',
+                    'battery_charge_limit_entity', 'battery_discharge_limit_entity')]
+                # Size this battery against the same native/device reservations
+                # as dispatch. Its own envelope is supplied by the new target;
+                # older actuator sets remain independent reserved demand.
+                return {'external_import_w': self.import_required(exclude_device=capacity_key('battery', controls)),
+                        'import_limit_w': import_limit(self.service.import_limit_w)}
         if operation == 'admission':
             validate_bindings(body['bindings'])
             validate_pool_pause(body['pool_pause'])
@@ -512,7 +523,7 @@ class HomeAssistantSource:
         if required > limit:
             raise ControlDeadlineError(f'Waiting for house import capacity: {required:.0f} W required, {limit:.0f} W house limit')
 
-    def import_required(self, *, effect=None):
+    def import_required(self, *, effect=None, exclude_device=None):
         options = self.options()
         if house_meter_errors(options):
             raise HouseMeterError(options)
@@ -564,6 +575,8 @@ class HomeAssistantSource:
             include(effect, max(effect['before_w'],effect['after_w'],effect['possible_w']))
         partitions, used = [], set()
         for device, bound in bounds.items():
+            if device == exclude_device:
+                continue
             measured = 0.0
             sensors = meters[device]
             # Shared or replaced meters cannot establish two independent load

@@ -136,6 +136,56 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_solar_backed_charge_adapts_to_gross_import_capacity(self):
+        from unittest.mock import patch
+        from shs_core.battery_conversion import Conversion, Curve
+
+        # 17 October capture: the solar-aware decision requested 8,325 DC W,
+        # but the native safety envelope was 8,800 AC W plus 6,329 W of house
+        # demand. The 15 kW gross budget must size the request before dispatch.
+        r = Rig()
+        self.addAsyncCleanup(r.runtime.close)
+        r.options.update(battery_capacity_kwh=18.08, battery_charge_max_w=8800,
+                         battery_discharge_max_w=9600)
+        for field, maximum in (('charge', 8.8), ('discharge', 9.6)):
+            r.rows['number.' + field]['attributes']['max'] = maximum
+        r.rows['sensor.house']['state'] = '6329'
+        r.rows['sensor.pv']['state'] = '4020'
+        r.rows['sensor.grid']['state'] = '2281'
+        r.rows['sensor.soc']['state'] = '18.8'
+        r.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        r.plan['grid']['import_limit_w'] = 15000
+        model = Conversion('captured-loss-model', Curve(.9557645926252383, 85.31059199396077),
+                           Curve(.95, 0), Curve(.9716846305625433, 140.6251520512858),
+                           122.87613431000018)
+        original = read_contract(r.plan['battery_execution'])
+        row = original.intervals[0]
+        duration = row.end_ms - row.start_ms
+        charge = round(8325 * duration / 3600)
+        ac = round(8800 * duration / 3600)
+        row = replace(row, stored_end_mwh=row.stored_start_mwh + charge,
+                      charge_ac_limit_w=8800, charge_ac_mwh=ac,
+                      import_mwh=row.load_mwh + ac, rounding_mwh=0)
+        r.plan['battery_execution'] = contract_wire(replace(original,
+            capacity_mwh=18080000, maximum_mwh=18080000, intervals=(row,),
+            objectives=(replace(original.objectives[0], target_mwh=row.stored_end_mwh),)))
+
+        with patch('shs_core.battery_runtime.conversion_model', return_value=(model, {})):
+            await r.start()
+            for house, expected in ((6329, 8202), (7500, 7082), (5000, 8325)):
+                with self.subTest(house_w=house):
+                    r.rows['sensor.house']['state'] = str(house)
+                    for _ in range(3):
+                        await r.advance(5000)
+                    state = r.runtime.host.state
+                    self.assertEqual(state.execution.assessment.charge_dc_w, expected)
+                    self.assertEqual(round(float(r.rows['number.charge']['state']) * 1000), expected)
+                    self.assertEqual(state.groups[0].status, 'adopted')
+                    self.assertLessEqual(house + model.grid_charge.input(expected), 15000)
+                    self.assertFalse(state.groups[0].release_pending)
+                    self.assertEqual(r.runtime.snapshot()['fault_history'], [])
+        self.assertTrue(r.calls)
+
     async def test_obsolete_cached_plan_is_not_offered_while_new_request_is_pending(self):
         from unittest.mock import patch
         from shs_core.home_runtime import ExecutionPlanOffered

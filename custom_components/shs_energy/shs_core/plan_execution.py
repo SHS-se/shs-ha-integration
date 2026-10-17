@@ -1020,6 +1020,13 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
         while lo < hi:
             mid = (lo + hi + 1) // 2
             net = conversion.net_grid(mid, 0, live.pv_w, live.house_w) + live.pending_import_w
+            # Native admission reserves the entire charging envelope against
+            # gross demand, with no discretionary solar credit. Size the target
+            # to that same budget instead of proposing a net-feasible command
+            # that the runtime and final native checks can never admit.
+            if operation == 'grid_charge':
+                reserved = live.house_w + live.pending_import_w + conversion.grid_charge.input(mid)
+                net = max(net, reserved)
             if net <= live.import_limit_w:
                 lo = mid
             else:

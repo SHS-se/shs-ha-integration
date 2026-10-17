@@ -119,9 +119,12 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         proof = json.loads((self.imported/'import.json').read_bytes())
         identity = {key:proof[key] for key in ('entry_id','migration_id','export_sha256','pair')}
         self.native_calls = []
+        self.external_import_w = 1000
+        self.import_limit_w = 10000
         async def send(*args):self.native_calls.append(args)
         async def request(operation,body):
             if operation=='credentials':return self.entry['data']
+            if operation=='battery_capacity':return {'external_import_w':self.external_import_w, 'import_limit_w':self.import_limit_w}
             if operation=='catalog':return dict(context=self.context,states={},preferences={})
             if operation in ('states','statistics'):return {}
             if operation == 'configure': return await self.configuration.install(body)
@@ -513,6 +516,25 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         rig.runtime.physical = writer
         self.addAsyncCleanup(rig.runtime.close,release=False)
         return socket,client,writer
+
+    async def test_remote_capacity_reservations_reduce_and_restore_charge(self):
+        rig = self.battery_rig()
+        await self.remote_battery(rig)
+        rig.rows['sensor.pv']['state'] = '500'
+        self.external_import_w = 9000  # Native/pending loads exceed their meters.
+        await rig.runtime.open()
+        for external, limit, charge in ((9000, 10000, .95), (1000, 10000, 1.899),
+                                       (9500, 10000, .475), (1000, 2000, .95)):
+            with self.subTest(external_import_w=external, import_limit_w=limit):
+                self.external_import_w = external
+                self.import_limit_w = limit
+                for _ in range(3):
+                    await rig.advance(5000)
+                self.assertEqual(float(rig.rows['number.charge']['state']), charge)
+                self.assertEqual(rig.runtime.host.state.frame.external.import_w, external)
+                self.assertEqual(rig.runtime.host.state.frame.limits.import_w, limit)
+                self.assertEqual(rig.runtime.host.state.groups[0].status, 'adopted')
+                self.assertFalse(rig.runtime.host.state.groups[0].release_pending)
 
     async def test_slow_route_admission_keeps_the_session_and_the_battery_grant(self):
         # 3 October 2026: HA's journal answered a battery route after the host's

@@ -105,6 +105,7 @@ class BatteryRuntime:
         self._mode_revision=0;self._mode=None;self._capture_revision=0;self._last_capture=None
         self._status={'state':'pending','reason':'Waiting for the battery plan'}
         self._last_error=None;self._external_pending={};self._frame_pending={};self._releasing=False
+        self._native_capacity=None
         self._release_revision=0
         self._bootstrap=execution.Account();self._replan_task=None;self._replan_pending=False
         self._bootstrap_rejection=None;self._bootstrap_captured=None
@@ -720,6 +721,7 @@ class BatteryRuntime:
             self._grant=await self.coordinator.battery_writer.take_over(self._identity,self.now()+900000)
         if self._grant and self.coordinator.battery_writer.is_current(self._grant,self.identity()):
             await self.host.accept(rt.GrantConfirmed(group.spec.id,self._grant))
+        self._native_capacity=await self.physical.import_capacity() if self.physical is not None else None
         for event in await self._observe(group.spec.id):
             await self.host.accept(event)
         account=self.host.state.execution.account
@@ -898,7 +900,8 @@ class BatteryRuntime:
         # This is a local response window, not a sensor report-age gate. Expiry
         # changes the capture identity even when every source is unchanged.
         self._external_pending={key:until for key,until in self._external_pending.items() if now<until}
-        capture=digest({'reports':reports,'authority':asdict(self.host.state.authority.identity),'pending':self._external_pending})
+        capture=digest({'reports':reports,'authority':asdict(self.host.state.authority.identity),
+            'pending':self._external_pending,'native_capacity':self._native_capacity})
         if capture==self._last_capture:
             conditions=self.host.state.conditions
             if conditions and conditions.valid_until_ms>now+CAPTURE_LIFETIME_MS//2:
@@ -950,12 +953,14 @@ class BatteryRuntime:
             state.groups[0].observation_revision, state.frame.revision if state.frame else 0)+1
         revision=self._capture_revision
         authority=state.authority
+        native_demand=self._native_capacity['external_import_w'] if self._native_capacity is not None else 0
+        import_limit=min(authority.plant.import_limit_w,self._native_capacity['import_limit_w']) if self._native_capacity is not None else authority.plant.import_limit_w
         observed=rt.Observed(group_id,rt.Observation(revision,now,valid,controls,(),envelope))
         # Gross nonbattery load is a conservative import frame. PV is included
         # separately as possible export, and never erased by a planned device.
         frame=rt.FrameObserved(rt.Frame(revision,now,valid,
-            rt.Envelope(max(accounting.house_w,external_w,authority.plant.import_limit_w if self._external_pending else 0), max(0,accounting.pv_w-accounting.house_w)),
-            rt.Envelope(authority.plant.import_limit_w,authority.plant.export_limit_w),tuple(external)))
+            rt.Envelope(max(accounting.house_w,external_w,native_demand,authority.plant.import_limit_w if self._external_pending else 0), max(0,accounting.pv_w-accounting.house_w)),
+            rt.Envelope(import_limit,authority.plant.export_limit_w),tuple(external)))
         self._frame_pending={frame.frame.revision:digest(self._external_pending)}
         energy=fraction*self._ratings['battery_capacity_kwh']
         conditions=rt.ConditionsObserved(ExecutionConditions(revision,now,valid,energy,
