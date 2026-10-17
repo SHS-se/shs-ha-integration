@@ -211,6 +211,8 @@ class Household:
         self.control_authority = control_authority
         self.ports = ports
         self.data = None
+        self.forecast_accuracy = None
+        self.forecast_accuracy_error = None
         self._control_listeners = set()
         self._battery_listeners = set()
         self.client = client
@@ -331,6 +333,7 @@ class Household:
         self.last_connection_success = self.ports.utcnow().isoformat()
         self.last_connection_error = None
         self._pipeline_error('cloud_status', None)
+        self._read_forecast_accuracy(status)
 
         active = bool(status.get("subscription_active"))
         self._sync_subscription_issue(active)
@@ -588,6 +591,7 @@ class Household:
                     "battery_plan": runtime.plan_feedback() if runtime is not None else None,
                 })
                 validate_server_contract(status)
+                self._read_forecast_accuracy(status)
                 self.replan_recommendations = status.get("replan_recommendations", [])
                 self.last_runtime_report = self.ports.utcnow().isoformat()
                 self.last_runtime_error = None
@@ -600,6 +604,13 @@ class Household:
                 return {}
             finally:
                 self.async_update_listeners()
+
+    def _read_forecast_accuracy(self, status):
+        report = status.get('forecast_accuracy')
+        if report and report != self.forecast_accuracy:
+            _LOGGER.info('Forecast accuracy calculation: %s', json.dumps(report, separators=(',', ':')))
+        self.forecast_accuracy = report
+        self.forecast_accuracy_error = status.get('forecast_accuracy_error')
 
     async def async_replan_poll(self, _now: datetime | None = None) -> None:
         """Exchange once per local 15-minute interval, independent of execution."""
@@ -2565,7 +2576,7 @@ class Household:
         self.optimisation_warnings = merge_warnings(base_load["planning_warnings"],
             *[model.get("planning_warnings",[]) for model in device_models])
         if self.optimisation_warnings:
-            _LOGGER.warning("Planning with estimated history: %s", self.optimisation_warnings)
+            _LOGGER.info("Planning evidence: %s", self.optimisation_warnings)
         profiles = base_load["by_weekday"]
 
         services, service_samples, ev_battery = self._build_services(

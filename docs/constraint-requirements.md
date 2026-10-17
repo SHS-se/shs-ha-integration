@@ -98,3 +98,9 @@ checks retain their purpose, but a failed battery handover retains its accepted
 account and must not discard other devices' replacement instructions. Report
 configuration confirmation failures independently of accepting a delivered plan.
 Only explicit mode/exclusion/override actions release equipment.
+
+User requirement, 17 October 2026: normal collection of history, model learning
+and limited fit observations do not create warning banners. Keep their evidence
+in diagnostics and informational logs. Operational failures, including an
+unavailable savings comparison, remain visible. Forecast quality is separate
+from device permissions and plan admission.

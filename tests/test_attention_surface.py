@@ -76,11 +76,17 @@ class AttentionSurfaceTests(unittest.TestCase):
         self.assertEqual(rest.count('{"kind": "none"}'), 2)
 
 
-    def test_sparse_history_is_nonblocking_diagnostic_attention(self):
-        from shs_core.planning_warnings import planning_warning, warning_attention
+    def test_learning_stays_diagnostic_but_comparison_failure_needs_attention(self):
+        from shs_core.planning_warnings import planning_warning, warning_attention, merge_warnings
         warning=planning_warning('profile_estimated','base','Sparse history','Planning uses an estimate')
-        item=warning_attention([warning])[0]
+        self.assertEqual(warning_attention([warning]), [])
+        self.assertEqual(merge_warnings([warning]), [warning])
+        pool=planning_warning('pool_model_quality','pool','limited_idle_observations, limited_response_observations','Learning continues')
+        self.assertEqual(warning_attention([pool]), [])
+        failure=planning_warning('baseline_unavailable','comparison','Comparison failed','Savings unavailable')
+        item=warning_attention([warning, failure])[0]
         self.assertEqual(item['fix']['kind'],'diagnostics')
+        self.assertIn('Comparison failed', item['detail'])
         self.assertNotIn('execution_blocked',item)
 
     def test_an_attention_item_is_built_from_persisted_state(self) -> None:

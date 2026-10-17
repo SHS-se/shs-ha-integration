@@ -52,6 +52,7 @@ class OfflineTests(unittest.IsolatedAsyncioTestCase):
             _LOGGER=SimpleNamespace(warning=lambda *args: None)))
         tariff, prices = {'revision': 1}, {'slots': ['cached']}
         coordinator = SimpleNamespace(data={'subscription_active': True}, _pipeline_error=lambda *args:None,
+            _read_forecast_accuracy=lambda _: None,
             ports=SimpleNamespace(utcnow=lambda: now), tariff_catalog=tariff, supplier_prices=prices, tariff_status='configured',
             tariff_components={'fee': 'cached'}, _sync_subscription_issue=lambda _: None,
             _sync_missing_input_issue=lambda: None,
