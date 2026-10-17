@@ -149,6 +149,18 @@ class DeviceOperations:
             raise ValueError(f"{entity} must report SOC as % or a fraction")
         return value
 
+    def requires_grid_capacity(self, entity, value):
+        """Stopping a switch, or setting EV current while off, adds no demand."""
+        if entity.split('.')[0] in ('switch', 'input_boolean') and value == 'off':
+            return False
+        if self.device == 'ev':
+            record = self.ownership.records.get('ev')
+            options = record['options'] if self.restoring and record else self.options()
+            switch = options.get('ev_charge_switch_entity')
+            if entity != switch and self.actuator_state(switch).state == 'off':
+                return False
+        return self.device != 'battery'
+
     async def command(self, entity, value):
         if self.battery_writer_fence is not None and not self.verifying:
             self.battery_writer_fence.check_device_command(entity)
@@ -188,13 +200,13 @@ class DeviceOperations:
             if not equal:
                 if self.battery_writer_fence is not None:
                     self.battery_writer_fence.check_device_command(entity)
-                if self.device!="battery" and not self.before_external_command(self.device):
+                if self.requires_grid_capacity(entity, value) and not self.before_external_command(self.device):
                     if self.scheduler is not None:
                         self.scheduler.device_deadline(self.device,"battery_headroom",datetime.now(timezone.utc)+timedelta(seconds=5))
                     raise ControlDeadlineError("Waiting for battery charging to release grid capacity")
                 def authorize():
                     self.check_authority()
-                    if self.device != 'battery' and not self.before_external_command(self.device):
+                    if self.requires_grid_capacity(entity, value) and not self.before_external_command(self.device):
                         raise ControlDeadlineError('Waiting for battery charging to release grid capacity')
                     if self.battery_writer_fence is not None:
                         self.battery_writer_fence.check_device_command(entity)

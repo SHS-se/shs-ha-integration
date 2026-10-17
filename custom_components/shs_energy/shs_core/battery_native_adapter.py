@@ -109,6 +109,12 @@ class SigenAdapter:
             after=tuple((k,value if k==key else v) for k,v in before)
             a,b=self.envelope(before),self.envelope(after)
             from dataclasses import replace
+            # The first transition starts from measured flow as well as the
+            # register ceiling. Response lag or meter rounding can exceed the
+            # latter; retain that complete bound in the ceiling-relief proof.
+            if not steps:
+                measured=effect.observation.envelope
+                a=replace(a,import_w=max(a.import_w,measured.import_w),export_w=max(a.export_w,measured.export_w))
             possible=replace(a,import_w=max(a.import_w,b.import_w),export_w=max(a.export_w,b.export_w))
             relief_id=None
             # Protocol-specific proof: reducing an ESS ceiling in the same EMS
