@@ -59,8 +59,9 @@ class Configuration:
         for mapping in cleaned.get('device_control_mappings', {}).values():
             mapping.pop('max_inhibit_slots', None)
             mapping.pop('running_power_w', None)
+            mapping.pop('maximum_power_w', None)
         if cleaned != self.options():
-            await self.commit(self.revision, cleaned, 'retire-obsolete-planning-fields-v3')
+            await self.commit(self.revision, cleaned, 'retire-obsolete-planning-fields-v4')
 
     async def _apply(self):
         desired = self.data

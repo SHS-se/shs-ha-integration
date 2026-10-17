@@ -35,7 +35,7 @@ class PoolContractTests(unittest.TestCase):
         returning "pool" the moment the method changed — which is why choosing
         a power control moved the card's header to "No room".
         """
-        expected = ["actuator_entity_ids", "power", "maximum_power_w", "power_setting_entity_id"]
+        expected = ["actuator_entity_ids", "power", "power_setting_entity_id"]
         for method in CONTROL_FIELDS:
             self.assertEqual(keys(method, "pool"), expected, method)
 
@@ -151,7 +151,7 @@ class RoutingTests(unittest.TestCase):
         )
         self.assertEqual(
             keys("variable_power", path),
-            ["actuator_entity_ids", "power", "maximum_power_w", "power_setting_entity_id"],
+            ["actuator_entity_ids", "power", "power_setting_entity_id"],
         )
 
 
@@ -207,7 +207,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(
             keys("switch_schedule", "room", "heating"),
             ["actuator_entity_ids", "power", "temperature_entity_id",
-             "maximum_power_w", "control_override_entity"],
+             "control_override_entity"],
         )
         self.assertEqual(
             keys("variable_power", "ev"),
@@ -216,7 +216,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(
             keys("permit_inhibit", "boiler"),
             ["actuator_entity_ids", "power",
-             "maximum_power_w", "control_override_entity"],
+             "control_override_entity"],
         )
 
     def test_an_unrouted_device_keeps_its_plain_contract(self):

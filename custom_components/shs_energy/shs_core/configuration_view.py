@@ -6,7 +6,6 @@ from .configuration_fields import _control_fields
 from .discovery import suggest_device_control_mapping
 from .device_controls import apply_planner_support, mapping_report, is_room_thermal_control, mapped_planning_path
 from .presentation import complete_device_views
-from .grid_capacity import rating_errors
 
 def execution_device_views(catalog, context, explicit, choices, coordinator, *, include_suggestions=True):
     """Use exactly the Schedule tab's inventory, ownership and permission rules."""
@@ -66,8 +65,7 @@ def execution_device_views(catalog, context, explicit, choices, coordinator, *, 
                     catalog, device, control_type
                 ) if include_suggestions else {}),
                 "execution_status": coordinator.controller.status.get("device:" + device["key"]),
-                "fields": [{**field, "required": field.get("required", False) or field["key"] in rating_errors(saved_mapping)}
-                           for field in _control_fields({**device, "control_type": control_type})],
+                "fields": _control_fields({**device, "control_type": control_type}),
                 **report,
             }
         )

@@ -131,7 +131,7 @@ def equipment_present(options, system, devices, configured_keys=()):
 def complete_device_views(devices, options, choices, status, plan, controllers, entity_names, area_names, now, configured_keys=()):
     """Augment one inventory with website choice, setup owner and local permission."""
     from .operating_modes import device_mode, system_device_keys, system_member_keys
-    from .grid_capacity import house_meter_errors, rating_errors
+    from .grid_capacity import house_meter_errors
     devices = deepcopy(devices)
     for device in devices:
         key = device.get("statistic_id") or device["key"]
@@ -256,9 +256,6 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
                                     "pool_stop_temperature_entity"):
                     field["required"] = included
 
-        for field in device.get('fields', []):
-            if field['key'] in rating_errors(mapping):
-                field['required'] = True
         device["controller_explanation"] = controller_explanation(
             controller_id, mode, device["execution_status"], active)["explanation"]
         device["fields"] = [f for f in device.get("fields", []) if f["key"] != "control_enabled"]

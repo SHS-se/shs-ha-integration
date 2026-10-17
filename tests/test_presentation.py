@@ -20,7 +20,7 @@ class PresentationTests(unittest.TestCase):
         self.assertFalse(view['execution_eligibility']['eligible'])
         self.assertIn('power', view['field_errors'])
         self.assertIn('house_consumption_power_entity', view['field_errors'])
-        water['mapping'].update(power='sensor.water_power', maximum_power_w=3000)
+        water['mapping'].update(power='sensor.water_power')
         self.options['house_consumption_power_entity'] = 'sensor.house'
         corrected = self.view([water])[0]
         self.assertNotIn('running_power_w', [f['key'] for f in corrected['fields']])

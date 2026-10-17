@@ -19,10 +19,11 @@ from shs_core.gateway_journal import digest
 from shs_core.gateway_service import GatewayService
 from shs_core.native_readings import power
 from shs_core.grid_capacity import (battery_released, ev_demand, required_import, import_limit,
-    empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, rated_power, GridRatingError, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, CHARGING_MODES)
+    empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, CHARGING_MODES)
 from shs_core.device_commands import actuator_targets
+from shs_core.connection_health import RetryBackoff
 from shs_core.battery_native_adapter import SigenAdapter
-from shs_core.device_operations import ControlDeadlineError
+from shs_core.device_operations import ControlDeadlineError, ControlObservationError, PowerHistoryError
 from shs_core.source_admission import (validate_bindings, ordered, FACT_ATTRIBUTES, native_pool_idle, owned_device_sources,
     validate_pool_pause, temperature_available, temperature_metadata)
 
@@ -75,8 +76,9 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             filter_sources=filter_sources, configured_entity_ids=configured_entity_ids, power=power, battery_released=battery_released,
             ev_demand=ev_demand, required_import=required_import, import_limit=import_limit, SigenAdapter=SigenAdapter,
             ControlDeadlineError=ControlDeadlineError, empty_capacity=empty_capacity, capacity_bound=capacity_bound,
-            commanded_controls=commanded_controls, _current=_current, EV_WATTS_PER_AMP=EV_WATTS_PER_AMP, actuator_targets=actuator_targets, rated_power=rated_power, GridRatingError=GridRatingError, capacity_key=capacity_key, house_meter_errors=house_meter_errors,
-            HouseMeterError=HouseMeterError, GridCapacityConfigurationError=GridCapacityConfigurationError,
+            commanded_controls=commanded_controls, _current=_current, EV_WATTS_PER_AMP=EV_WATTS_PER_AMP, actuator_targets=actuator_targets, device_power_bound=device_power_bound, PowerHistoryError=PowerHistoryError,
+            observe_power_peak=observe_power_peak, merge_power_peaks=merge_power_peaks, RetryBackoff=RetryBackoff, capacity_key=capacity_key, house_meter_errors=house_meter_errors,
+            HouseMeterError=HouseMeterError, GridCapacityConfigurationError=GridCapacityConfigurationError, ControlObservationError=ControlObservationError,
             battery_import_bound=battery_import_bound, CHARGING_MODES=CHARGING_MODES))
         for key,value in dict(validate_bindings=validate_bindings,ordered=ordered,FACT_ATTRIBUTES=FACT_ATTRIBUTES,
                 native_pool_idle=native_pool_idle,owned_device_sources=owned_device_sources,validate_pool_pause=validate_pool_pause,

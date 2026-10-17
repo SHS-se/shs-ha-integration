@@ -79,7 +79,7 @@ POWER_FIELD = _field(
     "power",
     "Power",
     "power",
-    help_text="Choose a power sensor, or enter the reviewed maximum electrical watts directly.",
+    help_text="Choose a power sensor. SHS uses its recorded peak for house capacity checks. You can also enter electrical watts directly.",
 )
 
 def _temperature_field(*, required: bool) -> dict[str, Any]:
@@ -208,8 +208,7 @@ EXECUTION_FIELDS = (
     _field("control_override_entity", "Manual override", "entity", domains=("input_boolean", "binary_sensor")),
 )
 for kind in ("setpoint", "switch_schedule", "permit_inhibit"):
-    CONTROL_FIELDS[kind] += (_field("maximum_power_w", "Maximum electrical power", "number", unit="W", minimum=1,
-        help_text="Equipment maximum, required when Power is a sensor. Leave empty when Power already contains reviewed rated watts."), *EXECUTION_FIELDS)
+    CONTROL_FIELDS[kind] += EXECUTION_FIELDS
 CONTROL_FIELDS["setpoint"] += (
     _field("minimum_temperature_c", "Lowest allowed target", "number", unit="°C"),
     _field("maximum_temperature_c", "Highest allowed target", "number", unit="°C"),
@@ -260,7 +259,7 @@ PATH_ACTUATOR_DOMAINS: dict[str, list[str]] = {
 
 # Path-specific fields. Shared execution settings are appended after filtering.
 PATH_CONTRACT_KEYS: dict[str, frozenset[str]] = {
-    "pool": frozenset({"actuator_entity_ids", "power", "maximum_power_w"}),
+    "pool": frozenset({"actuator_entity_ids", "power"}),
 }
 
 

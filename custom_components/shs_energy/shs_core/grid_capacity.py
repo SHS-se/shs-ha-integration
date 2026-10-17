@@ -214,34 +214,45 @@ def _current(value):
     return amps
 
 
-def rated_power(mapping):
-    """A reviewed bound, distinct from a live power sensor or learned mean."""
-    maximum = mapping.get('maximum_power_w')
-    if maximum is not None and (type(maximum) not in (int,float) or not isfinite(maximum) or maximum <= 0):
+def positive_power(value, unit='W'):
+    """Normalize an observed power sample; absent/invalid samples supply no peak."""
+    if isinstance(value, bool) or unit not in ('W', 'kW'):
         return None
-    watts = mapping.get('power')
-    literal = float(watts) if type(watts) in (int,float) and isfinite(watts) and watts > 0 else None
-    bounds = [value for value in (maximum,literal) if value is not None]
-    return max(bounds) if bounds else None
+    try:
+        watts = float(value) * (1000 if unit == 'kW' else 1)
+    except (ValueError, TypeError):
+        return None
+    return watts if isfinite(watts) and watts > 0 else None
 
 
-def rating_errors(mapping):
-    if (mapping.get('control_type') == 'variable_power' and not mapping.get('actuator_entity_ids')) or rated_power(mapping) is not None:
-        return {}
-    return {'maximum_power_w': ['Enter the equipment maximum electrical power in watts so house capacity can be checked before switching it on']}
+def merge_power_peaks(peaks, observed):
+    """Monotonic max-merge, shared by history seeding and durable observations."""
+    changed = False
+    for entity, value in observed.items():
+        watts = positive_power(value)
+        if watts is not None and watts > peaks.get(entity, 0):
+            peaks[entity] = watts
+            changed = True
+    return changed
+
+
+def observe_power_peak(peaks, row):
+    if not row:
+        return False
+    watts = positive_power(row.get('state'), row.get('attributes', {}).get('unit_of_measurement'))
+    return bool(watts is not None and merge_power_peaks(peaks, {row['entity_id']: watts}))
+
+
+def device_power_bound(mapping, peaks):
+    """Use literal Power watts or the mapped sensor's greatest recorded watts."""
+    source = mapping.get('power')
+    if type(source) in (int, float):
+        return positive_power(source)
+    return positive_power(peaks.get(source)) if isinstance(source, str) else None
 
 
 class GridCapacityConfigurationError(ValueError):
     pass
-
-
-class GridRatingError(GridCapacityConfigurationError):
-    def __init__(self, key, mapping):
-        message = '; '.join(message for messages in rating_errors(mapping).values() for message in messages)
-        super().__init__(message)
-        self.fix = {'kind':'fields', 'fields':[{'scope':'mapping','device_key':key,
-            'key':field, 'message':'; '.join(messages)} for field,messages in rating_errors(mapping).items()]}
-        self.next_step = 'Open the highlighted Maximum electrical power field and enter the equipment rating.'
 
 
 def capacity_key(logical, controls):

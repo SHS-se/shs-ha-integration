@@ -46,6 +46,15 @@ class ControlObservationError(ValueError):
         return self.unavailable
 
 
+class PowerHistoryError(ControlObservationError):
+    """Missing runtime evidence is retryable; it is never a configuration fault."""
+    def __init__(self, key, mapping):
+        sensor = mapping.get('power')
+        super().__init__(f'{key}: no positive recorded power is available for {sensor}; waiting for power history before increasing demand',
+            sensor if isinstance(sensor, str) else None,
+            'Inspect the mapped power sensor and its Recorder history.')
+
+
 class ActuatorUnavailableError(ControlObservationError):
     """The entity SHS writes cannot be reached, so nothing can be sent or handed back yet."""
 

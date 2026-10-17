@@ -3,7 +3,7 @@ import logging
 from time import perf_counter, thread_time
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.history import get_significant_states
-from homeassistant.components.recorder.statistics import statistics_during_period
+from homeassistant.components.recorder.statistics import statistics_during_period, statistic_during_period
 from homeassistant.exceptions import HomeAssistantError
 from .shs_core.household_ports import HouseholdReadError
 
@@ -14,6 +14,16 @@ class RecorderSource:
 
     def __init__(self, hass):
         self.hass = hass
+
+    async def power_peaks(self, entities):
+        """Aggregate all retained short/long-term maxima, normalized by Recorder."""
+        def read():
+            return {entity:statistic_during_period(self.hass, None, None, entity,
+                    {'max'}, {'power':'W'}).get('max') for entity in sorted(entities)}
+        try:
+            return await get_instance(self.hass).async_add_executor_job(read)
+        except HomeAssistantError as error:
+            raise HouseholdReadError(str(error)) from error
 
     async def statistics(self, start, end, entities, period, units, kinds):
         requested = perf_counter()

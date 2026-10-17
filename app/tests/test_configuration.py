@@ -50,6 +50,20 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reopened.options()['grid_export_limit_w'], 13200)
         self.assertEqual(reopened.options()['device_modes'], options['device_modes'])
 
+    async def test_upgrade_retires_manual_maximum_without_changing_modes_or_mapping(self):
+        mapping=dict(control_type='switch_schedule',actuator_entity_ids=['switch.pool'],
+            power='sensor.pool',maximum_power_w=1234)
+        options={**self.app.options(),'device_modes':{'pool':'controlling'},
+            'device_control_mappings':{'pool':mapping}}
+        await self.app.commit(self.app.revision,options,'retire-obsolete-planning-fields-v3')
+        reopened=Configuration(self.root,{'installation':'original'},self.gateway.install,project=deepcopy)
+        await reopened.load(self.gateway.value,self.credentials)
+        self.assertNotIn('maximum_power_w',reopened.options()['device_control_mappings']['pool'])
+        self.assertEqual(reopened.options()['device_modes'],{'pool':'controlling'})
+        self.assertEqual(reopened.options()['device_control_mappings']['pool'],
+            {key:value for key,value in mapping.items() if key!='maximum_power_w'})
+        self.assertEqual(reopened.options(),self.gateway.options())
+
     async def test_lost_reply_retains_pending_then_reconciles_without_duplicate_revision(self):
         async def lose_reply(body):
             await self.gateway.install(body)

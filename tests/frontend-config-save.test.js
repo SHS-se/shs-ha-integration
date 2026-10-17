@@ -1621,19 +1621,19 @@ test('transient settings refresh stays quiet until an hour and verified refresh 
   assert.equal(panel._attention().some(item => item.key === 'status_refresh'), false);
 });
 
-test('reviewed import maximum correction opens the mapped device field and clears after save', () => {
+test('mapped power source correction opens the device field and clears after save', () => {
   const panel = splitPanel();
-  const field = {key:'maximum_power_w',label:'Maximum electrical power',kind:'number',unit:'W',required:true};
-  const message = 'Enter the equipment maximum electrical power in watts';
+  const field = {key:'power',label:'Power',kind:'power',required:true};
+  const message = 'Select a power sensor';
   const fix = {kind:'fields',fields:[{scope:'mapping',device_key:'water',key:field.key,message}]};
   const water = {key:'water',name:'Hot water',category:'hot_water',control_type:'permit_inhibit',included:true,
     planned:true,fields:[field],system_fields:[],mapping:{power:'sensor.water'},permission:{},
     mapping_status:'invalid',field_errors:{[field.key]:[message]},execution_status:{state:'fault',fix}};
   panel._data.devices=[water];
   panel._data.attention=[{key:'device_control_mapping',severity:'warning',title:'Hot-water setup needs attention',fix}];
-  const token='mapping:water:maximum_power_w';
-  assert.match(panel._renderAttention(), /mapping:water:maximum_power_w/);
-  assert.match(panel._renderDevice(water), /Maximum electrical power/);
+  const token='mapping:water:power';
+  assert.match(panel._renderAttention(), /mapping:water:power/);
+  assert.match(panel._renderDevice(water), /Power/);
   assert.match(panel._renderDevice(water), /aria-invalid="true"/);
   let focused=false;
   panel.shadowRoot={querySelectorAll:()=>[{dataset:{fieldToken:token},scrollIntoView(){},
@@ -1641,7 +1641,7 @@ test('reviewed import maximum correction opens the mapped device field and clear
   panel._openField(token);
   assert.equal(panel._tab,'devices');
   assert.equal(focused,true);
-  water.mapping.maximum_power_w=3000;water.field_errors={};water.mapping_status='ready';water.execution_status={};
+  water.mapping.power='sensor.water';water.field_errors={};water.mapping_status='ready';water.execution_status={};
   panel._data.attention=[];
   assert.equal(panel._fieldProblems(field.key,'mapping','water').length,0);
 });

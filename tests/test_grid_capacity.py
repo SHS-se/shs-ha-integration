@@ -1,8 +1,9 @@
 """House-wide import checks use live readings and owned native settings."""
+import asyncio
 from copy import deepcopy
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, AsyncMock, patch
 
 import test_gateway_metadata as metadata
 import test_verification as verification
@@ -117,7 +118,7 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
             'actuator_entity_ids':['switch.pool'], 'power':'sensor.pool'}
         self.source.configuration.options = lambda:deepcopy(options)
         self.rows['switch.pool'] = {'state':'on', 'attributes':{}}
-        with self.assertRaisesRegex(ValueError, 'maximum electrical power in watts'):
+        with self.assertRaisesRegex(ValueError, 'no positive recorded power'):
             self.source.describe_import('pool','switch.pool','on')
         await self.native('pool-off', 'pool', 'switch.pool', 'turn_off')
         await self.native('ev-start', 'ev', 'switch.ev', 'turn_on')
@@ -358,15 +359,13 @@ class DurableDemandTests(unittest.TestCase):
 
 
 class RatingCorrectionTests(unittest.TestCase):
-    def test_required_rating_and_house_meter_have_one_correction_path(self):
+    def test_sensor_mapping_needs_no_maximum_configuration_and_keeps_house_meter_correction(self):
         from household_fixture import Rig
         from test_planning import device
         from shs_core.discovery import CatalogState, DiscoveryCatalog
-        from shs_core.configuration_schema import save_device, prepare_options
+        from shs_core.configuration_schema import save_device, prepare_options, validate_mapping_keys
         from shs_core.configuration_view import execution_device_views
         from shs_core.operating_modes import execution_mode_options
-        from shs_core.grid_capacity import GridRatingError, HouseMeterError
-        from shs_core.device_operations import correction_details
         key = 'water'
         model = device(key,'hot_water','permit_inhibit')
         states = {'switch.water':dict(state='off',attributes={}),
@@ -383,22 +382,20 @@ class RatingCorrectionTests(unittest.TestCase):
             return execution_device_views(catalog,dict(entity_names=names,area_names={},entity_areas={}),
                 options,dict(devices=[model],home={}),rig.household,include_suggestions=False)[0]
         invalid = view()
-        self.assertEqual(set(invalid['field_errors']),{'maximum_power_w','house_consumption_power_entity'})
-        self.assertTrue(next(f for f in invalid['fields'] if f['key']=='maximum_power_w')['required'])
+        self.assertEqual(set(invalid['field_errors']),{'house_consumption_power_entity'})
+        self.assertNotIn('maximum_power_w', {field['key'] for field in invalid['fields']})
         with self.assertRaises(ValueError):
             execution_mode_options(options,[invalid],key,'controlling')
-        rating_fix = correction_details(GridRatingError(key,mapping))['fix']['fields'][0]
-        self.assertEqual((rating_fix['scope'],rating_fix['device_key'],rating_fix['key']),('mapping',key,'maximum_power_w'))
-        house_fix = correction_details(HouseMeterError(options))['fix']['fields'][0]
-        self.assertEqual((house_fix['scope'],house_fix['key']),('configuration','house_consumption_power_entity'))
         options = prepare_options(options,{'house_consumption_power_entity':'sensor.house'},states.get)
-        options = save_device(options,key,{**mapping,'maximum_power_w':3000},model,states.get,
+        options = save_device(options,key,mapping,model,states.get,
             entity_names=names,area_names={},entity_area_ids={})
         ready = view()
         self.assertEqual(ready['field_errors'],{})
         self.assertIsNone(ready['permission']['reason'])
         self.assertFalse(ready['permission']['enabled'])
         self.assertEqual(execution_mode_options(options,[ready],key,'controlling')['device_modes'][key],'controlling')
+        with self.assertRaisesRegex(ValueError, 'unknown device fields: maximum_power_w'):
+            validate_mapping_keys({**mapping,'maximum_power_w':3000})
 
 
 class DispatchFenceTests(unittest.TestCase):
@@ -428,3 +425,190 @@ class DispatchFenceTests(unittest.TestCase):
         self.report(22,'sensor.ev','0')
         self.assertEqual(commanded_controls(self.capacity,'ev'),{'switch.ev':'off'})
         self.assertEqual(capacity_bound(self.capacity['devices']['ev']),11040)
+
+
+class PowerPeakTests(unittest.TestCase):
+    def test_only_positive_power_samples_raise_the_retained_peak(self):
+        from shs_core.grid_capacity import observe_power_peak, device_power_bound
+        peaks = {}
+        def observe(value, unit='W'):
+            return observe_power_peak(peaks, dict(entity_id='sensor.pool',state=value,
+                attributes={'unit_of_measurement':unit}))
+        self.assertTrue(observe('2.5','kW'))
+        for value, unit in [('0','W'),('1','W'),('unavailable','W'),('nan','W'),('inf','W'),
+                            ('-3000','W'),('9','kWh'),(True,'W')]:
+            self.assertFalse(observe(value,unit))
+        self.assertEqual(device_power_bound({'power':'sensor.pool'},peaks),2500)
+        self.assertEqual(device_power_bound({'power':2000},peaks),2000)
+        self.assertIsNone(device_power_bound({'power':'sensor.other'},peaks))
+        self.assertIsNone(device_power_bound({'maximum_power_w':9999},peaks))
+
+
+class NativePowerHistoryTests(unittest.IsolatedAsyncioTestCase):
+    asyncSetUp = metadata.MetadataTests.asyncSetUp
+    configure_ev = LiveImportTests.configure_ev
+    native = LiveImportTests.native
+
+    def configure_pool(self):
+        self.configure_ev()
+        self.physical.observation_changed = asyncio.Event()
+        options = self.source.configuration.options()
+        options['device_control_mappings']['pool'] = dict(control_type='switch_schedule',
+            actuator_entity_ids=['switch.pool'],power='sensor.pool')
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.rows['switch.pool'] = dict(state='off',attributes={})
+        self.rows['sensor.pool'] = dict(entity_id='sensor.pool',state='0',
+            last_reported=self.rows['sensor.house']['last_reported'],
+            attributes={'unit_of_measurement':'W','state_class':'measurement'})
+        self.source.report = lambda entity,*args,**kwargs:self.rows.get(entity)
+        self.source.history = SimpleNamespace(power_peaks=AsyncMock(return_value={'sensor.pool':4000}))
+        self.service.import_limit_w = 15000
+
+    async def test_history_peak_checks_idle_sensor_at_dispatch_without_history_io(self):
+        self.configure_pool()
+        self.source.collect_power_history()
+        await asyncio.gather(*self.tasks)
+        self.source.history.power_peaks.assert_awaited_once_with({'sensor.ev','sensor.pool'})
+        self.assertEqual(self.source.power_peaks['sensor.pool'],4000)
+        self.source.history.power_peaks.side_effect = AssertionError('dispatch must not read Recorder')
+        self.rows['sensor.house']['state']='12000'
+        with self.assertRaisesRegex(ControlDeadlineError,'16000 W required'):
+            await self.native('peak-pool','device:pool','switch.pool','turn_on')
+        self.assertFalse(self.calls)
+        self.source.collect_power_history()
+        self.assertFalse(self.source.power_history_pending)
+
+    async def test_higher_replaceable_report_during_history_scan_is_durable(self):
+        self.configure_pool()
+        started, finish = asyncio.Event(), asyncio.Event()
+        async def read(_entities):
+            started.set()
+            await finish.wait()
+            return {'sensor.pool':3000}
+        self.source.history.power_peaks.side_effect=read
+        self.source.collect_power_history()
+        await started.wait()
+        self.source.execution_source=lambda entity:False
+        self.source.entities.add('sensor.pool')
+        self.rows['sensor.pool']['state']='5000'
+        self.hass.fire('state_reported',entity_id='sensor.pool',new_state=SimpleNamespace(attributes={}))
+        self.rows['sensor.pool']['state']='0'
+        finish.set()
+        await asyncio.gather(*self.tasks)
+        await self.stream.queue.join()
+        self.assertEqual(self.source.power_peaks['sensor.pool'],5000)
+        self.assertEqual(self.journal.load_record('power_peaks')['sensor.pool'],5000)
+        self.assertEqual(self.source.intake_counts['ordered'],1)
+        self.assertFalse(self.calls)
+
+    async def test_retained_owned_mapping_uses_its_sensor_peak_after_remapping(self):
+        self.configure_pool()
+        options=self.source.configuration.options()
+        self.physical.ownership.records['device:pool']=dict(options=deepcopy(options),
+            originals={'switch.pool':'off'},last_commands={})
+        options['device_control_mappings'].pop('pool')
+        self.source.configuration.options=lambda:deepcopy(options)
+        self.source.power_peaks={'sensor.pool':5000}
+        self.rows['switch.pool']['state']='on'
+        self.rows['sensor.house']['state']='1000'
+        self.assertIn('sensor.pool',self.source.power_history_sources())
+        self.assertEqual(self.source.import_required(),6000)
+
+    async def test_missing_history_is_runtime_source_error_and_off_stays_available(self):
+        self.configure_pool()
+        from shs_core.device_operations import PowerHistoryError
+        from shs_core.device_operations import correction_details
+        with self.assertRaises(PowerHistoryError) as error:
+            self.source.describe_import('device:pool','switch.pool','on')
+        self.assertEqual(correction_details(error.exception)['fix'],{'kind':'entity','entity_id':'sensor.pool'})
+        await self.native('pool-off-without-history','device:pool','switch.pool','turn_off')
+        self.assertEqual(len(self.calls),1)
+
+    async def test_positive_startup_sample_is_durable_before_recorder_can_answer(self):
+        self.configure_pool()
+        self.rows['sensor.pool']['state']='2500'
+        started=asyncio.Event()
+        async def blocked(_entities):
+            started.set()
+            await asyncio.Event().wait()
+        self.source.history.power_peaks.side_effect=blocked
+        self.source.collect_power_history()
+        await started.wait()
+        self.assertEqual(self.journal.load_record('power_peaks')['sensor.pool'],2500)
+        self.tasks[-1].cancel()
+        await asyncio.gather(*self.tasks,return_exceptions=True)
+        self.source.power_peaks={}
+        await self.source.refresh_capacity()
+        self.assertEqual(self.source.power_peaks['sensor.pool'],2500)
+
+    async def test_history_failure_retries_without_blocking_native_startup(self):
+        self.configure_pool()
+        self.source.history.power_peaks.side_effect=[RuntimeError('Recorder busy'),{'sensor.pool':4000}]
+        with patch.dict(self.source.collect_power_history.__globals__,
+                RetryBackoff=lambda:SimpleNamespace(next=lambda:0,reset=lambda:None)):
+            with self.assertLogs(level='ERROR') as logs:
+                self.source.collect_power_history()
+                await asyncio.gather(*self.tasks)
+        self.assertIn('Recorder busy',logs.output[0])
+        self.assertEqual(self.source.power_peaks['sensor.pool'],4000)
+        self.assertEqual(self.source.history.power_peaks.await_count,2)
+        self.assertFalse(self.calls)
+
+    async def test_missing_peak_is_transported_with_retry_deadline_and_recovers_same_slot(self):
+        import test_controller as fixtures
+        from test_device_gateway import MemoryOperations
+        from command_fixture import controller_inputs
+        from shs_core.device_gateway import DeviceGateway
+        pool=fixtures.ControllerTests();pool.setUp()
+        pool.options['device_modes']['$pool']='controlling'
+        canonical=self.source.configuration.options()
+        canonical['device_control_mappings']=deepcopy(pool.options['device_control_mappings'])
+        mapping=next(iter(canonical['device_control_mappings'].values()))
+        mapping['power']='sensor.pool_power'
+        self.source.configuration.options=lambda:deepcopy(canonical)
+        self.source.report=lambda entity:self.rows.get(entity) or (
+            dict(entity_id=entity,state=pool.hass.states.get(entity).state,
+                 attributes=pool.hass.states.get(entity).attributes)
+            if pool.hass.states.get(entity) else None)
+        self.rows['select.mode']['state']='Standby'
+        self.rows['number.charge']['state']='0'
+        self.rows['sensor.battery']['state']='0'
+        gateway=DeviceGateway(controller_inputs(pool.hass),pool.controller.options,pool.store,
+            pool.controller.native_executor,authorize=lambda intent:None,
+            before_external=self.source.external_ready,operations=MemoryOperations())
+        await gateway.load()
+        request=dict(request_id='missing-peak',device='pool',operation='apply',
+            configuration_revision=1,policy_revision=1,headroom_reserved=True,
+            parameters=dict(start=metadata.datetime.now(metadata.timezone.utc).isoformat(),heating_w=3300,
+                pool_permitted=True,stop_temperature_c=30,models=pool.coordinator.optimisation_plan['device_models']))
+        pending=await gateway.perform(request)
+        self.assertEqual(pending['error']['kind'],'observation')
+        self.assertEqual(pending['error']['entity'],'sensor.pool_power')
+        self.assertTrue(pending['deadlines'])
+        self.assertFalse(pool.calls)
+        self.source.power_peaks['sensor.pool_power']=4000
+        self.rows['sensor.pool_power']=dict(state='0',attributes={'unit_of_measurement':'W','state_class':'measurement'},
+            last_reported=self.rows['sensor.house']['last_reported'])
+        self.assertLessEqual(self.source.import_required(),self.service.import_limit_w)
+        completed=await gateway.perform({**request,'request_id':'history-ready'})
+        self.assertIsNone(completed['error'])
+        self.assertEqual(pool.calls,[('switch.pool','on')])
+
+
+class RecorderPeakTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recorder_aggregates_the_complete_history_in_watts(self):
+        import logging
+        from test_execution_mode_select import load_adapter
+        from shs_core.household_ports import HouseholdReadError
+        calls=[]
+        async def execute(function):
+            return function()
+        def aggregate(hass,start,end,entity,kinds,units):
+            calls.append((start,end,entity,kinds,units))
+            return {'max':4321.5,'mean':12.0}
+        adapter=load_adapter('recorder_source.py',dict(logging=logging,
+            get_instance=lambda hass:SimpleNamespace(async_add_executor_job=execute),
+            statistic_during_period=aggregate,HomeAssistantError=RuntimeError,HouseholdReadError=HouseholdReadError))
+        result=await adapter.RecorderSource(object()).power_peaks({'sensor.pool'})
+        self.assertEqual(result,{'sensor.pool':4321.5})
+        self.assertEqual(calls,[(None,None,'sensor.pool',{'max'},{'power':'W'})])

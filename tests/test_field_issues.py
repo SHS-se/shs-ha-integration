@@ -74,10 +74,10 @@ class FieldIssueTests(unittest.TestCase):
 
     def test_unmapped_device_identifies_its_actual_required_actuator(self):
         report = mapping_report('switch_schedule', None)
-        self.assertEqual(set(report['field_errors']), {'actuator_entity_ids', 'maximum_power_w'})
+        self.assertEqual(set(report['field_errors']), {'actuator_entity_ids'})
 
     def test_missing_entity_marks_only_the_reference_that_is_broken(self):
-        report = mapping_report('switch_schedule', {'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.gone'], 'power': 'sensor.power', 'maximum_power_w':2000}, {'sensor.power'})
+        report = mapping_report('switch_schedule', {'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.gone'], 'power': 'sensor.power'}, {'sensor.power'})
         self.assertEqual(set(report['field_errors']), {'actuator_entity_ids'})
         self.assertIn('switch.gone', report['field_errors']['actuator_entity_ids'][0])
         self.assertNotIn('switch.gone', report['mapping_error'], 'website summary stays privacy-minimised')

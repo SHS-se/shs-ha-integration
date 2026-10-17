@@ -27,12 +27,12 @@ from .shs_core.battery_gateway import BatteryGateway
 from .shs_core.battery_native_adapter import SigenAdapter
 from .shs_core.native_readings import power
 from .shs_core.grid_capacity import (battery_released, ev_demand, required_import, import_limit,
-    empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, rated_power, GridRatingError, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, CHARGING_MODES)
+    empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, CHARGING_MODES)
 from .shs_core.device_commands import actuator_targets
 from .shs_core.command_transport import CommandTransport
 from .shs_core.controller_inputs import ControllerInputs
 from .shs_core.device_gateway import DeviceGateway
-from .shs_core.device_operations import ControlDeadlineError
+from .shs_core.device_operations import ControlDeadlineError, ControlObservationError, PowerHistoryError
 from .shs_core.gateway_journal import GatewayJournal, GatewayConflict
 from .shs_core.gateway_service import GatewayService, AppConnection
 from .shs_core.gateway_stream import GatewayCommands, GatewayOperations, GatewayRecord, GatewayStream
@@ -40,6 +40,7 @@ from .shs_core.execution_configuration import ExecutionConfiguration
 from .shs_core.source_admission import (validate_bindings, ordered, FACT_ATTRIBUTES, native_pool_idle, owned_device_sources,
     validate_pool_pause, temperature_available, temperature_metadata)
 from .shs_core.native_commands import NativeExecutor
+from .shs_core.connection_health import RetryBackoff
 
 _LOGGER = logging.getLogger(__name__)
 GATEWAYS = 'shs_energy_gateways'
@@ -69,6 +70,10 @@ class HomeAssistantSource:
         self.live_changes = {}
         self.fact_versions = {}
         self.capacity = empty_capacity()
+        self.power_peaks = {}
+        self.power_entities = set()
+        self.power_history_loaded = set()
+        self.power_history_pending = False
         self.capacity_entities = set()
         self.capacity_refresh_pending = False
         self.intake_counts = {'ordered':0, 'replaceable':0, 'bytes':0}
@@ -108,6 +113,7 @@ class HomeAssistantSource:
         entities = (set(self.configuration.options()['_observed_entities']) if self.configuration.value['revision'] else configured_entity_ids(self.options()))
         entities.update(self.bindings)
         entities.update(self.capacity_entities)
+        entities.update(self.power_history_sources())
         for record in self.service.physical.ownership.records.values():
             entities.update(record['originals'])
             entities.update(configured_entity_ids(record['options']))
@@ -199,6 +205,7 @@ class HomeAssistantSource:
             if self.admission is not None:
                 self.install_bindings(self.admission)
             self.entities = self.sources()
+            self.collect_power_history()
             # Queue the canonical configuration and its initial source values in
             # one callback turn before acknowledging the new revision.
             context = self.context()
@@ -313,6 +320,48 @@ class HomeAssistantSource:
         value = await self.service.stream.call('load_record', 'grid_capacity')
         if value is not None:
             self.install_capacity(value)
+        merge_power_peaks(self.power_peaks, await self.service.stream.call('load_record', 'power_peaks') or {})
+
+    def power_history_sources(self):
+        option_sets = [self.options(), *(record['options'] for record in
+            self.service.physical.ownership.records.values() if record.get('options'))]
+        return {sensor for options in option_sets
+            for mapping in options.get('device_control_mappings', {}).values()
+            if isinstance(sensor := mapping.get('power'), str) and '.' in sensor}
+
+    def collect_power_history(self):
+        self.power_entities = self.power_history_sources()
+        if self.power_history_pending or not self.power_history_sources() - self.power_history_loaded:
+            return
+        self.power_history_pending = True
+        async def collect():
+            retries = RetryBackoff()
+            try:
+                while not self.closed and (entities := self.power_history_sources() - self.power_history_loaded):
+                    # Subscribe/observe before the async Recorder read, so a live
+                    # high-to-low transient cannot be lost during the scan.
+                    for entity in entities:
+                        row = self.report(entity)
+                        if row:
+                            observe_power_peak(self.power_peaks, {**row, 'entity_id':entity})
+                    # Persist these observations before waiting on Recorder;
+                    # a failed scan must not lose a positive startup sample.
+                    await self.service.stream.call('save_record', 'power_peaks', self.power_peaks)
+                    try:
+                        history = await self.history.power_peaks(entities)
+                    except Exception:
+                        _LOGGER.exception('Could not read device peak power history; retrying')
+                        await asyncio.sleep(retries.next())
+                        continue
+                    merge_power_peaks(self.power_peaks, history)
+                    await self.service.stream.call('save_record', 'power_peaks', self.power_peaks)
+                    self.power_history_loaded.update(entities)
+                    _LOGGER.info('Device historical power peaks (W): %s',
+                        {entity:self.power_peaks.get(entity) for entity in sorted(entities)})
+                    retries.reset()
+            finally:
+                self.power_history_pending = False
+        self.entry.async_create_background_task(self.hass, collect(), name='shs_device_power_history')
 
     def requires_command(self, entity, value):
         # A stale equality cannot cancel an accepted, still outstanding effect.
@@ -426,11 +475,11 @@ class HomeAssistantSource:
                 return None
             raise ValueError(f'{device}: no unambiguous reviewed power mapping for {entity}')
         key, mapping = matches[0]
-        rated = rated_power(mapping)
+        rated = device_power_bound(mapping, self.power_peaks)
         if rated is None:
             if value == 'off':
                 return None
-            raise GridRatingError(key, mapping)
+            raise PowerHistoryError(key, mapping)
         controls = {target:self.report(target)['state'] for target in actuator_targets(mapping)}
         identity = capacity_key('device:'+key, controls)
         commanded = {**controls, **commanded_controls(self.capacity, identity)}
@@ -483,8 +532,12 @@ class HomeAssistantSource:
             _, native = ev_demand(options, self.service.physical.ownership.records, self.report)
             descriptor = self.describe_import('ev', switch, self.report(switch)['state'])
             include(descriptor, native)
-        for key, mapping in options.get('device_control_mappings', {}).items():
-            if rated_power(mapping) is None:
+        mappings = [(key, mapping, 'device:'+key) for key, mapping in options.get('device_control_mappings', {}).items()]
+        for owner, record in self.service.physical.ownership.records.items():
+            mappings.extend((key, mapping, owner) for key, mapping in record.get('options', {}).get('device_control_mappings', {}).items()
+                if set(actuator_targets(mapping)) & set(record['originals']))
+        for key, mapping, owner in mappings:
+            if device_power_bound(mapping, self.power_peaks) is None:
                 continue
             targets = actuator_targets(mapping)
             if not targets:
@@ -493,7 +546,7 @@ class HomeAssistantSource:
             row = self.report(entity)
             if row is None:
                 raise ValueError(f'{entity}: native actuator is unavailable for house import accounting')
-            descriptor = self.describe_import('device:'+key,entity,row['state'])
+            descriptor = self.describe_import(owner,entity,row['state'])
             if descriptor is not None:
                 include(descriptor,descriptor['before_w'])
         battery = self.service.battery
@@ -535,7 +588,7 @@ class HomeAssistantSource:
                 if required > limit:
                     raise ControlDeadlineError(f'Waiting for house import capacity: {required:.0f} W required, {limit:.0f} W house limit')
             return battery.installation is None or battery_released(battery.installation[3], self.report)
-        except (ControlDeadlineError, GridCapacityConfigurationError):
+        except (ControlDeadlineError, GridCapacityConfigurationError, ControlObservationError):
             raise
         except (ValueError, KeyError, TypeError):
             return False
@@ -553,16 +606,18 @@ class HomeAssistantSource:
                     lambda key: item.platform if (item := er.async_get(self.hass).async_get(key)) else None)
                 if discovered - self.entities:
                     metadata_changed(event)
-            if not self.execution_source(entity):
+            kind = 'state_report' if event.event_type == EVENT_STATE_REPORTED else 'state_change'
+            row = self.report(entity, event.data.get('new_state'), kind, compact=True) if entity in self.power_entities else None
+            raised_peak = observe_power_peak(self.power_peaks, row)
+            if not self.execution_source(entity) and not raised_peak:
                 self.intake_counts['replaceable'] += 1
                 self.live_revision += 1
                 self.live_changes[entity] = self.live_revision
                 return
-            kind = 'state_report' if event.event_type == EVENT_STATE_REPORTED else 'state_change'
             physical = self.service.physical
             physical.observation_changed.set()
             try:
-                row = self.report(entity, event.data.get('new_state'), kind, compact=True)
+                row = row or self.report(entity, event.data.get('new_state'), kind, compact=True)
                 self.intake_counts['ordered'] += 1
                 self.intake_counts['bytes'] += len(json.dumps(row))
                 receipt = self.service.stream.capture('observation', row)

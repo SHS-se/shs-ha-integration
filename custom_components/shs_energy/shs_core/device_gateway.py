@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from .api_contract import INTEGRATION_VERSION
 from .controller_metrics import ControllerMetrics
-from .device_operations import (DeviceOperations, ControlDeadlineError, ControlObservationError,
+from .device_operations import (DeviceOperations, ControlDeadlineError, ControlObservationError, PowerHistoryError,
                                 correction_details, EXTERNAL_CHANGE)
 from .device_ownership import DeviceOwnership
 from .operating_modes import device_mode
@@ -86,7 +86,7 @@ class DeviceGateway(DeviceOperations):
             return False
         try:
             return self.external_ready(device, entity=entity, value=value)
-        except ControlDeadlineError:
+        except (ControlDeadlineError, PowerHistoryError):
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
             raise
 

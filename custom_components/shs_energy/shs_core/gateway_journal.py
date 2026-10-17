@@ -16,7 +16,7 @@ import zlib
 
 from .command_journal import WriterLease, encoded, now_ms, RoutedCommand, ObligationCommand
 from .device_ownership import decode_ownership
-from .grid_capacity import empty_capacity, prepare_capacity, finish_capacity, observe_capacity, dispatch_capacity
+from .grid_capacity import empty_capacity, prepare_capacity, finish_capacity, observe_capacity, dispatch_capacity, observe_power_peak, merge_power_peaks
 
 PROTOCOL = 2
 RECEIPT_KINDS = frozenset(('gap', 'session', 'configuration', 'observation', 'outcome', 'activation'))
@@ -362,6 +362,9 @@ class GatewayJournal:
             if type(entity) is not str or not entity:
                 raise ValueError('Observation entity required')
             db.execute('INSERT OR REPLACE INTO latest VALUES (?,?,?)', (entity, ordinal, encoded(payload)))
+            peaks = self._power_peaks(db)
+            if observe_power_peak(peaks, payload):
+                db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', ('power_peaks', encoded(peaks)))
             capacity = self._capacity(db)
             before = capacity['revision']
             self._settle_capacity(db, capacity)
@@ -459,7 +462,7 @@ class GatewayJournal:
             return {'activation': activation_id, 'receipt': receipt}
 
     def load_record(self, name):
-        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission', 'house_import_limit', 'grid_capacity'):
+        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission', 'house_import_limit', 'grid_capacity', 'power_peaks'):
             raise ValueError('Unknown physical gateway record')
         with closing(self.connect(readonly=True)) as db:
             self._owner(db)
@@ -468,7 +471,7 @@ class GatewayJournal:
             return json.loads(row[0]) if row else None
 
     def save_record(self, name, value):
-        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission', 'house_import_limit', 'grid_capacity') or type(value) is not dict:
+        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission', 'house_import_limit', 'grid_capacity', 'power_peaks') or type(value) is not dict:
             raise ValueError('Invalid physical gateway record')
         if name == 'ownership':
             decode_ownership(value)
@@ -477,7 +480,16 @@ class GatewayJournal:
             if name == 'ownership':
                 db.execute('UPDATE ownership SET payload=? WHERE id=1', (encoded(value),))
             else:
+                if name == 'power_peaks':
+                    peaks = self._power_peaks(db)
+                    merge_power_peaks(peaks, value)
+                    value = peaks
                 db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', (name, encoded(value)))
+
+    @staticmethod
+    def _power_peaks(db):
+        row = db.execute("SELECT payload FROM records WHERE name='power_peaks'").fetchone()
+        return json.loads(row[0]) if row else {}
 
     @staticmethod
     def _capacity(db):

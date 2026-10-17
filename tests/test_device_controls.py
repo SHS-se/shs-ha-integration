@@ -21,16 +21,14 @@ from shs_core.device_controls import (  # noqa: E402
 
 class DeviceControlMappingTests(unittest.TestCase):
     def test_setpoint_requires_a_home_assistant_room(self) -> None:
-        report = mapping_report("setpoint", {"maximum_power_w": 3000,
-            "control_type": "setpoint",
+        report = mapping_report("setpoint", {"control_type": "setpoint",
             "temperature_entity_id": "sensor.office_temperature",
             "actuator_entity_ids": ["switch.office_heater"],
         })
         self.assertEqual(report["mapping_status"], "invalid")
         self.assertIn("assign a Home Assistant area", report["mapping_error"])
 
-        report = mapping_report("setpoint", {"maximum_power_w": 3000,
-            "control_type": "setpoint",
+        report = mapping_report("setpoint", {"control_type": "setpoint",
             "temperature_entity_id": "sensor.office_temperature",
             "actuator_entity_ids": ["switch.office_heater"],
         }, entity_names={"switch.office_heater": "Office heater"},
@@ -55,8 +53,7 @@ class DeviceControlMappingTests(unittest.TestCase):
             self.assertIn("combined switching", mapping_report(kind, mapping)["mapping_error"])
 
     def test_setpoint_rejects_actuators_in_different_rooms(self) -> None:
-        report = mapping_report("setpoint", {"maximum_power_w": 3000,
-            "control_type": "setpoint",
+        report = mapping_report("setpoint", {"control_type": "setpoint",
             "temperature_entity_id": "sensor.house_temperature",
             "actuator_entity_ids": ["switch.office", "switch.bedroom"],
         }, area_names={"office": "Office", "bedroom": "Bedroom"},
@@ -68,16 +65,14 @@ class DeviceControlMappingTests(unittest.TestCase):
         self.assertIn("must all belong to one", report["mapping_error"])
 
     def test_mismatched_control_type_is_not_configured(self) -> None:
-        report = mapping_report("permit_inhibit", {"maximum_power_w": 3000,
-            "control_type": "switch_schedule",
+        report = mapping_report("permit_inhibit", {"control_type": "switch_schedule",
             "actuator_entity_ids": ["switch.boiler"],
         })
         self.assertEqual(report["mapping_status"], "not_configured")
         self.assertIsNone(report["mapped_control_type"])
 
     def test_deleted_entity_invalidates_an_otherwise_complete_mapping(self) -> None:
-        report = mapping_report("switch_schedule", {"maximum_power_w": 3000,
-            "control_type": "switch_schedule",
+        report = mapping_report("switch_schedule", {"control_type": "switch_schedule",
             "actuator_entity_ids": ["switch.pool_heater"],
         }, {"switch.some_other_device"})
         self.assertEqual(report["mapping_status"], "invalid")
@@ -153,8 +148,7 @@ class DeviceControlMappingTests(unittest.TestCase):
         self.assertTrue(is_room_thermal_control("switch_schedule", "cooling"))
         report = mapping_report(
             "switch_schedule",
-            {"maximum_power_w": 3000,
-                "control_type": "switch_schedule",
+            {"control_type": "switch_schedule",
                 "temperature_entity_id": "sensor.entrance_temperature",
                 "actuator_entity_ids": ["climate.entrance_aircon"],
             },
@@ -168,8 +162,7 @@ class DeviceControlMappingTests(unittest.TestCase):
     def test_existing_on_off_mapping_remains_ready_without_room_upgrade(self) -> None:
         report = mapping_report(
             "switch_schedule",
-            {"maximum_power_w": 3000,
-                "control_type": "switch_schedule",
+            {"control_type": "switch_schedule",
                 "actuator_entity_ids": ["switch.office_heater"],
             },
             area_names={"office": "Office"},
@@ -180,8 +173,7 @@ class DeviceControlMappingTests(unittest.TestCase):
         self.assertNotIn("room_key", report["mapping_summary"])
 
     def test_saved_room_association_remains_current_configuration(self):
-        report = mapping_report("setpoint", {"maximum_power_w": 3000,
-            "control_type": "setpoint", "room_area_id": "office",
+        report = mapping_report("setpoint", {"control_type": "setpoint", "room_area_id": "office",
             "temperature_entity_id": "sensor.temperature",
             "actuator_entity_ids": ["climate.heater"],
         }, {"sensor.temperature", "climate.heater"},
@@ -219,8 +211,7 @@ class PlanningPathTests(unittest.TestCase):
             }
         }
         mappings = {
-            "sensor.pool_room_floor_heater_energy": {"maximum_power_w": 3000,
-                "control_type": "setpoint",
+            "sensor.pool_room_floor_heater_energy": {"control_type": "setpoint",
                 "temperature_entity_id": "sensor.basement_bathroom_temperature",
                 "actuator_entity_ids": ["climate.pool_bathroom_floor_thermostat"],
             }
@@ -269,8 +260,7 @@ if __name__ == "__main__":
 
 def _room(**extra):
     """A complete setpoint mapping, before any optional thermal lever."""
-    return {"maximum_power_w": 3000,
-        "control_type": "setpoint",
+    return {"control_type": "setpoint",
         "temperature_entity_id": "sensor.lounge",
         "actuator_entity_ids": ["climate.lounge"],
         **extra,
@@ -415,8 +405,7 @@ class PoolSwitchTests(unittest.TestCase):
 
 class PoolDeviceMappingTests(unittest.TestCase):
     def test_pool_setpoint_report_identifies_pool_service_without_room_or_temperature_controls(self):
-        report = mapping_report('setpoint', {"maximum_power_w": 3000,
-            'control_type': 'setpoint', 'actuator_entity_ids': ['switch.pool_heater'],
+        report = mapping_report('setpoint', {'control_type': 'setpoint', 'actuator_entity_ids': ['switch.pool_heater'],
             'temperature_entity_id': 'sensor.filtered_pool_water_temperature',
             'power': 'sensor.pool_heater_power',
         }, pool_control=True, pool_water_entity='sensor.filtered_pool_water_temperature')
@@ -436,12 +425,10 @@ class PoolDeviceMappingTests(unittest.TestCase):
         the same window, and left two writers on one pair of registers.
         """
         for mapping in (
-            {"maximum_power_w": 3000,
-                "control_type": "switch_schedule",
+            {"control_type": "switch_schedule",
                 "actuator_entity_ids": ["switch.pool_heater"],
             },
-            {"maximum_power_w": 3000,
-                "control_type": "switch_schedule",
+            {"control_type": "switch_schedule",
                 "actuator_entity_ids": ["switch.pool_pump"],
             },
         ):

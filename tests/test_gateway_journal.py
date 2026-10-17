@@ -33,6 +33,18 @@ class GatewayTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.gateway.save_record('arbitrary_record', value)
 
+    def test_power_peaks_merge_atomically_with_observations_and_survive_restart(self):
+        self.gateway.save_record('power_peaks',{'sensor.pool':3000})
+        self.gateway.record('observation',dict(entity_id='sensor.pool',state='4.5',
+            attributes={'unit_of_measurement':'kW'}))
+        # An older Recorder scan cannot overwrite a report received while it ran.
+        self.gateway.save_record('power_peaks',{'sensor.pool':4000,'sensor.other':700})
+        self.gateway.record('observation',dict(entity_id='sensor.pool',state='0',
+            attributes={'unit_of_measurement':'W'}))
+        self.gateway.close()
+        self.gateway.open()
+        self.assertEqual(self.gateway.load_record('power_peaks'),{'sensor.pool':4500,'sensor.other':700})
+
     def test_diagnostic_read_snapshot_cannot_block_receipt_commits(self):
         # The app's storage census holds a read transaction across dbstat and
         # table counts. Its snapshot must not lock the gateway's sole writer.

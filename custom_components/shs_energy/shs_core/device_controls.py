@@ -10,7 +10,6 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any
 
-from .grid_capacity import rating_errors
 
 from .const import (
     OPT_BATTERY_CONTROL_ENABLED,
@@ -300,9 +299,6 @@ def mapping_errors(
             and float(mapping["minimum_value"]) >= float(mapping["maximum_value"])
         ):
             _field_error(errors, field_errors, "minimum control value must be below maximum control value", "minimum_value", "maximum_value")
-    for field, messages in rating_errors(mapping).items():
-        for message in messages:
-            _field_error(errors, field_errors, message, field)
     if not _power_source(mapping):
         _field_error(errors, field_errors, "power must be a power entity or a positive watt value", "power")
     return errors
