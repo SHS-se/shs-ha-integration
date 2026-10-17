@@ -20,5 +20,5 @@ test('accuracy buttons show graded device percentages and restore keyboard focus
   await page.getByRole('button',{name:/Historical accuracy %/}).click();
   await expect(popup.getByRole('heading')).toHaveText('Historical accuracy %');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
-  await page.screenshot({path:`/private/tmp/shs-forecast-accuracy/ha-accuracy-${info.project.name}.png`});
+  await page.screenshot({path:info.outputPath(`ha-accuracy-${info.project.name}.png`)});
 });
