@@ -674,7 +674,7 @@ class BatteryRuntime:
             contract.export_reserve_mwh/1e6,True,0,contract.model_revision)
         plant=BatteryPlant(ratings['battery_min_soc']*capacity,capacity,cc,dc,
             options['battery_charge_efficiency'],options['battery_discharge_efficiency'],
-            plan['grid']['import_limit_w'],plan['grid']['export_limit_w'],
+            self.coordinator.house_import_limit_w(),plan['grid']['export_limit_w'],
             'discharged_storage',0,self._model)
         cut=contract.intervals[0].start_ms
         keys=self._control_entities()
@@ -1099,15 +1099,8 @@ class BatteryRuntime:
         group=self.host.state.groups[0]
         if any(a.stage!='prepared' and a.step.possible.import_w>0 for a in group.attempts):
             return False
-        report=self.coordinator.ports.battery_report(self._options['battery_power_measurement_entity'])
-        try:
-            watts,_=power(report,source=self._options['battery_power_measurement_entity'],signed=True)
-            mode=self.coordinator.ports.battery_report(self._options['battery_mode_entity'])['state']
-            limit=self.coordinator.ports.battery_report(self._options['battery_charge_limit_entity'])
-            ceiling=float(limit['state'])*(1000 if limit['attributes']['unit_of_measurement']=='kW' else 1)
-            return mode!='Command Charging (PV First)' or (ceiling==0 and watts<=100)
-        except (ValueError,KeyError,TypeError):
-            return False
+        from .grid_capacity import battery_released
+        return battery_released(self._options, self.coordinator.ports.battery_report)
 
     async def _release(self,reason):
         self._releasing=True

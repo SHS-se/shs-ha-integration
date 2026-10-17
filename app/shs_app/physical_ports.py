@@ -20,6 +20,7 @@ class RemoteDevices:
     async def synchronize(self, models):
         # Update the command epoch before returning a physical ownership view.
         value = {'plan':digest(self.household.optimisation_plan),
+                 'import_limit_w':self.household.house_import_limit_w(),
                  'options':digest(native_options(self.household.resolved_options()))}
         self.context = await self.gateway.call('policy', {'value':value})
         self.policy = value

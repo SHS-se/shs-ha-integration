@@ -35,7 +35,7 @@ class PhysicalGatewayTests(unittest.IsolatedAsyncioTestCase):
             if not self.permitted:
                 raise GatewayConflict('Session revoked')
         self.gateway = DeviceGateway(controller_inputs(self.hass), self.controller.options, self.store,
-            self.controller.native_executor, authorize=authorize, before_external=lambda device: True, operations=MemoryOperations())
+            self.controller.native_executor, authorize=authorize, before_external=lambda device, **command: True, operations=MemoryOperations())
         await self.gateway.load()
         self.options['device_modes']['$pool'] = 'controlling'
         self.models = self.coordinator.optimisation_plan['device_models']

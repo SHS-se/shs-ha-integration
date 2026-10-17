@@ -87,6 +87,7 @@ class Rig:
         def update_listeners():self.listener_updates+=1
         self.coordinator=SimpleNamespace(ports=SimpleNamespace(battery_report=lambda e:deepcopy(self.rows.get(e))),async_battery_planned_devices=devices,
             async_battery_native_readback=readback,async_battery_loss_statistics=statistics,_state_history=history,async_update_listeners=update_listeners,
+            house_import_limit_w=lambda:self.plan['grid']['import_limit_w'],
             binding_plan_for=lambda device,options:(self.plan,next((s for s in self.plan['plans']['priority']['slots']
                 if stamp(s['start'])<=self.now<min(stamp(s['start'])+900000,stamp(self.plan['valid_until']),stamp(self.plan['binding_until']))),None)),_battery_native_context=None)
         self.replans=[]

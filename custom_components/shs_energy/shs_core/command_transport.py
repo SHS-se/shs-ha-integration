@@ -45,6 +45,8 @@ class CommandTransport:
                     # this task has not entered the service coroutine.
                     prepared = True
                     raise
+                except CommandNotSent:
+                    raise
                 except Exception as error:
                     self.fault = error
                     raise CommandNotSent('Could not persist command intent') from error

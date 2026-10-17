@@ -101,7 +101,8 @@ async def configuration_payload(editor, *, refresh_roles):
             "state": 'loaded',
         },
         "configuration": options,
-        "sections": _configuration_sections(battery_control_required=battery_required),
+        "sections": _configuration_sections(battery_control_required=battery_required,
+            house_control_required=any(device.get("planned") for device in devices)),
         "entities": editor.entities(),
         "devices": devices,
         "portal": {

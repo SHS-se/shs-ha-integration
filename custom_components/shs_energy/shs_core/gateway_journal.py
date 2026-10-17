@@ -16,6 +16,7 @@ import zlib
 
 from .command_journal import WriterLease, encoded, now_ms, RoutedCommand, ObligationCommand
 from .device_ownership import decode_ownership
+from .grid_capacity import empty_capacity, prepare_capacity, finish_capacity, observe_capacity, dispatch_capacity
 
 PROTOCOL = 2
 RECEIPT_KINDS = frozenset(('gap', 'session', 'configuration', 'observation', 'outcome', 'activation'))
@@ -210,11 +211,14 @@ class GatewayJournal:
                 self.boot = uuid4().hex
                 db.execute("UPDATE sessions SET status='revoked' WHERE status='connected'")
                 db.execute('UPDATE authority SET boot=?,session=NULL', (self.boot,))
+                capacity = self._capacity(db)
                 for command in db.execute("SELECT command_id,route_id FROM commands WHERE status='prepared'").fetchall():
+                    finish_capacity(capacity, command['command_id'], 'uncertain')
                     db.execute("UPDATE commands SET status='uncertain',finished_at_ms=?,reason='gateway_interrupted' WHERE command_id=?", (now_ms(), command[0]))
                     if command['route_id']:
                         db.execute("UPDATE routes SET status='uncertain' WHERE id=?", (command['route_id'],))
                     self._append(db, 'outcome', {'command_id': command[0], 'status': 'uncertain', 'reason': 'gateway_interrupted'})
+                self._save_capacity(db, capacity)
                 self._append(db, 'gap', {'reason': 'gateway_restart' if old['boot'] else 'migration_cutover', 'previous_session': old['session'], 'boot': self.boot})
             self.lease = lease
             return self
@@ -358,7 +362,19 @@ class GatewayJournal:
             if type(entity) is not str or not entity:
                 raise ValueError('Observation entity required')
             db.execute('INSERT OR REPLACE INTO latest VALUES (?,?,?)', (entity, ordinal, encoded(payload)))
+            capacity = self._capacity(db)
+            before = capacity['revision']
+            self._settle_capacity(db, capacity)
+            if capacity['revision'] != before:
+                self._save_capacity(db, capacity)
         return ordinal
+
+    @staticmethod
+    def _settle_capacity(db, capacity):
+        def latest(entity):
+            row = db.execute('SELECT receipt,payload FROM latest WHERE entity=?', (entity,)).fetchone()
+            return (row[0], json.loads(row[1])) if row else (0, None)
+        observe_capacity(capacity, db.execute('SELECT high FROM transport').fetchone()[0], latest)
 
     def read(self, session, after, limit=256):
         cursor(after)
@@ -443,7 +459,7 @@ class GatewayJournal:
             return {'activation': activation_id, 'receipt': receipt}
 
     def load_record(self, name):
-        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission'):
+        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission', 'house_import_limit', 'grid_capacity'):
             raise ValueError('Unknown physical gateway record')
         with closing(self.connect(readonly=True)) as db:
             self._owner(db)
@@ -452,7 +468,7 @@ class GatewayJournal:
             return json.loads(row[0]) if row else None
 
     def save_record(self, name, value):
-        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission') or type(value) is not dict:
+        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission', 'house_import_limit', 'grid_capacity') or type(value) is not dict:
             raise ValueError('Invalid physical gateway record')
         if name == 'ownership':
             decode_ownership(value)
@@ -463,7 +479,20 @@ class GatewayJournal:
             else:
                 db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', (name, encoded(value)))
 
-    def prepare_command(self, command):
+    @staticmethod
+    def _capacity(db):
+        row = db.execute("SELECT payload FROM records WHERE name='grid_capacity'").fetchone()
+        value = json.loads(row[0]) if row else empty_capacity()
+        if (value.get('schema') != 1 or type(value.get('revision')) is not int or value['revision'] < 0
+                or type(value.get('devices')) is not dict):
+            raise JournalStorageError('Invalid durable house import accounting')
+        return value
+
+    @staticmethod
+    def _save_capacity(db, value):
+        db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', ('grid_capacity', encoded(value)))
+
+    def prepare_command(self, command, effect=None):
         payload = command.payload()
         fingerprint = sha256(payload.encode()).hexdigest()
         with closing(self.connect()) as db, db:
@@ -472,7 +501,7 @@ class GatewayJournal:
             if previous:
                 if previous['digest'] != fingerprint:
                     raise GatewayConflict('Command identity reused with different content')
-                return previous['status']
+                return {'status':previous['status'], 'capacity':self._capacity(db)}
             if db.execute('SELECT 1 FROM inherited_commands WHERE command_id=?', (command.id,)).fetchone():
                 raise GatewayConflict('Imported command identities are historical evidence only')
             if owner['activation'] is None or (owner['session'] is None and not isinstance(command, ObligationCommand)):
@@ -485,7 +514,21 @@ class GatewayJournal:
                     raise GatewayConflict('Battery step is outside its admitted route')
             db.execute("INSERT INTO commands VALUES (?,?,?,?,'prepared',?,NULL,NULL,?,?)",
                        (command.id, fingerprint, _pack(payload), ('physical:'+self.boot) if isinstance(command, ObligationCommand) else owner['session'], now_ms(), route_id, index))
-            return 'new'
+            capacity = self._capacity(db)
+            through = db.execute('SELECT high FROM transport').fetchone()[0]
+            prepare_capacity(capacity, command.id, effect, through)
+            self._save_capacity(db, capacity)
+            return {'status':'new', 'capacity':capacity}
+
+    def mark_dispatch(self, command_id):
+        # Queued synchronously immediately before the native service. Reports
+        # already queued during prepare cannot be mistaken for its response.
+        with closing(self.connect()) as db, db:
+            self._owner(db)
+            capacity = self._capacity(db)
+            through = db.execute('SELECT high FROM transport').fetchone()[0]
+            dispatch_capacity(capacity, command_id, through)
+            self._save_capacity(db, capacity)
 
     def finish_command(self, command, status, reason=None):
         if status not in ('not_sent', 'service_returned', 'uncertain'):
@@ -504,6 +547,11 @@ class GatewayJournal:
                     else:
                         db.execute('UPDATE routes SET status=? WHERE id=?', (status, command_row['route_id']))
                 self._append(db, 'outcome', {'command_id': command.id, 'status': status, 'reason': reason})
+            capacity = self._capacity(db)
+            finish_capacity(capacity, command.id, status)
+            self._settle_capacity(db, capacity)
+            self._save_capacity(db, capacity)
+            return capacity
 
     def admit_route(self, session, route_id, payload):
         content = encoded(payload)

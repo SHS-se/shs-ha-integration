@@ -24,10 +24,15 @@ from .shs_wire.protocol import admit, offer
 from .shs_core.controller_inputs import configured_entity_ids
 from .shs_core.api_contract import INTEGRATION_VERSION
 from .shs_core.battery_gateway import BatteryGateway
+from .shs_core.battery_native_adapter import SigenAdapter
 from .shs_core.native_readings import power
+from .shs_core.grid_capacity import (battery_released, ev_demand, required_import, import_limit,
+    empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, rated_power, GridRatingError, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, CHARGING_MODES)
+from .shs_core.device_commands import actuator_targets
 from .shs_core.command_transport import CommandTransport
 from .shs_core.controller_inputs import ControllerInputs
 from .shs_core.device_gateway import DeviceGateway
+from .shs_core.device_operations import ControlDeadlineError
 from .shs_core.gateway_journal import GatewayJournal, GatewayConflict
 from .shs_core.gateway_service import GatewayService, AppConnection
 from .shs_core.gateway_stream import GatewayCommands, GatewayOperations, GatewayRecord, GatewayStream
@@ -63,6 +68,9 @@ class HomeAssistantSource:
         self.live_revision = 0
         self.live_changes = {}
         self.fact_versions = {}
+        self.capacity = empty_capacity()
+        self.capacity_entities = set()
+        self.capacity_refresh_pending = False
         self.intake_counts = {'ordered':0, 'replaceable':0, 'bytes':0}
 
     def report(self, entity, state=None, kind='state_report', *, compact=False):
@@ -99,6 +107,7 @@ class HomeAssistantSource:
         """Configured, owned and filter-derived entities, read without subscribing."""
         entities = (set(self.configuration.options()['_observed_entities']) if self.configuration.value['revision'] else configured_entity_ids(self.options()))
         entities.update(self.bindings)
+        entities.update(self.capacity_entities)
         for record in self.service.physical.ownership.records.values():
             entities.update(record['originals'])
             entities.update(configured_entity_ids(record['options']))
@@ -148,7 +157,7 @@ class HomeAssistantSource:
         uses = self.bindings.get(entity, frozenset())
         # Ownership outlives configuration edits until explicit handover retires
         # it. Keep its former controls and override sources in the ordered plane.
-        if entity in self.owned_sources():
+        if entity in self.owned_sources() or entity in self.capacity_entities:
             uses = uses | {'device'}
         thermal = 'pool_temperature' in uses
         valid = (not self.pool_unavailable and all(temperature_available(self.hass.states.get(source))
@@ -291,20 +300,243 @@ class HomeAssistantSource:
         if self.projection:
             await self.projection.accept(value)
 
-    def external_ready(self, device):
+    def install_capacity(self, value):
+        if value['revision'] >= self.capacity['revision']:
+            self.capacity = value
+            descriptors = [descriptor for row in value['devices'].values()
+                for descriptor in [*row['effects'].values(), *([row['settled']] if row.get('settled') else [])]]
+            self.capacity_entities = {entity for descriptor in descriptors
+                for entity in [*descriptor['controls'], descriptor['sensor']] if entity}
+            self.entities.update(self.capacity_entities)
+
+    async def refresh_capacity(self):
+        value = await self.service.stream.call('load_record', 'grid_capacity')
+        if value is not None:
+            self.install_capacity(value)
+
+    def requires_command(self, entity, value):
+        # A stale equality cannot cancel an accepted, still outstanding effect.
+        for device, row in self.capacity['devices'].items():
+            settled = row.get('settled', {})
+            partial = entity in settled.get('controls', {}) and entity not in settled.get('acknowledgements', settled.get('controls', {}))
+            if not partial and not any(effect['order'] > settled.get('order', -1)
+                       for effect in row['effects'].values()):
+                continue
+            controls = commanded_controls(self.capacity, device)
+            if entity in controls and str(controls[entity]) != str(value):
+                try:
+                    if float(controls[entity]) == float(value):
+                        continue
+                except (ValueError, TypeError):
+                    pass
+                return True
+        return False
+
+    def power_source(self, mapping, key):
+        sensor = mapping.get('power')
+        if isinstance(sensor, str) and sensor.startswith('sensor.'):
+            return sensor
+        row = self.report(key) if key.startswith('sensor.') else None
+        attributes = (row or {}).get('attributes', {})
+        return key if attributes.get('unit_of_measurement') in ('W','kW') and attributes.get('state_class') == 'measurement' else None
+
+    def mark_dispatch(self, command):
+        self.service.stream.mark_dispatch(command.id)
+
+    def describe_stop(self, entity):
+        # OFF cannot add house demand and needs no unrelated current/rating
+        # reading. Retain any previous peak until its physical response arrives.
+        for device, row in self.capacity['devices'].items():
+            descriptors = [*row['effects'].values(), *([row['settled']] if row.get('settled') else [])]
+            for previous in sorted(descriptors,key=lambda d:d['order'],reverse=True):
+                if entity in previous['controls']:
+                    return {**previous,'changed':entity,
+                        'controls':{**commanded_controls(self.capacity,device),entity:'off'},
+                        'acknowledgements':{entity:'off'},
+                        'before_w':capacity_bound(row),'commanded_before_w':capacity_bound(row),
+                        'after_w':0.0,'possible_w':0.0}
+        return None
+
+    def describe_command(self, command):
+        action = command.action
+        if action.service == 'turn_off':
+            return self.describe_stop(action.entity)
+        value = action.service.removeprefix('turn_') if action.service in ('turn_on', 'turn_off') else action.value
+        return self.describe_import(command.device, action.entity, value)
+
+    def describe_import(self, device, entity, value):
+        options = self.options()
+        battery = self.service.battery
+        base = dict(device=device, logical=device, changed=entity, signed=False, scale=1.0, overhead_w=0.0,
+                    response_tolerance_w=0.0)
+        if battery.installation is not None and entity in {
+                battery.installation[3][key] for key in ('battery_mode_entity',
+                    'battery_charge_limit_entity', 'battery_discharge_limit_entity')}:
+            _, catalog, conversion, installed = battery.installation
+            battery.surface(installed)  # Validate current native units and metadata.
+            keys = ('battery_mode_entity', 'battery_charge_limit_entity', 'battery_discharge_limit_entity')
+            controls = {installed[key]:(self.report(installed[key])['state'] if key == 'battery_mode_entity'
+                        else _current(self.report(installed[key])['state'])) for key in keys}
+            identity = capacity_key('battery', controls)
+            commanded = {**controls, **commanded_controls(self.capacity, identity)}
+            expected = {**commanded, entity:value}
+            def envelope(values):
+                charge = self.report(installed['battery_charge_limit_entity'])
+                watts = _current(values[installed['battery_charge_limit_entity']])
+                watts *= 1000 if charge['attributes']['unit_of_measurement'] == 'kW' else 1
+                return battery_import_bound(values[installed['battery_mode_entity']],watts,catalog.charge_max_w,conversion)
+            return {**base, 'device':identity, 'logical':'battery', 'before_w':envelope(controls), 'commanded_before_w':envelope(commanded),
+                'after_w':envelope(expected),
+                'possible_w':max(envelope(expected),envelope({**controls,entity:value})),
+                'controls':expected, 'sensor':installed['battery_power_measurement_entity'],
+                'signed':True, 'scale':1/conversion.grid_charge.gain,
+                'overhead_w':conversion.grid_charge.overhead_w, 'response_tolerance_w':100.0}
+        record = self.service.physical.ownership.records.get(device, {})
+        options = record.get('options', options)
+        mappings = options.get('device_control_mappings', {})
+        if device == 'ev':
+            switch = options['ev_charge_switch_entity']
+            ev = [(key,m) for key,m in mappings.items() if m.get('control_type') == 'variable_power'
+                  and m.get('control_entity_id') and (not record or m.get('control_entity_id') in record['originals'])]
+            if len(ev) != 1:
+                raise ValueError('EV import accounting requires one reviewed current control')
+            key, mapping = ev[0]
+            current = mapping['control_entity_id']
+            if self.report(switch)['state'] == 'off' and entity == switch and value == 'off':
+                return {**base,'device':capacity_key('ev',(switch,current)),
+                    'before_w':0.0,'commanded_before_w':0.0,'after_w':0.0,'possible_w':0.0,
+                    'controls':{switch:'off'},'sensor':self.power_source(mapping,key)}
+            if self.report(current)['attributes'].get('unit_of_measurement') != 'A':
+                raise ValueError('EV current control must report amperes')
+            controls = {switch:self.report(switch)['state'], current:_current(self.report(current)['state'])}
+            if controls[switch] not in ('on','off'):
+                raise ValueError('EV charging switch is unavailable for house import accounting')
+            identity = capacity_key('ev', controls)
+            commanded = {**controls, **commanded_controls(self.capacity, identity)}
+            expected = {**commanded, entity:value}
+            def demand(values):
+                return _current(values[current])*EV_WATTS_PER_AMP if values[switch] == 'on' else 0.0
+            sensor = self.power_source(mapping, key)
+            return {**base, 'device':identity, 'before_w':demand(controls), 'commanded_before_w':demand(commanded), 'after_w':demand(expected),
+                    'possible_w':max(demand(expected),demand({**controls,entity:value})),
+                    'controls':expected, 'sensor':sensor}
+        matches = [(key,m) for key,m in mappings.items() if entity in actuator_targets(m)]
+        if len(matches) != 1:
+            if value == 'off':
+                return None
+            raise ValueError(f'{device}: no unambiguous reviewed power mapping for {entity}')
+        key, mapping = matches[0]
+        rated = rated_power(mapping)
+        if rated is None:
+            if value == 'off':
+                return None
+            raise GridRatingError(key, mapping)
+        controls = {target:self.report(target)['state'] for target in actuator_targets(mapping)}
+        identity = capacity_key('device:'+key, controls)
+        commanded = {**controls, **commanded_controls(self.capacity, identity)}
+        expected = {**commanded, entity:value}
+        def demand(values):
+            return rated if any(v == 'on' or target.split('.')[0] not in ('switch','input_boolean')
+                                for target,v in values.items()) else 0.0
+        return {**base, 'device':identity, 'before_w':demand(controls), 'commanded_before_w':demand(commanded), 'after_w':demand(expected),
+                    'possible_w':max(demand(expected),demand({**controls,entity:value})),
+                'controls':expected, 'sensor':self.power_source(mapping,key)}
+
+    def check_command(self, command):
+        if command.action.service == 'turn_off':
+            return
+        effect = self.describe_command(command)
+        if effect is None:
+            return
+        prepared = self.capacity['devices'].get(effect['device'], {}).get('effects', {}).get(command.id, effect)
+        action = command.action
+        reducing = action.service == 'turn_off' or (
+            effect['logical'] in ('ev','battery') and effect['possible_w'] <= effect['before_w']
+            and effect['after_w'] <= prepared['commanded_before_w'])
+        if (effect['logical'] == 'battery' and action.entity == self.service.battery.installation[3]['battery_mode_entity']
+                and action.value in CHARGING_MODES and effect['possible_w'] > 0):
+            reducing = False
+        if reducing:
+            return
+        required = self.import_required(effect=effect)
+        limit = import_limit(self.service.import_limit_w)
+        if required > limit:
+            raise ControlDeadlineError(f'Waiting for house import capacity: {required:.0f} W required, {limit:.0f} W house limit')
+
+    def import_required(self, *, effect=None):
+        options = self.options()
+        if house_meter_errors(options):
+            raise HouseMeterError(options)
+        house, _ = power(self.report(options['house_consumption_power_entity']),
+                         source=options['house_consumption_power_entity'])
+        bounds, meters, batteries = {}, {}, set()
+        def include(descriptor, bound):
+            device = descriptor['device']
+            bounds[device] = max(bounds.get(device, 0.0), bound)
+            meters.setdefault(device, set()).update([descriptor['sensor']] if descriptor['sensor'] else [])
+            if descriptor['logical'] == 'battery':
+                batteries.add(device)
+        switch = options.get('ev_charge_switch_entity')
+        if switch:
+            # Read/validate available native settings independently of desired
+            # ownership values; outstanding effects have their own journal.
+            _, native = ev_demand(options, self.service.physical.ownership.records, self.report)
+            descriptor = self.describe_import('ev', switch, self.report(switch)['state'])
+            include(descriptor, native)
+        for key, mapping in options.get('device_control_mappings', {}).items():
+            if rated_power(mapping) is None:
+                continue
+            targets = actuator_targets(mapping)
+            if not targets:
+                continue
+            entity = targets[0]
+            row = self.report(entity)
+            if row is None:
+                raise ValueError(f'{entity}: native actuator is unavailable for house import accounting')
+            descriptor = self.describe_import('device:'+key,entity,row['state'])
+            if descriptor is not None:
+                include(descriptor,descriptor['before_w'])
+        battery = self.service.battery
+        if battery.installation is not None:
+            _, _, conversion, installed = battery.installation
+            mode = installed['battery_mode_entity']
+            descriptor = self.describe_import('battery', mode, self.report(mode)['state'])
+            measured, _ = power(self.report(installed['battery_power_measurement_entity']),
+                                source=installed['battery_power_measurement_entity'], signed=True)
+            include(descriptor, max(descriptor['before_w'], conversion.grid_charge.input(max(0.0, measured))))
+        for row in self.capacity['devices'].values():
+            for descriptor in [*row['effects'].values(), *([row['settled']] if row.get('settled') else [])]:
+                include(descriptor, capacity_bound(row))
+        if effect is not None:
+            include(effect, max(effect['before_w'],effect['after_w'],effect['possible_w']))
+        partitions, used = [], set()
+        for device, bound in bounds.items():
+            measured = 0.0
+            sensors = meters[device]
+            # Shared or replaced meters cannot establish two independent load
+            # partitions. Retain the whole rated bound without subtracting it.
+            if device not in batteries and len(sensors) == 1:
+                sensor = next(iter(sensors))
+                if sensor not in used:
+                    measured, _ = power(self.report(sensor), source=sensor)
+                    used.add(sensor)
+            partitions.append((measured, bound))
+        return required_import(house, partitions)
+
+    def external_ready(self, device, *, entity=None, value=None):
         # The app has already reserved unknown pending demand. HA independently
         # checks the current battery response at the final native boundary.
         battery = self.service.battery
-        if battery.installation is None:
-            return True
-        options = battery.installation[3]
         try:
-            watts, _ = power(self.report(options['battery_power_measurement_entity']),
-                source=options['battery_power_measurement_entity'], signed=True)
-            mode = self.report(options['battery_mode_entity'])['state']
-            limit = self.report(options['battery_charge_limit_entity'])
-            ceiling = float(limit['state'])*(1000 if limit['attributes']['unit_of_measurement'] == 'kW' else 1)
-            return mode != 'Command Charging (PV First)' or (ceiling == 0 and watts <= 100)
+            if entity is not None:
+                limit = import_limit(self.service.import_limit_w)
+                effect = self.describe_import(device, entity, value)
+                required = self.import_required(effect=effect)
+                if required > limit:
+                    raise ControlDeadlineError(f'Waiting for house import capacity: {required:.0f} W required, {limit:.0f} W house limit')
+            return battery.installation is None or battery_released(battery.installation[3], self.report)
+        except (ControlDeadlineError, GridCapacityConfigurationError):
+            raise
         except (ValueError, KeyError, TypeError):
             return False
 
@@ -333,7 +565,18 @@ class HomeAssistantSource:
                 row = self.report(entity, event.data.get('new_state'), kind, compact=True)
                 self.intake_counts['ordered'] += 1
                 self.intake_counts['bytes'] += len(json.dumps(row))
-                self.service.stream.capture('observation', row)
+                receipt = self.service.stream.capture('observation', row)
+                def committed(future):
+                    if (entity in self.capacity_entities and not self.capacity_refresh_pending
+                            and not future.cancelled() and future.exception() is None):
+                        self.capacity_refresh_pending = True
+                        async def refresh():
+                            try:
+                                await self.refresh_capacity()
+                            finally:
+                                self.capacity_refresh_pending = False
+                        self.entry.async_create_background_task(self.hass, refresh(), name='shs_import_capacity')
+                receipt.add_done_callback(committed)
                 self.fact_versions[entity] = self.fact_versions.get(entity,0)+1
                 if entity in self.pool_metadata:
                     self.pool_metadata[entity] = temperature_metadata(state)
@@ -388,9 +631,9 @@ async def open_gateway(hass, entry):
 
     async def send(domain, action, data):
         await hass.services.async_call(domain, action, data, blocking=True)
-    commands = GatewayCommands(stream)
+    commands = GatewayCommands(stream, source)
     native = NativeExecutor(CommandTransport(commands, commands.execute), hass.states.get,
-                            lambda:hass.config.units.temperature_unit, send)
+                            lambda:hass.config.units.temperature_unit, send, capacity=source)
     registry = er.async_get(hass)
     inputs = ControllerInputs(hass.states.get, lambda:hass.config.units.temperature_unit,
         lambda entity:item.platform if (item:=registry.async_get(entity)) else None)
@@ -406,6 +649,10 @@ async def open_gateway(hass, entry):
         if admission is not None:
             source.install_bindings(admission)
         await service.physical.load()
+        await source.refresh_capacity()
+        retained_limit = await stream.call('load_record', 'house_import_limit')
+        if retained_limit is not None:
+            service.import_limit_w = import_limit(retained_limit['import_limit_w'])
         await service.battery.open()
         source.attach()
         await source.refresh_configuration()

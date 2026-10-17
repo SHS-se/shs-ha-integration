@@ -101,8 +101,8 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_policy_change_during_prepare_is_not_sent(self):
         original = self.journal.prepare_command
-        def prepare(command):
-            result = original(command)
+        def prepare(command, effect=None):
+            result = original(command, effect)
             self.policy += 1
             return result
         self.journal.prepare_command = prepare
@@ -111,8 +111,8 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_socket_revocation_during_prepare_is_not_sent(self):
         original = self.journal.prepare_command
-        def prepare(command):
-            result = original(command)
+        def prepare(command, effect=None):
+            result = original(command, effect)
             self.allowed = False
             self.gateway.revoke()
             return result

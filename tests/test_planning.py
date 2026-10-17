@@ -18,7 +18,6 @@ sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energ
 from shs_core.optimisation import (  # noqa: E402
     OptimisationInputError,
     build_base_load_model,
-    fuse_import_limit_w,
 )
 from shs_core.planning import (  # noqa: E402
     build_device_models,
@@ -1018,11 +1017,17 @@ class GridImportLimitTests(unittest.TestCase):
     fused for 17.2 kW was planned to 13.2 with no setting on screen to correct.
     """
 
-    def test_the_fuse_from_the_website_gives_the_limit(self):
-        self.assertEqual(fuse_import_limit_w({"fuse_a": 25, "connection_type": "three_phase"}), 17_250)
-        self.assertEqual(fuse_import_limit_w({"fuse_a": 20, "connection_type": "single_phase"}), 4_600)
-        for unknown in (None, {}, {"fuse_a": None}):
-            self.assertIsNone(fuse_import_limit_w(unknown))
+    def test_only_the_resolved_website_house_limit_gives_the_limit(self):
+        from household_fixture import Rig
+        from shs_core.configuration_schema import OPTION_KEYS, resolve_configuration
+        h = Rig(options={"grid_import_limit_w": 13200}).household
+        h.tariff_catalog = {"grid_import_limit_w": 15000, "configuration": {"fuse_a": 25}}
+        self.assertEqual(h.house_import_limit_w(), 15000)
+        self.assertNotIn("grid_import_limit_w", OPTION_KEYS)
+        self.assertNotIn("grid_import_limit_w", resolve_configuration({"grid_import_limit_w": 13200}))
+        for missing in (None, {}, {"configuration": {"fuse_a": 25}}):
+            h.tariff_catalog = missing
+            self.assertIsNone(h.house_import_limit_w())
 
     def test_the_inverter_rating_is_an_export_limit_and_never_an_import_limit(self):
         from types import SimpleNamespace

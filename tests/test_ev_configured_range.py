@@ -32,7 +32,8 @@ class EvConfiguredRangeTests(unittest.TestCase):
         options = dict(device_modes={'$ev': 'control_verification'},
             ev_charge_switch_entity='switch.charge', ev_connected_entity='binary_sensor.connected',
             ev_soc_entity='sensor.soc', ev_target_soc_entity='number.target',
-            ev_energy_remaining_entity='sensor.remaining', battery_enabled=False, pool_enabled=False)
+            ev_energy_remaining_entity='sensor.remaining', house_consumption_power_entity='sensor.house',
+            battery_enabled=False, pool_enabled=False)
         names = {entity: entity for entity in states}
         options = save_device(options, key, mapping, model, states.get,
             entity_names=names, area_names={}, entity_area_ids={})

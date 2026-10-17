@@ -131,6 +131,7 @@ def equipment_present(options, system, devices, configured_keys=()):
 def complete_device_views(devices, options, choices, status, plan, controllers, entity_names, area_names, now, configured_keys=()):
     """Augment one inventory with website choice, setup owner and local permission."""
     from .operating_modes import device_mode, system_device_keys, system_member_keys
+    from .grid_capacity import house_meter_errors, rating_errors
     devices = deepcopy(devices)
     for device in devices:
         key = device.get("statistic_id") or device["key"]
@@ -199,6 +200,13 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
                 reason = "; ".join(errors)
             elif device.get("mapping_status") != "ready":
                 reason = "Complete this device's setup first"
+        shared_errors = house_meter_errors(options) if planned and system != "battery" and not member else {}
+        if shared_errors:
+            device['field_errors'] = {**device.get('field_errors', {}), **shared_errors}
+            device['mapping_status'] = 'invalid'
+            shared_reason = '; '.join(message for messages in shared_errors.values() for message in messages)
+            device['mapping_error'] = '; '.join(filter(None,[device.get('mapping_error'),shared_reason]))
+            reason = '; '.join(filter(None,[reason,shared_reason]))
         verification_reason = reason
         mode = device_mode(options, controller_id)
         device["mode"] = mode
@@ -248,6 +256,9 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
                                     "pool_stop_temperature_entity"):
                     field["required"] = included
 
+        for field in device.get('fields', []):
+            if field['key'] in rating_errors(mapping):
+                field['required'] = True
         device["controller_explanation"] = controller_explanation(
             controller_id, mode, device["execution_status"], active)["explanation"]
         device["fields"] = [f for f in device.get("fields", []) if f["key"] != "control_enabled"]

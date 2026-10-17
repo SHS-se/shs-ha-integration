@@ -41,7 +41,7 @@ class GatewayStorageTests(unittest.TestCase):
         self.assertEqual(self.journal.begin_operation(session,dict(request_id='interrupted')), dict(state='interrupted'))
         with self.assertRaises(GatewayConflict):
             self.journal.begin_operation(session,dict(self.operation,parameters={}))
-        self.assertEqual(self.journal.prepare_command(self.command),'uncertain')
+        self.assertEqual(self.journal.prepare_command(self.command)['status'],'uncertain')
         self.assertEqual(self.journal.command_outcome('command'),dict(status='uncertain',reason='gateway_interrupted'))
         with closing(self.journal.connect(readonly=True)) as db:
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],3)
@@ -52,7 +52,7 @@ class GatewayStorageTests(unittest.TestCase):
         self.journal.close(); self.journal.open()
         replacement = self.journal.begin(IDENTITY,'replacement')['session']
         self.assertEqual(self.journal.begin_operation(replacement,self.operation)['result'],self.result)
-        self.assertEqual(self.journal.prepare_command(self.command),'uncertain')
+        self.assertEqual(self.journal.prepare_command(self.command)['status'],'uncertain')
         with patch.object(self.journal,'_reclaim_storage',wraps=self.journal._reclaim_storage) as reclaim:
             self.journal.close(); self.journal.open()
             self.assertEqual(reclaim.call_count,1)  # Checks the cleared marker, no VACUUM.

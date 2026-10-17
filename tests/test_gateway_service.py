@@ -46,7 +46,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         native = NativeExecutor(CommandTransport(commands,commands.execute),original.read_state,original.temperature_unit,send)
         self.service.physical = DeviceGateway(controller_inputs(self.hass),self.controller.options,
             GatewayRecord(self.stream,'ownership'),native,authorize=self.service.authorize_device,
-            before_external=lambda device:True,operations=GatewayOperations(self.stream,self.service.session))
+            before_external=lambda device, **command:True,operations=GatewayOperations(self.stream,self.service.session))
         await self.service.physical.load()
         await self.service.configuration_changed({'options':self.controller.options()})
         self.peer = AppConnection(self.service)
@@ -62,7 +62,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         page = await self.call('receipts',{'after':0,'limit':4096})
         await self.call('ack_delivery',{'through':page['through']})
         await self.call('activate',{'activation_id':'activation','proof':result['reconciliation']['proof']})
-        await self.call('policy',{'value':{'plan':'plan','options':digest(__import__('shs_core.native_configuration',fromlist=['native_options']).native_options(self.controller.options()))}})
+        await self.call('policy',{'value':{'plan':'plan','import_limit_w':10000,'options':digest(__import__('shs_core.native_configuration',fromlist=['native_options']).native_options(self.controller.options()))}})
         await self.call('synchronize',{'models':self.coordinator.optimisation_plan['device_models']})
 
     async def test_notification_wait_is_idle_without_journal_calls_and_wakes_after_commit(self):

@@ -79,7 +79,7 @@ POWER_FIELD = _field(
     "power",
     "Power",
     "power",
-    help_text="Choose a power sensor, or enter reviewed watts directly.",
+    help_text="Choose a power sensor, or enter the reviewed maximum electrical watts directly.",
 )
 
 def _temperature_field(*, required: bool) -> dict[str, Any]:
@@ -208,7 +208,8 @@ EXECUTION_FIELDS = (
     _field("control_override_entity", "Manual override", "entity", domains=("input_boolean", "binary_sensor")),
 )
 for kind in ("setpoint", "switch_schedule", "permit_inhibit"):
-    CONTROL_FIELDS[kind] += EXECUTION_FIELDS
+    CONTROL_FIELDS[kind] += (_field("maximum_power_w", "Maximum electrical power", "number", unit="W", minimum=1,
+        help_text="Equipment maximum, required when Power is a sensor. Leave empty when Power already contains reviewed rated watts."), *EXECUTION_FIELDS)
 CONTROL_FIELDS["setpoint"] += (
     _field("minimum_temperature_c", "Lowest allowed target", "number", unit="°C"),
     _field("maximum_temperature_c", "Highest allowed target", "number", unit="°C"),
@@ -259,7 +260,7 @@ PATH_ACTUATOR_DOMAINS: dict[str, list[str]] = {
 
 # Path-specific fields. Shared execution settings are appended after filtering.
 PATH_CONTRACT_KEYS: dict[str, frozenset[str]] = {
-    "pool": frozenset({"actuator_entity_ids", "power"}),
+    "pool": frozenset({"actuator_entity_ids", "power", "maximum_power_w"}),
 }
 
 
@@ -343,7 +344,7 @@ def section_fields(section: dict[str, Any]) -> list[dict[str, Any]]:
     return [*([toggle] if toggle else []), *section["fields"]]
 
 
-def _configuration_sections(*, battery_control_required=False) -> list[dict[str, Any]]:
+def _configuration_sections(*, battery_control_required=False, house_control_required=False) -> list[dict[str, Any]]:
     """Return the editable non-device configuration grouped for the panel."""
     c = shs_const
     category_labels = (
@@ -386,7 +387,7 @@ def _configuration_sections(*, battery_control_required=False) -> list[dict[str,
             "description": "Supplier and price area are configured on the Smart Home Solutions website; prices are fetched and calculated by the service.",
             "fields": [
                 _field(c.OPT_PV_FORECAST_ENTITIES, "Solar forecast", "entities", domains=("sensor",)),
-                _field("house_consumption_power_entity", "Instantaneous house consumption", "entity", domains=("sensor",), required=battery_control_required,
+                _field("house_consumption_power_entity", "Instantaneous house consumption", "entity", domains=("sensor",), required=battery_control_required or house_control_required,
                        help_text="Gross appliance power before solar, excluding battery charging. Use a W or kW measurement at the household AC boundary."),
                 _field("solar_production_power_entity", "Instantaneous solar production", "entity", domains=("sensor",), required=battery_control_required,
                        help_text="Reported plant solar power. The battery adapter accounts for conversion; energy counters and forecasts cannot authorize current supply."),
@@ -486,12 +487,6 @@ def _configuration_sections(*, battery_control_required=False) -> list[dict[str,
             "tab": "devices",
             "title": "Electrical and horizon limits",
             "fields": [
-                # Not the planner's limit: that is the main fuse answered in the home
-                # profile on the website, which the server applies to every plan.
-                # This saved figure only stands in while the tariff names no fuse,
-                # and the Settings tabs (Energy & planning, Devices) do not show it.
-                _field(c.OPT_GRID_IMPORT_LIMIT_W, "Grid import limit", "number", unit="W", minimum=1, step=1,
-                       help_text="Used only while the website has no main fuse for this home. The plan's limit is set in the home profile on the website."),
                 _field(c.OPT_GRID_EXPORT_LIMIT_W, "Grid export limit", "number", unit="W", minimum=1, step=1),
                 _field(c.OPT_TERMINAL_SOC_MIN, "Minimum charge at the end of the plan", "number", unit="%", minimum=0, maximum=100, step=1, scale=100),
                 _field(c.OPT_TERMINAL_ENERGY_VALUE, "Remaining battery value", "number", unit="SEK/kWh", minimum=0, step=0.01),

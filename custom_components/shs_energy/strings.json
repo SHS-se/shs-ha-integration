@@ -55,7 +55,6 @@
           "battery_discharge_efficiency": "Battery discharge efficiency (fraction)",
           "battery_export_reserve_soc": "Battery export reserve SOC (fraction)",
           "battery_export_min_price_sek_per_kwh": "Minimum export price for battery discharge (SEK/kWh)",
-          "grid_import_limit_w": "Grid import limit (W)",
           "grid_export_limit_w": "Grid export limit (W)",
           "terminal_soc_min": "Minimum SOC at the end of the horizon",
           "terminal_energy_value_sek_per_kwh": "Value of stored terminal energy (SEK/kWh)",
@@ -116,7 +115,6 @@
           "battery_discharge_efficiency": "Discharge efficiency",
           "battery_export_reserve_soc": "Do not deliberately export below this SOC",
           "battery_export_min_price_sek_per_kwh": "Minimum export price (SEK/kWh)",
-          "grid_import_limit_w": "Grid import limit (W)",
           "grid_export_limit_w": "Grid export limit (W)",
           "terminal_soc_min": "Minimum terminal SOC",
           "terminal_energy_value_sek_per_kwh": "Value of stored terminal energy (SEK/kWh)"

@@ -105,7 +105,6 @@ from .device_controls import (
 from .hot_water import is_hot_water, hot_water_setup_errors
 from .optimisation import (
     OptimisationInputError,
-    fuse_import_limit_w,
     REMEDY_DEFECT,
     REMEDY_SETTING,
     REMEDY_WAITING,
@@ -2034,15 +2033,22 @@ class Household:
             result.get("supplier_costs_accepted"),
         )
 
+    def house_import_limit_w(self):
+        """The website's resolved house limit, independent of any plan or setting."""
+        value = (self.tariff_catalog or {}).get("grid_import_limit_w")
+        if value is None:
+            return None
+        limit = parse_number(value, "Website house import limit")
+        if limit <= 0:
+            raise OptimisationInputError("Website house import limit must be positive")
+        return limit
+
     def _optimisation_options(self) -> dict[str, Any]:
         """Resolve defaults and require only capabilities enabled for this home."""
         options = self.resolved_options()
-        configuration = (self.tariff_catalog or {}).get("configuration") or {}
-        # A saved figure is used only while the website names no fuse; nothing in
-        # this app sets the plan's grid import limit.
-        fuse_limit_w = fuse_import_limit_w(configuration)
-        if fuse_limit_w is not None:
-            options[OPT_GRID_IMPORT_LIMIT_W] = fuse_limit_w
+        # The server resolves the owner's chosen limit against the main fuse.
+        # Neither the inverter rating nor a retired local setting can replace it.
+        options[OPT_GRID_IMPORT_LIMIT_W] = self.house_import_limit_w()
         if not options.get(OPT_GRID_EXPORT_LIMIT_W) and options.get(
             OPT_GRID_IMPORT_LIMIT_W
         ):
@@ -2081,7 +2087,7 @@ class Household:
             "a whole-home meter or Energy Dashboard grid meter": (
                 "Home Assistant Energy Dashboard grid meter is not configured"
             ),
-            OPT_GRID_IMPORT_LIMIT_W: "Grid import limit is not configured",
+            OPT_GRID_IMPORT_LIMIT_W: "Set the house import limit and main fuse in the website home profile",
             OPT_GRID_EXPORT_LIMIT_W: "Grid export limit is not configured",
         }
         self.optimisation_missing_inputs = [
@@ -2093,6 +2099,8 @@ class Household:
                      else OPT_FORECAST_RESOLUTION_MINUTES if key == "forecast resolution must be 15 minutes" else key),
              "message": labels.get(key, key + " is required or invalid")} for key in missing
         ]} if missing else None
+        if OPT_GRID_IMPORT_LIMIT_W in missing:
+            self.optimisation_missing_fix = {"kind": "website", "path": "/portal/home-profile"}
         self._sync_optimisation_issue()
         if missing:
             raise OptimisationInputError(

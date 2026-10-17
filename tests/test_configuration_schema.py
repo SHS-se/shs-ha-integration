@@ -101,12 +101,12 @@ class CurrentConfigurationTests(unittest.TestCase):
 
 
 
-    def test_boiler_saves_with_only_its_power_sensor_even_when_idle(self):
+    def test_boiler_saves_its_power_sensor_and_reviewed_maximum_even_when_idle(self):
         device = {"control_type": "permit_inhibit", "category": "hot_water", "name": "Boiler"}
         entities = {"switch.boiler": {"state": "on", "attributes": {}},
                     "sensor.boiler_power": {"state": "0", "attributes": {"unit_of_measurement": "W"}}}
         mapping = {"control_type": "permit_inhibit", "actuator_entity_ids": ["switch.boiler"],
-                   "power": "sensor.boiler_power"}
+                   "power": "sensor.boiler_power", "maximum_power_w":3000}
         saved = save_device({}, "boiler", mapping, device, entities.get,
             entity_names={key: key for key in entities}, area_names={}, entity_area_ids={})
         self.assertEqual(saved["device_control_mappings"]["boiler"], mapping)
@@ -145,7 +145,7 @@ class CurrentConfigurationTests(unittest.TestCase):
         options, _ = migrate_options({"entities_pool_heating": ["sensor.pool"],
                                      "device_control_mappings": {}}, source_version=6)
         mapping = {"control_type": "switch_schedule",
-                   "actuator_entity_ids": ["switch.esphome_pool_pump_switch"]}
+                   "actuator_entity_ids": ["switch.esphome_pool_pump_switch"], "maximum_power_w":1200}
         options['pool_water_temperature_entity'] = 'sensor.water'
         entities = {"switch.esphome_pool_pump_switch": {"state": "off", "attributes": {}},
                     "sensor.water": {"state": "29", "attributes": {"unit_of_measurement": "°C"}}}
@@ -195,7 +195,7 @@ class CurrentConfigurationTests(unittest.TestCase):
 
     def test_removed_mapping_power_stays_explicitly_empty(self):
         mapping = {'control_type': 'setpoint', 'actuator_entity_ids': ['climate.a'],
-                   'temperature_entity_id': 'sensor.old', 'power': None}
+                   'temperature_entity_id': 'sensor.old', 'power': None, 'maximum_power_w':2000}
         saved = save({}, 'heater', mapping)
         self.assertIsNone(saved['device_control_mappings']['heater']['power'])
         self.assertIsNone(resolve_configuration(saved)['device_control_mappings']['heater']['power'])
@@ -242,7 +242,7 @@ class CurrentConfigurationTests(unittest.TestCase):
     def test_shared_room_source_survives_save_reload_and_device_removal(self):
         old = {'device_control_mappings': {key: {'control_type': 'setpoint',
             'actuator_entity_ids': ['climate.' + key], 'temperature_entity_id': 'sensor.old',
-            'room_area_id': 'office'} for key in ('a', 'b')}}
+            'room_area_id': 'office', 'maximum_power_w':2000} for key in ('a', 'b')}}
         current, _ = migrate_options(old)
         self.assertEqual(current['rooms'], {'office': {'temperature_entity_id': 'sensor.old'}})
         for mapping in current['device_control_mappings'].values():

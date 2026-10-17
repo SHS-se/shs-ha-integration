@@ -19,8 +19,9 @@ class PresentationTests(unittest.TestCase):
         view = self.view([water])[0]
         self.assertFalse(view['execution_eligibility']['eligible'])
         self.assertIn('power', view['field_errors'])
-        self.assertNotIn('house_consumption_power_entity', view['field_errors'])
-        water['mapping']['power'] = 'sensor.water_power'
+        self.assertIn('house_consumption_power_entity', view['field_errors'])
+        water['mapping'].update(power='sensor.water_power', maximum_power_w=3000)
+        self.options['house_consumption_power_entity'] = 'sensor.house'
         corrected = self.view([water])[0]
         self.assertNotIn('running_power_w', [f['key'] for f in corrected['fields']])
         self.assertEqual(corrected['mapping_readiness']['state'], 'ready')
@@ -99,7 +100,8 @@ class PresentationTests(unittest.TestCase):
     def setUp(self):
         self.plan = json.loads((Path(__file__).parent / 'fixtures/schema-7-device-plan.json').read_text())['plan']
         self.now = datetime.fromisoformat(self.plan['issued_at']) + timedelta(minutes=6)
-        self.options = {**configuration_defaults(0, 0), 'planning_mode': 'live', 'battery_enabled': False, 'pool_enabled': False, 'ev_enabled': False}
+        self.options = {**configuration_defaults(0, 0), 'planning_mode': 'live', 'battery_enabled': False, 'pool_enabled': False, 'ev_enabled': False,
+                        'house_consumption_power_entity':'sensor.house'}
         self.device = {'key': 'sensor.laundry_energy', 'statistic_id': 'sensor.laundry_energy', 'name': 'Old name Energy',
             'category': 'heating', 'planning_role': 'controllable', 'planning_choice_at': None, 'control_type': 'setpoint',
             'mapping': {'control_type': 'setpoint', 'actuator_entity_ids': ['climate.laundry'], 'room_area_id': 'laundry'},

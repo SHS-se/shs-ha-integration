@@ -22,6 +22,7 @@ class GatewayService:
         self.configuration_pending = True
         self.policy_revision = 0
         self.policy = None
+        self.import_limit_w = None
         self.active = False
         self.physical = None
         self.battery = None
@@ -267,6 +268,19 @@ class AppConnection(GatewayConnection):
         if op == 'policy':
             if type(body['value']) is not dict or body['value'].get('options') != digest(native_options(s.source.options())):
                 raise ValueError('Policy identity must be an object')
+            from .grid_capacity import import_limit
+            # A session can collect inputs before its first website response.
+            # Missing authority grants no headroom: final native checks refuse
+            # every increase until a resolved house limit is admitted.
+            raw_limit = body['value']['import_limit_w']
+            limit = None if raw_limit is None else import_limit(raw_limit)
+            context = s.context()
+            if limit is not None and s.import_limit_w != limit:
+                await s.stream.call('save_record', 'house_import_limit', {'import_limit_w':limit})
+            s.authorize(op)
+            if s.context() != context:
+                raise GatewayConflict('House import policy changed during admission')
+            s.import_limit_w = limit
             if s.policy != body['value']:
                 s.policy = deepcopy(body['value'])
                 s.policy_revision += 1

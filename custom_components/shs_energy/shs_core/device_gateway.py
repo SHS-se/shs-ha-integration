@@ -79,14 +79,16 @@ class DeviceGateway(DeviceOperations):
         self.local_obligation = False
         self.pool_pause = None
 
-    def before_external_command(self, device):
-        if self.local_obligation:
-            return self.external_ready(device)
-        if not self.intent.headroom_reserved:
+    def before_external_command(self, device, *, entity, value):
+        if not self.local_obligation and not self.intent.headroom_reserved:
             self.reservation_required = True
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
             return False
-        return self.external_ready(device)
+        try:
+            return self.external_ready(device, entity=entity, value=value)
+        except ControlDeadlineError:
+            self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
+            raise
 
     async def load(self):
         await self.ownership.load()

@@ -8,7 +8,7 @@ import asyncio
 from copy import deepcopy
 import logging
 
-from .command_transport import settled
+from .command_transport import settled, CommandNotSent
 from .gateway_journal import GatewayConflict
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,13 +34,18 @@ class GatewayStream:
 
     def capture(self, kind, payload, *, ownership=None):
         """Assign local queue order in the source callback, including equal timestamps."""
+        args = (kind, payload) if ownership is None else (kind, payload, ownership)
+        return self._submit('record', args)
+
+    def mark_dispatch(self, command_id):
+        return self._submit('mark_dispatch', (command_id,))
+
+    def _submit(self, operation, args):
         if not self.accepting or self.failure:
             raise self.unavailable('source coverage interrupted') from self.failure
-        # Copy now: mutable source attributes must not change a queued receipt.
         future = asyncio.get_running_loop().create_future()
         future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
-        args = (kind, deepcopy(payload)) if ownership is None else (kind, deepcopy(payload), deepcopy(ownership))
-        self._enqueue(('record', args, future))
+        self._enqueue((operation, deepcopy(args), future))
         return future
 
     async def call(self, operation, *args):
@@ -49,11 +54,8 @@ class GatewayStream:
         if operation not in ('begin', 'disconnect', 'read', 'acknowledge_delivery', 'acknowledge_processed', 'snapshot',
                              'load_record', 'save_record', 'prepare_command', 'finish_command', 'admit_route', 'read_route', 'begin_operation', 'finish_operation', 'command_outcome', 'activate', 'resume'):
             raise ValueError('Unsupported gateway operation')
-        future = asyncio.get_running_loop().create_future()
-        future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
-        self._enqueue((operation, deepcopy(args), future))
         # Connection loss may cancel the request, never its durable journal work.
-        return await asyncio.shield(future)
+        return await asyncio.shield(self._submit(operation, args))
 
     def _enqueue(self, item):
         try:
@@ -208,8 +210,8 @@ class GatewayRecord:
 
 class GatewayCommands:
     """Bind CommandTransport to gateway commands without repurposing the source."""
-    def __init__(self, stream):
-        self.stream = stream
+    def __init__(self, stream, capacity=None):
+        self.stream, self.capacity = stream, capacity
 
     def prepare(self, command):
         raise RuntimeError('Gateway commands must run on the receipt worker')
@@ -219,9 +221,19 @@ class GatewayCommands:
 
     async def execute(self, function, *args):
         if function == self.prepare:
-            return await self.stream.call('prepare_command', *args)
+            try:
+                effect = self.capacity.describe_command(args[0]) if self.capacity else None
+            except (ValueError, KeyError, TypeError) as error:
+                raise CommandNotSent(str(error)) from error
+            result = await self.stream.call('prepare_command', *args, effect)
+            if self.capacity:
+                self.capacity.install_capacity(result['capacity'])
+            return result['status']
         if function == self.finish:
-            return await self.stream.call('finish_command', *args)
+            result = await self.stream.call('finish_command', *args)
+            if self.capacity:
+                self.capacity.install_capacity(result)
+            return
         raise ValueError('Unsupported gateway journal operation')
 
 

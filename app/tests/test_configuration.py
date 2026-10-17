@@ -40,6 +40,16 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reopened.options(),self.app.options())
         self.assertEqual(self.credentials_calls,1)
 
+    async def test_reload_removes_obsolete_local_import_limit_from_both_records(self):
+        options = {**self.app.options(), 'grid_import_limit_w': 13200, 'grid_export_limit_w': 13200}
+        await self.app.commit(self.app.revision, options, 'old-local-limit')
+        reopened = Configuration(self.root, {'installation':'original'}, self.gateway.install, project=deepcopy)
+        await reopened.load(self.gateway.value, self.credentials)
+        self.assertNotIn('grid_import_limit_w', reopened.options())
+        self.assertNotIn('grid_import_limit_w', self.gateway.options())
+        self.assertEqual(reopened.options()['grid_export_limit_w'], 13200)
+        self.assertEqual(reopened.options()['device_modes'], options['device_modes'])
+
     async def test_lost_reply_retains_pending_then_reconciles_without_duplicate_revision(self):
         async def lose_reply(body):
             await self.gateway.install(body)

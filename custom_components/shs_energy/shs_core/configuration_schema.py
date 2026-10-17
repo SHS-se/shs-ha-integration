@@ -222,6 +222,7 @@ def resolve_configuration(options, latitude=0.0, longitude=0.0):
     """Produce a detached runtime view from current records and shared defaults."""
     resolved = configuration_defaults(latitude, longitude)
     resolved.update(deepcopy(options))
+    resolved.pop("grid_import_limit_w", None)
     resolved.pop("pv_forecast_latitude", None)
     resolved.pop("pv_forecast_longitude", None)
     resolved.pop("battery_export_enabled", None)

@@ -138,7 +138,7 @@ class ScheduledController(DeviceOperations):
     def binding_execution_plan(self, device, options):
         return self.coordinator.binding_plan_for(device, options)
 
-    def before_external_command(self, device):
+    def before_external_command(self, device, *, entity, value):
         runtime = getattr(self, "battery_runtime", None)
         return runtime is None or runtime.before_external_command(device)
 

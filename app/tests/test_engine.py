@@ -151,7 +151,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         native_journal = GatewayCommands(self.stream)
         native = NativeExecutor(CommandTransport(native_journal,native_journal.execute),lambda e:None,lambda:'°C',send)
         self.service.physical = DeviceGateway(ControllerInputs(lambda e:None,lambda:'°C',lambda e:None),source.options,
-            GatewayRecord(self.stream,'ownership'),native,authorize=self.service.authorize_device,before_external=lambda device:True,
+            GatewayRecord(self.stream,'ownership'),native,authorize=self.service.authorize_device,before_external=lambda device, **command:True,
             operations=GatewayOperations(self.stream,self.service.session))
         self.service.battery = BatteryGateway(self.stream,self.service.physical,source.options,lambda e:None,
             lambda:int(datetime.now(timezone.utc).timestamp()*1000),authorize=self.service.authorize,

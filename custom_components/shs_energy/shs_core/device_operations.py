@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from .command_journal import Command
 from .native_commands import finite, native_command
+from .grid_capacity import GridCapacityConfigurationError
 from .device_ownership import DeviceOwnership
 from .api_contract import INTEGRATION_VERSION
 from .operating_modes import device_mode, EXECUTING_MODES
@@ -61,7 +62,7 @@ class ControlDeadlineError(ValueError):
 
 
 def correction_details(error):
-    if isinstance(error, HotWaterConfigurationError):
+    if isinstance(error, (HotWaterConfigurationError, GridCapacityConfigurationError)):
         return {"fix": error.fix, "next_step": error.next_step}
     return error.details if isinstance(error, (ControlObservationError, PlanChangedError)) else {}
 
@@ -159,6 +160,8 @@ class DeviceOperations:
             switch = options.get('ev_charge_switch_entity')
             if entity != switch and self.actuator_state(switch).state == 'off':
                 return False
+            if not self.restoring and entity != switch and finite(value) <= self.number(entity):
+                return False
         return self.device != 'battery'
 
     async def command(self, entity, value):
@@ -170,6 +173,8 @@ class DeviceOperations:
         native = native_command(entity, value, state,
                                 temperature_unit=self.inputs.temperature_unit() if domain == "climate" else None)
         value, equal = native.value, native.equal
+        if equal and not self.verifying and self.native_executor.requires_command(entity, value):
+            equal = False
         _, service, service_data = native.action.service_call()
         data = {key: item for key, item in service_data.items() if key != "entity_id"}
         now = datetime.now(timezone.utc)
@@ -200,13 +205,13 @@ class DeviceOperations:
             if not equal:
                 if self.battery_writer_fence is not None:
                     self.battery_writer_fence.check_device_command(entity)
-                if self.requires_grid_capacity(entity, value) and not self.before_external_command(self.device):
+                if self.requires_grid_capacity(entity, value) and not self.before_external_command(self.device, entity=entity, value=value):
                     if self.scheduler is not None:
                         self.scheduler.device_deadline(self.device,"battery_headroom",datetime.now(timezone.utc)+timedelta(seconds=5))
                     raise ControlDeadlineError("Waiting for battery charging to release grid capacity")
                 def authorize():
                     self.check_authority()
-                    if self.requires_grid_capacity(entity, value) and not self.before_external_command(self.device):
+                    if self.requires_grid_capacity(entity, value) and not self.before_external_command(self.device, entity=entity, value=value):
                         raise ControlDeadlineError('Waiting for battery charging to release grid capacity')
                     if self.battery_writer_fence is not None:
                         self.battery_writer_fence.check_device_command(entity)

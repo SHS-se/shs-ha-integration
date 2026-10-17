@@ -74,17 +74,23 @@ class NativeExecutor:
     validation happens after that authorization in the transport's scheduled
     coroutine, after journal preparation, without another intervening await.
     """
-    def __init__(self, transport, read_state, temperature_unit, send):
+    def __init__(self, transport, read_state, temperature_unit, send, *, capacity=None):
         self.transport = transport
         self.read_state = read_state
         self.temperature_unit = temperature_unit
         self.send = send
+        self.capacity = capacity
+
+    def requires_command(self, entity, value):
+        return self.capacity is not None and self.capacity.requires_command(entity, value)
 
     async def execute(self, command, *, authorize, timeout, on_sent=lambda: None):
         from .command_transport import CommandNotSent
 
         def check():
             authorize()
+            if self.capacity is not None:
+                self.capacity.check_command(command)
             action = command.action
             value = (action.service.removeprefix('turn_') if action.service in ('turn_on', 'turn_off')
                      else action.value)
@@ -96,5 +102,9 @@ class NativeExecutor:
             except (KeyError, TypeError, ValueError) as error:
                 raise CommandNotSent(str(error)) from error
 
-        await self.transport.execute(command, authorize=check, send=self.send,
+        async def send(*args):
+            if self.capacity is not None:
+                self.capacity.mark_dispatch(command)
+            await self.send(*args)
+        await self.transport.execute(command, authorize=check, send=send,
                                      timeout=timeout, on_sent=on_sent)
