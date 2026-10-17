@@ -11,6 +11,12 @@ already been published. Documentation-only changes do not require a bump.
 
 Follow `RELEASING.md`; do not create release tags manually.
 
+The SHS app bundles `custom_components/shs_energy/shs_core` and `shs_wire`.
+When either changes, bump the app version in `web/package.json`,
+`web/package-lock.json`, `apps/shs_energy/config.yaml` and its Dockerfile in the
+same commit. The app version bump starts its publication workflow; publishing
+only the HACS integration does not update the running app core.
+
 # Control continuity
 
 Follow [control continuity](docs/control-continuity.md) for every device, the

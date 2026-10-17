@@ -19,9 +19,14 @@ The HAOS app has a separate version in `apps/shs_energy/config.yaml` and
 `web/package.json`; keep them equal. The **SHS app** workflow tests and publishes
 `ghcr.io/shs-se/shs-energy-app:<version>` for amd64 and arm64 when app files change.
 Never reuse a published app version for changed bytes. Each app image includes the
-exact integration source from its commit. Update the installer baseline hash manifest
-when deliberately supporting replacement of another integration release. The package
-must be publicly pullable before advertising the repository as installable.
+exact integration source from its commit. Changes to the bundled `shs_core` or
+`shs_wire` require an app version bump in the same commit, even when all Python
+changes are under `custom_components/`. Bump `web/package.json`, its lockfile,
+`apps/shs_energy/config.yaml` and the Dockerfile default together. A HACS
+integration update alone leaves the app running its previously bundled core.
+Update the installer baseline hash manifest when deliberately supporting
+replacement of another integration release. The package must be publicly
+pullable before advertising the repository as installable.
 
 The Beta integration workflow watches integration code and its tests. App-only work
 does not publish a second HACS release under an unchanged integration version.
