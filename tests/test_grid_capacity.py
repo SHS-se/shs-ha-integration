@@ -262,6 +262,47 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
             'last_reported':self.rows['sensor.house']['last_reported']}
         self.source.power_peaks[sensor] = peak_w
 
+    def pool_heater(self, *, switch='on', setting='12.0', measured_w=3018):
+        options = self.source.configuration.options()
+        options['device_control_mappings']['pool_heater'] = {'control_type':'variable_power',
+            'actuator_entity_ids':['switch.pool_heater'], 'power':'sensor.pool_heater_power',
+            'power_setting_entity_id':'number.pool_setting'}
+        options['device_modes']['pool_heater'] = 'controlling'
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.rows['switch.pool_heater'] = {'state':switch, 'attributes':{}}
+        self.rows['number.pool_setting'] = {'state':setting, 'attributes':{'unit_of_measurement':'kW'}}
+        self.rows['sensor.pool_heater_power'] = {'state':str(measured_w),
+            'attributes':{'unit_of_measurement':'W', 'state_class':'measurement'},
+            'last_reported':self.rows['sensor.house']['last_reported']}
+        # 17 Oct 2026: the all-time peak came from the pool's previous air heat
+        # pump; at its 12 kW setting the ground-source pump has drawn 3146 W.
+        self.source.power_peaks.update({'sensor.pool_heater_power':5135.4,
+            'sensor.pool_heater_power@number.pool_setting=12':3146})
+        self.service.import_limit_w = 15000
+
+    async def test_running_heat_pump_reserves_its_peak_at_the_current_power_setting(self):
+        self.configure_ev()
+        self.pool_heater()
+        self.rows['sensor.house']['state'] = '9687'
+        self.assertEqual(self.source.import_required(), 9687 + 3146 - 3018)
+        self.assertEqual((await self.source.request('battery_capacity', {}))['external_import_w'], 9687 + 3146 - 3018)
+        for unseen in ('16', 'unavailable'):
+            with self.subTest(setting=unseen):
+                self.rows['number.pool_setting']['state'] = unseen
+                self.assertAlmostEqual(self.source.import_required(), 9687 + 5135.4 - 3018)
+
+    async def test_heat_pump_start_is_admitted_against_its_current_setting_peak(self):
+        self.configure_ev()
+        self.pool_heater(switch='off', setting='16', measured_w=0)
+        self.rows['sensor.house']['state'] = '11500'
+        with self.assertRaisesRegex(ControlDeadlineError, '16635 W required'):
+            await self.native('unseen-setting-start', 'device:pool_heater', 'switch.pool_heater', 'turn_on')
+        self.assertFalse(self.calls)
+        self.rows['number.pool_setting']['state'] = '12'
+        await self.native('known-setting-start', 'device:pool_heater', 'switch.pool_heater', 'turn_on')
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.source.import_required(), 11500 + 3146)
+
     async def test_pool_starts_without_peak_reservations_for_off_or_uncontrolled_devices(self):
         self.configure_ev()
         self.service.import_limit_w = 15000
@@ -692,6 +733,25 @@ class PowerPeakTests(unittest.TestCase):
         self.assertIsNone(device_power_bound({'maximum_power_w':9999},peaks))
 
 
+    def test_setting_peaks_bound_by_the_current_value_and_fall_back_to_any_setting(self):
+        from shs_core.grid_capacity import observe_power_peak, observe_setting_peak, device_power_bound
+        peaks = {}
+        row = dict(entity_id='sensor.pool',state='3.1',attributes={'unit_of_measurement':'kW'})
+        observe_power_peak(peaks, row)
+        self.assertTrue(observe_setting_peak(peaks, row, 'number.setting', '12.0'))
+        self.assertFalse(observe_setting_peak(peaks, {**row,'state':'3000','attributes':{'unit_of_measurement':'W'}},
+                                              'number.setting', '12'))
+        for setting in ('unavailable', None, True, 'nan'):
+            self.assertFalse(observe_setting_peak(peaks, row, 'number.setting', setting))
+        peaks['sensor.pool'] = 5000
+        mapping = {'power':'sensor.pool','power_setting_entity_id':'number.setting'}
+        self.assertEqual(device_power_bound(mapping, peaks, '12'), 3100)
+        self.assertEqual(device_power_bound(mapping, peaks, '12.0'), 3100)
+        self.assertEqual(device_power_bound(mapping, peaks, '8'), 5000)
+        self.assertEqual(device_power_bound(mapping, peaks, 'unavailable'), 5000)
+        self.assertEqual(device_power_bound({'power':'sensor.pool'}, peaks, '12'), 5000)
+
+
 class NativePowerHistoryTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = metadata.MetadataTests.asyncSetUp
     configure_ev = LiveImportTests.configure_ev
@@ -790,6 +850,37 @@ class NativePowerHistoryTests(unittest.IsolatedAsyncioTestCase):
         await self.source.refresh_capacity()
         self.assertEqual(self.source.power_peaks['sensor.pool'],2500)
 
+    def configure_pool_setting(self):
+        self.configure_pool()
+        options = self.source.configuration.options()
+        options['device_control_mappings']['pool']['power_setting_entity_id'] = 'number.pool_setting'
+        options['device_modes']['pool'] = 'controlling'
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.rows['number.pool_setting'] = dict(state='12.0',attributes={'unit_of_measurement':'kW'})
+        self.source.history.setting_power_peaks = AsyncMock(
+            return_value={'sensor.pool@number.pool_setting=12':3100})
+
+    async def test_setting_peaks_are_seeded_from_history_and_raised_by_live_reports(self):
+        self.configure_pool_setting()
+        self.source.collect_power_history()
+        await asyncio.gather(*self.tasks)
+        self.source.history.setting_power_peaks.assert_awaited_once_with({('sensor.pool','number.pool_setting')})
+        self.assertEqual(self.source.power_peaks['sensor.pool@number.pool_setting=12'],3100)
+        self.assertEqual(self.journal.load_record('power_peaks')['sensor.pool@number.pool_setting=12'],3100)
+        self.source.execution_source=lambda entity:False
+        self.source.entities.add('sensor.pool')
+        self.rows['sensor.pool']['state']='3300'
+        self.hass.fire('state_reported',entity_id='sensor.pool',new_state=SimpleNamespace(attributes={}))
+        await asyncio.gather(*self.tasks)
+        await self.stream.queue.join()
+        self.assertEqual(self.source.power_peaks['sensor.pool@number.pool_setting=12'],3300)
+        self.assertEqual(self.journal.load_record('power_peaks')['sensor.pool@number.pool_setting=12'],3300)
+        self.assertEqual(self.source.power_peaks['sensor.pool'],4000)
+        self.rows['switch.pool']['state']='on'
+        self.rows['sensor.pool']['state']='3000'
+        self.rows['sensor.house']['state']='5000'
+        self.assertEqual(self.source.import_required(),5300)
+
     async def test_history_failure_retries_without_blocking_native_startup(self):
         self.configure_pool()
         self.source.history.power_peaks.side_effect=[RuntimeError('Recorder busy'),{'sensor.pool':4000}]
@@ -861,3 +952,34 @@ class RecorderPeakTests(unittest.IsolatedAsyncioTestCase):
         result=await adapter.RecorderSource(object()).power_peaks({'sensor.pool'})
         self.assertEqual(result,{'sensor.pool':4321.5})
         self.assertEqual(calls,[(None,None,'sensor.pool',{'max'},{'power':'W'})])
+
+    async def test_recorder_attributes_power_maxima_to_each_retained_setting_span(self):
+        import logging
+        from datetime import datetime, timedelta, timezone
+        from test_execution_mode_select import load_adapter
+        from shs_core.grid_capacity import positive_power, power_setting_value, setting_peak_key
+        from shs_core.household_ports import HouseholdReadError
+        now = datetime.now(timezone.utc)
+        changes = [(now-timedelta(days=30),'8'), (now-timedelta(days=5),'12'), (now-timedelta(days=4),'12.0'),
+                   (now-timedelta(days=3),'unavailable'), (now-timedelta(days=2),'12')]
+        spans = []
+        async def execute(function):
+            return function()
+        def states(hass,start,end,entities,**kwargs):
+            self.assertEqual(entities,['number.setting'])
+            self.assertTrue(kwargs['include_start_time_state'])
+            return {'number.setting':[SimpleNamespace(state=value,last_changed=at) for at,value in changes]}
+        def aggregate(hass,start,end,entity,kinds,units):
+            spans.append((start,end))
+            return {'max':{0:2000,1:3100,2:3300}[len(spans)-1]}
+        adapter=load_adapter('recorder_source.py',dict(logging=logging,datetime=datetime,timedelta=timedelta,timezone=timezone,
+            get_instance=lambda hass:SimpleNamespace(keep_days=10,async_add_executor_job=execute),
+            get_significant_states=states,statistic_during_period=aggregate,HomeAssistantError=RuntimeError,
+            HouseholdReadError=HouseholdReadError,positive_power=positive_power,power_setting_value=power_setting_value,
+            setting_peak_key=setting_peak_key))
+        result=await adapter.RecorderSource(object()).setting_power_peaks({('sensor.pool','number.setting')})
+        self.assertEqual(result,{'sensor.pool@number.setting=8':2000,'sensor.pool@number.setting=12':3300})
+        self.assertAlmostEqual((spans[0][1]-spans[0][0]).total_seconds(),timedelta(days=5).total_seconds(),delta=60)
+        self.assertEqual(spans[1][1]-spans[1][0],timedelta(days=2))
+        self.assertEqual(spans[1][0],changes[1][0])
+        self.assertEqual(spans[2][0],changes[4][0])

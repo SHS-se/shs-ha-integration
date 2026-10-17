@@ -27,7 +27,7 @@ from .shs_core.battery_gateway import BatteryGateway
 from .shs_core.battery_native_adapter import SigenAdapter
 from .shs_core.native_readings import power
 from .shs_core.grid_capacity import (battery_released, required_import, import_limit,
-    empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, CHARGING_MODES)
+    empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, observe_setting_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, CHARGING_MODES)
 from .shs_core.device_commands import actuator_targets
 from .shs_core.operating_modes import device_mode
 from .shs_core.command_transport import CommandTransport
@@ -73,6 +73,7 @@ class HomeAssistantSource:
         self.capacity = empty_capacity()
         self.power_peaks = {}
         self.power_entities = set()
+        self.power_settings = set()
         self.power_history_loaded = set()
         self.power_history_pending = False
         self.capacity_entities = set()
@@ -341,35 +342,64 @@ class HomeAssistantSource:
             for mapping in options.get('device_control_mappings', {}).values()
             if isinstance(sensor := mapping.get('power'), str) and '.' in sensor}
 
+    def power_setting_sources(self):
+        """(Power sensor, native power setting) pairs whose peaks are kept per setting value."""
+        option_sets = [self.options(), *(record['options'] for record in
+            self.service.physical.ownership.records.values() if record.get('options'))]
+        return {(sensor, setting) for options in option_sets
+            for mapping in options.get('device_control_mappings', {}).values()
+            if isinstance(sensor := mapping.get('power'), str) and '.' in sensor
+            and isinstance(setting := mapping.get('power_setting_entity_id'), str) and '.' in setting}
+
+    def mapped_power_bound(self, mapping):
+        setting = mapping.get('power_setting_entity_id')
+        state = (self.report(setting) or {}).get('state') if isinstance(setting, str) else None
+        return device_power_bound(mapping, self.power_peaks, state)
+
+    def observe_setting_peaks(self, row):
+        raised = False
+        for sensor, setting in self.power_settings:
+            if row and sensor == row['entity_id']:
+                raised |= observe_setting_peak(self.power_peaks, row, setting, (self.report(setting) or {}).get('state'))
+        return raised
+
     def collect_power_history(self):
         self.power_entities = self.power_history_sources()
-        if self.power_history_pending or not self.power_history_sources() - self.power_history_loaded:
+        self.power_settings = self.power_setting_sources()
+        sources = lambda: self.power_history_sources() | self.power_setting_sources()
+        if self.power_history_pending or not sources() - self.power_history_loaded:
             return
         self.power_history_pending = True
         async def collect():
             retries = RetryBackoff()
             try:
-                while not self.closed and (entities := self.power_history_sources() - self.power_history_loaded):
+                while not self.closed and (pending := sources() - self.power_history_loaded):
+                    entities = {item for item in pending if isinstance(item, str)}
+                    settings = pending - entities
                     # Subscribe/observe before the async Recorder read, so a live
                     # high-to-low transient cannot be lost during the scan.
-                    for entity in entities:
+                    for entity in entities | {sensor for sensor, _ in settings}:
                         row = self.report(entity)
                         if row:
                             observe_power_peak(self.power_peaks, {**row, 'entity_id':entity})
+                            self.observe_setting_peaks({**row, 'entity_id':entity})
                     # Persist these observations before waiting on Recorder;
                     # a failed scan must not lose a positive startup sample.
                     await self.service.stream.call('save_record', 'power_peaks', self.power_peaks)
                     try:
-                        history = await self.history.power_peaks(entities)
+                        history = await self.history.power_peaks(entities) if entities else {}
+                        if settings:
+                            history = {**history, **await self.history.setting_power_peaks(settings)}
                     except Exception:
                         _LOGGER.exception('Could not read device peak power history; retrying')
                         await asyncio.sleep(retries.next())
                         continue
                     merge_power_peaks(self.power_peaks, history)
                     await self.service.stream.call('save_record', 'power_peaks', self.power_peaks)
-                    self.power_history_loaded.update(entities)
+                    self.power_history_loaded.update(pending)
                     _LOGGER.info('Device historical power peaks (W): %s',
-                        {entity:self.power_peaks.get(entity) for entity in sorted(entities)})
+                        {key:self.power_peaks[key] for key in sorted(self.power_peaks)
+                         if key in entities or key.partition('@')[0] in {sensor for sensor, _ in settings}})
                     retries.reset()
             finally:
                 self.power_history_pending = False
@@ -496,13 +526,13 @@ class HomeAssistantSource:
         if len(matches) > 1 and len({tuple(sorted(actuator_targets(m))) for _,m in matches}) == 1:
             sensor = self.import_power_source(matches)
             matches = [max((item for item in matches if self.power_source(item[1],item[0]) == sensor),
-                           key=lambda item:device_power_bound(item[1],self.power_peaks) or 0)]
+                           key=lambda item:self.mapped_power_bound(item[1]) or 0)]
         if len(matches) != 1:
             if value == 'off':
                 return None
             raise ValueError(f'{device}: no unambiguous reviewed power mapping for {entity}')
         key, mapping = matches[0]
-        rated = device_power_bound(mapping, self.power_peaks)
+        rated = self.mapped_power_bound(mapping)
         if rated is None:
             if value == 'off':
                 return None
@@ -569,7 +599,7 @@ class HomeAssistantSource:
             mappings.extend((key, mapping, owner) for key, mapping in record.get('options', {}).get('device_control_mappings', {}).items()
                 if set(actuator_targets(mapping)) & set(record['originals']))
         for key, mapping, owner in mappings:
-            if device_power_bound(mapping, self.power_peaks) is None:
+            if self.mapped_power_bound(mapping) is None:
                 continue
             targets = actuator_targets(mapping)
             if not targets:
@@ -643,6 +673,12 @@ class HomeAssistantSource:
             kind = 'state_report' if event.event_type == EVENT_STATE_REPORTED else 'state_change'
             row = self.report(entity, event.data.get('new_state'), kind, compact=True) if entity in self.power_entities else None
             raised_peak = observe_power_peak(self.power_peaks, row)
+            if self.observe_setting_peaks(row):
+                # Per-setting peaks are not observation payload; persist them
+                # beside it. The journal's max-merge makes write order irrelevant.
+                self.entry.async_create_background_task(self.hass,
+                    self.service.stream.call('save_record', 'power_peaks', dict(self.power_peaks)),
+                    name='shs_power_setting_peaks')
             if not self.execution_source(entity) and not raised_peak:
                 self.intake_counts['replaceable'] += 1
                 self.live_revision += 1

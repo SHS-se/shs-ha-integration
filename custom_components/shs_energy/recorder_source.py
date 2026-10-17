@@ -1,10 +1,12 @@
 """Read-only Home Assistant history and forecast adapters."""
 import logging
+from datetime import datetime, timedelta, timezone
 from time import perf_counter, thread_time
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.history import get_significant_states
 from homeassistant.components.recorder.statistics import statistics_during_period, statistic_during_period
 from homeassistant.exceptions import HomeAssistantError
+from .shs_core.grid_capacity import positive_power, power_setting_value, setting_peak_key
 from .shs_core.household_ports import HouseholdReadError
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,6 +22,46 @@ class RecorderSource:
         def read():
             return {entity:statistic_during_period(self.hass, None, None, entity,
                     {'max'}, {'power':'W'}).get('max') for entity in sorted(entities)}
+        try:
+            return await get_instance(self.hass).async_add_executor_job(read)
+        except HomeAssistantError as error:
+            raise HouseholdReadError(str(error)) from error
+
+    async def setting_power_peaks(self, pairs):
+        """Greatest recorded watts while each native power setting held one value.
+
+        Settings keep no long-term statistics, so attribution is limited to the
+        Recorder's retained setting states. Power maxima inside each span come
+        from the same normalized statistics as the all-time peak.
+        """
+        def read():
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=get_instance(self.hass).keep_days)
+            settings = sorted({setting for _, setting in pairs})
+            history = get_significant_states(self.hass, start, end, settings,
+                include_start_time_state=True, significant_changes_only=False,
+                minimal_response=False, no_attributes=True) or {}
+            result = {}
+            for setting in settings:
+                spans = []
+                for state in history.get(setting, []):
+                    value = power_setting_value(state.state)
+                    if spans and spans[-1][2] == value:
+                        continue
+                    at = max(start, state.last_changed)
+                    if spans:
+                        spans[-1][1] = at
+                    spans.append([at, end, value])
+                for sensor in sorted(sensor for sensor, paired in pairs if paired == setting):
+                    for begin, finish, value in spans:
+                        if value is None or finish <= begin:
+                            continue
+                        peak = positive_power(statistic_during_period(self.hass, begin, finish, sensor,
+                                              {'max'}, {'power':'W'}).get('max'))
+                        key = setting_peak_key(sensor, setting, value)
+                        if peak is not None and peak > result.get(key, 0):
+                            result[key] = peak
+            return result
         try:
             return await get_instance(self.hass).async_add_executor_job(read)
         except HomeAssistantError as error:

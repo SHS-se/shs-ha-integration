@@ -237,12 +237,50 @@ def observe_power_peak(peaks, row):
     return bool(watts is not None and merge_power_peaks(peaks, {row['entity_id']: watts}))
 
 
-def device_power_bound(mapping, peaks):
-    """Use literal Power watts or the mapped sensor's greatest recorded watts."""
+def power_setting_value(state):
+    """Canonical text of a numeric native power setting; other states have no key."""
+    if isinstance(state, bool):
+        return None
+    try:
+        value = float(state)
+    except (ValueError, TypeError):
+        return None
+    return f'{value:g}' if isfinite(value) else None
+
+
+def setting_peak_key(sensor, setting, value):
+    return f'{sensor}@{setting}={value}'
+
+
+def observe_setting_peak(peaks, row, setting, setting_state):
+    """Attribute a power sample to the native power setting holding when it arrived."""
+    if not row:
+        return False
+    value = power_setting_value(setting_state)
+    watts = positive_power(row.get('state'), row.get('attributes', {}).get('unit_of_measurement'))
+    return bool(value is not None and watts is not None and merge_power_peaks(
+        peaks, {setting_peak_key(row['entity_id'], setting, value): watts}))
+
+
+def device_power_bound(mapping, peaks, setting_state=None):
+    """Use literal Power watts or the mapped sensor's greatest recorded watts.
+
+    Equipment with a native power setting draws according to that setting, so
+    the greatest watts recorded at its current value bound it. A value without
+    recorded evidence falls back to the sensor's greatest watts at any setting.
+    """
     source = mapping.get('power')
     if type(source) in (int, float):
         return positive_power(source)
-    return positive_power(peaks.get(source)) if isinstance(source, str) else None
+    if not isinstance(source, str):
+        return None
+    setting = mapping.get('power_setting_entity_id')
+    value = power_setting_value(setting_state) if isinstance(setting, str) else None
+    if value is not None:
+        watts = positive_power(peaks.get(setting_peak_key(source, setting, value)))
+        if watts is not None:
+            return watts
+    return positive_power(peaks.get(source))
 
 
 class GridCapacityConfigurationError(ValueError):
