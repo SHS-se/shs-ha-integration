@@ -16,6 +16,10 @@ from .storage import Diagnostics
 from .database_census import DatabaseCensus
 from .profiling import AppProfiler, profiled
 from .logging_config import configure_logging, ConnectionLog
+from shs_core.connection_health import ConnectionHealth, RetryBackoff
+from shs_core.api import ShsConnectionError, connection_trace
+from .records import RecordStore
+from .gateway_client import GatewayDisconnected
 from shs_wire.protocol import PROTOCOL
 from shs_core.operational_attention import execution_attention, merge_attention, pipeline_issue
 
@@ -39,11 +43,15 @@ class Dashboard:
         self.engine = None
         self.control_owner = "Migration pending"
         self.connection_log = ConnectionLog(LOGGER)
+        self.connection_store = RecordStore(data/"connection-health.json")
+        self.connection_health = ConnectionHealth(self.connection_store, lambda: None)
+        self.connection_retry = RetryBackoff()
 
     async def get(self, path):
         async with self.session.get(self.supervisor + path, headers={"Authorization":"Bearer "+self.token}) as response:
             if response.status != 200:
-                raise ValueError(f"Home Assistant returned HTTP {response.status}")
+                error_type = ShsConnectionError if response.status >= 500 else ValueError
+                raise error_type(f"Home Assistant returned HTTP {response.status}")
             return await response.json()
 
     def publish_runtime(self, value):
@@ -89,6 +97,8 @@ class Dashboard:
             if engine.started:
                 self.connection = {'state':'connected','message':'App runtime active; connected to the Home Assistant gateway'}
                 self.connection_log.connected()
+                self.connection_health.verified('gateway')
+                self.connection_retry.reset()
             else:
                 self.connection = {'state':'recovering','message':'Accounting is catching up. Devices keep the last settings SHS sent.'}
 
@@ -98,7 +108,6 @@ class Dashboard:
         from .engine import AppEngine
         from .backends import BackendChanged
         from .migration_check import encoded
-        from .records import RecordStore
         pair = dict(protocol=self.manifest['protocol'],integration_version=self.manifest['integration_version'],
             app_version=self.version,core_sha256=sha256(encoded(hashes(self.bundle/'core/shs_core'))).hexdigest())
         target = RecordStore(self.data/'runtime-target.json')
@@ -118,6 +127,7 @@ class Dashboard:
                 paired_release=pair,publish=self.publish_runtime,app_url='/app/'+self.app_info['slug'])
             self.profiler = self.engine.profiler
             self.connection = {'state':'recovering','message':'Loading saved settings and checking queued Home Assistant observations.'}
+            self.connection_health.progress("connecting")
             self.connection_log.attempt()
             try:
                 await self.engine.run()
@@ -128,8 +138,13 @@ class Dashboard:
                 continue
             except Exception as error:
                 self.connection_log.disconnected(error)
-                self.connection = {'state':'disconnected','message':str(error)+'. Reconnecting with a new gateway session.'}
-            await asyncio.sleep(5)
+                if isinstance(error, (ClientError, TimeoutError, ShsConnectionError, GatewayDisconnected, ConnectionError)):
+                    self.connection_health.failed('gateway', error)
+                self.connection = {'state':'disconnected','message':str(error)+'. Reconnecting with a new gateway session.',
+                                   'persistent':not isinstance(error,(ClientError,TimeoutError,ShsConnectionError,GatewayDisconnected,ConnectionError))}
+            delay = self.connection_retry.next()
+            self.connection_health.progress('waiting', (datetime.now(timezone.utc)+timedelta(seconds=delay)).isoformat())
+            await asyncio.sleep(delay)
 
     @profiled('diagnostics_sample')
     async def resources(self):
@@ -138,8 +153,11 @@ class Dashboard:
         try:
             response = await self.get("/addons/self/stats")
             values = response["data"]
+            self.connection_health.verified("supervisor")
             self.app_info = (await self.get("/addons/self/info"))["data"]
-        except (ClientError, TimeoutError, ValueError, KeyError) as exception:
+        except (ClientError, TimeoutError, ShsConnectionError) as exception:
+            self.connection_health.failed('supervisor', exception)
+        except (ValueError, KeyError) as exception:
             error = str(exception)
         try:
             telemetry = {}
@@ -165,7 +183,14 @@ class Dashboard:
             self.system = {**self.system, "error": "Diagnostic storage failed: " + str(exception)}
 
     async def run(self):
-        self.app_info = (await self.get('/addons/self/info'))['data']
+        await self.connection_health.restore()
+        while self.app_info is None:
+            try:
+                self.app_info = (await self.get('/addons/self/info'))['data']
+                self.connection_health.verified('supervisor')
+            except (ClientError, TimeoutError, ShsConnectionError) as error:
+                self.connection_health.failed('supervisor', error)
+                await asyncio.sleep(self.connection_retry.next())
         async def sample():
             while True:
                 await self.resources()
@@ -176,6 +201,8 @@ class Dashboard:
         finally:
             for task in tasks:task.cancel()
             await asyncio.gather(*tasks,return_exceptions=True)
+            await self.connection_health.close()
+            await self.connection_store.async_close()
 
     def payload(self):
         recovery = None
@@ -198,13 +225,19 @@ class Dashboard:
             attention = merge_attention(attention,engine.operational_attention())
         if self.system['error']:
             attention = merge_attention(attention,[pipeline_issue('background',self.system['error'],key='app:diagnostics')])
+        for lane, episode in self.connection_health.episodes.items():
+            if self.connection_health.persistent(lane):
+                attention = merge_attention(attention, [pipeline_issue('background', episode['detail'], key='app:connection:'+lane)])
         from shs_core.app_projection import attention_links
         attention = attention_links(attention, engine.identity['entry_id'] if engine and engine.identity else '',
                                     engine.household.client.base_url if engine and engine.household else None)
         return {"app_version": self.version, "required_companion": self.manifest["integration_version"],
                 "attention":attention,
                 "recovery": recovery,
-                "protocol": PROTOCOL, "connection": self.connection,
+                "protocol": PROTOCOL, "connection": {**self.connection,
+                    'persistent': self.connection.get('persistent', False) or self.connection_health.persistent('gateway'),
+                    'retry_at': self.connection_health.state['retry_at']},
+                "cloud_connection": engine.household.connection_health.snapshot() if engine and engine.household else None,
                 "snapshot": self.snapshot, "system": self.system, "companion": self.companion,
                 "app_slug": self.app_info.get("slug") if self.app_info else None,
                 "sidebar_enabled": self.app_info.get("ingress_panel") if self.app_info else None,
@@ -285,7 +318,7 @@ async def main():
         except (OSError, ValueError) as error:
             observer.companion = {"state": "failed", "message": str(error)}
         LOGGER.info("Companion: %s", observer.companion["message"])
-    async with ClientSession(timeout=ClientTimeout(total=180)) as session:
+    async with ClientSession(timeout=ClientTimeout(total=180), trace_configs=[connection_trace()]) as session:
         observer.session = session
         runner = web.AppRunner(create_app(observer, Path("/opt/shs/web")),access_log=logging.getLogger('aiohttp.access'))
         await runner.setup()

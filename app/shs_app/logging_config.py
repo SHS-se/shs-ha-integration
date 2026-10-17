@@ -45,11 +45,11 @@ class ConnectionLog:
         self.attempts = max(1, self.attempts)
         identity = (type(error).__name__, str(error))
         if identity != self.last_error:
-            self.logger.error('Home Assistant connection failed on attempt %s: %s: %s; retrying in 5s',
+            self.logger.error('Home Assistant connection failed on attempt %s: %s: %s; retrying automatically',
                 self.attempts, *identity, exc_info=(type(error), error, error.__traceback__))
             self.last_error = identity
         elif self.attempts % 12 == 0:
-            self.logger.warning('Home Assistant still disconnected after %s attempts: %s: %s; retrying in 5s',
+            self.logger.warning('Home Assistant still disconnected after %s attempts: %s: %s; retrying automatically',
                 self.attempts, *identity)
 
     def connected(self):

@@ -10,7 +10,7 @@ test('failures stay prominent on every screen while a retained plan remains avai
   });
   await page.goto('./');
   const notice=page.getByRole('alert',{name:'SHS needs attention'});
-  for(const screen of ['Overview','Schedule','Controller','System','Settings']) {
+  for(const screen of ['Overview','Plan','Controller','System','Settings']) {
     await page.getByRole('link',{name:screen,exact:true}).click();
     await expect(notice).toBeVisible();
     await expect(notice).toContainText(upload.detail);
@@ -20,7 +20,7 @@ test('failures stay prominent on every screen while a retained plan remains avai
   await expect(page.locator('.connection')).toHaveText('Needs attention');
   await page.getByLabel('Color theme').selectOption('dark');
   await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
-  await page.getByRole('link',{name:'Schedule',exact:true}).click();
+  await page.getByRole('link',{name:'Plan',exact:true}).click();
   await expect(page.getByRole('heading',{name:'Your energy schedule'})).toBeVisible();
   await page.screenshot({path:`test-results/${info.project.name}-operational-failures.png`,fullPage:true});
   await page.getByRole('link',{name:'Download app logs'}).first().focus();

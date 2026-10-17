@@ -28,6 +28,7 @@ REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 # Preparation may include history reads. Solving runs as a durable cloud job
 # and returns a receipt rather than keeping this connection open.
 PLANNING_REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=150)
+NOTIFICATION_REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=120)
 
 
 class ShsApiError(Exception):
@@ -48,6 +49,10 @@ class ShsApiError(Exception):
         self.retryable = retryable
         suffix = f" [request_id={request_id}]" if request_id else ""
         super().__init__(f"{message}{suffix}")
+
+
+class ShsConnectionError(ShsApiError):
+    """A transport or remote service availability failure that can reconnect."""
 
 
 class ShsAuthError(ShsApiError):
@@ -75,6 +80,7 @@ class ShsApiClient:
         self._base_url = base_url.rstrip("/")
         self._device_token = device_token
         self.traffic = NetworkTraffic()
+        self.connection_progress = lambda state: None
 
     async def _request(
         self,
@@ -82,6 +88,8 @@ class ShsApiClient:
         path: str,
         json_body: dict[str, Any] | None = None,
         authenticated: bool = True,
+        timeout=None,
+        notification=False,
     ) -> dict[str, Any]:
         request_id = str(uuid4())
         headers = {
@@ -104,7 +112,8 @@ class ShsApiClient:
                 f"{self._base_url}/{path}",
                 json=json_body,
                 headers=headers,
-                timeout=PLANNING_REQUEST_TIMEOUT if path == "energy-optimisation-ingest" else REQUEST_TIMEOUT,
+                timeout=timeout or (PLANNING_REQUEST_TIMEOUT if path == "energy-optimisation-ingest" else REQUEST_TIMEOUT),
+                trace_request_ctx={"connected": self.connection_progress if notification else None},
             ) as resp:
                 status = resp.status
                 # aiohttp caches this decompressed body; json() reuses it.
@@ -155,7 +164,8 @@ class ShsApiClient:
                         )
                         if details not in (None, ""):
                             message = f"{message} ({details})"
-                        raise ShsApiError(
+                        error_type = ShsConnectionError if resp.status >= 500 else ShsApiError
+                        raise error_type(
                             message,
                             code=str(structured_error.get("code") or "api_error"),
                             request_id=response_request_id,
@@ -166,7 +176,8 @@ class ShsApiClient:
                             ),
                             retryable=bool(structured_error.get("retryable")),
                         )
-                    raise ShsApiError(
+                    error_type = ShsConnectionError if resp.status >= 500 else ShsApiError
+                    raise error_type(
                         f"{path} returned HTTP {resp.status} without an SHS API envelope",
                         code="upstream_transport_failure",
                         request_id=response_request_id,
@@ -186,7 +197,7 @@ class ShsApiClient:
                 failed = False
                 return payload["data"]
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            raise ShsApiError(
+            raise ShsConnectionError(
                 f"connection error calling {path}: {err}",
                 code="upstream_transport_failure",
                 request_id=request_id,
@@ -220,7 +231,8 @@ class ShsApiClient:
         query = {"wait_for_replan": "true"}
         if after is not None:
             query["after"] = after
-        status = await self._request("GET", "integration-status?" + urlencode(query))
+        status = await self._request("GET", "integration-status?" + urlencode(query),
+                                     timeout=NOTIFICATION_REQUEST_TIMEOUT, notification=True)
         validate_server_contract(status)
         return status.get("pending_replan_request_id")
 
@@ -425,3 +437,14 @@ class ShsApiClient:
                 "error": error,
             },
         )
+
+
+def connection_trace():
+    """Expose actual request transport activity; never treat it as API recovery."""
+    trace = aiohttp.TraceConfig()
+    async def headers_sent(session, context, params):
+        callback = (context.trace_request_ctx or {}).get('connected')
+        if callback:
+            callback('connected')
+    trace.on_request_headers_sent.append(headers_sent)
+    return trace

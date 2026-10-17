@@ -1,14 +1,19 @@
 import {useEffect, useRef} from 'react';
 import './configuration-editor.js';
-import {fetchApp} from './ingress';
+import {AppAccessError, fetchApp} from './ingress';
 
 type Editor = HTMLElement & {backend:typeof backend;dark:boolean;openCorrection:(query:string)=>void};
 const backend = {
   async request(body:Record<string,unknown>) {
     const {action,...data}=body;
-    const response=await fetchApp(`./api/configuration/${action}`,{
+    let response:Response;
+    try { response=await fetchApp(`./api/configuration/${action}`,{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data),
-    });
+    }); } catch(error) {
+      if(error instanceof AppAccessError)throw error;
+      throw Object.assign(new Error(String(error)),{code:'connection_unavailable'});
+    }
+    if(response.status>=500)throw Object.assign(new Error(`App request failed (${response.status})`),{code:'connection_unavailable'});
     if(!response.ok) {
       const content=await response.text();
       let detail;

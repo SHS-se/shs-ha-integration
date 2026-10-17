@@ -16,6 +16,7 @@ from typing import Any
 from uuid import uuid4
 
 from .replan_listener import listen_for_replans
+from .connection_health import ConnectionHealth
 from .operational_attention import pipeline_issue
 from .battery_live import BatteryLiveInputs
 from .durable_record import DurableRecord
@@ -26,6 +27,7 @@ from .configuration_schema import resolve_configuration
 
 from .api import (
     ShsApiClient,
+    ShsConnectionError,
     ShsApiError,
     ShsAuthError,
     ShsSubscriptionInactiveError,
@@ -206,7 +208,7 @@ class Household:
 
     def __init__(
         self, ports: HouseholdPorts, client: ShsApiClient, *,
-        store: DurableRecord, battery_inputs_store: RecordStore, control_authority: bool,
+        store: DurableRecord, battery_inputs_store: RecordStore, connection_store: RecordStore, control_authority: bool,
     ) -> None:
         self.control_authority = control_authority
         self.ports = ports
@@ -248,6 +250,8 @@ class Household:
         self.optimisation_missing_fix: dict[str, Any] | None = None
         self.optimisation_unplanned_services: list[str] = []
         self._attention: dict[str, dict[str, Any]] = {}
+        self.connection_health = ConnectionHealth(connection_store, ports.publish)
+        client.connection_progress = self.connection_health.progress
         self.device_control_mapping_gaps: list[str] = []
         self._loaded_options = dict(ports.options())
         self._optimisation_issue_grace_until = self.ports.utcnow() + timedelta(
@@ -424,6 +428,9 @@ class Household:
         silence, which is what "set the EV charging meter to variable-power
         control on the website" turned out to be.
         """
+        for lane, episode in self.connection_health.episodes.items():
+            if self.connection_health.persistent(lane):
+                self._attention['pipeline:'+lane] = pipeline_issue(lane, episode['detail'])
         order = {"error": 0, "warning": 1}
         blocked = {item['covered_by']:item['stage'] for item in self._attention.values() if item.get('covered_by')}
         return sorted(
@@ -435,6 +442,11 @@ class Household:
     def _pipeline_error(self, stage, error, *, fix=None, covered_by=None):
         """Each serialized stage clears only the failure its own success proves."""
         key = 'pipeline:'+stage
+        if isinstance(error, ShsConnectionError):
+            self.connection_health.failed(stage, error)
+            return
+        if error is None:
+            self.connection_health.verified(stage)
         previous = self._attention.get(key)
         if error is None:
             self._attention.pop(key, None)
@@ -503,6 +515,7 @@ class Household:
         The shared operational_status validator still gates every command;
         expired or invalid saved plans remain visible for diagnosis only.
         """
+        await self.connection_health.restore()
         stored = await self._store.async_load() or {}
         self.optimisation_plan = stored.get("optimisation_plan")
         self.replan_recommendations = stored.get("replan_recommendations", [])
@@ -642,6 +655,7 @@ class Household:
             wait,
             self.async_answer_replan,
             lambda error: _LOGGER.warning("Replan notification connection: %s", error),
+            progress=self.connection_health.progress,
         )
 
     async def async_answer_replan(self, requested: str) -> bool:

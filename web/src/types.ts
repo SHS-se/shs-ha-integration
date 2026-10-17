@@ -22,10 +22,12 @@ export type Attention = {key:string; severity:'error'|'warning'|'info'; stage?:s
 export type Entry = {id:string; title:string; state:string; accuracy?:AccuracyReport|null; accuracy_error?:string|null; operation?:{state:string; label?:string; reason:string}; schedule?:Plan|null; controllers?:Record<string,{state:string;reason?:string;[key:string]:unknown}>; measurements?:Record<string,Measurement>; attention?:Attention[]};
 export type Resources = {cpu_percent:number; memory_usage:number; memory_limit:number; blk_read:number; blk_write:number; network_rx:number; network_tx:number};
 export type History = {sampled_at:string; resources:Resources|null; telemetry?:Record<string,{measured_w:number|null; planned_w:number|null; plan_id:string|null}>};
+export type ConnectionStatus = {state:string;retry_at:string|null;persistent:boolean};
 export type State = {
+  cloud_connection?:ConnectionStatus|null;
   attention:Attention[];
   app_version:string; required_companion:string; protocol:number;
-  connection:{state:string; message:string; loaded_version?:string};
+  connection:{state:string; message:string; loaded_version?:string; persistent?:boolean;retry_at?:string|null};
   recovery:{processed_receipt:number|null}|null;
   snapshot:{sampled_at:string; integration_version:string; entries:Entry[]}|null;
   system:{storage?:StorageCensus;sampled_at:string|null; resources:Resources|null; error:string|null; filesystem_free_bytes?:number; database:{file_bytes:number; schema_version:number; page_size:number; free_pages:number; journal_mode:string; tables:{name:string;bytes:number;pages:number;rows:number}[]; history:History[]; query_plan:string[]; operations:{name:string;count:number;errors:number;last_ms:number;max_recent_ms:number;queue_ms:number}[]}|null};

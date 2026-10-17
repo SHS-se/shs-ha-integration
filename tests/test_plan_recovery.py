@@ -17,7 +17,7 @@ sys.path.append(str(ROOT))
 from refresh import refresh_in_progress
 from shs_core.presentation import operational_status
 from household_fixture import Rig, cloud_status
-from shs_core.api import ShsApiError
+from shs_core.api import ShsApiError, ShsConnectionError
 
 
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -50,17 +50,19 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         async def wait(_after):
             nonlocal calls
             calls+=1
-            if calls==1:raise ShsApiError('Notification connection lost')
+            if calls==1:raise ShsConnectionError('Notification connection lost')
             if calls==2:
                 retry.set();await release.wait();return None
             connected.set();await asyncio.Future()
         self.c.client.wait_for_replan=wait
-        async def listen(wait,answer,report):
-            await listen_for_replans(wait,answer,report,retry_seconds=0)
+        async def listen(wait,answer,report,**kwargs):
+            await listen_for_replans(wait,answer,report,retry_seconds=0,**kwargs)
         with patch('shs_core.household.listen_for_replans',listen):
             task=asyncio.create_task(self.c.async_replan_listener())
             try:
                 await asyncio.wait_for(retry.wait(),1)
+                self.assertFalse(any(i['key']=='pipeline:notifications' for i in self.c.attention_items))
+                self.c.connection_health.episodes['notifications']['observed_seconds']=3600
                 self.assertTrue(any(i['key']=='pipeline:notifications' for i in self.c.attention_items))
                 release.set();await asyncio.wait_for(connected.wait(),1)
                 self.assertFalse(any(i['key']=='pipeline:notifications' for i in self.c.attention_items))

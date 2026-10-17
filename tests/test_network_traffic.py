@@ -69,6 +69,14 @@ class ApiTrafficTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await client._request("POST", path), payload["data"])
         return client.traffic.snapshot()["total"], len(raw)
 
+    async def test_notification_timeout_does_not_extend_ordinary_status(self):
+        from household_fixture import cloud_status
+        client = self.api["ShsApiClient"](None, "https://example", "secret")
+        client._request = AsyncMock(return_value=cloud_status())
+        await client.wait_for_replan(None)
+        self.assertEqual(client._request.call_args.kwargs['timeout'].total, 120)
+        self.assertTrue(client._request.call_args.kwargs['notification'])
+
     async def test_success_measures_actual_decoded_utf8_body(self):
         total, size = await self.call()
         self.assertEqual(total["response_body_bytes"], size)

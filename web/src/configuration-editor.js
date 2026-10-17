@@ -94,6 +94,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this.shadowRoot.removeEventListener("input", this._boundInput);
     window.removeEventListener("beforeunload", this._boundBeforeUnload);
     clearInterval(this._poller);
+    clearTimeout(this._refreshWarningTimer);
+    clearTimeout(this._loadRetryTimer);
   }
 
   _clone(value) {
@@ -157,6 +159,22 @@ class ShsEnergyConfigPanel extends HTMLElement {
     }
   }
 
+  _refreshWarning() {
+    return this._refreshError && (this._refreshFailedAt == null || performance.now()-this._refreshFailedAt >= 3600000);
+  }
+
+  _connectionFailure(error) {
+    console.warn("SHS settings connection failed", error);
+    this._refreshError = this._errorMessage(error);
+    if (error?.code === "connection_unavailable" && this._refreshFailedAt == null) {
+      this._refreshFailedAt = performance.now();
+      this._refreshWarningTimer = setTimeout(() => {
+        if (!this._data) this._error = this._refreshError;
+        this._renderBackground();
+      }, 3600000);
+    }
+  }
+
   _errorMessage(error) {
     if (typeof error === "string" && error.trim()) return error;
     for (const value of [error?.message, error?.error?.message, error?.error, error?.code]) {
@@ -186,13 +204,24 @@ class ShsEnergyConfigPanel extends HTMLElement {
       const data = await this._request(message);
       if (this._acceptRefresh(data)) return;
       this._mergePanel(data);
+      this._refreshError = "";
+      this._refreshFailedAt = null;
+      this._loadRetryCeiling = 5;
+      clearTimeout(this._refreshWarningTimer);
+      clearTimeout(this._loadRetryTimer);
       this._deviceErrors = {};
       if (!data.requires_entry_selection) {
         this._entryId = data.entry.entry_id;
       }
     } catch (error) {
       if (error?.code === "refresh_in_progress") this._refreshing = true;
-      else { this._refreshing = false; this._error = this._errorMessage(error); }
+      else if (error?.code === "connection_unavailable") {
+        this._connectionFailure(error);
+        if (this._refreshWarning()) this._error = this._refreshError;
+        const ceiling = this._loadRetryCeiling || 5;
+        this._loadRetryCeiling = Math.min(60, ceiling * 2);
+        this._loadRetryTimer = setTimeout(() => { if (this.isConnected) this._load(false); }, ceiling * (.8 + Math.random() * .2) * 1000);
+      } else { this._refreshing = false; this._error = this._errorMessage(error); }
     } finally {
       this._loading = false;
       this._renderBackground();
@@ -960,12 +989,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
       if (this._editing() || this._dirty) this._data = { ...data, configuration: this._data.configuration, revision: this._data.revision };
       else this._mergePanel(data);
       this._refreshError = "";
+      this._refreshFailedAt = null;
+      clearTimeout(this._refreshWarningTimer);
       if (this._editing() || this._dirty) this._updateAttentionUI();
       else this._render();
     } catch (error) {
       if (!this._canPoll() || revision !== this._pollRevision || entryId !== this._entryId) return;
       this._refreshing = false;
-      this._refreshError = this._errorMessage(error);
+      this._connectionFailure(error);
       if (this._editing() || this._dirty) this._updateAttentionUI();
       else this._render();
     } finally { this._polling = false; }
@@ -1440,7 +1471,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       });
     }
     if (this._data?.portal?.error) items.push({ key: "website_refresh", severity: "warning", title: "Website choices could not be refreshed", detail: this._data.portal.error, next_step: "Refresh website choices to retry. The last received choices remain in use.", fix: { kind: "refresh_choices" } });
-    if (this._refreshError) items.push({ key: "status_refresh", severity: "error", title: "Current status could not be refreshed",
+    if (this._refreshWarning()) items.push({ key: "status_refresh", severity: "error", title: "Current status could not be refreshed",
       detail: this._refreshError, next_step: "Check the connection to Home Assistant, then retry the status refresh. Displayed states may be stale.", fix: { kind: "refresh" } });
     return items.sort((a, b) => ({error:0, warning:1, info:2}[a.severity] ?? 2) - ({error:0, warning:1, info:2}[b.severity] ?? 2));
   }
@@ -1485,7 +1516,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const rows = (items) => `<dl>${items.map(([label, value]) => `<div><dt>${this._escape(label)}</dt><dd>${this._escape(value ?? "Not yet")}</dd></div>`).join("")}</dl>`;
     const warningCount = this._attentionForTab("status").length;
     const controllers = this._sortedDevices().map(d => [d.name, `${this._label(d.execution_status?.state)}${d.execution_status?.reason ? ': ' + d.execution_status.reason : ''}`]);
-    return `<section class="card"><div class="status-heading"><h2>Integration status</h2>${warningCount ? this._statusBadge("warning", "Needs attention") : this._statusBadge(status.state, status.label)}</div><p>Planning: ${this._escape(this._refreshError ? "Current status is unconfirmed." : status.reason)}</p>${warningCount ? `<p>${warningCount} item${warningCount === 1 ? "" : "s"} need${warningCount === 1 ? "s" : ""} attention below.</p>` : ""}${status.recovering ? `<p>Requesting a fresh plan automatically…</p>` : status.retry_at && !status.actionable ? `<p>Automatic recovery will retry at ${this._time(status.retry_at)}.</p>` : ""}${values.last_optimisation_error ? `<p role="alert">Latest planning error: ${this._escape(values.last_optimisation_error)}</p>` : ""}${values.last_runtime_error ? `<p role="alert">Website status delivery failed: ${this._escape(values.last_runtime_error)}</p>` : ""}${this._refreshError ? `<p role="alert">Status refresh failed: ${this._escape(this._refreshError)}. These readings may be stale.</p>` : ""}<button class="secondary" data-action="download">Download redacted diagnostics</button></section>
+    return `<section class="card"><div class="status-heading"><h2>Integration status</h2>${warningCount ? this._statusBadge("warning", "Needs attention") : this._statusBadge(status.state, status.label)}</div><p>Planning: ${this._escape(this._refreshError ? "Current status is unconfirmed." : status.reason)}</p>${warningCount ? `<p>${warningCount} item${warningCount === 1 ? "" : "s"} need${warningCount === 1 ? "s" : ""} attention below.</p>` : ""}${status.recovering ? `<p>Requesting a fresh plan automatically…</p>` : status.retry_at && !status.actionable ? `<p>Automatic recovery will retry at ${this._time(status.retry_at)}.</p>` : ""}${values.last_optimisation_error ? `<p role="alert">Latest planning error: ${this._escape(values.last_optimisation_error)}</p>` : ""}${values.last_runtime_error ? `<p role="alert">Website status delivery failed: ${this._escape(values.last_runtime_error)}</p>` : ""}${this._refreshWarning() ? `<p role="alert">Status refresh failed: ${this._escape(this._refreshError)}. These readings may be stale.</p>` : ""}<button class="secondary" data-action="download">Download redacted diagnostics</button></section>
       ${this._attention().length ? `<div class="attention" aria-label="Status details">${this._renderAttention()}</div>` : ""}
       <details class="card diagnostics compact"><summary>Data delivery</summary>${rows([["Latest status delivered to website", this._time(values.last_runtime_report)], ["Latest daily delivery", this._time(values.last_daily_push)], ["Latest daily error", values.last_daily_push_error], ["Latest planning attempt", this._time(readiness.last_plan_attempt)], ["Latest successful exchange", this._time(readiness.last_plan_push)], ["Electrical readings received through", this._time(readiness.actuals_accepted_until)], ["New electrical quarters in latest exchange", readiness.actual_slots_accepted], ["Room readings received through", this._time(values.thermal_slots_accepted_until)], ["New room quarters in latest exchange", values.last_thermal_slots_accepted], ["Website choices received", this._time(this._data.portal.refreshed_at)]])}<p>Zero new quarters does not erase earlier history.</p></details>
       <details class="card diagnostics compact"><summary>Planner</summary>${rows([["Current plan", status.label], ["Plan identifier", status.plan_id], ["Issued", this._time(status.issued_at)], ["Published prices until", this._time(status.binding_until)], ["Valid until", this._time(status.valid_until)], ["Latest exchange error", values.last_optimisation_error], ["Tariff", this._label(values.tariff_status)], ["Subscription", values.subscription_active ? "Active" : "Inactive or unavailable"]])}${readiness.missing_inputs?.length ? `<ul>${readiness.missing_inputs.map(i => `<li>${this._escape(i)}</li>`).join("")}</ul>` : ""}</details>

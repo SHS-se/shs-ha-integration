@@ -1,6 +1,6 @@
 """The app's editor payload, preserving shared readiness and correction fields."""
 from shs_core import const as shs_const
-from shs_core.api import ShsApiError
+from shs_core.api import ShsApiError, ShsConnectionError
 from shs_core.configuration_fields import LABELS, _configuration_sections
 from shs_core.presentation import timeline, system_fields, device_name, device_readiness
 from shs_core.device_controls import room_thermal_zones
@@ -15,8 +15,12 @@ async def configuration_payload(editor, *, refresh_roles):
             if refresh_roles
             else await coordinator.async_cached_device_configuration()
         )
+        if refresh_roles:
+            coordinator._pipeline_error("website_choices", None)
     except (ShsApiError, KeyError, TypeError, ValueError) as err:
-        portal_error = str(err)
+        if isinstance(err, ShsConnectionError):
+            coordinator._pipeline_error("website_choices", err)
+        portal_error = coordinator.connection_health.visible_error(str(err))
         requested = await coordinator.async_cached_device_configuration()
 
     choices = await coordinator.async_cached_planning_configuration()
@@ -131,7 +135,7 @@ async def configuration_payload(editor, *, refresh_roles):
             "planning_mode": options.get(shs_const.OPT_PLANNING_MODE),
             **device_readiness(devices),
             "missing_inputs": list(coordinator.optimisation_missing_inputs),
-            "last_plan_error": coordinator.last_optimisation_error,
+            "last_plan_error": coordinator.connection_health.visible_error(coordinator.last_optimisation_error),
             "planning_job": exchange_status.get("planning_job"),
             "planning_submission": exchange_status.get("planning_submission"),
             "last_plan_attempt": coordinator.last_optimisation_attempt or exchange_status.get("last_optimisation_attempt"),
@@ -176,9 +180,9 @@ async def configuration_payload(editor, *, refresh_roles):
             "last_tariff_error": coordinator.last_tariff_error,
             "last_daily_push": coordinator.last_push_date,
             "last_daily_push_error": coordinator.last_push_error,
-            "last_optimisation_error": coordinator.last_optimisation_error,
+            "last_optimisation_error": coordinator.connection_health.visible_error(coordinator.last_optimisation_error),
             "last_runtime_report": coordinator.last_runtime_report,
-            "last_runtime_error": coordinator.last_runtime_error,
+            "last_runtime_error": coordinator.connection_health.visible_error(coordinator.last_runtime_error),
             "last_thermal_slots_accepted": thermal_slots,
             "thermal_slots_accepted_until": thermal_accepted_until,
         },

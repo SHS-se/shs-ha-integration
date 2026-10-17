@@ -72,7 +72,7 @@ class Backends:
                 plan_id=plan.get('plan_id') if plan else None,
                 subscription_active=h.data.get('subscription_active') if h and h.data else None,
                 website_url=('https://smarthomesolutions.se' if environment=='production' else 'https://test.smarthomesolutions.se')+'/portal/account',
-                error=self.errors.get(environment) or (h.last_optimisation_error if h else None)))
+                error=self.errors.get(environment) or (h.connection_health.visible_error(h.last_optimisation_error) if h else None)))
         return dict(revision=self.data['revision'], selected=self.controlling, environments=rows)
 
     async def change(self, environment, expected_revision, request_id, *, credentials=None):

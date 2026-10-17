@@ -9,7 +9,7 @@ test('accuracy buttons show graded device percentages and restore keyboard focus
       timezone:'Europe/Stockholm',forecast_plan_id:'plan',forecast:{percentage:94,grade:'green',devices},historical:{percentage:64,grade:'orange',devices}};
     await route.fulfill({json:data});
   });
-  await page.goto('./#schedule');
+  await page.goto('./#plan');
   const forecast=page.getByRole('button',{name:/Forecast accuracy %/});
   await expect(forecast).toContainText('94');
   await forecast.click();

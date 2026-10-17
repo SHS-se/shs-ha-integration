@@ -99,3 +99,9 @@ and serialized owners prevent stale completions from clearing newer failures.
 Ordinary Verification, deliberately stopped devices and unchanged available
 sensor timestamps do not create failure notices. Failed command/deadline waits
 are visible immediately; their reporting does not change control or handover.
+
+## Transient connection failures — 17 October 2026
+
+Log transport and remote-availability failures immediately. Show connection attention only after 3,600 seconds of continuously observed failure; verified success of that same connection resets the episode and clears its notice. Keep backend and connection lanes independent. Preserve observed time across restart without counting unobserved downtime. Retry with capped jittered backoff. Quiet notifications count as recovered only after a verified subscription and durable read.
+
+The app shows connection activity and retry countdown beside forecast/historical accuracy on its default Plan page. Transient errors restart the countdown; persistent errors are red. The website uses only Connected/Disconnected. Browser, gateway, resource and cloud connection banners use this policy. Genuine configuration, contract, planning and execution failures remain independently actionable; this policy changes no device ownership or commands.

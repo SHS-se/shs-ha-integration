@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const frontendVersion = 'app-configuration-v1';
 const frontendSource = readFileSync('web/src/configuration-editor.js', 'utf8');
 const loadPanel = (registry, version = frontendVersion) => {
-  const context = vm.createContext({ URL, crypto: {randomUUID: () => "test-request"}, HTMLElement: class {}, customElements: registry });
+  const context = vm.createContext({ URL, performance, setTimeout: () => 0, clearTimeout() {}, crypto: {randomUUID: () => "test-request"}, HTMLElement: class {}, customElements: registry });
   const moduleUrl = `https://ha.example/shs_energy_frontend/shs-energy-config-panel.js?v=${version}`;
   vm.runInContext(frontendSource.replaceAll('import.meta.url', JSON.stringify(moduleUrl)) + '\nglobalThis.Panel = ShsEnergyConfigPanel;', context);
   return context;
@@ -1603,4 +1603,20 @@ test('hot-water house-power correction opens Energy, highlights its field and cl
   water.field_errors = {};
   water.mapping_status = 'ready';
   assert.equal(panel._fieldProblems(field.key).length, 0);
+});
+
+
+test('transient settings refresh stays quiet until an hour and verified refresh clears it', async () => {
+  const panel = makePanel();panel._entryId='entry';
+  panel._backend = {request: async () => {throw {code:'connection_unavailable',message:'Service unavailable'};}};
+  await panel._poll();
+  assert.equal(Boolean(panel._refreshWarning()), false);
+  assert.equal(panel._attention().some(item => item.key === 'status_refresh'), false);
+  panel._refreshFailedAt -= 3600000;
+  assert.equal(Boolean(panel._refreshWarning()), true);
+  assert.equal(panel._attention().some(item => item.key === 'status_refresh'), true);
+  panel._backend = {request: async () => ({entry:{entry_id:'entry'},configuration:{},devices:[]})};
+  await panel._poll();
+  assert.equal(Boolean(panel._refreshWarning()), false);
+  assert.equal(panel._attention().some(item => item.key === 'status_refresh'), false);
 });

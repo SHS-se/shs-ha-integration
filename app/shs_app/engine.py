@@ -28,11 +28,13 @@ from shs_core.runtime_projection import runtime_projection
 from .retention import RecentVerification
 from shs_core.verification_storage import VerificationStorage
 
-from .gateway_client import GatewayClient
+from .gateway_client import GatewayClient, GatewayDisconnected
 from .migration_export import file_digest
 from .migration_import import verify_import, regular_path
 from .physical_ports import RemoteDevices, RemoteBattery
 from .records import RecordStore
+from shs_core.connection_health import RetryBackoff
+from shs_core.api import ShsConnectionError
 from .projection import DisplayPlan
 from .sources import ObservationMirror, RemoteHistory
 from .upgrades import open_runtime_schema
@@ -127,6 +129,10 @@ class AppEngine:
         return task
 
     def operation_error(self, key, error, *, stage='background'):
+        if isinstance(error, GatewayDisconnected):
+            if self.household:
+                self.household._pipeline_error("projection", ShsConnectionError(str(error)))
+            return
         previous = self.operation_errors.get(key)
         if error is None:
             self.operation_errors.pop(key, None)
@@ -204,9 +210,11 @@ class AppEngine:
             household = Household(cloud_ports,client,
                 store=DurableRecord(record(f'cloud.{environment}.'),encode,json.loads),
                 battery_inputs_store=record('battery_live_inputs.' if authority else f'cloud.{environment}.battery_inputs.'),
+                connection_store=record(f'cloud.{environment}.connections.'),
                 control_authority=authority)
             self.households[environment] = household
             await household.async_restore_plan()
+            household.connection_health.verified("projection")
         h = self.household = self.households[self.environment]
         if self.backends.data['admitted_for'] != self.environment:
             choices = await h.async_cached_planning_configuration()
@@ -511,6 +519,7 @@ class AppEngine:
 
     async def cloud_job(self, environment, operation, *, stage):
         """A failed cloud session cannot stop its sibling or the physical owner."""
+        retries = RetryBackoff()
         while True:
             try:
                 await operation()
@@ -518,7 +527,7 @@ class AppEngine:
             except Exception as error:
                 self.households[environment]._pipeline_error(stage, error)
                 self.wake_projection.set()
-                await asyncio.sleep(5)
+                await asyncio.sleep(retries.next())
 
     async def restart(self):
         await self.restart_requested.wait()
@@ -679,6 +688,7 @@ class AppEngine:
         await asyncio.gather(*self.tasks,return_exceptions=True)
         if self.battery: await self.battery.close(release=False)
         if self.controller: await self.controller.async_stop()
+        for h in self.households.values(): await h.connection_health.close()
         for store in self.record_stores: await store.async_close()
         for h in self.households.values(): h.battery_live_inputs.close()
         if self.gateway: await self.gateway.close()

@@ -2,13 +2,13 @@ import {test,expect} from '@playwright/test';
 
 test('branded ingress dashboard, navigation, schedule inspection and themes',async({page},info)=>{
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto('./');
+  await page.goto('./#overview');
   await expect(page.getByRole('heading',{name:'A clearer view of your energy'})).toBeVisible();
   await expect(page.getByText('3.79 kW')).toBeVisible();
   await expect(page.getByRole('heading',{name:'Your app is running the home'})).toBeVisible();
   await expect(page.locator('.brand img')).toHaveJSProperty('naturalWidth',512);
   await page.screenshot({path:`test-results/${info.project.name}-overview.png`,fullPage:true});
-  await page.getByRole('link',{name:'Schedule',exact:true}).click();
+  await page.getByRole('link',{name:'Plan',exact:true}).click();
   await expect(page.getByRole('heading',{name:'Your energy schedule'})).toBeVisible();
   const chart=page.getByRole('img',{name:/Price, power flows, consumption, storage and temperature/});
   await expect(chart).toBeVisible();
@@ -50,7 +50,7 @@ test('keyboard navigation and reduced motion support',async({page})=>{
   await page.emulateMedia({reducedMotion:'reduce'});await page.goto('./');
   const skip=page.getByRole('link',{name:'Skip to content'});
   await expect(skip).toBeAttached();await page.keyboard.press('Tab');await expect(skip).toBeFocused();
-  await page.goto('./#schedule');
+  await page.goto('./#plan');
   await page.getByRole('button',{name:'Next →'}).focus();await page.keyboard.press('Enter');
   await expect(page.getByLabel('Selected interval')).toHaveValue('1');
 });
@@ -69,7 +69,7 @@ test('existing runtime startup shows progress and then the live dashboard',async
   await expect(page.getByRole('heading',{name:'Connect your Home Assistant integration'})).toHaveCount(0);
   recovering=false;
   await page.reload();
-  await expect(page.getByRole('heading',{name:'Your app is running the home'})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Your energy schedule'})).toBeVisible();
   await expect(page.getByRole('heading',{name:'Starting SHS'})).toHaveCount(0);
 });
 
@@ -77,10 +77,10 @@ test('failed startup shows the connection error instead of recovery or installat
   let failed=true;
   await page.route('**/api/state',async route=>{
     const response=await route.fetch();const data=await response.json();
-    if(failed){data.snapshot=null;data.recovery=null;data.connection={state:'disconnected',message:'Execution configuration revision reused with different content.'};}
+    if(failed){data.snapshot=null;data.recovery=null;data.connection={state:'disconnected',persistent:true,message:'Execution configuration revision reused with different content.'};}
     await route.fulfill({json:data});
   });
-  await page.goto('./#schedule');
+  await page.goto('./#plan');
   await expect(page.getByRole('heading',{name:'SHS connection failed'})).toBeVisible();
   await expect(page.locator('.connection')).toHaveText('Disconnected');
   await expect(page.getByText('Execution configuration revision reused with different content.')).toBeVisible();
@@ -93,7 +93,7 @@ test('failed startup shows the connection error instead of recovery or installat
   await expect(page.getByRole('link',{name:'Download connection logs'})).toHaveAttribute('download','');
   failed=false;
   await page.reload();
-  await page.getByRole('link',{name:'Schedule',exact:true}).click();
+  await page.getByRole('link',{name:'Plan',exact:true}).click();
   await expect(page.getByRole('heading',{name:'Your energy schedule'})).toBeVisible();
   await expect(page.locator('.connection')).toHaveText('Connected');
   await expect(page.getByRole('heading',{name:'SHS connection failed'})).toHaveCount(0);
@@ -104,7 +104,7 @@ test('saved dashboard stays open during accounting catch-up and exposes a later 
   await page.route('**/api/state',async route=>{
     const response=await route.fetch();const data=await response.json();
     if(connection!=='connected'){
-      data.connection={state:connection,message:connection==='recovering'?'Accounting is catching up.':'Accounting batch could not be committed.'};
+      data.connection={state:connection,persistent:connection==='disconnected',message:connection==='recovering'?'Accounting is catching up.':'Accounting batch could not be committed.'};
       data.recovery=connection==='recovering'?{processed_receipt:42}:null;
       // A retained snapshot may still contain the previous active controller.
       // Catch-up must not present that report as a current decision.
@@ -112,7 +112,7 @@ test('saved dashboard stays open during accounting catch-up and exposes a later 
     }
     await route.fulfill({json:data});
   });
-  await page.goto('./#schedule');
+  await page.goto('./#plan');
   await expect(page.getByRole('heading',{name:'Accounting is catching up',exact:true})).toBeVisible();
   await expect(page.getByRole('heading',{name:'Your energy schedule'})).toBeVisible();
   await expect(page.getByRole('heading',{name:'Connect your Home Assistant integration'})).toHaveCount(0);
@@ -128,7 +128,7 @@ test('saved dashboard stays open during accounting catch-up and exposes a later 
   await expect(page.getByText('Accounting batch could not be committed.')).toBeVisible();
   await expect(page.locator('.connection')).toHaveText('Disconnected');
   await expect(page.getByRole('heading',{name:'Accounting is catching up',exact:true})).toHaveCount(0);
-  await page.getByRole('link',{name:'Schedule',exact:true}).click();
+  await page.getByRole('link',{name:'Plan',exact:true}).click();
   await expect(page.getByRole('heading',{name:'Your energy schedule'})).toBeVisible();
   connection='connected';
   await page.reload();
@@ -151,7 +151,7 @@ test('schedule chart explains an interval, selects it and narrows to one day',as
       battery_soc:.2+.6*sun,ev_soc:.69,temperatures_c:{pool:29+i*.004,living_room:20.8+sun*.4},import_cost_sek:on?.9:0,export_revenue_sek:sun>.6?.2:0};});
     await route.fulfill({json:data});
   });
-  await page.goto('./#schedule');
+  await page.goto('./#plan');
   const chart=page.getByRole('img',{name:/Price, power flows, consumption, storage and temperature/});
   await expect(chart.getByText('NOW · PLAN →')).toBeVisible();
   await expect(chart.getByText('Temperature',{exact:true})).toBeVisible();
@@ -183,7 +183,7 @@ test('schedule chart explains an interval, selects it and narrows to one day',as
   expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
   await page.getByRole('link',{name:'Settings',exact:true}).click();
   await page.getByLabel('Color theme').selectOption('dark');
-  await page.getByRole('link',{name:'Schedule',exact:true}).click();
+  await page.getByRole('link',{name:'Plan',exact:true}).click();
   await page.screenshot({path:`test-results/${info.project.name}-schedule-dark.png`,fullPage:true});
 });
 
@@ -199,7 +199,7 @@ test('temperature forecast gaps stay gaps and a missing forecast is explicit',as
     schedule.execution=schedule.household.map((slot:any)=>({...slot,temperatures_c:{room:18}}));
     await route.fulfill({json:data});
   });
-  await page.goto('./#schedule');
+  await page.goto('./#plan');
   const chart=page.getByRole('img',{name:/storage and temperature/});
   const curve=chart.locator('[data-temperature="room"] path');
   await expect(curve).toHaveAttribute('d',/^M[^M]+M/);
@@ -246,7 +246,7 @@ test('hot-water planned actions explain measured-demand permission in household 
       water:{type:'house_demand_permission',expected_permitted:false,allow_below_w:1500,inhibit_above_w:3500}};
     await route.fulfill({json:data});
   });
-  await page.goto('./#schedule');
+  await page.goto('./#plan');
   const row=page.getByRole('row').filter({has:page.getByRole('cell',{name:'Hot water',exact:true})});
   await expect(row).toContainText('Allow at 1.5 kW of house demand or lower. Pause above 3.5 kW.');
   await expect(row).toContainText('Forecast for this interval: paused. Control follows measured house power.');

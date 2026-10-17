@@ -19,7 +19,7 @@ async function homeAssistant(page:Page,options:{rejectRenewal?:boolean;rejectRet
   await page.route('**/ha-test',route=>route.fulfill({contentType:'text/html',body:`
     <home-assistant></home-assistant>
     <script>document.querySelector('home-assistant').hass={callWS:message=>window.renewIngress(message)};</script>
-    <iframe title="SHS" src="/api/hassio_ingress/test/#schedule" style="width:100%;height:900px"></iframe>`}));
+    <iframe title="SHS" src="/api/hassio_ingress/test/#plan" style="width:100%;height:900px"></iframe>`}));
   await page.route('**/api/hassio_ingress/test/**',async route=>{
     const request=route.request();
     const path=new URL(request.url()).pathname.split('/test/')[1];
@@ -141,7 +141,8 @@ test('renewal times out without reloading and subsequent recovery still works',a
 test('server errors do not create a new ingress session',async({page})=>{
   const harness=await homeAssistant(page,{status:503}),{app}=harness;
   harness.expire();await visibility(app,false);
-  await expect(app.getByRole('alert')).toContainText('App request failed (503)');
+  await expect(app.getByRole('alert')).toHaveCount(0);
+  await expect(app.getByLabel('Cloud connection')).toContainText('s');
   expect(harness.counts()).toEqual({renewals:0,rejected:1,saved:0});
 });
 

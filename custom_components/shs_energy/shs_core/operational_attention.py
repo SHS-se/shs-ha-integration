@@ -3,6 +3,7 @@ from copy import deepcopy
 
 
 STAGES = {
+    'website_choices': ('Website choices could not be refreshed', 'SHS retries the connection automatically. The last received choices remain in use.'),
     'cloud_status': ('Server connection failed', 'Check the server connection. SHS retries automatically.'),
     'tariff': ('Tariff data could not be received', 'Check the server connection and account settings.'),
     'prices': ('Electricity prices could not be received', 'Check the price source and server connection.'),

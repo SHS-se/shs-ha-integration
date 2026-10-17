@@ -32,6 +32,9 @@ class Store:
     async def async_load(self):
         return deepcopy(self.saved)
 
+    def async_delay_save(self, callback, delay):
+        self.saved = deepcopy(callback())
+
     async def async_save(self, value):
         self.saved = deepcopy(value)
 
@@ -74,4 +77,4 @@ class Rig:
             repair=lambda *args: self.repairs.append(args), publish=lambda: self.published.append(True), spawn=spawn,
         )
         self.household = Household(ports, self.client,
-            store=DurableRecord(self.records, json.dumps, json.loads), battery_inputs_store=self.battery_store, control_authority=True)
+            store=DurableRecord(self.records, json.dumps, json.loads), battery_inputs_store=self.battery_store, connection_store=Store(), control_authority=True)

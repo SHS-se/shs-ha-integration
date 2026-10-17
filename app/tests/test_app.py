@@ -147,9 +147,10 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(dashboard.payload()['recovery'],{'processed_receipt':42})
             dashboard.connection={'state':'disconnected','message':'Configuration revision conflict'}
             self.assertIsNone(dashboard.payload()['recovery'])
-            self.assertEqual(dashboard.payload()['connection'],dashboard.connection)
+            self.assertEqual(dashboard.payload()['connection'],{**dashboard.connection,'persistent':False,'retry_at':None})
             dashboard.connection={'state':'recovering','message':'Loading saved settings'}
             engine.started=True
             engine.household=SimpleNamespace(operational_status={'state':'disabled'},
+                connection_health=SimpleNamespace(snapshot=lambda:dict(state='connected',retry_at=None,persistent=False)),
                 client=SimpleNamespace(base_url='https://test.smarthomesolutions.se'))
             self.assertIsNone(dashboard.payload()['recovery'])

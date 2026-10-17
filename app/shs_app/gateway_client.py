@@ -17,6 +17,10 @@ from .profiling import AppProfiler, profiled
 LOGGER = logging.getLogger(__name__)
 
 
+class GatewayDisconnected(GatewayConflict):
+    """The authenticated socket was lost; reconnecting can restore it."""
+
+
 class GatewayClient:
     def __init__(self, session, url, token, identity, inbox, *, instance=None, executor=asyncio.to_thread, paired_release=None, profiler=None):
         self.profiler = profiler if profiler is not None else AppProfiler()
@@ -27,6 +31,7 @@ class GatewayClient:
         self.instance = instance or uuid4().hex
         self.executor = executor
         self.socket = None
+        self.failure = None
         self.connected = None
         self.request_id = 0
         self.lock = asyncio.Lock()
@@ -73,6 +78,7 @@ class GatewayClient:
             raise RuntimeError('Gateway connection already open')
         socket = await self.http.ws_connect(self.url, headers={'Authorization':'Bearer '+self.token}, max_msg_size=32*1024*1024)
         self.socket = socket
+        self.failure = None
         try:
             challenge = await socket.receive_json()
             if challenge.get('type') != 'auth_required':
@@ -108,6 +114,7 @@ class GatewayClient:
             raise
         except Exception as error:
             LOGGER.warning('HA gateway socket closed: %s: %s', type(error).__name__, error)
+            self.failure = error if isinstance(error, GatewayConflict) else GatewayDisconnected('HA gateway socket closed')
             await self.close()
 
     def encode(self, value):
@@ -132,7 +139,7 @@ class GatewayClient:
         try:
             async with self.lock:
                 if self.socket is None:
-                    raise GatewayConflict('Gateway is disconnected')
+                    raise GatewayDisconnected('Gateway is disconnected')
                 self.request_id += 1
                 request_id = self.request_id
                 self.pending[request_id] = future
@@ -147,9 +154,14 @@ class GatewayClient:
             # transport failure: closing here would revoke HA's battery grant and
             # stop every other job on this session.
             raise
+        except GatewayDisconnected:
+            await self.close()
+            raise
         except BaseException as error:
             await self.close()
-            if isinstance(error,(aiohttp.ClientError,TypeError,ValueError,KeyError)):
+            if isinstance(error, aiohttp.ClientError):
+                raise GatewayDisconnected('Gateway transport failed; reconnect explicitly') from error
+            if isinstance(error,(TypeError,ValueError,KeyError)):
                 raise GatewayConflict('Gateway request failed; reconnect explicitly') from error
             raise
 
@@ -184,7 +196,7 @@ class GatewayClient:
         self.connected = None
         reader,self.reader = self.reader,None
         for future in self.pending.values():
-            if not future.done():future.set_exception(GatewayConflict('Gateway disconnected; reconcile a new session'))
+            if not future.done():future.set_exception(self.failure or GatewayDisconnected('Gateway disconnected; reconcile a new session'))
         self.pending.clear()
         if reader is not None and reader is not asyncio.current_task():
             reader.cancel()

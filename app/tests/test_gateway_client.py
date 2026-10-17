@@ -15,7 +15,7 @@ sys.path.append(str(Path(__file__).parents[2]/'tests'))
 from gateway_fixture import IDENTITY, seed
 from shs_core.gateway_journal import GatewayConflict
 from shs_core.receipt_inbox import ReceiptInbox
-from shs_app.gateway_client import GatewayClient
+from shs_app.gateway_client import GatewayClient, GatewayDisconnected
 
 
 class ClientTests(unittest.IsolatedAsyncioTestCase):
@@ -152,10 +152,10 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_transport_failure_still_closes_the_session(self):
         first = await self.client.connect()
         with patch.object(self.client.socket, 'send_json', side_effect=aiohttp.ClientConnectionResetError('peer reset')):
-            with self.assertRaises(GatewayConflict):
+            with self.assertRaises(GatewayDisconnected):
                 await self.client.snapshot()
         self.assertIsNone(self.client.socket)
-        with self.assertRaises(GatewayConflict):
+        with self.assertRaises(GatewayDisconnected):
             await self.client.snapshot()
         second = await self.client.connect()
         self.assertGreater(second['generation'], first['generation'])
