@@ -29,6 +29,7 @@ from .shs_core.native_readings import power
 from .shs_core.grid_capacity import (battery_released, required_import, import_limit,
     empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, CHARGING_MODES)
 from .shs_core.device_commands import actuator_targets
+from .shs_core.operating_modes import device_mode
 from .shs_core.command_transport import CommandTransport
 from .shs_core.controller_inputs import ControllerInputs
 from .shs_core.device_gateway import DeviceGateway
@@ -511,7 +512,7 @@ class HomeAssistantSource:
         commanded = {**controls, **commanded_controls(self.capacity, identity)}
         expected = {**commanded, entity:value}
         def demand(values):
-            return rated if any(v == 'on' or target.split('.')[0] not in ('switch','input_boolean')
+            return rated if any(v != 'off' and (v == 'on' or target.split('.')[0] not in ('switch','input_boolean'))
                                 for target,v in values.items()) else 0.0
         return {**base, 'device':identity, 'before_w':demand(controls), 'commanded_before_w':demand(commanded), 'after_w':demand(expected),
                     'possible_w':max(demand(expected),demand({**controls,entity:value})),
@@ -552,13 +553,19 @@ class HomeAssistantSource:
             if descriptor['logical'] == 'battery':
                 batteries.add(device)
         switch = options.get('ev_charge_switch_entity')
-        if switch:
+        if switch and device_mode(options, 'ev') == 'controlling':
             # Read/validate available native settings independently of desired
             # ownership values; outstanding effects have their own journal.
             descriptor = self.describe_import('ev', switch, self.report(switch)['state'])
             include(descriptor, descriptor['before_w'])
-        mappings = [(key, mapping, 'device:'+key) for key, mapping in options.get('device_control_mappings', {}).items()]
+        # Uncontrolled appliances are already in the measured house demand.
+        # Only controlling devices add a native peak envelope; journalled
+        # commands below retain their reservations even during a mode exit.
+        mappings = [(key, mapping, 'device:'+key) for key, mapping in options.get('device_control_mappings', {}).items()
+                    if device_mode(options, 'device:'+key) == 'controlling']
         for owner, record in self.service.physical.ownership.records.items():
+            if device_mode(options, owner) != 'controlling':
+                continue
             mappings.extend((key, mapping, owner) for key, mapping in record.get('options', {}).get('device_control_mappings', {}).items()
                 if set(actuator_targets(mapping)) & set(record['originals']))
         for key, mapping, owner in mappings:

@@ -21,6 +21,7 @@ from shs_core.native_readings import power
 from shs_core.grid_capacity import (battery_released, required_import, import_limit,
     empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, CHARGING_MODES)
 from shs_core.device_commands import actuator_targets
+from shs_core.operating_modes import device_mode
 from shs_core.connection_health import RetryBackoff
 from shs_core.battery_native_adapter import SigenAdapter
 from shs_core.device_operations import ControlDeadlineError, ControlObservationError, PowerHistoryError
@@ -79,7 +80,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             commanded_controls=commanded_controls, _current=_current, EV_WATTS_PER_AMP=EV_WATTS_PER_AMP, actuator_targets=actuator_targets, device_power_bound=device_power_bound, PowerHistoryError=PowerHistoryError,
             observe_power_peak=observe_power_peak, merge_power_peaks=merge_power_peaks, RetryBackoff=RetryBackoff, capacity_key=capacity_key, house_meter_errors=house_meter_errors,
             HouseMeterError=HouseMeterError, GridCapacityConfigurationError=GridCapacityConfigurationError, ControlObservationError=ControlObservationError,
-            battery_import_bound=battery_import_bound, CHARGING_MODES=CHARGING_MODES))
+            battery_import_bound=battery_import_bound, CHARGING_MODES=CHARGING_MODES, device_mode=device_mode))
         for key,value in dict(validate_bindings=validate_bindings,ordered=ordered,FACT_ATTRIBUTES=FACT_ATTRIBUTES,
                 native_pool_idle=native_pool_idle,owned_device_sources=owned_device_sources,validate_pool_pause=validate_pool_pause,
                 temperature_available=temperature_available,temperature_metadata=temperature_metadata).items():

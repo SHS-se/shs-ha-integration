@@ -31,6 +31,7 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         options = self.source.configuration.options()
         options.update(ev_charge_switch_entity='switch.ev', device_control_mappings={
             'ev': {'control_type':'variable_power', 'control_entity_id':'number.ev', 'power':'sensor.ev'}})
+        options['device_modes']['$ev'] = 'controlling'
         self.source.configuration.options = lambda:deepcopy(options)
         self.source.report = self.rows.get
         self.rows['switch.ev'] = {'state':'off', 'attributes':{}}
@@ -181,6 +182,7 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         mapping = {'control_type':'permit_inhibit', 'actuator_entity_ids':['switch.water'], 'power':'sensor.water'}
         options['device_control_mappings'].update({'sensor.hot_water_energy':deepcopy(mapping),
                                                  'sensor.water_boiler_energy':deepcopy(mapping)})
+        options['device_modes']['sensor.water_boiler_energy'] = 'controlling'
         self.source.configuration.options = lambda:deepcopy(options)
         self.source.power_peaks['sensor.water'] = 3000
         self.rows['switch.water'] = {'state':'on', 'attributes':{}}
@@ -218,6 +220,7 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
                 mapping = {'control_type':kind, 'actuator_entity_ids':[entity], 'power':'sensor.load'}
                 options['device_control_mappings'].update({'sensor.counter_a':deepcopy(mapping),
                                                          'sensor.counter_b':deepcopy(mapping)})
+                options['device_modes'].update({'sensor.counter_a':'controlling', 'sensor.counter_b':'controlling'})
                 self.source.configuration.options = lambda:deepcopy(options)
                 self.rows[entity] = {'state':value, 'attributes':{'temperature':22}}
                 self.rows['sensor.load'] = {'state':'2000',
@@ -244,6 +247,77 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ControlDeadlineError, '16000 W required'):
             await self.native('pool-start', 'pool', 'switch.pool', 'turn_on')
         self.assertFalse(self.calls)
+
+    def mapped_load(self, key, entity, state, peak_w, mode, measured_w=0):
+        options = self.source.configuration.options()
+        sensor = 'sensor.'+key+'_power'
+        options['device_control_mappings'][key] = {
+            'control_type':'setpoint' if entity.startswith('climate.') else 'switch_schedule',
+            'actuator_entity_ids':[entity], 'power':sensor}
+        options['device_modes'][key] = mode
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.rows[entity] = {'state':state, 'attributes':{'temperature':22}}
+        self.rows[sensor] = {'state':str(measured_w),
+            'attributes':{'unit_of_measurement':'W', 'state_class':'measurement'},
+            'last_reported':self.rows['sensor.house']['last_reported']}
+        self.source.power_peaks[sensor] = peak_w
+
+    async def test_pool_starts_without_peak_reservations_for_off_or_uncontrolled_devices(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        self.rows['sensor.house']['state'] = '2500'
+        self.mapped_load('off_room', 'climate.off_room', 'off', 6000, 'controlling')
+        self.mapped_load('monitor_room', 'climate.monitor_room', 'heat', 8000, 'monitoring', 900)
+        self.mapped_load('boiler', 'switch.boiler', 'on', 9000, 'control_verification')
+        self.mapped_load('pool', 'switch.pool', 'off', 4000, 'controlling')
+        self.assertEqual(self.source.import_required(), 2500)
+        self.assertTrue(self.source.external_ready('device:pool', entity='switch.pool', value='on'))
+        await self.native('pool-start', 'device:pool', 'switch.pool', 'turn_on')
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][2], {'entity_id':'switch.pool'})
+        # A slow/unchanged OFF readback must not erase the accepted start.
+        self.assertEqual(self.rows['switch.pool']['state'], 'off')
+        self.assertEqual(self.source.import_required(), 6500)
+
+    async def test_off_climate_has_no_peak_but_enabled_controlling_climate_keeps_it(self):
+        self.configure_ev()
+        self.rows['sensor.house']['state'] = '2500'
+        self.mapped_load('room', 'climate.room', 'off', 4000, 'controlling', 100)
+        self.assertEqual(self.source.import_required(), 2500)
+        self.rows['climate.room']['state'] = 'heat'
+        self.assertEqual(self.source.import_required(), 6400)
+
+    async def test_monitoring_demand_remains_in_house_meter_and_still_blocks_overload(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        self.rows['sensor.house']['state'] = '13000'
+        self.mapped_load('room', 'climate.room', 'heat', 20000, 'monitoring', 8000)
+        self.mapped_load('pool', 'switch.pool', 'off', 4000, 'controlling')
+        self.assertEqual(self.source.import_required(), 13000)
+        with self.assertRaisesRegex(ControlDeadlineError, '17000 W required'):
+            await self.native('pool-overload', 'device:pool', 'switch.pool', 'turn_on')
+        self.assertFalse(self.calls)
+
+    async def test_mode_exit_keeps_unconfirmed_native_command_reservation(self):
+        self.configure_ev()
+        self.rows['sensor.house']['state'] = '2500'
+        self.service.import_limit_w = 15000
+        self.mapped_load('pool', 'switch.pool', 'off', 4000, 'controlling')
+        await self.native('pool-start', 'device:pool', 'switch.pool', 'turn_on')
+        options = self.source.configuration.options()
+        options['device_modes']['pool'] = 'monitoring'
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.assertEqual(self.source.import_required(), 6500)
+
+    async def test_monitoring_ev_uses_measured_house_demand_without_current_reservation(self):
+        self.configure_ev()
+        options = self.source.configuration.options()
+        options['device_modes']['$ev'] = 'monitoring'
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.rows['switch.ev']['state'] = 'on'
+        self.rows['sensor.ev']['state'] = '1000'
+        self.rows['sensor.house']['state'] = '2500'
+        self.assertEqual(self.source.import_required(), 2500)
 
     async def test_nonfinite_current_never_creates_free_capacity(self):
         self.configure_ev()
@@ -347,6 +421,7 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         options=self.source.configuration.options()
         options['device_control_mappings']['pool']={'control_type':'switch_schedule',
             'actuator_entity_ids':['switch.pool'],'power':2000}
+        options['device_modes']['pool'] = 'controlling'
         self.source.configuration.options=lambda:deepcopy(options)
         self.rows['switch.pool']={'state':'on','attributes':{}}
         self.rows['sensor.house']['state']='14000'
@@ -677,6 +752,7 @@ class NativePowerHistoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_retained_owned_mapping_uses_its_sensor_peak_after_remapping(self):
         self.configure_pool()
         options=self.source.configuration.options()
+        options['device_modes']['pool'] = 'controlling'
         self.physical.ownership.records['device:pool']=dict(options=deepcopy(options),
             originals={'switch.pool':'off'},last_commands={})
         options['device_control_mappings'].pop('pool')
