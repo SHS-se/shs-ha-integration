@@ -948,6 +948,27 @@ class Assessment:
     valid_until_ms: int
 
 
+def _remaining_charge_capacity(contract, objective, live, conversion):
+    """Upper bound on permitted delivery, not a promise of future sunlight.
+
+    Automatic surplus absorption is permitted up to its power ceiling. Its
+    forecast energy is neither a ceiling nor extra grid-recovery authority.
+    Sized grid requests retain their nominal allocation and explicit recipes.
+    """
+    capacity = 0
+    for row in contract.intervals:
+        start = max(live.at_ms, row.start_ms)
+        end = min(row.end_ms, objective.deadline_ms, contract.valid_until_ms)
+        if end <= start:
+            continue
+        if row.operation in ('solar_charge', 'hold', 'supply_house'):
+            watts = min(live.charge_max_dc_w, int(conversion.surplus_charge.output(row.charge_ac_limit_w)))
+            capacity += _round(Fraction(watts * (end - start), 3600))
+        else:
+            capacity += max(0, row.stored_at(end) - row.stored_at(start))
+    return capacity
+
+
 def assess_execution(account: Account, live: LiveState, conversion: Conversion, *, responsibilities=True) -> Assessment:
     """Follow the accepted role; delegate no price comparison to the executor.
 
@@ -1000,6 +1021,8 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
                 if extra:
                     until = min(until, recipe.end_ms, now + ceil(quantity * 3600 / extra))
                 recovery_state = "projected_feasible" if quantity else "waiting_for_measurements"
+            elif operation == 'solar_charge':
+                recovery_state = 'waiting_for_solar'
             else:
                 replan = "shortfall_without_recovery_authority"
         elif debt is None and state_debt > 0:
@@ -1007,11 +1030,10 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
         for objective in contract.objectives:
             if objective.kind != "stored_energy" or not objective.start_ms <= now < objective.deadline_ms:
                 continue
-            nominal_remaining = sum(max(0, r.stored_at(min(r.end_ms, objective.deadline_ms)) - r.stored_at(max(now, r.start_ms)))
-                                    for r in contract.intervals if r.end_ms > now and r.start_ms < objective.deadline_ms)
+            permitted_remaining = _remaining_charge_capacity(contract, objective, live, conversion)
             delegated = sum(min(r.max_correction_mwh, r.extra_charge_dc_w * max(0, r.end_ms - max(now, r.start_ms)) // 3600)
                             for r in contract.recovery if r.objective_id == objective.id and r.end_ms > now)
-            if objective.target_mwh - live.stored_mwh > nominal_remaining + delegated:
+            if objective.target_mwh - live.stored_mwh > permitted_remaining + delegated:
                 recovery_state, replan = "insufficient_capacity", "observed_state_cannot_meet_target"
         # Respect the instantaneous physical import budget, including possible
         # effects of real commands to other devices. Forecast error is no gate.
@@ -1154,6 +1176,8 @@ def explain_execution(account: Account, live: LiveState, assessment: Assessment,
         next_action = "The plan allows extra charging to catch up when enough power is available."
     elif assessment.recovery_state == "waiting_for_measurements":
         next_action = "Waiting for energy readings to confirm how much charging is still needed."
+    elif assessment.recovery_state == 'waiting_for_solar':
+        next_action = "Continue storing available spare solar. Energy readings will confirm progress toward the target."
     elif assessment.reason in ("battery_full", "stored_target_reached"):
         next_action = "Keep this energy for the next planned use."
     if contract:

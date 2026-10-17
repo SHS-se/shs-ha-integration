@@ -495,6 +495,71 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.recovery_dc_w, 0)
         self.assertEqual(result.replan_reason, "observed_state_cannot_meet_target")
 
+    def solar_account(self):
+        # Fresh 17 October plan: 23.702 Wh of forecast solar in the partial
+        # first quarter. After delivery, PV was already below house demand.
+        row = ReferenceInterval(0, 382299, 2693920, 2717622,
+            'solar_charge', 'stored_energy', False, False, 8800, 9600, False,
+            24949, 0, 140611, 115662, 0, 0, 0, 0, 0)
+        plan = replace(contract(), capacity_mwh=18080000, maximum_mwh=18080000,
+            intervals=(row,), valid_until_ms=row.end_ms,
+            objectives=(Objective('solar-window', 'stored_energy', 0, row.end_ms,
+                                  row.stored_end_mwh, 'Store spare solar'),))
+        live = replace(self.live, at_ms=14575, stored_mwh=row.stored_start_mwh,
+            house_w=1772, pv_w=1758, eligible_load_w=1772, charge_max_dc_w=8800,
+            grid_charge_allowed=False)
+        return opening_account(plan, energy=live.stored_mwh), live
+
+    def test_fresh_solar_plan_does_not_require_replan_for_forecast_drift(self):
+        account, live = self.solar_account()
+        result = assess_execution(account, live, self.model)
+        self.assertIsNone(result.replan_reason)
+        self.assertEqual((result.operation, result.charge_dc_w, result.recovery_dc_w), ('hold', 0, 0))
+        card = explain_execution(account, live, result, mode='controlling', measured_battery_dc_w=0)
+        self.assertEqual(card['status'], 'Following the plan')
+        self.assertIn('less stored', card['difference'])
+
+    def test_solar_shortfall_waits_for_permitted_surplus_without_grid_recovery(self):
+        account, live = self.solar_account()
+        account = meter(account, 'charge', live.at_ms, 0)
+        account = meter(account, 'discharge', live.at_ms, 0)
+        debt = balance(account, live.at_ms).flow_debt_low_mwh
+        self.assertGreater(debt, 0)
+        for pv, expected in ((1758, 0), (2772, 950)):
+            with self.subTest(pv_w=pv):
+                result = assess_execution(account, replace(live, pv_w=pv), self.model)
+                self.assertIsNone(result.replan_reason)
+                self.assertEqual(result.recovery_state, 'waiting_for_solar')
+                self.assertEqual(result.recovery_remaining_mwh, debt)
+                self.assertEqual((result.charge_dc_w, result.recovery_dc_w), (expected, 0))
+        self.assertEqual(balance(account, live.at_ms).flow_debt_low_mwh, debt)
+
+    def test_solar_target_still_reports_insufficient_physical_capacity(self):
+        account, live = self.solar_account()
+        for changed in (replace(live, charge_max_dc_w=0),
+                        replace(live, at_ms=account.contract.valid_until_ms - 1000)):
+            with self.subTest(live=changed):
+                result = assess_execution(account, changed, self.model)
+                self.assertEqual(result.replan_reason, 'observed_state_cannot_meet_target')
+                self.assertEqual(result.recovery_state, 'insufficient_capacity')
+                self.assertEqual(result.recovery_dc_w, 0)
+        limited = replace(account.contract.intervals[0], charge_ac_limit_w=1)
+        bounded = opening_account(replace(account.contract, intervals=(limited,)), energy=live.stored_mwh)
+        self.assertEqual(assess_execution(bounded, live, self.model).replan_reason,
+                         'observed_state_cannot_meet_target')
+        expiring = opening_account(replace(account.contract, valid_until_ms=live.at_ms + 1000),
+                                   energy=live.stored_mwh)
+        self.assertEqual(assess_execution(expiring, live, self.model).replan_reason,
+                         'observed_state_cannot_meet_target')
+
+    def test_unfulfilled_solar_target_keeps_its_measured_outcome(self):
+        account, live = self.solar_account()
+        deadline = account.contract.valid_until_ms
+        account = observe_state(account, StateObservation(deadline, live.stored_mwh, 'SOC'))
+        outcome = objective_history(account, deadline)[0]
+        self.assertEqual(outcome['outcome'], 'missed')
+        self.assertEqual(outcome['shortfall_mwh'], 23702)
+
     def test_export_reserve_is_distinct_from_household_minimum(self):
         row = replace(contract().intervals[0], operation="export", target_kind="permission",
                       charge_ac_mwh=0, import_mwh=0, discharge_ac_mwh=300_000, export_mwh=50_000,

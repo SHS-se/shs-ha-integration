@@ -191,3 +191,21 @@ runtime, queues two different captures before delivery and verifies that both ar
 accepted, including a later capture with an earlier but still fresh source time.
 This fixes the revision collision; it does not establish that the separate
 measurement-processing delays observed in production have been resolved.
+
+## Solar target feasibility (17 October 2026)
+
+A fresh partial-quarter solar plan could immediately request another plan after
+delivery: its forecast remaining charge was treated as the maximum permitted
+delivery, so even an unchanged SOC reading during delivery made the target appear
+unreachable. Automatic surplus absorption already permits more than its forecast
+when sunlight is available. Feasibility now uses that permission's power ceiling
+and remaining time as an upper bound, subject to current equipment limits. This
+does not predict sunlight or claim that recovery is guaranteed. Grid charging
+keeps its nominal allocation and explicit recovery recipes.
+
+Solar shortfalls remain in the account while the controller waits for available
+surplus. No extra grid purchase is authorised. Targets exceeding the remaining
+physical capacity still request replanning, and measured missed deadlines retain
+their unfulfilled outcomes. Regression coverage includes the captured first
+quarter, measured flow debt, power/source limits and full replacement-plan
+admission through the durable battery runtime.

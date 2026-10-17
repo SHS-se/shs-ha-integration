@@ -136,6 +136,42 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_replacement_solar_plan_clears_shortfall_recommendation(self):
+        r = Rig()
+        self.addAsyncCleanup(r.runtime.close)
+        await r.start()
+        original = read_contract(r.plan['battery_execution'])
+        self.assertEqual(r.runtime.snapshot()['assessment']['replan_reason'],
+                         'observed_state_cannot_meet_target')
+        captured = await r.runtime.capture_feedback(5000000, 'fresh-solar-plan')
+        start, end = r.now, original.valid_until_ms
+        energy = lambda watts: round(watts * (end - start) / 3600)
+        row = ReferenceInterval(start, end, 5000000, 5000000 + energy(95),
+            'solar_charge', 'stored_energy', False, False, 4000, 4000, False,
+            energy(100), 0, energy(1100), energy(1000), 0, 0, 0, 0,
+            energy(1100) - energy(1000) - energy(100))
+        revised = replace(original, id='fresh-solar-contract', generation=captured['generation'],
+            source_receipt=captured['source_receipt'], previous_contract_id=original.id,
+            intervals=(row,), objectives=(Objective('solar-window', 'stored_energy', start, end,
+                row.stored_end_mwh, 'Store available spare solar'),), recovery=(),
+            dispositions=(Disposition(original.objectives[0].id, 'incorporated', 'solar-window',
+                                      'Replanned from observed state'),))
+        r.plan['battery_execution'] = contract_wire(revised)
+        r.rows['sensor.pv']['state'] = '900'
+        r.rows['sensor.grid']['state'] = '100'
+        for _ in range(3):
+            await r.advance(20000)
+        status = r.runtime.snapshot()
+        self.assertEqual(status['accepted_reference_id'], revised.id)
+        self.assertIsNone(status['plan_rejection'])
+        self.assertIsNone(status['assessment']['replan_reason'])
+        self.assertEqual(status['reason'], 'Following the plan')
+        self.assertEqual(status['command_state'], 'adopted')
+        self.assertEqual(status['requested_settings'],
+            {'mode': 'Maximum Self Consumption', 'charge_limit_w': 4000, 'discharge_limit_w': 0})
+        history = objective_history(r.runtime.host.state.execution.account, r.now)
+        self.assertEqual(history[0]['responsibility'], 'incorporated')
+
     async def test_solar_backed_charge_adapts_to_gross_import_capacity(self):
         from unittest.mock import patch
         from shs_core.battery_conversion import Conversion, Curve
