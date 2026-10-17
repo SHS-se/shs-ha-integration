@@ -697,8 +697,26 @@ def _relief_rule(group, step):
     return rule
 
 
+def _adds_nothing(state, group, step, now):
+    """A numeric increase within the group's held envelope needs no headroom.
+
+    Raising a battery's discharge ceiling while it supplies the house cannot add
+    import or export, and admission credits that discharge (user requirement,
+    17 October 2026). Refusing it would only hold a lower manual ceiling. A
+    decrease still needs its commissioned relief proof below.
+    """
+    before = dict(step.before).get(step.key)
+    if (type(step.value) not in (int, float) or type(before) not in (int, float) or step.value <= before
+            or not _scope_frame_valid(state, now) or not _fresh(group.observation, now)):
+        return False
+    # Exclude the step's own preparation: it must not justify itself.
+    held = [group.observation.envelope, *(a.step.possible for a in group.attempts if a.stage != "prepared")]
+    return (step.possible.import_w <= max(e.import_w for e in held)
+            and step.possible.export_w <= max(e.export_w for e in held))
+
+
 def _admissible(state, group, step, now):
-    if _room(state, group, step.possible, now):
+    if _room(state, group, step.possible, now) or _adds_nothing(state, group, step, now):
         return True
     rule = _relief_rule(group, step)
     if (rule is None or not _fresh(state.frame, now) or not _fresh(group.observation, now)

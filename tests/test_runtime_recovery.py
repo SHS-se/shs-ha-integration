@@ -249,6 +249,39 @@ class ReliefTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 replace(rule, **changes)
 
+    def neutral_increase(self, *, external=12000):
+        # Capture, 17 October 2026: a manual 1 kW discharge ceiling in
+        # self-consumption while gross house demand exceeded the import limit.
+        h = Harness()
+        before = controls("supply", 0, 1000)
+        h.observe(target=before, envelope=Envelope(0, 800))
+        h.event(FrameObserved(replace(h.state.frame, revision=2, external=Envelope(external, 0))))
+        h.request(target=controls("supply", 0, 4995))
+        return h, Step("discharge", 4995, before, (Guard("ready", 1, 1),), Envelope(0, 800),
+                       20, 100, True, "synthetic-absolute-v1")
+
+    def test_increase_that_adds_no_import_or_export_dispatches_over_the_limit(self):
+        h, step = self.neutral_increase()
+        h.propose(steps=(step,))
+        self.assertEqual(h.group().status, "awaiting_durability")
+        sent = h.durable()
+        self.assertEqual((sent.key, sent.value), ("discharge", 4995))
+
+    def test_increase_beyond_the_held_envelope_still_needs_headroom(self):
+        for possible in (Envelope(1, 800), Envelope(0, 801)):
+            with self.subTest(possible=possible):
+                h, step = self.neutral_increase()
+                h.propose(steps=(replace(step, possible=possible),))
+                self.assertEqual(h.group().status, "physical_scope_blocked")
+
+    def test_neutral_increase_needs_a_fresh_frame_at_durable_dispatch(self):
+        h, step = self.neutral_increase(); h.propose(steps=(step,))
+        prepared = h.group().attempts[0]
+        h.event(FrameObserved(replace(h.state.frame, revision=3, valid_until_ms=h.now + 1)))
+        h.now += 1
+        h.event(JournalDurable(prepared.prepared_revision))
+        self.assertFalse(any(isinstance(e, Send) for e in h.effects))
+
     def test_only_improvement_in_the_violated_direction_qualifies(self):
         h, step = self.relief(external=0)
         h.event(FrameObserved(replace(h.state.frame, revision=3, external=Envelope(0, 11000))))
