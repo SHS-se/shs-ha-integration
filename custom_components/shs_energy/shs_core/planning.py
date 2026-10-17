@@ -183,6 +183,75 @@ def pool_heating_runtime(entities, history, captured) -> dict:
             "heating_elapsed_basis": "observed_on_lower_bound" if lower_bound else "confirmed_transition"}
 
 
+def pool_heating_history(entities, history, start, captured) -> dict | None:
+    """Observed enabled intervals, including runs that stopped before capture.
+
+    Each actuator's recorder rows retain their supplied order. Intersecting their
+    enabled intervals expresses the same AND as ``pool_heating_running``. Missing
+    or unavailable observations leave history unknown, never a fabricated off run.
+    """
+    if not entities:
+        return None
+    combined = None
+    complete = True
+    for entity in sorted(entities):
+        segments = []
+        previous_at = None
+        previous_state = None
+        run_start = None
+        basis = "observed_on_lower_bound"
+        for at, state, _attributes in history.get(entity, []):
+            if previous_at is not None:
+                segments.append((previous_at, at, previous_state, run_start, basis))
+            known = "on" if state in ("on", True) else "off" if state in ("off", False) else None
+            if known == "on" and previous_state != "on":
+                run_start = at
+                basis = "confirmed_transition" if previous_state == "off" else "observed_on_lower_bound"
+            elif known != "on":
+                run_start = None
+            previous_at, previous_state = at, known
+        if previous_at is not None:
+            segments.append((previous_at, captured, previous_state, run_start, basis))
+        covered_until = start
+        enabled = []
+        for left, right, state, began, run_basis in segments:
+            left, right = max(start, left), min(captured, right)
+            if right <= left:
+                continue
+            if left > covered_until or state is None:
+                complete = False
+            covered_until = max(covered_until, right)
+            if state == "on":
+                enabled.append((left, right, began, run_basis))
+        if covered_until < captured or previous_at is None:
+            complete = False
+        if combined is None:
+            combined = enabled
+        else:
+            intersection = []
+            for left, right, began, run_basis in combined:
+                for other_left, other_right, other_began, other_basis in enabled:
+                    overlap_start, overlap_end = max(left, other_left), min(right, other_right)
+                    if overlap_end > overlap_start:
+                        latest_start = max(began, other_began)
+                        latest_basis = run_basis if began >= other_began else other_basis
+                        intersection.append((overlap_start, overlap_end, latest_start, latest_basis))
+            combined = intersection
+    # Repeated recorder observations of the same enabled run are one interval.
+    intervals = []
+    for left, right, began, basis in combined:
+        elapsed = max(0, (left - began).total_seconds())
+        if intervals and intervals[-1]["end"] == left.isoformat() and intervals[-1]["elapsed_basis"] == basis:
+            previous = intervals[-1]
+            age = previous["elapsed_seconds_at_start"] + (left - datetime.fromisoformat(previous["start"])).total_seconds()
+            if age == elapsed:
+                previous["end"] = right.isoformat()
+                continue
+        intervals.append({"start": left.isoformat(), "end": right.isoformat(),
+                          "elapsed_seconds_at_start": elapsed, "elapsed_basis": basis})
+    return {"start": start.isoformat(), "end": captured.isoformat(), "complete": complete, "intervals": intervals}
+
+
 def build_services(
     options: dict[str, Any],
     horizon: list[datetime],

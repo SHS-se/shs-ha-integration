@@ -1119,6 +1119,72 @@ class PoolHeaterRuntimeTests(unittest.TestCase):
         runtime = pool_heating_runtime({'switch.heat'}, {'switch.heat': rows}, START + timedelta(minutes=30))
         self.assertEqual(runtime, {'heating_elapsed_seconds': 5 * 60, 'heating_elapsed_basis': 'observed_on_lower_bound'})
 
+    def heating_history(self, rows, captured_minutes=14, entities=None):
+        from shs_core.planning import pool_heating_history
+        return pool_heating_history(entities or {'switch.heat'}, rows,
+                                    START, START + timedelta(minutes=captured_minutes))
+
+    def test_completed_partial_runs_and_multiple_cycles_survive_an_off_capture(self):
+        rows = [(START - timedelta(minutes=10), 'off', None),
+                (START + timedelta(minutes=1), 'on', None),
+                (START + timedelta(minutes=4), 'off', None),
+                (START + timedelta(minutes=7), 'on', None),
+                (START + timedelta(minutes=12), 'off', None)]
+        result = self.heating_history({'switch.heat': rows})
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['start'], START.isoformat())
+        self.assertEqual(result['end'], (START + timedelta(minutes=14)).isoformat())
+        self.assertEqual(result['intervals'], [
+            {'start': (START + timedelta(minutes=left)).isoformat(),
+             'end': (START + timedelta(minutes=right)).isoformat(),
+             'elapsed_seconds_at_start': 0, 'elapsed_basis': 'confirmed_transition'}
+            for left, right in [(1, 4), (7, 12)]])
+
+    def test_interval_clipping_preserves_startup_age_before_the_current_quarter(self):
+        rows = [(START - timedelta(minutes=20), 'off', None),
+                (START - timedelta(minutes=5), 'on', None),
+                (START + timedelta(minutes=2), 'on', None),
+                (START + timedelta(minutes=8), 'off', None)]
+        result = self.heating_history({'switch.heat': rows})
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['intervals'], [{
+            'start': START.isoformat(), 'end': (START + timedelta(minutes=8)).isoformat(),
+            'elapsed_seconds_at_start': 300, 'elapsed_basis': 'confirmed_transition'}])
+
+    def test_initial_on_observation_preserves_a_labeled_elapsed_lower_bound(self):
+        result = self.heating_history({'switch.heat': [(START - timedelta(minutes=5), 'on', None)]})
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['intervals'][0]['elapsed_seconds_at_start'], 300)
+        self.assertEqual(result['intervals'][0]['elapsed_basis'], 'observed_on_lower_bound')
+
+    def test_companion_must_be_on_and_its_transition_sets_the_combined_run_age(self):
+        rows = {'switch.heat': [(START - timedelta(minutes=20), 'off', None),
+                                (START - timedelta(minutes=10), 'on', None)],
+                'switch.flow': [(START - timedelta(minutes=20), 'off', None),
+                                (START - timedelta(minutes=2), 'on', None),
+                                (START + timedelta(minutes=8), 'off', None)]}
+        result = self.heating_history(rows, entities=set(rows))
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['intervals'], [{
+            'start': START.isoformat(), 'end': (START + timedelta(minutes=8)).isoformat(),
+            'elapsed_seconds_at_start': 120, 'elapsed_basis': 'confirmed_transition'}])
+
+    def test_unknown_history_retains_known_intervals_without_claiming_complete_coverage(self):
+        rows = {'switch.heat': [(START + timedelta(minutes=1), 'on', None),
+                                (START + timedelta(minutes=4), 'unavailable', None),
+                                (START + timedelta(minutes=7), 'on', None),
+                                (START + timedelta(minutes=12), 'off', None)]}
+        result = self.heating_history(rows)
+        self.assertFalse(result['complete'])
+        self.assertEqual([(row['start'], row['end']) for row in result['intervals']], [
+            ((START + timedelta(minutes=left)).isoformat(), (START + timedelta(minutes=right)).isoformat())
+            for left, right in [(1, 4), (7, 12)]])
+        self.assertTrue(all(row['elapsed_basis'] == 'observed_on_lower_bound' for row in result['intervals']))
+        self.assertFalse(self.heating_history({})['complete'])
+        self.assertTrue(self.heating_history({'switch.heat': [(START - timedelta(minutes=1), 'off', None)]})['complete'])
+        self.assertEqual(self.heating_history({'switch.heat': [(START - timedelta(minutes=1), 'off', None)]})['intervals'], [])
+
+
     def test_transient_command_controls_even_when_expected_draw_is_zero(self):
         from shs_core.device_port import device_intent
         plan = {'pool': {'heater_response': {'kind': 'bergvarme'}, 'stop_temperature_c': 32}, 'device_models': []}

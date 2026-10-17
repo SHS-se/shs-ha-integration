@@ -133,6 +133,7 @@ from .planning import (
     pool_heating_running,
     pool_heating_actuators,
     pool_heating_runtime,
+    pool_heating_history,
     unplanned_services,
 )
 from .readings import daily_category_readings, usable_change
@@ -2776,12 +2777,15 @@ class Household:
                 ),
                 "source_entity_ids": {"water_temperature": pool_entity},
             }
+            actuators = pool_heating_actuators(device_models, control_mappings, pool_water_entity=pool_entity)
+            history = await self.ports.history.states(
+                captured - timedelta(hours=2), captured, sorted(actuators), with_attributes=False,
+            ) if actuators else {}
             if pool_state["heating_running"] is True:
-                actuators = pool_heating_actuators(device_models, control_mappings, pool_water_entity=pool_entity)
-                history = await self.ports.history.states(
-                    captured - timedelta(hours=2), captured, sorted(actuators), with_attributes=False,
-                )
                 pool_state.update(pool_heating_runtime(actuators, history, captured))
+            heating_history = pool_heating_history(actuators, history, quarter_start(captured), captured)
+            if heating_history is not None:
+                pool_state["heating_history"] = heating_history
 
         if capabilities["pool"] and pool_state is None:
             raise OptimisationInputError("Pool water temperature is not configured", fix={"kind": "fields", "fields": [{"key": OPT_POOL_WATER_TEMPERATURE_ENTITY}]})
