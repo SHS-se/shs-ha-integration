@@ -16,7 +16,7 @@ import zlib
 
 from .command_journal import WriterLease, encoded, now_ms, RoutedCommand, ObligationCommand
 from .device_ownership import decode_ownership
-from .grid_capacity import empty_capacity, prepare_capacity, finish_capacity, observe_capacity, dispatch_capacity, observe_power_peak, merge_power_peaks
+from .grid_capacity import empty_capacity, canonicalize_capacity, prepare_capacity, finish_capacity, observe_capacity, dispatch_capacity, observe_power_peak, merge_power_peaks
 
 PROTOCOL = 2
 RECEIPT_KINDS = frozenset(('gap', 'session', 'configuration', 'observation', 'outcome', 'activation'))
@@ -468,7 +468,8 @@ class GatewayJournal:
             self._owner(db)
             row = (db.execute('SELECT payload FROM ownership WHERE id=1').fetchone() if name == 'ownership'
                    else db.execute('SELECT payload FROM records WHERE name=?', (name,)).fetchone())
-            return json.loads(row[0]) if row else None
+            value = json.loads(row[0]) if row else None
+            return canonicalize_capacity(value) if name == 'grid_capacity' and value is not None else value
 
     def save_record(self, name, value):
         if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission', 'house_import_limit', 'grid_capacity', 'power_peaks') or type(value) is not dict:
@@ -498,7 +499,7 @@ class GatewayJournal:
         if (value.get('schema') != 1 or type(value.get('revision')) is not int or value['revision'] < 0
                 or type(value.get('devices')) is not dict):
             raise JournalStorageError('Invalid durable house import accounting')
-        return value
+        return canonicalize_capacity(value)
 
     @staticmethod
     def _save_capacity(db, value):

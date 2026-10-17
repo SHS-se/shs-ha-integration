@@ -63,6 +63,37 @@ def empty_capacity():
     return {'schema': 1, 'revision': 0, 'devices': {}}
 
 
+def _superseded(effect, order, confirmed):
+    return effect['order'] <= order and (effect['status'] == 'service_returned' or
+        effect['witnessed'] is not None and effect['witnessed'] < confirmed)
+
+
+def canonicalize_capacity(capacity):
+    """Roll existing counter-keyed rows into their physical actuator identity.
+
+    Keep every unresolved effect. A later confirmed setting can supersede only
+    the same successful/witnessed writes that ordinary observation can retire.
+    """
+    if not any(key.startswith('device:') and '@' in key for key in capacity['devices']):
+        return capacity
+    devices = {}
+    for key, row in capacity['devices'].items():
+        identity = 'device@' + key.split('@', 1)[1] if key.startswith('device:') and '@' in key else key
+        target = devices.setdefault(identity, {'effects': {}})
+        for command, effect in row['effects'].items():
+            target['effects'][command] = {**effect, 'device':identity}
+        settled = row.get('settled')
+        if settled and settled['order'] > target.get('settled', {}).get('order', -1):
+            target['settled'] = {**settled, 'device':identity}
+    for row in devices.values():
+        if settled := row.get('settled'):
+            row['effects'] = {key:effect for key,effect in row['effects'].items()
+                if not _superseded(effect, settled['order'], settled['confirmed'])}
+    capacity['devices'] = devices
+    capacity['revision'] += 1
+    return capacity
+
+
 def capacity_bound(device):
     return max([device.get('settled', {}).get('after_w', 0.0)] +
                [effect['peak_w'] for effect in device.get('effects', {}).values()])
@@ -163,9 +194,7 @@ def observe_capacity(capacity, ordinal, latest):
                 row['settled'] = {**effect, 'confirmed': ordinal}
                 changed = True
             for previous_id, previous in list(row['effects'].items()):
-                if previous['order'] <= effect['order'] and (
-                        previous['status'] == 'service_returned' or
-                        previous['witnessed'] is not None and previous['witnessed'] < ordinal):
+                if _superseded(previous, effect['order'], ordinal):
                     del row['effects'][previous_id]
                     changed = True
     if changed:
@@ -222,6 +251,8 @@ class GridCapacityConfigurationError(ValueError):
 
 def capacity_key(logical, controls):
     """Different actuator sets are independent loads, even after a remapping."""
+    if logical.startswith('device:'):
+        logical = 'device'
     return logical + '@' + ','.join(sorted(controls))
 
 

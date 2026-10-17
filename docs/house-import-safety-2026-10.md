@@ -44,6 +44,14 @@ and are refused. Native import accounting and command envelopes share this
 resolution, so retired counter mappings cannot independently block the battery's
 capacity query or count the charger more than once.
 
+Mapped switches and thermostats also use their actuator set as the durable load
+identity, independently of the energy counter naming the device. A device command
+resolves its own reviewed mapping; duplicate counter mappings of the same actuator
+share one capacity reservation. Existing counter-keyed reservation rows are
+combined on read, retaining every uncertain effect and using the latest confirmed
+settlement. Supersession uses the same proof as normal observation, so an older
+never-witnessed uncertain write is not erased by a later OFF under another alias.
+
 ## Complexity and practical limits
 
 The old EV/battery coordination was spread between the app's reservations, native battery transitions and HA's final device gate. The aggregate check is now shared at the common transport boundary, with one durable demand ledger in the existing journal. The ledger adds necessary state for outstanding effects; replacing it with a meter-only comparison would recreate the lag bugs. The battery's native multi-register transition state machine remains necessary and is not replaced by another executor.

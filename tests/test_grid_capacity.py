@@ -9,7 +9,8 @@ import test_gateway_metadata as metadata
 import test_verification as verification
 import test_battery_gateway as battery
 from shs_core.grid_capacity import (required_import, import_limit, empty_capacity,
-    prepare_capacity, finish_capacity, observe_capacity, capacity_bound, dispatch_capacity, commanded_controls)
+    prepare_capacity, finish_capacity, observe_capacity, capacity_bound, dispatch_capacity, commanded_controls,
+    capacity_key, canonicalize_capacity)
 from shs_core.command_journal import Command, NativeAction
 from shs_core.device_operations import ControlDeadlineError
 
@@ -173,6 +174,63 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, 'one admitted power source'):
             self.source.describe_import('ev', 'switch.ev', 'on')
         self.assertFalse(self.calls)
+
+    async def test_boiler_counter_aliases_share_one_native_load_and_durable_reservation(self):
+        self.configure_ev()
+        options = self.source.configuration.options()
+        mapping = {'control_type':'permit_inhibit', 'actuator_entity_ids':['switch.water'], 'power':'sensor.water'}
+        options['device_control_mappings'].update({'sensor.hot_water_energy':deepcopy(mapping),
+                                                 'sensor.water_boiler_energy':deepcopy(mapping)})
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.source.power_peaks['sensor.water'] = 3000
+        self.rows['switch.water'] = {'state':'on', 'attributes':{}}
+        self.rows['sensor.water'] = {'state':'3000', 'attributes':{'unit_of_measurement':'W', 'state_class':'measurement'},
+                                    'last_reported':self.rows['sensor.house']['last_reported']}
+        self.rows['sensor.house']['state'] = '4000'
+        self.service.import_limit_w = 15000
+        self.assertEqual(await self.source.request('battery_capacity', {}),
+                         {'external_import_w':4000, 'import_limit_w':15000})
+        first = self.source.describe_import('device:sensor.hot_water_energy', 'switch.water', 'on')
+        second = self.source.describe_import('device:sensor.water_boiler_energy', 'switch.water', 'on')
+        self.assertEqual(first['device'], second['device'])
+        await self.native('boiler-alias-on', 'device:sensor.hot_water_energy', 'switch.water', 'turn_on')
+        await self.native('boiler-alias-off', 'device:sensor.water_boiler_energy', 'switch.water', 'turn_off')
+        self.assertEqual(len(self.calls), 2)
+        capacity = await self.stream.call('load_record', 'grid_capacity')
+        rows = [row for key,row in capacity['devices'].items() if 'switch.water' in key]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows[0]['effects']), 2)
+
+    async def test_aliases_share_capacity_across_switch_pool_and_thermostat_controls(self):
+        self.configure_ev()
+        original = self.source.configuration.options()
+        cases = (
+            ('switch_schedule', 'switch.load', 'on', None),
+            ('permit_inhibit', 'switch.load', 'on', None),
+            ('setpoint', 'climate.load', 'heat', None),
+            ('setpoint', 'number.load', '22', None),
+            ('variable_power', 'switch.load', 'on', 'pool'),
+            ('switch_schedule', 'switch.load', 'on', 'pool'),
+        )
+        for kind, entity, value, system in cases:
+            with self.subTest(kind=kind, entity=entity, system=system):
+                options = deepcopy(original)
+                mapping = {'control_type':kind, 'actuator_entity_ids':[entity], 'power':'sensor.load'}
+                options['device_control_mappings'].update({'sensor.counter_a':deepcopy(mapping),
+                                                         'sensor.counter_b':deepcopy(mapping)})
+                self.source.configuration.options = lambda:deepcopy(options)
+                self.rows[entity] = {'state':value, 'attributes':{'temperature':22}}
+                self.rows['sensor.load'] = {'state':'2000',
+                    'attributes':{'unit_of_measurement':'W', 'state_class':'measurement'},
+                    'last_reported':self.rows['sensor.house']['last_reported']}
+                self.rows['sensor.house']['state'] = '3000'
+                self.source.power_peaks['sensor.load'] = 2500
+                self.service.import_limit_w = 15000
+                self.assertEqual((await self.source.request('battery_capacity', {}))['external_import_w'], 3500)
+                owners = (system,) if system else ('device:sensor.counter_a', 'device:sensor.counter_b')
+                descriptors = [self.source.describe_import(owner,entity,value) for owner in owners]
+                self.assertEqual(len({descriptor['device'] for descriptor in descriptors}), 1)
+                self.assertEqual(descriptors[0]['before_w'], 2500)
 
     async def test_generic_switch_adds_its_reviewed_power_to_current_house_demand(self):
         self.configure_ev()
@@ -396,6 +454,37 @@ class DurableDemandTests(unittest.TestCase):
             attributes={'unit_of_measurement':'W','state_class':'measurement'},
             last_reported='2026-10-17T00:00:00Z'))
         observe_capacity(self.capacity,ordinal,lambda key:self.rows.get(key,(0,None)))
+
+    def test_restored_counter_aliases_keep_only_proven_settlement_and_all_uncertain_effects(self):
+        for status, witnessed, expected in (('uncertain', None, 4000),
+                                             ('uncertain', 17, 0),
+                                             ('service_returned', None, 0)):
+            with self.subTest(status=status, witnessed=witnessed):
+                on = {**self.effect(4000), 'device':'device:old_counter@switch.water',
+                      'logical':'device:old_counter', 'controls':{'switch.water':'on'},
+                      'changed':'switch.water', 'sensor':'sensor.water'}
+                off = {**on, 'device':'device:new_counter@switch.water',
+                       'logical':'device:new_counter', 'controls':{'switch.water':'off'},
+                       'after_w':0, 'possible_w':0}
+                # Existing journals can have two rows for the same actuator.
+                # The later OFF is physically confirmed. A never-witnessed
+                # uncertain ON can still arrive and must retain its full bound.
+                capacity = {'schema':1, 'revision':5, 'devices':{
+                    on['device']:{'effects':{'on':{**on, 'peak_w':4000, 'order':15,
+                        'status':status, 'witnessed':witnessed, 'dispatch_through':15}},
+                        'settled':{**on, 'after_w':3000, 'order':10, 'confirmed':12}},
+                    off['device']:{'effects':{}, 'settled':{**off, 'order':20, 'confirmed':22}},
+                }}
+                canonicalize_capacity(capacity)
+                identity = capacity_key('device:new_counter', ('switch.water',))
+                self.assertEqual(list(capacity['devices']), [identity])
+                row = capacity['devices'][identity]
+                self.assertEqual(row['settled']['after_w'], 0)
+                self.assertEqual(capacity_bound(row), expected)
+                revision = capacity['revision']
+                self.assertIs(canonicalize_capacity(capacity), capacity)
+                self.assertEqual(capacity['revision'], revision)
+        self.assertNotEqual(capacity_key('device:new_counter', ('switch.other_water',)), identity)
 
     def test_successful_reduction_waits_for_native_and_physical_response(self):
         prepare_capacity(self.capacity,'off',self.effect(0,'off'),10)

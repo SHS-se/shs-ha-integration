@@ -400,6 +400,16 @@ class HomeAssistantSource:
         attributes = (row or {}).get('attributes', {})
         return key if attributes.get('unit_of_measurement') in ('W','kW') and attributes.get('state_class') == 'measurement' else None
 
+    def import_power_source(self, mappings):
+        sensors = {self.power_source(mapping, key) for key, mapping in mappings}
+        if len(sensors) > 1:
+            # Counter aliases may retain different meters. Resolve the explicitly
+            # admitted physical source, never whichever happens to report first.
+            sensors = {sensor for sensor in sensors if 'capture' in self.bindings.get(sensor, ())}
+        if len(sensors) != 1:
+            raise ValueError('Import accounting requires one admitted power source')
+        return sensors.pop()
+
     def mark_dispatch(self, command):
         self.service.stream.mark_dispatch(command.id)
 
@@ -462,15 +472,7 @@ class HomeAssistantSource:
             if len(currents) != 1:
                 raise ValueError('EV import accounting requires one reviewed current control')
             current = currents.pop()
-            sensors = {self.power_source(mapping, key) for key, mapping in ev}
-            if len(sensors) > 1:
-                # Energy-counter aliases can retain different power mappings.
-                # The admitted battery capture names the current physical meter;
-                # choose that explicit binding, never whichever reports first.
-                sensors = {sensor for sensor in sensors if 'capture' in self.bindings.get(sensor, ())}
-            if len(sensors) != 1:
-                raise ValueError('EV import accounting requires one admitted power source')
-            sensor = sensors.pop()
+            sensor = self.import_power_source(ev)
             if self.report(switch)['state'] == 'off' and entity == switch and value == 'off':
                 return {**base,'device':capacity_key('ev',(switch,current)),
                     'before_w':0.0,'commanded_before_w':0.0,'after_w':0.0,'possible_w':0.0,
@@ -488,7 +490,12 @@ class HomeAssistantSource:
             return {**base, 'device':identity, 'before_w':demand(controls), 'commanded_before_w':demand(commanded), 'after_w':demand(expected),
                     'possible_w':max(demand(expected),demand({**controls,entity:value})),
                     'controls':expected, 'sensor':sensor}
-        matches = [(key,m) for key,m in mappings.items() if entity in actuator_targets(m)]
+        matches = [(key,m) for key,m in mappings.items() if entity in actuator_targets(m)
+                   and (not device.startswith('device:') or key == device.removeprefix('device:'))]
+        if len(matches) > 1 and len({tuple(sorted(actuator_targets(m))) for _,m in matches}) == 1:
+            sensor = self.import_power_source(matches)
+            matches = [max((item for item in matches if self.power_source(item[1],item[0]) == sensor),
+                           key=lambda item:device_power_bound(item[1],self.power_peaks) or 0)]
         if len(matches) != 1:
             if value == 'off':
                 return None
