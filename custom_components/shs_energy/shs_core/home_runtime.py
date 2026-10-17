@@ -11,7 +11,8 @@ from . import plan_execution as execution
 from .native_records import (
     Controls, Envelope, Guard, Measurements, NativeCatalog, NeedTransition, Observation, OperationBinding, Proposed, Purpose, ReliefRule, Request, Send, Step, Value, WriterGrant, WriterIdentity, _identity, _integer, _number, _pairs, _reason, _within
 )
-from .battery_supply import SupplyScope
+from .battery_mode import promised_credit_w
+from .battery_supply import SupplyScope, proportional_supply
 from .runtime_json import read_runtime_json, encode_value
 from .energy_ledger import (
     EnergyLedger, CounterSample, ActualsWatermark, StreamActuals, SettledActuals,
@@ -611,7 +612,47 @@ def reservation(group: Group, now_ms: int) -> Envelope:
     return Envelope(max(e.import_w for e in envelopes), max(e.export_w for e in envelopes))
 
 
-def _room(state, group, extra, now):
+DISCHARGE_MEASUREMENT = "battery_discharge_dc_w"
+
+
+def _discharge_credit(state, now, group, step, import_after_w):
+    """AC battery supply admission credits, as the plan's grid balance does.
+
+    Measured discharge counts (user requirement, 17 October 2026). While the
+    accepted instruction caps supply against an import target, the discharge it
+    promises for the import being admitted counts too (user requirement, 17
+    October 2026, evening). Neither exceeds the discharge ceiling of the
+    observed, in-flight or proposed settings, so a lower ceiling, a stop or a
+    charging mode withdraws credit before the register or meter responds.
+    """
+    battery = _battery_group(state)
+    conversion = state.authority.plant.conversion if battery is not None else None
+    if (battery is None or conversion is None or battery.mode != "controlling"
+            or not _managed(state, battery) or not _fresh(battery.observation, now)):
+        return 0.0
+    catalog = state.authority.catalog
+    modes = {dict(b.target)[catalog.mode_key] for b in catalog.bindings
+             if b.operation.operation in ("self_consumption", "supply_house", "export")}
+    settings = [battery.observation.controls, *(c for a in battery.attempts for c in (a.step.before, a.step.after))]
+    if step is not None and group.spec.id == battery.spec.id:
+        settings += [step.before, step.after]
+    ceiling = min(dict(c)[catalog.discharge_key] if dict(c)[catalog.mode_key] in modes else 0 for c in settings)
+    measured = dict(battery.observation.measurements).get(DISCHARGE_MEASUREMENT, 0)
+    credit = conversion.discharge.output(min(measured, ceiling))
+    contract, c = state.execution.account.contract, state.conditions
+    row = contract.interval(now) if contract is not None else None
+    if (row is None or row.import_target_w is None or state.execution.status != "active"
+            or c is None or now >= c.valid_until_ms or c.energy_kwh <= state.authority.plant.cutoff_kwh):
+        return credit
+    eligible = c.eligible_load_w if c.eligible_load_w is not None else 0.0
+    bound = proportional_supply(c.residual_load_w, c.pv_w, eligible).house_supply_bound_w
+    promised = promised_credit_w(import_after_w=max(0.0, import_after_w), import_target_w=row.import_target_w,
+                                 eligible_bound_w=bound,
+                                 discharge_ceiling_ac_w=min(row.discharge_ac_limit_w, conversion.discharge.output(ceiling)))
+    return max(credit, promised)
+
+
+def _room(state, group, step, now):
     if not _scope_frame_valid(state, now):
         return False
     imported, exported = state.frame.external.import_w, state.frame.external.export_w
@@ -620,9 +661,10 @@ def _room(state, group, extra, now):
             continue
         bound = reservation(item, now)
         if item.spec.id == group.spec.id:
-            bound = Envelope(max(bound.import_w, extra.import_w), max(bound.export_w, extra.export_w))
+            bound = Envelope(max(bound.import_w, step.possible.import_w), max(bound.export_w, step.possible.export_w))
         imported += bound.import_w
         exported += bound.export_w
+    imported -= _discharge_credit(state, now, group, step, imported)
     return imported <= state.frame.limits.import_w and exported <= state.frame.limits.export_w
 
 
@@ -716,7 +758,7 @@ def _adds_nothing(state, group, step, now):
 
 
 def _admissible(state, group, step, now):
-    if _room(state, group, step.possible, now) or _adds_nothing(state, group, step, now):
+    if _room(state, group, step, now) or _adds_nothing(state, group, step, now):
         return True
     rule = _relief_rule(group, step)
     if (rule is None or not _fresh(state.frame, now) or not _fresh(group.observation, now)

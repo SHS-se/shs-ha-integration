@@ -109,3 +109,11 @@ User requirement, 17 October 2026: house import admission credits the
 controlled battery's measured discharge, as the planner's grid balance does.
 Solar production earns no credit. See
 [house import safety](house-import-safety-2026-10.md#one-physical-admission-boundary).
+
+User requirement, 17 October 2026 (evening): the planner states each interval's
+battery mode — follow demand, cover demand above an import target, or a fixed
+figure that also defends the house limit — and the exact load partition that
+defines base load and the battery's eligible demand. HA executes that law and
+does not infer membership from its own device list. While a capped instruction
+is in force, house import admission also credits the discharge it promises. See
+[battery execution contract v2](battery-execution-contract-v2.md).

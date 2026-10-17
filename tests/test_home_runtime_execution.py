@@ -94,7 +94,7 @@ class Harness:
         start,end=s.from_ms,s.until_ms
         charge=round(2000*(end-start)/3600);load_energy=round(1000*(end-start)/3600)
         row=ReferenceInterval(start,end,5000000,5000000+charge,'grid_charge','stored_energy',True,False,
-            4000,0,False,charge,0,0,load_energy,load_energy+charge,0,0,0,0)
+            4000,0,'none', None, None, None,charge,0,0,load_energy,load_energy+charge,0,0,0,0)
         self.contract=ExecutionContract('initial','plan',0,mode,'config-1','model','stored_energy_mwh',
             round(s.plant.capacity_kwh*1e6),round(s.plant.cutoff_kwh*1e6),round(s.plant.capacity_kwh*1e6),
             round(s.plant.cutoff_kwh*1e6),end,0,None,(row,),
@@ -208,7 +208,7 @@ class ExecutableRuntimeTests(unittest.TestCase):
         start, end = h.contract.intervals[0].start_ms, h.contract.intervals[0].end_ms
         load = round(1000 * (end - start) / 3600)
         row = ReferenceInterval(start, end, 5000000, 5000000, 'hold', 'permission', False, False,
-            4000, 0, False, 0, 0, 0, load, load, 0, 0, 0, 0)
+            4000, 0, 'none', None, None, None, 0, 0, 0, load, load, 0, 0, 0, 0)
         h.offer(replace(h.contract, intervals=(row,), objectives=(
             Objective('role', 'permission', start, end, 5000000, 'keep the role'),)))
         self.assertEqual(h.state.execution.assessment.operation, 'hold')
@@ -221,7 +221,7 @@ class ExecutableRuntimeTests(unittest.TestCase):
         start, end = h.contract.intervals[0].start_ms, h.contract.intervals[0].end_ms
         load = round(1000 * (end - start) / 3600)
         row = ReferenceInterval(start, end, 5000000, 5000000, 'idle', 'permission', False, False,
-            0, 0, False, 0, 0, 0, load, load, 0, 0, 0, 0)
+            0, 0, 'none', None, None, None, 0, 0, 0, load, load, 0, 0, 0, 0)
         h.offer(replace(h.contract, intervals=(row,), objectives=(
             Objective('role', 'permission', start, end, 5000000, 'let surplus export'),)))
         self.assertEqual(h.state.execution.assessment.operation, 'idle')
@@ -382,7 +382,7 @@ class ExecutableRuntimeTests(unittest.TestCase):
         self.assertEqual(upgraded.groups[0].attempts,h.state.groups[0].attempts)
         self.assertEqual(upgraded.groups[0].grant,h.state.groups[0].grant)
         self.assertTrue(upgraded.groups[0].owned)
-        self.assertEqual(json.loads(encode_checkpoint(upgraded))['schema_version'],10)
+        self.assertEqual(json.loads(encode_checkpoint(upgraded))['schema_version'],11)
 
     def test_v8_checkpoint_upgrade_preserves_account_and_issued_effects(self):
         h=Harness();h.offer();h.prepare();h.durable()
@@ -390,4 +390,4 @@ class ExecutableRuntimeTests(unittest.TestCase):
         old['state']['execution'].pop('plan_rejection')
         upgraded=decode_checkpoint(json.dumps(old))
         self.assertEqual(upgraded,h.state)
-        self.assertEqual(json.loads(encode_checkpoint(upgraded))['schema_version'],10)
+        self.assertEqual(json.loads(encode_checkpoint(upgraded))['schema_version'],11)

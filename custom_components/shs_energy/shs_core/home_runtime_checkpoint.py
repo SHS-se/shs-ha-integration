@@ -1,10 +1,11 @@
-"""Closed version-10 JSON for the offline runtime and conservative crash restoration."""
+"""Closed version-11 JSON for the offline runtime and conservative crash restoration."""
 from __future__ import annotations
 
 from dataclasses import replace
 import json
 
 from . import home_runtime as runtime
+from .plan_execution import upgrade_persisted_contracts
 from .runtime_json import MAX_BYTES, encode_value as _encode, decode_value as _decode, read_runtime_json
 
 
@@ -90,7 +91,7 @@ def _check_state(state):
 
 def encode_checkpoint(state: runtime.HomeState) -> bytes:
     _check_state(state)
-    data = json.dumps({"schema_version": 10, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    data = json.dumps({"schema_version": 11, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > MAX_BYTES:
         raise ValueError("checkpoint exceeds byte limit")
     return data
@@ -115,13 +116,16 @@ def decode_checkpoint(data: bytes) -> runtime.HomeState:
             group.update(desired=None, plan=None, transition_work=None, attempts=issued,
                 generation=group["generation"] + 1,
                 release_pending=group["release_pending"] or group["owned"] or bool(issued))
-        return _check_state(_decode(upgrade_native_catalog(raw), runtime.HomeState))
+        return _check_state(_decode(upgrade_persisted_contracts(upgrade_native_catalog(raw)), runtime.HomeState))
     if value["schema_version"] in (8, 9):
         if value["schema_version"] == 8:
             value["state"]["execution"] = upgrade_execution_session(value["state"]["execution"])
         value["state"] = upgrade_native_catalog(value["state"])
-    elif value["schema_version"] != 10:
+    elif value["schema_version"] not in (10, 11):
         raise ValueError("unsupported checkpoint version/fields")
+    if value["schema_version"] != 11:
+        # Through version 10 contract rows stated only `follows_demand`.
+        value["state"] = upgrade_persisted_contracts(value["state"])
     return _check_state(_decode(value["state"], runtime.HomeState))
 
 

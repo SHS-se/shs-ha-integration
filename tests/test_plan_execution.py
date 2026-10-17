@@ -17,7 +17,7 @@ QUARTER = 900_000
 
 def contract(*, generation=0, opening=5_000_000, increment=500_000, previous=None, dispositions=(), recovery=()):
     interval = ReferenceInterval(0, QUARTER, opening, opening + increment,
-        "grid_charge", "stored_energy", True, False, 2200, 0, False,
+        "grid_charge", "stored_energy", True, False, 2200, 0, 'none', None, None, None,
         550_000, 0, 0, 250_000, 800_000, 0, 0, 0, 0)
     return ExecutionContract(f"plan-{generation}", f"plan-{generation}", generation,
         "controlling", "whole-house", "constant-reference-0.95", "stored_energy_mwh",
@@ -97,17 +97,18 @@ class ContractTests(unittest.TestCase):
                       import_mwh=0, grid_charge_allowed=False)
         for operation in ('hold', 'supply_house'):
             with self.subTest(operation=operation):
-                offered = replace(contract(), intervals=(replace(row, operation=operation),))
+                mode = "follow_demand" if operation == "supply_house" else "none"
+                offered = replace(contract(), intervals=(replace(row, operation=operation, supply_mode=mode),))
                 wire = contract_wire(offered)
                 restored = read_contract(wire)
                 self.assertEqual(restored, offered)
                 self.assertEqual(restored.intervals[0].charge_ac_mwh, 550_000)
                 account = admit_plan(Account(), restored, 0, StateObservation(0, 5_000_000, 'SOC'))
                 self.assertEqual(balance(account, QUARTER).reference_mwh, 5_500_000)
-        discharging = replace(row, operation='supply_house', charge_ac_mwh=0, discharge_ac_mwh=550_000,
+        discharging = replace(row, operation='supply_house', supply_mode='follow_demand', charge_ac_mwh=0, discharge_ac_mwh=550_000,
                              pv_mwh=0, export_mwh=300_000, stored_end_mwh=4_500_000)
         with self.assertRaisesRegex(ValueError, 'directional'):
-            replace(discharging, operation='hold')
+            replace(discharging, operation='hold', supply_mode='none')
 
     def test_recovery_cannot_escape_deadline_or_duplicate_headroom(self):
         r = Recovery("cheap-window", 0, QUARTER, 500_000, 2000, 0, "household", "nominal_first_then_earliest", "Same cheap window")
@@ -469,7 +470,7 @@ class ExecutionTests(unittest.TestCase):
     def test_scope_following_is_not_forecast_capped(self):
         row = replace(contract().intervals[0], operation="supply_house", target_kind="demand_following",
                       charge_ac_mwh=0, import_mwh=0, discharge_ac_mwh=250_000,
-                      charge_ac_limit_w=0, discharge_ac_limit_w=10000, follows_demand=True,
+                      charge_ac_limit_w=0, discharge_ac_limit_w=10000, supply_mode="follow_demand",
                       stored_end_mwh=4_750_000)
         plan = replace(contract(), intervals=(row,), objectives=())
         account = opening_account(plan)
@@ -499,7 +500,7 @@ class ExecutionTests(unittest.TestCase):
         # Fresh 17 October plan: 23.702 Wh of forecast solar in the partial
         # first quarter. After delivery, PV was already below house demand.
         row = ReferenceInterval(0, 382299, 2693920, 2717622,
-            'solar_charge', 'stored_energy', False, False, 8800, 9600, False,
+            'solar_charge', 'stored_energy', False, False, 8800, 9600, 'none', None, None, None,
             24949, 0, 140611, 115662, 0, 0, 0, 0, 0)
         plan = replace(contract(), capacity_mwh=18080000, maximum_mwh=18080000,
             intervals=(row,), valid_until_ms=row.end_ms,
@@ -610,7 +611,7 @@ class BasisReconciliationTests(unittest.TestCase):
     def test_live_reserve_increase_is_authoritative_without_changing_plan(self):
         plan=contract(increment=-250000)
         row=replace(plan.intervals[0],operation='supply_house',target_kind='demand_following',
-            charge_ac_mwh=0,discharge_ac_mwh=250000,import_mwh=0,charge_ac_limit_w=0,discharge_ac_limit_w=1000,follows_demand=True)
+            charge_ac_mwh=0,discharge_ac_mwh=250000,import_mwh=0,charge_ac_limit_w=0,discharge_ac_limit_w=1000,supply_mode="follow_demand")
         plan=replace(plan,intervals=(row,),objectives=(replace(plan.objectives[0],kind='demand_following'),))
         account=opening_account(plan,energy=5000000)
         live=LiveState(0,5000000,1000,0,1000,4000,4000,10000,10000,minimum_mwh=6000000)

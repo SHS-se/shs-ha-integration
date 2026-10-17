@@ -80,7 +80,7 @@ def _decode_execution(db, size, history_factory=None):
         count, first, last = db.execute(f'SELECT COUNT(*),MIN(ordinal),MAX(ordinal) FROM {name}').fetchone()
         if count != counts[name] or (count and last - first + 1 != count) or (count and name != 'traces' and first != 0):
             raise ValueError(f'Execution {name} differs from its committed count')
-    raw = json.loads(shell)
+    raw = execution.upgrade_persisted_contracts(json.loads(shell))
     captured = raw['captured_feedback']
     if captured is not None and not isinstance(captured, str):
         raise ValueError('Invalid captured planning request')
@@ -93,7 +93,7 @@ def _decode_execution(db, size, history_factory=None):
             'SELECT event_id,stream,direction,boundary,epoch,source_at_ms,total_mwh,receipt,physical_id FROM meters ORDER BY ordinal'))
         observations = tuple(execution.StateObservation(a, b, c, bool(d)) for a, b, c, d in db.execute(
             'SELECT at_ms,stored_mwh,source,measured FROM observations ORDER BY ordinal'))
-        histories = {name: tuple(decode_value(json.loads(row[0]), kind) for row in db.execute(
+        histories = {name: tuple(decode_value(execution.upgrade_persisted_contracts(json.loads(row[0])), kind) for row in db.execute(
             f'SELECT payload FROM {name} ORDER BY ordinal')) for name, kind in
             (('admissions', execution.Admission), ('reconciliations', execution.StateReconciliation))}
         account = replace(base.account, meters=meters, observations=observations, **histories)

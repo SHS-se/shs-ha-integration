@@ -23,6 +23,8 @@ class GatewayService:
         self.policy_revision = 0
         self.policy = None
         self.import_limit_w = None
+        # The connected app's promised battery supply; memory only, per session.
+        self.battery_cover = None
         self.active = False
         self.physical = None
         self.battery = None
@@ -66,6 +68,7 @@ class GatewayService:
         self.update_event.set()
         self.obligation_event.set()
         self.reconciliation = None
+        self.battery_cover = None
         if self.battery:
             self.battery.revoke()
         for request in self.pending.values():
@@ -180,6 +183,7 @@ FIELDS = {
     'battery_grant': {'identity', 'catalog', 'conversion', 'expires_at_ms'},
     'battery_route': {'effect', 'grant'},
     'battery_step': {'route_id', 'index', 'send'},
+    'battery_cover': {'offer'},
     'projection': {'value'},
     'requests': set(),
     'reply': {'request_id', 'result', 'error'},
@@ -295,6 +299,10 @@ class AppConnection(GatewayConnection):
             return await s.battery.grant(body['identity'], body['catalog'], body['conversion'], body['expires_at_ms'])
         if op == 'battery_route':
             return await s.battery.propose(body['effect'], body['grant'])
+        if op == 'battery_cover':
+            from .battery_mode import read_cover_offer
+            s.battery_cover = read_cover_offer(body['offer'])
+            return {}
         if op == 'battery_step':
             return await s.battery.step(body['route_id'], body['index'], body['send'])
         if op == 'projection':

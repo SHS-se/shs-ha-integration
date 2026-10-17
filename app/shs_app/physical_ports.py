@@ -55,17 +55,28 @@ class RemoteBattery:
         self.grant = None
         self.routes = {}
         self.enabled = False
+        self.cover = self.UNSENT
+
+    UNSENT = object()
 
     def revoke(self):
         self.enabled = False
         self.grant = None
         self.routes.clear()
+        # A new gateway session starts without any promise; publish it again.
+        self.cover = self.UNSENT
 
     def close(self):
         self.revoke()
 
     async def import_capacity(self):
         return await self.gateway.call('source', {'operation':'battery_capacity', 'body':{}})
+
+    async def publish_cover(self, offer):
+        """Publish the capped instruction's promise to the gateway's final admission."""
+        if offer != self.cover:
+            await self.gateway.call('battery_cover', {'offer': offer})
+            self.cover = offer
 
     def is_current(self, grant, identity):
         return bool(self.enabled and self.gateway.connected and grant and grant == self.grant and identity

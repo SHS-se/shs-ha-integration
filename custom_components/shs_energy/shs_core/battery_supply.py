@@ -51,6 +51,83 @@ class SupplyScope:
 
 
 @dataclass(frozen=True)
+class DemandLoad:
+    """A load the planner separated from base load: one device model key."""
+    key: str
+    name: str
+    category: str
+
+    def __post_init__(self):
+        if any(type(v) is not str or not v for v in (self.key, self.name, self.category)) or self.key.startswith("$"):
+            raise ValueError("demand loads need a device key, name and category")
+
+
+@dataclass(frozen=True)
+class DemandProfile:
+    id: str
+    include_base: bool
+    eligible_keys: tuple[str, ...]
+
+    def __post_init__(self):
+        if type(self.id) is not str or not self.id or type(self.include_base) is not bool:
+            raise ValueError("demand profile needs an identity and explicit base membership")
+        keys = self.eligible_keys
+        if type(keys) is not tuple or tuple(sorted(set(keys))) != keys or any(type(k) is not str or not k for k in keys):
+            raise ValueError("eligible keys must be unique and sorted")
+
+
+@dataclass(frozen=True)
+class ExecutionDemand:
+    """The plan's demand partition (contract v2). HA reads it; it never infers one.
+
+    Base load is house consumption minus every listed load; a profile's eligible
+    demand is base (when included) plus its eligible loads.
+    """
+    loads: tuple[DemandLoad, ...]
+    profiles: tuple[DemandProfile, ...]
+
+    def __post_init__(self):
+        keys = tuple(load.key for load in self.loads)
+        if keys != tuple(sorted(set(keys))):
+            raise ValueError("demand loads must be unique and sorted by key")
+        ids = [profile.id for profile in self.profiles]
+        if not ids or len(set(ids)) != len(ids):
+            raise ValueError("demand profiles need unique identities")
+        if any(not set(profile.eligible_keys) <= set(keys) for profile in self.profiles):
+            raise ValueError("a profile names a load the plan does not list")
+
+    @classmethod
+    def read(cls, value):
+        if type(value) is not dict or set(value) != {"loads", "profiles"}:
+            raise ValueError("unknown or missing demand fields")
+        if type(value["loads"]) is not list or type(value["profiles"]) is not list:
+            raise ValueError("demand loads and profiles must be arrays")
+        loads = []
+        for row in value["loads"]:
+            if type(row) is not dict or set(row) != {"key", "name", "category"}:
+                raise ValueError("unknown or missing demand load fields")
+            loads.append(DemandLoad(**row))
+        profiles = []
+        for row in value["profiles"]:
+            if type(row) is not dict or set(row) != {"id", "include_base", "eligible_keys"} or type(row["eligible_keys"]) is not list:
+                raise ValueError("unknown or missing demand profile fields")
+            profiles.append(DemandProfile(row["id"], row["include_base"], tuple(row["eligible_keys"])))
+        return cls(tuple(loads), tuple(profiles))
+
+    @property
+    def keys(self):
+        return tuple(load.key for load in self.loads)
+
+    def scope(self, profile_id):
+        """The profile as a supply scope over exactly this plan's listed loads."""
+        profile = next((p for p in self.profiles if p.id == profile_id), None)
+        if profile is None:
+            raise ValueError("interval names an unknown demand profile")
+        return SupplyScope.read({"kind": "selected", "include_base": profile.include_base,
+                                 "planned_device_keys": list(profile.eligible_keys)})
+
+
+@dataclass(frozen=True)
 class SupplyAccounting:
     house_w: float
     pv_w: float
@@ -143,7 +220,7 @@ def measured_supply(scope, house, pv, planned_readings, planned_keys, *, now_ms,
 
 
 def observe_supply(scope, options, devices, read_entity, *, at_ms, capture_lifetime_ms,
-                   boundary, membership_revision, expected_membership_revision):
+                   boundary, membership_revision, expected_membership_revision, members=None):
     """Resolve declared live bindings into one inspectable accounting result.
 
     `devices` is the acknowledged Included inventory. The host supplies its
@@ -172,8 +249,11 @@ def observe_supply(scope, options, devices, read_entity, *, at_ms, capture_lifet
             raise ValueError(f"{entity}: invalid physical power reading") from error
         return PowerReading(watts, entity, at_ms, at_ms + capture_lifetime_ms, boundary, reported_at_ms=report_ms)
 
-    planned = {d["key"]: d for d in devices if d.get("planning_role") == "controllable"
-               and d["key"] not in options.get("excluded_device_readings", [])}
+    # A v2 plan lists the loads it separated from base (`members`); only a v1
+    # plan leaves that membership to HA's own planned-device inventory.
+    planned = set(members) if members is not None else {
+        d["key"] for d in devices if d.get("planning_role") == "controllable"
+        and d["key"] not in options.get("excluded_device_readings", [])}
     required = required_power_keys(scope, planned)
     mappings = options.get("device_control_mappings", {})
     switches = planned_switch_bindings(options, devices)

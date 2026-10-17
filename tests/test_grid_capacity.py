@@ -105,6 +105,47 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ControlDeadlineError, 'house import capacity'):
             self.source.external_ready('ev', entity='number.ev', value=16.0)
 
+    def cover(self, **changes):
+        from shs_core.battery_mode import read_cover_offer
+        # Peak-shave instruction: base supplied, the car's meter excluded.
+        self.service.battery_cover = read_cover_offer({'import_target_w':15000, 'discharge_ac_max_w':9600,
+            'include_base':True, 'meters':['sensor.ev'], 'valid_until_ms':2**53-1, **changes})
+
+    async def test_peak_shave_promise_admits_the_increase_it_will_cover(self):
+        # Capture, 17 October 2026 (evening): nothing discharges below the
+        # target, so measured discharge alone could never admit the car's 16 A.
+        self.charging_car_at_minimum()
+        self.discharging(0)
+        self.cover()
+        self.assertTrue(self.source.external_ready('ev', entity='number.ev', value=16.0))
+        await self.native('ev-full', 'ev', 'number.ev', 'set_value', 16)
+        self.assertEqual(len(self.calls), 1)
+
+    async def test_promise_lapses_without_an_offer_validity_or_discharge_setting(self):
+        self.charging_car_at_minimum()
+        for case in ('none', 'expired', 'standby', 'outside_scope'):
+            with self.subTest(case=case):
+                self.discharging(0, mode='Standby' if case == 'standby' else 'Maximum Self Consumption')
+                if case == 'none':
+                    self.service.battery_cover = None
+                else:
+                    self.cover(**{'expired':{'valid_until_ms':0}, 'standby':{},
+                                  'outside_scope':{'include_base':False, 'meters':['sensor.ev']}}[case])
+                if case == 'outside_scope':
+                    # Only the car is eligible, at 3.45 kW measured: enough.
+                    # Shrink it below the 1.59 kW the increase needs.
+                    self.rows['sensor.ev']['state'] = '1000'
+                with self.assertRaisesRegex(ControlDeadlineError, 'house import capacity'):
+                    self.source.external_ready('ev', entity='number.ev', value=16.0)
+                self.rows['sensor.ev']['state'] = '3450'
+        self.assertFalse(self.calls)
+
+    async def test_app_disconnect_withdraws_the_promise(self):
+        self.charging_car_at_minimum()
+        self.cover()
+        self.service.revoke()
+        self.assertIsNone(self.service.battery_cover)
+
     async def test_pending_battery_stop_withdraws_credit_before_register_and_meter_respond(self):
         self.charging_car_at_minimum()
         self.discharging(3000)

@@ -105,7 +105,7 @@ class Rig:
         self.coordinator.battery_writer=self.fence
     def install_contract(self, generation=0, previous=None, start=10000, end=900000):
         row=ReferenceInterval(start,end,5000000,5000000+round(2000*(end-start)/3600),
-            'grid_charge','stored_energy',True,False,4000,0,False,
+            'grid_charge','stored_energy',True,False,4000,0,'none', None, None, None,
             round(2000*(end-start)/3600),0,0,round(1000*(end-start)/3600),round(2000*(end-start)/3600)+round(1000*(end-start)/3600),0,0,0,0)
         row=replace(row,rounding_mwh=row.import_mwh-row.load_mwh-row.charge_ac_mwh)
         contract=ExecutionContract('c'+str(generation),self.plan['plan_id'],generation,self.options['device_modes']['$battery'],
@@ -147,7 +147,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         start, end = r.now, original.valid_until_ms
         energy = lambda watts: round(watts * (end - start) / 3600)
         row = ReferenceInterval(start, end, 5000000, 5000000 + energy(95),
-            'solar_charge', 'stored_energy', False, False, 4000, 4000, False,
+            'solar_charge', 'stored_energy', False, False, 4000, 4000, 'none', None, None, None,
             energy(100), 0, energy(1100), energy(1000), 0, 0, 0, 0,
             energy(1100) - energy(1000) - energy(100))
         revised = replace(original, id='fresh-solar-contract', generation=captured['generation'],
@@ -699,6 +699,55 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(any(call[2]['entity_id']=='switch.pool' for call in r.calls))
                 finally:await r.runtime.close()
 
+    async def test_house_supply_measures_exactly_the_plans_listed_loads(self):
+        """Contract v2: base load is the house minus the plan's listed loads.
+
+        HA's own inventory neither adds nor removes a load: a device enrolled
+        after the plan stays in base, and a listed load HA does not plan is
+        still subtracted.
+        """
+        from shs_core.battery_supply import ExecutionDemand
+        r=Rig();r.add_pool()
+        for key,watts in (('ev',800),('heater',300),('tv',500)):
+            r.options['device_control_mappings'][key]={'power':'sensor.'+key}
+            r.rows['sensor.'+key]={'state':str(watts),'attributes':{'unit_of_measurement':'W','state_class':'measurement'},
+                                   'last_reported':iso(r.now)}
+        async def devices():
+            return [{'key':key,'planning_role':'controllable'} for key in ('ev','pool','tv')]
+        r.coordinator.async_battery_planned_devices=devices
+        await r.start()
+        try:
+            for _ in range(2):await r.advance(5000)
+            original=r.runtime.host.state.execution.account.contract
+            r.extend_plan()
+            r.now=900000
+            r.rows['sensor.soc']['state']='100'
+            r.rows['sensor.house']['state']='2800'
+            r.rows['sensor.grid']['state']='2800'
+            r.plan.pop('battery_supply_scope')
+            demand=ExecutionDemand.read({'loads':[{'key':key,'name':key,'category':'other'} for key in ('ev','heater','pool')],
+                                         'profiles':[{'id':'base+pool','include_base':True,'eligible_keys':['pool']}]})
+            row=ReferenceInterval(900000,1800000,10000000,9500000,
+                'supply_house','demand_following',False,False,0,4000,'follow_demand',None,None,'base+pool',
+                0,500000,0,700000,200000,0,0,0,0)
+            for value in r.rows.values():value['last_reported']=iso(r.now)
+            feedback=await r.runtime.capture_feedback(10000000,'full-battery')
+            contract=replace(original,id='v2-plan',generation=feedback['generation'],source_receipt=feedback['source_receipt'],
+                previous_contract_id=original.id,valid_until_ms=1800000,intervals=(row,),demand=demand,
+                objectives=(Objective('supply-house','demand_following',900000,1800000,0,'Supply current house demand'),),
+                dispositions=(Disposition(original.objectives[0].id,'retired',None,'Charging window finished'),))
+            r.plan['battery_execution']=contract_wire(contract)
+            for _ in range(5):
+                for value in r.rows.values():value['last_reported']=iso(r.now)
+                await r.runtime.refresh();await r.runtime.host.idle()
+                r.now+=5000
+            status=r.runtime.snapshot()
+            self.assertEqual(status['accepted_reference_id'],contract.id,status)
+            self.assertEqual(status['measurements']['eligible_gross_w'],2800-800-300)
+            self.assertIn('sensor.heater',r.runtime.capture_entities())
+            self.assertNotIn('sensor.tv',r.runtime.capture_entities())
+        finally:await r.runtime.close()
+
     async def test_charging_to_house_supply_ignores_stale_selected_pool_readings(self):
         r=Rig();r.add_pool()
         r.options['device_control_mappings']['ev']={'power':'sensor.ev'}
@@ -725,7 +774,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             r.rows['sensor.pool']['last_reported']=iso(0)
             r.plan['battery_supply_scope']={'kind':'selected','include_base':True,'planned_device_keys':['pool']}
             row=ReferenceInterval(900000,1800000,10000000,9500000,
-                'supply_house','demand_following',False,False,0,4000,True,
+                'supply_house','demand_following',False,False,0,4000,'follow_demand', None, None, None,
                 0,500000,0,700000,200000,0,0,0,0)
             for entity,value in r.rows.items():
                 if entity!='sensor.pool':value['last_reported']=iso(r.now)
@@ -1036,7 +1085,7 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             captured=await r.runtime.capture_feedback(5000000,'snapshot')
             last=original.intervals[-1]
             supply=ReferenceInterval(last.end_ms,1800000,last.stored_end_mwh,last.stored_end_mwh-500000,
-                'supply_house','demand_following',False,False,4000,4000,True,
+                'supply_house','demand_following',False,False,4000,4000,'follow_demand', None, None, None,
                 0,500000,0,500000,0,0,0,0,0)
             proposed=replace(original,id='late-but-usable',generation=captured['generation'],
                 source_receipt=captured['source_receipt'],previous_contract_id=original.id,valid_until_ms=1800000,

@@ -30,6 +30,8 @@ from .shs_core.grid_capacity import (battery_released, required_import, import_l
     empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, observe_setting_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, battery_discharge_ceiling, CHARGING_MODES)
 from .shs_core.device_commands import actuator_targets
 from .shs_core.operating_modes import device_mode
+from .shs_core.battery_mode import promised_credit_w
+from .shs_core.battery_supply import proportional_supply
 from .shs_core.command_transport import CommandTransport
 from .shs_core.controller_inputs import ControllerInputs
 from .shs_core.device_gateway import DeviceGateway
@@ -569,27 +571,29 @@ class HomeAssistantSource:
     def admit_import(self, effect):
         limit = import_limit(self.service.import_limit_w)
         demand = self.import_required(effect=effect)
-        credit = self.discharge_credit(effect)
+        credit = self.discharge_credit(effect, demand)
         required = max(0.0, demand-credit)
         if required > limit:
             detail = f' after {credit:.0f} W battery discharge' if credit else ''
             raise ControlDeadlineError(f'Waiting for house import capacity: {required:.0f} W required{detail}, {limit:.0f} W house limit')
 
-    def discharge_credit(self, effect=None):
-        """AC supply from measured battery discharge, credited as the plan does.
+    def discharge_credit(self, effect=None, import_after_w=0.0):
+        """AC battery supply admission credits, as the plan's grid balance does.
 
-        User requirement, 17 October 2026. Only the controlled battery earns it,
-        and never beyond the discharge ceiling of its native, journalled or
-        proposed settings: a pending stop withdraws it before the meter responds.
+        Measured discharge counts (user requirement, 17 October 2026). While the
+        connected app publishes a capped instruction's promise, the discharge it
+        promises for the import being admitted counts too (17 October, evening).
+        Only the controlled battery earns either, never beyond the discharge
+        ceiling of its native, journalled or proposed settings: a pending stop
+        or charging setting withdraws credit before the meter responds.
         """
         battery = self.service.battery
-        if battery.installation is None or device_mode(self.options(), 'battery') != 'controlling':
+        options = self.options()
+        if battery.installation is None or device_mode(options, 'battery') != 'controlling':
             return 0.0
         _, _, conversion, installed = battery.installation
         sensor = installed['battery_power_measurement_entity']
         measured, _ = power(self.report(sensor), source=sensor, signed=True)
-        if measured >= 0:
-            return 0.0
         mode, limit = installed['battery_mode_entity'], installed['battery_discharge_limit_entity']
         unit = self.report(limit)['attributes']['unit_of_measurement']
         controls = {key:(self.report(key)['state'] if key == mode else _current(self.report(key)['state']))
@@ -601,7 +605,18 @@ class HomeAssistantSource:
             settings += [effect['controls'], {**controls, effect['changed']:effect['controls'][effect['changed']]}]
         ceiling = min(battery_discharge_ceiling(values[mode], _current(values[limit])*(1000 if unit == 'kW' else 1))
                       for values in settings)
-        return conversion.discharge.output(min(-measured, ceiling))
+        credit = conversion.discharge.output(min(max(0.0, -measured), ceiling))
+        offer = self.service.battery_cover
+        if offer is None or datetime.now(timezone.utc).timestamp() * 1000 >= offer['valid_until_ms']:
+            return credit
+        house, _ = power(self.report(options['house_consumption_power_entity']), source=options['house_consumption_power_entity'])
+        pv, _ = power(self.report(options['solar_production_power_entity']), source=options['solar_production_power_entity'])
+        loads = sum(power(self.report(meter), source=meter)[0] for meter in offer['meters'])
+        eligible = min(house, max(0.0, house - loads if offer['include_base'] else loads))
+        bound = proportional_supply(house, pv, eligible).house_supply_bound_w
+        return max(credit, promised_credit_w(import_after_w=max(0.0, import_after_w),
+            import_target_w=offer['import_target_w'], eligible_bound_w=bound,
+            discharge_ceiling_ac_w=min(offer['discharge_ac_max_w'], conversion.discharge.output(ceiling))))
 
     def import_required(self, *, effect=None, exclude_device=None):
         options = self.options()

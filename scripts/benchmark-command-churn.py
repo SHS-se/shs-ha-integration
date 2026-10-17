@@ -101,7 +101,7 @@ async def replay():
             contract = ex.read_contract(rig.plan['battery_execution'])
             row = replace(contract.intervals[0], operation='supply_house', target_kind='demand_following',
                 charge_ac_mwh=0, import_mwh=0, discharge_ac_mwh=contract.intervals[0].load_mwh,
-                charge_ac_limit_w=0, discharge_ac_limit_w=4000, follows_demand=True,
+                charge_ac_limit_w=0, discharge_ac_limit_w=4000, supply_mode="follow_demand",
                 stored_end_mwh=4800000, rounding_mwh=0)
             rig.plan['battery_execution'] = ex.contract_wire(replace(contract, intervals=(row,), objectives=()))
             mirror.install_snapshot(dict(configuration={'home':'benchmark'}, through=0,
@@ -134,7 +134,7 @@ async def replay():
                     charge_ac_mwh=0, discharge_ac_mwh=row.load_mwh, pv_mwh=0,
                     import_mwh=0, export_mwh=0, curtailed_mwh=0, unserved_mwh=0, rounding_mwh=0,
                     charge_ac_limit_w=0, discharge_ac_limit_w=state.authority.plant.discharge_max_w,
-                    follows_demand=True) for row in old.intervals)
+                    supply_mode="follow_demand") for row in old.intervals)
                 contract=replace(old,id='benchmark-demand',generation=account.requested_generation,
                     previous_contract_id=old.id,source_receipt=account.receipt,intervals=rows)
                 runtime.host.state=replace(state,execution=replace(state.execution,account=account))

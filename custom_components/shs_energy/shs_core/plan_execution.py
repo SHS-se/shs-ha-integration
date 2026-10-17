@@ -17,9 +17,11 @@ from sys import intern
 from typing import Optional
 
 from .battery_conversion import Conversion
-from .battery_supply import proportional_supply
+from .battery_mode import SUPPLY_MODES, supply_request_ac_w
+from .battery_supply import ExecutionDemand, proportional_supply
 
 SCHEMA = "battery-plan-execution-v1"
+SCHEMA_V2 = "battery-plan-execution-v2"
 
 
 def _integer(value, *, minimum=None):
@@ -75,7 +77,12 @@ class ReferenceInterval:
     export_allowed: bool
     charge_ac_limit_w: int
     discharge_ac_limit_w: int
-    follows_demand: bool
+    # How supply responds to live demand (contract v2; a v1 row is
+    # follow_demand or a fixed figure equal to its ceiling). `none` off supply.
+    supply_mode: str
+    discharge_ac_w: Optional[int]
+    import_target_w: Optional[int]
+    profile_id: Optional[str]
     charge_ac_mwh: int
     discharge_ac_mwh: int
     pv_mwh: int
@@ -92,6 +99,8 @@ class ReferenceInterval:
             if isinstance(value, str):
                 object.__setattr__(self, name, intern(value))
         for key, value in asdict(self).items():
+            if value is None and key in ("discharge_ac_w", "import_target_w"):
+                continue
             if key.endswith("_ms") or key.endswith("_mwh") or key.endswith("_w"):
                 _integer(value, minimum=None if key == "rounding_mwh" else 0)
         if self.end_ms <= self.start_ms:
@@ -100,8 +109,20 @@ class ReferenceInterval:
             raise ValueError("unsupported nominal battery role")
         if self.target_kind not in ("stored_energy", "demand_following", "permission"):
             raise ValueError("target, forecast and permission must be distinguished")
-        if any(type(v) is not bool for v in (self.grid_charge_allowed, self.export_allowed, self.follows_demand)):
+        if any(type(v) is not bool for v in (self.grid_charge_allowed, self.export_allowed)):
             raise ValueError("explicit source/export permissions required")
+        if self.supply_mode not in SUPPLY_MODES or (self.supply_mode != "none") != (self.operation == "supply_house"):
+            raise ValueError("household supply needs exactly one stated response")
+        if (self.supply_mode == "fixed") != (self.discharge_ac_w is not None):
+            raise ValueError("only a fixed response states a discharge figure")
+        if self.supply_mode in ("none", "follow_demand") and self.import_target_w is not None:
+            raise ValueError("only a capped response defends an import target")
+        if self.supply_mode == "import_target" and self.import_target_w is None:
+            raise ValueError("an import-target response needs its target")
+        if self.discharge_ac_w is not None and self.discharge_ac_w > self.discharge_ac_limit_w:
+            raise ValueError("fixed discharge exceeds its stated ceiling")
+        if self.profile_id is not None:
+            _text(self.profile_id)
         if self.operation == "grid_charge" and not self.grid_charge_allowed:
             raise ValueError("nominal operation lacks grid permission")
         if self.operation == "export" and not self.export_allowed:
@@ -208,10 +229,21 @@ class ExecutionContract:
     objectives: tuple[Objective, ...]
     recovery: tuple[Recovery, ...]
     dispositions: tuple[Disposition, ...]
+    # The plan's demand partition (v2). A v1 contract left it to the plan's
+    # separate supply scope and HA's planned-device inventory.
+    demand: Optional[ExecutionDemand] = None
 
     def __post_init__(self):
         for value in (self.id, self.plan_id, self.scope_revision, self.model_revision):
             _text(value)
+        profiles = {p.id for p in self.demand.profiles} if self.demand is not None else set()
+        for row in self.intervals:
+            supplies = row.operation in ("supply_house", "export")
+            if self.demand is None and row.profile_id is not None:
+                raise ValueError("a v1 reference cannot name demand profiles")
+            if self.demand is not None and (supplies != (row.profile_id is not None)
+                                            or supplies and row.profile_id not in profiles):
+                raise ValueError("every supplying interval names one of the plan's demand profiles")
         if self.energy_basis != "stored_energy_mwh" or self.mode not in ("controlling", "control_verification"):
             raise ValueError("unsupported accounting basis or execution mode")
         for value in (self.generation, self.capacity_mwh, self.minimum_mwh, self.maximum_mwh, self.export_reserve_mwh, self.valid_until_ms, self.source_receipt):
@@ -253,28 +285,146 @@ class ExecutionContract:
     def interval(self, at_ms):
         return next((r for r in self.intervals if r.start_ms <= at_ms < min(r.end_ms, self.valid_until_ms)), None)
 
+    def supply_scope(self, row):
+        """The interval's supply scope and the plan's listed loads; None for v1."""
+        if self.demand is None or row is None or row.profile_id is None:
+            return None
+        return self.demand.scope(row.profile_id), self.demand.keys
+
     def stored_at(self, at_ms):
         if not self.intervals[0].start_ms <= at_ms <= self.intervals[-1].end_ms:
             raise ValueError("reference does not cover accounting instant")
         return next(r for r in self.intervals if at_ms <= r.end_ms).stored_at(at_ms)
 
 
+_V1_FIELDS = "schema id plan_id generation mode scope_revision model_revision energy_basis capacity_mwh minimum_mwh maximum_mwh export_reserve_mwh valid_until_ms source_receipt previous_contract_id intervals objectives recovery dispositions"
+_V1_INTERVAL = ("start_ms end_ms stored_start_mwh stored_end_mwh operation target_kind grid_charge_allowed export_allowed "
+                "charge_ac_limit_w discharge_ac_limit_w follows_demand charge_ac_mwh discharge_ac_mwh pv_mwh load_mwh "
+                "import_mwh export_mwh curtailed_mwh unserved_mwh rounding_mwh")
+_ACCOUNT = "charge_ac_mwh discharge_ac_mwh pv_mwh load_mwh import_mwh export_mwh curtailed_mwh unserved_mwh rounding_mwh"
+_V2_INTERVAL = "start_ms end_ms stored_start_mwh stored_end_mwh target_kind instruction " + _ACCOUNT
+_INSTRUCTIONS = {
+    "idle": "kind", "hold": "kind charge_ac_limit_w", "solar_charge": "kind charge_ac_limit_w",
+    "grid_charge": "kind charge_ac_w", "export": "kind profile_id discharge_ac_w",
+    "supply": "kind profile_id charge_ac_limit_w discharge_ac_limit_w response",
+}
+_RESPONSES = {"follow_demand": "mode", "import_target": "mode import_target_w",
+              "fixed": "mode discharge_ac_w import_target_w"}
+
+
+def _v1_interval(value):
+    row = dict(_fields(value, _V1_INTERVAL))
+    follows = row.pop("follows_demand")
+    if type(follows) is not bool:
+        raise ValueError("explicit demand-following flag required")
+    supplying = row["operation"] == "supply_house"
+    mode = ("follow_demand" if follows else "fixed") if supplying else "none"
+    return ReferenceInterval(**row, supply_mode=mode,
+                             discharge_ac_w=row["discharge_ac_limit_w"] if mode == "fixed" else None,
+                             import_target_w=None, profile_id=None)
+
+
+def _v2_interval(value):
+    row = dict(_fields(value, _V2_INTERVAL))
+    instruction = row.pop("instruction")
+    kind = instruction.get("kind") if type(instruction) is dict else None
+    if kind not in _INSTRUCTIONS:
+        raise ValueError("unsupported battery instruction")
+    _fields(instruction, _INSTRUCTIONS[kind])
+    role = {"idle": "idle", "hold": "hold", "solar_charge": "solar_charge", "grid_charge": "grid_charge",
+            "supply": "supply_house", "export": "export"}[kind]
+    charge = instruction.get("charge_ac_w", instruction.get("charge_ac_limit_w", 0))
+    discharge = instruction.get("discharge_ac_w") if kind == "export" else instruction.get("discharge_ac_limit_w", 0)
+    mode, fixed, target = "none", None, None
+    if kind == "supply":
+        response = instruction["response"]
+        mode = response.get("mode") if type(response) is dict else None
+        if mode not in _RESPONSES:
+            raise ValueError("unsupported supply response")
+        _fields(response, _RESPONSES[mode])
+        fixed, target = response.get("discharge_ac_w"), response.get("import_target_w")
+        if mode == "fixed" and fixed is None:
+            raise ValueError("a fixed response needs its discharge figure")
+    return ReferenceInterval(**row, operation=role, grid_charge_allowed=kind == "grid_charge",
+                             export_allowed=kind == "export", charge_ac_limit_w=charge, discharge_ac_limit_w=discharge,
+                             supply_mode=mode, discharge_ac_w=fixed, import_target_w=target,
+                             profile_id=instruction.get("profile_id"))
+
+
 def read_contract(value):
-    raw = dict(_fields(value, "schema id plan_id generation mode scope_revision model_revision energy_basis capacity_mwh minimum_mwh maximum_mwh export_reserve_mwh valid_until_ms source_receipt previous_contract_id intervals objectives recovery dispositions"))
-    if raw.pop("schema") != SCHEMA:
+    schema = value.get("schema") if type(value) is dict else None
+    if schema not in (SCHEMA, SCHEMA_V2):
         raise ValueError("unsupported execution contract; no legacy translation")
-    for field, cls in (("intervals", ReferenceInterval), ("objectives", Objective), ("recovery", Recovery), ("dispositions", Disposition)):
+    raw = dict(_fields(value, _V1_FIELDS + (" demand" if schema == SCHEMA_V2 else "")))
+    raw.pop("schema")
+    raw["demand"] = ExecutionDemand.read(raw["demand"]) if schema == SCHEMA_V2 else None
+    for field, cls in (("intervals", None), ("objectives", Objective), ("recovery", Recovery), ("dispositions", Disposition)):
         if type(raw[field]) is not list:
             raise ValueError("execution records must be arrays")
-        raw[field] = tuple(cls(**_fields(v, " ".join(cls.__dataclass_fields__))) for v in raw[field])
+        if cls is None:
+            raw[field] = tuple((_v2_interval if schema == SCHEMA_V2 else _v1_interval)(v) for v in raw[field])
+        else:
+            raw[field] = tuple(cls(**_fields(v, " ".join(cls.__dataclass_fields__))) for v in raw[field])
     return ExecutionContract(**raw)
 
 
+def upgrade_persisted_contracts(raw):
+    """One-way, idempotent upgrade of persisted v1-shaped contract records.
+
+    A stored v1 interval keeps exactly its meaning: `follows_demand` follows
+    demand, any other household supply is a fixed figure equal to its ceiling.
+    A stored contract predating the plan's demand partition has none.
+    """
+    if isinstance(raw, list):
+        return [upgrade_persisted_contracts(v) for v in raw]
+    if not isinstance(raw, dict):
+        return raw
+    value = {k: upgrade_persisted_contracts(v) for k, v in raw.items()}
+    if value.get("type") == "ReferenceInterval" and "follows_demand" in value:
+        follows = value.pop("follows_demand")
+        mode = ("follow_demand" if follows else "fixed") if value.get("operation") == "supply_house" else "none"
+        value.update(supply_mode=mode, discharge_ac_w=value["discharge_ac_limit_w"] if mode == "fixed" else None,
+                     import_target_w=None, profile_id=None)
+    if value.get("type") == "ExecutionContract" and "demand" not in value:
+        value["demand"] = None
+    return value
+
+
+def _instruction_wire(row):
+    if row.operation == "supply_house":
+        response = {"mode": row.supply_mode}
+        if row.supply_mode == "fixed":
+            response["discharge_ac_w"] = row.discharge_ac_w
+        if row.supply_mode in ("fixed", "import_target"):
+            response["import_target_w"] = row.import_target_w
+        return {"kind": "supply", "profile_id": row.profile_id, "charge_ac_limit_w": row.charge_ac_limit_w,
+                "discharge_ac_limit_w": row.discharge_ac_limit_w, "response": response}
+    if row.operation == "export":
+        return {"kind": "export", "profile_id": row.profile_id, "discharge_ac_w": row.discharge_ac_limit_w}
+    if row.operation == "grid_charge":
+        return {"kind": "grid_charge", "charge_ac_w": row.charge_ac_limit_w}
+    if row.operation == "idle":
+        return {"kind": "idle"}
+    return {"kind": row.operation, "charge_ac_limit_w": row.charge_ac_limit_w}
+
+
 def contract_wire(contract):
-    value = asdict(contract)
-    for field in ("intervals", "objectives", "recovery", "dispositions"):
+    """The wire form the planner would have sent for this contract."""
+    value = {k: v for k, v in asdict(contract).items() if k != "demand"}
+    for field in ("objectives", "recovery", "dispositions"):
         value[field] = list(value[field])
-    return {"schema": SCHEMA, **value}
+    timing = "start_ms end_ms stored_start_mwh stored_end_mwh target_kind".split() + _ACCOUNT.split()
+    if contract.demand is None:
+        def v1(row):
+            if row.supply_mode == "fixed" and (row.import_target_w is not None or row.discharge_ac_w != row.discharge_ac_limit_w):
+                raise ValueError("a v1 reference cannot state an import target or separate fixed figure")
+            names = [n for n in _V1_INTERVAL.split() if n != "follows_demand"]
+            return {**{n: getattr(row, n) for n in names}, "follows_demand": row.supply_mode == "follow_demand"}
+        return {"schema": SCHEMA, **value, "intervals": [v1(row) for row in contract.intervals]}
+    demand = {"loads": [asdict(load) for load in contract.demand.loads],
+              "profiles": [{**asdict(p), "eligible_keys": list(p.eligible_keys)} for p in contract.demand.profiles]}
+    intervals = [{**{n: getattr(row, n) for n in timing}, "instruction": _instruction_wire(row)} for row in contract.intervals]
+    return {"schema": SCHEMA_V2, **value, "intervals": intervals, "demand": demand}
 
 
 @dataclass(frozen=True, slots=True)
@@ -1092,7 +1242,14 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
         if operation == "export" and not (row.export_allowed and live.export_allowed):
             operation, reason, replan = "hold", "export_restricted", "export_permission_changed"
         else:
-            ac = scope if row.follows_demand else min(scope, row.discharge_ac_limit_w)
+            if operation == "supply_house":
+                ac = min(row.discharge_ac_limit_w, supply_request_ac_w(row.supply_mode, eligible_bound_w=scope,
+                    discharge_ac_w=row.discharge_ac_w, import_target_w=row.import_target_w,
+                    house_w=live.house_w, pv_w=live.pv_w, pending_import_w=live.pending_import_w))
+                if row.supply_mode == "fixed" and ac > row.discharge_ac_w:
+                    reason = "import_limit_support"
+            else:
+                ac = min(scope, row.discharge_ac_limit_w)
             if operation == "export":
                 # The native export ceiling includes house supply. PV export
                 # already present consumes the physical export limit first.
@@ -1148,6 +1305,8 @@ def explain_execution(account: Account, live: LiveState, assessment: Assessment,
         status = "The planned charge level has been reached"
     elif assessment.reason == "import_headroom_reduced":
         status = "Charging is reduced to leave enough power for your home"
+    elif assessment.reason == "import_limit_support":
+        status = "Supplying more than planned to keep the house within its import limit"
     now = f"Your home is using {live.house_w / 1000:.2f} kW. Solar is providing {live.pv_w / 1000:.2f} kW."
     if measured_battery_dc_w is None:
         now += " Waiting for a battery power reading."
@@ -1183,5 +1342,12 @@ def explain_execution(account: Account, live: LiveState, assessment: Assessment,
     if contract:
         objective = next((o for o in contract.objectives if o.kind == "stored_energy" and o.start_ms <= live.at_ms < o.deadline_ms), None)
         deadline = objective.deadline_ms if objective else None
-    return {"status": status, "plan": plans[row.operation] if row else "Waiting for a current battery plan.",
+    plan = plans[row.operation] if row else "Waiting for a current battery plan."
+    if row and row.supply_mode == "import_target":
+        plan = f"The plan is to cover demand above {row.import_target_w / 1000:.2f} kW of grid import from the battery."
+    elif row and row.supply_mode == "fixed":
+        plan = f"The plan is to supply {row.discharge_ac_w / 1000:.2f} kW from the battery"
+        plan += (f", more if needed to keep grid import within {row.import_target_w / 1000:.2f} kW."
+                 if row.import_target_w is not None else ".")
+    return {"status": status, "plan": plan,
             "now": now, "difference": difference, "next": next_action, "deadline_ms": deadline}

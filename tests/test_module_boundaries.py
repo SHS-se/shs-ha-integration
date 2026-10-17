@@ -35,7 +35,7 @@ PURE_MODULES = (
     "shs_core.household", "shs_core.household_ports", "shs_core.app_projection", "shs_core.native_commands", "shs_core.controller_inputs", "shs_core.device_ownership", "shs_core.command_journal", "shs_core.command_transport",
     "shs_core.battery_commands", "shs_core.operating_modes", "shs_core.verification",
     "shs_core.home_runtime", "shs_core.home_runtime_checkpoint", "shs_core.energy_ledger", "shs_core.runtime_json",
-    "shs_core.battery_supply", "shs_core.home_host", "shs_core.battery_native_adapter",
+    "shs_core.battery_supply", "shs_core.battery_mode", "shs_core.home_host", "shs_core.battery_native_adapter",
     "shs_core.controller", "shs_core.battery_live", "shs_core.battery_writer", "shs_core.battery_runtime", "shs_core.battery_conversion",
     "shs_core.presentation", "shs_core.plan_execution", "shs_core.battery_physical", "shs_core.execution_storage", "execution_migration",
     "shs_core.api_contract", "shs_core.durable_record", "shs_core.verification_storage",

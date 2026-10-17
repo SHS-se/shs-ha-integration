@@ -35,7 +35,7 @@ def encode(value):return json.dumps(value,separators=(',',':'),allow_nan=False)
 def decode_row(name,row):
     if name=='meters':return ex.MeterReceipt(*row)
     if name=='observations':return ex.StateObservation(row[0],row[1],row[2],bool(row[3]))
-    return decode_value(json.loads(row[0]),KINDS[name])
+    return decode_value(ex.upgrade_persisted_contracts(json.loads(row[0])),KINDS[name])
 
 
 def columns(name):

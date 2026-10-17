@@ -68,6 +68,21 @@ def plan_scope(options):
     """
     return digest({k:v for k,v in options.items() if k!='device_modes' and k not in METADATA_KEYS})
 
+def v1_supply_scope(plan, slot):
+    """A v1 plan's separate scope, with its hot-water permission applied."""
+    scope_wire = plan['battery_supply_scope']
+    if plan.get('capabilities', {}).get('boiler'):
+        allowed = slot['boiler_battery_allowed']
+        if type(allowed) is not bool:
+            raise ValueError('Hot-water battery permission is required')
+        if not allowed:
+            water_keys = {d['key'] for d in plan['device_models'] if d.get('category') == 'hot_water'}
+            if scope_wire['kind'] != 'selected':
+                raise ValueError('Hot water requires an explicit battery supply partition')
+            scope_wire = {**scope_wire, 'planned_device_keys': [key for key in scope_wire['planned_device_keys'] if key not in water_keys]}
+    return SupplyScope.read(scope_wire)
+
+
 def plan_contract(plan):
     """Read this plan's battery reference without granting command authority."""
     contract = execution.read_contract(plan['battery_execution'])
@@ -643,18 +658,18 @@ class BatteryRuntime:
             self._notify_planning('execution_contract_required')
             return
         contract=plan_contract(plan)
-        scope_wire = plan['battery_supply_scope']
-        if plan.get('capabilities', {}).get('boiler'):
-            allowed = slot['boiler_battery_allowed']
-            if type(allowed) is not bool:
-                raise ValueError('Hot-water battery permission is required')
-            if not allowed:
-                water_keys = {d['key'] for d in plan['device_models'] if d.get('category') == 'hot_water'}
-                if scope_wire['kind'] != 'selected':
-                    raise ValueError('Hot water requires an explicit battery supply partition')
-                scope_wire = {**scope_wire, 'planned_device_keys': [key for key in scope_wire['planned_device_keys'] if key not in water_keys]}
-        scope=SupplyScope.read(scope_wire)
+        planned_scope=contract.supply_scope(contract.interval(self.now()))
+        if planned_scope is not None:
+            # Contract v2: the plan states the demand and each interval's
+            # profile. HA neither reads its own inventory nor rewrites hot water.
+            scope=planned_scope[0]
+        elif contract.demand is not None:
+            # A v2 interval that does not supply names no profile.
+            scope=SupplyScope('none')
+        else:
+            scope=v1_supply_scope(plan,slot)
         capacity=ratings['battery_capacity_kwh']
+
         cc=min(ratings['battery_charge_max_w'],surface['limits']['charge']['maximum_w'])
         dc=min(ratings['battery_discharge_max_w'],surface['limits']['discharge']['maximum_w'])
         if (cc,dc)!=(ratings['battery_charge_max_w'],ratings['battery_discharge_max_w']):
@@ -731,6 +746,8 @@ class BatteryRuntime:
             if self.host.state.execution.account.contract==contract:
                 self._notify_planning(None)  # Publish actual admission without requesting another plan.
         await self.host.accept(rt.Tick())
+        if getattr(self.physical,'publish_cover',None) is not None:
+            await self.physical.publish_cover(self._cover_offer())
         session=self.host.state.execution
         self._status=({'state':'controlling' if mode=='controlling' else 'verified',
             'reason':'Following the battery plan' if mode=='controlling' else 'Testing the plan; battery settings are not being changed'}
@@ -900,8 +917,10 @@ class BatteryRuntime:
         # This is a local response window, not a sensor report-age gate. Expiry
         # changes the capture identity even when every source is unchanged.
         self._external_pending={key:until for key,until in self._external_pending.items() if now<until}
+        scope,members=self._supply_now(now)
         capture=digest({'reports':reports,'authority':asdict(self.host.state.authority.identity),
-            'pending':self._external_pending,'native_capacity':self._native_capacity})
+            'pending':self._external_pending,'native_capacity':self._native_capacity,
+            'supply':[asdict(scope),members]})
         if capture==self._last_capture:
             conditions=self.host.state.conditions
             if conditions and conditions.valid_until_ms>now+CAPTURE_LIFETIME_MS//2:
@@ -911,8 +930,9 @@ class BatteryRuntime:
             raise ValueError('native control metadata changed')
         source=source_revision(options,self._devices)
         try:
-            accounting,evidence=observe_supply(self._scope,options,self._devices,reports.get,at_ms=now,capture_lifetime_ms=CAPTURE_LIFETIME_MS,
-                boundary='configured_household_reported_power',membership_revision=source,expected_membership_revision=self._model_sources)
+            accounting,evidence=observe_supply(scope,options,self._devices,reports.get,at_ms=now,capture_lifetime_ms=CAPTURE_LIFETIME_MS,
+                boundary='configured_household_reported_power',membership_revision=source,expected_membership_revision=self._model_sources,
+                members=members)
         except ValueError as error:
             raise BatteryPowerReadingError(str(error)) from error
         battery,_=power(reports[options['battery_power_measurement_entity']],source=options['battery_power_measurement_entity'],signed=True)
@@ -955,7 +975,8 @@ class BatteryRuntime:
         authority=state.authority
         native_demand=self._native_capacity['external_import_w'] if self._native_capacity is not None else 0
         import_limit=min(authority.plant.import_limit_w,self._native_capacity['import_limit_w']) if self._native_capacity is not None else authority.plant.import_limit_w
-        observed=rt.Observed(group_id,rt.Observation(revision,now,valid,controls,(),envelope))
+        observed=rt.Observed(group_id,rt.Observation(revision,now,valid,controls,
+            ((rt.DISCHARGE_MEASUREMENT,max(0.0,-battery)),),envelope))
         # Gross nonbattery load is a conservative import frame. PV is included
         # separately as possible export, and never erased by a planned device.
         frame=rt.FrameObserved(rt.Frame(revision,now,valid,
@@ -975,10 +996,54 @@ class BatteryRuntime:
         self._last_capture=capture
         return (rt.MeasurementsReceived(observed,frame.frame,conditions.conditions),)
 
+    def _supply_now(self,now):
+        """The accepted plan's demand profile at this instant, over its listed loads.
+
+        A v1 contract keeps its plan-level scope and HA's planned inventory.
+        """
+        contract=self.host.state.execution.account.contract if self.host else None
+        if contract is None or contract.demand is None:
+            return self._scope,None
+        planned=contract.supply_scope(contract.interval(now))
+        return planned if planned is not None else (SupplyScope('none'),contract.demand.keys)
+
+    def _cover_offer(self):
+        """The capped instruction's promise for the gateway's final admission.
+
+        Only an active v2 execution above its storage reserve promises supply;
+        any other state withdraws the promise, which only blocks increases.
+        """
+        state=self.host.state if self.host else None
+        session=state.execution if state else None
+        contract=session.account.contract if session else None
+        now=self.now()
+        row=contract.interval(now) if contract else None
+        conditions=state.conditions if state else None
+        if (row is None or row.import_target_w is None or contract.demand is None or session.status!='active'
+                or conditions is None or conditions.energy_kwh<=state.authority.plant.cutoff_kwh):
+            return None
+        scope,members=contract.supply_scope(row)
+        mappings=self._options.get('device_control_mappings',{})
+        meters=[mappings.get(key,{}).get('power') for key in required_power_keys(scope,members)]
+        if any(not isinstance(meter,str) for meter in meters):
+            return None
+        return {'import_target_w':row.import_target_w,'discharge_ac_max_w':row.discharge_ac_limit_w,
+                'include_base':scope.include_base,'meters':sorted(set(meters)),
+                'valid_until_ms':min(row.end_ms,contract.valid_until_ms)}
+
     def capture_entities(self):
         """The exact dependencies used by the complete-frame acceptance below."""
-        planned=planned_power_bindings(self._options,self._devices)
-        required=required_power_keys(self._scope,planned)
+        contract=self.host.state.execution.account.contract if self.host else None
+        if contract is not None and contract.demand is not None:
+            # Every profile's meters: the current interval may change profile.
+            mappings=self._options.get('device_control_mappings',{})
+            members=contract.demand.keys
+            planned={key:mappings.get(key,{}).get('power') for key in members}
+            required={key for profile in contract.demand.profiles
+                      for key in required_power_keys(contract.demand.scope(profile.id),members)}
+        else:
+            planned=planned_power_bindings(self._options,self._devices)
+            required=required_power_keys(self._scope,planned)
         switches=planned_switch_bindings(self._options,self._devices)
         return set(self._control_entities())|{planned.get(key) for key in required}|{entity for key in required for entity in switches.get(key,())}|{self._options.get(key) for key in
             ('house_consumption_power_entity','solar_production_power_entity','battery_power_measurement_entity','battery_soc_entity','grid_power_entity')}

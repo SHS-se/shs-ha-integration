@@ -1116,7 +1116,8 @@ def validate_plan_contract(plan: Any, now: datetime) -> None:
         if start is None or (previous is not None and start < previous + timedelta(minutes=15)):
             raise OptimisationInputError("optimisation plan has invalid or overlapping slot times")
         previous = start
-    if plan["schema_version"] == 9:
+    if plan["schema_version"] >= 9:
+        # Schema 10 keeps this envelope; its battery contract states the demand.
         scope = plan.get("operating_scope")
         if (not isinstance(scope, dict) or not isinstance(scope.get("modes"), dict)
                 or any(not isinstance(owner, str) or mode not in
@@ -1124,7 +1125,7 @@ def validate_plan_contract(plan: Any, now: datetime) -> None:
                        for owner, mode in scope["modes"].items())):
             raise OptimisationInputError("plan operating modes are invalid")
         execution = plan.get("execution_plan")
-        if (not isinstance(execution, dict) or execution.get("schema_version") == 9
+        if (not isinstance(execution, dict) or execution.get("schema_version") in (9, 10)
                 or "execution_plan" in execution):
             raise OptimisationInputError("plan requires a self-contained execution plan")
         if any(execution.get(key) != plan.get(key) for key in ("plan_id", "snapshot_id")):
