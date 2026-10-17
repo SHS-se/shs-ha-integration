@@ -8,6 +8,8 @@ EV_WATTS_PER_AMP = EU_AC_PHASE_COUNT * EU_AC_PHASE_VOLTAGE
 CHARGING_MODES = frozenset(('Command Charging (PV First)', 'Command Charging (Grid First)'))
 NON_GRID_MODES = frozenset(('Standby', 'Maximum Self Consumption',
     'Command Discharging (PV First)', 'Command Discharging (Battery First)'))
+DISCHARGE_MODES = frozenset(('Maximum Self Consumption',
+    'Command Discharging (PV First)', 'Command Discharging (Battery First)'))
 
 
 def battery_import_bound(mode, ceiling_w, maximum_w, conversion):
@@ -18,6 +20,11 @@ def battery_import_bound(mode, ceiling_w, maximum_w, conversion):
     # A valid but unsupported automatic mode has no commissioned no-import
     # promise. Reserve its rating rather than interpreting it as idle.
     return conversion.grid_charge.input(maximum_w)
+
+
+def battery_discharge_ceiling(mode, ceiling_w):
+    """DC discharge a native setting permits; other modes promise none."""
+    return ceiling_w if mode in DISCHARGE_MODES else 0.0
 
 
 def import_limit(value):
@@ -50,7 +57,8 @@ def required_import(house_w, devices):
     """Union each measured load with its bound; sum independent partitions.
 
     Gross house demand excludes battery charging, whose measured partition is
-    zero here. Solar and battery supply provide no discretionary import credit.
+    zero here. Solar supplies no import credit; admission subtracts measured
+    battery discharge separately, as the planner's grid balance does.
     """
     values = [house_w, *(watts for pair in devices for watts in pair)]
     if any(not isfinite(v) or v < 0 for v in values):

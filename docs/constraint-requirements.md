@@ -104,3 +104,8 @@ and limited fit observations do not create warning banners. Keep their evidence
 in diagnostics and informational logs. Operational failures, including an
 unavailable savings comparison, remain visible. Forecast quality is separate
 from device permissions and plan admission.
+
+User requirement, 17 October 2026: house import admission credits the
+controlled battery's measured discharge, as the planner's grid balance does.
+Solar production earns no credit. See
+[house import safety](house-import-safety-2026-10.md#one-physical-admission-boundary).

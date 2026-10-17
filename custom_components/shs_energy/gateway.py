@@ -27,7 +27,7 @@ from .shs_core.battery_gateway import BatteryGateway
 from .shs_core.battery_native_adapter import SigenAdapter
 from .shs_core.native_readings import power
 from .shs_core.grid_capacity import (battery_released, required_import, import_limit,
-    empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, observe_setting_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, CHARGING_MODES)
+    empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, observe_setting_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, battery_discharge_ceiling, CHARGING_MODES)
 from .shs_core.device_commands import actuator_targets
 from .shs_core.operating_modes import device_mode
 from .shs_core.command_transport import CommandTransport
@@ -564,10 +564,44 @@ class HomeAssistantSource:
             reducing = False
         if reducing:
             return
-        required = self.import_required(effect=effect)
+        self.admit_import(effect)
+
+    def admit_import(self, effect):
         limit = import_limit(self.service.import_limit_w)
+        demand = self.import_required(effect=effect)
+        credit = self.discharge_credit(effect)
+        required = max(0.0, demand-credit)
         if required > limit:
-            raise ControlDeadlineError(f'Waiting for house import capacity: {required:.0f} W required, {limit:.0f} W house limit')
+            detail = f' after {credit:.0f} W battery discharge' if credit else ''
+            raise ControlDeadlineError(f'Waiting for house import capacity: {required:.0f} W required{detail}, {limit:.0f} W house limit')
+
+    def discharge_credit(self, effect=None):
+        """AC supply from measured battery discharge, credited as the plan does.
+
+        User requirement, 17 October 2026. Only the controlled battery earns it,
+        and never beyond the discharge ceiling of its native, journalled or
+        proposed settings: a pending stop withdraws it before the meter responds.
+        """
+        battery = self.service.battery
+        if battery.installation is None or device_mode(self.options(), 'battery') != 'controlling':
+            return 0.0
+        _, _, conversion, installed = battery.installation
+        sensor = installed['battery_power_measurement_entity']
+        measured, _ = power(self.report(sensor), source=sensor, signed=True)
+        if measured >= 0:
+            return 0.0
+        mode, limit = installed['battery_mode_entity'], installed['battery_discharge_limit_entity']
+        unit = self.report(limit)['attributes']['unit_of_measurement']
+        controls = {key:(self.report(key)['state'] if key == mode else _current(self.report(key)['state']))
+                    for key in (mode, installed['battery_charge_limit_entity'], limit)}
+        row = self.capacity['devices'].get(capacity_key('battery', controls), {})
+        settings = [controls, *(d['controls'] for d in [*row.get('effects', {}).values(),
+                    *([row['settled']] if row.get('settled') else [])])]
+        if effect is not None and effect['logical'] == 'battery':
+            settings += [effect['controls'], {**controls, effect['changed']:effect['controls'][effect['changed']]}]
+        ceiling = min(battery_discharge_ceiling(values[mode], _current(values[limit])*(1000 if unit == 'kW' else 1))
+                      for values in settings)
+        return conversion.discharge.output(min(-measured, ceiling))
 
     def import_required(self, *, effect=None, exclude_device=None):
         options = self.options()
@@ -646,11 +680,7 @@ class HomeAssistantSource:
         battery = self.service.battery
         try:
             if entity is not None:
-                limit = import_limit(self.service.import_limit_w)
-                effect = self.describe_import(device, entity, value)
-                required = self.import_required(effect=effect)
-                if required > limit:
-                    raise ControlDeadlineError(f'Waiting for house import capacity: {required:.0f} W required, {limit:.0f} W house limit')
+                self.admit_import(self.describe_import(device, entity, value))
             return battery.installation is None or battery_released(battery.installation[3], self.report)
         except (ControlDeadlineError, GridCapacityConfigurationError, ControlObservationError):
             raise

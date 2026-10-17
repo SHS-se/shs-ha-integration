@@ -54,6 +54,68 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ControlDeadlineError, 'house import capacity'):
             self.source.external_ready('ev', entity='switch.ev', value='on')
 
+    def charging_car_at_minimum(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        self.rows['sensor.house']['state'] = '9000'
+        self.rows['switch.ev']['state'] = 'on'
+        self.rows['number.ev']['state'] = '5'
+        self.rows['sensor.ev']['state'] = '3450'
+
+    def discharging(self, watts, *, mode='Maximum Self Consumption', ceiling_kw='4'):
+        self.rows['select.mode']['state'] = mode
+        self.rows['number.discharge']['state'] = ceiling_kw
+        self.rows['sensor.battery']['state'] = str(-watts)
+
+    async def test_measured_battery_discharge_is_credited_as_the_plan_expects(self):
+        # Capture, 17 October 2026: the selected plan raised the car to 16 A
+        # while the battery discharged to keep import under the 15 kW limit.
+        # Gross demand alone exceeds it; the discharge credit admits the plan.
+        self.charging_car_at_minimum()
+        effect = self.source.describe_import('ev', 'number.ev', 16.0)
+        self.assertEqual(self.source.import_required(effect=effect), 16590)
+        self.discharging(3000)
+        self.assertEqual(self.source.discharge_credit(), self.conversion.discharge.output(3000))
+        self.assertTrue(self.source.external_ready('ev', entity='number.ev', value=16.0))
+        await self.native('ev-full', 'ev', 'number.ev', 'set_value', 16)
+        self.assertEqual(len(self.calls), 1)
+
+    async def test_discharge_credit_never_exceeds_the_native_discharge_ceiling(self):
+        self.charging_car_at_minimum()
+        self.discharging(3000, ceiling_kw='1')
+        credit = self.conversion.discharge.output(1000)
+        self.assertEqual(self.source.discharge_credit(), credit)
+        with self.assertRaisesRegex(ControlDeadlineError, f'after {credit:.0f} W battery discharge'):
+            await self.native('ev-full', 'ev', 'number.ev', 'set_value', 16)
+        self.assertFalse(self.calls)
+
+    async def test_only_a_controlled_discharging_battery_earns_credit(self):
+        self.charging_car_at_minimum()
+        for mode in ('Standby', 'Command Charging (PV First)'):
+            with self.subTest(mode=mode):
+                self.discharging(3000, mode=mode)
+                self.assertEqual(self.source.discharge_credit(), 0)
+        self.discharging(-500)
+        self.assertEqual(self.source.discharge_credit(), 0)
+        self.discharging(3000)
+        options = self.source.configuration.options()
+        options['device_modes']['$battery'] = 'monitoring'
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.assertEqual(self.source.discharge_credit(), 0)
+        with self.assertRaisesRegex(ControlDeadlineError, 'house import capacity'):
+            self.source.external_ready('ev', entity='number.ev', value=16.0)
+
+    async def test_pending_battery_stop_withdraws_credit_before_register_and_meter_respond(self):
+        self.charging_car_at_minimum()
+        self.discharging(3000)
+        await self.native('battery-stop', 'battery', 'number.discharge', 'set_value', 0)
+        self.assertEqual(len(self.calls), 1)
+        # The register still reads 4 kW and the meter still shows discharge.
+        self.assertEqual(self.source.discharge_credit(), 0)
+        with self.assertRaisesRegex(ControlDeadlineError, 'house import capacity'):
+            await self.native('ev-full', 'ev', 'number.ev', 'set_value', 16)
+        self.assertEqual(len(self.calls), 1)
+
     async def native(self, identity, device, entity, service, value=None):
         await self.physical.native_executor.execute(
             Command(identity, 'controller', device, 'plan', NativeAction(entity,service,value)),
