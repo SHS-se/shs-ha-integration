@@ -55,6 +55,18 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         report['current']['configuration']['device_modes'].clear()
         self.assertTrue(self.options['device_modes'])
 
+    async def test_export_includes_the_shared_accuracy_report_and_its_calculations(self):
+        self.assertEqual(controller_diagnostics(self.controller, self.panel())['forecast_accuracy'],
+                         {'report': None, 'error': None})
+        report = {'version': 1, 'historical': {'percentage': 0, 'devices': []},
+                  'calculations': [{'key': 'battery', 'historical': {'actual_kwh': 22.8, 'absolute_error_kwh': 42.7}}]}
+        self.coordinator.forecast_accuracy = report
+        self.coordinator.forecast_accuracy_error = None
+        exported = controller_diagnostics(self.controller, self.panel())['forecast_accuracy']
+        self.assertEqual(exported, {'report': report, 'error': None})
+        exported['report']['calculations'].clear()
+        self.assertEqual(len(report['calculations']), 1)
+
     async def test_live_and_simulated_commands_are_separate_and_persisted(self):
         self.options['device_modes'] = {'$ev': 'controlling', '$pool': 'control_verification'}
         await self.controller.async_start()

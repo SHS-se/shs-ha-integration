@@ -103,6 +103,9 @@ def controller_diagnostics(controller, panel):
             "failed_samples_this_session": controller.diagnostics_failed_samples,
         },
         controller_metrics=controller.metrics.snapshot(),
+        # The cloud's latest twice-daily report, with its per-component calculations.
+        forecast_accuracy={"report": deepcopy(getattr(controller.coordinator, "forecast_accuracy", None)),
+                           "error": getattr(controller.coordinator, "forecast_accuracy_error", None)},
     )
     runtime = getattr(controller, "battery_runtime", None)
     if runtime is not None:
