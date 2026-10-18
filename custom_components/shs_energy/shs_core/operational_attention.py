@@ -67,6 +67,10 @@ def execution_attention(controllers, battery, devices):
     if battery.get('planning_error'):
         results.append(pipeline_issue('failure_report',battery['planning_error'],key='battery-planning'))
     for key, status in {**controllers, 'battery':battery}.items():
+        if status.get('mode') not in (None, 'controlling') and status.get('holding') is False:
+            # Monitoring and Verification change nothing, so no plan execution can be blocked.
+            # A device SHS still holds after leaving Controlling keeps its alarms.
+            continue
         failed = (status.get('state') in ('fault','unsupported','limited')
                   or status.get('execution_blocked') or status.get('plan_rejection')
                   or status.get('command_state') in ('physical_scope_blocked','native_guard_blocked','attempt_limit','journal_fault'))

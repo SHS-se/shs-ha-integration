@@ -154,6 +154,13 @@ class ScheduledController(DeviceOperations):
         if device == "pool" and self.ownership.retired_pool_temperature_settings:
             details["retired_temperature_settings"] = deepcopy(self.ownership.retired_pool_temperature_settings)
             details["control_notice"] = "Old temperature control has been removed. Check the heater's own temperature settings; SHS now only uses its switch."
+        if device != "battery":
+            # Attention reads these to tell a blocked plan from a device SHS is not operating.
+            try:
+                details["mode"] = device_mode(self.active_options or self.options(), device)
+            except ValueError:
+                details["mode"] = None
+            details["holding"] = device in self.ownership.records
         value = {"state": state, **details}
         if self.status.get(device) == value:
             return

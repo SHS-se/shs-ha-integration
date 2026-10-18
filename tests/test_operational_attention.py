@@ -17,6 +17,21 @@ class OperationalAttentionTests(unittest.TestCase):
         battery.update(command_state='physical_scope_blocked')
         self.assertIn('grid capacity',execution_attention(reports,battery,[])[0]['detail'])
 
+    def test_only_controlling_or_still_held_devices_raise_execution_alarms(self):
+        failures=({'state':'fault','reason':'x'},{'state':'limited','reason':'x'},{'state':'idle','reason':'x','execution_blocked':True},
+                  {'state':'verified','reason':'x','plan_rejection':{'reason':'x'}},{'state':'pending','reason':'x','command_state':'attempt_limit'})
+        for failure in failures:
+            for mode in ('monitoring','control_verification'):
+                with self.subTest(failure=failure,mode=mode):
+                    self.assertEqual(execution_attention({'device:a':{**failure,'mode':mode,'holding':False}},{},[]),[])
+                    self.assertEqual(execution_attention({},{**failure,'mode':mode,'holding':False},[]),[])
+                    # A failed handover leaves SHS holding the device: that is still an alarm.
+                    self.assertTrue(execution_attention({'device:a':{**failure,'mode':mode,'holding':True}},{},[]))
+                    # Unknown ownership never hides a failure.
+                    self.assertTrue(execution_attention({'device:a':{**failure,'mode':mode}},{},[]))
+            with self.subTest(failure=failure,mode='controlling'):
+                self.assertTrue(execution_attention({'device:a':{**failure,'mode':'controlling','holding':False}},{},[]))
+
     def test_a_rejected_battery_update_remains_visible_with_an_accepted_reference(self):
         battery={'state':'controlling','accepted_plan_id':'previous',
                  'plan_rejection':{'reason':'Execution contract did not match the request'}}

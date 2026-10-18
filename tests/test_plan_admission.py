@@ -6,6 +6,8 @@ from pathlib import Path
 import unittest
 
 import test_device_commands as device_fixtures
+import test_controller as controller_fixtures
+from shs_core.verification import VerificationJournal
 from shs_core.optimisation import validate_plan_contract, OptimisationInputError, discrete_current_control
 from shs_core.presentation import operational_status, timeline
 from shs_core.operational_attention import execution_attention
@@ -120,6 +122,27 @@ class DeviceCommandIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(status['execution_blocked'])
         self.assertFalse(any(i['key']=='controller:device:broken'
                              for i in execution_attention(self.controller.status, {}, [])))
+
+    async def test_verification_fault_is_not_an_execution_alarm_until_controlling(self):
+        mapping = self.options['device_control_mappings']['heater']
+        mapping.update(control_type='setpoint', setpoint_entity_id='number.target')
+        self.states['number.target'] = device_fixtures.State(40, min=30, max=60, step=.5, unit_of_measurement='°C')
+        self.coordinator.optimisation_plan['device_models'][0]['control_type'] = 'setpoint'
+        self.coordinator.async_cached_device_configuration.return_value[0]['control_type'] = 'setpoint'
+        self.slot['device_commands']['heater'] = {'type':'setpoint', 'target_c':45, 'minimum_c':40, 'maximum_c':55}
+        self.options['device_modes']['heater'] = 'control_verification'
+        self.controller.verification = VerificationJournal(controller_fixtures.Store(), controller_fixtures.Store())
+        await self.controller.async_start()
+        status = self.controller.status['device:heater']
+        self.assertEqual(status['state'], 'fault')
+        self.assertIn('reviewed minimum and maximum temperatures are required', status['reason'])
+        self.assertEqual((status['mode'], status['holding']), ('control_verification', False))
+        self.assertFalse(any(i['key']=='controller:device:heater'
+                             for i in execution_attention(self.controller.status, {}, [])))
+        self.options['device_modes']['heater'] = 'controlling'
+        await self.controller.async_tick()
+        self.assertTrue(any(i['key']=='controller:device:heater'
+                            for i in execution_attention(self.controller.status, {}, [])))
 
     async def test_configured_temperature_bounds_replace_static_room_range(self):
         mapping = self.options['device_control_mappings']['heater']

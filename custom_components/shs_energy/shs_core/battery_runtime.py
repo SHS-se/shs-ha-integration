@@ -249,7 +249,7 @@ class BatteryRuntime:
             return self._plan_status(value, self._bootstrap_rejection, self._bootstrap.contract)
         state=self.host.state;group=state.groups[0];session=state.execution
         accounting_at,accounting=self._accounting(session.account,include_evidence)
-        value.update(command_state=group.status,mode=group.mode,execution_state=session.status,
+        value.update(command_state=group.status,mode=group.mode,holding=group.owned,execution_state=session.status,
             accounting_at_ms=accounting_at,
             pending_writes=sum(a.stage!="accepted" for a in group.attempts),native_target=dict(group.desired.target) if group.desired else None,
             accounting=accounting,
