@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from .api_contract import INTEGRATION_VERSION
 from .controller_metrics import ControllerMetrics
 from .device_operations import (DeviceOperations, ControlDeadlineError, ControlObservationError, PowerHistoryError,
-                                correction_details, EXTERNAL_CHANGE)
+                                correction_details)
 from .device_ownership import DeviceOwnership
 from .operating_modes import device_mode
 from .hot_water import HotWaterConfigurationError
@@ -136,8 +136,6 @@ class DeviceGateway(DeviceOperations):
             raise GatewayConflict('Local device control permission is absent')
         if self.restoring:
             return
-        if self.device in self.ownership.overrides:
-            raise GatewayConflict(self.ownership.overrides[self.device])
         options = self.options()
         if self.device.startswith('device:'):
             key = self.device.removeprefix('device:')
@@ -186,10 +184,6 @@ class DeviceGateway(DeviceOperations):
         async with self.lock:
             options = self.options()
             changed = False
-            for device in tuple(self.ownership.overrides):
-                if device_mode(options, device) != 'controlling':
-                    del self.ownership.overrides[device]
-                    changed = True
             for device, record in tuple(self.ownership.records.items()):
                 if device == 'battery' and device_mode(options, device) == 'control_verification':
                     # A pre-runtime battery record holds no settings to return:

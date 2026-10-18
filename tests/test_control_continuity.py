@@ -12,6 +12,10 @@ and ask the user; do not edit the expectations.
 
 15 October 2026: the user explicitly removed source-age rejection. Available
 old readings retain control; release and no-write assertions still apply.
+
+18 October 2026: the user explicitly required SHS to own a Controlling device:
+a change made outside SHS is switched back instead of latching the device as
+overridden. Release and handover assertions are unchanged.
 """
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -96,21 +100,22 @@ class GenericDeviceTests(Continuity):
         self.assertNotIn('device:heater', self.controller.ownership.overrides)
         self.assertEqual(self.calls, [])
 
-    async def test_a_genuine_external_change_latches_until_the_select_leaves_controlling(self):
+    async def test_a_genuine_external_change_is_switched_back_without_releasing(self):
         await self.start()
         self.states['switch.heater'] = State('on')
         await self.controller.async_tick()
-        self.assertEqual(self.status()['state'], 'overridden', self.status())
-        self.assertEqual(self.calls, [], 'the manual setting is left alone')
+        self.assertEqual(self.status()['state'], 'commanded', self.status())
+        self.assertEqual(self.status()['reverted_external_change'], {'switch.heater': 'on'})
+        self.assertEqual(self.calls, [('switch.heater', 'off')], 'SHS switches it back, never hands it back')
+        self.assertNotIn('device:heater', self.controller.ownership.overrides)
+        self.calls.clear()
         await self.controller.async_tick()
-        self.assertEqual(self.status()['state'], 'overridden')
+        self.assertEqual(self.calls, [])
+        self.assertNotIn('reverted_external_change', self.status())
+        # The select still hands the device back to the baseline captured first.
         self.options['device_modes']['heater'] = 'control_verification'
         await self.controller.async_tick()
-        self.assertNotIn('device:heater', self.controller.ownership.overrides)
-        self.options['device_modes']['heater'] = 'controlling'
-        await self.controller.async_tick()
-        self.assertEqual(self.status()['state'], 'commanded', self.status())
-        self.assertEqual(self.calls, [('switch.heater', 'off')])
+        self.assertEqual(self.calls, [('switch.heater', 'on')])
 
     async def test_a_restart_keeps_the_last_setting_and_resumes_without_handing_back(self):
         await self.start()

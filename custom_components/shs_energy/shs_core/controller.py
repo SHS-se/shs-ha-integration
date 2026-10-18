@@ -31,7 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 from .device_operations import (DeviceOperations, ControlObservationError, ActuatorUnavailableError,
     PlanChangedError, ControlDeadlineError, correction_details, checked_state, battery_limit_value,
     DEVICES, CONFIRM_SECONDS,
-    OBSERVATION_GRACE_SECONDS, EXTERNAL_CHANGE)
+    OBSERVATION_GRACE_SECONDS)
 
 
 class ScheduledController(DeviceOperations):
@@ -185,14 +185,12 @@ class ScheduledController(DeviceOperations):
 
         These are the only reasons SHS hands a device back: its execution-mode
         select, the website or local choices that remove it from that select
-        (demotion, exclusion, a disabled system), a manual override the user
-        configured for the purpose, and an external change that stays latched
-        until the select leaves Controlling. An override entity that cannot be
-        read raises instead, so it holds rather than releases.
+        (demotion, exclusion, a disabled system) and a manual override the user
+        configured for the purpose. A change made outside SHS is not one: SHS
+        switches it back. An override entity that cannot be read raises
+        instead, so it holds rather than releases.
         """
         mode = device_mode(options, device)
-        if device in self.ownership.overrides:
-            return {"state": "overridden", "reason": self.ownership.overrides[device]}
         if mode not in EXECUTING_MODES:
             return {"state": mode, "reason": "Observing only; no SHS commands" if mode == "monitoring" else
                     "Planning only; no SHS commands or command verification"}
@@ -508,12 +506,6 @@ class ScheduledController(DeviceOperations):
                 devices = None
             if self.devices is not None:
                 self.adopt_ownership(await self.devices.synchronize(requested))
-            else:
-                for device in tuple(self.ownership.overrides):
-                    # Leaving Controlling on the select clears an external-change latch.
-                    if device_mode(options, device) != "controlling":
-                        del self.ownership.overrides[device]
-                        await self.save()
             # Hash shared inputs once, excluding unused future-plan slots.
             metrics_context = fingerprint({
                 "options": options, "slot": slot,

@@ -19,10 +19,13 @@ def decode_ownership(value):
                 or type(record.get('options')) is not dict or type(record.get('originals')) is not dict
                 or any(type(entity) is not str or not entity for entity in record['originals'])):
             raise ValueError('Invalid captured device settings')
-    overrides = deepcopy(value.get('overrides', {}))
+    overrides = value.get('overrides', {})
     if any(type(key) is not str or type(reason) is not str for key, reason in overrides.items()):
         raise ValueError('Invalid device override record')
-    return records, overrides, deepcopy(value.get('retired_pool_temperature_settings', {}))
+    # Overrides held only external-change latches. SHS now switches such a
+    # change back (user requirement, 18 October 2026), so a journalled latch
+    # is discarded and the device resumes Controlling.
+    return records, {}, deepcopy(value.get('retired_pool_temperature_settings', {}))
 
 
 class DeviceOwnership:

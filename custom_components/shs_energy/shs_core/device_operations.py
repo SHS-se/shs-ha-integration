@@ -28,7 +28,6 @@ DEVICES = ("battery", "ev", "pool")
 CONFIRM_SECONDS = 15
 # Restarts and reconnects hide an entity for about a minute; longer needs attention.
 OBSERVATION_GRACE_SECONDS = 5 * 60
-EXTERNAL_CHANGE = "Actuator changed outside SHS; set this device to Verification and back to Controlling to resume"
 
 
 class ControlObservationError(ValueError):
@@ -315,7 +314,6 @@ class DeviceOperations:
                         changed.add(entity)
                 if changed:
                     record["externally_changed"] = sorted(changed)
-                    self.ownership.overrides[device] = EXTERNAL_CHANGE
                     await self.save()
                 for entity, value in original.items():
                     if entity not in record.get("externally_changed", []):
@@ -531,17 +529,16 @@ class DeviceOperations:
             raise ValueError("actuator is assigned to a system controller")
         self.check_targets(device, targets)
         record = self.ownership.records.get(device)
-        if record:
-            for entity in record.get("last_commands", {}):
-                # Unavailable is unknown, never an external change.
-                self.actuator_state(entity)
-            changed = [entity for entity, value in record.get("last_commands", {}).items() if not self.matches(entity, value)]
-            if changed:
-                record["externally_changed"] = changed
-                self.ownership.overrides[device] = EXTERNAL_CHANGE
-                await self.save()
-                await self.restore(device)
-                return {"state": "overridden", "reason": self.ownership.overrides[device]}
+        commanded = dict(record.get("last_commands", {})) if record else {}
+        for entity in commanded:
+            # Unavailable is unknown, never an external change.
+            self.actuator_state(entity)
+        # SHS owns a Controlling device (user requirement, 18 October 2026): a
+        # setting changed outside SHS is switched back by the commands below, in
+        # the evaluation the actuator's own state change starts. It never
+        # suspends control or hands the device back.
+        outside = {entity: self.state(entity).state for entity, value in commanded.items()
+                   if not self.matches(entity, value)}
         values = {}
         demand = None
         water = is_hot_water(next(m for m in models if m["key"] == key))
@@ -577,8 +574,16 @@ class DeviceOperations:
                 permission = self.actuator_state(targets[0]).state
                 if permission not in ("on", "off"):
                     raise ValueError("Hot-water permission switch must report on or off")
-                on = heating_permission(command["permitted"], permission == "on", demand)
+                # Only heating SHS permitted may finish; a switch turned on
+                # outside SHS during an inhibition is switched back off.
+                permitted = permission == "on" and commanded.get(targets[0], "on") == "on"
+                on = heating_permission(command["permitted"], permitted, demand)
             values = {entity: "on" if on else "off" for entity in targets}
+        reverted = {entity: state for entity, state in outside.items()
+                    if entity in values and not self.matches(entity, values[entity])}
+        if reverted and not self.verifying:
+            _LOGGER.warning("%s: switching back %s, changed outside SHS", device,
+                            ", ".join(f"{entity} ({state})" for entity, state in reverted.items()))
         record = await self.capture(device, options, targets)
         for entity, value in values.items():
             await self.command(entity, value)
@@ -591,8 +596,12 @@ class DeviceOperations:
             decision = {"kind": kind, "permitted": on}
             if demand is not None:
                 decision.update(heater_power_w=demand, planned_permitted=command["permitted"], finishing_heating=on and not command["permitted"])
-        return {"state": "commanded", "reason": "actuator targets acknowledged; delivered heat or power is not inferred",
-                "decision": decision}
+        result = {"state": "commanded", "reason": "actuator targets acknowledged; delivered heat or power is not inferred",
+                  "decision": decision}
+        if reverted:
+            result.update(reason="Switched back after a change outside SHS; " + result["reason"],
+                          reverted_external_change=reverted)
+        return result
 
     def preview_state(self, entity):
         """Read real HA state without scheduling observations or changing journals."""

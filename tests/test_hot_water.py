@@ -73,6 +73,30 @@ class HotWaterTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.assertEqual(self.states['switch.heater'].state, 'off')
 
+    async def test_heating_switched_on_outside_shs_during_an_inhibition_is_switched_back_off(self):
+        # 18 October 2026: another automation turned the boiler on outside its
+        # allowance; its draw is not heating SHS permitted, so it cannot finish.
+        self.states['sensor.water_power'].state = '0'
+        await self.controller.async_start()
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+        self.states['switch.heater'].state = 'on'
+        self.states['sensor.water_power'].state = '3000'
+        self.calls.clear()
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [('switch.heater', 'off')])
+        status = self.controller.status['device:heater']
+        self.assertEqual(status['state'], 'commanded', status)
+        self.assertEqual(status['reverted_external_change'], {'switch.heater': 'on'})
+        self.assertFalse(status['decision']['finishing_heating'])
+
+    async def test_permission_switched_off_outside_shs_is_switched_back_on(self):
+        self.slot['device_commands']['heater']['permitted'] = True
+        await self.controller.async_start()
+        self.states['switch.heater'].state = 'off'
+        self.calls.clear()
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [('switch.heater', 'on')])
+
     async def test_new_allow_resumes_permission(self):
         self.states['sensor.water_power'].state = '0'
         await self.controller.async_start()

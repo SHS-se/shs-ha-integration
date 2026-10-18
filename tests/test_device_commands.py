@@ -42,16 +42,27 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.heater'].state, 'on')
         self.assertEqual(self.controller.status['device:heater']['state'], 'disabled')
 
-    async def test_external_change_is_preserved_and_suspension_survives_restart(self):
+    async def test_external_change_is_switched_back_and_ownership_survives_restart(self):
         await self.controller.async_start()
         self.states['switch.heater'].state = 'on'
         await self.controller.async_tick()
-        self.assertEqual(self.controller.status['device:heater']['state'], 'overridden')
-        self.assertEqual(self.states['switch.heater'].state, 'on')
+        self.assertEqual(self.controller.status['device:heater']['state'], 'commanded')
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+        self.assertEqual(self.controller.ownership.records['device:heater']['originals'], {'switch.heater': 'on'})
+        self.states['switch.heater'].state = 'on'
         other = ScheduledController(controller_inputs(self.hass), self.coordinator, self.store, lambda: deepcopy(self.options), native_executor=native_executor(self.hass))
         await other.async_start()
-        self.assertEqual(other.status['device:heater']['state'], 'overridden')
-        self.assertEqual(self.states['switch.heater'].state, 'on')
+        self.assertEqual(other.status['device:heater']['state'], 'commanded')
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+
+    async def test_a_journalled_external_change_latch_is_discarded_and_control_resumes(self):
+        # Before 18 October 2026 an external change latched the device and handed it back.
+        self.store.saved = {'records': {}, 'overrides': {'device:heater':
+            'Actuator changed outside SHS; set this device to Verification and back to Controlling to resume'}}
+        await self.controller.async_start()
+        self.assertEqual(self.controller.ownership.overrides, {})
+        self.assertEqual(self.controller.status['device:heater']['state'], 'commanded')
+        self.assertEqual(self.states['switch.heater'].state, 'off')
 
     async def test_expiry_and_schema_six_do_not_infer_commands_from_watts(self):
         await self.controller.async_start()

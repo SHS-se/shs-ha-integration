@@ -40,10 +40,22 @@ Returning the select to Controlling before then cancels it.
 Verification itself writes no schedule. The handover is the one write that
 leaving Controlling causes, and Verification starts after it.
 
-A genuine external change (the actuator is available but not in the state SHS
-commanded) latches the device as `overridden`. SHS sends nothing and leaves the
-manual setting alone. Setting the select to Verification clears the latch;
-Controlling then resumes from the current state.
+## Changes made outside SHS are switched back
+
+User requirement, 18 October 2026: SHS owns a device in Controlling and is
+event driven. A genuine external change (the actuator is available but not in
+the state SHS last commanded, for example another automation switching the
+water boiler) is switched back to the planned state in the evaluation that the
+actuator's own state change starts. It is neither a release nor a hold: SHS does
+not hand the device back, keeps the baseline it captured first, and reports the
+reverted entities as `reverted_external_change` on the device status with a
+warning in the log. For hot water, only heating SHS permitted may finish after
+an inhibition starts; heating switched on outside SHS is switched off again.
+
+To operate a device by hand, use what releases it: the select or a configured
+manual-override entity. This supersedes the earlier `overridden` latch, which
+left the manual setting alone and handed the rest of the device back; a latch
+journalled by an older version is discarded on load and control resumes.
 
 ## What never releases
 
@@ -154,6 +166,7 @@ record so that it is not reimplemented differently again.
 | 25 September 2026 (`7c5453a`) | The minimum-run-time work changed Controlling → Verification to relinquish a device without handing it back, for every device and the battery, and rewrote the continuity tests to expect that. No requirement asked for it, and this document and `ha-execution-mode-entities.md` kept describing the handover. The restore path already waits for a minimum run, so the change was not needed for that feature. |
 | 27 September 2026 (`014a18e`) | The move of the runtime into the app added a Home Assistant handback of the battery whenever its writer was lost: an app restart or dropped socket, an HA stop, a settings revision, an expired grant. Ordinary devices kept their continuity. Nothing tested the battery against the rule. |
 | 3 October 2026 | A one-second preparation timeout closed the app's gateway session at most quarter-hour boundaries, and the handback above flipped the battery to Maximum Self Consumption and back each time. The user restated the rule: only a control-mode change releases a device, the battery included, and Controlling → Verification hands it back. Both halves were restored for every device (`e97b71a`, `3649055`, `a2be5e3`, `909f5d0` and the commit adding this section). |
+| 18 October 2026 | Another automation (Node-RED) kept switching the water boiler on outside its allowance. SHS latched the boiler as `overridden` 3 seconds after its first planned stop and stopped commanding it for the rest of the day. The user required SHS to own Controlling devices and switch external changes back; the latch was removed. Releases are unchanged. |
 
 What to take from it:
 
