@@ -111,6 +111,16 @@ class DeviceCommandIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status['device:broken']['state'], 'idle')
         self.assertTrue(self.controller.status['device:broken']['execution_blocked'])
 
+    async def test_missing_device_command_in_verification_is_not_an_execution_alarm(self):
+        del self.slot['device_commands']['broken']
+        self.options['device_modes']['broken'] = 'control_verification'
+        await self.controller.async_start()
+        status = self.controller.status['device:broken']
+        self.assertEqual((status['state'], status['reason']), ('idle', 'No current plan for this device'))
+        self.assertFalse(status['execution_blocked'])
+        self.assertFalse(any(i['key']=='controller:device:broken'
+                             for i in execution_attention(self.controller.status, {}, [])))
+
     async def test_configured_temperature_bounds_replace_static_room_range(self):
         mapping = self.options['device_control_mappings']['heater']
         mapping.update(control_type='setpoint', setpoint_entity_id='number.target',

@@ -549,7 +549,7 @@ class BatteryRuntime:
             self._mode_revision=group.mode_revision+1
             self._mode=mode
             await self.host.accept(rt.AuthorityChanged(group.spec.id,mode,self._mode_revision,None))
-        self._status={'state':'idle','reason':self._holding(reason),'execution_blocked':mode in ('controlling','control_verification')}
+        self._status={'state':'idle','reason':self._holding(reason),'execution_blocked':mode=='controlling'}
 
     async def _retire_changed_configuration(self, options):
         """Bind to changed settings without changing what the battery is doing."""
