@@ -624,10 +624,10 @@ class Household:
 
     @property
     def input_accuracy(self) -> dict[str, Any]:
-        """Live health of prices, solar forecast, sensors and measured quarters."""
+        """Price estimate accuracy plus live solar forecast, sensor and measurement health."""
         return input_accuracy(options=dict(self.ports.options()), read=self.ports.read_state,
-                              prices=self.supplier_prices, measured_quarters=self.measured_quarters,
-                              now=self.ports.utcnow(), local_tz=self.ports.home().timezone)
+                              accuracy_report=self.forecast_accuracy, measured_quarters=self.measured_quarters,
+                              now=self.ports.utcnow())
 
     def _read_forecast_accuracy(self, status):
         report = status.get('forecast_accuracy')

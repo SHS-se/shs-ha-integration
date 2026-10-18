@@ -1,12 +1,13 @@
-"""Live health of the inputs the planner depends on.
+"""Health of the inputs the planner depends on.
 
-Each check is one share — healthy readings over the readings it expects — so
-the score is 0..100 by construction. The headline averages the checks that
-apply to this home. It describes inputs as they are now, never past accuracy.
+The live checks are one share each — healthy readings over the readings they
+expect — so every score is 0..100 by construction. Prices is the cloud's latest
+comparison of the planner's price estimates with the prices later published.
+The headline averages the checks that have a score.
 """
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone, tzinfo
+from datetime import datetime, timedelta, timezone
 from math import isfinite
 from typing import Any, Callable, Iterable
 
@@ -16,8 +17,6 @@ from .optimisation import ACTUAL_FIELD_BY_CATEGORY, quarter_start
 VERSION = 1
 QUARTER = timedelta(minutes=15)
 MEASUREMENT_WINDOW = timedelta(hours=24)
-# Day-ahead prices for tomorrow are published around 13:00; an hour of grace.
-TOMORROW_PRICES_LOCAL_HOUR = 14
 MAX_ISSUES = 10
 # Polled continuously by the plant: silence means stale, not idle.
 LIVE_FIELDS = ("battery_soc_entity", "battery_power_measurement_entity", "grid_power_entity",
@@ -42,22 +41,13 @@ def _check(key: str, healthy: int, expected: int, issues: Iterable[str], **extra
             "expected": expected, "issues": sorted(issues)[:MAX_ISSUES], **extra}
 
 
-def price_check(prices: dict | None, now: datetime, local_tz: tzinfo) -> dict[str, Any] | None:
-    """Published supplier prices over every quarter that should have one by now."""
-    local = now.astimezone(local_tz)
-    last_day = local.date() + timedelta(days=1 if local.hour >= TOMORROW_PRICES_LOCAL_HOUR else 0)
-    end = datetime.combine(last_day + timedelta(days=1), time(), tzinfo=local_tz).astimezone(timezone.utc)
-    expected, at = [], quarter_start(now)
-    while at < end:
-        expected.append(at)
-        at += QUARTER
-    published = set()
-    if prices and prices.get("configuration") is not None:
-        published = {datetime.fromisoformat(slot["start"]).astimezone(timezone.utc) for slot in prices.get("forecast", [])}
-    missing = [at for at in expected if at not in published]
-    return _check("prices", len(expected) - len(missing), len(expected), [],
-                  published_until=max(published).isoformat() if published else None,
-                  first_missing=missing[0].isoformat() if missing else None)
+def price_check(report: dict | None) -> dict[str, Any]:
+    """The twice-daily report's estimate accuracy; unscored until a published price was compared."""
+    prices = (report or {}).get("prices") or {}
+    percentage = prices.get("percentage")
+    return {"key": "prices", "percentage": percentage, "grade": grade(percentage),
+            "quarters": int(prices.get("quarters") or 0),
+            "calculated_at": (report or {}).get("calculated_at") if prices else None, "issues": []}
 
 
 def _usable(state: Any, entity: str) -> bool:
@@ -130,11 +120,12 @@ def prune_quarters(quarters: dict[str, bool], now: datetime) -> dict[str, bool]:
     return {start: ok for start, ok in quarters.items() if datetime.fromisoformat(start) >= since}
 
 
-def input_accuracy(*, options: dict, read: Callable[[str], Any], prices: dict | None,
-                   measured_quarters: dict[str, bool], now: datetime, local_tz: tzinfo) -> dict[str, Any]:
+def input_accuracy(*, options: dict, read: Callable[[str], Any], accuracy_report: dict | None,
+                   measured_quarters: dict[str, bool], now: datetime) -> dict[str, Any]:
     checks = [check for check in (
-        price_check(prices, now, local_tz), solar_forecast_check(options, read),
+        price_check(accuracy_report), solar_forecast_check(options, read),
         sensor_check(options, read, now), measurement_check(measured_quarters, now)) if check is not None]
-    percentage = round(sum(check["percentage"] for check in checks) / len(checks)) if checks else None
+    scored = [check["percentage"] for check in checks if check["percentage"] is not None]
+    percentage = round(sum(scored) / len(scored)) if scored else None
     return {"version": VERSION, "observed_at": now.astimezone(timezone.utc).isoformat(),
             "percentage": percentage, "grade": grade(percentage), "checks": checks}

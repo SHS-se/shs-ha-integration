@@ -67,6 +67,14 @@ class ControllerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         exported['report']['calculations'].clear()
         self.assertEqual(len(report['calculations']), 1)
 
+    async def test_export_includes_live_input_accuracy_without_failing_on_it(self):
+        self.assertIsNone(controller_diagnostics(self.controller, self.panel())['input_accuracy'])
+        self.coordinator.input_accuracy = {'version': 1, 'percentage': 95, 'checks': []}
+        self.assertEqual(controller_diagnostics(self.controller, self.panel())['input_accuracy']['percentage'], 95)
+        broken = type('Broken', (), {'input_accuracy': property(lambda _: 1 / 0)})()
+        from shs_core.controller_diagnostics import _input_accuracy
+        self.assertEqual(_input_accuracy(broken), {'error': 'ZeroDivisionError: division by zero'})
+
     async def test_live_and_simulated_commands_are_separate_and_persisted(self):
         self.options['device_modes'] = {'$ev': 'controlling', '$pool': 'control_verification'}
         await self.controller.async_start()

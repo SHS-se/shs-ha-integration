@@ -4,13 +4,11 @@ from types import SimpleNamespace
 import sys
 import unittest
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 from shs_core.input_accuracy import (input_accuracy, measurement_check, price_check, prune_quarters,
                                      quarter_completeness, sensor_check, solar_forecast_check)
 
-TZ = ZoneInfo("Europe/Stockholm")
 NOW = datetime(2026, 10, 18, 8, 0, tzinfo=timezone.utc)  # 10:00 local
 
 
@@ -19,28 +17,18 @@ def state(value, age=1):
                            last_reported=NOW - timedelta(seconds=age))
 
 
-def prices(start, end):
-    slots, at = [], start
-    while at < end:
-        slots.append({"start": at.isoformat(), "end": (at + timedelta(minutes=15)).isoformat()})
-        at += timedelta(minutes=15)
-    return {"configuration": {"supplier": "x", "price_area": "SE3"}, "forecast": slots}
-
-
 class PriceCheckTests(unittest.TestCase):
-    def test_before_publication_only_today_is_expected(self):
-        end_of_today = datetime(2026, 10, 18, 22, 0, tzinfo=timezone.utc)
-        check = price_check(prices(NOW - timedelta(hours=8), end_of_today), NOW, TZ)
-        self.assertEqual((check["percentage"], check["healthy"], check["expected"]), (100, 56, 56))
+    def test_prices_come_from_the_reports_estimate_accuracy(self):
+        report = {"calculated_at": "2026-10-18T16:00:05Z", "prices": {"percentage": 83, "grade": "lime", "quarters": 96}}
+        self.assertEqual(price_check(report), {"key": "prices", "percentage": 83, "grade": "lime", "quarters": 96,
+                                               "calculated_at": "2026-10-18T16:00:05Z", "issues": []})
 
-    def test_after_publication_tomorrow_must_be_there(self):
-        afternoon = datetime(2026, 10, 18, 13, 0, tzinfo=timezone.utc)  # 15:00 local
-        check = price_check(prices(afternoon, datetime(2026, 10, 18, 22, 0, tzinfo=timezone.utc)), afternoon, TZ)
-        self.assertEqual((check["healthy"], check["expected"]), (36, 132))
-        self.assertEqual(check["first_missing"], "2026-10-18T22:00:00+00:00")
-
-    def test_no_prices_scores_zero(self):
-        self.assertEqual(price_check(None, NOW, TZ)["percentage"], 0)
+    def test_a_report_without_a_price_comparison_is_unscored(self):
+        for report in (None, {"version": 1, "calculated_at": "2026-10-18T04:00:05Z"},
+                       {"calculated_at": "x", "prices": {"percentage": None, "grade": None, "quarters": 0}}):
+            check = price_check(report)
+            self.assertIsNone(check["percentage"])
+            self.assertEqual(check["quarters"], 0)
 
 
 class SensorAndSolarTests(unittest.TestCase):
@@ -81,12 +69,15 @@ class MeasurementTests(unittest.TestCase):
 
 
 class HeadlineTests(unittest.TestCase):
-    def test_headline_averages_the_checks_that_apply(self):
-        options = {"grid_power_entity": "sensor.grid"}
-        result = input_accuracy(options=options, read={"sensor.grid": state("1")}.get, prices=None,
-                                measured_quarters={}, now=NOW, local_tz=TZ)
+    def test_headline_averages_the_checks_that_have_a_score(self):
+        options = {"grid_power_entity": "sensor.grid", "battery_soc_entity": "sensor.soc"}
+        read = {"sensor.grid": state("1"), "sensor.soc": state("unavailable")}.get
+        result = input_accuracy(options=options, read=read, accuracy_report=None, measured_quarters={}, now=NOW)
         self.assertEqual([check["key"] for check in result["checks"]], ["prices", "sensors"])
-        self.assertEqual((result["percentage"], result["grade"]), (50, "red"))
+        self.assertEqual((result["percentage"], result["grade"]), (50, "red"))  # unscored prices are left out
+        report = {"calculated_at": "2026-10-18T04:00:05Z", "prices": {"percentage": 90, "grade": "green", "quarters": 96}}
+        result = input_accuracy(options=options, read=read, accuracy_report=report, measured_quarters={}, now=NOW)
+        self.assertEqual(result["percentage"], 70)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ export function AccuracyButtons({report, error, input}: {report?: AccuracyReport
   return <><div className="accuracy-buttons">
     {(['input','historical'] as const).map(kind=>{
       const score=scores[kind];
-      return <button type="button" key={kind} title={kind==='historical'?error||(report?`${stamp} · ${report.forecast_plan_id??''}`:''):''}
+      return <button type="button" key={kind} title={kind==='historical'?error||stamp:''}
         onClick={()=>setOpen(kind)}>{labels[kind]} <strong className={score?.grade?`accuracy-${score.grade}`:''}>{value(score?.percentage)}</strong></button>;
     })}
   </div><dialog ref={dialog} className="accuracy-dialog" aria-labelledby={heading} onClose={()=>setOpen(null)}>
@@ -31,19 +31,19 @@ export function AccuracyButtons({report, error, input}: {report?: AccuracyReport
   </dialog></>;
 }
 
-/** Live input health: each check is healthy readings over expected readings. */
+/** Live checks are healthy over expected readings; Prices is the cloud's estimate accuracy. */
 function InputChecks({input, value, timeZone}: {input?: InputAccuracy|null; value: (p: number|null|undefined) => string; timeZone: string}) {
   if (!input?.checks.length) return <p className="muted">Waiting for the first input check</p>;
   const time = (iso: string) => new Date(iso).toLocaleString(undefined,{timeZone,weekday:'short',hour:'2-digit',minute:'2-digit'});
-  const detail = (check: InputCheck) => check.key==='prices'
-    ? (check.published_until?`Published to ${time(new Date(Date.parse(check.published_until)+900_000).toISOString())}`:'No published prices')
+  const detail = (check: InputCheck) => check.quarters!==undefined
+    ? (check.quarters?`Estimates against published prices, ${check.quarters} quarters${check.calculated_at?` · ${time(check.calculated_at)}`:''}`:'No published price compared yet')
     : `${check.healthy} of ${check.expected} ${check.key==='measurements'?'quarters complete':'usable'}`;
   return <><ul>{input.checks.map(check=><li key={check.key} className="accuracy-check">
-    <span><span>{CHECKS[check.key]??check.key}</span><small>{detail(check)}{check.key!=='prices'&&check.issues.length>0&&<>: {check.key==='measurements'
+    <span><span>{CHECKS[check.key]??check.key}</span><small>{detail(check)}{check.quarters===undefined&&check.issues.length>0&&<>: {check.key==='measurements'
       ?check.issues.map(time).join(', '):check.issues.join(', ')}</>}</small></span>
-    <strong className={check.grade?`accuracy-${check.grade}`:''}>{value(check.percentage)}%</strong>
+    <strong className={check.grade?`accuracy-${check.grade}`:''}>{value(check.percentage)}{check.percentage!==null?'%':''}</strong>
   </li>)}</ul>
-    <div className="accuracy-schedule"><p>Checked <time dateTime={input.observed_at}>{new Date(input.observed_at).toLocaleString(undefined,{timeZone})}</time>. The headline averages these checks.</p></div></>;
+    <div className="accuracy-schedule"><p>Checked <time dateTime={input.observed_at}>{new Date(input.observed_at).toLocaleString(undefined,{timeZone})}</time>. The headline averages the scored checks.</p></div></>;
 }
 
 /** The cloud publishes a report at local 06:00 and 18:00 in the home's time zone. */

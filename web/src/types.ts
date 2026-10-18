@@ -1,10 +1,10 @@
 export type StorageCensus = {diagnostic_retention_days:number; databases:{name:string;error?:string;file_bytes?:number;wal_bytes?:number;shm_bytes?:number;schema_version?:number;journal_mode?:string;free_pages?:number;census_ms?:number;details_sampled_at?:string;details_census_ms?:number;tables?:{name:string;rows:number;pages:number;bytes:number}[];receipts?:{received_through:number;processed_through:number;pending:number};retained_ranges?:Record<string,{first:number|string|null;last:number|string|null}>}[];archives:{name:string;bytes:number}[];operations?:Record<string,unknown>};
 export type Temperature = {key:string; name:string; target_c:number|null};
 type AccuracyScore = {percentage:number|null; grade:'green'|'lime'|'yellow'|'orange'|'red'|null};
-export type AccuracyReport = {version:1; calculated_at:string; scheduled_at:string; timezone:string; forecast_plan_id:string|null;
-  forecast:AccuracyScore&{devices:(AccuracyScore&{key:string;name:string})[]}; historical:AccuracyScore&{devices:(AccuracyScore&{key:string;name:string})[]}};
-export type InputCheck = AccuracyScore&{key:'prices'|'solar_forecast'|'sensors'|'measurements'; healthy:number; expected:number; issues:string[];
-  published_until?:string|null; first_missing?:string|null};
+export type AccuracyReport = {version:number; calculated_at:string; scheduled_at:string; timezone:string;
+  historical:AccuracyScore&{devices:(AccuracyScore&{key:string;name:string})[]}; prices?:AccuracyScore&{quarters:number}};
+export type InputCheck = AccuracyScore&{key:'prices'|'solar_forecast'|'sensors'|'measurements'; issues:string[];
+  healthy?:number; expected?:number; quarters?:number; calculated_at?:string|null};
 export type InputAccuracy = AccuracyScore&{version:1; observed_at:string; checks:InputCheck[]};
 export type Slot = {
   start: string; duration_hours: number; binding: boolean;

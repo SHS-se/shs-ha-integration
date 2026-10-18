@@ -5,10 +5,10 @@ test('accuracy buttons show graded device percentages and restore keyboard focus
     ['boiler','Water boiler',64,'orange'],['battery','House battery',54,'red']].map(([key,name,percentage,grade])=>({key,name,percentage,grade}));
   await page.route('**/api/state',async route=>{
     const response=await route.fetch(),data=await response.json();
-    data.snapshot.entries[0].accuracy={version:1,calculated_at:'2026-10-17T16:00:01Z',scheduled_at:'2026-10-17T16:00:00Z',
-      timezone:'Europe/Stockholm',forecast_plan_id:'plan',forecast:{percentage:94,grade:'green',devices},historical:{percentage:64,grade:'orange',devices}};
+    data.snapshot.entries[0].accuracy={version:2,calculated_at:'2026-10-17T16:00:01Z',scheduled_at:'2026-10-17T16:00:00Z',
+      timezone:'Europe/Stockholm',historical:{percentage:64,grade:'orange',devices},prices:{percentage:80,grade:'lime',quarters:96}};
     data.snapshot.entries[0].input_accuracy={version:1,observed_at:'2026-10-18T08:00:00Z',percentage:88,grade:'lime',checks:[
-      {key:'prices',percentage:100,grade:'green',healthy:56,expected:56,issues:[],published_until:'2026-10-18T21:45:00+00:00',first_missing:null},
+      {key:'prices',percentage:80,grade:'lime',quarters:96,calculated_at:'2026-10-17T16:00:01Z',issues:[]},
       {key:'solar_forecast',percentage:100,grade:'green',healthy:8,expected:8,issues:[]},
       {key:'sensors',percentage:98,grade:'green',healthy:63,expected:64,issues:['sensor.kitchen_heater_power']},
       {key:'measurements',percentage:54,grade:'red',healthy:52,expected:96,issues:['2026-10-18T01:00:00+00:00']}]};
@@ -23,6 +23,7 @@ test('accuracy buttons show graded device percentages and restore keyboard focus
   for(const name of ['Prices','Solar forecast','Sensors','Measurements'])await expect(popup.getByText(name,{exact:true})).toBeVisible();
   await expect(popup.getByText('sensor.kitchen_heater_power',{exact:false})).toBeVisible();
   await expect(popup.getByText('52 of 96 quarters complete',{exact:false})).toBeVisible();
+  await expect(popup.getByText('Estimates against published prices, 96 quarters',{exact:false})).toBeVisible();
   await page.screenshot({path:info.outputPath(`ha-input-accuracy-${info.project.name}.png`)});
   await page.keyboard.press('Escape');
   await expect(input).toBeFocused();

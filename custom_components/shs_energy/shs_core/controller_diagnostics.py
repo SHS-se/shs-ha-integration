@@ -106,11 +106,20 @@ def controller_diagnostics(controller, panel):
         # The cloud's latest twice-daily report, with its per-component calculations.
         forecast_accuracy={"report": deepcopy(getattr(controller.coordinator, "forecast_accuracy", None)),
                            "error": getattr(controller.coordinator, "forecast_accuracy_error", None)},
+        input_accuracy=_input_accuracy(controller.coordinator),
     )
     runtime = getattr(controller, "battery_runtime", None)
     if runtime is not None:
         report["battery_execution"] = runtime.snapshot(include_evidence=True)
     return report
+
+
+def _input_accuracy(coordinator):
+    """The live input checks as the app shows them now; a failure is recorded, never raised."""
+    try:
+        return getattr(coordinator, "input_accuracy", None)
+    except Exception as error:  # noqa: BLE001 - the download must not fail on one diagnostic
+        return {"error": f"{type(error).__name__}: {error}"}
 
 
 def _without_excluded(sample, excluded):
