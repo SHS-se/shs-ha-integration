@@ -10,11 +10,14 @@ CAPTURE_KEYS = ('house_consumption_power_entity', 'solar_production_power_entity
     'battery_power_measurement_entity', 'battery_soc_entity', 'grid_power_entity',
     'battery_mode_entity', 'battery_charge_limit_entity', 'battery_discharge_limit_entity')
 COUNTERS = ('grid_import', 'grid_export', 'battery_charge', 'battery_discharge')
-# Only fields consumed by physical/capture policy travel as execution facts.
+# Only fields consumed by physical/capture policy travel as execution facts,
+# plus the solar forecast's `watts`. Until a new configuration's admission is
+# installed every source travels ordered, and the app keeps the ordered row in
+# place of the live one: without `watts` the next replan has no solar forecast.
 FACT_ATTRIBUTES = frozenset(('unit_of_measurement', 'device_class', 'state_class',
     'entity_id', 'min', 'max', 'step', 'options', 'hvac_modes', 'hvac_mode',
     'temperature', 'current_temperature', 'min_temp', 'max_temp', 'target_temp_step',
-    'preset_mode', 'preset_modes'))
+    'preset_mode', 'preset_modes', 'watts'))
 
 
 def source_bindings(options, models):

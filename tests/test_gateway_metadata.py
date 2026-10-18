@@ -289,6 +289,29 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row['attributes'],{'unit_of_measurement':'W'})
         self.assertEqual(self.source.intake_counts['replaceable'],100)
 
+    async def test_pending_admission_keeps_the_solar_forecast_in_ordered_reports(self):
+        # 18 October 2026: while a new configuration waited for its admission,
+        # every source travelled ordered and compact. The forecast's compact row
+        # replaced the app's live one, and the replan found no `watts` at all.
+        now=datetime.now(timezone.utc)
+        watts={'2026-10-19T12:00:00+02:00':4200,'2026-10-19T12:15:00+02:00':4350}
+        states={'sensor.forecast':SimpleNamespace(state='20.4',attributes={'unit_of_measurement':'kWh',
+            'device_class':'energy','watts':watts,'wh_period':{'2026-10-19T12:00:00+02:00':1050}},
+            last_changed=now,last_updated=now,last_reported=now,context=SimpleNamespace(id='forecast'))}
+        self.hass.states.get=states.get
+        self.service.physical.observation_changed=asyncio.Event()
+        self.source.entities=set(states)
+        self.source.install_bindings(dict(revision=1,pool_pause=None,bindings={'sensor.forecast':['reference']}))
+        self.assertFalse(self.source.execution_source('sensor.forecast'))
+        self.source.configuration.value['revision']=2
+        self.assertTrue(self.source.execution_source('sensor.forecast'))
+        self.hass.fire('state_changed',entity_id='sensor.forecast',new_state=states['sensor.forecast'])
+        await self.stream.queue.join()
+        with self.journal.connect(readonly=True) as db:
+            row=json.loads(db.execute("SELECT payload FROM latest WHERE entity='sensor.forecast'").fetchone()[0])
+        self.assertEqual(row['attributes']['watts'],watts)
+        self.assertNotIn('wh_period',row['attributes'])
+
     def current(self):
         return self.gateway.fence.snapshot()['grant_current']
 

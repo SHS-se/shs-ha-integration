@@ -381,6 +381,20 @@ def extract_timestamped_forecast(
     return dict(sorted(result.items())), used, max(issued)
 
 
+def solar_forecast(
+    entities: list[dict[str, Any]],
+) -> tuple[dict[datetime, float], list[str], datetime]:
+    """The summed solar forecast in W, read the one way planning reads it."""
+    return extract_timestamped_forecast(
+        entities,
+        # `watts` is the canonical adapter contract. Accepting a generic
+        # positional array would reintroduce kW/kWh ambiguity.
+        attribute_names=("watts",),
+        value_keys=("watts", "power", "value", "estimate"),
+        combine="sum",
+    )
+
+
 def category_meters(
     configured: dict[str, list[str]],
     devices: list[dict[str, Any]],

@@ -114,12 +114,12 @@ from .optimisation import (
     base_load_source,
     calibration_summary,
     category_meters,
-    extract_timestamped_forecast,
     normalized_fraction,
     optimisation_plan_due,
     parse_number,
     PlanContractCache,
     quarter_start,
+    solar_forecast,
     usable_device_quarter_kwh,
     SNAPSHOT_SCHEMA_VERSION,
     utc_slots,
@@ -2593,14 +2593,7 @@ class Household:
             for entity_id in options.get(OPT_PV_FORECAST_ENTITIES, [])
         ]
         if pv_entities:
-            pv, pv_used, pv_issued = extract_timestamped_forecast(
-                pv_entities,
-                # `watts` is the canonical adapter contract. Accepting a
-                # generic positional array would reintroduce kW/kWh ambiguity.
-                attribute_names=("watts",),
-                value_keys=("watts", "power", "value", "estimate"),
-                combine="sum",
-            )
+            pv, pv_used, pv_issued = solar_forecast(pv_entities)
         else:
             pv = {start: 0.0 for start in horizon}
             pv_used = []

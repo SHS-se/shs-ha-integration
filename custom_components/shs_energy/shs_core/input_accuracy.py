@@ -12,7 +12,7 @@ from math import isfinite
 from typing import Any, Callable, Iterable
 
 from .controller_observations import MAX_SAMPLE_AGE_SECONDS
-from .optimisation import ACTUAL_FIELD_BY_CATEGORY, quarter_start
+from .optimisation import ACTUAL_FIELD_BY_CATEGORY, OptimisationInputError, quarter_start, solar_forecast
 
 VERSION = 1
 QUARTER = timedelta(minutes=15)
@@ -68,14 +68,26 @@ def _fresh(state: Any, now: datetime) -> bool:
     return 0 <= (now - reported).total_seconds() <= MAX_SAMPLE_AGE_SECONDS
 
 
+def _forecast_usable(state: Any, entity: str) -> bool:
+    """A numeric state is not enough: planning reads the timestamped `watts` series."""
+    if not _usable(state, entity):
+        return False
+    try:
+        solar_forecast([{"entity_id": entity, "attributes": dict(state.attributes or {}),
+                         "last_updated": state.last_updated}])
+    except OptimisationInputError:
+        return False
+    return True
+
+
 def solar_forecast_check(options: dict, read: Callable[[str], Any]) -> dict[str, Any] | None:
-    """Usable solar forecast sensors; homes without solar have nothing to check."""
+    """Solar forecast sensors planning can read; homes without solar have nothing to check."""
     entities = set(options.get("pv_forecast_entities") or [])
     if not entities and not options.get("entities_solar_production"):
         return None
     if not entities:
         return _check("solar_forecast", 0, 1, ["no solar forecast configured"])
-    failed = {entity for entity in entities if not _usable(read(entity), entity)}
+    failed = {entity for entity in entities if not _forecast_usable(read(entity), entity)}
     return _check("solar_forecast", len(entities) - len(failed), len(entities), failed)
 
 

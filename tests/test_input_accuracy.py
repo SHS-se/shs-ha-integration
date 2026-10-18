@@ -46,9 +46,22 @@ class SensorAndSolarTests(unittest.TestCase):
     def test_solar_forecast_needs_usable_sensors_and_is_skipped_without_solar(self):
         self.assertIsNone(solar_forecast_check({}, {}.get))
         options = {"pv_forecast_entities": ["sensor.today", "sensor.tomorrow"], "entities_solar_production": ["sensor.pv"]}
-        check = solar_forecast_check(options, {"sensor.today": state("20.5"), "sensor.tomorrow": state("unknown")}.get)
+        today = state("20.5")
+        today.attributes = {"watts": {"2026-10-18T12:00:00+02:00": 4200}}
+        check = solar_forecast_check(options, {"sensor.today": today, "sensor.tomorrow": state("unknown")}.get)
         self.assertEqual((check["percentage"], check["issues"]), (50, ["sensor.tomorrow"]))
         self.assertEqual(solar_forecast_check({"entities_solar_production": ["sensor.pv"]}, {}.get)["percentage"], 0)
+
+    def test_a_numeric_forecast_without_a_readable_watts_series_is_unusable(self):
+        # 18 October 2026: eight numeric forecast sensors scored 100 % while the
+        # replan failed, because none carried the `watts` series it reads.
+        options = {"pv_forecast_entities": ["sensor.bare", "sensor.positional", "sensor.today"]}
+        bare, positional, today = state("20.5"), state("12.4"), state("20.5")
+        positional.attributes = {"watts": [4200, 4350]}
+        today.attributes = {"watts": {"2026-10-18T12:00:00+02:00": 4200}}
+        states = {"sensor.bare": bare, "sensor.positional": positional, "sensor.today": today}
+        check = solar_forecast_check(options, states.get)
+        self.assertEqual((check["healthy"], check["issues"]), (1, ["sensor.bare", "sensor.positional"]))
 
 
 class MeasurementTests(unittest.TestCase):
