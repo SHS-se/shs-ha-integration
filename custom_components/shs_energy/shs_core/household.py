@@ -126,6 +126,7 @@ from .optimisation import (
     validate_plan_contract,
 )
 from .measurements import device_measurement_issues
+from .input_accuracy import input_accuracy, prune_quarters, quarter_completeness
 from .planning import (
     build_device_models,
     build_services,
@@ -216,6 +217,8 @@ class Household:
         self.data = None
         self.forecast_accuracy = None
         self.forecast_accuracy_error = None
+        # Completeness of measured quarters read since start-up, last 24 hours.
+        self.measured_quarters: dict[str, bool] = {}
         self._control_listeners = set()
         self._battery_listeners = set()
         self.client = client
@@ -603,7 +606,7 @@ class Household:
                     "retry_at": operation["retry_at"],
                     "last_error": (self.last_optimisation_error or "")[:1000] or None,
                     "battery_plan": runtime.plan_feedback() if runtime is not None else None,
-                })
+                }, input_accuracy=self.input_accuracy)
                 validate_server_contract(status)
                 self._read_forecast_accuracy(status)
                 self.replan_recommendations = status.get("replan_recommendations", [])
@@ -618,6 +621,13 @@ class Household:
                 return {}
             finally:
                 self.async_update_listeners()
+
+    @property
+    def input_accuracy(self) -> dict[str, Any]:
+        """Live health of prices, solar forecast, sensors and measured quarters."""
+        return input_accuracy(options=dict(self.ports.options()), read=self.ports.read_state,
+                              prices=self.supplier_prices, measured_quarters=self.measured_quarters,
+                              now=self.ports.utcnow(), local_tz=self.ports.home().timezone)
 
     def _read_forecast_accuracy(self, status):
         report = status.get('forecast_accuracy')
@@ -3270,12 +3280,12 @@ class Household:
                     start.astimezone(timezone.utc),
                     complete_end - timedelta(hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS),
                 )
-                actuals = (
-                    await self._actual_quarters(entities, start, complete_end)
-                    if (entities.get("total_consumption") or entities.get("grid_import"))
+                measured = bool(entities.get("total_consumption") or entities.get("grid_import")) \
                     and start < complete_end and replan_request_id is None
-                    else []
-                )
+                actuals = await self._actual_quarters(entities, start, complete_end) if measured else []
+                if measured:
+                    self.measured_quarters = prune_quarters({**self.measured_quarters,
+                        **quarter_completeness(actuals, entities, start, complete_end)}, complete_end)
                 if actuals and devices:
                     device_actuals = await self._device_actual_quarters(
                         devices, start, complete_end

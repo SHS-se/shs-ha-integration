@@ -66,7 +66,7 @@ class Dashboard:
                     'label':'Accounting is catching up',
                     'reason':'The saved schedule is available. New controller decisions wait for queued observations to be accounted.'}
             entry = {'id':engine.identity['entry_id'], 'title':'Smart Home Solutions', 'state':'loaded',
-                'accuracy':values['forecast_accuracy'], 'accuracy_error':values['forecast_accuracy_error'],
+                'accuracy':values['forecast_accuracy'], 'accuracy_error':values['forecast_accuracy_error'], 'input_accuracy':values['input_accuracy'],
                 'operation':operation, 'schedule':schedule(values['optimisation_plan'],operation),
                 'controllers':value['controllers'] if engine.started else {}, 'attention':attention_links(values['attention_items'],engine.identity['entry_id'],engine.household.client.base_url),
                 'measurements':{}}

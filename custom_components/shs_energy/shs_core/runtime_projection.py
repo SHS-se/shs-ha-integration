@@ -14,7 +14,7 @@ FIELDS = (
     'supplier_cost_days', 'supplier_prices', 'tariff_catalog', 'tariff_components', 'tariff_status',
     'total_price_forecast', 'last_thermal_slots_accepted', 'last_runtime_report', 'last_runtime_error',
     'attention_items', 'device_control_mapping_gaps', 'replan_recommendations',
-    'optimisation_warnings', 'exchange_warnings', 'forecast_accuracy', 'forecast_accuracy_error',
+    'optimisation_warnings', 'exchange_warnings', 'forecast_accuracy', 'forecast_accuracy_error', 'input_accuracy',
 )
 
 

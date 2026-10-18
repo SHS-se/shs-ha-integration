@@ -240,12 +240,16 @@ class ShsApiClient:
         """Fetch subscription status for the paired customer."""
         return await self._request("GET", "integration-status")
 
-    async def report_runtime(self, runtime: dict[str, Any]) -> dict[str, Any]:
-        """Report current local readiness, independently of plan acceptance."""
-        result = await self._request(
-            "POST", "integration-status",
-            json_body={"api_version": API_VERSION, "runtime": runtime},
-        )
+    async def report_runtime(self, runtime: dict[str, Any], *, input_accuracy: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Report current local readiness, independently of plan acceptance.
+
+        Input accuracy travels beside the runtime: a website that predates it
+        ignores the extra field instead of rejecting the runtime.
+        """
+        body = {"api_version": API_VERSION, "runtime": runtime}
+        if input_accuracy is not None:
+            body["input_accuracy"] = input_accuracy
+        result = await self._request("POST", "integration-status", json_body=body)
         if result.get("runtime_received") is not True:
             raise ShsApiError("Website did not confirm storing the current HA status")
         return result

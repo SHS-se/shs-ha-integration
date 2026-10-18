@@ -24,6 +24,7 @@
 .accuracy-heading h2{font-size:1rem;margin:0}.accuracy-heading button{font-size:1.4rem;min-width:44px;min-height:44px;padding:0;background:transparent;border:0;color:var(--muted)}
 .accuracy-dialog ul{list-style:none;margin:.75rem 0;padding:0}
 .accuracy-dialog li{display:flex;justify-content:space-between;gap:1rem;padding:.55rem 0;border-bottom:1px solid var(--line);font-size:.9rem}
+.accuracy-check span{display:flex;flex-direction:column;gap:.15rem;min-width:0}.accuracy-check small{color:var(--muted);font-size:.75rem;overflow-wrap:anywhere}
 .accuracy-schedule{font-size:.75rem;color:var(--muted)}.accuracy-schedule p{margin:.15rem 0}
 
 .planner-status-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.5rem}.planner-status-row .accuracy-buttons{margin-bottom:0}.connection-indicator{display:inline-flex;gap:.5rem;align-items:center;min-height:44px;padding:.4rem .6rem;font-size:.8rem;color:var(--muted);font-variant-numeric:tabular-nums}.connection-light{width:.5rem;height:.5rem;border-radius:50%;background:var(--muted)}.connection-indicator.online .connection-light{background:#047857}.connection-indicator.error .connection-light{background:#b91c1c}[data-theme=dark] .connection-indicator.online .connection-light{background:#34d399}[data-theme=dark] .connection-indicator.error .connection-light{background:#f87171}

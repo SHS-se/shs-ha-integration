@@ -3,6 +3,9 @@ export type Temperature = {key:string; name:string; target_c:number|null};
 type AccuracyScore = {percentage:number|null; grade:'green'|'lime'|'yellow'|'orange'|'red'|null};
 export type AccuracyReport = {version:1; calculated_at:string; scheduled_at:string; timezone:string; forecast_plan_id:string|null;
   forecast:AccuracyScore&{devices:(AccuracyScore&{key:string;name:string})[]}; historical:AccuracyScore&{devices:(AccuracyScore&{key:string;name:string})[]}};
+export type InputCheck = AccuracyScore&{key:'prices'|'solar_forecast'|'sensors'|'measurements'; healthy:number; expected:number; issues:string[];
+  published_until?:string|null; first_missing?:string|null};
+export type InputAccuracy = AccuracyScore&{version:1; observed_at:string; checks:InputCheck[]};
 export type Slot = {
   start: string; duration_hours: number; binding: boolean;
   pv_w: number|null; base_w: number|null; load_w: number|null;
@@ -19,7 +22,7 @@ export type Slot = {
 export type Plan = {plan_id:string; issued_at:string; valid_until:string; binding_until:string; timezone:string; currency:string; temperatures:Temperature[]; household:Slot[]; execution:Slot[]|null; devices:{key:string; name:string; category:string}[]};
 export type Measurement = {value:number|null; unit:string; entity_id:string|null; observed_at:string|null};
 export type Attention = {key:string; severity:'error'|'warning'|'info'; stage?:string; title?:string; detail?:string; items?:string[]; next_step?:string; fix?:{kind?:string;entity_id?:string;entity_ids?:string[];url?:string;fields?:{key:string; message?:string; url:string}[]}};
-export type Entry = {id:string; title:string; state:string; accuracy?:AccuracyReport|null; accuracy_error?:string|null; operation?:{state:string; label?:string; reason:string}; schedule?:Plan|null; controllers?:Record<string,{state:string;reason?:string;[key:string]:unknown}>; measurements?:Record<string,Measurement>; attention?:Attention[]};
+export type Entry = {id:string; title:string; state:string; accuracy?:AccuracyReport|null; accuracy_error?:string|null; input_accuracy?:InputAccuracy|null; operation?:{state:string; label?:string; reason:string}; schedule?:Plan|null; controllers?:Record<string,{state:string;reason?:string;[key:string]:unknown}>; measurements?:Record<string,Measurement>; attention?:Attention[]};
 export type Resources = {cpu_percent:number; memory_usage:number; memory_limit:number; blk_read:number; blk_write:number; network_rx:number; network_tx:number};
 export type History = {sampled_at:string; resources:Resources|null; telemetry?:Record<string,{measured_w:number|null; planned_w:number|null; plan_id:string|null}>};
 export type ConnectionStatus = {state:string;retry_at:string|null;persistent:boolean};

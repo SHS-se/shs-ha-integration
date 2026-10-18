@@ -10,7 +10,7 @@ test('Plan is default and cloud activity shares the accuracy row',async({page},i
   await page.goto('./');
   await expect(page.getByRole('link',{name:'Plan',exact:true})).toHaveAttribute('aria-current','page');
   const row=page.locator('.planner-status-row'),indicator=row.getByLabel('Cloud connection');
-  await expect(row.getByRole('button',{name:/Forecast accuracy/})).toBeVisible();
+  await expect(row.getByRole('button',{name:/Input accuracy/})).toBeVisible();
   await expect(indicator).toHaveText('Connected');
   connection={state:'waiting',retry_at:new Date(await page.evaluate(()=>Date.now())+30000).toISOString(),persistent:false};
   await page.clock.runFor(15100);await expect(indicator).toContainText('s');
