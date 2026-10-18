@@ -21,6 +21,13 @@ export function AccuracyButtons({report, error}: {report?: AccuracyReport|null; 
     {error?<p role="status">{error}</p>:!(open&&report?.[open].devices.length)?<p className="muted">Learning</p>:<ul>{(open?report?.[open].devices:[])?.map(row=><li key={row.key}>
       <span>{row.name}</span><strong className={row.grade?`accuracy-${row.grade}`:''}>{value(row.percentage)}{row.percentage!==null?'%':''}</strong>
     </li>)}</ul>}
-    {report&&<time dateTime={report.calculated_at}>{stamp}</time>}
+    <div className="accuracy-schedule">{report&&<p>Calculated <time dateTime={report.calculated_at}>{stamp}</time></p>}
+      <p>{nextUpdate(Date.now(),report?.timezone??Intl.DateTimeFormat().resolvedOptions().timeZone)} Updates at 06:00 and 18:00.</p></div>
   </dialog></>;
+}
+
+/** The cloud publishes a report at local 06:00 and 18:00 in the home's time zone. */
+function nextUpdate(now: number, timeZone: string) {
+  const hour=Number(new Intl.DateTimeFormat('en-GB',{timeZone,hour:'2-digit',hourCycle:'h23'}).formatToParts(now).find(part=>part.type==='hour')!.value);
+  return hour<6?'Next update today at 06:00.':hour<18?'Next update today at 18:00.':'Next update tomorrow at 06:00.';
 }
