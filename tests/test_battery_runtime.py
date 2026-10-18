@@ -116,12 +116,13 @@ class Rig:
     async def start(self):
         self.plan['battery_execution']['scope_revision']=plan_scope(self.options)
         await self.fence.open();await self.runtime.open();await self.runtime.refresh()
-        if self.runtime.host:await asyncio.wait_for(self.runtime.host.idle(),2)
+        # A hang guard only: CI runners vary about 2x and some tests delay admission 1.2 s.
+        if self.runtime.host:await asyncio.wait_for(self.runtime.host.idle(),10)
     async def advance(self,millis=20000):
         self.now+=millis
         for row in self.rows.values():row['last_reported']=iso(self.now)
         await self.runtime.refresh()
-        if self.runtime.host:await asyncio.wait_for(self.runtime.host.idle(),2)
+        if self.runtime.host:await asyncio.wait_for(self.runtime.host.idle(),10)
 
     def extend_plan(self):
         self.plan['valid_until']=self.plan['binding_until']=iso(2700000)
