@@ -2,6 +2,8 @@ import {useEffect, useId, useRef, useState} from 'react';
 import type {AccuracyReport, InputAccuracy, InputCheck} from './types';
 
 const CHECKS: Record<InputCheck['key'], string> = {prices:'Prices', solar_forecast:'Solar forecast', sensors:'Sensors', measurements:'Measurements'};
+/** The cloud recalculates on new data, in five-minute steps. */
+const UPDATES = 'Recalculated within five minutes of a new plan, measurement or published price.';
 
 export function AccuracyButtons({report, error, input}: {report?: AccuracyReport|null; error?: string|null; input?: InputAccuracy|null}) {
   const [open,setOpen] = useState<'input'|'historical'|null>(null);
@@ -27,7 +29,7 @@ export function AccuracyButtons({report, error, input}: {report?: AccuracyReport
         <span>{row.name}</span><strong className={row.grade?`accuracy-${row.grade}`:''}>{value(row.percentage)}{row.percentage!==null?'%':''}</strong>
       </li>)}</ul>}
       <div className="accuracy-schedule">{report&&<p>Calculated <time dateTime={report.calculated_at}>{stamp}</time></p>}
-        <p>{nextUpdate(Date.now(),timeZone)} Updates at 06:00 and 18:00.</p></div></>}
+        <p>{UPDATES}</p></div></>}
   </dialog></>;
 }
 
@@ -43,11 +45,5 @@ function InputChecks({input, value, timeZone}: {input?: InputAccuracy|null; valu
       ?check.issues.map(time).join(', '):check.issues.join(', ')}</>}</small></span>
     <strong className={check.grade?`accuracy-${check.grade}`:''}>{value(check.percentage)}{check.percentage!==null?'%':''}</strong>
   </li>)}</ul>
-    <div className="accuracy-schedule"><p>Checked <time dateTime={input.observed_at}>{new Date(input.observed_at).toLocaleString(undefined,{timeZone})}</time>. The headline averages the scored checks.</p></div></>;
-}
-
-/** The cloud publishes a report at local 06:00 and 18:00 in the home's time zone. */
-function nextUpdate(now: number, timeZone: string) {
-  const hour=Number(new Intl.DateTimeFormat('en-GB',{timeZone,hour:'2-digit',hourCycle:'h23'}).formatToParts(now).find(part=>part.type==='hour')!.value);
-  return hour<6?'Next update today at 06:00.':hour<18?'Next update today at 18:00.':'Next update tomorrow at 06:00.';
+    <div className="accuracy-schedule"><p>Checked <time dateTime={input.observed_at}>{new Date(input.observed_at).toLocaleString(undefined,{timeZone})}</time>. The headline averages the scored checks. A changed check is sent within five minutes.</p></div></>;
 }

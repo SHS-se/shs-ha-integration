@@ -30,7 +30,7 @@ test('accuracy buttons show graded device percentages and restore keyboard focus
   await page.getByRole('button',{name:/Historical accuracy %/}).click();
   await expect(popup.getByRole('heading')).toHaveText('Historical accuracy %');
   for(const n of [94,84,74,64,54])await expect(popup.getByText(`${n}%`,{exact:true})).toBeVisible();
-  await expect(popup.locator('.accuracy-schedule')).toContainText(/Next update (today|tomorrow) at (06|18):00\./);
+  await expect(popup.locator('.accuracy-schedule')).toContainText('Recalculated within five minutes of a new plan, measurement or published price.');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
   await page.screenshot({path:info.outputPath(`ha-accuracy-${info.project.name}.png`)});
 });

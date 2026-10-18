@@ -126,7 +126,7 @@ from .optimisation import (
     validate_plan_contract,
 )
 from .measurements import device_measurement_issues
-from .input_accuracy import input_accuracy, prune_quarters, quarter_completeness
+from .input_accuracy import input_accuracy, prune_quarters, quarter_completeness, report_due
 from .planning import (
     build_device_models,
     build_services,
@@ -276,6 +276,8 @@ class Household:
         )
         self._recovering = False
         self.last_runtime_report: str | None = None
+        self._reported_input_accuracy: dict[str, Any] | None = None
+        self._input_accuracy_attempted_at: datetime | None = None
         self.last_runtime_error: str | None = None
         self.last_connection_success: str | None = None
         self.last_connection_error: str | None = None
@@ -594,6 +596,7 @@ class Household:
         async with self._runtime_lock:
             operation = self.operational_status
             runtime = getattr(self, 'battery_runtime', None)
+            accuracy = self.input_accuracy
             try:
                 status = await self.client.report_runtime({
                     "observed_at": operation["now"],
@@ -606,8 +609,9 @@ class Household:
                     "retry_at": operation["retry_at"],
                     "last_error": (self.last_optimisation_error or "")[:1000] or None,
                     "battery_plan": runtime.plan_feedback() if runtime is not None else None,
-                }, input_accuracy=self.input_accuracy)
+                }, input_accuracy=accuracy)
                 validate_server_contract(status)
+                self._reported_input_accuracy = accuracy
                 self._read_forecast_accuracy(status)
                 self.replan_recommendations = status.get("replan_recommendations", [])
                 self.last_runtime_report = self.ports.utcnow().isoformat()
@@ -621,6 +625,20 @@ class Household:
                 return {}
             finally:
                 self.async_update_listeners()
+
+    async def async_report_input_accuracy(self) -> None:
+        """Report input accuracy as soon as it changes, at most every five minutes.
+
+        A failed report waits as long as a sent one, so an unreachable website
+        is not asked again every minute.
+        """
+        now = self.ports.utcnow()
+        sent = [datetime.fromisoformat(self.last_runtime_report)] if self.last_runtime_report else []
+        latest = max(sent + ([self._input_accuracy_attempted_at] if self._input_accuracy_attempted_at else []),
+                     default=None)
+        if report_due(self.input_accuracy, self._reported_input_accuracy, latest, now):
+            self._input_accuracy_attempted_at = now
+            await self.async_report_runtime()
 
     @property
     def input_accuracy(self) -> dict[str, Any]:

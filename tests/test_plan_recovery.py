@@ -43,6 +43,29 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         await self.c.async_report_runtime()
         self.assertFalse(any(i['key']=='pipeline:runtime_report' for i in self.c.attention_items))
 
+    async def test_input_accuracy_is_reported_when_it_changes_at_most_every_five_minutes(self):
+        from unittest.mock import PropertyMock
+        def accuracy(percentage, minute):
+            return {'version': 1, 'percentage': percentage, 'checks': [],
+                    'observed_at': (self.now + timedelta(minutes=minute)).isoformat()}
+        sent = self.c.client.report_runtime
+        with patch.object(type(self.c), 'input_accuracy', new_callable=PropertyMock) as current:
+            async def check(percentage, minute):
+                current.return_value = accuracy(percentage, minute)
+                self.rig.now = self.now + timedelta(minutes=minute)
+                await self.c.async_report_input_accuracy()
+                return sent.await_count
+            self.assertEqual(await check(100, 0), 1)
+            self.assertEqual(await check(100, 1), 1, 'a newer check time alone is no change')
+            self.assertEqual(await check(88, 2), 1, 'a change waits until five minutes after the last report')
+            self.assertEqual(await check(88, 5), 2)
+            self.assertEqual(sent.await_args.kwargs['input_accuracy']['percentage'], 88)
+            sent.side_effect = ShsApiError('Controller status upload failed')
+            self.assertEqual(await check(75, 10), 3)
+            self.assertEqual(await check(75, 11), 3, 'a failed report is not retried every minute')
+            sent.side_effect = None
+            self.assertEqual(await check(75, 15), 4)
+
     async def test_notification_failure_clears_only_after_the_long_poll_succeeds(self):
         from shs_core.replan_listener import listen_for_replans
         retry,release,connected=asyncio.Event(),asyncio.Event(),asyncio.Event()

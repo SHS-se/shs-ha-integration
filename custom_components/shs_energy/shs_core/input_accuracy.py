@@ -18,6 +18,8 @@ VERSION = 1
 QUARTER = timedelta(minutes=15)
 MEASUREMENT_WINDOW = timedelta(hours=24)
 MAX_ISSUES = 10
+# The website shows these numbers to the quarter; a change is sent at most this often.
+REPORT_INTERVAL = timedelta(minutes=5)
 # Polled continuously by the plant: silence means stale, not idle.
 LIVE_FIELDS = ("battery_soc_entity", "battery_power_measurement_entity", "grid_power_entity",
                "grid_export_power_entity", "house_consumption_power_entity", "solar_production_power_entity")
@@ -42,7 +44,7 @@ def _check(key: str, healthy: int, expected: int, issues: Iterable[str], **extra
 
 
 def price_check(report: dict | None) -> dict[str, Any]:
-    """The twice-daily report's estimate accuracy; unscored until a published price was compared."""
+    """The cloud's latest estimate accuracy; unscored until a published price was compared."""
     prices = (report or {}).get("prices") or {}
     percentage = prices.get("percentage")
     return {"key": "prices", "percentage": percentage, "grade": grade(percentage),
@@ -141,3 +143,15 @@ def input_accuracy(*, options: dict, read: Callable[[str], Any], accuracy_report
     percentage = round(sum(scored) / len(scored)) if scored else None
     return {"version": VERSION, "observed_at": now.astimezone(timezone.utc).isoformat(),
             "percentage": percentage, "grade": grade(percentage), "checks": checks}
+
+
+def report_due(accuracy: dict[str, Any], reported: dict[str, Any] | None,
+               reported_at: datetime | None, now: datetime) -> bool:
+    """A changed result is due once the last report is five minutes old; the check time alone is no change."""
+    if reported is not None and _content(accuracy) == _content(reported):
+        return False
+    return reported_at is None or now - reported_at >= REPORT_INTERVAL
+
+
+def _content(accuracy: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in accuracy.items() if key != "observed_at"}
