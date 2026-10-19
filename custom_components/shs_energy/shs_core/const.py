@@ -210,6 +210,10 @@ OPTIMISATION_PROFILE_DAYS = 10
 # sensor is picked up, while the server's upsert keeps the row count at 96/day.
 THERMAL_BACKFILL_HOURS = 72
 MAX_THERMAL_SLOTS_PER_PUSH = 288
+# How far back a newly mapped room's history is sent, a push's spare rows at a
+# time. The website accepts thermal rows up to eight days old and a zone fit
+# needs five days, so a week lets a new room fit on the next daily refit.
+THERMAL_ROOM_HISTORY_HOURS = 7 * 24
 
 # Published prices, not measurements: they need no recorder and no watermark,
 # so a quarter far outside the actual-slot window can still be priced. The

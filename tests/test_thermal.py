@@ -13,7 +13,9 @@ from shs_core.thermal import (  # noqa: E402
     actuator_value,
     cooling_value,
     build_thermal_slots,
+    energy_duty,
     interpolate_hourly_forecast,
+    merge_thermal_slots,
     numeric_value,
     quarter_means,
     thermal_zone_inputs,
@@ -221,6 +223,32 @@ class BuildSlotsTests(unittest.TestCase):
     def test_a_quarter_with_neither_is_still_dropped(self) -> None:
         zones = {"kitchen": {"room_temperature_c": {START: 21.0}, "actuator_duty": {}}}
         self.assertEqual(build_thermal_slots(zones, {}), [])
+
+
+class EnergyDutyTests(unittest.TestCase):
+    def test_duty_is_drawn_power_over_rated_power(self) -> None:
+        rows = [{"start": START.isoformat(), "device_energy_kwh": {"a": 0.1, "b": 0.05}},
+                {"start": at(15).isoformat(), "device_energy_kwh": {"a": 0.5, "b": 0.5}}]
+        # 0.15 kWh in a quarter is 600 W of 1200 W; the second quarter caps at 1.
+        self.assertEqual(energy_duty(rows, ["a", "b"], 1200), {START: 0.5, at(15): 1.0})
+
+    def test_a_quarter_missing_any_meter_or_a_rating_is_skipped(self) -> None:
+        rows = [{"start": START.isoformat(), "device_energy_kwh": {"a": 0.1}}]
+        self.assertEqual(energy_duty(rows, ["a", "b"], 1200), {})
+        self.assertEqual(energy_duty(rows, ["a"], None), {})
+
+
+class MergeSlotsTests(unittest.TestCase):
+    def test_one_row_per_quarter_with_every_room(self) -> None:
+        regular = [{"start": at(15).isoformat(), "zone_observations": {"a": {"room_temperature_c": 21}},
+                    "outdoor_temperature_c": 4.0}]
+        history = [{"start": START.isoformat(), "zone_observations": {"b": {"room_temperature_c": 19}}},
+                   {"start": at(15).isoformat(), "zone_observations": {"b": {"room_temperature_c": 20}}}]
+        merged = merge_thermal_slots(regular, history)
+        self.assertEqual([row["start"] for row in merged], [START.isoformat(), at(15).isoformat()])
+        self.assertEqual(set(merged[1]["zone_observations"]), {"a", "b"})
+        self.assertEqual(merged[1]["outdoor_temperature_c"], 4.0)
+        self.assertEqual(regular[0]["zone_observations"], {"a": {"room_temperature_c": 21}})
 
 
 class ZoneInputTests(unittest.TestCase):

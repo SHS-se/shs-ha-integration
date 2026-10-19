@@ -52,6 +52,7 @@ from .const import (
     ISSUE_SUBSCRIPTION_INACTIVE,
     MAX_THERMAL_SLOTS_PER_PUSH,
     THERMAL_BACKFILL_HOURS,
+    THERMAL_ROOM_HISTORY_HOURS,
     OPT_OUTDOOR_TEMPERATURE_ENTITY,
     OPT_WEATHER_FORECAST_ENTITY,
     OPT_FORECAST_RESOLUTION_MINUTES,
@@ -140,9 +141,12 @@ from .planning import (
 )
 from .readings import daily_category_readings, usable_change
 from .thermal import (
+    SLOT,
     actuator_value,
     cooling_value,
     build_thermal_slots,
+    energy_duty,
+    merge_thermal_slots,
     interpolate_hourly_forecast,
     numeric_value,
     quarter_means,
@@ -246,6 +250,7 @@ class Household:
         self.last_actual_slots_accepted = 0
         self.actuals_accepted_until: str | None = None
         self.last_thermal_slots_accepted = 0
+        self.pending_room_history: dict[str, str] | None = None
         self.optimisation_missing_inputs: list[str] = []
         self.optimisation_degraded_devices: list[dict[str, str]] = []
         self.optimisation_warnings: list[dict[str, Any]] = []
@@ -1551,9 +1556,21 @@ class Household:
         devices: list[dict[str, Any]],
         start: datetime,
         end: datetime,
+        room_history: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Build complete quarter-hour thermal observations for every zone."""
+        """Build complete quarter-hour thermal observations for every zone.
+
+        ``room_history`` maps each room to the earliest quarter already sent
+        for it. A room that is new, or not yet sent back to
+        ``THERMAL_ROOM_HISTORY_HOURS``, also gets its older quarters in the room
+        left in this push, newest first. The shared upload watermark cannot do
+        this: it follows the outdoor rows a pool home sends every push, so a
+        room mapped later would otherwise start with an hour of history and
+        wait days for enough to fit. Where each room has got to is left in
+        ``pending_room_history``, to be kept once the website accepts the push.
+        """
         from .configuration_schema import shared_devices
+        self.pending_room_history = None
         zones = thermal_zone_inputs(
             shared_devices(devices, options), options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
             pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
@@ -1572,6 +1589,46 @@ class Household:
                 return []
             return build_thermal_slots({}, outdoor_only)[-MAX_THERMAL_SLOTS_PER_PUSH:]
 
+        slots = (await self._zone_thermal_slots(
+            options, devices, zones, start, end, outdoor=True
+        ))[-MAX_THERMAL_SLOTS_PER_PUSH:]
+        if room_history is None:
+            return slots
+        floor = end - timedelta(hours=THERMAL_ROOM_HISTORY_HOURS)
+        sent_from = {}
+        for key in zones:
+            try:
+                sent_from[key] = datetime.fromisoformat(room_history[key]).astimezone(timezone.utc)
+            except (KeyError, TypeError, ValueError):
+                sent_from[key] = start.astimezone(timezone.utc)
+        behind = {key: value for key, value in sent_from.items() if value > floor}
+        room = MAX_THERMAL_SLOTS_PER_PUSH - len(slots)
+        if behind and room > 0:
+            history_end = max(behind.values())
+            history_start = max(floor, history_end - SLOT * room)
+            # The outdoor rows for these quarters were sent when they were
+            # current. Sending them again would only ask for their sunshine again.
+            history = await self._zone_thermal_slots(
+                options, devices, {key: zones[key] for key in behind},
+                history_start, history_end, outdoor=False,
+            )
+            slots = merge_thermal_slots(slots, history)
+            for key in behind:
+                sent_from[key] = min(sent_from[key], history_start)
+        self.pending_room_history = {key: value.isoformat() for key, value in sent_from.items()}
+        return slots
+
+    async def _zone_thermal_slots(
+        self,
+        options: dict[str, Any],
+        devices: list[dict[str, Any]],
+        zones: dict[str, dict[str, Any]],
+        start: datetime,
+        end: datetime,
+        *,
+        outdoor: bool,
+    ) -> list[dict[str, Any]]:
+        """Thermal rows for ``zones`` over one window."""
         temperature_entities = sorted(
             {zone["temperature_entity_id"] for zone in zones.values()}
         )
@@ -1623,8 +1680,24 @@ class Household:
             for entity_id, rows in actuator_history.items()
         }
 
+        # Heater meters say what was actually drawn and outlive the actuator
+        # history, so they decide duty wherever they cover the quarter.
+        statistic_by_key = self._device_statistics(devices)
+        metered = await self._statistics_changes(sorted({
+            statistic_by_key[device_key]
+            for zone in zones.values() for device_key in zone["device_keys"]
+            if device_key in statistic_by_key
+        }), start, end, "5minute")
+        device_quarters = self._device_changes(statistic_by_key, metered)
+        rated = {str(device["key"]): device.get("active_power_w") for device in devices}
+
         series: dict[str, dict[str, dict[datetime, float]]] = {}
         for key, zone in zones.items():
+            ratings = [rated.get(device_key) for device_key in zone["device_keys"]]
+            metered_duty = energy_duty(
+                device_quarters, zone["device_keys"],
+                sum(ratings) if all(isinstance(value, (int, float)) for value in ratings) else None,
+            )
             duties: dict[datetime, list[float]] = {}
             cooling: dict[datetime, list[float]] = {}
             for entity_id in zone["actuator_entity_ids"]:
@@ -1640,9 +1713,12 @@ class Household:
                     zone["temperature_entity_id"], {}
                 ),
                 "actuator_duty": {
-                    slot: round(sum(values) / len(values), 4)
-                    for slot, values in duties.items()
-                    if len(values) == len(zone["actuator_entity_ids"])
+                    **{
+                        slot: round(sum(values) / len(values), 4)
+                        for slot, values in duties.items()
+                        if len(values) == len(zone["actuator_entity_ids"])
+                    },
+                    **metered_duty,
                 },
                 # Any actuator cooling taints the whole zone-quarter, so this
                 # is a maximum rather than a mean.
@@ -1658,9 +1734,8 @@ class Household:
                     zone_series[field] = helper_quarters.get(entity_id, {})
             series[key] = zone_series
 
-        outdoor = await self._outdoor_temperature_quarters(options, start, end)
-        slots = build_thermal_slots(series, outdoor)
-        return slots[-MAX_THERMAL_SLOTS_PER_PUSH:]
+        temperatures_outdoor = await self._outdoor_temperature_quarters(options, start, end) if outdoor else {}
+        return build_thermal_slots(series, temperatures_outdoor)
 
     async def _pool_quarters(
         self, options: dict[str, Any], start: datetime, end: datetime
@@ -3333,9 +3408,11 @@ class Household:
                             timezone.utc
                         ) - timedelta(hours=1),
                     )
+                self.pending_room_history = None
                 try:
                     thermal_slots = await self._thermal_quarters(
-                        thermal_options, devices, thermal_start, complete_end
+                        thermal_options, devices, thermal_start, complete_end,
+                        stored.get("thermal_room_history_from", {}),
                     ) if replan_request_id is None else []
                 except (HouseholdReadError, OptimisationInputError, ValueError) as err:
                     # A missing thermal sensor must never stop the electrical
@@ -3525,6 +3602,8 @@ class Household:
                 stored["thermal_slots_accepted_until"] = result[
                     "thermal_slots_accepted_until"
                 ]
+                if self.pending_room_history is not None:
+                    stored["thermal_room_history_from"] = self.pending_room_history
             self.last_thermal_slots_accepted = int(
                 result.get("thermal_slots_accepted") or 0
             )

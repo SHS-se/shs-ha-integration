@@ -321,7 +321,7 @@ def build_thermal_slots(
             "zone_observations": observations,
             "quality": {
                 "temperature_aggregation": "mean_of_recorder_5minute_means",
-                "duty_aggregation": "time_weighted_recorder_history",
+                "duty_aggregation": "energy_meter_else_recorder_history",
                 "duration_seconds": SLOT_SECONDS,
             },
         }
@@ -329,6 +329,51 @@ def build_thermal_slots(
             payload["outdoor_temperature_c"] = outdoor[slot]
         slots.append(payload)
     return slots
+
+
+def energy_duty(
+    device_quarters: Iterable[dict[str, Any]],
+    device_keys: Sequence[str],
+    rated_w: float | None,
+) -> dict[datetime, float]:
+    """A zone's heating duty per quarter, read from its heaters' own meters.
+
+    The meter saw what the heater actually drew, keeps long-term statistics,
+    and needs no actuator state history, which the recorder purges after
+    ``purge_keep_days``. A quarter counts only when every heater in the zone
+    reported it, and duty is the drawn power over the zone's rated power.
+    """
+    if not device_keys or rated_w is None or not isfinite(rated_w) or rated_w <= 0:
+        return {}
+    result: dict[datetime, float] = {}
+    for row in device_quarters:
+        energy = row.get("device_energy_kwh") or {}
+        if not all(key in energy for key in device_keys):
+            continue
+        watts = sum(energy[key] for key in device_keys) * 1000 * 3600 / SLOT_SECONDS
+        start = datetime.fromisoformat(row["start"]).astimezone(timezone.utc)
+        result[start] = round(min(1.0, watts / rated_w), 4)
+    return result
+
+
+def merge_thermal_slots(*batches: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Join thermal rows from several windows into one row per quarter.
+
+    The website rejects a second row for the same start, so a room's history
+    window that touches the regular window must share its rows rather than
+    repeat them.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    for batch in batches:
+        for row in batch:
+            existing = merged.get(row["start"])
+            if existing is None:
+                merged[row["start"]] = {**row, "zone_observations": dict(row["zone_observations"])}
+                continue
+            existing["zone_observations"].update(row["zone_observations"])
+            if "outdoor_temperature_c" in row:
+                existing.setdefault("outdoor_temperature_c", row["outdoor_temperature_c"])
+    return [merged[start] for start in sorted(merged, key=lambda value: datetime.fromisoformat(value))]
 
 
 def thermal_zone_inputs(
