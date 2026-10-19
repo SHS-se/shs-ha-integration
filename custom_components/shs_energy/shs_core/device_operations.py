@@ -547,10 +547,7 @@ class DeviceOperations:
                 raise HotWaterConfigurationError(mapping, key)
             demand = self.watts(mapping["power"])
         if kind == "setpoint":
-            low = max(mapping["minimum_temperature_c"], command["minimum_c"])
-            high = min(mapping["maximum_temperature_c"], command["maximum_c"])
-            if not low <= command["target_c"] <= high:
-                raise ValueError("planned temperature exceeds reviewed bounds")
+            low, high = command["minimum_c"], command["maximum_c"]
             for entity in targets:
                 state = self.state(entity)
                 if entity.startswith("climate."):

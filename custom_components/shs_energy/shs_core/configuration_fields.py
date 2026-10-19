@@ -209,12 +209,6 @@ EXECUTION_FIELDS = (
 )
 for kind in ("setpoint", "switch_schedule", "permit_inhibit"):
     CONTROL_FIELDS[kind] += EXECUTION_FIELDS
-CONTROL_FIELDS["setpoint"] += (
-    _field("minimum_temperature_c", "Lowest allowed target", "number", unit="°C"),
-    _field("maximum_temperature_c", "Highest allowed target", "number", unit="°C"),
-)
-CONTROL_FIELDS["switch_schedule"] += (
-)
 
 
 # Entities a planning path reads but never writes.

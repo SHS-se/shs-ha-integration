@@ -90,8 +90,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_setpoint_and_mapping_edit_restore_original_target(self):
         mapping = self.options['device_control_mappings']['heater']
-        mapping.update(control_type='setpoint', setpoint_entity_id='number.target',
-                       minimum_temperature_c=18, maximum_temperature_c=24)
+        mapping.update(control_type='setpoint', setpoint_entity_id='number.target')
         self.coordinator.optimisation_plan['device_models'][0]['control_type'] = 'setpoint'
         self.coordinator.async_cached_device_configuration.return_value[0]['control_type'] = 'setpoint'
         self.slot['device_commands']['heater'] = {'type': 'setpoint', 'target_c': 21.4, 'minimum_c': 20, 'maximum_c': 23}
@@ -160,8 +159,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.hass.config = SimpleNamespace(units=SimpleNamespace(temperature_unit='°C'))
         self.states['climate.heater'] = State('heat', temperature=20, min_temp=5, max_temp=35, target_temp_step=.5)
         mapping = self.options['device_control_mappings']['heater']
-        mapping.update(control_type='setpoint', actuator_entity_ids=['climate.heater'],
-                       minimum_temperature_c=18, maximum_temperature_c=24)
+        mapping.update(control_type='setpoint', actuator_entity_ids=['climate.heater'])
         self.coordinator.optimisation_plan['device_models'][0]['control_type'] = 'setpoint'
         self.coordinator.async_cached_device_configuration.return_value[0]['control_type'] = 'setpoint'
         self.slot['device_commands']['heater'] = {'type':'setpoint', 'target_c':21.5, 'minimum_c':20, 'maximum_c':23}

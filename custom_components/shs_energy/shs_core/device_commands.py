@@ -76,9 +76,8 @@ def execution_setup_errors(mapping, contract=None):
     if not targets:
         return ['choose the switch or temperature control SHS should use']
     if kind == 'setpoint':
-        low, high = mapping.get('minimum_temperature_c'), mapping.get('maximum_temperature_c')
-        if not numeric(low) or not numeric(high) or not low < high:
-            return ['reviewed minimum and maximum temperatures are required']
+        # Each command carries its own bounds from the room's website schedule;
+        # a second local range would only repeat or contradict them.
         if mapping.get('companion_actuator_entity_ids') or any(mapping.get(k) for k in ('permit_entity_id', 'mode_entity_id', 'offset_entity_id')):
             return ['this combination of temperature controls is not supported yet']
         if any(t.split('.')[0] not in ('climate', 'number', 'input_number') for t in targets):

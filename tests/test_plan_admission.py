@@ -11,6 +11,8 @@ from shs_core.verification import VerificationJournal
 from shs_core.optimisation import validate_plan_contract, OptimisationInputError, discrete_current_control
 from shs_core.presentation import operational_status, timeline
 from shs_core.operational_attention import execution_attention
+from shs_core.configuration_fields import control_fields
+from shs_core.device_commands import execution_setup_errors
 
 
 class PlanAdmissionTests(unittest.TestCase):
@@ -126,7 +128,7 @@ class DeviceCommandIsolationTests(unittest.IsolatedAsyncioTestCase):
     async def test_verification_fault_is_not_an_execution_alarm_until_controlling(self):
         mapping = self.options['device_control_mappings']['heater']
         mapping.update(control_type='setpoint', setpoint_entity_id='number.target')
-        self.states['number.target'] = device_fixtures.State(40, min=30, max=60, step=.5, unit_of_measurement='°C')
+        self.states['number.target'] = device_fixtures.State(40, min=30, max=60, step=.5, unit_of_measurement='°F')
         self.coordinator.optimisation_plan['device_models'][0]['control_type'] = 'setpoint'
         self.coordinator.async_cached_device_configuration.return_value[0]['control_type'] = 'setpoint'
         self.slot['device_commands']['heater'] = {'type':'setpoint', 'target_c':45, 'minimum_c':40, 'maximum_c':55}
@@ -135,7 +137,7 @@ class DeviceCommandIsolationTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         status = self.controller.status['device:heater']
         self.assertEqual(status['state'], 'fault')
-        self.assertIn('reviewed minimum and maximum temperatures are required', status['reason'])
+        self.assertIn('temperature control must use Celsius', status['reason'])
         self.assertEqual((status['mode'], status['holding']), ('control_verification', False))
         self.assertFalse(any(i['key']=='controller:device:heater'
                              for i in execution_attention(self.controller.status, {}, [])))
@@ -144,10 +146,12 @@ class DeviceCommandIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(i['key']=='controller:device:heater'
                             for i in execution_attention(self.controller.status, {}, [])))
 
-    async def test_configured_temperature_bounds_replace_static_room_range(self):
+    async def test_website_command_bounds_need_no_local_temperature_range(self):
+        # The room schedule on the website owns the comfort range; Home
+        # Assistant asks for no second Lowest/Highest target of its own.
         mapping = self.options['device_control_mappings']['heater']
-        mapping.update(control_type='setpoint', setpoint_entity_id='number.target',
-                       minimum_temperature_c=38, maximum_temperature_c=50)
+        mapping.update(control_type='setpoint', setpoint_entity_id='number.target')
+        self.assertEqual(execution_setup_errors(mapping), [])
         self.states['number.target'] = device_fixtures.State(40, min=30, max=60, step=.5, unit_of_measurement='°C')
         self.coordinator.optimisation_plan['device_models'][0]['control_type'] = 'setpoint'
         self.coordinator.async_cached_device_configuration.return_value[0]['control_type'] = 'setpoint'
@@ -158,6 +162,6 @@ class DeviceCommandIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.calls.clear()
         self.slot['device_commands']['heater']['target_c'] = 52
         await self.controller.async_tick()
-        self.assertEqual(self.controller.status['device:heater']['state'], 'fault')
-        self.assertEqual(self.calls, [])
-        self.assertEqual(self.states['number.target'].state, '45.0')
+        self.assertEqual(self.controller.status['device:heater']['state'], 'commanded')
+        self.assertEqual(self.calls, [('number.target', 52)])
+        self.assertNotIn('minimum_temperature_c', {f['key'] for f in control_fields('setpoint', None)})

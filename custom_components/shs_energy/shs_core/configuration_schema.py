@@ -26,6 +26,9 @@ ROOM_AREA_FIELD = c.ROOM_AREA_FIELD
 # can be routed to, so a field cannot appear on a card and be rejected on save.
 MAPPING_KEYS = {kind: mapping_keys(kind) for kind in CONTROL_FIELDS}
 MAPPING_KEYS["switch_schedule"].add("temperature_entity_id")
+# Former card fields a stored mapping may still carry. A save accepts and drops
+# them: the room schedule on the website now owns the setpoint range.
+RETIRED_MAPPING_KEYS = frozenset({"minimum_temperature_c", "maximum_temperature_c"})
 
 
 def validate_mapping_keys(mapping, *, pool=False):
@@ -35,7 +38,7 @@ def validate_mapping_keys(mapping, *, pool=False):
     # Pool mappings persist the shared water source as planner routing metadata,
     # regardless of the device model's control type. It is not a device editor.
     allowed = MAPPING_KEYS[control_type] | ({"temperature_entity_id"} if pool else set())
-    unknown = set(mapping) - allowed
+    unknown = set(mapping) - allowed - RETIRED_MAPPING_KEYS
     if unknown:
         raise ValueError("unknown device fields: " + ", ".join(sorted(unknown)))
 
