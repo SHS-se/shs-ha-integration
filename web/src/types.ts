@@ -3,7 +3,7 @@ export type Temperature = {key:string; name:string; target_c:number|null};
 type AccuracyScore = {percentage:number|null; grade:'green'|'lime'|'yellow'|'orange'|'red'|null};
 export type AccuracyReport = {version:number; calculated_at:string; scheduled_at:string; timezone:string;
   historical:AccuracyScore&{devices:(AccuracyScore&{key:string;name:string})[]}; prices?:AccuracyScore&{quarters:number}};
-export type InputCheck = AccuracyScore&{key:'prices'|'solar_forecast'|'sensors'|'measurements'; issues:string[];
+export type InputCheck = AccuracyScore&{key:'prices'|'solar_forecast'|'sensors'|'measurements'|'battery'; issues:string[];
   healthy?:number; expected?:number; quarters?:number; calculated_at?:string|null};
 export type InputAccuracy = AccuracyScore&{version:1; observed_at:string; checks:InputCheck[]};
 export type Slot = {

@@ -349,6 +349,22 @@ class BatteryRuntime:
         value['display'] = battery_status_text(value)
         return value
 
+    def charge_target_outcomes(self,window_ms):
+        """Measured charge targets due within the window: [(deadline_ms, shortfall_mwh)].
+
+        Outcomes settle on quarter boundaries, so one evaluation serves each quarter.
+        """
+        session=self.host.state.execution if self.host else None
+        if session is None:
+            return []
+        now=self.now();key=(now//900000,session.account.contract.id if session.account.contract else None)
+        cached=getattr(self,'_target_outcomes',None)
+        if cached is None or cached[0]!=key:
+            rows=execution.stored_target_outcomes(session.account,now-window_ms,now)
+            cached=self._target_outcomes=(key,sorted((objective.deadline_ms,outcome['shortfall_mwh'])
+                for objective,outcome in rows if outcome['outcome'] in ('fulfilled','missed')))
+        return cached[1]
+
     def plan_feedback(self):
         """Actual durable admission, independently of the coordinator's plan cache."""
         session=self.host.state.execution if self.host else None

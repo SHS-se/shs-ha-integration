@@ -1,7 +1,7 @@
 import {useEffect, useId, useRef, useState} from 'react';
 import type {AccuracyReport, InputAccuracy, InputCheck} from './types';
 
-const CHECKS: Record<InputCheck['key'], string> = {prices:'Prices', solar_forecast:'Solar forecast', sensors:'Sensors', measurements:'Measurements'};
+const CHECKS: Record<InputCheck['key'], string> = {prices:'Prices', solar_forecast:'Solar forecast', sensors:'Sensors', measurements:'Measurements', battery:'Battery'};
 /** The cloud recalculates on new data, in five-minute steps. */
 const UPDATES = 'Recalculated within five minutes of a new plan, measurement or published price.';
 
@@ -39,9 +39,9 @@ function InputChecks({input, value, timeZone}: {input?: InputAccuracy|null; valu
   const time = (iso: string) => new Date(iso).toLocaleString(undefined,{timeZone,weekday:'short',hour:'2-digit',minute:'2-digit'});
   const detail = (check: InputCheck) => check.quarters!==undefined
     ? (check.quarters?`Estimates against published prices, ${check.quarters} quarters${check.calculated_at?` · ${time(check.calculated_at)}`:''}`:'No published price compared yet')
-    : `${check.healthy} of ${check.expected} ${check.key==='measurements'?'quarters complete':'usable'}`;
+    : `${check.healthy} of ${check.expected} ${check.key==='measurements'?'quarters complete':check.key==='battery'?'charge targets reached':'usable'}`;
   return <><ul>{input.checks.map(check=><li key={check.key} className="accuracy-check">
-    <span><span>{CHECKS[check.key]??check.key}</span><small>{detail(check)}{check.quarters===undefined&&check.issues.length>0&&<>: {check.key==='measurements'
+    <span><span>{CHECKS[check.key]??check.key}</span><small>{detail(check)}{check.quarters===undefined&&check.issues.length>0&&<>: {check.key==='measurements'||check.key==='battery'
       ?check.issues.map(time).join(', '):check.issues.join(', ')}</>}</small></span>
     <strong className={check.grade?`accuracy-${check.grade}`:''}>{value(check.percentage)}{check.percentage!==null?'%':''}</strong>
   </li>)}</ul>

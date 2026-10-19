@@ -956,6 +956,9 @@ def _withdraw_execution(state, reason, effects, *, refresh=True):
                    replan_reason=reason if refresh else session.replan_reason))
 
 
+EXECUTION_SHORTFALLS = frozenset(("observed_state_cannot_meet_target", "shortfall_without_recovery_authority"))
+
+
 def _refresh_execution(state, now, effects, *, select=True):
     session, conditions = state.execution, state.conditions
     contract = session.account.contract
@@ -977,7 +980,11 @@ def _refresh_execution(state, now, effects, *, select=True):
         return state
     live = execution_live(state, now)
     assessment = execution.assess_execution(session.account, live, state.authority.plant.conversion)
-    if assessment.replan_reason and assessment.replan_reason != session.replan_reason:
+    # User requirement, 19 October 2026: a banner only asks for manual action.
+    # A shortfall leaves the controller running and the next plan incorporates
+    # it, so it is reported through input accuracy, not as a recommendation.
+    if (assessment.replan_reason and assessment.replan_reason != session.replan_reason
+            and assessment.replan_reason not in EXECUTION_SHORTFALLS):
         effects.append(NeedPlan(assessment.replan_reason))
     session = replace(session, assessment=assessment, live=live,
         replan_reason=assessment.replan_reason or session.replan_reason,

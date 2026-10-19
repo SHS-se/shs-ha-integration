@@ -1,7 +1,7 @@
 """Receipt replay adapts historical accounting to a newly resumed live host."""
 from shs_core.battery_runtime import BatteryRuntime, ACCOUNTING_REUSE_MS
 from shs_core.runtime_json import Records
-from shs_core.home_runtime import TRACE_RETENTION_MS, Tick
+from shs_core.home_runtime import EXECUTION_SHORTFALLS, TRACE_RETENTION_MS, Tick
 
 
 class AppBatteryRuntime(BatteryRuntime):
@@ -20,8 +20,9 @@ class AppBatteryRuntime(BatteryRuntime):
         await super().start()
         # The reducer retains the reason even if a restart interrupts the cloud
         # request. Resume it using the existing queue and writer readiness gate.
-        if self.host is not None and self.host.state.execution.replan_reason is not None:
-            self._notify_planning(self.host.state.execution.replan_reason)
+        reason = self.host.state.execution.replan_reason if self.host is not None else None
+        if reason is not None and reason not in EXECUTION_SHORTFALLS:
+            self._notify_planning(reason)
 
     async def ingest_receipt(self, identity, receipt, *, replay=False):
         """Accept evidence promptly; ordinary decisions belong to the 5s clock."""

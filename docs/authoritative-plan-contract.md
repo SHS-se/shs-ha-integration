@@ -45,6 +45,17 @@ integration events which previously forced a solve submit a recommendation.
 A successful plan publication clears reasons that predate its solve; an event
 that occurred during the solve remains visible. A failed solve clears nothing.
 
+User requirement, 19 October 2026: a recommendation is shown only when the
+household must act manually; it is never informational. A battery shortfall the
+controller cannot recover before an objective's deadline
+(`observed_state_cannot_meet_target`, `shortfall_without_recovery_authority`)
+leaves the controller running, and the next plan incorporates the outcome, so
+it raises no recommendation. It is reported instead by the input-accuracy
+`battery` check: the share of stored-energy targets due in the last 24 hours
+that were reached, with missed deadlines as its issues. Reasons that leave the
+battery without an executable plan (expiry, changed capacity, authority or
+permissions, a missing battery contract, a rejected handover) still recommend.
+
 Compare four consecutive completed quarters entirely covered by the accepted
 plan. Warn when each quarter differs by more than 50%, or when the absolute
 difference of the **rolling four-quarter totals** exceeds 6 kWh. Missing quarters

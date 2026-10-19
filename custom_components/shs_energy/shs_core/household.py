@@ -126,7 +126,7 @@ from .optimisation import (
     validate_plan_contract,
 )
 from .measurements import device_measurement_issues
-from .input_accuracy import input_accuracy, prune_quarters, quarter_completeness, report_due
+from .input_accuracy import MEASUREMENT_WINDOW, input_accuracy, prune_quarters, quarter_completeness, report_due
 from .planning import (
     build_device_models,
     build_services,
@@ -643,9 +643,11 @@ class Household:
     @property
     def input_accuracy(self) -> dict[str, Any]:
         """Price estimate accuracy plus live solar forecast, sensor and measurement health."""
+        runtime = getattr(self, 'battery_runtime', None)
+        targets = runtime.charge_target_outcomes(MEASUREMENT_WINDOW // timedelta(milliseconds=1)) if runtime is not None else None
         return input_accuracy(options=dict(self.ports.options()), read=self.ports.read_state,
                               accuracy_report=self.forecast_accuracy, measured_quarters=self.measured_quarters,
-                              now=self.ports.utcnow())
+                              now=self.ports.utcnow(), charge_targets=targets)
 
     def _read_forecast_accuracy(self, status):
         report = status.get('forecast_accuracy')

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
-from shs_core.input_accuracy import (input_accuracy, measurement_check, price_check, prune_quarters,
+from shs_core.input_accuracy import (battery_check, input_accuracy, measurement_check, price_check, prune_quarters,
                                      quarter_completeness, sensor_check, solar_forecast_check)
 
 NOW = datetime(2026, 10, 18, 8, 0, tzinfo=timezone.utc)  # 10:00 local
@@ -91,6 +91,22 @@ class HeadlineTests(unittest.TestCase):
         report = {"calculated_at": "2026-10-18T04:00:05Z", "prices": {"percentage": 90, "grade": "green", "quarters": 96}}
         result = input_accuracy(options=options, read=read, accuracy_report=report, measured_quarters={}, now=NOW)
         self.assertEqual(result["percentage"], 70)
+
+
+class BatteryCheckTests(unittest.TestCase):
+    def test_a_missed_charge_target_lowers_accuracy_instead_of_raising_a_banner(self):
+        # 18 October 2026: the 00:00 target was missed by 0.16 kWh, the next one reached.
+        missed, reached = 1792360800000, 1792365300000
+        check = battery_check([(missed, 156144), (reached, 0)])
+        self.assertEqual((check["key"], check["healthy"], check["expected"], check["percentage"]), ("battery", 1, 2, 50))
+        self.assertEqual(check["issues"], ["2026-10-18T22:00:00+00:00"])
+        result = input_accuracy(options={}, read={}.get, accuracy_report=None, measured_quarters={}, now=NOW,
+                                charge_targets=[(missed, 156144), (reached, 0)])
+        self.assertEqual([c["key"] for c in result["checks"]], ["prices", "battery"])
+
+    def test_no_measured_charge_target_is_no_check(self):
+        self.assertIsNone(battery_check([]))
+        self.assertIsNone(battery_check(None))
 
 
 if __name__ == "__main__":

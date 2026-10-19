@@ -137,6 +137,23 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_missed_charge_target_is_measured_for_input_accuracy(self):
+        # User requirement, 19 October 2026: a banner only asks for manual action.
+        r = Rig()
+        self.addAsyncCleanup(r.runtime.close)
+        await r.start()
+        self.assertEqual(r.runtime.snapshot()['assessment']['replan_reason'], 'observed_state_cannot_meet_target')
+        self.assertEqual(r.replans, [])
+        self.assertEqual(r.runtime.charge_target_outcomes(86400000), [])
+        for _ in range(45):
+            await r.advance()
+        # The rig's plan ends at 900000; only that expiry needs a manual replan.
+        self.assertEqual([kw['replan_reason'] for kw in r.replans],
+                         ['Battery controller: plan_expired. Consider a manual replan.'])
+        outcomes = r.runtime.charge_target_outcomes(86400000)
+        self.assertEqual([deadline for deadline, _ in outcomes], [900000])
+        self.assertGreater(outcomes[0][1], 0)
+
     async def test_replacement_solar_plan_clears_shortfall_recommendation(self):
         r = Rig()
         self.addAsyncCleanup(r.runtime.close)

@@ -941,6 +941,17 @@ def objective_history(account, at_ms):
     return tuple(records.values())
 
 
+def stored_target_outcomes(account, since_ms, at_ms):
+    """Measured outcomes of stored-energy targets due in [since_ms, at_ms]."""
+    if '_evidence' in account.__dict__:
+        return account._evidence.stored_target_outcomes(account, since_ms, at_ms)
+    latest, closed_at, _ = _objective_catalog(account, at_ms)
+    observed = _measured_observations(account)
+    return [(objective, _objective_outcome(account, objective, closed_at.get(objective.id), at_ms, observed))
+            for objective in latest.values()
+            if objective.kind == "stored_energy" and since_ms <= objective.deadline_ms <= at_ms]
+
+
 def _live_objectives(account, at_ms):
     """Live responsibilities by reference: each admitted objective is visited once, only live rows copied."""
     if '_evidence' in account.__dict__:

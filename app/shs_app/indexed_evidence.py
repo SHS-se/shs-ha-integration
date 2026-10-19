@@ -381,6 +381,14 @@ class AccountEvidence:
             yield dict(objective=row['objective'],origin_contract_id=versions[0]['contract_id'],versions=versions,
                 dispositions=dispositions,**outcome,responsibility=row['responsibility'])
 
+    def stored_target_outcomes(self,account,since_ms,at_ms):
+        with self.database.snapshot():
+            rows,_=self._catalog(at_ms)
+            due=[(ex.Objective(**row['objective']),row['closed_at']) for row in rows
+                 if row['objective']['kind']=='stored_energy' and since_ms<=row['objective']['deadline_ms']<=at_ms]
+            return [(objective,ex._objective_outcome(account,objective,closed,at_ms,account._measured_at))
+                    for objective,closed in due]
+
     def live_objectives(self,account,at_ms):
         with self.database.snapshot():
             return self._live_objectives(account,at_ms)

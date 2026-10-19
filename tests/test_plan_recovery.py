@@ -94,7 +94,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_runtime_report_carries_actual_battery_admission_instead_of_cached_plan(self):
         feedback={'accepted':{'plan_id':'admitted','contract_id':'reference','scope_revision':'scope','generation':3},'rejection':None}
-        self.c.battery_runtime=SimpleNamespace(plan_feedback=lambda:feedback)
+        self.c.battery_runtime=SimpleNamespace(plan_feedback=lambda:feedback,charge_target_outcomes=lambda window_ms:[])
         self.c.optimisation_plan={'plan_id':'only-cached'}
         await self.c.async_report_runtime()
         self.assertEqual(self.c.client.report_runtime.await_args.args[0]['battery_plan'],feedback)

@@ -161,6 +161,16 @@ class Harness:
 
 
 class ExecutableRuntimeTests(unittest.TestCase):
+    def test_a_shortfall_requests_no_replan_banner(self):
+        # User requirement, 19 October 2026: a banner only asks for manual action.
+        # The controller keeps running and input accuracy reports the miss.
+        h=Harness();h.offer()
+        self.assertIsNone(h.state.execution.replan_reason)
+        s=h.compiled.summary
+        h.conditions(energy=.5,now=s.until_ms-60000)
+        self.assertEqual(h.state.execution.replan_reason,'observed_state_cannot_meet_target')
+        self.assertFalse([e for e in h.effects if isinstance(e,NeedPlan)])
+
     def test_only_the_latest_traces_are_retained_in_whole_archive_pages(self):
         from shs_core.home_runtime import MAX_EXECUTION_TRACES, TRACE_TRIM, ExecutionTrace, retain_traces
         # The archive stores traces 128 to a page; trimming whole pages keeps the rest reusable.

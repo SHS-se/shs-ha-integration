@@ -83,7 +83,7 @@ APIs and a notification framework remain separate work.
 | Demand exceeds the forecast | Account for the resulting energy difference. Reduce charging when real headroom requires it; do not defer merely because the forecast was wrong. |
 | Solar is below forecast | Preserve the charging objective using permitted sources where possible. Solar-only permission remains solar-only; grid permission is not inferred. |
 | A temporary interruption prevents planned delivery | Record the shortfall, its evidence and an authorised recovery route if available. |
-| Recovery cannot meet the original purpose or deadline | Request a new plan and expose the shortfall. Do not promise automatic recovery next quarter. |
+| Recovery cannot meet the original purpose or deadline | Expose the shortfall in the objective outcome and the replan feedback, and report it through the input-accuracy battery check. Raise no replan banner (user requirement, 19 October 2026). Do not promise automatic recovery next quarter. |
 | Lower demand or additional solar leaves more stored energy | Record a credit. Do not discharge simply to reduce accounting variance. |
 | Battery is full | Respect saturation. Do not treat a charging command as delivered energy or accumulate a recoverable obligation to charge above capacity. |
 

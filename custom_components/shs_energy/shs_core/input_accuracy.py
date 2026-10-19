@@ -1,7 +1,9 @@
 """Health of the inputs the planner depends on.
 
 The live checks are one share each — healthy readings over the readings they
-expect — so every score is 0..100 by construction. Prices is the cloud's latest
+expect — so every score is 0..100 by construction. Battery is the share of the
+battery's charge targets due in the last 24 hours that it reached; a shortfall
+is reported here rather than as a replan banner. Prices is the cloud's latest
 comparison of the planner's price estimates with the prices later published.
 The headline averages the checks that have a score.
 """
@@ -129,16 +131,27 @@ def measurement_check(quarters: dict[str, bool], now: datetime) -> dict[str, Any
     return _check("measurements", len(recent) - len(gaps), len(recent), gaps)
 
 
+def battery_check(outcomes: list[tuple[int, int]] | None) -> dict[str, Any] | None:
+    """Charge targets reached among those measured; issues are the missed deadlines."""
+    if not outcomes:
+        return None
+    missed = [datetime.fromtimestamp(deadline / 1000, timezone.utc).isoformat()
+              for deadline, shortfall in outcomes if shortfall]
+    return _check("battery", len(outcomes) - len(missed), len(outcomes), missed)
+
+
 def prune_quarters(quarters: dict[str, bool], now: datetime) -> dict[str, bool]:
     since = quarter_start(now) - MEASUREMENT_WINDOW
     return {start: ok for start, ok in quarters.items() if datetime.fromisoformat(start) >= since}
 
 
 def input_accuracy(*, options: dict, read: Callable[[str], Any], accuracy_report: dict | None,
-                   measured_quarters: dict[str, bool], now: datetime) -> dict[str, Any]:
+                   measured_quarters: dict[str, bool], now: datetime,
+                   charge_targets: list[tuple[int, int]] | None = None) -> dict[str, Any]:
     checks = [check for check in (
         price_check(accuracy_report), solar_forecast_check(options, read),
-        sensor_check(options, read, now), measurement_check(measured_quarters, now)) if check is not None]
+        sensor_check(options, read, now), measurement_check(measured_quarters, now),
+        battery_check(charge_targets)) if check is not None]
     scored = [check["percentage"] for check in checks if check["percentage"] is not None]
     percentage = round(sum(scored) / len(scored)) if scored else None
     return {"version": VERSION, "observed_at": now.astimezone(timezone.utc).isoformat(),
