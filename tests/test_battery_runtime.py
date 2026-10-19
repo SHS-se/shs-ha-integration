@@ -1273,6 +1273,22 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
                         r.runtime.validate_plan_response(candidate)
                 finally:await r.runtime.close()
 
+    async def test_another_device_entering_verification_is_not_a_battery_fault(self):
+        # User requirement, 19 October 2026: Verification of another device has
+        # no effect on plan execution. A receipt observed before the next
+        # refresh rebinds the changed settings is not a fault, and nothing is written.
+        r=Rig();await r.start()
+        try:
+            calls=len(r.calls)
+            r.options['device_modes']['switch.towel_rack']='control_verification'
+            self.assertEqual(await r.runtime._observe_batch(r.runtime.host.state.groups[0].spec.id),())
+            await r.advance()
+            self.assertEqual(r.runtime.snapshot()['fault_history'],[])
+            self.assertEqual(r.runtime.host.state.execution.status,'active')
+            self.assertFalse(r.runtime.host.state.groups[0].release_pending)
+            self.assertEqual(r.calls[calls:],[])
+        finally:await r.runtime.close()
+
     async def test_unrelated_options_do_not_reject_a_captured_battery_reference(self):
         r=Rig('control_verification');await r.start()
         try:

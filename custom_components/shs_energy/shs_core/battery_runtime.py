@@ -920,9 +920,11 @@ class BatteryRuntime:
     async def _observe_batch(self,group_id):
         if self._closed or self.host is None or self.host.state.authority is None:
             return ()
-        options=self.controller.options()
-        if options!=self._options and not self._releasing:
-            raise ValueError('battery configuration changed')
+        if self.controller.options()!=self._options and not self._releasing:
+            # Any settings change, such as another device entering Verification,
+            # is rebound by the next refresh. Until then nothing is measured and
+            # the battery holds; it is not a fault.
+            return ()
         options=self._options
         read=self.coordinator.ports.battery_report
         now=self.now()
