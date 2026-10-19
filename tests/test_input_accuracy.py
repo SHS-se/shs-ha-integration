@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energy"))
 from shs_core.input_accuracy import (battery_check, input_accuracy, measurement_check, price_check, prune_quarters,
-                                     quarter_completeness, sensor_check, solar_forecast_check)
+                                     quarter_completeness, room_model_check, sensor_check, solar_forecast_check)
 
 NOW = datetime(2026, 10, 18, 8, 0, tzinfo=timezone.utc)  # 10:00 local
 
@@ -29,6 +29,25 @@ class PriceCheckTests(unittest.TestCase):
             check = price_check(report)
             self.assertIsNone(check["percentage"])
             self.assertEqual(check["quarters"], 0)
+
+
+class RoomModelTests(unittest.TestCase):
+    def test_planned_rooms_without_a_clean_model_are_named_with_the_fit_reason(self):
+        rooms = [{"key": "bath", "name": "Master bathroom", "status": "limited", "issues": ["insufficient_heating"]},
+                 {"key": "bed", "name": "Mark's bedroom", "status": "waiting", "issues": ["waiting"]},
+                 {"key": "office", "name": "Office", "status": "fitted", "issues": []},
+                 {"key": "spare", "name": "Spare room", "status": "unidentified", "issues": []}]
+        check = room_model_check(rooms)
+        self.assertEqual((check["key"], check["healthy"], check["expected"], check["percentage"]), ("room_models", 1, 4, 25))
+        self.assertEqual(check["issues"], ["Mark's bedroom: waiting", "Master bathroom: insufficient_heating",
+                                           "Spare room: unidentified"])
+
+    def test_no_planned_room_or_an_older_website_has_no_check(self):
+        self.assertIsNone(room_model_check(None))
+        self.assertIsNone(room_model_check([]))
+        accuracy = input_accuracy(options={}, read=lambda entity: None, accuracy_report=None,
+                                  measured_quarters={}, now=NOW, room_models=[{"name": "Bath", "status": "fitted"}])
+        self.assertEqual([check["key"] for check in accuracy["checks"]], ["prices", "room_models"])
 
 
 class SensorAndSolarTests(unittest.TestCase):

@@ -5,6 +5,7 @@ expect — so every score is 0..100 by construction. Battery is the share of the
 battery's charge targets due in the last 24 hours that it reached; a shortfall
 is reported here rather than as a replan banner. Prices is the cloud's latest
 comparison of the planner's price estimates with the prices later published.
+Room models is the share of planned rooms whose thermal fit is clean.
 The headline averages the checks that have a score.
 """
 from __future__ import annotations
@@ -140,6 +141,21 @@ def battery_check(outcomes: list[tuple[int, int]] | None) -> dict[str, Any] | No
     return _check("battery", len(outcomes) - len(missed), len(outcomes), missed)
 
 
+def room_model_check(rooms: list[dict] | None) -> dict[str, Any] | None:
+    """Planned rooms with a clean thermal model, as the website's fits report them.
+
+    A room still waiting for its first fit, or fitted with warnings, is named
+    with the fit's own reason codes, which the website translates.
+    """
+    rooms = [room for room in rooms or [] if isinstance(room, dict) and isinstance(room.get("name"), str)]
+    if not rooms:
+        return None
+    unclean = [room for room in rooms if room.get("status") != "fitted"]
+    issues = [f"{room['name']}: {','.join(str(code) for code in room.get('issues') or [room.get('status')])}"[:200]
+              for room in unclean]
+    return _check("room_models", len(rooms) - len(unclean), len(rooms), issues)
+
+
 def prune_quarters(quarters: dict[str, bool], now: datetime) -> dict[str, bool]:
     since = quarter_start(now) - MEASUREMENT_WINDOW
     return {start: ok for start, ok in quarters.items() if datetime.fromisoformat(start) >= since}
@@ -147,11 +163,12 @@ def prune_quarters(quarters: dict[str, bool], now: datetime) -> dict[str, bool]:
 
 def input_accuracy(*, options: dict, read: Callable[[str], Any], accuracy_report: dict | None,
                    measured_quarters: dict[str, bool], now: datetime,
-                   charge_targets: list[tuple[int, int]] | None = None) -> dict[str, Any]:
+                   charge_targets: list[tuple[int, int]] | None = None,
+                   room_models: list[dict] | None = None) -> dict[str, Any]:
     checks = [check for check in (
         price_check(accuracy_report), solar_forecast_check(options, read),
         sensor_check(options, read, now), measurement_check(measured_quarters, now),
-        battery_check(charge_targets)) if check is not None]
+        battery_check(charge_targets), room_model_check(room_models)) if check is not None]
     scored = [check["percentage"] for check in checks if check["percentage"] is not None]
     percentage = round(sum(scored) / len(scored)) if scored else None
     return {"version": VERSION, "observed_at": now.astimezone(timezone.utc).isoformat(),

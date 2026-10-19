@@ -221,6 +221,7 @@ class Household:
         self.data = None
         self.forecast_accuracy = None
         self.forecast_accuracy_error = None
+        self.room_models = None
         # Completeness of measured quarters read since start-up, last 24 hours.
         self.measured_quarters: dict[str, bool] = {}
         self._control_listeners = set()
@@ -652,7 +653,7 @@ class Household:
         targets = runtime.charge_target_outcomes(MEASUREMENT_WINDOW // timedelta(milliseconds=1)) if runtime is not None else None
         return input_accuracy(options=dict(self.ports.options()), read=self.ports.read_state,
                               accuracy_report=self.forecast_accuracy, measured_quarters=self.measured_quarters,
-                              now=self.ports.utcnow(), charge_targets=targets)
+                              now=self.ports.utcnow(), charge_targets=targets, room_models=self.room_models)
 
     def _read_forecast_accuracy(self, status):
         report = status.get('forecast_accuracy')
@@ -660,6 +661,9 @@ class Household:
             _LOGGER.info('Forecast accuracy calculation: %s', json.dumps(report, separators=(',', ':')))
         self.forecast_accuracy = report
         self.forecast_accuracy_error = status.get('forecast_accuracy_error')
+        # Absent from an older website, and null when it could not read them.
+        rooms = status.get('room_models')
+        self.room_models = rooms if isinstance(rooms, list) else None
 
     async def async_replan_poll(self, _now: datetime | None = None) -> None:
         """Exchange once per local 15-minute interval, independent of execution."""
