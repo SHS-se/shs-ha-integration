@@ -5,7 +5,7 @@ import asyncio
 from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 import logging
-from math import ceil, floor
+from math import floor
 from types import SimpleNamespace
 from time import perf_counter
 from uuid import uuid4
@@ -548,7 +548,6 @@ class DeviceOperations:
                 raise HotWaterConfigurationError(mapping, key)
             demand = self.watts(mapping["power"])
         if kind == "setpoint":
-            low, high = command["minimum_c"], command["maximum_c"]
             for entity in targets:
                 state = self.state(entity)
                 if entity.startswith("climate."):
@@ -562,16 +561,11 @@ class DeviceOperations:
                     step, origin = finite(state.attributes.get("step", 1)), finite(state.attributes["min"])
                 if step <= 0:
                     raise ValueError("invalid temperature step")
-                # The nearest hardware step that stays inside the plan's range:
-                # a 22.5 °C target on a whole-degree thermostat with a 22.5 °C
-                # maximum is 22, not a rejected 23.
-                steps = (command["target_c"] - origin) / step
-                fitting = [origin + n * step for n in sorted({floor(steps), ceil(steps)},
-                                                             key=lambda n: (abs(steps - n), n))
-                           if low - 1e-9 <= origin + n * step <= high + 1e-9]
-                if not fitting:
-                    raise ValueError("no hardware temperature step fits the plan envelope")
-                values[entity] = fitting[0]
+                # The nearest hardware step, halves rounded up (user requirement,
+                # 19 October 2026): a 22.5 °C plan on a whole-degree thermostat
+                # is 23, even above the plan's 22.5 maximum, so the room gets
+                # the heat it was planned rather than less.
+                values[entity] = origin + floor((command["target_c"] - origin) / step + 0.5 + 1e-9) * step
         else:
             on = command["permitted"] if kind == "permit_inhibit" else command["on_seconds"] == 900
             if water:

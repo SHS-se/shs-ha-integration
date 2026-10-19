@@ -175,8 +175,9 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.states['climate.heater'].attributes['temperature'],20)
 
-    async def test_whole_degree_thermostat_rounds_to_a_step_inside_the_plan_range(self):
-        # 22.5 °C on a 1 °C step is 22 or 23; only 22 is within 18–22.5.
+    async def test_whole_degree_thermostat_rounds_half_degrees_up(self):
+        # A BHT-002 only accepts whole degrees. 22.5 °C becomes 23, even above
+        # the plan's 22.5 maximum, so the room gets at least the planned heat.
         self.hass.config = SimpleNamespace(units=SimpleNamespace(temperature_unit='°C'))
         self.states['climate.heater'] = State('heat', temperature=18, min_temp=5, max_temp=90, target_temp_step=1)
         mapping = self.options['device_control_mappings']['heater']
@@ -189,11 +190,12 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.hass.services.async_call = climate_call
         await self.controller.async_start()
         self.assertEqual(self.controller.status['device:heater']['state'], 'commanded')
-        self.assertEqual(self.states['climate.heater'].attributes['temperature'], 22)
-        # Nearest still wins when both neighbours fit.
-        self.slot['device_commands']['heater'].update(target_c=20.6, maximum_c=23)
-        await self.controller.async_tick()
-        self.assertEqual(self.states['climate.heater'].attributes['temperature'], 21)
+        self.assertEqual(self.states['climate.heater'].attributes['temperature'], 23)
+        # Anything other than a half rounds to the nearest degree.
+        for planned, written in ((20.6, 21), (20.4, 20)):
+            self.slot['device_commands']['heater'].update(target_c=planned, maximum_c=23)
+            await self.controller.async_tick()
+            self.assertEqual(self.states['climate.heater'].attributes['temperature'], written)
 
     async def test_lost_ownership_inventory_holds_control(self):
         await self.controller.async_start()

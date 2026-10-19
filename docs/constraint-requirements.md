@@ -117,3 +117,11 @@ defines base load and the battery's eligible demand. HA executes that law and
 does not infer membership from its own device list. While a capped instruction
 is in force, house import admission also credits the discharge it promises. See
 [battery execution contract v2](battery-execution-contract-v2.md).
+
+User requirement, 19 October 2026: heaters need no minimum or maximum
+temperature in Home Assistant. The room's comfort schedule on the website owns
+the setpoint range and every setpoint command carries it. HA writes the planned
+target rounded to the thermostat's own step, halves rounded up: a 22.5 °C plan
+on a whole-degree thermostat (such as the BHT-002) is 23 °C. A rounded value
+outside the command's range is still written, never rejected; the thermostat's
+resolution, not a second local envelope, decides what can be executed.
