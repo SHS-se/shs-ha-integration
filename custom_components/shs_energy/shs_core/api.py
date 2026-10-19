@@ -75,10 +75,14 @@ class ShsApiClient:
         session: aiohttp.ClientSession,
         base_url: str,
         device_token: str | None = None,
+        app_version: str | None = None,
     ) -> None:
         self._session = session
         self._base_url = base_url.rstrip("/")
         self._device_token = device_token
+        # The SHS app that runs this core, when there is one. The website shows
+        # it beside the plan HA reports, next to the core's own version.
+        self._app_version = app_version
         self.traffic = NetworkTraffic()
         self.connection_progress = lambda state: None
 
@@ -97,6 +101,8 @@ class ShsApiClient:
             "X-SHS-API-Version": str(API_VERSION),
             "X-SHS-Integration-Version": INTEGRATION_VERSION,
         }
+        if self._app_version:
+            headers["X-SHS-App-Version"] = self._app_version
         if authenticated:
             if not self._device_token:
                 raise ShsAuthError("no device token configured")

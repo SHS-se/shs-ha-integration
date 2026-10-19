@@ -206,7 +206,8 @@ class AppEngine:
         for environment, cloud_credentials in self.backends.data['credentials'].items():
             authority = environment == self.environment
             cloud_ports = ports if authority else replace(ports, admit=refuse_admission, repair=lambda *_args:None)
-            client = ShsApiClient(self.http,cloud_credentials[CONF_BASE_URL],cloud_credentials[CONF_DEVICE_TOKEN])
+            client = ShsApiClient(self.http,cloud_credentials[CONF_BASE_URL],cloud_credentials[CONF_DEVICE_TOKEN],
+                app_version=(self.paired_release or {}).get('app_version'))
             household = Household(cloud_ports,client,
                 store=DurableRecord(record(f'cloud.{environment}.'),encode,json.loads),
                 battery_inputs_store=record('battery_live_inputs.' if authority else f'cloud.{environment}.battery_inputs.'),
@@ -564,7 +565,7 @@ class AppEngine:
         environment = body['environment']
         if environment not in URLS:
             raise ValueError('Choose production or test')
-        client = ShsApiClient(self.http,URLS[environment],'')
+        client = ShsApiClient(self.http,URLS[environment],'',app_version=(self.paired_release or {}).get('app_version'))
         code = body.get('pairing_code')
         if not isinstance(code,str) or not code.strip():
             raise BackendSetupError('Enter the pairing code from this backend',
