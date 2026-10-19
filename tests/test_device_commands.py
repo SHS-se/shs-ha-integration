@@ -175,6 +175,26 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.states['climate.heater'].attributes['temperature'],20)
 
+    async def test_whole_degree_thermostat_rounds_to_a_step_inside_the_plan_range(self):
+        # 22.5 °C on a 1 °C step is 22 or 23; only 22 is within 18–22.5.
+        self.hass.config = SimpleNamespace(units=SimpleNamespace(temperature_unit='°C'))
+        self.states['climate.heater'] = State('heat', temperature=18, min_temp=5, max_temp=90, target_temp_step=1)
+        mapping = self.options['device_control_mappings']['heater']
+        mapping.update(control_type='setpoint', actuator_entity_ids=['climate.heater'])
+        self.coordinator.optimisation_plan['device_models'][0]['control_type'] = 'setpoint'
+        self.coordinator.async_cached_device_configuration.return_value[0]['control_type'] = 'setpoint'
+        self.slot['device_commands']['heater'] = {'type':'setpoint', 'target_c':22.5, 'minimum_c':18, 'maximum_c':22.5}
+        async def climate_call(domain, service, data, blocking):
+            self.states[data['entity_id']].attributes['temperature'] = data['temperature']
+        self.hass.services.async_call = climate_call
+        await self.controller.async_start()
+        self.assertEqual(self.controller.status['device:heater']['state'], 'commanded')
+        self.assertEqual(self.states['climate.heater'].attributes['temperature'], 22)
+        # Nearest still wins when both neighbours fit.
+        self.slot['device_commands']['heater'].update(target_c=20.6, maximum_c=23)
+        await self.controller.async_tick()
+        self.assertEqual(self.states['climate.heater'].attributes['temperature'], 21)
+
     async def test_lost_ownership_inventory_holds_control(self):
         await self.controller.async_start()
         self.coordinator.async_cached_device_configuration.side_effect = ValueError('bad cache')
