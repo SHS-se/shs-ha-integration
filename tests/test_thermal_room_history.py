@@ -56,7 +56,8 @@ class RoomHistoryTests(unittest.IsolatedAsyncioTestCase):
         earliest = NOW - QUARTER * MAX_THERMAL_SLOTS_PER_PUSH
         self.assertEqual(starts[0], earliest)
         self.assertTrue(all('master_bathroom' in slot['zone_observations'] for slot in slots))
-        self.assertEqual(self.household.pending_room_history, {'master_bathroom': earliest.isoformat()})
+        self.assertEqual(self.household.pending_room_history,
+                         {'master_bathroom': earliest.isoformat(), '$house': earliest.isoformat()})
 
     async def test_history_continues_back_to_a_week_and_stops(self):
         start, history = NOW - timedelta(hours=1), {}
@@ -64,7 +65,7 @@ class RoomHistoryTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(5):
             await self.quarters(start, history)
             history = self.household.pending_room_history
-        self.assertEqual(history, {'master_bathroom': floor.isoformat()})
+        self.assertEqual(history, {'master_bathroom': floor.isoformat(), '$house': floor.isoformat()})
         slots = await self.quarters(start, history)
         self.assertEqual(len(slots), 4)
         self.assertEqual(self.household.pending_room_history, history)

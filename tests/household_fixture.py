@@ -54,6 +54,7 @@ class Rig:
         self.options = deepcopy(options or {'planning_mode': 'live'})
         self.home = HomeFacts(59.3, 18.0, 'en', ZoneInfo('Europe/Stockholm'))
         self.states = {}
+        self.areas = {}
         self.records = Store(stored)
         self.battery_store = Store()
         self.client = Mock(status=AsyncMock(return_value=cloud_status(subscription_active=False)))
@@ -71,7 +72,7 @@ class Rig:
         ports = HouseholdPorts(
             home=lambda: self.home, options=lambda: deepcopy(self.options), admit=admit,
             read_state=self.states.get, entity_ids=lambda: set(self.states),
-            entity_names=lambda: {}, area_names=lambda: {}, entity_areas=lambda: {},
+            entity_names=lambda: {}, area_names=lambda: {}, entity_areas=lambda: dict(self.areas),
             inventory=AsyncMock(return_value=[]), battery_report=lambda entity: None,
             history=self.history, utcnow=lambda: self.now, recovering=lambda: False,
             repair=lambda *args: self.repairs.append(args), publish=lambda: self.published.append(True), spawn=spawn,

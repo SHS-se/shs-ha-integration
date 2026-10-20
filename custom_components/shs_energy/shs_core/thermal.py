@@ -38,6 +38,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime, timedelta, timezone
 from math import isfinite
+from statistics import median
 from typing import Any
 
 from .device_controls import mapped_planning_path
@@ -50,6 +51,16 @@ SLOT_SECONDS = int(SLOT.total_seconds())
 # nothing. Below this share of known seconds the quarter is dropped rather
 # than published as a confident reading built from one surviving sample.
 THERMAL_MIN_SAMPLE_COVERAGE = 0.6
+
+# The house a room loses its heat into. A room is not a box in outdoor air: a
+# bathroom between heated rooms cools toward them, and follows them when the
+# house's own heating switches off at night. The house temperature is the
+# median across areas of each area's median sensor, so a garage, a door
+# sensor's chip or a smart plug's internal thermometer is one vote among the
+# house's rooms instead of a pull on an average.
+HOUSE_HISTORY_KEY = "$house"
+# Fewer areas than this is a few rooms, not the house.
+MIN_HOUSE_AREAS = 3
 
 # Climate entities report their true demand in ``hvac_action``; ``state`` only
 # names the mode the user selected. A thermostat left in ``heat`` all night is
@@ -269,9 +280,57 @@ def interpolate_hourly_forecast(
     return result
 
 
+def house_temperature_entities(
+    entity_areas: dict[str, str],
+    read_state: Callable[[str], Any],
+    excluded: Iterable[str | None] = (),
+) -> dict[str, str]:
+    """Every indoor temperature sensor with statistics, and its area.
+
+    Only sensors in an area count: an area is how Home Assistant says a sensor
+    is in the house. The outdoor and pool water sensors are in areas too, so
+    the ones this home configured are left out by name.
+    """
+    skip = {entity for entity in excluded if entity}
+    result: dict[str, str] = {}
+    for entity_id, area in entity_areas.items():
+        if not entity_id.startswith("sensor.") or entity_id in skip or not area:
+            continue
+        state = read_state(entity_id)
+        attributes = getattr(state, "attributes", None) or {}
+        if (
+            attributes.get("device_class") == "temperature"
+            and attributes.get("state_class") == "measurement"
+            and attributes.get("unit_of_measurement") == "°C"
+        ):
+            result[entity_id] = area
+    return result
+
+
+def house_temperature_quarters(
+    quarters_by_entity: dict[str, dict[datetime, float]],
+    area_by_entity: dict[str, str],
+) -> dict[datetime, float]:
+    """The house's temperature per quarter: a median of area medians."""
+    readings: dict[datetime, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for entity_id, quarters in quarters_by_entity.items():
+        area = area_by_entity.get(entity_id)
+        if area is None:
+            continue
+        for slot, value in quarters.items():
+            if isfinite(value):
+                readings[slot][area].append(value)
+    return {
+        slot: round(median(median(values) for values in areas.values()), 4)
+        for slot, areas in readings.items()
+        if len(areas) >= MIN_HOUSE_AREAS
+    }
+
+
 def build_thermal_slots(
     zones: dict[str, dict[str, dict[datetime, float]]],
     outdoor: dict[datetime, float],
+    house: dict[datetime, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Assemble complete quarter-hour thermal rows for the website.
 
@@ -281,8 +340,9 @@ def build_thermal_slots(
     chart's band, while the heat-loss fit itself reads temperature against the
     per-device energy already carried on the electrical slots. Outdoor
     temperature is a home-level field because every zone loses heat to the
-    same air.
+    same air, and so is the house temperature every zone sits in.
     """
+    house = house or {}
     rows: dict[datetime, dict[str, dict[str, float]]] = defaultdict(dict)
     for key, series in zones.items():
         temperatures = series.get("room_temperature_c", {})
@@ -312,10 +372,8 @@ def build_thermal_slots(
     # series, and a pool-only home has no zones to carry it: gating the row on
     # zone observations left those homes with no outdoor history at all, and the
     # fit then refused for want of samples it could never have had.
-    for slot in sorted(set(rows) | set(outdoor)):
+    for slot in sorted(set(rows) | set(outdoor) | set(house)):
         observations = rows.get(slot, {})
-        if not observations and slot not in outdoor:
-            continue
         payload: dict[str, Any] = {
             "start": slot.isoformat(),
             "zone_observations": observations,
@@ -327,6 +385,8 @@ def build_thermal_slots(
         }
         if slot in outdoor:
             payload["outdoor_temperature_c"] = outdoor[slot]
+        if slot in house:
+            payload["house_temperature_c"] = house[slot]
         slots.append(payload)
     return slots
 
@@ -371,8 +431,9 @@ def merge_thermal_slots(*batches: Iterable[dict[str, Any]]) -> list[dict[str, An
                 merged[row["start"]] = {**row, "zone_observations": dict(row["zone_observations"])}
                 continue
             existing["zone_observations"].update(row["zone_observations"])
-            if "outdoor_temperature_c" in row:
-                existing.setdefault("outdoor_temperature_c", row["outdoor_temperature_c"])
+            for field in ("outdoor_temperature_c", "house_temperature_c"):
+                if field in row:
+                    existing.setdefault(field, row[field])
     return [merged[start] for start in sorted(merged, key=lambda value: datetime.fromisoformat(value))]
 
 

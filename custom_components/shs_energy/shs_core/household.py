@@ -141,11 +141,14 @@ from .planning import (
 )
 from .readings import daily_category_readings, usable_change
 from .thermal import (
+    HOUSE_HISTORY_KEY,
     SLOT,
     actuator_value,
     cooling_value,
     build_thermal_slots,
     energy_duty,
+    house_temperature_entities,
+    house_temperature_quarters,
     merge_thermal_slots,
     interpolate_hourly_forecast,
     numeric_value,
@@ -1517,6 +1520,21 @@ class Household:
         statistics = await self._statistics_means([entity_id], start, end)
         return quarter_means(statistics.get(entity_id, []))
 
+    async def _house_temperature_quarters(
+        self, options: dict[str, Any], start: datetime, end: datetime
+    ) -> dict[datetime, float]:
+        """The house every room sits in, from the indoor sensors in its areas."""
+        sources = house_temperature_entities(
+            self.ports.entity_areas(), self.ports.read_state,
+            (options.get(OPT_OUTDOOR_TEMPERATURE_ENTITY), options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY)),
+        )
+        if not sources:
+            return {}
+        statistics = await self._statistics_means(sorted(sources), start, end)
+        return house_temperature_quarters(
+            {entity_id: quarter_means(rows) for entity_id, rows in statistics.items()}, sources,
+        )
+
     async def _outdoor_forecast(
         self, options: dict[str, Any], horizon: list[datetime]
     ) -> tuple[dict[datetime, float], str | None]:
@@ -1600,7 +1618,9 @@ class Household:
             return slots
         floor = end - timedelta(hours=THERMAL_ROOM_HISTORY_HOURS)
         sent_from = {}
-        for key in zones:
+        # The house is sent back a week like a room, so rooms can learn from
+        # it on the next refit instead of a week later.
+        for key in [*zones, HOUSE_HISTORY_KEY]:
             try:
                 sent_from[key] = datetime.fromisoformat(room_history[key]).astimezone(timezone.utc)
             except (KeyError, TypeError, ValueError):
@@ -1613,8 +1633,9 @@ class Household:
             # The outdoor rows for these quarters were sent when they were
             # current. Sending them again would only ask for their sunshine again.
             history = await self._zone_thermal_slots(
-                options, devices, {key: zones[key] for key in behind},
+                options, devices, {key: zones[key] for key in behind if key in zones},
                 history_start, history_end, outdoor=False,
+                house=HOUSE_HISTORY_KEY in behind,
             )
             slots = merge_thermal_slots(slots, history)
             for key in behind:
@@ -1631,8 +1652,13 @@ class Household:
         end: datetime,
         *,
         outdoor: bool,
+        house: bool | None = None,
     ) -> list[dict[str, Any]]:
-        """Thermal rows for ``zones`` over one window."""
+        """Thermal rows for ``zones`` over one window.
+
+        The house temperature rides with the outdoor rows unless ``house`` says
+        otherwise: the history window sends it alone while the house catches up.
+        """
         temperature_entities = sorted(
             {zone["temperature_entity_id"] for zone in zones.values()}
         )
@@ -1739,7 +1765,9 @@ class Household:
             series[key] = zone_series
 
         temperatures_outdoor = await self._outdoor_temperature_quarters(options, start, end) if outdoor else {}
-        return build_thermal_slots(series, temperatures_outdoor)
+        temperatures_house = (await self._house_temperature_quarters(options, start, end)
+                              if (outdoor if house is None else house) else {})
+        return build_thermal_slots(series, temperatures_outdoor, temperatures_house)
 
     async def _pool_quarters(
         self, options: dict[str, Any], start: datetime, end: datetime
