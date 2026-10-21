@@ -192,7 +192,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status['device:heater']['state'], 'commanded')
         self.assertEqual(self.states['climate.heater'].attributes['temperature'], 23)
         # Anything other than a half rounds to the nearest degree.
-        for planned, written in ((20.6, 21), (20.4, 20)):
+        for planned, written in ((20.6, 21), (20.4, 20), (21.46, 21), (21.11, 21), (21.38, 21), (21.5, 22)):
             self.slot['device_commands']['heater'].update(target_c=planned, maximum_c=23)
             await self.controller.async_tick()
             self.assertEqual(self.states['climate.heater'].attributes['temperature'], written)

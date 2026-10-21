@@ -640,3 +640,17 @@ Wire schema identifiers, calibrated measurement error, supported native correcti
 steps and benchmark limits require implementation evidence. This specification
 does not invent values for them. These are engineering tasks, not missing product
 decisions blocking the agreed plan-execution objective.
+
+### Native room-thermostat forecast evidence (21 October 2026)
+
+Setpoint device snapshot models carry `thermostat` evidence: native entity,
+minimum/maximum/step, current target, own current temperature and `hvac_action`.
+The gateway's compact ordered reports preserve the HVAC action alongside both
+temperatures. Unknown native evidence is `null`; it is never inferred from the
+selected `heat` mode. The planner uses the explicit 0.5 °C start margin and
+observed heating latch to project power from supported targets.
+
+New native-target commands use hardware bounds in `minimum_c`/`maximum_c`; room
+comfort bounds remain in the thermal zone. Execution still rounds each requested
+target to the nearest hardware step, halves up. Acknowledged settings do not
+promise delivered watts. No execution, ownership, or release rule changes here.

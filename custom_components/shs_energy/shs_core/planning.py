@@ -708,6 +708,32 @@ def unplanned_services(
     return reports
 
 
+def thermostat_facts(mapping, read_state):
+    """Capture a native thermostat without inventing missing sensor/action data.
+
+    These are snapshot observations, not persisted device training parameters.
+    A number-only target cannot report its own sensor and HVAC latch.
+    """
+    from .device_commands import actuator_targets
+    targets = actuator_targets(mapping)
+    if len(targets) != 1 or not targets[0].startswith("climate."):
+        return None
+    state = read_state(targets[0])
+    if state is None or state.state != "heat":
+        return None
+    attrs = state.attributes
+    fields = dict(minimum_c="min_temp", maximum_c="max_temp", step_c="target_temp_step",
+                  current_temperature_c="current_temperature", target_temperature_c="temperature")
+    values = {key: attrs.get(attribute) for key, attribute in fields.items()}
+    if (any(type(v) not in (int, float) or not isfinite(v) for v in values.values())
+            or values["step_c"] <= 0 or values["maximum_c"] < values["minimum_c"]
+            or not values["minimum_c"] <= values["target_temperature_c"] <= values["maximum_c"]
+            or attrs.get("hvac_action") not in ("heating", "idle", "off")):
+        return None
+    return dict(entity_id=targets[0], **values,
+                hvac_action="heating" if attrs["hvac_action"] == "heating" else "idle")
+
+
 def build_device_models(
     devices: list[dict[str, Any]],
     device_actuals: list[dict[str, Any]],

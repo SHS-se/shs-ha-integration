@@ -2780,6 +2780,11 @@ class Household:
                 devices, control_mappings, profile_start, captured,
             ),
         )
+        # Native state is read at capture, independently of historical models.
+        from .planning import thermostat_facts
+        for model in device_models:
+            if model["control_type"] == "setpoint" and model.get("planning_service") != "pool":
+                model["thermostat"] = thermostat_facts(control_mappings.get(model["key"], {}), self.ports.read_state)
         self.optimisation_degraded_devices = degraded_devices
         self._sync_degraded_device_issue()
         modelled_device_keys = tuple(

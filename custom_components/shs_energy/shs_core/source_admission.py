@@ -15,7 +15,7 @@ COUNTERS = ('grid_import', 'grid_export', 'battery_charge', 'battery_discharge')
 # installed every source travels ordered, and the app keeps the ordered row in
 # place of the live one: without `watts` the next replan has no solar forecast.
 FACT_ATTRIBUTES = frozenset(('unit_of_measurement', 'device_class', 'state_class',
-    'entity_id', 'min', 'max', 'step', 'options', 'hvac_modes', 'hvac_mode',
+    'entity_id', 'min', 'max', 'step', 'options', 'hvac_modes', 'hvac_mode', 'hvac_action',
     'temperature', 'current_temperature', 'min_temp', 'max_temp', 'target_temp_step',
     'preset_mode', 'preset_modes', 'watts'))
 

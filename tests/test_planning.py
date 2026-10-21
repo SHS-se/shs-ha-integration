@@ -1236,3 +1236,33 @@ class PoolHeaterRuntimeTests(unittest.TestCase):
         self.assertEqual(intent['parameters']['heating_w'], 3000)
         with self.assertRaises(KeyError):
             device_intent('pool', 'apply', plan, {'start': START.isoformat(), 'pool_w': 0}, configuration_revision=1, policy_revision=1)
+
+class ThermostatFactsTests(unittest.TestCase):
+    def setUp(self):
+        from types import SimpleNamespace
+        self.mapping = dict(control_type='setpoint', actuator_entity_ids=['climate.bathroom'])
+        self.state = SimpleNamespace(state='heat', attributes=dict(min_temp=5, max_temp=90,
+            target_temp_step=1, current_temperature=21, temperature=21, hvac_action='idle'))
+
+    def facts(self):
+        from shs_core.planning import thermostat_facts
+        return thermostat_facts(self.mapping, lambda entity: self.state)
+
+    def test_own_temperature_target_and_hvac_latch_travel_with_native_steps(self):
+        self.assertEqual(self.facts(), dict(entity_id='climate.bathroom', minimum_c=5, maximum_c=90,
+            step_c=1, current_temperature_c=21, target_temperature_c=21, hvac_action='idle'))
+        self.state.attributes['hvac_action'] = 'heating'
+        self.assertEqual(self.facts()['hvac_action'], 'heating')
+        self.assertNotIn('thermostat', self.mapping)
+
+    def test_unknown_evidence_is_not_an_ideal_thermostat(self):
+        for key in ('current_temperature', 'temperature', 'hvac_action', 'target_temp_step'):
+            saved = self.state.attributes.pop(key)
+            self.assertIsNone(self.facts())
+            self.state.attributes[key] = saved
+        self.state.state = 'unavailable'
+        self.assertIsNone(self.facts())
+
+    def test_number_targets_cannot_invent_their_own_sensor_or_hvac_action(self):
+        self.mapping['actuator_entity_ids'] = ['number.target']
+        self.assertIsNone(self.facts())

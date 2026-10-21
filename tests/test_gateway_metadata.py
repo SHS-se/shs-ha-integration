@@ -56,6 +56,17 @@ class Hass:
 
 
 class MetadataTests(unittest.IsolatedAsyncioTestCase):
+    async def test_compact_thermostat_reports_keep_native_action_and_both_temperatures(self):
+        now = datetime.now(timezone.utc)
+        state = SimpleNamespace(state='heat', attributes=dict(temperature=21, current_temperature=20.5,
+            hvac_action='idle', target_temp_step=1, min_temp=5, max_temp=90, unrelated='omit'),
+            last_changed=now, last_updated=now, last_reported=now, context=SimpleNamespace(id='native'))
+        report = self.source.report('climate.bathroom', state, compact=True)
+        self.assertEqual(report['attributes']['hvac_action'], 'idle')
+        self.assertEqual(report['attributes']['temperature'], 21)
+        self.assertEqual(report['attributes']['current_temperature'], 20.5)
+        self.assertNotIn('unrelated', report['attributes'])
+
     async def asyncSetUp(self):
         await battery_fixtures.BatteryGatewayTests.asyncSetUp(self)
         self.hass = Hass()
