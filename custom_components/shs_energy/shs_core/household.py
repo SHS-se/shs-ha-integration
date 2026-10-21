@@ -103,7 +103,7 @@ from .device_controls import (
     planning_path,
     requested_controllable_devices,
 )
-from .hot_water import FINISH_HEATING_W, is_hot_water, hot_water_setup_errors
+from .hot_water import RUNNING_PEAK_MIN_W, is_hot_water, hot_water_setup_errors
 from .optimisation import (
     OptimisationInputError,
     REMEDY_DEFECT,
@@ -2583,7 +2583,7 @@ class Household:
         for key, sensor in sensors.items():
             peaks = [row["max"] for row in statistics.get(sensor, [])
                      if type(row.get("max")) in (int, float) and isfinite(row["max"])
-                     and row["max"] >= FINISH_HEATING_W]
+                     and row["max"] >= RUNNING_PEAK_MIN_W]
             if peaks:
                 result[key] = round(median(peaks), 1)
         return result

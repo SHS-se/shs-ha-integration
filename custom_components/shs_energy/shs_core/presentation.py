@@ -6,7 +6,7 @@ from .optimisation import validate_plan_contract, OptimisationInputError
 from .configuration_fields import _configuration_sections, _control_fields, LABELS
 from .device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_control_errors
 from .device_commands import execution_setup_errors, slot_command
-from .hot_water import is_hot_water, hot_water_setup_errors
+from .hot_water import FINISH_HEATING_W, is_hot_water, hot_water_setup_errors
 
 
 
@@ -340,7 +340,7 @@ def controller_explanation(device, mode, status, slot=None):
     except (KeyError, TypeError, ValueError) as error:
         planned = f"The device's plan command is unreadable: {error}"
     if status.get('decision', {}).get('finishing_heating'):
-        planned = 'Finishing heating: the scheduled pause waits until heater power falls below 500 W.'
+        planned = f'Finishing heating: the scheduled pause waits until heater power falls below {FINISH_HEATING_W} W.'
     parts.append(planned or 'Waiting for a current plan for this device.')
     if status.get('next_step'): parts.append(status['next_step'])
     return {'explanation': '\n'.join(parts)}

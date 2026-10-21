@@ -25,10 +25,13 @@ class HotWaterTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.assertEqual(self.states['switch.heater'].state, 'on')
         self.assertTrue(self.controller.status['device:heater']['decision']['finishing_heating'])
-        self.states['sensor.water_power'].state = '500'
+        self.states['sensor.water_power'].state = '120'
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.states['sensor.water_power'].state = '499'
+        self.states['sensor.water_power'].state = '50'
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.heater'].state, 'on')
+        self.states['sensor.water_power'].state = '49'
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.heater'].state, 'off')
         self.calls.clear()
@@ -146,9 +149,9 @@ class HotWaterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('inhibit', self.controller.verification.attempts[-1]['operations'])
 
     def test_boundary_and_no_start_when_already_blocked(self):
-        self.assertTrue(heating_permission(False, True, 501))
-        self.assertTrue(heating_permission(False, True, 500))
-        self.assertFalse(heating_permission(False, True, 499))
+        self.assertTrue(heating_permission(False, True, 51))
+        self.assertTrue(heating_permission(False, True, 50))
+        self.assertFalse(heating_permission(False, True, 49))
         self.assertFalse(heating_permission(False, False, 3000))
         self.assertTrue(heating_permission(True, False, 0))
 

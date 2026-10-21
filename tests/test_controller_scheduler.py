@@ -479,7 +479,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.assertIn('sensor.water_power', self.scheduler.dependencies['device:heater'])
         self.assertEqual(self.states['switch.heater'].state, 'on')
-        self.states['sensor.water_power'].state = '499'
+        self.states['sensor.water_power'].state = '49'
         self.event('sensor.water_power')
         await self.drain()
         self.assertEqual(self.states['switch.heater'].state, 'off')
