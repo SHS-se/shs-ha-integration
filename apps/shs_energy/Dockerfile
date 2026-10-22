@@ -1,12 +1,24 @@
 ARG TARGETARCH
-FROM node:24.14.0-bookworm-slim AS frontend
+FROM node:24.22.1-bookworm-slim AS frontend
 WORKDIR /src/web
 COPY web/package*.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 
-FROM python:3.13.12-slim-bookworm AS companion
+FROM python:3.13.13-slim-bookworm AS python-base
+# Debian's security update distrusts both the eMudhra root and its AAA cross-sign.
+# Fail the build if a mirror has not published the fixed bookworm package yet.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge '20250419~deb12u2' \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir --upgrade pip==26.2.2
+COPY scripts/check-tls-trust.py /usr/local/bin/check-tls-trust.py
+RUN python /usr/local/bin/check-tls-trust.py
+
+FROM python-base AS companion
 WORKDIR /src
 COPY app/ ./app/
 COPY scripts/build-companion.py ./scripts/build-companion.py
@@ -14,8 +26,8 @@ COPY custom_components/ ./custom_components/
 RUN python scripts/build-companion.py /bundle
 COPY web/package.json /bundle/app.json
 
-FROM python:3.13.12-slim-bookworm AS runtime
-ARG BUILD_VERSION=0.1.0-beta.107
+FROM python-base AS runtime
+ARG BUILD_VERSION=0.1.0-beta.108
 ARG TARGETARCH
 LABEL io.hass.version="${BUILD_VERSION}" io.hass.type="app" \
       org.opencontainers.image.source="https://github.com/SHS-se/shs-ha-integration" \

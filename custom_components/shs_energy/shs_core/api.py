@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import ssl
 from time import monotonic
 from typing import Any
 from urllib.parse import urlencode
 from uuid import uuid4
 
 import aiohttp
+import certifi
 
 from .network_traffic import NetworkTraffic
 
@@ -23,6 +25,9 @@ from .api_contract import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+# Explicitly use the patched Mozilla bundle, including when Home Assistant's
+# shared session was created with an older host trust store.
+_TLS_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 # Preparation may include history reads. Solving runs as a durable cloud job
@@ -118,6 +123,7 @@ class ShsApiClient:
                 f"{self._base_url}/{path}",
                 json=json_body,
                 headers=headers,
+                ssl=_TLS_CONTEXT,
                 timeout=timeout or (PLANNING_REQUEST_TIMEOUT if path == "energy-optimisation-ingest" else REQUEST_TIMEOUT),
                 trace_request_ctx={"connected": self.connection_progress if notification else None},
             ) as resp:

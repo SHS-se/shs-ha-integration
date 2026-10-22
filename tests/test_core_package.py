@@ -124,7 +124,7 @@ print('household exchange runs from the isolated distribution')
                         self.assertIn(node.module.split('.')[0], sys.stdlib_module_names, str(path))
                 elif isinstance(node, ast.Import):
                     for name in node.names:
-                        self.assertIn(name.name.split('.')[0], sys.stdlib_module_names | ({'aiohttp'} if path.name == 'api.py' else set()), str(path))
+                        self.assertIn(name.name.split('.')[0], sys.stdlib_module_names | ({'aiohttp', 'certifi'} if path.name == 'api.py' else set()), str(path))
 
     async def test_read_only_reader_does_not_complete_legacy_cleanup_or_create_files(self):
         import sqlite3

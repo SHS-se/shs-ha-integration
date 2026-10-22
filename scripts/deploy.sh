@@ -37,7 +37,7 @@ app_slug="shs_energy"
 app_image="shs-se/shs-energy-app"
 # What starts each workflow, as its own `paths` filter lists them.
 beta_paths='^(custom_components/|tests/|scripts/bump\.sh$|\.github/workflows/beta\.yml$)'
-app_paths='^(app/|web/|apps/|repository\.yaml$|\.dockerignore$|\.github/workflows/app\.yml$|scripts/build-companion\.py$|scripts/check-app\.py$)'
+app_paths='^(app/|web/|apps/|repository\.yaml$|\.dockerignore$|\.github/workflows/app\.yml$|scripts/build-companion\.py$|scripts/check-app\.py$|scripts/check-tls-trust\.py$)'
 ha_host="${HA_HOST:-192.168.10.20}"
 ha_port="${HA_PORT:-22222}"
 # The Advanced SSH & Web Terminal add-on, whose token may call Home Assistant.

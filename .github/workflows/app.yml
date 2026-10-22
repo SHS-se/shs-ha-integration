@@ -2,7 +2,7 @@ name: SHS app
 on:
   push:
     branches: [main]
-    paths: ['app/**', 'web/**', 'apps/**', 'repository.yaml', '.dockerignore', '.github/workflows/app.yml', 'scripts/build-companion.py', 'scripts/check-app.py']
+    paths: ['app/**', 'web/**', 'apps/**', 'repository.yaml', '.dockerignore', '.github/workflows/app.yml', 'scripts/build-companion.py', 'scripts/check-app.py', 'scripts/check-tls-trust.py']
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,7 +20,7 @@ jobs:
           python-version: '3.13'
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '24.22.1'
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: pip install -r app/requirements.txt PyYAML==6.0.3
