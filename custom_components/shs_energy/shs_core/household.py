@@ -3184,7 +3184,7 @@ class Household:
         if result["state"] == "pending":
             stored["optimisation_pending_job"] = {
                 key: value for key, value in pending.items()
-                if key not in ("snapshot_id", "devices")
+                if key not in ("snapshot_id", "devices", "submission_error")
             }
             stored["optimisation_pending_job"]["job_id"] = result["job_id"]
         else:
@@ -3205,12 +3205,15 @@ class Household:
                 if recovering_submission else self.client.planning_status(pending["job_id"])
             )
         except ShsApiError as error:
+            failure = error
+            if recovering_submission and error.code == "planning_job_not_found" and pending.get("submission_error"):
+                failure = ShsApiError(**pending["submission_error"])
             async with self._push_lock:
                 stored = await self._store.async_read() or {}
                 if self._planning_receipt_identity(stored.get(record_key, {})) != self._planning_receipt_identity(pending):
                     return 0
-                self.last_optimisation_error = str(error)
-                self._pipeline_error('delivery', error)
+                self.last_optimisation_error = str(failure)
+                self._pipeline_error('delivery', failure)
                 if error.code == "planning_job_not_found":
                     stored = await self._store.async_load()
                     stored.pop(record_key, None)
@@ -3220,7 +3223,7 @@ class Household:
                     self.async_update_listeners()
                     return 5
             if recovering_submission and pending.get("replan_request_id"):
-                await self._report_replan_failure(pending["replan_request_id"], str(error))
+                await self._report_replan_failure(pending["replan_request_id"], str(failure))
             return 0
         async with self._push_lock:
             stored = await self._store.async_load() or {}
@@ -3231,6 +3234,7 @@ class Household:
                 return result["retry_after_ms"] / 1000
             if recovering_submission:
                 await self._journal_planning_acceptance(stored, result, pending)
+                self._pipeline_error('upload', None)
                 try:
                     await self._record_device_exchange(stored, pending["devices"], result)
                 except (ShsApiError, HouseholdReadError, OptimisationInputError, KeyError, TypeError, ValueError) as error:
@@ -3585,6 +3589,16 @@ class Household:
                     # original reason instead of replacing it with a later 404.
                     if not error.retryable and snapshot is not None:
                         stored.pop("optimisation_pending_submission", None)
+                        await self._store.async_save(stored)
+                    elif snapshot is not None and snapshot.get("snapshot_id"):
+                        # Recovery may find a committed job despite a lost reply.
+                        # If none exists, report the upload failure that caused
+                        # recovery, including its original request identity.
+                        stored["optimisation_pending_submission"]["submission_error"] = {
+                            "message": error.message, "code": error.code,
+                            "request_id": error.request_id, "path": error.path,
+                            "retryable": error.retryable,
+                        }
                         await self._store.async_save(stored)
                     raise
                 self._pipeline_error('upload', None)

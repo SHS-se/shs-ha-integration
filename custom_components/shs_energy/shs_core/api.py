@@ -48,6 +48,7 @@ class ShsApiError(Exception):
         path: str | None = None,
         retryable: bool = False,
     ) -> None:
+        self.message = message
         self.code = code
         self.request_id = request_id
         self.path = path

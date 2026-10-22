@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, Mock
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
 from household_fixture import Rig, replacement_plan
-from shs_core.api import ShsApiError
+from shs_core.api import ShsApiError, ShsConnectionError
 
 
 class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
@@ -275,6 +275,8 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(accepted['job_id'], 'job')
         self.assertNotIn('snapshot_id', accepted)
         self.assertNotIn('devices', accepted)
+        self.assertNotIn('submission_error', accepted)
+        self.assertNotIn('pipeline:upload', self.failures())
         self.assertEqual(self.rig.records.saved['answered_replan_request_id'], 'manual')
         self.assertEqual(self.rig.records.saved['optimisation_actuals_accepted_until'], self.rig.now.isoformat())
         self.h.client.planning_status.return_value = self.published()
@@ -318,7 +320,38 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         await self.h._poll_planning_job(pending)
         self.assertNotIn('optimisation_pending_submission', self.rig.records.saved)
         self.assertEqual(self.h.optimisation_plan, self.plan)
-        self.h.client.report_replan_failure.assert_awaited_once_with('manual', 'not accepted')
+        self.h.client.report_replan_failure.assert_awaited_once_with('manual', 'reply lost')
+
+    async def test_missing_submission_preserves_original_546_across_restart(self):
+        original = ShsConnectionError(
+            'energy-optimisation-ingest returned HTTP 546 without an SHS API envelope',
+            code='upstream_transport_failure', request_id='upload-request', retryable=True,
+        )
+        self.h.client.push_optimisation.side_effect = original
+        await self.h.async_answer_replan('manual')
+        rig = Rig(now=self.rig.now, options=self.rig.options, stored=self.rig.records.saved)
+        restarted = rig.household
+        restarted.client = self.h.client
+        await restarted.async_restore_plan()
+        pending = (await restarted._store.async_read())['optimisation_pending_submission']
+        restarted.client.planning_submission_status.side_effect = ShsApiError(
+            'planning job not found', code='planning_job_not_found', request_id='lookup-request',
+        )
+        await restarted._poll_planning_job(pending)
+        self.assertEqual(restarted.last_optimisation_error, str(original))
+        delivery = {item['key']: item for item in restarted.attention_items}['pipeline:delivery']
+        self.assertEqual(delivery['detail'], str(original))
+        self.assertNotIn('optimisation_pending_submission', rig.records.saved)
+        restarted.client.report_replan_failure.assert_awaited_once_with('manual', str(original))
+        self.assertEqual(restarted.optimisation_plan, self.plan)
+
+    async def test_upload_failure_without_snapshot_identity_keeps_original_error(self):
+        self.h._build_optimisation_snapshot.return_value = {}
+        original = ShsApiError('ingest returned HTTP 546', retryable=True)
+        self.h.client.push_optimisation.side_effect = original
+        await self.h.async_optimisation_push(force_plan=True)
+        self.assertEqual(self.h.last_optimisation_error, str(original))
+        self.assertNotIn('optimisation_pending_submission', self.rig.records.saved)
 
     async def test_rejected_submission_reports_the_original_error_without_receipt_recovery(self):
         accepted = await self.accept()
