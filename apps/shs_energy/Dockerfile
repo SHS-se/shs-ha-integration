@@ -6,7 +6,7 @@ RUN npm ci --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 
-FROM python:3.13.13-slim-bookworm AS python-base
+FROM python:3.13.17-slim-bookworm AS python-base
 # Debian's security update distrusts both the eMudhra root and its AAA cross-sign.
 # Fail the build if a mirror has not published the fixed bookworm package yet.
 RUN apt-get update \
@@ -27,7 +27,7 @@ RUN python scripts/build-companion.py /bundle
 COPY web/package.json /bundle/app.json
 
 FROM python-base AS runtime
-ARG BUILD_VERSION=0.1.0-beta.108
+ARG BUILD_VERSION=0.1.0-beta.109
 ARG TARGETARCH
 LABEL io.hass.version="${BUILD_VERSION}" io.hass.type="app" \
       org.opencontainers.image.source="https://github.com/SHS-se/shs-ha-integration" \
