@@ -83,3 +83,23 @@ test('source inspection works from Settings and startup failures need no snapsho
   await page.getByRole('link',{name:'System',exact:true}).click();
   await expect(page.getByRole('alert',{name:'SHS needs attention'})).toContainText('Receipt ingestion stopped');
 });
+
+test('execution replanning is automatic and future car charging stays conditional',async({page})=>{
+  await page.route('**/api/configuration/get',async route=>{
+    const data=await(await route.fetch()).json();
+    data.replan_recommendations=[];
+    data.readiness.execution_replanning={in_flight:true,pending:{},owners:{
+      $ev:{owner:'$ev',status:'temporarily_absent',cause:'vehicle_disconnected',blocked_intervals:[]},
+      $pool:{owner:'$pool',status:'faulted',cause:'actuator_unavailable',blocked_intervals:[]}}};
+    await route.fulfill({json:data});
+  });
+  await page.goto('./#settings');
+  const editor=page.locator('shs-configuration-editor');
+  const notice=editor.locator('[data-execution-replanning]');
+  await expect(notice).toContainText('Automatically updating the household plan.');
+  await expect(notice).toContainText('Future charging remains conditional on connection.');
+  await expect(notice).toContainText('Unavailable until recovery is observed.');
+  await expect(notice).toContainText('Other executable loads keep their commitments for the next hour.');
+  await expect(editor.getByText('Manual replan recommended',{exact:true})).toHaveCount(0);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+});

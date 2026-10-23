@@ -27,7 +27,7 @@ RUN python scripts/build-companion.py /bundle
 COPY web/package.json /bundle/app.json
 
 FROM python-base AS runtime
-ARG BUILD_VERSION=0.1.0-beta.110
+ARG BUILD_VERSION=0.1.0-beta.111
 ARG TARGETARCH
 LABEL io.hass.version="${BUILD_VERSION}" io.hass.type="app" \
       org.opencontainers.image.source="https://github.com/SHS-se/shs-ha-integration" \

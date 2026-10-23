@@ -12,7 +12,7 @@
       "boiler": false,
       "ev": false
     },
-    "model_version": "rules-planner-v15:fd5b9444f002d48870cd73193e297beaf68efbbfdc84baa5feb93f8af889054a",
+    "model_version": "rules-planner-v20:e4ebd3558a58bee609df00c1641183d05cb87ed6b4460e260498857570a10838",
     "decision_diagnostics_version": 2,
     "plan_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
     "snapshot_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
@@ -27,6 +27,7 @@
     "validation_errors": [],
     "measurement_issues": [],
     "planning_warnings": [],
+    "execution_availability": [],
     "sources": {
       "pv": {
         "provider": "home_assistant_entity",
@@ -4397,7 +4398,7 @@
         "boiler": false,
         "ev": false
       },
-      "model_version": "rules-planner-v15:fd5b9444f002d48870cd73193e297beaf68efbbfdc84baa5feb93f8af889054a",
+      "model_version": "rules-planner-v20:e4ebd3558a58bee609df00c1641183d05cb87ed6b4460e260498857570a10838",
       "decision_diagnostics_version": 2,
       "plan_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
       "snapshot_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
@@ -4412,6 +4413,7 @@
       "validation_errors": [],
       "measurement_issues": [],
       "planning_warnings": [],
+      "execution_availability": [],
       "sources": {
         "pv": {
           "provider": "home_assistant_entity",
@@ -8714,7 +8716,7 @@
       "generation": 1,
       "mode": "controlling",
       "scope_revision": "fixture-whole-house",
-      "model_revision": "rules-planner-v15:fd5b9444f002d48870cd73193e297beaf68efbbfdc84baa5feb93f8af889054a:ac-constant-efficiency:0.95:0.95",
+      "model_revision": "rules-planner-v20:e4ebd3558a58bee609df00c1641183d05cb87ed6b4460e260498857570a10838:ac-constant-efficiency:0.95:0.95",
       "energy_basis": "stored_energy_mwh",
       "capacity_mwh": 18080000,
       "minimum_mwh": 904000,

@@ -1530,6 +1530,20 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<aside class="card alert warning" role="status" data-measurement-issues><h2>Left out of this plan: sensor readings could not be used</h2><p>Only these devices are affected; the rest of the home is planned as usual. Once a sensor reports a real value again, a manual replan is recommended.</p><ul>${issues.map(issue => `<li>${this._escape(issue.reason)}${issue.entity_id ? ` <button class="text" data-action="inspect-entity" data-entity-id="${this._escape(issue.entity_id)}">Inspect source entity</button>` : ""}</li>`).join("")}</ul></aside>`;
   }
 
+  _renderExecutionReplanning() {
+    const state = this._data.readiness?.execution_replanning || {};
+    const owners = Object.values(state.owners || {});
+    const pending = Boolean(state.in_flight || Object.keys(state.pending || {}).length);
+    if (!owners.length && !pending) return "";
+    const names = { $ev: "Car", $pool: "Pool heating", $battery: "House battery" };
+    const name = owner => names[owner] || this._sortedDevices().find(device => device.key === owner)?.name || "Planned device";
+    const progress = state.retry_on_exchange ? "Automatic replanning is awaiting a retry." :
+      pending ? "Automatically updating the household plan." : "The plan includes the observed device availability.";
+    return `<aside class="card" role="status" data-execution-replanning><h2>Device availability</h2>
+      <p>${progress} Other executable loads keep their commitments for the next hour.</p>
+      ${owners.length ? `<ul>${owners.map(change => `<li><strong>${this._escape(name(change.owner))}:</strong> ${change.status === "faulted" ? "Unavailable until recovery is observed." : change.owner === "$ev" ? "Future charging remains conditional on connection." : "The missed interval will be rescheduled."}</li>`).join("")}</ul>` : ""}</aside>`;
+  }
+
   _renderReplanRecommendations() {
     const reasons = this._data.replan_recommendations || [];
     if (!reasons.length && !this._replanning && !this._replanError) return "";
@@ -1616,7 +1630,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
           <div data-refresh-progress>${this._refreshBanner()}</div>
           ${this._error ? `<div class="alert error"><strong>Could not save or refresh</strong><span>${this._escape(this._error)}</span></div>` : ""}
           ${this._notice ? `<div class="alert notice"><span>${this._escape(this._notice)}</span></div>` : ""}
-          ${this._renderBackends()}${this._renderMeasurementIssues()}${this._renderReplanRecommendations()}${this._renderBody()}
+          ${this._renderBackends()}${this._renderMeasurementIssues()}${this._renderExecutionReplanning()}${this._renderReplanRecommendations()}${this._renderBody()}
         </section>
         <footer aria-live="polite"><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling.</span></footer>
         ${this._inspectedEntity ? this._entityInspector() : ""}

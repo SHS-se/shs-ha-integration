@@ -16,6 +16,7 @@ import certifi
 
 from .network_traffic import NetworkTraffic
 
+from .execution_replan import ExecutionReplan
 from .api_contract import (
     API_VERSION,
     INTEGRATION_VERSION,
@@ -348,6 +349,7 @@ class ShsApiClient:
         device_inventory_complete: bool = False,
         replan_request_id: str | None = None,
         replan_recommendation: str | None = None,
+        execution_replan: ExecutionReplan | None = None,
         equipment: dict[str, bool] | None = None,
     ) -> dict[str, Any]:
         """Push aggregate, per-device and thermal quarters, plus a plan."""
@@ -360,6 +362,8 @@ class ShsApiClient:
             "actual_slots": actual_slots,
             "devices": devices or [],
         }
+        if execution_replan is not None and snapshot is None:
+            raise ValueError("execution replanning requires a captured snapshot")
         if replan_recommendation:
             body["replan_recommendation"] = replan_recommendation[:1000]
         if equipment is not None:
@@ -378,6 +382,8 @@ class ShsApiClient:
         if snapshot is not None:
             body["snapshot"] = snapshot
             body["planning_exchange_version"] = 2
+            if execution_replan is not None:
+                body["execution_replan"] = execution_replan
             # Only a snapshot can answer a request, because only a snapshot
             # produces a plan. The server refuses the pair without one.
             if replan_request_id is not None:
@@ -385,7 +391,7 @@ class ShsApiClient:
         result = await self._request(
             "POST", "energy-optimisation-ingest", json_body=body,
         )
-        if "job_id" in result or result.get("pending") is True or result.get("plan") is not None:
+        if execution_replan is not None or "job_id" in result or result.get("pending") is True or result.get("plan") is not None:
             self._validate_planning_receipt(result)
         return result
 

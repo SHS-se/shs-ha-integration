@@ -6,6 +6,7 @@ from .planning_warnings import merge_warnings
 
 import asyncio
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from datetime import date, datetime, time, timedelta, timezone
 import hashlib
 import json
@@ -16,6 +17,7 @@ from typing import Any
 from uuid import uuid4
 
 from .replan_listener import listen_for_replans
+from . import execution_replan as execution_evidence
 from .connection_health import ConnectionHealth
 from .operational_attention import pipeline_issue
 from .battery_live import BatteryLiveInputs
@@ -1394,6 +1396,11 @@ class Household:
             "last_optimisation_push": stored.get("last_optimisation_push"),
             "last_optimisation_attempt": stored.get("last_optimisation_attempt"),
             "actuals_accepted_until": stored.get("optimisation_actuals_accepted_until"),
+            "execution_replanning": {
+                **stored.get("execution_replanning", {}),
+                "in_flight": bool((stored.get("optimisation_pending_submission") or
+                    stored.get("optimisation_pending_job") or {}).get("execution_replan")),
+            },
             "planning_job": (
                 {"job_id": stored["optimisation_pending_job"]["job_id"], "state": "pending"}
                 if stored.get("optimisation_pending_job") else None
@@ -3181,6 +3188,8 @@ class Household:
 
     async def _journal_planning_acceptance(self, stored, result, pending) -> None:
         stored.pop("optimisation_pending_submission", None)
+        if pending.get("execution_replan"):
+            execution_evidence.admitted(stored.setdefault("execution_replanning", {}), pending["execution_replan"]["changes"])
         if result["state"] == "pending":
             stored["optimisation_pending_job"] = {
                 key: value for key, value in pending.items()
@@ -3217,6 +3226,11 @@ class Household:
                 if error.code == "planning_job_not_found":
                     stored = await self._store.async_load()
                     stored.pop(record_key, None)
+                    if pending.get("execution_replan"):
+                        journal = stored.setdefault("execution_replanning", {})
+                        execution_evidence.failed(journal, pending["execution_replan"]["changes"])
+                        if recovering_submission and failure.retryable:
+                            journal.pop("retry_on_exchange", None)
                     await self._store.async_save(stored)
                     self.async_update_listeners()
                 else:
@@ -3260,6 +3274,10 @@ class Household:
             elif result["state"] == "failed":
                 self.last_optimisation_error = result.get("detail") or result.get("code") or "planning failed"
                 self._pipeline_error('planning', self.last_optimisation_error)
+                if pending.get("execution_replan"):
+                    execution_evidence.failed(stored.setdefault("execution_replanning", {}), pending["execution_replan"]["changes"])
+            if result["state"] == "superseded" and pending.get("execution_replan"):
+                execution_evidence.failed(stored.setdefault("execution_replanning", {}), pending["execution_replan"]["changes"])
             if result["state"] != "pending":
                 # Superseded work supplies no replacement. Keep the accepted plan.
                 stored.pop("optimisation_pending_job", None)
@@ -3271,6 +3289,33 @@ class Household:
         await self.async_battery_inputs_refresh()
         return result["retry_after_ms"] / 1000 if result["state"] == "pending" else 0
 
+    async def async_execution_observed(self, device, plan, slot, condition) -> None:
+        """Journal Controlling evidence; the existing delivery owner replans it."""
+        if not self.control_authority or device_mode(self.resolved_options(), device) != "controlling":
+            return
+        if not plan or not plan.get("plan_id") or not slot:
+            return
+        async with self._push_lock:
+            current = await self._store.async_read() or {}
+            journal = deepcopy(current.get("execution_replanning", {}))
+            owner = execution_evidence.owner_key(device)
+            if condition is not None and "available_entities" in condition:
+                required = journal.get("recovery_sources", {}).get(owner, [])
+                if not required or not set(required).issubset(condition["available_entities"]):
+                    return
+                condition = None
+            receipt = current.get("optimisation_pending_submission") or current.get("optimisation_pending_job") or {}
+            recovery_in_flight = any(change["owner"] == owner and change["status"] != "recovered"
+                for change in receipt.get("execution_replan", {}).get("changes", []))
+            execution_evidence.observe(journal, owner, slot, condition, recovery_requires_replan=recovery_in_flight)
+            if journal == current.get("execution_replanning", {}):
+                return
+            stored = await self._store.async_load() or {}
+            stored["execution_replanning"] = journal
+            await self._store.async_save(stored)
+        self._planning_job_wake.set()
+        self.async_update_listeners()
+
     async def async_planning_delivery(self) -> None:
         """Host-owned delivery loop resumes journalled jobs after activation."""
         while True:
@@ -3278,6 +3323,22 @@ class Household:
             async with self._push_lock:
                 stored = await self._store.async_read() or {}
                 pending = stored.get("optimisation_pending_submission") or stored.get("optimisation_pending_job")
+                journal = stored.get("execution_replanning", {})
+                execution_due = bool(journal.get("pending")) and not journal.get("retry_on_exchange")
+            if not pending and execution_due:
+                await self.async_optimisation_push(force_plan=True)
+                self._planning_job_wake.clear()
+                async with self._push_lock:
+                    current = await self._store.async_read() or {}
+                    if current.get("optimisation_pending_submission") or current.get("optimisation_pending_job"):
+                        continue
+                # Transport failure has no new sensor event; retry through this
+                # same receipt owner, rather than starting another runtime.
+                try:
+                    await asyncio.wait_for(self._planning_job_wake.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    pass
+                continue
             if not pending:
                 await self._planning_job_wake.wait()
                 continue
@@ -3385,6 +3446,13 @@ class Household:
             self.optimisation_plan = self.optimisation_plan or stored.get(
                 "optimisation_plan"
             )
+            journal = stored.get("execution_replanning", {})
+            execution_changes = list(journal.get("pending", {}).values())
+            execution_request = None
+            if execution_changes and self.optimisation_plan and replan_request_id is None:
+                execution_request = {"request_id": str(uuid4()),
+                    "accepted_plan_id": self.optimisation_plan["plan_id"],
+                    "observed_at": self.ports.utcnow().isoformat(), "changes": execution_changes}
             snapshot_error: str | None = None
             stage = 'collection'
             try:
@@ -3481,7 +3549,7 @@ class Household:
                 plan_due = optimisation_plan_due(
                     last_plan,
                     self.ports.utcnow(),
-                    force=force_plan,
+                    force=force_plan or execution_request is not None,
                     retry_after_error=bool(self.last_optimisation_error),
                 ) and (replan_request_id is not None or not (
                     stored.get("optimisation_pending_job") or stored.get("optimisation_pending_submission")))
@@ -3537,6 +3605,21 @@ class Household:
                         self.optimisation_missing_inputs = [snapshot_error]
                         self.optimisation_missing_remedy = REMEDY_DEFECT
                         self._sync_optimisation_issue()
+                if snapshot is not None:
+                    if journal:
+                        scope = snapshot["operating_scope"]
+                        owners = {"$battery", *(scope["device_owners"].get(model["key"], model["key"])
+                            for model in snapshot["device_models"])}
+                        current_options = self.resolved_options()
+                        excluded = set(current_options.get("excluded_device_readings", []))
+                        active = {owner for owner in owners
+                            if scope["modes"].get(owner) == "controlling" and owner not in excluded
+                            and (not owner.startswith("$") or current_options.get(owner[1:] + "_enabled", True))}
+                        execution_evidence.retain_authority(journal, active)
+                        if execution_request is not None:
+                            changes = list(journal.get("pending", {}).values())
+                            execution_request = {**execution_request, "changes": changes} if changes else None
+                    snapshot["execution_availability"] = list(journal.get("owners", {}).values())
                 # Price the quarters just measured as well as the ones ahead, so
                 # the portal's history tab is priced on the same exchange that
                 # gives it the energy rather than a push behind.
@@ -3566,6 +3649,7 @@ class Household:
                         "snapshot_id": snapshot["snapshot_id"],
                         "replan_request_id": replan_request_id,
                         "devices": devices,
+                        **({"execution_replan": execution_request} if execution_request is not None else {}),
                     }
                     await self._store.async_save(stored)
                 ingest_started = monotonic()
@@ -3581,7 +3665,8 @@ class Household:
                         device_inventory_complete=True,
                         replan_request_id=replan_request_id,
                         replan_recommendation=(replan_reason or "Integration configuration or controller conditions changed. Review the retained schedule and consider a manual replan.")
-                            if force_plan and replan_request_id is None else None,
+                            if force_plan and replan_request_id is None and execution_request is None else None,
+                        execution_replan=execution_request if snapshot is not None else None,
                         equipment=self.equipment_presence(),
                     )
                 except ShsApiError as error:
@@ -3589,6 +3674,8 @@ class Household:
                     # original reason instead of replacing it with a later 404.
                     if not error.retryable and snapshot is not None:
                         stored.pop("optimisation_pending_submission", None)
+                        if execution_request is not None:
+                            execution_evidence.failed(stored.setdefault("execution_replanning", {}), execution_request["changes"])
                         await self._store.async_save(stored)
                     elif snapshot is not None and snapshot.get("snapshot_id"):
                         # Recovery may find a committed job despite a lost reply.
@@ -3606,6 +3693,7 @@ class Household:
                 if result.get("job_id"):
                     await self._journal_planning_acceptance(stored, result, {
                         "replan_request_id": replan_request_id,
+                        **({"execution_replan": execution_request} if execution_request is not None else {}),
                     })
                 else:
                     # The server accepted telemetry without starting a solve.
@@ -3664,6 +3752,8 @@ class Household:
             elif result.get("state") == "failed":
                 self.last_optimisation_error = result.get("detail") or result.get("code") or "planning failed"
                 self._pipeline_error('planning', self.last_optimisation_error)
+                if execution_request is not None:
+                    execution_evidence.failed(stored.setdefault("execution_replanning", {}), execution_request["changes"])
             stored["last_optimisation_push"] = self.last_optimisation_push
             await self._store.async_save(stored)
             if await self._retry_pending_plan_ack(stored):

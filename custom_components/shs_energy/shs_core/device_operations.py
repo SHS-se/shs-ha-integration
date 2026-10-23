@@ -396,6 +396,8 @@ class DeviceOperations:
                       "charge target reached")
             await self.command(switch, "off")
             return {"state": "stopped", "requested_current_a": current,
+                    "execution_condition": ({"status": "temporarily_absent", "cause": "vehicle_disconnected"}
+                        if connected in ("off", "false", "disconnected") and soc < target_soc else None),
                     "reason": "off slot, disconnected, or charge target reached",
                     "decision": {"kind": "ev", "charging": False, "current_a": 0, "reason": reason}}
         await self.command(entity, current)
@@ -508,7 +510,18 @@ class DeviceOperations:
         command = slot_command(slot, key)
         if command["type"] == "unavailable":
             # A plan that cannot drive the device releases nothing; only the select does.
-            return {"state": "unsupported", "reason": self.holding(device, command["reason"])}
+            # Positive availability observations can recover a known missing
+            # entity; reading controls never executes this unavailable command.
+            entities = set(actuator_targets(mapping))
+            entities.update(value for key, value in mapping.items()
+                if key in ("power", "temperature_entity_id") and isinstance(value, str))
+            available = []
+            for entity in sorted(entities):
+                state = self.observed_state(entity)
+                if state is not None and state.state not in ("unknown", "unavailable"):
+                    available.append(entity)
+            return {"state": "unsupported", "reason": self.holding(device, command["reason"]),
+                    "execution_available_entities": available}
         kind = command["type"]
         if kind != mapping["control_type"]:
             raise ValueError("the website command does not match the reviewed local method")

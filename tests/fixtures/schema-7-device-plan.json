@@ -10,7 +10,7 @@
       "boiler": false,
       "ev": false
     },
-    "model_version": "rules-planner-v9:882789904289fe2a8164745ac76ffb739910f0a7696525676efe6d8fd97983eb",
+    "model_version": "rules-planner-v20:e4ebd3558a58bee609df00c1641183d05cb87ed6b4460e260498857570a10838",
     "decision_diagnostics_version": 2,
     "plan_id": "eedefc70-b625-42f0-be09-b1e79c0c88d9",
     "snapshot_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
@@ -25,6 +25,7 @@
     "validation_errors": [],
     "measurement_issues": [],
     "planning_warnings": [],
+    "execution_availability": [],
     "thermal_projection": {
       "source": "comfort_schedule_model",
       "season": null,
@@ -50,29 +51,33 @@
         15
       ],
       "planned_total_power_w": [
-        2000,
-        2000,
-        839.9985862837972,
-        299.99999999999875,
-        299.99999999999875,
-        299.99999999999875,
-        299.99999999999875,
-        299.99999999999875
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
       ],
       "unplanned_total_power_w": [
-        1500,
-        1500,
-        1500,
-        1500,
-        1500,
-        1500,
-        1500,
-        1500
+        999.9999999999998,
+        1999.9999999999998,
+        1933.333333333333,
+        1000,
+        0,
+        1000,
+        1000,
+        1000
       ],
       "zones": [
         {
           "key": "room",
           "name": "Room",
+          "device_keys": [
+            "relay",
+            "thermostat"
+          ],
           "control_type": "setpoint",
           "load_type": "duty_cycle",
           "priority": 1,
@@ -108,44 +113,44 @@
             24
           ],
           "planned_temperature_c": [
-            20.43477698271415,
-            20.86415307900836,
-            21,
-            21,
-            21,
-            21,
-            21,
-            21
+            19.93788900246938,
+            19.87654956014161,
+            19.815972088604024,
+            19.75614712250346,
+            19.697065314067245,
+            19.638717431642608,
+            19.5810943582542,
+            19.52418709017959
           ],
           "unplanned_temperature_c": [
-            20.310554987652964,
-            20.617252199291684,
-            20.920139556979457,
-            21.219264387482152,
-            21.51467342966311,
-            21.80641284178618,
-            22.09452820872806,
-            22.379064549101013
+            20.186332992591772,
+            20.618795309697337,
+            21.029225769470106,
+            21.202773514216688,
+            21.1257214241318,
+            21.2980704806047,
+            21.4682785827134,
+            21.636372325820144
           ],
           "planned_power_w": [
-            2000,
-            2000,
-            839.9985862837972,
-            299.99999999999875,
-            299.99999999999875,
-            299.99999999999875,
-            299.99999999999875,
-            299.99999999999875
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
           ],
           "unplanned_power_w": [
-            1500,
-            1500,
-            1500,
-            1500,
-            1500,
-            1500,
-            1500,
-            1500
+            999.9999999999998,
+            1999.9999999999998,
+            1933.333333333333,
+            1000,
+            0,
+            1000,
+            1000,
+            1000
           ]
         }
       ]
@@ -289,6 +294,15 @@
       {
         "key": "thermostat",
         "control_type": "setpoint",
+        "thermostat": {
+          "entity_id": "climate.thermostat",
+          "minimum_c": 5,
+          "maximum_c": 35,
+          "step_c": 0.5,
+          "current_temperature_c": 20,
+          "target_temperature_c": 20,
+          "hvac_action": "idle"
+        },
         "name": "thermostat",
         "statistic_id": "sensor.thermostat",
         "category": "heating",
@@ -314,7 +328,7 @@
     "plans": {
       "baseline": {
         "key": "baseline",
-        "label": "Selected loads with self-consumption battery",
+        "label": "Selected loads with self-consumption battery and EV load balancing",
         "status": "ready",
         "validation_errors": [],
         "slots": [
@@ -336,22 +350,22 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 2000
+              "room": 0
             },
             "device_loads_w": {
-              "relay": 1000,
-              "thermostat": 1000
+              "relay": 0,
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
                 "type": "switch_schedule",
-                "on_seconds": 900
+                "on_seconds": 0
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -359,30 +373,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 2700,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 2700,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 1.0125000000000002,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 2700,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 2700,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 2700,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -407,22 +421,22 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 2000
+              "room": 0
             },
             "device_loads_w": {
-              "relay": 1000,
-              "thermostat": 1000
+              "relay": 0,
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
                 "type": "switch_schedule",
-                "on_seconds": 900
+                "on_seconds": 0
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -430,30 +444,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 2700,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 2700,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 1.0125000000000002,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 2700,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 2700,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 2700,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -478,11 +492,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 839.9985862837972
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 839.9985862837972
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -491,9 +505,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -501,30 +515,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 1539.998586283797,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 1539.998586283797,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.5774994698564239,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 1539.998586283797,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 1539.998586283797,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 1539.998586283797,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -549,11 +563,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -562,9 +576,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -572,30 +586,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -620,11 +634,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -633,9 +647,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -643,30 +657,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -691,11 +705,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -704,9 +718,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -714,30 +728,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -762,11 +776,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -775,9 +789,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -785,30 +799,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -833,11 +847,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -846,9 +860,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -856,30 +870,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -888,16 +902,16 @@
           }
         ],
         "summary": {
-          "load_kwh": 2.9849996465709476,
+          "load_kwh": 1.4000000000000001,
           "flexible_load_kwh": 0,
           "pv_kwh": 0,
-          "grid_import_kwh": 2.9849996465709476,
+          "grid_import_kwh": 1.4000000000000001,
           "grid_export_kwh": 0,
           "curtailed_kwh": 0,
-          "priced_import_kwh": 2.9849996465709476,
+          "priced_import_kwh": 1.4000000000000001,
           "priced_export_kwh": 0,
-          "net_cost_sek": 4.477499469856422,
-          "terminal_adjusted_cost_sek": 4.477499469856422,
+          "net_cost_sek": 2.0999999999999996,
+          "terminal_adjusted_cost_sek": 2.1,
           "battery_soc_start": 0,
           "battery_soc_end": 0,
           "battery_soc_low": 0,
@@ -936,22 +950,22 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 2000
+              "room": 0
             },
             "device_loads_w": {
-              "relay": 1000,
-              "thermostat": 1000
+              "relay": 0,
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
                 "type": "switch_schedule",
-                "on_seconds": 900
+                "on_seconds": 0
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -959,30 +973,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 2700,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 2700,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 1.0125000000000002,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 2700,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 2700,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 2700,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1008,22 +1022,22 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 2000
+              "room": 0
             },
             "device_loads_w": {
-              "relay": 1000,
-              "thermostat": 1000
+              "relay": 0,
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
                 "type": "switch_schedule",
-                "on_seconds": 900
+                "on_seconds": 0
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1031,30 +1045,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 2700,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 2700,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 1.0125000000000002,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 2700,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 2700,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 2700,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1080,11 +1094,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 839.9985862837972
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 839.9985862837972
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -1093,9 +1107,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1103,30 +1117,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 1539.998586283797,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 1539.998586283797,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.5774994698564239,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 1539.998586283797,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 1539.998586283797,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 1539.998586283797,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1152,11 +1166,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -1165,9 +1179,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1175,30 +1189,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1224,11 +1238,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -1237,9 +1251,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1247,30 +1261,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1296,11 +1310,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -1309,9 +1323,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1319,30 +1333,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1368,11 +1382,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -1381,9 +1395,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1391,30 +1405,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1440,11 +1454,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -1453,9 +1467,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1463,30 +1477,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1496,16 +1510,16 @@
           }
         ],
         "summary": {
-          "load_kwh": 2.9849996465709476,
+          "load_kwh": 1.4000000000000001,
           "flexible_load_kwh": 0,
           "pv_kwh": 0,
-          "grid_import_kwh": 2.9849996465709476,
+          "grid_import_kwh": 1.4000000000000001,
           "grid_export_kwh": 0,
           "curtailed_kwh": 0,
-          "priced_import_kwh": 2.9849996465709476,
+          "priced_import_kwh": 1.4000000000000001,
           "priced_export_kwh": 0,
-          "net_cost_sek": 4.477499469856422,
-          "terminal_adjusted_cost_sek": 4.477499469856422,
+          "net_cost_sek": 2.0999999999999996,
+          "terminal_adjusted_cost_sek": 2.1,
           "battery_soc_start": 0,
           "battery_soc_end": 0,
           "battery_soc_low": 0,
@@ -1544,22 +1558,22 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 2000
+              "room": 0
             },
             "device_loads_w": {
-              "relay": 1000,
-              "thermostat": 1000
+              "relay": 0,
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
                 "type": "switch_schedule",
-                "on_seconds": 900
+                "on_seconds": 0
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1567,30 +1581,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 2700,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 2700,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 1.0125000000000002,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 2700,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 2700,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 2700,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1616,22 +1630,22 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 2000
+              "room": 0
             },
             "device_loads_w": {
-              "relay": 1000,
-              "thermostat": 1000
+              "relay": 0,
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
                 "type": "switch_schedule",
-                "on_seconds": 900
+                "on_seconds": 0
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1639,30 +1653,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 2700,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 2700,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 1.0125000000000002,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 2700,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 2700,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 2700,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1688,11 +1702,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 839.9985862837972
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 839.9985862837972
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -1701,9 +1715,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1711,30 +1725,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 1539.998586283797,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 1539.998586283797,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.5774994698564239,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 1539.998586283797,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 1539.998586283797,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 1539.998586283797,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1760,11 +1774,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -1773,9 +1787,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1783,30 +1797,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1832,11 +1846,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -1845,9 +1859,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1855,30 +1869,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1904,11 +1918,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -1917,9 +1931,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1927,30 +1941,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -1976,11 +1990,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -1989,9 +2003,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -1999,30 +2013,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -2048,11 +2062,11 @@
             "boiler_permitted": false,
             "ev_w": 0,
             "room_heating_w": {
-              "room": 299.99999999999875
+              "room": 0
             },
             "device_loads_w": {
               "relay": 0,
-              "thermostat": 299.99999999999875
+              "thermostat": 0
             },
             "device_commands": {
               "relay": {
@@ -2061,9 +2075,9 @@
               },
               "thermostat": {
                 "type": "setpoint",
-                "target_c": 21,
-                "minimum_c": 19,
-                "maximum_c": 24
+                "target_c": 19,
+                "minimum_c": 5,
+                "maximum_c": 35
               }
             },
             "ev_target_current_a": 0,
@@ -2071,30 +2085,30 @@
             "ev_max_current_a": 0,
             "ev_soc": null,
             "ev_connected": false,
-            "load_w": 999.9999999999987,
+            "load_w": 700,
             "battery_charge_w": 0,
             "battery_discharge_w": 0,
             "battery_export_w": 0,
             "battery_command": null,
             "battery_soc": 0,
-            "grid_import_w": 999.9999999999987,
+            "grid_import_w": 700,
             "grid_export_w": 0,
             "curtailed_w": 0,
             "unserved_w": 0,
-            "import_cost_sek": 0.37499999999999956,
+            "import_cost_sek": 0.26249999999999996,
             "export_revenue_sek": 0,
             "decision": {
               "schema_version": 1,
               "store_allocations": [],
               "battery": null,
               "grid_balance": {
-                "load_w": 999.9999999999987,
+                "load_w": 700,
                 "pv_w": 0,
                 "battery_charge_w": 0,
                 "battery_discharge_w": 0,
-                "residual_w": 999.9999999999987,
+                "residual_w": 700,
                 "direction": "import",
-                "power_w": 999.9999999999987,
+                "power_w": 700,
                 "limit_w": 15000,
                 "limit_binding": false,
                 "reason": "residual_after_dispatch"
@@ -2104,16 +2118,16 @@
           }
         ],
         "summary": {
-          "load_kwh": 2.9849996465709476,
+          "load_kwh": 1.4000000000000001,
           "flexible_load_kwh": 0,
           "pv_kwh": 0,
-          "grid_import_kwh": 2.9849996465709476,
+          "grid_import_kwh": 1.4000000000000001,
           "grid_export_kwh": 0,
           "curtailed_kwh": 0,
-          "priced_import_kwh": 2.9849996465709476,
+          "priced_import_kwh": 1.4000000000000001,
           "priced_export_kwh": 0,
-          "net_cost_sek": 4.477499469856422,
-          "terminal_adjusted_cost_sek": 4.477499469856422,
+          "net_cost_sek": 2.0999999999999996,
+          "terminal_adjusted_cost_sek": 2.1,
           "battery_soc_start": 0,
           "battery_soc_end": 0,
           "battery_soc_low": 0,

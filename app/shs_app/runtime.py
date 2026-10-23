@@ -1,7 +1,7 @@
 """Receipt replay adapts historical accounting to a newly resumed live host."""
 from shs_core.battery_runtime import BatteryRuntime, ACCOUNTING_REUSE_MS
 from shs_core.runtime_json import Records
-from shs_core.home_runtime import EXECUTION_SHORTFALLS, TRACE_RETENTION_MS, Tick
+from shs_core.home_runtime import TRACE_RETENTION_MS, Tick
 
 
 class AppBatteryRuntime(BatteryRuntime):
@@ -21,7 +21,7 @@ class AppBatteryRuntime(BatteryRuntime):
         # The reducer retains the reason even if a restart interrupts the cloud
         # request. Resume it using the existing queue and writer readiness gate.
         reason = self.host.state.execution.replan_reason if self.host is not None else None
-        if reason is not None and reason not in EXECUTION_SHORTFALLS:
+        if reason is not None:
             self._notify_planning(reason)
 
     async def ingest_receipt(self, identity, receipt, *, replay=False):
@@ -59,17 +59,20 @@ class AppBatteryRuntime(BatteryRuntime):
             return ()
         return await super()._confirm(group_id)
 
-    def _notify_planning(self, reason):
+    def _notify_planning(self, reason, *, publish=True):
         if self.physical is not None and not self.physical.enabled:
             self._runtime_reason = reason
+            if reason is not None or not self._replan_pending:
+                self._planning_reason = reason
+            self._publish_runtime_pending = self._publish_runtime_pending or publish
             self._replan_pending = True
             return
-        super()._notify_planning(reason)
+        super()._notify_planning(reason, publish=publish)
 
     async def refresh(self):
         await super().refresh()
         if self._replan_pending and (self.physical is None or self.physical.enabled):
-            self._notify_planning(self._runtime_reason)
+            self._notify_planning(self._planning_reason, publish=self._publish_runtime_pending)
 
     async def _bootstrap_received(self,checkpoint):
         await super()._bootstrap_received(checkpoint)

@@ -139,6 +139,7 @@ async def configuration_payload(editor, *, refresh_roles):
             "last_plan_error": coordinator.connection_health.visible_error(coordinator.last_optimisation_error),
             "planning_job": exchange_status.get("planning_job"),
             "planning_submission": exchange_status.get("planning_submission"),
+            "execution_replanning": exchange_status.get("execution_replanning", {}),
             "last_plan_attempt": coordinator.last_optimisation_attempt or exchange_status.get("last_optimisation_attempt"),
             "last_plan_push": (
                 coordinator.last_optimisation_push

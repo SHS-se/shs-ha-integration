@@ -15,6 +15,7 @@ from time import perf_counter
 from uuid import uuid4
 
 from .command_journal import Command
+from . import execution_replan as execution_evidence
 from .native_commands import finite, native_command
 from .device_ownership import DeviceOwnership, decode_ownership
 from .api_contract import INTEGRATION_VERSION
@@ -303,6 +304,14 @@ class ScheduledController(DeviceOperations):
                         f"{OBSERVATION_GRACE_SECONDS // 60} minutes ({error}). {hold} {purpose} as soon as it reports again.",
                         **details, **correction_details(error))
 
+    async def record_execution(self, device, plan, slot, condition):
+        # Verification and candidate handovers never report physical failures.
+        if self.verifying or self.restoring or device_mode(self.active_options or self.options(), device) != "controlling":
+            return
+        observer = getattr(self.coordinator, "async_execution_observed", None)
+        if observer is not None:
+            await observer(device, plan, slot, condition)
+
     def end_gap(self, device):
         if self.scheduler is not None:
             self.scheduler.device_deadline(device, "observation_gap", None)
@@ -574,6 +583,12 @@ class ScheduledController(DeviceOperations):
                               else await getattr(self, f"execute_{device}")(options, slot))
                     self.failed.pop(device, None)
                     self.end_gap(device)
+                    if result.get("state") == "unsupported":
+                        if "execution_available_entities" in result:
+                            await self.record_execution(device, plan, slot,
+                                {"available_entities": result["execution_available_entities"]})
+                    else:
+                        await self.record_execution(device, plan, slot, result.get("execution_condition"))
                     self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"))
                 except Exception as err:
                     if isinstance(err,ControlDeadlineError):
@@ -594,6 +609,12 @@ class ScheduledController(DeviceOperations):
                         if self.scheduler is not None:
                             self.scheduler.request("plan_replaced")
                         continue
+                    if (not isinstance(err, (PlanChangedError, HotWaterConfigurationError))
+                            and execution_evidence.requested(execution_evidence.owner_key(device), slot)):
+                        await self.record_execution(device, plan, slot, {"status": "faulted",
+                            "cause": f"{type(err).__name__}:{getattr(err, 'entity', '') or ''}",
+                            **({"recover_when_entities": [err.entity]} if isinstance(err, ControlObservationError)
+                                and err.unavailable and err.entity else {})})
                     if isinstance(err, ControlObservationError) and err.transient:
                         # Nothing is written or handed back while an entity is away. A
                         # handover the select already asked for stays queued for its return.

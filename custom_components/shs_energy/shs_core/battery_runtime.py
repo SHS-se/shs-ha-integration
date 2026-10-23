@@ -5,6 +5,8 @@ durable command execution and the exclusive local writer. No schedule fallback.
 """
 from __future__ import annotations
 
+from . import execution_replan as execution_evidence
+
 import asyncio
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
@@ -123,6 +125,11 @@ class BatteryRuntime:
         self._native_capacity=None
         self._release_revision=0
         self._bootstrap=execution.Account();self._replan_task=None;self._replan_pending=False
+        self._execution_observations=[]
+        self._execution_condition=object()  # First real observation reconciles persisted household availability.
+        self._execution_had_work=False
+        self._planning_reason=None
+        self._publish_runtime_pending=False
         self._bootstrap_rejection=None;self._bootstrap_captured=None
         self._fault_history=[]
         self._observation_error=None
@@ -485,6 +492,10 @@ class BatteryRuntime:
         if reason not in ('meter_recorded','duplicate_meter_sample','stale_meter_sample'):
             self._runtime_reason=reason
             self._record_fault('runtime',reason)
+            if (self.host and self.host.state.execution.account.contract is not None
+                    and (reason == 'transition_timeout' or
+                         isinstance(self.host.state.groups[0].transition_work, rt.TransitionFailure))):
+                self._queue_execution({'status': 'faulted', 'cause': 'battery_transition_failed'})
 
     def _record_fault(self,source,reason):
         now=iso(self.now())
@@ -913,8 +924,14 @@ class BatteryRuntime:
             except Exception as error:
                 self._observation_error=f'{type(error).__name__}: {error}'
                 self._record_fault('observation',self._observation_error)
+                if self.host and self.host.state.execution.account.contract is not None:
+                    self._queue_execution({'status': 'faulted', 'cause': 'battery_observation_unavailable'})
                 raise
             self._observation_error=None
+            if self.host and self.host.state.execution.account.contract is not None:
+                group=self.host.state.groups[0]
+                if group.status == 'adopted' and not any(a.stage == 'ambiguous' for a in group.attempts):
+                    self._queue_execution(None)
             return events
 
     async def _observe_batch(self,group_id):
@@ -1095,24 +1112,62 @@ class BatteryRuntime:
             return await self.physical.propose(effect)
         return self.adapter.propose(effect)
 
-    def _notify_planning(self,reason: str | None):
+    def _queue_execution(self, condition):
+        # Never wait for the household exchange lock while holding a battery
+        # observation/receipt lock: snapshot capture reads this same account.
+        plan,slot=self.coordinator.binding_plan_for('battery', self.controller.options())
+        if not plan or not slot:
+            return
+        has_work=execution_evidence.requested('$battery',slot)
+        if condition == self._execution_condition and (condition is None or self._execution_had_work or not has_work):
+            if self._replan_pending and (self._replan_task is None or self._replan_task.done()):
+                self._notify_planning(self._planning_reason, publish=self._publish_runtime_pending)
+            return
+        if condition != self._execution_condition:
+            self._execution_had_work=False
+        self._execution_condition=condition
+        self._execution_had_work=self._execution_had_work or has_work
+        self._execution_observations.append((plan,slot,condition))
+        self._notify_planning(None, publish=False)
+
+    def _notify_planning(self,reason: str | None, *, publish=True):
         """Report admission/rejection, or publish another planner recommendation."""
         self._runtime_reason=reason
+        self._publish_runtime_pending=self._publish_runtime_pending or publish
+        if reason is not None or not self._replan_pending:
+            self._planning_reason=reason
         self._replan_pending=True
         if self._replan_task is not None and not self._replan_task.done():
             return
         async def run():
             while self._replan_pending and not self._closed and not self._closing:
                 self._replan_pending=False
+                reason,self._planning_reason=self._planning_reason,None
+                publish,self._publish_runtime_pending=self._publish_runtime_pending,False
                 try:
-                    if self._runtime_reason in (None,'plan_handover_rejected'):
+                    while self._execution_observations:
+                        plan,slot,condition=self._execution_observations[0]
+                        await self.coordinator.async_execution_observed('battery',plan,slot,condition)
+                        self._execution_observations.pop(0)
+                    if reason in rt.EXECUTION_SHORTFALLS:
+                        plan,slot=self.coordinator.binding_plan_for('battery', self.controller.options())
+                        await self.coordinator.async_execution_observed('battery',plan,slot,
+                            {'status': 'temporarily_absent', 'cause': reason})
+                    elif reason not in (None,'plan_handover_rejected'):
+                        # Expiry/configuration remains a recommendation; it is
+                        # not a physical execution failure granting hold release.
+                        await self.coordinator.async_optimisation_push(force_plan=True,
+                            replan_reason=f"Battery controller: {reason}. Consider a manual replan.")
+                    if publish:
                         await self.coordinator.async_report_runtime()
-                    else:
-                        await self.coordinator.async_optimisation_push(force_plan=True, replan_reason=f"Battery controller: {self._runtime_reason}. Consider a manual replan.")
                     self._replan_error=None
                 except Exception as error:
                     self._replan_error=str(error)
                     self._record_fault('replan',str(error))
+                    if self._planning_reason is None:
+                        self._planning_reason=reason
+                    self._publish_runtime_pending=self._publish_runtime_pending or publish
+                    self._replan_pending=True
                     return  # The existing coordinator retry/poll owns transport retry.
         self._replan_task=asyncio.create_task(run())
 
@@ -1159,7 +1214,13 @@ class BatteryRuntime:
                     raise DispatchRejected('battery writer or request changed')
             authorize()
             if self.physical is not None:
-                return await self.physical.dispatch(effect, authorize)
+                try:
+                    return await self.physical.dispatch(effect, authorize)
+                except DispatchRejected:
+                    raise
+                except Exception:
+                    self._queue_execution({'status': 'faulted', 'cause': 'battery_command_failed'})
+                    raise
             entity,value=effect.key,effect.value
             if entity==self._options['battery_mode_entity']:
                 action=NativeAction(entity,'select_option',value)
@@ -1172,7 +1233,11 @@ class BatteryRuntime:
             try:
                 await self.controller.native_executor.execute(request,authorize=authorize,timeout=75)
             except CommandNotSent as error:
+                self._queue_execution({'status': 'faulted', 'cause': 'battery_command_not_sent'})
                 raise DispatchRejected(str(error)) from error
+            except Exception:
+                self._queue_execution({'status': 'faulted', 'cause': 'battery_command_failed'})
+                raise
 
     def before_external_command(self,device):
         """Reserve unknown pending demand before another adapter changes a load.

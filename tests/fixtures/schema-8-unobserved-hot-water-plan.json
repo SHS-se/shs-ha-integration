@@ -12,7 +12,7 @@
       "boiler": true,
       "ev": false
     },
-    "model_version": "rules-planner-v9:882789904289fe2a8164745ac76ffb739910f0a7696525676efe6d8fd97983eb",
+    "model_version": "rules-planner-v20:e4ebd3558a58bee609df00c1641183d05cb87ed6b4460e260498857570a10838",
     "decision_diagnostics_version": 2,
     "plan_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
     "snapshot_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
@@ -45,9 +45,10 @@
         "scope": "boiler",
         "severity": "warning",
         "message": "Boiler running power has not been observed yet.",
-        "consequence": "Daily heating permissions remain active. Consumption and power headroom use available demand evidence until a heating run is measured."
+        "consequence": "Daily heating permissions remain active. Electrical consumption is unknown until the boiler's running power is measured."
       }
     ],
+    "execution_availability": [],
     "sources": {
       "pv": {
         "provider": "home_assistant_entity",
@@ -236,7 +237,7 @@
     "plans": {
       "baseline": {
         "key": "baseline",
-        "label": "Selected loads with self-consumption battery",
+        "label": "Selected loads with self-consumption battery and EV load balancing",
         "status": "ready",
         "validation_errors": [],
         "slots": [

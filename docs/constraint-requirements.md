@@ -125,3 +125,21 @@ target rounded to the thermostat's own step, halves rounded up: a 22.5 °C plan
 on a whole-degree thermostat (such as the BHT-002) is 23 °C. A rounded value
 outside the command's range is still written, never rejected; the thermostat's
 resolution, not a second local envelope, decides what can be executed.
+
+User requirement, 23 October 2026: an unplugged car retains future charging
+planning and truthful cable telemetry. When a scheduled load cannot execute and
+its work must move, forced household replanning is mandatory, including for pool
+heating, battery charging and other devices. Release only the affected owner's
+commitments needed to remove or reschedule the unexecutable work, including its
+source and destination slots. All other executable loads retain the normal
+next-hour hold (four quarters at a quarter boundary,
+including intersecting slots for a partial current quarter). No household-wide
+unlock or manual-click requirement is permitted for this case. Preserve actuals,
+outstanding service, original deadlines, equipment limits and permissions. See
+[execution-failure replanning and selective commitment release](authoritative-plan-contract.md#execution-failure-replanning-and-selective-commitment-release)
+for trigger, retry, accounting and acceptance requirements. The implemented
+integration owns durable per-owner evidence, automatic capture and the common
+receipt/acknowledgement path; ordinary captures retain unresolved faults.
+Verification and unchanged failures do not create physical failure requests.
+Integration, app replay and browser regressions verify this path; deployment
+remains separate.

@@ -96,6 +96,9 @@ class Rig:
             self.runtime_reports.append(self.runtime.plan_feedback())
             return {}
         self.coordinator.async_report_runtime=report_runtime
+        self.execution_observations=[]
+        async def observed(device,plan,slot,condition):self.execution_observations.append((device,plan,slot,condition))
+        self.coordinator.async_execution_observed=observed
         async def replan(**kw):self.replans.append(kw)
         self.coordinator.async_optimisation_push=replan
         self.plan['grid']={'import_limit_w':10000,'export_limit_w':10000}
