@@ -212,9 +212,9 @@ floor. The planner chooses one confirmed valid current for every 15-minute slot
 and derives power using the reviewed phase count and voltage. It
 never treats the entity's instantaneous state as fixed charger power. Usable
 battery capacity is derived from live remaining energy and SOC, charging
-efficiency uses the reviewed vehicle setting, and a timezone-aware departure timestamp is
-optional. When it is absent, the current target SOC is planned over the rolling
-72-hour horizon. Derived capacity is read-only; electrical parameters remain
+efficiency uses the reviewed vehicle setting, and the car's charge limit is a
+hard ceiling. The planner values ongoing range readiness over the rolling
+72-hour horizon; range goals are configured on the website. Derived capacity is read-only; electrical parameters remain
 reviewable in the vehicle editor.
 
 Configuration has four pages: **Energy**, **Devices**, **Schedule** and **Status**.

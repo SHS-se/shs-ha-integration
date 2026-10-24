@@ -304,11 +304,13 @@ class EvServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(OptimisationInputError, "number.charge_current step must be positive"):
             self.plan(self.options)
 
-    def test_a_connected_car_without_a_departure_charges_across_the_horizon(
+    def test_a_connected_car_reports_its_charge_limit_across_the_horizon(
         self,
     ) -> None:
         services, _samples, battery = self.plan(self.options)
-        self.assertIsNone(battery["departure"])
+        self.assertNotIn("departure", battery)
+        self.assertNotIn("departure_target_soc", battery)
+        self.assertEqual(battery["charge_limit_soc"], 0.8)
         self.assertTrue(battery["connected"])
         deadline = datetime.fromisoformat(services[0]["deadline"])
         self.assertEqual(deadline, HORIZON[-1] + timedelta(minutes=15))
@@ -322,19 +324,12 @@ class EvServiceTests(unittest.TestCase):
         self.assertEqual(battery["available_from"], connected_battery["available_from"])
         self.assertEqual(battery["soc"], connected_battery["soc"])
 
-    def test_a_stated_departure_becomes_the_deadline(self) -> None:
-        departure = HORIZON[40]
-        self.states["sensor.departure"] = {
-            "state": departure.isoformat(), "attributes": {}
-        }
-        services, _samples, battery = self.plan({
-            **self.options,
-            "ev_departure_entity": "sensor.departure",
-        })
-        self.assertEqual(datetime.fromisoformat(battery["departure"]), departure)
-        self.assertEqual(
-            datetime.fromisoformat(services[0]["deadline"]), departure
-        )
+    def test_a_retired_saved_option_does_not_read_an_entity_or_change_the_plan(self) -> None:
+        expected = self.plan(self.options)
+        # This entity deliberately does not exist. Retired settings cannot
+        # reintroduce a deadline or block a fresh snapshot.
+        actual = self.plan({**self.options, "ev_departure_entity": "sensor.removed"})
+        self.assertEqual(actual, expected)
 
     def test_a_routed_connected_car_keeps_its_control_at_the_target_soc(self) -> None:
         self.states["sensor.soc"]["state"] = "80"
@@ -357,24 +352,6 @@ class EvServiceTests(unittest.TestCase):
         self.assertEqual(control["phase_count"] * control["voltage_v"], 690)
         self.assertEqual(control["current_step_a"], 1)
         self.assertEqual(control["max_current_a"], 16)
-
-    def test_a_departure_outside_the_horizon_leaves_this_plan_without_one(self) -> None:
-        """A departure next week, or one already past, is a realistic schedule."""
-        for state in (
-            (HORIZON[-1] + timedelta(days=2)).isoformat(),
-            (HORIZON[0] - timedelta(hours=3)).isoformat(),
-            "unknown",
-        ):
-            with self.subTest(departure=state):
-                self.states["sensor.departure"] = {"state": state, "attributes": {}}
-                services, _samples, battery = self.plan(
-                    {**self.options, "ev_departure_entity": "sensor.departure"}
-                )
-                self.assertIsNone(battery["departure"])
-                self.assertEqual(
-                    datetime.fromisoformat(services[0]["deadline"]),
-                    HORIZON[-1] + timedelta(minutes=15),
-                )
 
     def test_a_percentage_state_of_charge_is_read_by_its_unit(self) -> None:
         """A car at 1 % was read as full when the value alone set the scale."""
@@ -959,7 +936,7 @@ class VehicleStateWithoutAControlRouteTests(unittest.TestCase):
         self.assertIsNotNone(ev_battery)
         self.assertTrue(ev_battery["connected"])
         self.assertAlmostEqual(ev_battery["soc"], 0.67, places=4)
-        self.assertAlmostEqual(ev_battery["departure_target_soc"], 0.8, places=4)
+        self.assertAlmostEqual(ev_battery["charge_limit_soc"], 0.8, places=4)
         # 51.5 kWh remaining at 67% is a 76.9 kWh pack.
         self.assertAlmostEqual(ev_battery["capacity_kwh"], 76.866, places=2)
 

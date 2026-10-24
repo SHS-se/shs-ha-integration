@@ -20,7 +20,6 @@ from .const import (
     OPT_OUTDOOR_TEMPERATURE_ENTITY,
     OPT_WEATHER_FORECAST_ENTITY,
     OPT_EV_CONNECTED_ENTITY,
-    OPT_EV_DEPARTURE_ENTITY,
     OPT_EV_ENERGY_REMAINING_ENTITY,
     OPT_EV_SOC_ENTITY,
     OPT_EV_TARGET_SOC_ENTITY,
@@ -641,7 +640,7 @@ def discover_configuration(
             "Vehicle charge target",
         ),
         (
-            OPT_EV_ENERGY_REMAINING_ENTITY,
+        OPT_EV_ENERGY_REMAINING_ENTITY,
             _first_state(
                 states,
                 exact_ids=("sensor.tesla_model_y_energy_remaining",),
@@ -727,13 +726,13 @@ def discover_configuration(
                 OPT_EV_CONNECTED_ENTITY,
                 OPT_EV_SOC_ENTITY,
                 OPT_EV_TARGET_SOC_ENTITY,
-                OPT_EV_ENERGY_REMAINING_ENTITY,
+            OPT_EV_ENERGY_REMAINING_ENTITY,
             )) and ev_current is not None,
             "missing": missing((
                 OPT_EV_CONNECTED_ENTITY,
                 OPT_EV_SOC_ENTITY,
                 OPT_EV_TARGET_SOC_ENTITY,
-                OPT_EV_ENERGY_REMAINING_ENTITY,
+            OPT_EV_ENERGY_REMAINING_ENTITY,
             )),
             "current_control": (
                 None
@@ -759,7 +758,6 @@ def discover_configuration(
         OPT_EV_CONNECTED_ENTITY,
         OPT_EV_SOC_ENTITY,
         OPT_EV_TARGET_SOC_ENTITY,
-        OPT_EV_DEPARTURE_ENTITY,
         OPT_EV_ENERGY_REMAINING_ENTITY,
     ):
         if key in evidence or options.get(key) in (None, "", []):

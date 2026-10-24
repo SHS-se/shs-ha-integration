@@ -99,6 +99,14 @@ class MeasurementIssueTests(unittest.TestCase):
         self.assertEqual(values["soc"], "unavailable")
         self.assertEqual(values["water_temperature_c"], "warm")
 
+    def test_charge_limit_issues_use_the_current_snapshot_field(self) -> None:
+        for value in ("105", "unavailable"):
+            with self.subTest(value=value):
+                self.states["number.charge_limit"] = state(value, "%")
+                issues = self.issues()
+                self.assertEqual([(i["device"], i["field"], i["entity_id"]) for i in issues],
+                                 [("ev", "charge_limit_soc", "number.charge_limit")])
+
     def test_an_unreadable_heater_setting_leaves_out_the_pool(self) -> None:
         options = {**OPTIONS, "pool_start_temperature_entity": "number.pool_start",
                    "pool_stop_temperature_entity": "number.pool_stop"}

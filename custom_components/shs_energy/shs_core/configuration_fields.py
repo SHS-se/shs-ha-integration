@@ -549,9 +549,8 @@ def _configuration_sections(*, battery_control_required=False, house_control_req
             "title": "Electric vehicle",
             "description": (
                 "Vehicle state supplies the charging need, and the car's own charge "
-                "limit caps it. An optional departure timestamp gives that "
-                "limit a specific deadline; without one, the planner uses the "
-                "end of its rolling horizon. Charger current bounds "
+                "limit caps it. The planner values ongoing range readiness "
+                "over its rolling horizon. Charger current bounds "
                 "and the optional charging-power sensor come from its Variable Power "
                 "device card. The electrical model below converts those amps into "
                 "watts, so it has to match the cable actually installed: a "
@@ -587,18 +586,7 @@ def _configuration_sections(*, battery_control_required=False, house_control_req
                         "The car's own charge limit, which it will refuse to "
                         "charge past. The planner treats it as a hard ceiling "
                         "on the vehicle store, so it never buys more range "
-                        "than this allows, and plans toward it when no "
-                        "departure is set."
-                    ),
-                ),
-                _field(
-                    c.OPT_EV_DEPARTURE_ENTITY,
-                    "Optional departure timestamp",
-                    "entity",
-                    help_text=(
-                        "When provided, the entity must contain a timezone-aware "
-                        "timestamp. Leave it empty to plan toward the charge "
-                        "limit over the rolling horizon."
+                        "than this allows. Range goals are configured on the website."
                     ),
                 ),
                 _field(

@@ -262,5 +262,11 @@ why it has no plan. A battery left out is handed back until a plan includes it;
 no replan is requested, because the server recommends one once its reading is
 real again. A percentage unit decides how a state of charge is scaled, so a car
 at 1 % is not read as full; an empty car is planned with the battery size last
-derived from its own readings; a departure outside the horizon, already past or
-unset leaves that plan without one.
+derived from its own readings.
+
+User requirement, 24 October 2026: vehicle snapshots use `charge_limit_soc` for
+its physical charge ceiling and contain no EV departure time. The planner values
+ongoing range readiness; the vehicle charge limit does not impose a deadline.
+The integration and app ship this shared producer together with the backend
+contract. There is no alias for the retired cap field. Capture fresh measurements
+and generate a fresh plan after the coordinated roll-forward.

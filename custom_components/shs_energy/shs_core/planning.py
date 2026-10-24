@@ -27,7 +27,6 @@ from .const import (
     EU_AC_PHASE_VOLTAGE,
     OPT_DEVICE_CONTROL_MAPPINGS,
     OPT_EV_CONNECTED_ENTITY,
-    OPT_EV_DEPARTURE_ENTITY,
     OPT_EV_ENERGY_REMAINING_ENTITY,
     OPT_EV_SOC_ENTITY,
     OPT_EV_TARGET_SOC_ENTITY,
@@ -488,37 +487,6 @@ def build_services(
                 "vehicle battery size cannot be derived while it reports no charge"
             )
 
-        departure: datetime | None = None
-        departure_raw: Any = None
-        departure_entity = options.get(OPT_EV_DEPARTURE_ENTITY)
-        if isinstance(departure_entity, str) and departure_entity:
-            try:
-                departure_raw = read_entity(departure_entity)["state"]
-            except OptimisationInputError as err:
-                # An unset or unavailable departure is no departure; a
-                # missing entity is still the setup error it was.
-                if err.remedy != REMEDY_WAITING:
-                    raise
-                departure_raw = None
-        if departure_raw not in (None, "", "unknown", "unavailable"):
-            try:
-                departure = datetime.fromisoformat(
-                    str(departure_raw).replace("Z", "+00:00")
-                )
-            except ValueError as err:
-                raise OptimisationInputError(
-                    f"{OPT_EV_DEPARTURE_ENTITY} must contain an ISO timestamp"
-                ) from err
-            if departure.tzinfo is None:
-                raise OptimisationInputError(
-                    f"{OPT_EV_DEPARTURE_ENTITY} timestamp must include a timezone"
-                )
-            departure = departure.astimezone(timezone.utc)
-            # A departure already past, or beyond this horizon, is a realistic
-            # schedule: this plan simply has no departure inside it.
-            if departure <= first or departure > end:
-                departure = None
-
         ev_battery = {
             "name": str(
                 soc_payload["attributes"].get("friendly_name") or "EV battery"
@@ -526,11 +494,10 @@ def build_services(
             "connected": connected,
             "capacity_kwh": round(capacity, 3),
             "soc": round(soc, 6),
-            "departure_target_soc": round(target, 6),
+            "charge_limit_soc": round(target, 6),
             "charge_efficiency": round(charge_efficiency, 4),
             "kwh_per_km": round(kwh_per_km, 4),
             "available_from": first.isoformat(),
-            "departure": departure.isoformat() if departure else None,
             "priority": 3,
             "source_entity_ids": {
                 "connected": connected_id,
@@ -555,7 +522,6 @@ def build_services(
         # buy cheap surplus, and the server must never invent phase/current
         # limits for that decision.
         if ev_controls:
-            planning_deadline = departure or end
             control = discrete_current_control(
                 configured_min,
                 configured_max,
@@ -565,10 +531,10 @@ def build_services(
                 label=current_entity,
             )
             services.append({
-                "id": f"ev:{planning_deadline.isoformat()}",
+                "id": f"ev:{end.isoformat()}",
                 "device": "ev",
                 "earliest_start": first.isoformat(),
-                "deadline": planning_deadline.isoformat(),
+                "deadline": end.isoformat(),
                 "required_kwh": round(required, 3),
                 "control": control,
                 "priority": 3,

@@ -32,6 +32,16 @@ class ConfigurationReaderTests(unittest.TestCase):
             migrated, _ = migrate_options({"battery_export_enabled": value})
             self.assertNotIn("battery_export_enabled", migrated)
 
+    def test_retired_ev_departure_is_not_an_editor_or_runtime_option(self):
+        from shs_core.configuration_schema import OPTION_KEYS, merge_options
+        self.assertNotIn("ev_departure_entity", OPTION_KEYS)
+        saved = {"ev_departure_entity": "sensor.old", "ev_target_soc_entity": "number.limit"}
+        migrated, _ = migrate_options(saved)
+        self.assertNotIn("ev_departure_entity", migrated)
+        self.assertEqual(migrated["ev_target_soc_entity"], "number.limit")
+        with self.assertRaisesRegex(ValueError, "unknown"):
+            merge_options({}, {"ev_departure_entity": "sensor.old"})
+
     def test_revision_location_changes_and_private_copies(self):
         from shs_core.configuration_schema import ConfigurationReader
         source = {'rooms': {'room': {'temperature_entity_id': 'sensor.old'}},

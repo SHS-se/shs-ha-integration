@@ -169,7 +169,7 @@ def _vehicle(readings: _Readings, options: dict[str, Any], devices: list[dict[st
         readings.issues.append(_issue("ev", "connected", options.get(OPT_EV_CONNECTED_ENTITY), connected.state,
                                       f"The car's cable connection reads {connected.state!r}, not on or off."))
     soc = readings.fraction("ev", "soc", options.get(OPT_EV_SOC_ENTITY), "state of charge")
-    readings.fraction("ev", "departure_target_soc", options.get(OPT_EV_TARGET_SOC_ENTITY), "charge limit")
+    readings.fraction("ev", "charge_limit_soc", options.get(OPT_EV_TARGET_SOC_ENTITY), "charge limit")
     entity = options.get(OPT_EV_ENERGY_REMAINING_ENTITY)
     remaining = readings.number("ev", "energy_remaining", entity, "remaining energy")
     if remaining is None:

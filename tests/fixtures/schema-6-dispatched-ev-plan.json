@@ -12,7 +12,7 @@
       "boiler": false,
       "ev": true
     },
-    "model_version": "rules-planner-v20:e4ebd3558a58bee609df00c1641183d05cb87ed6b4460e260498857570a10838",
+    "model_version": "rules-planner-v20:fc582d6a1560ee24b30d3c8694a0b35941fa68814e301cf8de9fa36dfa4e9f0c",
     "decision_diagnostics_version": 2,
     "plan_id": "eedefc70-b625-42f0-be09-b1e79c0c88d9",
     "snapshot_id": "9c8cbe63-5b50-4f4c-a0e5-a7bc4d945c43",
@@ -187,11 +187,10 @@
       "connected": true,
       "capacity_kwh": 75,
       "soc": 0.55,
-      "departure_target_soc": 0.8,
+      "charge_limit_soc": 0.8,
       "charge_efficiency": 0.92,
       "kwh_per_km": 0.16,
       "available_from": "2026-08-20T09:00:00.000Z",
-      "departure": null,
       "priority": 3,
       "source_entity_ids": {
         "connected": "binary_sensor.ev_connected",

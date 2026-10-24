@@ -94,7 +94,7 @@ class SensorWiringTests(unittest.TestCase):
         self.assertIn("EU_AC_PHASE_COUNT = 3", CONSTANTS)
         self.assertIn("EU_AC_PHASE_VOLTAGE = 230.0", CONSTANTS)
 
-    def test_mapped_loads_are_automatic_and_ev_departure_is_optional(self) -> None:
+    def test_mapped_loads_are_automatic_and_ev_uses_ongoing_range(self) -> None:
         sections = FIELDS[
             FIELDS.index('"id": "ev"') :
             len(FIELDS)
@@ -106,7 +106,7 @@ class SensorWiringTests(unittest.TestCase):
         ):
             self.assertNotIn(obsolete, sections)
         self.assertNotIn("field.required_when", CONFIG_PANEL_FRONTEND)
-        self.assertIn('"Optional departure timestamp"', sections)
+        self.assertNotIn("OPT_EV_DEPARTURE_ENTITY", sections)
         self.assertNotIn("departure timestamp entity is not configured", PLANNING)
         # Service selection and sizing are executed in tests/test_planning.py.
         # This only guards the boundary that makes that possible: planning

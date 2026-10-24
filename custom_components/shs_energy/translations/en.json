@@ -61,7 +61,6 @@
           "ev_connected_entity": "EV connected entity",
           "ev_soc_entity": "EV state of charge entity",
           "ev_target_soc_entity": "EV charge-limit entity",
-          "ev_departure_entity": "Optional EV departure timestamp entity",
           "ev_energy_remaining_entity": "EV energy remaining entity (kWh)"
         }
       },
@@ -127,7 +126,6 @@
           "ev_connected_entity": "EV connected entity",
           "ev_soc_entity": "EV state of charge",
           "ev_target_soc_entity": "EV charge limit",
-          "ev_departure_entity": "Optional departure timestamp entity",
           "ev_energy_remaining_entity": "Energy remaining (kWh)"
         }
       },

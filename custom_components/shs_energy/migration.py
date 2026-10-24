@@ -17,7 +17,6 @@ EV_FIELDS = {
     "ev_connected_entity": "connected_entity_id",
     "ev_soc_entity": "soc_entity_id",
     "ev_target_soc_entity": "target_soc_entity_id",
-    "ev_departure_entity": "departure_entity_id",
     "ev_energy_remaining_entity": "energy_remaining_entity_id",
     "ev_charge_efficiency": "charge_efficiency",
 }

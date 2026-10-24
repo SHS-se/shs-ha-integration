@@ -33,7 +33,7 @@ update as time going backwards.
 
 User requirement, 23 September 2026: realistic measured state beyond a desired
 target — a car above its charge limit, a pool warmer than its stop temperature,
-a pack below a raised cut-off, an empty car, a departure beyond the horizon — is
+a pack below a raised cut-off, an empty car — is
 neither infeasibility nor invalid input. A reading no device can produce isolates
 only its own device and is named for both interfaces; it never discards otherwise
 valid household planning. See
@@ -143,3 +143,10 @@ receipt/acknowledgement path; ordinary captures retain unresolved faults.
 Verification and unchanged failures do not create physical failure requests.
 Integration, app replay and browser regressions verify this path; deployment
 remains separate.
+
+User requirement, 24 October 2026: vehicle snapshots use `charge_limit_soc` for
+its physical charge ceiling and contain no EV departure time. The planner values
+ongoing range readiness; the vehicle charge limit does not impose a deadline.
+The integration and app ship this shared producer together with the backend
+contract. There is no alias for the retired cap field. Capture fresh measurements
+and generate a fresh plan after the coordinated roll-forward.
