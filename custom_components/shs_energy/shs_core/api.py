@@ -272,7 +272,8 @@ class ShsApiClient:
         """Queue the same household request used by the website button."""
         result = await self._request(
             "POST", "integration-status",
-            json_body={"api_version": API_VERSION, "request_replan": True},
+            json_body={"api_version": API_VERSION, "request_replan": True,
+                       "reason": "integration_replan"},
         )
         request_id = result.get("replan_request_id")
         if not isinstance(request_id, str) or not request_id:

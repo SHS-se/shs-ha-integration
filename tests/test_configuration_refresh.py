@@ -83,7 +83,7 @@ class ManualReplanTests(unittest.IsolatedAsyncioTestCase):
         client = SimpleNamespace(_request=AsyncMock(return_value={'replan_request_id': 'request'}))
         self.assertEqual(await ns['request_replan'](client), 'request')
         client._request.assert_awaited_once_with('POST', 'integration-status',
-            json_body={'api_version': 1, 'request_replan': True})
+            json_body={'api_version': 1, 'request_replan': True, 'reason': 'integration_replan'})
         client._request.return_value = {}
         with self.assertRaisesRegex(ValueError, 'did not confirm'):
             await ns['request_replan'](client)
