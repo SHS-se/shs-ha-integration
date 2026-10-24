@@ -1243,3 +1243,22 @@ class ThermostatFactsTests(unittest.TestCase):
     def test_number_targets_cannot_invent_their_own_sensor_or_hvac_action(self):
         self.mapping['actuator_entity_ids'] = ['number.target']
         self.assertIsNone(self.facts())
+
+class PoolElectricalEvidenceTests(unittest.TestCase):
+    def test_counter_deltas_survive_switch_gaps_but_not_missing_endpoints_or_resets(self):
+        from shs_core.planning import pool_electrical_history
+        model={"key":"heater","statistic_id":"sensor.energy","planning_service":"pool"}
+        attrs={"unit_of_measurement":"kWh","state_class":"total_increasing"}
+        def capture(values):
+            rows=[(START+timedelta(seconds=i*20),v,attrs) for i,v in enumerate(values)]
+            return pool_electrical_history([model],{"sensor.energy":rows},START,START+timedelta(minutes=2))["counters"]
+        self.assertEqual(capture(["100","unavailable","100"]),
+                         [{"device_key":"heater","start_kwh":100.,"end_kwh":100.}])
+        self.assertEqual(capture(["100","100.1"])[0]["end_kwh"],100.1)
+        for values in (["unavailable","100"],["100","unavailable"],["100","0","101"],["100","nan"],["100","99"]):
+            with self.subTest(values=values): self.assertEqual(capture(values),[])
+        for unit,factor in (("Wh",.001),("MWh",1000),("W",None)):
+            attrs["unit_of_measurement"]=unit
+            result=capture(["100","101"])
+            if factor is None: self.assertEqual(result,[])
+            else: self.assertAlmostEqual(result[0]["end_kwh"]-result[0]["start_kwh"],factor)

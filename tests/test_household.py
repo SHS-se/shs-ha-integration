@@ -13,6 +13,27 @@ from shs_core.device_controls import BatteryMeasurementConfigurationError
 
 
 class HouseholdTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pool_snapshot_capture_keeps_metered_energy_through_restart_switch_gap(self):
+        rig=Rig(); start=rig.now.replace(minute=0,second=0,microsecond=0)
+        captured=start+timedelta(minutes=2)
+        model={"key":"heater","statistic_id":"sensor.energy","planning_service":"pool",
+               "category":"pool_heating","control_type":"variable_power","planning_role":"controllable"}
+        mapping={"heater":{"control_type":"variable_power","actuator_entity_ids":["switch.pool"]}}
+        attrs={"unit_of_measurement":"kWh","state_class":"total_increasing"}
+        async def history(begin,end,entities,*,with_attributes):
+            self.assertEqual(end,captured)
+            if with_attributes:
+                self.assertEqual(begin,start); self.assertEqual(entities,["sensor.energy"])
+                return {"sensor.energy":[(start,"655.535",attrs),(start+timedelta(seconds=30),"655.535",attrs)]}
+            return {"switch.pool":[(start,"off",None),(start+timedelta(seconds=20),"unavailable",None),
+                                   (start+timedelta(seconds=67),"off",None)]}
+        rig.history.states.side_effect=history
+        result=await rig.household._pool_capture_history([model],mapping,
+            {"heating_running":False,"source_entity_ids":{"water_temperature":"sensor.water"}},captured)
+        self.assertFalse(result["heating_history"]["complete"])
+        self.assertEqual(result["electrical_history"],{"start":start.isoformat(),"end":captured.isoformat(),
+            "counters":[{"device_key":"heater","start_kwh":655.535,"end_kwh":655.535}]})
+
     async def test_midquarter_replan_subtracts_live_counter_delivery_after_completed_quarters(self):
         from shs_core.planning import build_services
         rig = Rig()

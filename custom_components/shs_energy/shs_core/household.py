@@ -139,6 +139,7 @@ from .planning import (
     pool_heating_actuators,
     pool_heating_runtime,
     pool_heating_history,
+    pool_electrical_history,
     unplanned_services,
 )
 from .readings import daily_category_readings, usable_change
@@ -2671,6 +2672,29 @@ class Household:
             if datetime.fromisoformat(key) >= cutoff
         }
 
+    async def _pool_capture_history(self, models, mappings, pool_state, captured):
+        """Acquire electrical evidence independently of switch availability."""
+        pool_entity = pool_state["source_entity_ids"]["water_temperature"]
+        actuators = pool_heating_actuators(models, mappings, pool_water_entity=pool_entity)
+        history = await self.ports.history.states(
+            captured - timedelta(hours=2), captured, sorted(actuators), with_attributes=False,
+        ) if actuators else {}
+        observations = {}
+        if pool_state["heating_running"] is True:
+            observations.update(pool_heating_runtime(actuators, history, captured))
+        pool_meters = [model for model in models if model.get("planning_service") == "pool"]
+        counter_history = await self.ports.history.states(
+            quarter_start(captured), captured,
+            sorted({model["statistic_id"] for model in pool_meters}), with_attributes=True,
+        ) if pool_meters else {}
+        observations["electrical_history"] = pool_electrical_history(
+            pool_meters, counter_history, quarter_start(captured), captured,
+        )
+        heating_history = pool_heating_history(actuators, history, quarter_start(captured), captured)
+        if heating_history is not None:
+            observations["heating_history"] = heating_history
+        return observations
+
     async def _build_optimisation_snapshot(
         self,
         options: dict[str, Any],
@@ -2988,15 +3012,9 @@ class Household:
                 ),
                 "source_entity_ids": {"water_temperature": pool_entity},
             }
-            actuators = pool_heating_actuators(device_models, control_mappings, pool_water_entity=pool_entity)
-            history = await self.ports.history.states(
-                captured - timedelta(hours=2), captured, sorted(actuators), with_attributes=False,
-            ) if actuators else {}
-            if pool_state["heating_running"] is True:
-                pool_state.update(pool_heating_runtime(actuators, history, captured))
-            heating_history = pool_heating_history(actuators, history, quarter_start(captured), captured)
-            if heating_history is not None:
-                pool_state["heating_history"] = heating_history
+            pool_state.update(await self._pool_capture_history(
+                device_models, control_mappings, pool_state, captured,
+            ))
 
         if capabilities["pool"] and pool_state is None:
             raise OptimisationInputError("Pool water temperature is not configured", fix={"kind": "fields", "fields": [{"key": OPT_POOL_WATER_TEMPERATURE_ENTITY}]})

@@ -150,6 +150,46 @@ def pool_heater_settings(options, entity_payload) -> dict:
     }
 
 
+
+def pool_electrical_history(models, history, start, captured):
+    """Metered current-quarter input; switch outages do not erase counter deltas.
+
+    Recorder supplies the boundary state and changes through capture. Missing
+    or trailing unavailable states remain missing. Any observed counter reset
+    invalidates this interval, even if the final total exceeds the first one.
+    """
+    counters = []
+    for model in models:
+        if model.get('planning_service') != 'pool':
+            continue
+        first = last = previous = None
+        valid = True
+        for at, state, attributes in history.get(model['statistic_id'], []):
+            if state in ('unknown', 'unavailable', None):
+                value = None
+            else:
+                unit = (attributes or {}).get('unit_of_measurement')
+                kind = (attributes or {}).get('state_class')
+                try:
+                    value = float(state) * {'Wh': .001, 'kWh': 1, 'MWh': 1000}[unit]
+                except (ValueError, TypeError, KeyError):
+                    valid = False
+                    break
+                if kind not in ('total', 'total_increasing') or not isfinite(value) or value < 0:
+                    valid = False
+                    break
+                if previous is not None and value < previous:
+                    valid = False
+                    break
+                previous = value
+            if at <= start:
+                first = value
+            last = value
+        if valid and first is not None and last is not None:
+            counters.append(dict(device_key=model['key'], start_kwh=first, end_kwh=last))
+    return dict(start=start.isoformat(), end=captured.isoformat(), counters=counters)
+
+
 def pool_heating_runtime(entities, history, captured) -> dict:
     """Confirmed enabled age. Unknown/reconnected observations do not restart a run.
 
