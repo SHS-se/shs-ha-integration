@@ -46,7 +46,11 @@ def actuator_on(entity, state, attributes):
         action = (attributes or {}).get("hvac_action")
         if action == "heating":
             return True
-        if action in ("idle", "off", "cooling") or state == "off":
+        # Cooling is electrically active: it cannot identify another shared
+        # meter device as OFF for attribution to a heater.
+        if action == "cooling":
+            return None
+        if action in ("idle", "off") or state == "off":
             return False
         return None
     if entity.startswith(("switch.", "input_boolean.")):

@@ -63,6 +63,6 @@ mean; this correction does not introduce a new planner feasibility policy or
 claim that the two quantities are interchangeable. Sparse electrical/thermal
 excitation remains a model-quality limitation.
 
-Integration beta.159 and app beta.116 supply this corrected existing field.
+Integration beta.160 and app beta.117 supply this corrected existing field.
 No server protocol or Rust action, priority, constraint, EV connection or
 EV departure rule changes are required.

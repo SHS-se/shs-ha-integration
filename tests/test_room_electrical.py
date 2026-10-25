@@ -41,7 +41,7 @@ class OnPowerTests(unittest.TestCase):
 
     def test_shared_meter_requires_every_other_actuator_explicitly_off(self):
         condition=OnCondition('sensor.power',('climate.room',),('climate.other',))
-        for activity,expected in [('heating',None),('idle',1200),(None,None)]:
+        for activity,expected in [('heating',None),('cooling',None),('idle',1200),(None,None)]:
             with self.subTest(activity=activity):
                 found=self.learn([row(0,'heating'),row(10,'idle')],condition=condition,
                     extras={'climate.other':[(START,'heat',{'hvac_action':activity})]})
