@@ -52,6 +52,37 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
     def failures(self):
         return {item['key']:item for item in self.h.attention_items}
 
+    async def test_manual_replan_uploads_completed_meter_evidence_across_dst(self):
+        """Synthetic recorder changes, through the real exchange and aggregation.
+
+        These UTC quarters straddle Stockholm's repeated local 02:00 hour.
+        The pool's memory must receive the OFF quarter as well as the ON one.
+        """
+        from datetime import timezone
+        boundary = datetime(2025, 10, 26, 1, 15, tzinfo=timezone.utc)
+        self.rig.now = boundary + timedelta(minutes=7)
+        start = boundary - timedelta(minutes=30)
+        self.rig.records.saved['optimisation_actuals_accepted_until'] = start.isoformat()
+        self.h._configured_entities = lambda: {'grid_import': ['sensor.synthetic_grid']}
+        self.h._prepared_device_inventory.return_value = [{
+            'key': 'synthetic_pool', 'statistic_id': 'sensor.synthetic_pool',
+            'category': 'pool_heating', 'planning_role': 'controllable'}]
+
+        async def statistics(begin, end, entities, period, units, kinds):
+            self.assertEqual((begin, end, period), (start, boundary, '5minute'))
+            return {entity: [{'start': (start + timedelta(minutes=5*i)).timestamp(),
+                              'change': .1 if entity == 'sensor.synthetic_grid' else (0 if i < 3 else .3)}
+                             for i in range(6)] for entity in entities}
+
+        self.rig.history.statistics.side_effect = statistics
+        await self.h.async_optimisation_push(force_plan=True, replan_request_id='synthetic-manual')
+        actuals, snapshot = self.h.client.push_optimisation.call_args.args[:2]
+        self.assertEqual(snapshot['snapshot_id'], 'snapshot')
+        self.assertEqual([row['start'] for row in actuals],
+                         [start.isoformat(), (start + timedelta(minutes=15)).isoformat()])
+        self.assertEqual([row['device_energy_kwh']['synthetic_pool'] for row in actuals], [0, .9])
+        self.assertEqual([row['quality']['duration_seconds'] for row in actuals], [900, 900])
+
     async def test_failed_solve_survives_telemetry_and_new_pending_work_until_a_plan_is_accepted(self):
         pending=await self.accept('manual')
         self.h.client.planning_status.return_value={'state':'failed','detail':'Committed owner removed: old-meter'}

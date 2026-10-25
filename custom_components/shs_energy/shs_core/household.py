@@ -3503,8 +3503,11 @@ class Household:
                     start.astimezone(timezone.utc),
                     complete_end - timedelta(hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS),
                 )
+                # A manual capture needs the same completed electrical history
+                # as a routine exchange: pool thermal memory advances from these
+                # quarters before the server prepares the new plan.
                 measured = bool(entities.get("total_consumption") or entities.get("grid_import")) \
-                    and start < complete_end and replan_request_id is None
+                    and start < complete_end
                 actuals = await self._actual_quarters(entities, start, complete_end) if measured else []
                 if measured:
                     self.measured_quarters = prune_quarters({**self.measured_quarters,
