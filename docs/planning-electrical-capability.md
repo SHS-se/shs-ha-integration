@@ -30,3 +30,39 @@ quarter-average observations, explicit missing electrical evidence, canonical
 mapping mismatch, and unchanged room/EV behavior. The planner repository's
 pinned cross-repository qualification executes the full household capture,
 planner and physical command path against independently generated inputs.
+
+
+## Room operating electricity
+
+Room `active_power_w` is expected draw while the actual heater operates. It is
+separate from both unconditional `forecast_w_by_slot` consumption and the
+conservative maximum retained by the native gateway. An idle thermostat's live
+standby watts cannot describe future heating, and a historical peak cannot be
+substituted for typical heating input.
+
+`shs_core/room_electrical.py` owns this evidence. Its batched history adapter
+reads normalized five-minute power means and actual actuator activity over the
+existing completed profile window. A bucket contributes only when every
+instant in it has explicit heating activity: thermostat `hvac_action=heating`
+or direct switch ON. Climate mode `heat` alone is permission, not activity.
+Other actuators sharing the meter must be explicitly inactive. Mixed, unknown
+or incomplete intervals are not prorated into fictitious ON energy.
+
+The duration-weighted ON mean, support hours, interval count and mapping
+condition are captured in `inference.on_power`; configured numeric Power is
+explicit operating evidence. There is no minimum sample count, positive-power
+threshold, peak substitution, prior-model substitute or persisted fallback.
+Missing ON evidence stays unknown with the existing diagnostic. Unconditional
+empirical consumption, comfort intent, native admission and thermal fitting
+retain their separate owners. Historical replay captures keep their original
+values; correcting current evidence does not silently rewrite history.
+
+The native gateway continues reserving its retained electrical bound. Its
+conservative reservation can differ from the planner's expected operating
+mean; this correction does not introduce a new planner feasibility policy or
+claim that the two quantities are interchangeable. Sparse electrical/thermal
+excitation remains a model-quality limitation.
+
+Integration beta.159 and app beta.116 supply this corrected existing field.
+No server protocol or Rust action, priority, constraint, EV connection or
+EV departure rule changes are required.

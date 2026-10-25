@@ -54,7 +54,7 @@ PURE_MODULES = (
     "shs_core.configuration_fields",
     "shs_core.optimisation",
     "shs_core.measurements",
-    "shs_core.planning",
+    "shs_core.planning", "shs_core.room_electrical",
     "shs_core.readings",
     "shs_core.supplier",
     "shs_core.tariff",

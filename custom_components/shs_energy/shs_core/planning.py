@@ -20,6 +20,7 @@ from typing import Any, Callable, Optional
 from math import isfinite
 
 from .planning_warnings import planning_warning
+from .room_electrical import OnPowerEvidence
 
 from .const import (
     EV_CHARGE_EFFICIENCY,
@@ -748,6 +749,7 @@ def build_device_models(
     *,
     mapped_power_w: PowerReader,
     pool_power_w: dict[str, float | None],
+    room_on_power: dict[str, OnPowerEvidence],
     local_tz: tzinfo,
     pool_water_entity: str | None = None,
     boiler_running_power_w: dict[str, float] | None = None,
@@ -812,6 +814,8 @@ def build_device_models(
             # as the physical gateway. Quarter means and instantaneous sensor
             # watts remain observations, never replacements for that bound.
             active_power_w = pool_power_w.get(str(device["key"]))
+        if path == "room":
+            active_power_w = room_on_power[str(device["key"])].expected_w
         if path == "boiler":
             # Quarter means describe energy, not an element's running draw.
             # Preserve observed on-cycle power while its live sensor is idle.
@@ -832,6 +836,7 @@ def build_device_models(
                 for weekday, profile in empirical["by_weekday"].items()
             },
             **({"running_power_w": active_power_w} if path == "boiler" else {}),
+            **({"on_power": room_on_power[str(device["key"])].as_inference()} if path == "room" else {}),
         }
         if planning_role == "base_load":
             continue

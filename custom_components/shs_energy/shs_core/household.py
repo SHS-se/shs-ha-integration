@@ -1204,12 +1204,14 @@ class Household:
         )
         if not isinstance(active_mappings, dict):
             active_mappings = {}
+        from .device_controls import mapped_planning_path
         for device in prepared:
             if device["key"] in self.ports.options().get("excluded_device_readings", []):
                 continue
             mapping = active_mappings.get(device["key"], {})
             watts = self._mapped_power_w(mapping)
-            if watts is not None and not is_hot_water(device):
+            if watts is not None and not is_hot_water(device) and mapped_planning_path(
+                    device, mapping, self.resolved_options().get("pool_water_temperature_entity")) != "room":
                 device["active_power_w"] = round(watts, 1)
         from .configuration_schema import shared_devices
         return shared_devices(prepared, self.ports.options()) if included_only else prepared
@@ -2799,6 +2801,9 @@ class Household:
                 "device control mappings must be an object",
                 remedy=REMEDY_DEFECT,
             )
+        from .room_electrical import capture_room_on_power
+        room_on_power = await capture_room_on_power(self.ports.history, devices, control_mappings,
+            profile_start, profile_end, pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY))
         electrical_bounds = await self.ports.electrical_power_bounds(control_mappings)
         device_models, degraded_devices = build_device_models(
             devices,
@@ -2807,6 +2812,7 @@ class Household:
             control_mappings,
             mapped_power_w=self._mapped_power_w,
             pool_power_w=electrical_bounds,
+            room_on_power=room_on_power,
             local_tz=self.ports.home().timezone,
             pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
             boiler_running_power_w=await self._boiler_running_power_w(
