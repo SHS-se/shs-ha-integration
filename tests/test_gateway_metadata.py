@@ -15,7 +15,7 @@ from gateway_fixture import IDENTITY
 from gateway_wire import filter_sources
 from test_execution_mode_select import load_adapter
 from shs_core.controller_inputs import configured_entity_ids
-from shs_core.gateway_journal import digest
+from shs_core.gateway_journal import digest, GatewayConflict
 from shs_core.gateway_service import GatewayService
 from shs_core.native_readings import power
 from shs_core.grid_capacity import (battery_released, required_import, import_limit,
@@ -77,7 +77,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         passthrough = lambda function:function
         registry = SimpleNamespace(async_get=lambda entity:None)
         adapter = load_adapter('gateway.py', dict(asyncio=asyncio, datetime=datetime, timezone=timezone, json=json,
-            logging=logging, Path=Path, perf_counter=perf_counter, thread_time=thread_time,
+            logging=logging, Path=Path, perf_counter=perf_counter, thread_time=thread_time, GatewayConflict=GatewayConflict,
             callback=passthrough, vol=SimpleNamespace(Required=lambda key:key),
             websocket_api=SimpleNamespace(require_admin=passthrough, async_response=passthrough,
                 websocket_command=lambda schema:passthrough),
@@ -164,6 +164,21 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         self.rows['sensor.battery']['state'] = '0'
         self.rows['sensor.battery']['attributes']['unit_of_measurement'] = 'kWh'
         self.assertFalse(self.source.external_ready('pool'))
+
+    async def test_planning_electrical_bounds_share_dispatch_evidence(self):
+        options = self.source.options()
+        mappings = options.get('device_control_mappings', {})
+        self.source.refresh_capacity = AsyncMock()
+        self.source.power_peaks = {'sensor.synthetic_pool':3600}
+        candidate = {'synthetic': {'power':'sensor.synthetic_pool'}}
+        self.source.options = lambda: {**options, 'device_control_mappings':candidate}
+        result = await self.source.request('planning_power_bounds', {'mappings':candidate})
+        self.assertEqual(result, {'synthetic':3600})
+        self.source.refresh_capacity.assert_awaited_once()
+        self.source.power_peaks = {}
+        self.assertEqual(await self.source.request('planning_power_bounds', {'mappings':candidate}), {'synthetic':None})
+        with self.assertRaises(GatewayConflict):
+            await self.source.request('planning_power_bounds', {'mappings':mappings})
 
     async def test_statistics_wire_preserves_rows_and_logs_only_counts(self):
         rows = {'sensor.energy': [{'start': 1, 'end': 301, 'change': 0.125}]}

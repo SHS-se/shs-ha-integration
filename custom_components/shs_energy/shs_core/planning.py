@@ -747,6 +747,7 @@ def build_device_models(
     control_mappings: dict[str, Any],
     *,
     mapped_power_w: PowerReader,
+    pool_power_w: dict[str, float | None],
     local_tz: tzinfo,
     pool_water_entity: str | None = None,
     boiler_running_power_w: dict[str, float] | None = None,
@@ -806,6 +807,11 @@ def build_device_models(
             else empirical_active_power_w if empirical_active_power_w is not None
             else previous_power_w
         )
+        if path == "pool":
+            # ON electrical permission is supplied by the same retained bound
+            # as the physical gateway. Quarter means and instantaneous sensor
+            # watts remain observations, never replacements for that bound.
+            active_power_w = pool_power_w.get(str(device["key"]))
         if path == "boiler":
             # Quarter means describe energy, not an element's running draw.
             # Preserve observed on-cycle power while its live sensor is idle.

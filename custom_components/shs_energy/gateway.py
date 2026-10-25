@@ -229,7 +229,7 @@ class HomeAssistantSource:
     async def request(self, operation, body):
         fields = {'credentials':set(),
             'admission':{'revision','bindings','pool_pause'}, 'live':{'after'},
-            'catalog':set(), 'battery_capacity':set(),
+            'catalog':set(), 'battery_capacity':set(), 'planning_power_bounds':{'mappings'},
             'configure':{'expected_revision','revision','options','digest'},
             'statistics':{'start','end','entities','period','units','kinds'},
             'states':{'start','end','entities','with_attributes'}, 'forecast':{'entity'}}
@@ -237,6 +237,16 @@ class HomeAssistantSource:
             raise ValueError('Unsupported source request')
         if operation == 'credentials':
             return dict(self.entry.data)
+        if operation == 'planning_power_bounds':
+            # Planning and final dispatch share the same retained electrical
+            # evidence. A quiet/currently limited sensor is not an ON rating.
+            mappings = body['mappings']
+            if mappings != self.options().get('device_control_mappings', {}):
+                raise GatewayConflict('Electrical capture belongs to another device configuration')
+            await self.refresh_capacity()
+            if mappings != self.options().get('device_control_mappings', {}):
+                raise GatewayConflict('Device configuration changed during electrical capture')
+            return {key:self.mapped_power_bound(mapping) for key,mapping in mappings.items()}
         if operation == 'battery_capacity':
             async with self.service.physical.lock:
                 await self.refresh_capacity()

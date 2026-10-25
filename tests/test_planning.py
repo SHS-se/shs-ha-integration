@@ -445,6 +445,7 @@ class DeviceModelTests(unittest.TestCase):
                     {"pump": .191, "heater": .289, "floor": .2}} for start in HORIZON[:4]]
         models, degraded = build_device_models(
             devices, actuals, HORIZON, mappings, mapped_power_w=lambda _: None,
+            pool_power_w={"pump":764, "heater":1156},
             local_tz=timezone.utc, pool_water_entity="sensor.water",
         )
         self.assertEqual(degraded, [])
@@ -462,6 +463,7 @@ class DeviceModelTests(unittest.TestCase):
             HORIZON,
             mappings or {},
             mapped_power_w=lambda mapping: watts,
+            pool_power_w={device["key"]:watts for device in devices},
             local_tz=timezone.utc,
         )
         return models
@@ -473,6 +475,7 @@ class DeviceModelTests(unittest.TestCase):
             HORIZON,
             mappings or {},
             mapped_power_w=lambda mapping: watts,
+            pool_power_w={device["key"]:watts for device in devices},
             local_tz=timezone.utc,
             boiler_running_power_w=running_power,
         )
@@ -549,7 +552,7 @@ class DeviceModelTests(unittest.TestCase):
         self.assertEqual(set(models[0]["forecast_w_by_slot"]), {0})
         self.assertIn("device_history_estimated", {w["code"] for w in models[0]["planning_warnings"]})
 
-    def test_eleven_hours_of_history_can_supply_running_power(self) -> None:
+    def test_quarter_energy_supplies_expected_demand_not_pool_on_capability(self) -> None:
         devices = [inventory_device("sensor.new", "controllable", "switch_schedule",
                                     category="pool_heating")]
         history = complete_history("sensor.alive")
@@ -558,8 +561,24 @@ class DeviceModelTests(unittest.TestCase):
         models, degraded = self.build_with_degraded(devices, history)
         self.assertEqual(len(models), 1)
         self.assertEqual(degraded, [])
-        self.assertEqual(models[0]["active_power_w"], 772)
+        self.assertIsNone(models[0]["active_power_w"])
+        self.assertEqual(max(models[0]["forecast_w_by_slot"]), 772)
         self.assertEqual(models[0]["profile_status"], "warming")
+
+    def test_pool_on_bound_is_independent_of_live_power_and_quarter_average(self):
+        key = "sensor.synthetic_pool"
+        devices = [inventory_device(key, "controllable", "switch_schedule", category="pool_heating")]
+        mappings = {key:{"control_type":"switch_schedule", "power":"sensor.synthetic_pool_power"}}
+        models, _ = build_device_models(devices, complete_history(key, kwh=.3), HORIZON, mappings,
+            mapped_power_w=lambda _:1200, pool_power_w={key:3600}, local_tz=timezone.utc)
+        self.assertEqual(models[0]["active_power_w"], 3600)
+        self.assertEqual(set(models[0]["forecast_w_by_slot"]), {1200})
+        # Neither a previous profile estimate nor a lower current sample is a bound.
+        models, _ = build_device_models(devices, complete_history(key, kwh=.3), HORIZON, mappings,
+            mapped_power_w=lambda _:1200, pool_power_w={key:None}, local_tz=timezone.utc)
+        self.assertIsNone(models[0]["active_power_w"])
+        self.assertEqual(set(models[0]["forecast_w_by_slot"]), {1200})
+        self.assertIn("running_power_unknown", {warning["code"] for warning in models[0]["planning_warnings"]})
 
     def test_missing_device_quarters_preserve_the_household_history(self) -> None:
         history = complete_history("sensor.alive")
@@ -795,6 +814,7 @@ class DeviceModelTests(unittest.TestCase):
             HORIZON,
             {},
             mapped_power_w=reader,
+            pool_power_w={},
             local_tz=timezone.utc,
         )
         self.assertEqual(len(seen), len(keys))

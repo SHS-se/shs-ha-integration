@@ -69,6 +69,12 @@ class Rig:
         def spawn(coroutine, name):
             self.spawned.append(name)
             coroutine.close()  # Tests explicitly invoke work; no detached tasks.
+        self.electrical_bounds = {}
+        async def electrical_power_bounds(mappings):
+            from shs_core.grid_capacity import device_power_bound
+            return {key:device_power_bound(mapping, self.electrical_bounds,
+                    getattr(self.states.get(mapping.get('power_setting_entity_id')), 'state', None))
+                    for key,mapping in mappings.items()}
         ports = HouseholdPorts(
             home=lambda: self.home, options=lambda: deepcopy(self.options), admit=admit,
             read_state=self.states.get, entity_ids=lambda: set(self.states),
@@ -76,6 +82,7 @@ class Rig:
             inventory=AsyncMock(return_value=[]), battery_report=lambda entity: None,
             history=self.history, utcnow=lambda: self.now, recovering=lambda: False,
             repair=lambda *args: self.repairs.append(args), publish=lambda: self.published.append(True), spawn=spawn,
+            electrical_power_bounds=electrical_power_bounds,
         )
         self.household = Household(ports, self.client,
             store=DurableRecord(self.records, json.dumps, json.loads), battery_inputs_store=self.battery_store, connection_store=Store(), control_authority=True)

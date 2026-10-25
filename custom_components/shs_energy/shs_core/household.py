@@ -2799,12 +2799,14 @@ class Household:
                 "device control mappings must be an object",
                 remedy=REMEDY_DEFECT,
             )
+        electrical_bounds = await self.ports.electrical_power_bounds(control_mappings)
         device_models, degraded_devices = build_device_models(
             devices,
             device_profile_actuals,
             horizon,
             control_mappings,
             mapped_power_w=self._mapped_power_w,
+            pool_power_w=electrical_bounds,
             local_tz=self.ports.home().timezone,
             pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
             boiler_running_power_w=await self._boiler_running_power_w(
