@@ -647,6 +647,9 @@ class DeviceOperations:
                 previews["battery"] = {"error": str(err)}
         if slot.get("pool_w") is not None and options.get("pool_enabled"):
             try:
+                if 'pool_permitted' in slot and pool_permission(plan, slot) is None:
+                    previews["pool"] = {"fields": [{"label": "Pool heater", "value": "Existing settings retained"}]}
+                    return previews
                 request, _ = self.pool_request(options, slot, read_state=self.preview_state, plan=plan)
                 fields = [{"label": "Pool heater", "value": request["requested_switch_state"].capitalize()},
                           {"label": "Water temperature", "value": request["water_temperature_c"], "unit": "°C"},

@@ -328,7 +328,9 @@ def controller_explanation(device, mode, status, slot=None):
                 current = slot['ev_target_current_a']
                 planned = f'The plan requests charging at {current:g} A.' if current else 'The plan requests no car charging now.'
             elif device == 'pool' and 'pool_w' in slot:
-                planned = 'The plan requests pool heating now.' if slot['pool_w'] > 0 else 'The plan requests no pool heating now.'
+                planned = ('The plan has no new pool instruction; existing settings are retained.'
+                           if 'pool_permitted' in slot and slot['pool_permitted'] is None else
+                           'The plan requests pool heating now.' if slot['pool_w'] > 0 else 'The plan requests no pool heating now.')
             else:
                 command = slot_command(slot, device.removeprefix('device:'))
                 kind = command.get('type')

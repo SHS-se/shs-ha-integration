@@ -37,6 +37,8 @@ CONTROL_TYPES = (
 
 def pool_requested_w(plan, slot):
     """Transient models distinguish enabled nominal command from expected electricity."""
+    if 'pool_permitted' in slot and slot['pool_permitted'] is None:
+        raise ValueError('No new pool instruction; existing settings are retained')
     response = (plan.get("pool") or {}).get("heater_response")
     return slot["pool_command_w"] if (plan.get("pool") or {}).get("planning_basis") == "empirical" or response and response["kind"] == "bergvarme" else slot["pool_w"]
 
@@ -44,6 +46,10 @@ def pool_requested_w(plan, slot):
 def pool_permission(plan, slot):
     """Permission is independent of forecast watts while a model is learning."""
     if 'pool_permitted' in slot:
+        if slot['pool_permitted'] is None:
+            if slot.get('pool_command_w') is not None:
+                raise ValueError('An absent pool instruction cannot carry commanded power')
+            return None
         if type(slot['pool_permitted']) is not bool:
             raise ValueError('pool permission must be a boolean')
         return slot['pool_permitted']

@@ -26,7 +26,7 @@ from .battery_commands import validate_battery_command, battery_mode_key
 from .configuration_values import resolve_battery_quantities, resolve_quantity
 from .device_commands import actuator_targets, execution_setup_errors, validate_commands
 from .hot_water import HotWaterConfigurationError
-from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path
+from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path, pool_permission
 
 _LOGGER = logging.getLogger(__name__)
 from .device_operations import (DeviceOperations, ControlObservationError, ActuatorUnavailableError,
@@ -571,6 +571,13 @@ class ScheduledController(DeviceOperations):
                                  if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device))
                     if not slot or not supported:
                         self.report(device, "idle", reason=self.holding(device, "No current plan for this device"), execution_blocked=controlling)
+                        continue
+                    if device == "pool" and pool_permission(plan, slot) is None:
+                        self.failed.pop(device, None)
+                        self.end_gap(device)
+                        self.report(device, "idle", reason=self.holding(device,
+                            "No accepted pool instruction covers this interval; existing settings are retained"),
+                            execution_blocked=controlling)
                         continue
                     if self.failed.get(device) == key:
                         continue

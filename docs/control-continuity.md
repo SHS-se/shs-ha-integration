@@ -74,6 +74,16 @@ journalled by an older version is discarded on load and control resumes.
 When an entity returns, SHS only carries out what the current plan and the select
 already require. If the device is already in the planned state, nothing is sent.
 
+## Pool intervals without a new instruction
+
+User requirement, 25 October 2026: if missing pool observations prevent a new
+schedule, retain the accepted pool instructions. A published interval with
+`pool_permitted: null` explicitly contains no new instruction. Hold existing
+settings before intent encoding, verification or device execution, and explain
+that hold on the device card. Forecast consumption is not a command and must
+not trigger an execution-failure replan. This does not release ownership or
+change the explicit handover rules above.
+
 ## Hot-water scheduled permission
 
 User requirement, 14 October 2026: the planner supplies a binary daily allowance

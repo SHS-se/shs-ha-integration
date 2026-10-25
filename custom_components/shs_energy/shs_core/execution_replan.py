@@ -37,6 +37,8 @@ def requested(owner, slot):
     if owner == '$ev':
         return (slot.get('ev_target_current_a') or slot.get('ev_w') or 0) > 0
     if owner == '$pool':
+        if 'pool_permitted' in slot and slot['pool_permitted'] is None:
+            return False
         return (slot.get('pool_w') or 0) > 0
     if owner == '$battery':
         return (slot.get('battery_charge_w') or slot.get('battery_discharge_w') or 0) > 0
