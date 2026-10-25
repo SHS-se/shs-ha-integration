@@ -13,7 +13,7 @@ import aiohttp
 
 sys.path.append(str(Path(__file__).parents[2]/'tests'))
 from gateway_fixture import IDENTITY, seed
-from shs_core.gateway_journal import GatewayConflict
+from shs_core.gateway_journal import AdmissionPending, GatewayConflict
 from shs_core.household_ports import HouseholdReadError
 from shs_app.sources import RemoteHistory
 from shs_core.receipt_inbox import ReceiptInbox
@@ -58,6 +58,14 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             await RemoteHistory(self.client).source('states', {})
         self.assertIsNotNone(self.client.socket)
         self.assertEqual(self.client.connected['generation'],first['generation'])
+        await self.client.snapshot()
+
+    async def test_settings_admission_refusal_is_typed_and_keeps_the_session(self):
+        first = await self.client.connect()
+        with self.assertRaisesRegex(AdmissionPending, 'older configuration or policy'):
+            await self.client.call('device', {'intent': {}})
+        self.assertIsNotNone(self.client.socket)
+        self.assertIs(self.client.connected, first)
         await self.client.snapshot()
 
     async def test_lost_ack_reply_reconnects_new_epoch_from_committed_inbox(self):

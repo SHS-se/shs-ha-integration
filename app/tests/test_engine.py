@@ -16,7 +16,7 @@ from shs_app.migration_import import import_export
 from shs_app.gateway_seed import seed_gateway
 from shs_app.engine import AppEngine
 from shs_core.const import CONF_BASE_URL, CONF_DEVICE_TOKEN
-from shs_core.gateway_journal import GatewayJournal, GatewayConflict
+from shs_core.gateway_journal import AdmissionPending, GatewayJournal, GatewayConflict
 from shs_core.gateway_service import GatewayService, AppConnection
 from shs_core.gateway_stream import GatewayStream, GatewayRecord, GatewayOperations, GatewayCommands
 from shs_core.device_gateway import DeviceGateway
@@ -91,7 +91,8 @@ class LoopbackSocket:
             reply = dict(success=True,result=result)
         except (ValueError,KeyError,TypeError,RuntimeError) as error:
             stale = self.peer.closed or self.peer.service.connection is not self.peer
-            reply = dict(success=False,error=dict(code='shs_gateway_stale' if stale else 'shs_gateway_rejected',message=str(error)))
+            reply = dict(success=False,error=dict(code='shs_gateway_stale' if stale else
+                'shs_gateway_admission' if isinstance(error, AdmissionPending) else 'shs_gateway_rejected',message=str(error)))
         self.replies.put_nowait(dict(id=value['id'],type='result',**reply))
     async def close(self):
         self.peer.disconnected()

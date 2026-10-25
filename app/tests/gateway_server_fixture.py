@@ -42,6 +42,10 @@ async def serve():
                         await ws.send_json(dict(id=request_id,type='result',success=False,
                             error=dict(code='shs_source_unavailable',message='recorder unavailable')))
                         continue
+                    if value['operation'] == 'device':
+                        await ws.send_json(dict(id=request_id,type='result',success=False,
+                            error=dict(code='shs_gateway_admission',message='Device intention belongs to an older configuration or policy')))
+                        continue
                     if value['operation'] == 'connect':
                         admit(value['body'].pop('contract'), offer('released-companion'))
                     if value['operation'] == 'projection_chunk':

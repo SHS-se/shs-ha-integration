@@ -6,7 +6,7 @@ import unittest
 import test_controller as fixtures
 from command_fixture import native_executor, controller_inputs
 from shs_core.device_gateway import DeviceGateway
-from shs_core.gateway_journal import GatewayConflict
+from shs_core.gateway_journal import AdmissionPending, GatewayConflict
 
 
 class MemoryOperations:
@@ -69,6 +69,18 @@ class PhysicalGatewayTests(unittest.IsolatedAsyncioTestCase):
         transport.journal.prepare = revoke
         result = await self.gateway.perform(self.request())
         self.assertEqual(result['error']['kind'], 'rejected')
+        self.assertEqual(self.states['switch.pool'].state, 'off')
+
+    async def test_settings_change_during_an_operation_is_an_admission_wait_not_a_rejection(self):
+        admitted = []
+        def authorize(intent):
+            admitted.append(intent)
+            if len(admitted) > 1:
+                raise AdmissionPending('Reconcile and activate the current app session first')
+        self.gateway.authorize = authorize
+        result = await self.gateway.perform(self.request())
+        self.assertEqual(result['error']['kind'], 'admission')
+        self.assertEqual(result['error']['message'], 'Reconcile and activate the current app session first')
         self.assertEqual(self.states['switch.pool'].state, 'off')
 
     async def test_verification_mode_hands_the_device_back_and_accepts_no_schedule(self):

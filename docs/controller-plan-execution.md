@@ -317,7 +317,19 @@ The app preserves deferred notifications through startup/replay writer gates and
 resumes persisted shortfall reasons once the gate opens. This adds no economic
 tick, physical writer, handback or Verification effect. Generic unavailable
 commands may probe the previously unavailable source read-only; they cannot
-clear write failures merely because an actuator can be read.
+clear write failures merely because an actuator can be read. A mapped device's
+refused command that names no unavailable source recovers when HA's native
+settings change, which forces a replacement plan that schedules it again. The
+same settings keep it faulted, so an unchanged refusal cannot loop. A refusal
+journalled before settings identities were recorded is retried once. An
+`unavailable` command is never resumable work: its recovery always replans.
+
+HA refuses device work while it installs a new configuration until the app holds
+the new context (`AdmissionPending`, wire code `shs_gateway_admission`). That
+refusal is a wait, not a fault: nothing is sent, the device reports `pending`
+and keeps its last setting, and no execution evidence is journalled. A fault's
+cause is `Type:entity` followed by the refusal's own words; only `Type:entity`
+identifies it, so a reworded message is not new evidence.
 
 ### Recovery feasibility
 

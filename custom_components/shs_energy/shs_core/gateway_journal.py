@@ -64,6 +64,14 @@ class GatewayRejected(ValueError):
     """A correlated request was rejected; the socket itself remains usable."""
 
 
+class AdmissionPending(GatewayConflict, GatewayRejected):
+    """HA refuses device work until the app holds its current settings and policy.
+
+    A settings change does this briefly by design; the refused work is retried
+    under the new context and is never equipment evidence.
+    """
+
+
 def digest(value):
     return sha256(encoded(value).encode()).hexdigest()
 

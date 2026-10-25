@@ -142,7 +142,10 @@ Every ordinary or forced capture also carries `snapshot.execution_availability`
 for currently unresolved conditions. It excludes recovered rows. A known missed
 temporary opportunity blocks that interval only; current disconnection does not
 invent a future arrival time. A fault persists until observed recovery and is
-not assigned an invented repair time. Neither fault evidence nor inability to
+not assigned an invented repair time. For a mapped device's refused command with
+no unavailable source, a change of HA's native settings is that observation (see
+[controller plan execution](controller-plan-execution.md#implemented-forced-replan-transport)).
+Neither fault evidence nor inability to
 send a command proves a held actuator stopped consuming power. Actual state,
 SOC, targets, deadlines and measured delivery continue through the existing
 snapshot/accounting fields; there is no second additive missed-energy input.

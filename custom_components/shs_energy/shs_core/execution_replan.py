@@ -27,6 +27,24 @@ class ExecutionReplan(TypedDict):
     changes: list[ExecutionChange]
 
 
+CAUSE_REASON_CHARS = 200
+
+
+def fault_cause(error):
+    """`Type:entity`, then the refusal's own words so the plan can say why.
+
+    Only the first token identifies the fault: a reworded message for the same
+    fault is not new evidence and must not request another plan.
+    """
+    identity = f"{type(error).__name__}:{getattr(error, 'entity', '') or ''}"
+    reason = ' '.join(str(error).split()).rstrip('.')[:CAUSE_REASON_CHARS]
+    return f'{identity} {reason}' if reason else identity
+
+
+def cause_identity(cause):
+    return cause.split(' ', 1)[0]
+
+
 def owner_key(device):
     return device if device.startswith('$') else device.removeprefix('device:') if device.startswith('device:') else '$' + device
 
@@ -43,6 +61,9 @@ def requested(owner, slot):
     if owner == '$battery':
         return (slot.get('battery_charge_w') or slot.get('battery_discharge_w') or 0) > 0
     command = slot.get('device_commands', {}).get(owner, {})
+    if command.get('type') == 'unavailable':
+        # Nothing executes it, so recovery cannot resume it: it needs a plan.
+        return False
     return bool(command.get('permitted') or command.get('on_seconds', 0) or command.get('value', 0)
                 or command.get('type') == 'setpoint' or slot.get('device_loads_w', {}).get(owner, 0))
 
@@ -61,6 +82,7 @@ def observe(journal, owner, slot, condition, *, recovery_requires_replan=False):
             return False
         rows.pop(owner)
         journal.get('recovery_sources', {}).pop(owner, None)
+        journal.get('recovery_configuration', {}).pop(owner, None)
         # A still-executable accepted request can resume directly. Work
         # suppressed by either absence or fault needs a replacement schedule.
         if recovery_requires_replan or not requested(owner, slot):
@@ -77,7 +99,7 @@ def observe(journal, owner, slot, condition, *, recovery_requires_replan=False):
         start = datetime.fromisoformat(slot['start'].replace('Z', '+00:00'))
         intervals = [{'start': start.isoformat(), 'end': (start + timedelta(minutes=15)).isoformat()}]
     change = {'owner': owner, 'status': status, 'cause': cause, 'blocked_intervals': intervals}
-    if previous and previous['status'] == status and previous['cause'] == cause:
+    if previous and previous['status'] == status and cause_identity(previous['cause']) == cause_identity(cause):
         if (status == 'faulted' and previous['blocked_intervals']) or not intervals or previous['blocked_intervals'] == intervals:
             return False
     # Keep the last blocked absolute opportunity through off slots/replacement.
@@ -89,6 +111,12 @@ def observe(journal, owner, slot, condition, *, recovery_requires_replan=False):
         journal.setdefault('recovery_sources', {})[owner] = list(sources)
     else:
         journal.get('recovery_sources', {}).pop(owner, None)
+    # A refusal with no source to watch is retried once the settings change.
+    configuration = condition.get('recover_when_configuration')
+    if configuration:
+        journal.setdefault('recovery_configuration', {})[owner] = configuration
+    else:
+        journal.get('recovery_configuration', {}).pop(owner, None)
     if not requested(owner, slot):
         return False
     pending[owner] = deepcopy(change)
@@ -116,7 +144,7 @@ def failed(journal, changes):
 
 def retain_authority(journal, owners):
     """Explicit authority exit ends an episode, without claiming physical recovery."""
-    for field in ('owners', 'pending', 'recovery_sources'):
+    for field in ('owners', 'pending', 'recovery_sources', 'recovery_configuration'):
         if field in journal:
             journal[field] = {owner: value for owner, value in journal[field].items() if owner in owners}
     if not journal.get('pending'):

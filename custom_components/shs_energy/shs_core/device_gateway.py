@@ -19,7 +19,7 @@ from .device_operations import (DeviceOperations, ControlDeadlineError, ControlO
 from .device_ownership import DeviceOwnership
 from .operating_modes import device_mode
 from .hot_water import HotWaterConfigurationError
-from .gateway_journal import GatewayConflict
+from .gateway_journal import AdmissionPending, GatewayConflict
 
 
 @dataclass(frozen=True)
@@ -128,7 +128,7 @@ class DeviceGateway(DeviceOperations):
             return
         self.authorize(self.intent)
         if self.closed or self.options() != self.active_options:
-            raise GatewayConflict('Canonical device configuration changed')
+            raise AdmissionPending('Canonical device configuration changed')
         mode = device_mode(self.options(), self.device)
         # Verification writes no schedule, but leaving Controlling for it is the
         # release and its handover is a real write (docs/control-continuity.md).
@@ -282,7 +282,7 @@ class DeviceGateway(DeviceOperations):
                     else:
                         result = await self.execute_device(intent.device, self.active_options, self.slot)
             except Exception as exception:
-                error = {'message':str(exception), 'kind':'deadline' if isinstance(exception, ControlDeadlineError) else 'observation' if isinstance(exception, ControlObservationError) else 'configuration' if isinstance(exception, HotWaterConfigurationError) else 'rejected',
+                error = {'message':str(exception), 'kind':'deadline' if isinstance(exception, ControlDeadlineError) else 'observation' if isinstance(exception, ControlObservationError) else 'configuration' if isinstance(exception, HotWaterConfigurationError) else 'admission' if isinstance(exception, AdmissionPending) else 'rejected',
                          'details':correction_details(exception)}
                 if isinstance(exception, ControlObservationError):
                     error.update(entity=exception.entity, unavailable=exception.unavailable)

@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 from uuid import uuid4
 
-from .gateway_journal import GatewayConflict, digest
+from .gateway_journal import AdmissionPending, GatewayConflict, digest
 from .native_configuration import native_options
 from .gateway_stream import GatewayConnection
 
@@ -86,12 +86,12 @@ class GatewayService:
     def authorize(self, operation):
         self.require_socket()
         if not self.active or self.configuration_pending:
-            raise GatewayConflict('Reconcile and activate the current app session first')
+            raise AdmissionPending('Reconcile and activate the current app session first')
 
     def authorize_device(self, intent):
         self.authorize('device')
         if (intent.configuration_revision != self.configuration_revision or intent.policy_revision != self.policy_revision):
-            raise GatewayConflict('Device intention belongs to an older configuration or policy')
+            raise AdmissionPending('Device intention belongs to an older configuration or policy')
 
     async def configuration_changed(self, value):
         # Host invalidates synchronously before it creates this coroutine.

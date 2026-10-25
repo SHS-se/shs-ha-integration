@@ -4,7 +4,7 @@ from shs_core.native_configuration import native_options
 from shs_core import home_runtime as rt
 from shs_core.command_transport import CommandUncertain
 from shs_core.device_port import device_intent
-from shs_core.gateway_journal import GatewayConflict, GatewayRejected, digest
+from shs_core.gateway_journal import AdmissionPending, GatewayConflict, GatewayRejected, digest
 from shs_core.home_host import DispatchRejected
 from shs_core.native_records import GRANT_NOT_CURRENT
 from shs_core.runtime_json import encode_value, decode_value
@@ -36,7 +36,7 @@ class RemoteDevices:
 
     async def perform(self, device, operation, plan, slot):
         if self.context is None:
-            raise GatewayConflict('Device policy has not been admitted')
+            raise AdmissionPending('Device policy has not been admitted')
         intent = device_intent(device, operation, plan, slot,
             configuration_revision=self.context['configuration_revision'], policy_revision=self.context['policy_revision'])
         response = await self.gateway.call('device', {'intent':intent})

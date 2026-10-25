@@ -15,6 +15,8 @@ from household_fixture import Rig
 from shs_core import execution_replan as evidence
 from shs_core.api import ShsApiClient, ShsApiError
 from shs_core.api_contract import API_VERSION
+from shs_core.device_operations import ControlObservationError
+from shs_core.gateway_journal import AdmissionPending, GatewayRejected
 
 
 class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
@@ -108,6 +110,50 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
         await self.h.async_execution_observed('device:heater', self.plan, slot, {'status': 'faulted', 'cause': 'service_failed'})
         await self.h.async_execution_observed('device:heater', self.plan, off, {'available_entities': ['switch.heater']})
         self.assertEqual(self.rig.records.saved['execution_replanning']['owners']['heater']['cause'], 'service_failed')
+
+    def heater_slots(self):
+        self.rig.options['device_modes']['heater'] = 'controlling'
+        slot = {**self.slot, 'device_loads_w': {'heater': 1000}, 'device_commands': {'heater': {
+            'type': 'setpoint', 'target_c': 20, 'minimum_c': 5, 'maximum_c': 90}}}
+        # The replacement keeps the heater's forecast load but cannot run it.
+        held = {**slot, 'device_commands': {'heater': {'type': 'unavailable', 'reason': 'Fault'}}}
+        return slot, held
+
+    async def test_refused_command_with_no_source_recovers_when_settings_change_and_not_before(self):
+        slot, held = self.heater_slots()
+        cause = 'GatewayRejected: Interrupted device operation; reconcile physical observations before a new intention'
+        await self.h.async_execution_observed('device:heater', self.plan, slot, {'status': 'faulted', 'cause': cause})
+        await self.h.async_optimisation_push()
+        change = self.h.client.push_optimisation.call_args.kwargs['execution_replan']['changes'][0]
+        self.assertEqual(change, {'owner': 'heater', 'status': 'faulted', 'cause': cause,
+                                  'blocked_intervals': change['blocked_intervals']})
+        await self.h.async_execution_observed('device:heater', self.plan, held, {'available_entities': ['climate.heater']})
+        self.assertIn('heater', self.rig.records.saved['execution_replanning']['owners'])
+        self.rig.options['house_consumption_power_entity'] = 'sensor.replacement_house_power'
+        await self.h.async_execution_observed('device:heater', self.plan, held, {'available_entities': ['climate.heater']})
+        journal = self.rig.records.saved['execution_replanning']
+        self.assertNotIn('heater', journal['owners'])
+        self.assertNotIn('heater', journal.get('recovery_configuration', {}))
+        self.assertEqual(journal['pending']['heater'], {'owner': 'heater', 'status': 'recovered',
+            'cause': 'execution_recovered', 'blocked_intervals': []})
+
+    async def test_refusal_journalled_without_settings_identity_is_retried_once(self):
+        slot, held = self.heater_slots()
+        await self.h.async_execution_observed('device:heater', self.plan, slot, {'status': 'faulted', 'cause': 'GatewayRejected:'})
+        legacy = deepcopy(self.rig.records.saved)
+        del legacy['execution_replanning']['recovery_configuration']
+        restarted = Rig(options=self.rig.options, stored=legacy).household
+        restarted.optimisation_plan = self.h.optimisation_plan
+        await restarted.async_execution_observed('device:heater', self.plan, held, {'available_entities': []})
+        journal = (await restarted._store.async_read())['execution_replanning']
+        self.assertNotIn('heater', journal['owners'])
+        self.assertEqual(journal['pending']['heater']['status'], 'recovered')
+        # Refused again under the same settings, it holds: no replan loop.
+        await restarted.async_execution_observed('device:heater', self.plan, slot,
+            {'status': 'faulted', 'cause': 'GatewayRejected: Invalid mapped device intention'})
+        await restarted.async_execution_observed('device:heater', self.plan, held, {'available_entities': []})
+        journal = (await restarted._store.async_read())['execution_replanning']
+        self.assertEqual(journal['owners']['heater']['cause'], 'GatewayRejected: Invalid mapped device intention')
 
     async def test_partial_quarter_reconnection_replans_ev_work_suppressed_by_replacement(self):
         self.assertGreater(self.rig.now.minute % 15, 0)
@@ -297,6 +343,30 @@ class EvidenceTests(unittest.TestCase):
         evidence.admitted(journal, [{**journal['pending']['heater'], 'cause': 'older'}])
         self.assertIn('heater', journal['pending'])
 
+    def test_refusal_keeps_its_reason_and_rewording_is_not_new_evidence(self):
+        self.assertEqual(evidence.fault_cause(GatewayRejected('Device intention belongs to an older configuration or policy.')),
+                         'GatewayRejected: Device intention belongs to an older configuration or policy')
+        self.assertEqual(evidence.fault_cause(GatewayRejected('')), 'GatewayRejected:')
+        self.assertEqual(evidence.fault_cause(ControlObservationError('switch.x is\nunavailable', 'switch.x', '')),
+                         'ControlObservationError:switch.x switch.x is unavailable')
+        journal = {}
+        slot = {'start': '2026-10-23T10:00:00Z', 'device_loads_w': {'heater': 1000},
+                'device_commands': {'heater': {'type': 'setpoint', 'target_c': 20, 'minimum_c': 5, 'maximum_c': 90}}}
+        self.assertTrue(evidence.observe(journal, 'heater', slot, {'status': 'faulted', 'cause': 'GatewayRejected: first'}))
+        evidence.admitted(journal, [journal['pending']['heater']])
+        self.assertFalse(evidence.observe(journal, 'heater', slot, {'status': 'faulted', 'cause': 'GatewayRejected: second'}))
+        self.assertEqual(journal['owners']['heater']['cause'], 'GatewayRejected: first')
+
+    def test_unavailable_command_is_not_resumable_so_recovery_requests_a_plan(self):
+        journal = {}
+        slot = {'start': '2026-10-23T10:00:00Z', 'device_loads_w': {'heater': 1000},
+                'device_commands': {'heater': {'type': 'unavailable', 'reason': 'Fault'}}}
+        self.assertFalse(evidence.requested('heater', slot))
+        evidence.observe(journal, 'heater', {**slot, 'device_commands': {}}, {'status': 'faulted', 'cause': 'GatewayRejected:'})
+        evidence.admitted(journal, list(journal['pending'].values()))
+        self.assertTrue(evidence.observe(journal, 'heater', slot, None))
+        self.assertEqual(journal['pending']['heater']['status'], 'recovered')
+
 
 class ControllerEvidenceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -315,6 +385,28 @@ class ControllerEvidenceTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertIsNone(self.coordinator.async_execution_observed.call_args.args[3])
         self.assertEqual(self.states['switch.charge'].state, 'on')
+
+    async def test_settings_admission_waits_without_fault_and_a_real_refusal_keeps_its_reason(self):
+        self.options['device_modes']['$ev'] = 'controlling'
+        empty = {'records': {}, 'overrides': {}, 'retired_pool_temperature_settings': {}}
+        self.controller.devices = SimpleNamespace(ownership=AsyncMock(return_value=empty),
+            synchronize=AsyncMock(return_value=empty),
+            perform=AsyncMock(side_effect=AdmissionPending('Device intention belongs to an older configuration or policy')))
+        await self.controller.async_start()
+        self.coordinator.async_execution_observed.assert_not_awaited()
+        self.assertEqual(self.controller.status['ev']['state'], 'pending')
+        self.assertNotIn('ev', self.controller.failed)
+        self.controller.devices.perform = AsyncMock(return_value=dict(ownership=empty, deadlines=[], reads=[],
+            diagnostics={'commands': [], 'observations': {}}, result=None, reservation_required=False, reports={},
+            error={'kind': 'admission', 'message': 'Reconcile and activate the current app session first', 'details': {}}))
+        await self.controller.async_tick()
+        self.coordinator.async_execution_observed.assert_not_awaited()
+        self.assertIn('Reconcile and activate', self.controller.status['ev']['reason'])
+        self.controller.devices.perform = AsyncMock(side_effect=GatewayRejected('Invalid EV intention'))
+        await self.controller.async_tick()
+        self.assertEqual(self.coordinator.async_execution_observed.call_args.args[3],
+                         {'status': 'faulted', 'cause': 'GatewayRejected: Invalid EV intention'})
+        self.assertEqual(self.controller.status['ev']['state'], 'fault')
 
     async def test_verification_never_observes_execution_failure(self):
         self.options['device_modes']['$ev'] = 'control_verification'

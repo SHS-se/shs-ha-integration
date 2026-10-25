@@ -15,6 +15,7 @@ from time import perf_counter
 from uuid import uuid4
 
 from .command_journal import Command
+from .gateway_journal import AdmissionPending
 from . import execution_replan as execution_evidence
 from .native_commands import finite, native_command
 from .device_ownership import DeviceOwnership, decode_ownership
@@ -97,6 +98,8 @@ class ScheduledController(DeviceOperations):
                 raise HotWaterConfigurationError(options)
             if error['kind'] == 'deadline':
                 raise ControlDeadlineError(error['message'])
+            if error['kind'] == 'admission':
+                raise AdmissionPending(error['message'])
             if error['kind'] == 'observation':
                 exception = ControlObservationError(error['message'], error['entity'],
                     error['details'].get('next_step', ''), unavailable=error['unavailable'])
@@ -603,6 +606,15 @@ class ScheduledController(DeviceOperations):
                         self.report(device,"pending",reason=str(err),retry_automatically=True,
                                     execution_blocked=device_mode(options, device) == "controlling")
                         continue
+                    if isinstance(err, AdmissionPending):
+                        # HA refuses work only until the app holds a settings
+                        # change it is installing; nothing was sent, and the
+                        # device is not faulted (docs/control-continuity.md).
+                        self.failed.pop(device, None)
+                        self.report(device, "pending", reason=self.holding(device,
+                            f"Waiting for Home Assistant to admit the current settings ({err})"),
+                            retry_automatically=True, execution_blocked=device_mode(options, device) == "controlling")
+                        continue
                     if (isinstance(err, PlanChangedError)
                             and self.coordinator.current_plan_slot is not None
                             and self.coordinator.operational_status["actionable"]
@@ -619,7 +631,7 @@ class ScheduledController(DeviceOperations):
                     if (not isinstance(err, (PlanChangedError, HotWaterConfigurationError))
                             and execution_evidence.requested(execution_evidence.owner_key(device), slot)):
                         await self.record_execution(device, plan, slot, {"status": "faulted",
-                            "cause": f"{type(err).__name__}:{getattr(err, 'entity', '') or ''}",
+                            "cause": execution_evidence.fault_cause(err),
                             **({"recover_when_entities": [err.entity]} if isinstance(err, ControlObservationError)
                                 and err.unavailable and err.entity else {})})
                     if isinstance(err, ControlObservationError) and err.transient:

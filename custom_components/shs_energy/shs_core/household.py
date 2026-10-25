@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from .replan_listener import listen_for_replans
 from . import execution_replan as execution_evidence
+from .native_configuration import native_options
 from .connection_health import ConnectionHealth
 from .operational_attention import pipeline_issue
 from .battery_live import BatteryLiveInputs
@@ -3315,6 +3316,11 @@ class Household:
         await self.async_battery_inputs_refresh()
         return result["retry_after_ms"] / 1000 if result["state"] == "pending" else 0
 
+    def _execution_configuration(self) -> str:
+        """Identity of the settings HA checks device work against."""
+        return hashlib.sha256(json.dumps(native_options(self.resolved_options()),
+            sort_keys=True, default=str).encode()).hexdigest()
+
     async def async_execution_observed(self, device, plan, slot, condition) -> None:
         """Journal Controlling evidence; the existing delivery owner replans it."""
         if not self.control_authority or device_mode(self.resolved_options(), device) != "controlling":
@@ -3327,9 +3333,20 @@ class Household:
             owner = execution_evidence.owner_key(device)
             if condition is not None and "available_entities" in condition:
                 required = journal.get("recovery_sources", {}).get(owner, [])
-                if not required or not set(required).issubset(condition["available_entities"]):
+                row = journal.get("owners", {}).get(owner)
+                if required:
+                    if not set(required).issubset(condition["available_entities"]):
+                        return
+                elif (row is None or row["status"] != "faulted"
+                        or journal.get("recovery_configuration", {}).get(owner) == self._execution_configuration()):
+                    # Readable controls never prove that a refused write now
+                    # works. Changed settings can; a fault an older version
+                    # journalled without them is retried once (a new refusal holds).
                     return
                 condition = None
+            elif (condition is not None and condition["status"] == "faulted" and not owner.startswith("$")
+                    and not condition.get("recover_when_entities")):
+                condition = {**condition, "recover_when_configuration": self._execution_configuration()}
             receipt = current.get("optimisation_pending_submission") or current.get("optimisation_pending_job") or {}
             recovery_in_flight = any(change["owner"] == owner and change["status"] != "recovered"
                 for change in receipt.get("execution_replan", {}).get("changes", []))
