@@ -38,6 +38,10 @@ async def serve():
                 request_id = value['id']
                 assert value.pop('type') == 'shs_energy/gateway'
                 try:
+                    if value['operation'] == 'source':
+                        await ws.send_json(dict(id=request_id,type='result',success=False,
+                            error=dict(code='shs_source_unavailable',message='recorder unavailable')))
+                        continue
                     if value['operation'] == 'connect':
                         admit(value['body'].pop('contract'), offer('released-companion'))
                     if value['operation'] == 'projection_chunk':

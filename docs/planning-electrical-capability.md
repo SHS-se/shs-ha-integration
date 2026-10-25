@@ -52,7 +52,11 @@ The duration-weighted ON mean, support hours, interval count and mapping
 condition are captured in `inference.on_power`; configured numeric Power is
 explicit operating evidence. There is no minimum sample count, positive-power
 threshold, peak substitution, prior-model substitute or persisted fallback.
-Missing ON evidence stays unknown with the existing diagnostic. Unconditional
+Missing ON evidence stays unknown with the existing diagnostic. A typed Recorder
+read failure becomes explicit `source_unavailable` evidence and a warning;
+configured watts are preserved. Programming, configuration and cancellation
+failures propagate. The gateway preserves this source-failure identity without
+closing an otherwise usable session. Unconditional
 empirical consumption, comfort intent, native admission and thermal fitting
 retain their separate owners. Historical replay captures keep their original
 values; correcting current evidence does not silently rewrite history.
@@ -63,6 +67,6 @@ mean; this correction does not introduce a new planner feasibility policy or
 claim that the two quantities are interchangeable. Sparse electrical/thermal
 excitation remains a model-quality limitation.
 
-Integration beta.160 and app beta.117 supply this corrected existing field.
+Integration beta.161 and app beta.118 supply this corrected existing field.
 No server protocol or Rust action, priority, constraint, EV connection or
 EV departure rule changes are required.

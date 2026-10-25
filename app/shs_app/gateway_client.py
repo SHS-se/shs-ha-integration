@@ -9,6 +9,7 @@ from uuid import uuid4
 import aiohttp
 
 from shs_core.command_transport import settled
+from shs_core.household_ports import HouseholdReadError
 from shs_core.gateway_journal import GatewayConflict, GatewayRejected, validate_identity
 from shs_wire.protocol import admit, hello
 from .profiling import AppProfiler, profiled
@@ -105,6 +106,8 @@ class GatewayClient:
                 future = self.pending.pop(reply['id'])
                 if reply.get('success') is True:
                     future.set_result(reply['result'])
+                elif reply.get('error',{}).get('code') == 'shs_source_unavailable':
+                    future.set_exception(HouseholdReadError(reply['error'].get('message','Source unavailable')))
                 elif reply.get('error',{}).get('code') == 'shs_gateway_rejected':
                     future.set_exception(GatewayRejected(reply['error'].get('message','Gateway rejected the request')))
                 else:
@@ -147,7 +150,7 @@ class GatewayClient:
             # A slow recorder query must not stop current observation delivery or
             # final command admission on this same authenticated socket.
             return await asyncio.shield(future)
-        except (GatewayRejected, asyncio.CancelledError):
+        except (GatewayRejected, HouseholdReadError, asyncio.CancelledError):
             # Replies are correlated by request identity, so the reader settles
             # an abandoned request whenever HA answers it. A caller that stops
             # waiting (a bounded battery preparation, an ending task) is not a

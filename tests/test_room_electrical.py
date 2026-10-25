@@ -3,9 +3,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import unittest
+import asyncio
 from unittest.mock import AsyncMock
 from types import SimpleNamespace
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
+from shs_core.household_ports import HouseholdReadError, ConfigurationChanged
 from shs_core.room_electrical import OnCondition, capture_room_on_power, room_on_power
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -85,7 +87,25 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(found['room'].expected_w);self.assertEqual(found['room'].source,'shared_meter_unknown')
         h.statistics.assert_not_awaited()
 
-    async def test_history_failure_is_not_fabricated_model_evidence(self):
-        h=self.history();h.statistics.side_effect=RuntimeError('recorder failed')
-        with self.assertRaisesRegex(RuntimeError,'recorder failed'):
-            await capture_room_on_power(h,[self.device()],{'room':self.mapping()},START,at(15))
+    async def test_unavailable_history_is_explicit_unknown_and_keeps_configured_power(self):
+        for source in ('states', 'statistics'):
+            with self.subTest(source=source):
+                h=self.history();getattr(h,source).side_effect=HouseholdReadError('recorder unavailable')
+                devices=[self.device(),dict(self.device(),key='configured')]
+                with self.assertLogs('shs_core.room_electrical',level='WARNING') as logs:
+                    found=await capture_room_on_power(h,devices,{'room':self.mapping(),
+                        'configured':self.mapping(1700)},START,at(15))
+                self.assertIsNone(found['room'].expected_w)
+                self.assertEqual(found['room'].source,'source_unavailable')
+                self.assertEqual(found['room'].intervals,0)
+                self.assertEqual(found['room'].condition.power,'sensor.power')
+                self.assertEqual(found['configured'].expected_w,1700)
+                self.assertIn('recorder unavailable',logs.output[0])
+
+    async def test_programming_configuration_and_cancellation_failures_propagate(self):
+        for error in (RuntimeError('bug'),ValueError('invalid'),TypeError('invalid'),
+                      ConfigurationChanged('remapped'),asyncio.CancelledError()):
+            with self.subTest(error=type(error).__name__):
+                h=self.history();h.states.side_effect=error
+                with self.assertRaises(type(error)):
+                    await capture_room_on_power(h,[self.device()],{'room':self.mapping()},START,at(15))

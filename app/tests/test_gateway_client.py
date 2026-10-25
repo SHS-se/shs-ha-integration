@@ -14,6 +14,8 @@ import aiohttp
 sys.path.append(str(Path(__file__).parents[2]/'tests'))
 from gateway_fixture import IDENTITY, seed
 from shs_core.gateway_journal import GatewayConflict
+from shs_core.household_ports import HouseholdReadError
+from shs_app.sources import RemoteHistory
 from shs_core.receipt_inbox import ReceiptInbox
 from shs_app.gateway_client import GatewayClient, GatewayDisconnected
 
@@ -49,6 +51,14 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
     def delivered(self, session):
         with closing(sqlite3.connect(self.gateway.path)) as db:
             return db.execute('SELECT delivered FROM sessions WHERE id=?', (session,)).fetchone()[0]
+
+    async def test_source_unavailable_preserves_typed_error_and_live_session(self):
+        first=await self.client.connect()
+        with self.assertRaisesRegex(HouseholdReadError,'recorder unavailable'):
+            await RemoteHistory(self.client).source('states', {})
+        self.assertIsNotNone(self.client.socket)
+        self.assertEqual(self.client.connected['generation'],first['generation'])
+        await self.client.snapshot()
 
     async def test_lost_ack_reply_reconnects_new_epoch_from_committed_inbox(self):
         first = await self.client.connect()

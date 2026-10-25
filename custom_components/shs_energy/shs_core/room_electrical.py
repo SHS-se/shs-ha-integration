@@ -14,6 +14,7 @@ import logging
 
 from .device_commands import actuator_targets
 from .device_controls import mapped_planning_path
+from .household_ports import ConfigurationChanged, HouseholdReadError
 
 _LOGGER = logging.getLogger(__name__)
 PERIOD = timedelta(minutes=5)
@@ -125,9 +126,20 @@ async def capture_room_on_power(history, devices, mappings, start, end, *, pool_
     sensors = {c.power for c in conditions.values()}
     actuators = sorted({entity for c in conditions.values() for entity in (*c.on, *c.off)})
     begun = perf_counter()
-    statistics, states = await asyncio.gather(
-        history.statistics(start, end, sensors, "5minute", {"power": "W"}, {"mean"}),
-        history.states(start, end, actuators, with_attributes=True))
+    try:
+        statistics, states = await asyncio.gather(
+            history.statistics(start, end, sensors, "5minute", {"power": "W"}, {"mean"}),
+            history.states(start, end, actuators, with_attributes=True))
+    except ConfigurationChanged:
+        raise
+    except HouseholdReadError as error:
+        # Unavailable optional evidence is explicit, never replacement watts.
+        # Configuration, programming and cancellation failures still propagate.
+        captured.update({key: OnPowerEvidence(None, 0, 0, "source_unavailable", condition)
+                         for key, condition in conditions.items()})
+        _LOGGER.warning("Room electrical evidence unavailable: devices=%s elapsed_ms=%.1f error=%s",
+                        len(conditions), (perf_counter()-begun)*1000, error)
+        return captured
     means = {}
     for sensor, rows in statistics.items():
         converted = {}

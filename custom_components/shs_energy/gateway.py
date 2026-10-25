@@ -19,6 +19,7 @@ from homeassistant.util.json import json_loads
 from .configuration import (area_name_by_id, entity_area_id_by_id,
                             entity_display_name_by_id, resolved_options)
 from .recorder_source import RecorderSource
+from .shs_core.household_ports import HouseholdReadError, ConfigurationChanged
 from .gateway_wire import ProjectionAssembly, filter_sources
 from .shs_wire.protocol import admit, offer
 from .shs_core.controller_inputs import configured_entity_ids
@@ -888,6 +889,12 @@ async def websocket_gateway(hass, connection, msg):
         if request['operation'] == 'connect':
             result['result']['contract'] = offer(INTEGRATION_VERSION)
         connection.send_result(msg['id'],result['result'])
+    except ConfigurationChanged:
+        raise
+    except HouseholdReadError as error:
+        if msg['operation'] != 'source':
+            raise
+        connection.send_error(msg['id'], 'shs_source_unavailable', str(error))
     except (ValueError, KeyError, TypeError, RuntimeError) as error:
         stale = peer is None or peer.closed or peer.service.connection is not peer
         connection.send_error(msg['id'],'shs_gateway_stale' if stale else 'shs_gateway_rejected',str(error))
