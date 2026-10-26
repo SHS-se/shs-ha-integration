@@ -52,10 +52,13 @@ User requirement, 19 October 2026: a recommendation is shown only when the
 household must act manually; it is never informational. A battery shortfall the
 controller cannot recover before an objective's deadline
 (`observed_state_cannot_meet_target`, `shortfall_without_recovery_authority`)
-leaves the controller running and raises no recommendation. Under the 23 October
-execution-failure requirement below, it MUST also force a replan when remaining
-scheduled work is unexecutable and needs rescheduling; otherwise the next normal
-plan incorporates the outcome. It is reported by the input-accuracy
+leaves the controller running and raises no recommendation. User requirement,
+26 October 2026: such a shortfall never forces a replan while the battery's
+remaining work can still run, whatever its size; the controller keeps following
+the accepted plan and the next normal plan incorporates the outcome. Battery work
+that cannot run (a fault or absence) forces the execution-failure replan below
+only when the blocked quarter schedules at least 100 Wh of battery charge or
+discharge. It is reported by the input-accuracy
 `battery` check: the share of stored-energy targets due in the last 24 hours
 that were reached, with missed deadlines as its issues. Reasons that leave the
 battery without an executable plan (expiry, changed capacity, authority or

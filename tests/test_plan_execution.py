@@ -8,7 +8,7 @@ sys.path.append(str(Path(__file__).parents[1] / "custom_components" / "shs_energ
 from shs_core.plan_execution import (Account, Bounds, Disposition, ExecutionContract, MeterReceipt,
     Objective, Recovery, ReferenceInterval, StateObservation, admit_plan, balance,
     contract_wire, feedback, measured, objective_history, observe_state, read_contract,
-    record_meter, request_replan)
+    record_meter, request_replan, storage_ratios)
 from shs_core.plan_execution import LiveState, assess_execution, explain_execution, capture_replan
 from shs_core.battery_conversion import Conversion, Curve
 
@@ -117,6 +117,40 @@ class ContractTests(unittest.TestCase):
             replace(contract(), recovery=(r, replace(r, order=1)))
         with self.assertRaisesRegex(ValueError, "deadline"):
             replace(contract(), recovery=(replace(r, end_ms=QUARTER + 1),))
+
+
+class StorageRatioTests(unittest.TestCase):
+    """User requirement, 26 October 2026: efficiency is measured from the data."""
+
+    def journal(self, quarters):
+        account = Account()
+        totals = {"charge": 0, "discharge": 0}
+        stored = 5_000_000
+        for direction in totals:
+            account = meter(account, direction, 0, 0)
+        account = observe_state(account, StateObservation(0, stored, "SOC"))
+        for i, (charged, discharged, change) in enumerate(quarters, 1):
+            totals["charge"] += charged; totals["discharge"] += discharged; stored += change
+            for direction, total in totals.items():
+                account = meter(account, direction, i * QUARTER, total)
+            account = observe_state(account, StateObservation(i * QUARTER, stored, "SOC"))
+        return account
+
+    def test_one_way_quarters_measure_terminal_to_stored_energy(self):
+        account = self.journal([(1_000_000, 0, 988_000)] * 6 + [(0, 1_000_000, -1_033_000)] * 6
+                               + [(500_000, 500_000, 0)])
+        ratios = storage_ratios(account, 0, 13 * QUARTER)
+        self.assertEqual(ratios["charge"]["state"], "measured")
+        self.assertAlmostEqual(ratios["charge"]["ratio"], .988)
+        self.assertEqual(ratios["charge"]["spans"], 6)
+        self.assertAlmostEqual(ratios["discharge"]["ratio"], 1_000_000 / 1_033_000)
+
+    def test_too_little_evidence_or_an_unphysical_ratio_is_not_a_measurement(self):
+        account = self.journal([(1_000_000, 0, 988_000)] * 5 + [(0, 1_000_000, -900_000)] * 6)
+        ratios = storage_ratios(account, 0, 11 * QUARTER)
+        self.assertEqual(ratios["charge"]["state"], "insufficient_evidence")
+        self.assertEqual(ratios["discharge"]["state"], "inconsistent")
+        self.assertNotIn("ratio", ratios["charge"])
 
 
 class MeterEvidenceTests(unittest.TestCase):

@@ -161,17 +161,18 @@ class Harness:
 
 
 class ExecutableRuntimeTests(unittest.TestCase):
-    def test_a_shortfall_forces_one_replan_and_keeps_execution_active(self):
-        # User requirement, 23 October 2026: execution failure automatically
-        # replans the household without asking for manual action or stopping.
+    def test_a_shortfall_with_runnable_work_keeps_executing_without_a_replan(self):
+        # User requirement, 26 October 2026: a shortfall never forces a replan
+        # while the remaining work can run, whatever its size. It is recorded
+        # for input accuracy and the accepted plan keeps executing.
         h=Harness();h.offer()
         self.assertIsNone(h.state.execution.replan_reason)
         s=h.compiled.summary
         h.conditions(energy=.5,now=s.until_ms-60000)
         self.assertEqual(h.state.execution.replan_reason,'observed_state_cannot_meet_target')
-        self.assertEqual([e.reason for e in h.effects if isinstance(e,NeedPlan)],
-                         ['observed_state_cannot_meet_target'])
+        self.assertFalse([e for e in h.effects if isinstance(e,NeedPlan)])
         self.assertEqual(h.state.execution.status, 'active')
+        self.assertIsNotNone(h.state.groups[0].desired)
         h.conditions(energy=.5, now=s.until_ms-30000)
         self.assertFalse([e for e in h.effects if isinstance(e,NeedPlan)])
 

@@ -93,7 +93,7 @@ APIs and a notification framework remain separate work.
 | Plan calls for household supply | Follow actual eligible net demand within the authorised operation and real limits. Forecast watts are not a cap on household demand. |
 | Demand exceeds the forecast | Account for the resulting energy difference. Reduce charging when real headroom requires it; do not defer merely because the forecast was wrong. |
 | Solar is below forecast | Preserve the charging objective using permitted sources where possible. Solar-only permission remains solar-only; grid permission is not inferred. |
-| A temporary interruption prevents planned delivery | Record the shortfall and its evidence, apply only authorised local recovery, and force a replan when scheduled work needs moving. Release only affected commitments; preserve other owners' next-hour commands. |
+| A temporary interruption prevents planned delivery | Record the shortfall and its evidence, apply only authorised local recovery, and force a replan when scheduled work needs moving. Release only affected commitments; preserve other owners' next-hour commands. For the battery, only work that cannot run forces this replan, and only when its blocked quarter schedules at least 100 Wh (user requirement, 26 October 2026). |
 | Recovery cannot meet the original purpose or deadline | Expose the shortfall in the objective outcome and the replan feedback, and report it through the input-accuracy battery check. Raise no replan banner (user requirement, 19 October 2026). Do not promise automatic recovery next quarter. |
 | Lower demand or additional solar leaves more stored energy | Record a credit. Do not discharge simply to reduce accounting variance. |
 | Battery is full | Respect saturation. Do not treat a charging command as delivered energy or accumulate a recoverable obligation to charge above capacity. |
@@ -216,6 +216,12 @@ the AC formula again. Where efficiencies vary, use the versioned interval model.
 The constant-efficiency equation above is illustrative, not a requirement to use
 95% or another fixed efficiency. Preserve the existing empirical conversion
 model, including power-dependent gain, fixed overhead and idle-loss treatment.
+User requirement, 26 October 2026: plan stored energy with measured efficiencies.
+When constant-power operation cannot separate gain from overhead, the branch's
+measured energy ratio is its gain. The execution journal's battery-terminal
+counters and measured stored energy give the terminal-to-stored ratio for each
+direction. The planning efficiency is their product; configured values remain
+only for a path without enough evidence, labelled as such.
 Its reported installation boundary is not automatically cell-internal storage
 efficiency. The contract MUST identify the compatible model and electrical/storage
 basis used for its reference; actuals retain their own measurement provenance.

@@ -20,7 +20,7 @@ from .command_transport import CommandNotSent
 from . import home_runtime as rt
 from .home_host import HomeHost, HostPorts, DispatchRejected
 from .battery_native_adapter import SigenAdapter
-from .battery_conversion import conversion_model, windows_from_statistics
+from .battery_conversion import CONVERSION_EVIDENCE_MS, battery_efficiencies, conversion_model, windows_from_statistics
 from .battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
 from . import plan_execution as execution
 from .runtime_json import Records, runtime_digest as digest
@@ -240,6 +240,7 @@ class BatteryRuntime:
     def snapshot(self, *, include_evidence=False):
         """Current status; with evidence, the journals as immutable Records to encode later."""
         value={**self._status,'loss_model':self._model.wire() if self._model else None,'loss_evidence':self._fits,
+            'storage_evidence':getattr(self,'_storage',None),
             'input_errors':dict(self._counter_errors),'planning_error':self._replan_error,
             'runtime_reason':getattr(self,'_runtime_reason',None),'measurements':getattr(self,'_measurements',None),
             'planning_warnings':getattr(self,'_measurements',{}).get('planning_warnings', []),
@@ -355,6 +356,22 @@ class BatteryRuntime:
                     'next':'Waiting for a corrected plan; the rejected update is not being used.'}
         value['display'] = battery_status_text(value)
         return value
+
+    def efficiencies(self):
+        """Measured AC-to-stored efficiencies for planning; None before a loss model.
+
+        Refreshed with the hourly loss model from the same evidence period.
+        """
+        if self._model is None:
+            return None
+        account=self.host.state.execution.account if self.host else None
+        key=(self._model.revision,self._model_at,account is not None)
+        if getattr(self,'_efficiency_key',None)!=key:
+            self._storage=(execution.storage_ratios(account,self._model_at-CONVERSION_EVIDENCE_MS,self._model_at)
+                           if account is not None else {})
+            self._efficiencies=battery_efficiencies(self._model,self._storage)
+            self._efficiency_key=key
+        return self._efficiencies
 
     def charge_target_outcomes(self,window_ms):
         """Measured charge targets due within the window: [(deadline_ms, shortfall_mwh)].
@@ -1149,11 +1166,7 @@ class BatteryRuntime:
                         plan,slot,condition=self._execution_observations[0]
                         await self.coordinator.async_execution_observed('battery',plan,slot,condition)
                         self._execution_observations.pop(0)
-                    if reason in rt.EXECUTION_SHORTFALLS:
-                        plan,slot=self.coordinator.binding_plan_for('battery', self.controller.options())
-                        await self.coordinator.async_execution_observed('battery',plan,slot,
-                            {'status': 'temporarily_absent', 'cause': reason})
-                    elif reason not in (None,'plan_handover_rejected'):
+                    if reason not in (None,'plan_handover_rejected',*rt.EXECUTION_SHORTFALLS):
                         # Expiry/configuration remains a recommendation; it is
                         # not a physical execution failure granting hold release.
                         await self.coordinator.async_optimisation_push(force_plan=True,

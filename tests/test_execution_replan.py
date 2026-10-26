@@ -335,6 +335,21 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_battery_work_that_cannot_run_replans_only_from_100_wh(self):
+        # User requirement, 26 October 2026: unmet battery energy below 100 Wh
+        # in the blocked quarter does not warrant a replan.
+        fault = {'status': 'faulted', 'cause': 'battery_command_failed'}
+        slot = {'start': '2026-10-23T10:00:00Z', 'battery_charge_w': 399, 'battery_discharge_w': 0}
+        self.assertFalse(evidence.requested('$battery', slot))
+        journal = {}
+        self.assertFalse(evidence.observe(journal, '$battery', slot, fault))
+        self.assertEqual(journal['owners']['$battery']['blocked_intervals'], [])
+        self.assertFalse(journal['pending'])
+        due = {**slot, 'start': '2026-10-23T10:15:00Z', 'battery_charge_w': 0, 'battery_discharge_w': 400}
+        self.assertTrue(evidence.requested('$battery', due))
+        self.assertTrue(evidence.observe(journal, '$battery', due, fault))
+        self.assertEqual(journal['pending']['$battery']['blocked_intervals'][0]['start'], '2026-10-23T10:15:00+00:00')
+
     def test_raw_device_identity_and_unrelated_pending_are_preserved(self):
         journal = {}
         slot = {'start': '2026-10-23T10:00:00Z', 'device_loads_w': {'heater': 1000}}

@@ -150,3 +150,10 @@ ongoing range readiness; the vehicle charge limit does not impose a deadline.
 The integration and app ship this shared producer together with the backend
 contract. There is no alias for the retired cap field. Capture fresh measurements
 and generate a fresh plan after the coordinated roll-forward.
+
+User requirement, 26 October 2026: a battery shortfall never forces a replan while
+the remaining work can still run, whatever its size. When battery work cannot run
+(a fault or absence), it forces a replan only if the blocked quarter schedules at
+least 100 Wh. This 100 Wh threshold is that explicit requirement. Battery planning
+efficiency is measured from the data, not a hard-coded or configured constant; see
+[controller plan execution](controller-plan-execution.md).

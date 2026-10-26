@@ -16,7 +16,7 @@ from math import ceil, isfinite
 from sys import intern
 from typing import Optional
 
-from .battery_conversion import Conversion
+from .battery_conversion import MIN_FIT_INPUT_WH, MIN_FIT_WINDOWS, Conversion
 from .battery_mode import SUPPLY_MODES, supply_request_ac_w
 from .battery_supply import ExecutionDemand, proportional_supply
 
@@ -950,6 +950,51 @@ def stored_target_outcomes(account, since_ms, at_ms):
     return [(objective, _objective_outcome(account, objective, closed_at.get(objective.id), at_ms, observed))
             for objective in latest.values()
             if objective.kind == "stored_energy" and since_ms <= objective.deadline_ms <= at_ms]
+
+
+def storage_ratios(account, since_ms, at_ms):
+    """Measured stored energy per battery-terminal energy, by direction.
+
+    Each span joins the measured state observations at or before consecutive
+    quarter boundaries and meters exactly that span, so both readings share
+    their endpoints. Only spans that move energy one way count. Charging is
+    stored/terminal; discharging is terminal/stored. Energies are summed, so
+    state-of-charge resolution averages out rather than biasing the ratio.
+    """
+    rows = account.observations
+    if hasattr(rows, 'at_or_before'):
+        lookup = rows.at_or_before
+    else:
+        ordered = sorted((r for r in rows if r.at_ms <= at_ms), key=lambda r: r.at_ms)
+        times = [r.at_ms for r in ordered]
+        lookup = lambda t: ordered[i - 1] if (i := bisect_right(times, t)) else None
+    totals = {"charge": [0, 0, 0], "discharge": [0, 0, 0]}
+    boundary = -(-since_ms // 900000) * 900000
+    previous = lookup(boundary)
+    while boundary + 900000 <= at_ms:
+        boundary += 900000
+        current = lookup(boundary)
+        if previous and current and previous.measured and current.measured and current.at_ms > previous.at_ms:
+            charged = measured(account.meter_index, "charge", previous.at_ms, current.at_ms)
+            discharged = measured(account.meter_index, "discharge", previous.at_ms, current.at_ms)
+            stored = current.stored_mwh - previous.stored_mwh
+            if charged.exact and discharged.exact:
+                if charged.low > 0 and discharged.low == 0:
+                    row = totals["charge"]; row[0] += charged.low; row[1] += stored; row[2] += 1
+                elif discharged.low > 0 and charged.low == 0:
+                    row = totals["discharge"]; row[0] += discharged.low; row[1] += -stored; row[2] += 1
+        previous = current
+    result = {}
+    for direction, (terminal, stored, spans) in totals.items():
+        evidence = {"spans": spans, "terminal_kwh": terminal / 1e6, "stored_kwh": stored / 1e6}
+        ratio = (stored / terminal if direction == "charge" else terminal / stored) if terminal > 0 and stored > 0 else None
+        if spans < MIN_FIT_WINDOWS or terminal < MIN_FIT_INPUT_WH * 1000 or ratio is None:
+            result[direction] = {**evidence, "state": "insufficient_evidence"}
+        elif not 0 < ratio <= 1:
+            result[direction] = {**evidence, "state": "inconsistent", "ratio": ratio}
+        else:
+            result[direction] = {**evidence, "state": "measured", "ratio": ratio}
+    return result
 
 
 def _live_objectives(account, at_ms):

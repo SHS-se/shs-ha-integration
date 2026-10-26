@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 import unittest
 sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
-from shs_core.battery_conversion import Curve, Conversion, LossWindow, fit_branch, conversion_model, windows_from_statistics
+from shs_core.battery_conversion import Curve, Conversion, LossWindow, battery_efficiencies, fit_branch, conversion_model, windows_from_statistics
 
 class ConversionTests(unittest.TestCase):
     def test_tiny_commands_cannot_erase_installation_overhead(self):
@@ -52,3 +52,23 @@ class ConversionTests(unittest.TestCase):
         solar,grid=m.charge_inputs(3000,3000,1000)
         self.assertAlmostEqual(solar,2000)
         self.assertAlmostEqual(grid,(3000-1940+100)/.95)
+    def test_constant_power_charging_is_measured_by_its_energy_ratio(self):
+        # User requirement, 26 October 2026: efficiency is measured, not assumed.
+        rows=[LossWindow(i*300000,(i+1)*300000,'grid_charge',8830/12,8352/12,'s',478/12) for i in range(12)]
+        model,fits=conversion_model(rows,charge_efficiency=.95,discharge_efficiency=.95,source_revision='s')
+        self.assertEqual(fits['grid_charge']['state'],'insufficient_power_variation')
+        self.assertEqual(fits['grid_charge']['model_source'],'measured_energy_ratio')
+        self.assertAlmostEqual(model.grid_charge.gain,8352/8830)
+        self.assertEqual(model.grid_charge.overhead_w,0)
+        self.assertEqual(fits['surplus_charge']['model_source'],'configured')
+        few,fits=conversion_model(rows[:5],charge_efficiency=.95,discharge_efficiency=.95,source_revision='s')
+        self.assertEqual(fits['grid_charge']['model_source'],'configured')
+        self.assertEqual(few.grid_charge.gain,.95)
+
+    def test_planning_efficiency_joins_measured_conversion_and_storage(self):
+        model=Conversion('s',Curve(.946,0),Curve(.95,0),Curve(.95,0),0)
+        storage={'charge':{'state':'measured','ratio':.988},'discharge':{'state':'insufficient_evidence'}}
+        result=battery_efficiencies(model,storage)
+        self.assertEqual(result['charge_efficiency'],round(.946*.988,4))
+        self.assertEqual(result['discharge_efficiency'],.95)
+        self.assertEqual(result['storage'],{'charge':'measured','discharge':'unmeasured'})

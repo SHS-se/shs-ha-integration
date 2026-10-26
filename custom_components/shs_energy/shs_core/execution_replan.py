@@ -28,6 +28,9 @@ class ExecutionReplan(TypedDict):
 
 
 CAUSE_REASON_CHARS = 200
+# User requirement, 26 October 2026: battery work that cannot run forces a
+# replan only when the blocked quarter schedules at least this much energy.
+BATTERY_REPLAN_MIN_WH = 100
 
 
 def fault_cause(error):
@@ -59,7 +62,9 @@ def requested(owner, slot):
             return False
         return (slot.get('pool_w') or 0) > 0
     if owner == '$battery':
-        return (slot.get('battery_charge_w') or slot.get('battery_discharge_w') or 0) > 0
+        # Unmet energy is the quarter's scheduled charge and discharge.
+        watts = (slot.get('battery_charge_w') or 0) + (slot.get('battery_discharge_w') or 0)
+        return watts * .25 >= BATTERY_REPLAN_MIN_WH
     command = slot.get('device_commands', {}).get(owner, {})
     if command.get('type') == 'unavailable':
         # Nothing executes it, so recovery cannot resume it: it needs a plan.

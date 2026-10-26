@@ -140,6 +140,19 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_planning_efficiencies_come_from_the_loss_model_and_journal(self):
+        # User requirement, 26 October 2026: efficiency is measured, not assumed.
+        r = Rig()
+        self.addAsyncCleanup(r.runtime.close)
+        await r.start()
+        result = r.runtime.efficiencies()
+        storage = r.runtime.snapshot()['storage_evidence']
+        self.assertEqual(set(storage), {'charge', 'discharge'})
+        factor = lambda d: storage[d]['ratio'] if storage[d]['state'] == 'measured' else 1.0
+        self.assertEqual(result['charge_efficiency'], round(r.runtime._model.grid_charge.gain * factor('charge'), 4))
+        self.assertEqual(result['discharge_efficiency'], round(r.runtime._model.discharge.gain * factor('discharge'), 4))
+        self.assertIs(r.runtime.efficiencies(), result)
+
     async def test_a_missed_charge_target_is_measured_for_input_accuracy(self):
         # User requirement, 19 October 2026: a banner only asks for manual action.
         r = Rig()

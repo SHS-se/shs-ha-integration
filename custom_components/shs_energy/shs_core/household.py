@@ -22,6 +22,7 @@ from .native_configuration import native_options
 from .connection_health import ConnectionHealth
 from .operational_attention import pipeline_issue
 from .battery_live import BatteryLiveInputs
+from .battery_conversion import CONVERSION_EVIDENCE_MS
 from .durable_record import DurableRecord
 from .operating_modes import device_mode, operating_mode_identity
 
@@ -586,7 +587,7 @@ class Household:
         if battery_measurement_errors(options):
             raise BatteryMeasurementConfigurationError(options)
         end=self.ports.utcnow()
-        values=await self.ports.history.statistics(end-timedelta(days=2),end,set(bindings.values()),"5minute",{"power":"W"},{"mean","min","max"})
+        values=await self.ports.history.statistics(end-timedelta(milliseconds=CONVERSION_EVIDENCE_MS),end,set(bindings.values()),"5minute",{"power":"W"},{"mean","min","max"})
         result={}
         for role,entity in bindings.items():
             rows=[]
@@ -2944,6 +2945,9 @@ class Household:
                 raise
             except ValueError as error:
                 raise OptimisationInputError(str(error)) from error
+        # User requirement, 26 October 2026: plan stored energy with measured
+        # efficiencies. The configured values apply only before any loss model.
+        measured_efficiency = runtime.efficiencies() if runtime is not None else None
         battery = None if battery_entity is None else {
             "capacity_kwh": battery_limits[OPT_BATTERY_CAPACITY_KWH],
             "soc": battery_soc,
@@ -2951,10 +2955,10 @@ class Household:
             "max_soc": 1.0,
             "charge_max_w": battery_limits[OPT_BATTERY_CHARGE_MAX_W],
             "discharge_max_w": battery_limits[OPT_BATTERY_DISCHARGE_MAX_W],
-            "charge_efficiency": parse_number(
+            "charge_efficiency": measured_efficiency["charge_efficiency"] if measured_efficiency else parse_number(
                 options[OPT_BATTERY_CHARGE_EFFICIENCY], OPT_BATTERY_CHARGE_EFFICIENCY
             ),
-            "discharge_efficiency": parse_number(
+            "discharge_efficiency": measured_efficiency["discharge_efficiency"] if measured_efficiency else parse_number(
                 options[OPT_BATTERY_DISCHARGE_EFFICIENCY],
                 OPT_BATTERY_DISCHARGE_EFFICIENCY,
             ),

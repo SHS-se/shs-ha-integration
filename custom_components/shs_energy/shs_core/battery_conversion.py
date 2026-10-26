@@ -108,6 +108,13 @@ class LossWindow:
         return (self.end_ms - self.start_ms) / 3600000
 
 
+# The least evidence that identifies a branch, by regression or energy ratio.
+MIN_FIT_WINDOWS = 6
+MIN_FIT_INPUT_WH = 200
+# Conversion and storage evidence both cover this recent period.
+CONVERSION_EVIDENCE_MS = 2 * 86400000
+
+
 def fit_branch(windows, branch):
     rows = [w for w in windows if w.branch == branch]
     if not rows:
@@ -125,7 +132,7 @@ def fit_branch(windows, branch):
     # the PV-to-battery converter. Keep useful balances without calling them a fit.
     if branch == "surplus_charge":
         return {**evidence, "state": "source_paths_not_isolated"}
-    if len(rows) < 6 or total_in < 200 or max(inputs) - min(inputs) < 500:
+    if len(rows) < MIN_FIT_WINDOWS or total_in < MIN_FIT_INPUT_WH or max(inputs) - min(inputs) < 500:
         return {**evidence, "state": "insufficient_power_variation"}
     weights = [w.hours for w in rows]
     duration = sum(weights)
@@ -146,14 +153,23 @@ def conversion_model(windows, *, charge_efficiency, discharge_efficiency, source
     This does not switch command paths or silently replace a failed live reading.
     Solar-path calibration needs independent branch information; a site residual
     is retained as evidence, never relabelled as pure DC conversion efficiency.
+
+    User requirement, 26 October 2026: efficiency is measured, not assumed.
+    Charging at one constant power cannot separate gain from overhead, but its
+    measured energy ratio is still a measurement at the power actually used.
     """
     rows = [w for w in windows if w.source_revision == source_revision][-2000:]
     fits = {key: fit_branch(rows, key) for key in ("grid_charge", "surplus_charge", "discharge")}
     curves = {}
     for key, fit in fits.items():
+        ratio = fit.get("effective_energy_ratio")
         if fit["state"] == "measured":
             curves[key] = Curve(**fit["curve"])
             fit["model_source"] = "measured"
+        elif (key != "surplus_charge" and ratio is not None and 0 < ratio <= 1
+              and fit["windows"] >= MIN_FIT_WINDOWS and fit["input_kwh"] * 1000 >= MIN_FIT_INPUT_WH):
+            curves[key] = Curve(ratio, 0)
+            fit["model_source"] = "measured_energy_ratio"
         else:
             curves[key] = Curve(discharge_efficiency if key == "discharge" else charge_efficiency, 0)
             fit["model_source"] = "configured"
@@ -166,6 +182,23 @@ def conversion_model(windows, *, charge_efficiency, discharge_efficiency, source
                 "curves": {k:asdict(v) for k,v in curves.items()}, "idle_loss_w": idle_w}
     revision = "sha256:"+sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()
     return Conversion(revision, curves['grid_charge'], curves['surplus_charge'], curves['discharge'], idle_w), fits
+
+
+def battery_efficiencies(conversion, storage):
+    """AC energy to stored energy and back, for planning stored-energy targets.
+
+    The AC-to-terminal gain comes from the conversion model and the
+    terminal-to-stored ratio from the execution journal. A direction without
+    storage evidence keeps the terminal as its stored boundary, as before.
+    """
+    def ratio(direction):
+        row = storage.get(direction, {})
+        return (row["ratio"], "measured") if row.get("state") == "measured" else (1.0, "unmeasured")
+    charge, charge_basis = ratio("charge")
+    discharge, discharge_basis = ratio("discharge")
+    return {"charge_efficiency": round(conversion.grid_charge.gain * charge, 4),
+            "discharge_efficiency": round(conversion.discharge.gain * discharge, 4),
+            "storage": {"charge": charge_basis, "discharge": discharge_basis}}
 
 
 def windows_from_statistics(series, *, source_revision, unit_scale=1000, end_ms):

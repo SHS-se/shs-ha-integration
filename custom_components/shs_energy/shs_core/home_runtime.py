@@ -980,10 +980,14 @@ def _refresh_execution(state, now, effects, *, select=True):
         return state
     live = execution_live(state, now)
     assessment = execution.assess_execution(session.account, live, state.authority.plant.conversion)
-    # Execution shortfalls now force an automatic scoped household replan;
-    # this does not request manual action or change the active device setting.
+    # User requirement, 26 October 2026: a shortfall never forces a replan
+    # while the battery's remaining work can still run, whatever its size.
+    # The controller keeps following the accepted plan; input accuracy reports
+    # the miss and the next normal plan incorporates it. Unrunnable work is
+    # reported separately as a fault.
     if (group.mode == "controlling" and assessment.replan_reason
-            and assessment.replan_reason != session.replan_reason):
+            and assessment.replan_reason != session.replan_reason
+            and assessment.replan_reason not in EXECUTION_SHORTFALLS):
         effects.append(NeedPlan(assessment.replan_reason))
     session = replace(session, assessment=assessment, live=live,
         replan_reason=assessment.replan_reason or session.replan_reason,

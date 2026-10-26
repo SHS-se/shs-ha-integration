@@ -95,6 +95,27 @@ class IndexedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(corrected.meter_index.measure('charge',1,DAY),reference.meter_index.measure('charge',1,DAY))
         self.assertEqual(state.account.meter_index.measure('charge',1,DAY),indexed.meter_index.measure('charge',1,DAY))
 
+    async def test_storage_ratios_match_the_reference_after_restore(self):
+        # User requirement, 26 October 2026: efficiency is measured from the journal.
+        reference=ex.Account();indexed=self.account
+        totals={'charge':0,'discharge':0};stored=5000000
+        quarters=[(1000000,0,988000)]*7+[(0,1000000,-1033000)]*7
+        for i,(charged,discharged,change) in enumerate([(0,0,0),*quarters]):
+            totals['charge']+=charged;totals['discharge']+=discharged;stored+=change
+            for direction,total in totals.items():
+                kwargs=dict(event_id=f'{direction}:{i}',stream=direction,direction=direction,boundary='battery_dc',
+                    epoch='m',source_at_ms=i*QUARTER,total_mwh=total)
+                reference=ex.record_meter(reference,**kwargs);indexed=ex.record_meter(indexed,**kwargs)
+            observation=ex.StateObservation(i*QUARTER,stored,'live_soc')
+            reference=ex.observe_state(reference,observation);indexed=ex.observe_state(indexed,observation)
+            await self.save(indexed)
+        expected=ex.storage_ratios(reference,0,len(quarters)*QUARTER)
+        self.assertEqual(expected['charge']['state'],'measured')
+        self.assertEqual(ex.storage_ratios(indexed,0,len(quarters)*QUARTER),expected)
+        reopened=IndexedStorage(self.path,asyncio.to_thread,ObservationMirror())
+        _,state=await reopened.load()
+        self.assertEqual(ex.storage_ratios(state.account,0,len(quarters)*QUARTER),expected)
+
     async def test_at_or_before_keeps_arrival_order_with_out_of_order_times(self):
         account=self.account
         for at in (100,300,200):
