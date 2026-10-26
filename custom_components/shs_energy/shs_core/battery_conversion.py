@@ -84,7 +84,11 @@ class Conversion:
 
 @dataclass(frozen=True)
 class LossWindow:
-    """Integrated comparable readings over one stable observation window."""
+    """Integrated comparable readings over one single-branch observation window.
+
+    `stable` windows also hold power steady enough to place on a power curve;
+    the others still measure energy, because window means are linear.
+    """
     start_ms: int
     end_ms: int
     branch: str
@@ -92,6 +96,7 @@ class LossWindow:
     output_wh: float
     source_revision: str
     raw_loss_wh: float
+    stable: bool = True
 
     def __post_init__(self):
         if (type(self.start_ms) is not int or type(self.end_ms) is not int or
@@ -102,6 +107,8 @@ class LossWindow:
             raise ValueError("invalid conversion observation energy")
         if self.input_wh < 0 or self.output_wh < 0:
             raise ValueError("direction must be isolated before fitting")
+        if type(self.stable) is not bool:
+            raise ValueError("invalid conversion observation stability")
 
     @property
     def hours(self):
@@ -111,8 +118,20 @@ class LossWindow:
 # The least evidence that identifies a branch, by regression or energy ratio.
 MIN_FIT_WINDOWS = 6
 MIN_FIT_INPUT_WH = 200
-# Conversion and storage evidence both cover this recent period.
-CONVERSION_EVIDENCE_MS = 2 * 86400000
+# Conversion and storage evidence both cover this recent period, long enough
+# that a branch the battery seldom uses is still learned.
+CONVERSION_EVIDENCE_MS = 30 * 86400000
+# The most recent windows of each branch that a fit uses.
+MAX_FIT_WINDOWS = 2000
+
+
+def measured_ratio(fit):
+    """The branch's measured energy ratio, or None without enough evidence."""
+    ratio = fit.get("effective_energy_ratio")
+    if (ratio is None or not 0 < ratio <= 1 or fit["windows"] < MIN_FIT_WINDOWS
+            or fit["input_kwh"] * 1000 < MIN_FIT_INPUT_WH):
+        return None
+    return ratio
 
 
 def fit_branch(windows, branch):
@@ -121,19 +140,24 @@ def fit_branch(windows, branch):
         return {"state": "no_observations", "windows": 0}
     if len({w.source_revision for w in rows}) != 1:
         raise ValueError("conversion observations use different source mappings")
-    inputs = [w.input_wh / w.hours for w in rows]
-    outputs = [w.output_wh / w.hours for w in rows]
     total_in = sum(w.input_wh for w in rows)
-    evidence = {"windows": len(rows), "input_kwh": total_in / 1000,
-                "input_range_w": [min(inputs), max(inputs)],
+    # Energy is summed over every single-branch window; only steady windows
+    # place points on the power curve.
+    stable = [w for w in rows if w.stable]
+    inputs = [w.input_wh / w.hours for w in stable]
+    outputs = [w.output_wh / w.hours for w in stable]
+    stable_in = sum(w.input_wh for w in stable)
+    evidence = {"windows": len(rows), "stable_windows": len(stable), "input_kwh": total_in / 1000,
+                "input_range_w": [min(inputs), max(inputs)] if inputs else None,
                 "effective_energy_ratio": sum(w.output_wh for w in rows) / total_in if total_in > 0 else None,
                 "basis": "reported_site_surplus" if branch == "surplus_charge" else "installation_including_overhead"}
     # Subtracting AC house consumption from PV does not independently identify
     # the PV-to-battery converter. Keep useful balances without calling them a fit.
     if branch == "surplus_charge":
         return {**evidence, "state": "source_paths_not_isolated"}
-    if len(rows) < MIN_FIT_WINDOWS or total_in < MIN_FIT_INPUT_WH or max(inputs) - min(inputs) < 500:
+    if len(stable) < MIN_FIT_WINDOWS or stable_in < MIN_FIT_INPUT_WH or max(inputs) - min(inputs) < 500:
         return {**evidence, "state": "insufficient_power_variation"}
+    rows = stable
     weights = [w.hours for w in rows]
     duration = sum(weights)
     mean_x = sum(w*x for w,x in zip(weights,inputs)) / duration
@@ -158,22 +182,25 @@ def conversion_model(windows, *, charge_efficiency, discharge_efficiency, source
     Charging at one constant power cannot separate gain from overhead, but its
     measured energy ratio is still a measurement at the power actually used.
     """
-    rows = [w for w in windows if w.source_revision == source_revision][-2000:]
+    current = [w for w in windows if w.source_revision == source_revision]
+    # Cap each branch separately so frequent idle windows cannot crowd out a
+    # branch the battery seldom uses.
+    rows = [w for branch in ("grid_charge", "surplus_charge", "discharge", "idle")
+            for w in [w for w in current if w.branch == branch][-MAX_FIT_WINDOWS:]]
     fits = {key: fit_branch(rows, key) for key in ("grid_charge", "surplus_charge", "discharge")}
     curves = {}
     for key, fit in fits.items():
-        ratio = fit.get("effective_energy_ratio")
+        ratio = measured_ratio(fit)
         if fit["state"] == "measured":
             curves[key] = Curve(**fit["curve"])
             fit["model_source"] = "measured"
-        elif (key != "surplus_charge" and ratio is not None and 0 < ratio <= 1
-              and fit["windows"] >= MIN_FIT_WINDOWS and fit["input_kwh"] * 1000 >= MIN_FIT_INPUT_WH):
+        elif key != "surplus_charge" and ratio is not None:
             curves[key] = Curve(ratio, 0)
             fit["model_source"] = "measured_energy_ratio"
         else:
             curves[key] = Curve(discharge_efficiency if key == "discharge" else charge_efficiency, 0)
             fit["model_source"] = "configured"
-    idle = [w.raw_loss_wh/w.hours for w in rows if w.branch == "idle"]
+    idle = [w.raw_loss_wh/w.hours for w in rows if w.branch == "idle" and w.stable]
     idle_w = median(idle) if len(idle) >= 6 else 0.0
     if not 0 <= idle_w <= 10000:
         raise ValueError("inconsistent idle-loss observations")
@@ -184,20 +211,28 @@ def conversion_model(windows, *, charge_efficiency, discharge_efficiency, source
     return Conversion(revision, curves['grid_charge'], curves['surplus_charge'], curves['discharge'], idle_w), fits
 
 
-def battery_efficiencies(conversion, storage):
+def battery_efficiencies(conversion, fits, storage):
     """AC energy to stored energy and back, for planning stored-energy targets.
 
-    The AC-to-terminal gain comes from the conversion model and the
-    terminal-to-stored ratio from the execution journal. A direction without
-    storage evidence keeps the terminal as its stored boundary, as before.
+    The AC side is the branch's measured energy ratio, which includes
+    installation overhead at the powers the battery actually runs; a fitted
+    gain alone would leave that overhead out. The terminal-to-stored ratio
+    comes from the execution journal. Without evidence, the AC side uses the
+    model's labelled configured gain and the terminal stays the stored boundary.
     """
-    def ratio(direction):
+    def conversion_side(branch, curve):
+        ratio = measured_ratio(fits.get(branch, {"windows": 0}))
+        return (ratio, "measured") if ratio is not None else (curve.gain, fits.get(branch, {}).get("model_source", "configured"))
+    def storage_side(direction):
         row = storage.get(direction, {})
         return (row["ratio"], "measured") if row.get("state") == "measured" else (1.0, "unmeasured")
-    charge, charge_basis = ratio("charge")
-    discharge, discharge_basis = ratio("discharge")
-    return {"charge_efficiency": round(conversion.grid_charge.gain * charge, 4),
-            "discharge_efficiency": round(conversion.discharge.gain * discharge, 4),
+    charge_ac, charge_ac_basis = conversion_side("grid_charge", conversion.grid_charge)
+    discharge_ac, discharge_ac_basis = conversion_side("discharge", conversion.discharge)
+    charge, charge_basis = storage_side("charge")
+    discharge, discharge_basis = storage_side("discharge")
+    return {"charge_efficiency": round(charge_ac * charge, 4),
+            "discharge_efficiency": round(discharge_ac * discharge, 4),
+            "conversion": {"charge": charge_ac_basis, "discharge": discharge_ac_basis},
             "storage": {"charge": charge_basis, "discharge": discharge_basis}}
 
 
@@ -206,6 +241,8 @@ def windows_from_statistics(series, *, source_revision, unit_scale=1000, end_ms)
 
     Min/max reject changing direction or source mixes inside an average. Historical
     aggregates cannot provide current command freshness or physical confirmations.
+    Grid charging and discharging keep unsteady windows, marked unstable: their
+    energy is still exact, though they cannot place a point on a power curve.
     """
     if set(series) != {"battery", "house", "pv", "grid"}:
         raise ValueError("four explicit source mappings are required")
@@ -222,8 +259,7 @@ def windows_from_statistics(series, *, source_revision, unit_scale=1000, end_ms)
                 continue
             if any(not r['min']<=r['mean']<=r['max'] for r in (b,h,p,g)) or min(h['min'],p['min'])<0:
                 continue
-            if any(r['max']-r['min'] > 250 for r in (b,h,p,g)):
-                continue
+            stable = all(r['max']-r['min'] <= 250 for r in (b,h,p,g))
             loss = p['mean']+g['mean']-b['mean']-h['mean']
             if p['max'] <= 20 and b['min'] >= 100:
                 branch,x,y = 'grid_charge',g['mean']-h['mean'],b['mean']
@@ -235,9 +271,9 @@ def windows_from_statistics(series, *, source_revision, unit_scale=1000, end_ms)
                 branch,x,y = 'idle',max(0,g['mean']-h['mean']),0
             else:
                 continue
-            if x < 0 or y < 0:
+            if x < 0 or y < 0 or not stable and branch not in ('grid_charge', 'discharge'):
                 continue
-            result.append(LossWindow(start,start+300000,branch,x/12,y/12,source_revision,loss/12))
+            result.append(LossWindow(start,start+300000,branch,x/12,y/12,source_revision,loss/12,stable))
         except (KeyError, TypeError, ValueError):
             continue
     return tuple(result)

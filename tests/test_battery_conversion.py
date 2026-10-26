@@ -37,6 +37,10 @@ class ConversionTests(unittest.TestCase):
         self.assertAlmostEqual(rows[0].output_wh,1800/12)
         self.assertAlmostEqual(rows[0].raw_loss_wh,200/12)
         series['house'][0]['max']=3.2
+        unsteady=windows_from_statistics(series,source_revision='s',end_ms=300000)
+        self.assertEqual([(w.branch,w.stable) for w in unsteady],[('discharge',False)])
+        self.assertAlmostEqual(unsteady[0].output_wh,1800/12)
+        series['battery'][0]['max']=.5
         self.assertEqual(windows_from_statistics(series,source_revision='s',end_ms=300000),())
     def test_complete_aligned_windows_only_and_configuration_separates_evidence(self):
         series={key:[dict(start=0,mean=v,min=v,max=v)] for key,v in dict(battery=1,house=.5,pv=0,grid=1.7).items()}
@@ -65,10 +69,39 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(fits['grid_charge']['model_source'],'configured')
         self.assertEqual(few.grid_charge.gain,.95)
 
+    def test_unsteady_windows_measure_energy_but_not_the_power_curve(self):
+        steady=[LossWindow(i*300000,(i+1)*300000,'discharge',x/12,(.976*x-139)/12,'s',(.024*x+139)/12) for i,x in enumerate(range(600,3600,300))]
+        unsteady=[LossWindow((20+i)*300000,(21+i)*300000,'discharge',1200/12,900/12,'s',300/12,False) for i in range(10)]
+        alone=fit_branch(steady,'discharge')
+        fit=fit_branch(steady+unsteady,'discharge')
+        self.assertEqual((fit['state'],fit['windows'],fit['stable_windows']),('measured',20,10))
+        self.assertEqual(fit['curve'],alone['curve'])
+        energy=sum(w.input_wh for w in steady+unsteady)
+        self.assertAlmostEqual(fit['effective_energy_ratio'],sum(w.output_wh for w in steady+unsteady)/energy)
+        only=fit_branch(unsteady,'discharge')
+        self.assertEqual(only['state'],'insufficient_power_variation')
+        self.assertAlmostEqual(only['effective_energy_ratio'],.75)
+
+    def test_frequent_idle_windows_cannot_crowd_out_a_rare_branch(self):
+        rows=[LossWindow(i*300000,(i+1)*300000,'discharge',1200/12,1080/12,'s',120/12) for i in range(6)]
+        rows+=[LossWindow((10+i)*300000,(11+i)*300000,'idle',120/12,0,'s',120/12) for i in range(2500)]
+        model,fits=conversion_model(rows,charge_efficiency=.95,discharge_efficiency=.95,source_revision='s')
+        self.assertEqual(fits['discharge']['model_source'],'measured_energy_ratio')
+        self.assertAlmostEqual(model.discharge.gain,.9)
+        self.assertEqual(fits['idle']['windows'],2000)
+
     def test_planning_efficiency_joins_measured_conversion_and_storage(self):
-        model=Conversion('s',Curve(.946,0),Curve(.95,0),Curve(.95,0),0)
-        storage={'charge':{'state':'measured','ratio':.988},'discharge':{'state':'insufficient_evidence'}}
-        result=battery_efficiencies(model,storage)
-        self.assertEqual(result['charge_efficiency'],round(.946*.988,4))
-        self.assertEqual(result['discharge_efficiency'],.95)
-        self.assertEqual(result['storage'],{'charge':'measured','discharge':'unmeasured'})
+        # The planner gets the measured energy ratio, including overhead at
+        # the powers used, not a fitted gain that leaves overhead out.
+        steady=[LossWindow(i*300000,(i+1)*300000,'discharge',x/12,(.976*x-139)/12,'s',(.024*x+139)/12) for i,x in enumerate(range(600,3600,300))]
+        model,fits=conversion_model(steady,charge_efficiency=.95,discharge_efficiency=.95,source_revision='s')
+        self.assertEqual(fits['discharge']['model_source'],'measured')
+        storage={'charge':{'state':'measured','ratio':.988},'discharge':{'state':'measured','ratio':.968}}
+        result=battery_efficiencies(model,fits,storage)
+        self.assertEqual(result['discharge_efficiency'],round(fits['discharge']['effective_energy_ratio']*.968,4))
+        self.assertLess(result['discharge_efficiency'],model.discharge.gain*.968)
+        self.assertEqual(result['charge_efficiency'],round(.95*.988,4))
+        self.assertEqual(result['conversion'],{'charge':'configured','discharge':'measured'})
+        self.assertEqual(result['storage'],{'charge':'measured','discharge':'measured'})
+        unmeasured=battery_efficiencies(model,fits,{})
+        self.assertEqual(unmeasured['storage'],{'charge':'unmeasured','discharge':'unmeasured'})

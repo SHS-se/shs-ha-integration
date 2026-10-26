@@ -369,7 +369,7 @@ class BatteryRuntime:
         if getattr(self,'_efficiency_key',None)!=key:
             self._storage=(execution.storage_ratios(account,self._model_at-CONVERSION_EVIDENCE_MS,self._model_at)
                            if account is not None else {})
-            self._efficiencies=battery_efficiencies(self._model,self._storage)
+            self._efficiencies=battery_efficiencies(self._model,self._fits,self._storage)
             self._efficiency_key=key
         return self._efficiencies
 

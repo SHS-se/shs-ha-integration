@@ -216,12 +216,17 @@ the AC formula again. Where efficiencies vary, use the versioned interval model.
 The constant-efficiency equation above is illustrative, not a requirement to use
 95% or another fixed efficiency. Preserve the existing empirical conversion
 model, including power-dependent gain, fixed overhead and idle-loss treatment.
-User requirement, 26 October 2026: plan stored energy with measured efficiencies.
-When constant-power operation cannot separate gain from overhead, the branch's
-measured energy ratio is its gain. The execution journal's battery-terminal
-counters and measured stored energy give the terminal-to-stored ratio for each
-direction. The planning efficiency is their product; configured values remain
-only for a path without enough evidence, labelled as such.
+User requirement, 26 October 2026: plan stored energy with measured efficiencies,
+for charging and discharging alike. Evidence covers the last 30 days, capped at
+the most recent 2000 windows per branch. A five-minute window counts for energy
+when the battery moves one way throughout with no solar; its power need not be
+steady, because window means are linear. Only steady windows fit the power curve
+and idle loss. When the curve cannot be identified, the branch's measured energy
+ratio is its gain. The execution journal's battery-terminal counters and measured
+stored energy give the terminal-to-stored ratio for each direction. The planning
+efficiency is the branch's measured energy ratio, which includes overhead at the
+powers actually used, times that terminal-to-stored ratio. Configured values
+remain only for a path without enough evidence, labelled as such.
 Its reported installation boundary is not automatically cell-internal storage
 efficiency. The contract MUST identify the compatible model and electrical/storage
 basis used for its reference; actuals retain their own measurement provenance.
