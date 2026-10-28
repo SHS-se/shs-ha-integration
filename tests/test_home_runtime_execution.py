@@ -397,7 +397,7 @@ class ExecutableRuntimeTests(unittest.TestCase):
         self.assertEqual(upgraded.groups[0].attempts,h.state.groups[0].attempts)
         self.assertEqual(upgraded.groups[0].grant,h.state.groups[0].grant)
         self.assertTrue(upgraded.groups[0].owned)
-        self.assertEqual(json.loads(encode_checkpoint(upgraded))['schema_version'],11)
+        self.assertEqual(json.loads(encode_checkpoint(upgraded))['schema_version'],12)
 
     def test_v8_checkpoint_upgrade_preserves_account_and_issued_effects(self):
         h=Harness();h.offer();h.prepare();h.durable()
@@ -405,4 +405,4 @@ class ExecutableRuntimeTests(unittest.TestCase):
         old['state']['execution'].pop('plan_rejection')
         upgraded=decode_checkpoint(json.dumps(old))
         self.assertEqual(upgraded,h.state)
-        self.assertEqual(json.loads(encode_checkpoint(upgraded))['schema_version'],11)
+        self.assertEqual(json.loads(encode_checkpoint(upgraded))['schema_version'],12)

@@ -91,7 +91,7 @@ def _check_state(state):
 
 def encode_checkpoint(state: runtime.HomeState) -> bytes:
     _check_state(state)
-    data = json.dumps({"schema_version": 11, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    data = json.dumps({"schema_version": 12, "state": _encode(state)}, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > MAX_BYTES:
         raise ValueError("checkpoint exceeds byte limit")
     return data
@@ -121,10 +121,11 @@ def decode_checkpoint(data: bytes) -> runtime.HomeState:
         if value["schema_version"] == 8:
             value["state"]["execution"] = upgrade_execution_session(value["state"]["execution"])
         value["state"] = upgrade_native_catalog(value["state"])
-    elif value["schema_version"] not in (10, 11):
+    elif value["schema_version"] not in (10, 11, 12):
         raise ValueError("unsupported checkpoint version/fields")
-    if value["schema_version"] != 11:
-        # Through version 10 contract rows stated only `follows_demand`.
+    if value["schema_version"] != 12:
+        # Through 10 rows stated only follows_demand; through 11 execution
+        # records omitted separate installation and terminal/storage terms.
         value["state"] = upgrade_persisted_contracts(value["state"])
     return _check_state(_decode(value["state"], runtime.HomeState))
 

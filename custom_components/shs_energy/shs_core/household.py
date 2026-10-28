@@ -2945,9 +2945,15 @@ class Household:
                 raise
             except ValueError as error:
                 raise OptimisationInputError(str(error)) from error
-        # User requirement, 26 October 2026: plan stored energy with measured
-        # efficiencies. The configured values apply only before any loss model.
-        measured_efficiency = runtime.efficiencies() if runtime is not None else None
+        # The same captured installation model serves physical execution,
+        # live planning and offline simulation. No aggregate AC efficiency is
+        # substituted for its directional curves or terminal/stored boundary.
+        physical = None
+        if battery_entity is not None:
+            model_runtime = getattr(self, "battery_model_runtime", None) or getattr(self, "battery_runtime", None)
+            if model_runtime is None:
+                raise OptimisationInputError("Battery physical model is unavailable", remedy=REMEDY_DEFECT)
+            physical = await model_runtime.async_planning_physics(options)
         battery = None if battery_entity is None else {
             "capacity_kwh": battery_limits[OPT_BATTERY_CAPACITY_KWH],
             "soc": battery_soc,
@@ -2955,13 +2961,7 @@ class Household:
             "max_soc": 1.0,
             "charge_max_w": battery_limits[OPT_BATTERY_CHARGE_MAX_W],
             "discharge_max_w": battery_limits[OPT_BATTERY_DISCHARGE_MAX_W],
-            "charge_efficiency": measured_efficiency["charge_efficiency"] if measured_efficiency else parse_number(
-                options[OPT_BATTERY_CHARGE_EFFICIENCY], OPT_BATTERY_CHARGE_EFFICIENCY
-            ),
-            "discharge_efficiency": measured_efficiency["discharge_efficiency"] if measured_efficiency else parse_number(
-                options[OPT_BATTERY_DISCHARGE_EFFICIENCY],
-                OPT_BATTERY_DISCHARGE_EFFICIENCY,
-            ),
+            **physical,
         }
         # Derived from the same routing the services were built from, so a
         # capability can never claim a service the snapshot does not carry.

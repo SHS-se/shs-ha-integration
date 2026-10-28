@@ -66,6 +66,19 @@ class Conversion:
         solar = min(dc_w, self.solar_capacity(pv_w, house_w))
         return self.surplus_charge.input(solar), self.grid_charge.input(max(0.0, dc_w - solar))
 
+    def charge_dc(self, ac_w, pv_w, house_w):
+        """Greatest terminal input whose actual AC input fits the allocation.
+
+        If surplus cannot activate its converter, charge_inputs assigns none
+        of the allocation to that branch. A mixed branch starts only after
+        its own fixed overhead is covered.
+        """
+        surplus = max(0.0, pv_w - house_w)
+        if self.solar_capacity(pv_w, house_w) == 0:
+            return self.grid_charge.output(ac_w)
+        return (self.surplus_charge.output(min(ac_w, surplus))
+                + self.grid_charge.output(max(0.0, ac_w - surplus)))
+
     def net_grid(self, charge_dc_w, discharge_dc_w, pv_w, house_w):
         """Installation overhead persists across idle and active operation.
 
@@ -211,29 +224,21 @@ def conversion_model(windows, *, charge_efficiency, discharge_efficiency, source
     return Conversion(revision, curves['grid_charge'], curves['surplus_charge'], curves['discharge'], idle_w), fits
 
 
-def battery_efficiencies(conversion, fits, storage):
-    """AC energy to stored energy and back, for planning stored-energy targets.
+def planning_physics(conversion, storage):
+    """The complete installation law and separate terminal/stored ratios.
 
-    The AC side is the branch's measured energy ratio, which includes
-    installation overhead at the powers the battery actually runs; a fitted
-    gain alone would leave that overhead out. The terminal-to-stored ratio
-    comes from the execution journal. Without evidence, the AC side uses the
-    model's labelled configured gain and the terminal stays the stored boundary.
+    Conversion curves already include their measured installation overhead.
+    Multiplying their observed energy ratios into storage efficiencies would
+    lose their power dependence and count conversion loss a second time.
+    An unmeasured storage boundary remains the existing unit-ratio model;
+    diagnostics retain that evidence label separately from the physical record.
     """
-    def conversion_side(branch, curve):
-        ratio = measured_ratio(fits.get(branch, {"windows": 0}))
-        return (ratio, "measured") if ratio is not None else (curve.gain, fits.get(branch, {}).get("model_source", "configured"))
     def storage_side(direction):
         row = storage.get(direction, {})
-        return (row["ratio"], "measured") if row.get("state") == "measured" else (1.0, "unmeasured")
-    charge_ac, charge_ac_basis = conversion_side("grid_charge", conversion.grid_charge)
-    discharge_ac, discharge_ac_basis = conversion_side("discharge", conversion.discharge)
-    charge, charge_basis = storage_side("charge")
-    discharge, discharge_basis = storage_side("discharge")
-    return {"charge_efficiency": round(charge_ac * charge, 4),
-            "discharge_efficiency": round(discharge_ac * discharge, 4),
-            "conversion": {"charge": charge_ac_basis, "discharge": discharge_ac_basis},
-            "storage": {"charge": charge_basis, "discharge": discharge_basis}}
+        return row["ratio"] if row.get("state") == "measured" else 1.0
+    return {"conversion": conversion.wire(),
+            "charge_efficiency": storage_side("charge"),
+            "discharge_efficiency": storage_side("discharge")}
 
 
 def windows_from_statistics(series, *, source_revision, unit_scale=1000, end_ms):

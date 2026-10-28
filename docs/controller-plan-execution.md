@@ -223,10 +223,26 @@ when the battery moves one way throughout with no solar; its power need not be
 steady, because window means are linear. Only steady windows fit the power curve
 and idle loss. When the curve cannot be identified, the branch's measured energy
 ratio is its gain. The execution journal's battery-terminal counters and measured
-stored energy give the terminal-to-stored ratio for each direction. The planning
-efficiency is the branch's measured energy ratio, which includes overhead at the
-powers actually used, times that terminal-to-stored ratio. Configured values
-remain only for a path without enough evidence, labelled as such.
+stored energy give the terminal-to-stored ratio for each direction.
+
+User requirement, 28 October 2026: live planning and the annual simulator use
+that complete refined model, with the same directional conversion curves and
+installation overhead as execution. Snapshot schema 11 carries `conversion`
+alongside `charge_efficiency` and `discharge_efficiency`; those two ratios now
+refer only to the terminal/stored boundary. Equipment power ratings are terminal
+DC, while planner instructions remain AC. The earlier export of aggregate
+AC-to-stored percentages is superseded. Configured conversion assumptions remain
+only for a path without enough evidence, labelled as such by the existing learner.
+
+The v3 execution reference captures those storage ratios separately and names
+`installation_mwh` in each interval's electrical balance. Its stored endpoints
+come from the exact native projection. Actual terminal counters are converted
+using the model captured by each admitted reference; later calibration cannot
+reprice earlier physical delivery. Charge targets, recovery capacity and reserve
+timing use that same terminal/stored boundary. Historical v1/v2 records retain
+their original unit terminal/storage accounting through an explicit record
+migration, without fabricating a refined model for a new snapshot.
+
 Its reported installation boundary is not automatically cell-internal storage
 efficiency. The contract MUST identify the compatible model and electrical/storage
 basis used for its reference; actuals retain their own measurement provenance.

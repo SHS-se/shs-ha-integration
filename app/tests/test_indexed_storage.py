@@ -31,6 +31,45 @@ class IndexedTests(unittest.IsolatedAsyncioTestCase):
     async def save(self,account):
         await self.store.save(META,ExecutionSession(account=account))
 
+    async def test_refined_storage_regimes_survive_checkpoint_and_late_counter_correction(self):
+        from test_refined_battery import wire
+        reference, indexed = ex.Account(), self.account
+        for direction in ('charge', 'discharge'):
+            reference = meter(reference, direction, 0, 0)
+            indexed = meter(indexed, direction, 0, 0)
+        first = ex.read_contract(wire())
+        reference = ex.admit_plan(reference, first, 0, ex.StateObservation(0, 5_000_000, 'synthetic-SOC'))
+        indexed = ex.admit_plan(indexed, first, 0, ex.StateObservation(0, 5_000_000, 'synthetic-SOC'))
+        reference = meter(reference, 'charge', QUARTER, 1_000_000)
+        indexed = meter(indexed, 'charge', QUARTER, 1_000_000)
+        reference, indexed = ex.request_replan(reference), ex.request_replan(indexed)
+        second = wire()
+        second.update(id='second-reference', plan_id='second-plan', generation=1,
+            source_receipt=reference.requests[-1].source_receipt,
+            previous_contract_id=first.id, valid_until_ms=2*QUARTER,
+            storage={'charge_efficiency': .8, 'discharge_efficiency': .75})
+        second['intervals'][0].update(start_ms=QUARTER, end_ms=2*QUARTER,
+            stored_start_mwh=5_900_000, stored_end_mwh=5_900_000)
+        contract = ex.read_contract(second)
+        observed = ex.StateObservation(QUARTER, 5_900_000, 'synthetic-SOC')
+        reference = ex.admit_plan(reference, contract, QUARTER, observed)
+        indexed = ex.admit_plan(indexed, contract, QUARTER, observed)
+        for direction, total in (('charge', 2_000_000), ('discharge', 0)):
+            reference = meter(reference, direction, 2*QUARTER, total)
+            indexed = meter(indexed, direction, 2*QUARTER, total)
+        self.assertEqual(ex.balance(indexed, 2*QUARTER), ex.balance(reference, 2*QUARTER))
+        self.assertEqual(ex.balance(indexed, 2*QUARTER).flow_debt_low_mwh, -800_000)
+        await self.save(indexed)
+        reopened = IndexedStorage(self.path, asyncio.to_thread, ObservationMirror())
+        _, restored = await reopened.load()
+        self.assertEqual(ex.balance(restored.account, 2*QUARTER), ex.balance(reference, 2*QUARTER))
+        corrected = meter(restored.account, 'charge', QUARTER, 1_100_000)
+        reference = meter(reference, 'charge', QUARTER, 1_100_000)
+        self.assertEqual(ex.balance(corrected, 2*QUARTER), ex.balance(reference, 2*QUARTER))
+        self.assertEqual(ex.balance(corrected, 2*QUARTER).flow_debt_low_mwh, -810_000)
+        await reopened.save(META, ExecutionSession(account=corrected))
+        self.assertEqual(ex.balance(corrected, 2*QUARTER), ex.balance(reference, 2*QUARTER))
+
     async def test_deadline_crossing_preserves_objective_history_before_and_after_checkpoint_and_restart(self):
         reference=ex.Account();indexed=self.account
         for direction in ('charge','discharge'):

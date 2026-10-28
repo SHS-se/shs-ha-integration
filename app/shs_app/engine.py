@@ -241,6 +241,10 @@ class AppEngine:
         path = stores/f'shs_energy.execution.{entry}.sqlite'
         self.battery = h.battery_runtime = AppBatteryRuntime(h,controller,IndexedStorage(path,asyncio.to_thread,self.mirror),
             lambda:int(datetime.now(timezone.utc).timestamp()*1000))
+        # Observing backends use the same measured plant without receiving
+        # execution authority or access to the controlling request generation.
+        for household in self.households.values():
+            household.battery_model_runtime = self.battery
         self.battery.profiler = self.profiler
         self.writer = h.battery_writer = RemoteBattery(self.gateway,self.battery,self.battery.now)
         self.battery.physical = self.writer

@@ -22,6 +22,7 @@ from .battery_supply import ExecutionDemand, proportional_supply
 
 SCHEMA = "battery-plan-execution-v1"
 SCHEMA_V2 = "battery-plan-execution-v2"
+SCHEMA_V3 = "battery-plan-execution-v3"
 
 
 def _integer(value, *, minimum=None):
@@ -92,6 +93,8 @@ class ReferenceInterval:
     curtailed_mwh: int
     unserved_mwh: int
     rounding_mwh: int
+    # V3 names installation demand separately from household consumption.
+    installation_mwh: int = 0
 
     def __post_init__(self):
         for name in ('operation', 'target_kind'):
@@ -131,10 +134,10 @@ class ReferenceInterval:
             raise ValueError("nominal charge and discharge cannot coincide")
         if self.import_mwh and self.export_mwh:
             raise ValueError("nominal import and export cannot coincide")
-        # Eight independently rounded gross terms have at most 4 mWh residual.
+        # Nine independently rounded gross terms have at most 4 mWh residual.
         residual = (self.pv_mwh + self.import_mwh + self.discharge_ac_mwh
                     - self.load_mwh + self.unserved_mwh - self.charge_ac_mwh
-                    - self.export_mwh - self.curtailed_mwh)
+                    - self.export_mwh - self.curtailed_mwh - self.installation_mwh)
         if residual != self.rounding_mwh or abs(residual) > 4:
             raise ValueError("nominal electrical account does not conserve energy")
         if self.unserved_mwh > self.load_mwh:
@@ -210,6 +213,18 @@ class Disposition:
 
 
 @dataclass(frozen=True)
+class StorageRatios:
+    """Terminal DC to stored energy and stored energy to terminal DC."""
+    charge_efficiency: float
+    discharge_efficiency: float
+
+    def __post_init__(self):
+        if any(type(v) not in (int, float) or not isfinite(v) or not 0 < v <= 1
+               for v in (self.charge_efficiency, self.discharge_efficiency)):
+            raise ValueError("terminal/stored ratios must be positive shares")
+
+
+@dataclass(frozen=True)
 class ExecutionContract:
     id: str
     plan_id: str
@@ -232,8 +247,16 @@ class ExecutionContract:
     # The plan's demand partition (v2). A v1 contract left it to the plan's
     # separate supply scope and HA's planned-device inventory.
     demand: Optional[ExecutionDemand] = None
+    wire_schema: str = ""
+    storage: StorageRatios = StorageRatios(1.0, 1.0)
 
     def __post_init__(self):
+        if self.wire_schema in ("", SCHEMA, SCHEMA_V2):
+            object.__setattr__(self, "wire_schema", SCHEMA_V2 if self.demand is not None else SCHEMA)
+        if self.wire_schema not in (SCHEMA, SCHEMA_V2, SCHEMA_V3):
+            raise ValueError("unsupported execution contract")
+        if self.wire_schema == SCHEMA_V3 and self.demand is None:
+            raise ValueError("refined battery reference requires its demand partition")
         for value in (self.id, self.plan_id, self.scope_revision, self.model_revision):
             _text(value)
         profiles = {p.id for p in self.demand.profiles} if self.demand is not None else set()
@@ -303,6 +326,7 @@ _V1_INTERVAL = ("start_ms end_ms stored_start_mwh stored_end_mwh operation targe
                 "import_mwh export_mwh curtailed_mwh unserved_mwh rounding_mwh")
 _ACCOUNT = "charge_ac_mwh discharge_ac_mwh pv_mwh load_mwh import_mwh export_mwh curtailed_mwh unserved_mwh rounding_mwh"
 _V2_INTERVAL = "start_ms end_ms stored_start_mwh stored_end_mwh target_kind instruction " + _ACCOUNT
+_V3_INTERVAL = _V2_INTERVAL + " installation_mwh"
 _INSTRUCTIONS = {
     "idle": "kind", "hold": "kind charge_ac_limit_w", "solar_charge": "kind charge_ac_limit_w",
     "grid_charge": "kind charge_ac_w", "export": "kind profile_id discharge_ac_w",
@@ -324,8 +348,8 @@ def _v1_interval(value):
                              import_target_w=None, profile_id=None)
 
 
-def _v2_interval(value):
-    row = dict(_fields(value, _V2_INTERVAL))
+def _stated_interval(value, schema):
+    row = dict(_fields(value, _V3_INTERVAL if schema == SCHEMA_V3 else _V2_INTERVAL))
     instruction = row.pop("instruction")
     kind = instruction.get("kind") if type(instruction) is dict else None
     if kind not in _INSTRUCTIONS:
@@ -353,19 +377,22 @@ def _v2_interval(value):
 
 def read_contract(value):
     schema = value.get("schema") if type(value) is dict else None
-    if schema not in (SCHEMA, SCHEMA_V2):
+    if schema not in (SCHEMA, SCHEMA_V2, SCHEMA_V3):
         raise ValueError("unsupported execution contract; no legacy translation")
-    raw = dict(_fields(value, _V1_FIELDS + (" demand" if schema == SCHEMA_V2 else "")))
+    raw = dict(_fields(value, _V1_FIELDS + (" demand" if schema != SCHEMA else "")
+                       + (" storage" if schema == SCHEMA_V3 else "")))
     raw.pop("schema")
-    raw["demand"] = ExecutionDemand.read(raw["demand"]) if schema == SCHEMA_V2 else None
+    raw["demand"] = ExecutionDemand.read(raw["demand"]) if schema != SCHEMA else None
+    if schema == SCHEMA_V3:
+        raw["storage"] = StorageRatios(**_fields(raw["storage"], "charge_efficiency discharge_efficiency"))
     for field, cls in (("intervals", None), ("objectives", Objective), ("recovery", Recovery), ("dispositions", Disposition)):
         if type(raw[field]) is not list:
             raise ValueError("execution records must be arrays")
         if cls is None:
-            raw[field] = tuple((_v2_interval if schema == SCHEMA_V2 else _v1_interval)(v) for v in raw[field])
+            raw[field] = tuple(_v1_interval(v) if schema == SCHEMA else _stated_interval(v, schema) for v in raw[field])
         else:
             raw[field] = tuple(cls(**_fields(v, " ".join(cls.__dataclass_fields__))) for v in raw[field])
-    return ExecutionContract(**raw)
+    return ExecutionContract(**raw, wire_schema=schema)
 
 
 def upgrade_persisted_contracts(raw):
@@ -387,6 +414,14 @@ def upgrade_persisted_contracts(raw):
                      import_target_w=None, profile_id=None)
     if value.get("type") == "ExecutionContract" and "demand" not in value:
         value["demand"] = None
+    # Historical records explicitly retain the electrical law they recorded.
+    # New wire v3 parsing never supplies these missing required terms.
+    if value.get("type") == "ReferenceInterval" and "installation_mwh" not in value:
+        value["installation_mwh"] = 0
+    if value.get("type") == "ExecutionContract" and "wire_schema" not in value:
+        value["wire_schema"] = SCHEMA_V2 if value.get("demand") is not None else SCHEMA
+    if value.get("type") == "ExecutionContract" and "storage" not in value:
+        value["storage"] = {"type": "StorageRatios", "charge_efficiency": 1.0, "discharge_efficiency": 1.0}
     return value
 
 
@@ -410,10 +445,14 @@ def _instruction_wire(row):
 
 def contract_wire(contract):
     """The wire form the planner would have sent for this contract."""
-    value = {k: v for k, v in asdict(contract).items() if k != "demand"}
+    value = {k: v for k, v in asdict(contract).items() if k not in ("demand", "wire_schema", "storage")}
+    if contract.wire_schema == SCHEMA_V3:
+        value['storage'] = asdict(contract.storage)
     for field in ("objectives", "recovery", "dispositions"):
         value[field] = list(value[field])
     timing = "start_ms end_ms stored_start_mwh stored_end_mwh target_kind".split() + _ACCOUNT.split()
+    if contract.wire_schema == SCHEMA_V3:
+        timing.append("installation_mwh")
     if contract.demand is None:
         def v1(row):
             if row.supply_mode == "fixed" and (row.import_target_w is not None or row.discharge_ac_w != row.discharge_ac_limit_w):
@@ -424,7 +463,7 @@ def contract_wire(contract):
     demand = {"loads": [asdict(load) for load in contract.demand.loads],
               "profiles": [{**asdict(p), "eligible_keys": list(p.eligible_keys)} for p in contract.demand.profiles]}
     intervals = [{**{n: getattr(row, n) for n in timing}, "instruction": _instruction_wire(row)} for row in contract.intervals]
-    return {"schema": SCHEMA_V2, **value, "intervals": intervals, "demand": demand}
+    return {"schema": contract.wire_schema, **value, "intervals": intervals, "demand": demand}
 
 
 @dataclass(frozen=True, slots=True)
@@ -665,6 +704,17 @@ class Account:
         return MeterIndex(self.meters)
 
     @cached_property
+    def _storage_regimes(self):
+        if '_evidence' in self.__dict__:
+            rows = self._evidence.storage_regimes()
+        else:
+            rows = ((row.at_ms, row.contract.storage) for row in self.admissions)
+        result = ()
+        for at, ratios in rows:
+            result = _append_storage_regime(result, at, ratios)
+        return result
+
+    @cached_property
     def _meter_events(self):
         return _Lookup((row.event_id, row) for row in self.meters)
 
@@ -707,6 +757,74 @@ def _at_or_before(rows, at_ms):
     return next((row for row in reversed(rows) if row.at_ms<=at_ms),None)
 
 
+def _append_storage_regime(regimes, at_ms, storage):
+    if regimes and regimes[-1][1] == storage:
+        return regimes
+    if regimes and regimes[-1][0] == at_ms:
+        return _append_storage_regime(regimes[:-1], at_ms, storage)
+    return (*regimes, (at_ms, storage))
+
+
+def _carry_storage_cache(before, after, changes):
+    """Carry derived evidence, invalidating the affected counter suffix.
+
+    A late counter correction can amend any later energy balance. Ordinary
+    chronological receipts preserve closed calibration segments, while the
+    active segment is always read against the current meter index.
+    """
+    if 'admissions' in changes:
+        prior = before.__dict__.get('_storage_regimes')
+        if prior is None:
+            after.__dict__.pop('_storage_regimes', None)
+        else:
+            row = changes['admissions'][-1]
+            after.__dict__['_storage_regimes'] = _append_storage_regime(prior, row.at_ms, row.contract.storage)
+    if 'meters' in changes:
+        cache = before.__dict__.get('_stored_segments')
+        if cache is not None:
+            row = changes['meters'][-1]
+            _, previous = before.meter_index.neighbours(row.stream, row.source_at_ms)
+            after.__dict__['_stored_segments'] = ({key: value for key, value in cache.items()
+                if key[1] <= previous.source_at_ms} if previous is not None else {})
+
+
+def _scaled_bounds(value, factor):
+    return Bounds(_round(value.low * factor), None if value.high is None else _round(value.high * factor))
+
+
+def _stored_delivery(account, start_ms, end_ms):
+    """Measured terminal counters expressed on each admitted storage basis."""
+    if end_ms < start_ms:
+        raise ValueError('reversed accounting interval')
+    charge, discharge = Bounds(0, 0), Bounds(0, 0)
+    if end_ms == start_ms:
+        return charge, discharge
+    regimes = account._storage_regimes
+    if not regimes or start_ms < regimes[0][0]:
+        raise ValueError('stored delivery precedes its physical reference')
+    cache = account.__dict__.setdefault('_stored_segments', {})
+    first = bisect_right(regimes, start_ms, key=lambda row: row[0]) - 1
+    for i in range(first, len(regimes)):
+        at, storage = regimes[i]
+        left = max(start_ms, at)
+        right = min(end_ms, regimes[i + 1][0]) if i + 1 < len(regimes) else end_ms
+        if right > left:
+            key = (left, right, storage.charge_efficiency, storage.discharge_efficiency)
+            closed = i + 1 < len(regimes) and right == regimes[i + 1][0]
+            item = cache.get(key) if closed else None
+            if item is None:
+                item = (_scaled_bounds(measured(account.meter_index, 'charge', left, right),
+                                       Fraction(str(storage.charge_efficiency))),
+                        _scaled_bounds(measured(account.meter_index, 'discharge', left, right),
+                                       1 / Fraction(str(storage.discharge_efficiency))))
+                if closed:
+                    cache[key] = item
+            charge, discharge = charge.plus(item[0]), discharge.plus(item[1])
+        if right >= end_ms:
+            break
+    return charge, discharge
+
+
 def _evolve(account, **changes):
     """Internal validated transitions extend an already validated prefix.
 
@@ -723,6 +841,7 @@ def _evolve(account, **changes):
     result = object.__new__(Account)
     result.__dict__.update(account.__dict__)
     result.__dict__.update(changes)
+    _carry_storage_cache(account, result, changes)
     if 'meters' in changes:
         receipt = changes['meters'][-1]
         result.__dict__['meter_index'] = account.meter_index.appended(receipt)
@@ -857,8 +976,9 @@ def balance(account, at_ms):
     charge = measured(account.meter_index, "charge", anchor.at_ms, at_ms)
     discharge = measured(account.meter_index, "discharge", anchor.at_ms, at_ms)
     origin = anchor.stored_mwh
-    lo = None if charge.high is None else reference - origin - charge.high + discharge.low
-    hi = None if discharge.high is None else reference - origin - charge.low + discharge.high
+    stored_charge, stored_discharge = _stored_delivery(account, anchor.at_ms, at_ms)
+    lo = None if stored_charge.high is None else reference - origin - stored_charge.high + stored_discharge.low
+    hi = None if stored_discharge.high is None else reference - origin - stored_charge.low + stored_discharge.high
     observation = account._observed_at.get(at_ms)
     state_debt = reference - observation.stored_mwh if observation else None
     return Balance(reference, charge, discharge, lo, hi, state_debt,
@@ -879,8 +999,7 @@ def _objective_outcome(account, objective, closed_at_ms, at_ms, observed):
         result["outcome"] = "changed_before_deadline"
     elif objective.kind == "stored_energy" and deadline <= at_ms and account.opening.at_ms <= deadline:
         anchor=account.anchor(deadline)
-        charged = measured(account.meter_index, "charge", anchor.at_ms, deadline)
-        discharged = measured(account.meter_index, "discharge", anchor.at_ms, deadline)
+        charged, discharged = _stored_delivery(account, anchor.at_ms, deadline)
         if charged.exact and discharged.exact:
             shortfall = max(0, objective.target_mwh - anchor.stored_mwh - charged.low + discharged.low)
             result.update(outcome="missed" if shortfall else "fulfilled", shortfall_mwh=shortfall,
@@ -1169,7 +1288,7 @@ def _remaining_charge_capacity(contract, objective, live, conversion):
             continue
         if row.operation in ('solar_charge', 'hold', 'supply_house'):
             watts = min(live.charge_max_dc_w, int(conversion.surplus_charge.output(row.charge_ac_limit_w)))
-            capacity += _round(Fraction(watts * (end - start), 3600))
+            capacity += round(watts * contract.storage.charge_efficiency * (end - start) / 3600)
         else:
             capacity += max(0, row.stored_at(end) - row.stored_at(start))
     return capacity
@@ -1186,6 +1305,8 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
     if contract is None or (row := contract.interval(now)) is None:
         return Assessment("idle", 0, 0, 0, 0, "no_current_plan", "unavailable", None, "plan_required", now)
     until = min(row.end_ms, contract.valid_until_ms)
+    charge_efficiency = contract.storage.charge_efficiency
+    discharge_efficiency = contract.storage.discharge_efficiency
     if not live.available:
         return Assessment("idle", 0, 0, 0, 0, "equipment_unavailable", "unavailable", None, "equipment_unavailable", until)
     if not 0 <= live.stored_mwh <= contract.capacity_mwh:
@@ -1204,9 +1325,7 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
             # the retained empirical model, rather than mistaking AC watts for
             # terminal watts or applying a nominal 95% to actual DC counters.
             ac_w = row.charge_ac_mwh * 3600 / (row.end_ms - row.start_ms)
-            solar_ac = min(ac_w, surplus)
-            nominal = min(live.charge_max_dc_w, int(conversion.surplus_charge.output(solar_ac)
-                          + conversion.grid_charge.output(max(0, ac_w - solar_ac))))
+            nominal = min(live.charge_max_dc_w, int(conversion.charge_dc(ac_w, live.pv_w, live.house_w)))
         b = balance(account, now)
         # A state-only discrepancy never fabricates flow debt. Only a proven
         # common positive shortfall can consume discretionary recovery authority.
@@ -1221,11 +1340,11 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
                 target = next(o.target_mwh for o in contract.objectives if o.id == recipe.objective_id)
                 charged = measured(account.meter_index, "charge", recipe.start_ms, now)
                 planned = max(0, contract.stored_at(now) - contract.stored_at(recipe.start_ms))
-                used = None if charged.high is None else max(0, charged.high - planned)
+                used = None if charged.high is None else max(0, round(charged.high * charge_efficiency) - planned)
                 quantity = 0 if used is None else min(debt, max(0, recipe.max_correction_mwh - used), max(0, target - live.stored_mwh))
                 extra = min(recipe.extra_charge_dc_w, max(0, live.charge_max_dc_w - nominal)) if quantity else 0
                 if extra:
-                    until = min(until, recipe.end_ms, now + ceil(quantity * 3600 / extra))
+                    until = min(until, recipe.end_ms, now + ceil(quantity * 3600 / (extra * charge_efficiency)))
                 recovery_state = "projected_feasible" if quantity else "waiting_for_measurements"
             elif operation == 'solar_charge':
                 recovery_state = 'waiting_for_solar'
@@ -1237,7 +1356,7 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
             if objective.kind != "stored_energy" or not objective.start_ms <= now < objective.deadline_ms:
                 continue
             permitted_remaining = _remaining_charge_capacity(contract, objective, live, conversion)
-            delegated = sum(min(r.max_correction_mwh, r.extra_charge_dc_w * max(0, r.end_ms - max(now, r.start_ms)) // 3600)
+            delegated = sum(min(r.max_correction_mwh, int(r.extra_charge_dc_w * charge_efficiency * max(0, r.end_ms - max(now, r.start_ms)) / 3600))
                             for r in contract.recovery if r.objective_id == objective.id and r.end_ms > now)
             if objective.target_mwh - live.stored_mwh > permitted_remaining + delegated:
                 recovery_state, replan = "insufficient_capacity", "observed_state_cannot_meet_target"
@@ -1270,7 +1389,7 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
         if charge:
             target=min([contract.maximum_mwh, *(o.target_mwh for o in contract.objectives
                 if o.kind=="stored_energy" and o.start_ms<=now<o.deadline_ms)])
-            until=min(until,now+max(1,ceil((target-live.stored_mwh)*3600/charge)))
+            until=min(until,now+max(1,ceil((target-live.stored_mwh)*3600/(charge * charge_efficiency))))
         if extra:
             extra = max(0, charge - nominal)
             recovery_state = "executing" if extra else "temporarily_limited"
@@ -1288,9 +1407,9 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
                     if delivered.high is None:
                         known = False
                         continue
-                    used = max(0, delivered.high - max(0, contract.stored_at(now) - contract.stored_at(r.start_ms)))
+                    used = max(0, round(delivered.high * charge_efficiency) - max(0, contract.stored_at(now) - contract.stored_at(r.start_ms)))
                 capacity += min(max(0, r.max_correction_mwh - used),
-                                r.extra_charge_dc_w * max(0, r.end_ms - max(now, r.start_ms)) // 3600)
+                                int(r.extra_charge_dc_w * charge_efficiency * max(0, r.end_ms - max(now, r.start_ms)) / 3600))
             if known and capacity < debt:
                 recovery_state, replan = "insufficient_capacity", "recovery_cannot_meet_deadline"
     elif operation in ("supply_house", "export"):
@@ -1319,7 +1438,7 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
                 if live.minimum_mwh>contract.minimum_mwh:
                     replan="local_storage_reserve_changed"
             elif discharge:
-                until = min(until, now + ceil((live.stored_mwh - reserve) * 3600 / discharge))
+                until = min(until, now + ceil((live.stored_mwh - reserve) * discharge_efficiency * 3600 / discharge))
     # Falling to zero power is a decision about stored energy, not a decision to
     # let surplus reach the grid: only the plan's own `idle` forgoes that.
     if not charge and not discharge and operation != "idle":

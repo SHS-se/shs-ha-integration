@@ -1,0 +1,281 @@
+{
+  "schema": "battery-physics-conformance-v1",
+  "provenance": "Independently invented synthetic equipment and hand-calculated expected values. No household measurements.",
+  "battery": {
+    "capacity_kwh": 10,
+    "min_soc": 0.1,
+    "max_soc": 0.9,
+    "charge_max_w": 4000,
+    "discharge_max_w": 5000,
+    "charge_efficiency": 0.9,
+    "discharge_efficiency": 0.8,
+    "conversion": {
+      "revision": "synthetic-affine-conformance-v1",
+      "grid_charge": {
+        "gain": 0.8,
+        "overhead_w": 80
+      },
+      "surplus_charge": {
+        "gain": 0.9,
+        "overhead_w": 45
+      },
+      "discharge": {
+        "gain": 0.75,
+        "overhead_w": 75
+      },
+      "idle_loss_w": 60
+    }
+  },
+  "forward": [
+    {
+      "name": "idle-floor",
+      "stored_kwh": 5,
+      "hours": 0.25,
+      "pv_w": 0,
+      "house_w": 500,
+      "charge_dc_w": 0,
+      "discharge_dc_w": 0,
+      "expected": {
+        "charge_w": 0,
+        "discharge_w": 0,
+        "battery_idle_w": 60,
+        "net_w": 560,
+        "battery_kwh": 5
+      }
+    },
+    {
+      "name": "grid-charge-overhead",
+      "stored_kwh": 5,
+      "hours": 0.25,
+      "pv_w": 0,
+      "house_w": 500,
+      "charge_dc_w": 800,
+      "discharge_dc_w": 0,
+      "expected": {
+        "charge_w": 1100,
+        "discharge_w": 0,
+        "battery_idle_w": 0,
+        "net_w": 1600,
+        "battery_kwh": 5.18
+      }
+    },
+    {
+      "name": "solar-charge-idle-floor-remainder",
+      "stored_kwh": 5,
+      "hours": 0.25,
+      "pv_w": 2500,
+      "house_w": 500,
+      "charge_dc_w": 855,
+      "discharge_dc_w": 0,
+      "expected": {
+        "charge_w": 1000,
+        "discharge_w": 0,
+        "battery_idle_w": 10,
+        "net_w": -990,
+        "battery_kwh": 5.192375
+      }
+    },
+    {
+      "name": "mixed-source-charging",
+      "stored_kwh": 5,
+      "hours": 0.25,
+      "pv_w": 2500,
+      "house_w": 500,
+      "charge_dc_w": 2555,
+      "discharge_dc_w": 0,
+      "expected": {
+        "charge_w": 3100,
+        "discharge_w": 0,
+        "battery_idle_w": 0,
+        "net_w": 1100,
+        "battery_kwh": 5.574875
+      }
+    },
+    {
+      "name": "discharge-overhead-and-storage",
+      "stored_kwh": 5,
+      "hours": 0.25,
+      "pv_w": 0,
+      "house_w": 500,
+      "charge_dc_w": 0,
+      "discharge_dc_w": 1000,
+      "expected": {
+        "charge_w": 0,
+        "discharge_w": 675,
+        "battery_idle_w": 0,
+        "net_w": -175,
+        "battery_kwh": 4.6875
+      }
+    },
+    {
+      "name": "discharge-below-converter-zero-crossing",
+      "stored_kwh": 5,
+      "hours": 0.25,
+      "pv_w": 0,
+      "house_w": 500,
+      "charge_dc_w": 0,
+      "discharge_dc_w": 40,
+      "expected": {
+        "charge_w": 0,
+        "discharge_w": 0,
+        "battery_idle_w": 45,
+        "net_w": 545,
+        "battery_kwh": 4.9875
+      }
+    },
+    {
+      "name": "unusable-solar-surplus-is-not-an-active-branch",
+      "stored_kwh": 5,
+      "hours": 0.25,
+      "pv_w": 520,
+      "house_w": 500,
+      "charge_dc_w": 800,
+      "discharge_dc_w": 0,
+      "expected": {
+        "charge_w": 1100,
+        "discharge_w": 0,
+        "battery_idle_w": 0,
+        "net_w": 1080,
+        "battery_kwh": 5.18
+      }
+    }
+  ],
+  "charge_inverse": [
+    {
+      "name": "grid-only",
+      "ac_w": 1100,
+      "pv_w": 0,
+      "house_w": 500,
+      "expected_dc_w": 800
+    },
+    {
+      "name": "solar-only",
+      "ac_w": 1000,
+      "pv_w": 2500,
+      "house_w": 500,
+      "expected_dc_w": 855
+    },
+    {
+      "name": "mixed-source",
+      "ac_w": 3100,
+      "pv_w": 2500,
+      "house_w": 500,
+      "expected_dc_w": 2555
+    },
+    {
+      "name": "mixed-source-grid-activation-gap",
+      "ac_w": 2050,
+      "pv_w": 2500,
+      "house_w": 500,
+      "expected_dc_w": 1755
+    },
+    {
+      "name": "mixed-source-grid-activated",
+      "ac_w": 2300,
+      "pv_w": 2500,
+      "house_w": 500,
+      "expected_dc_w": 1915
+    },
+    {
+      "name": "below-grid-zero-crossing",
+      "ac_w": 100,
+      "pv_w": 0,
+      "house_w": 500,
+      "expected_dc_w": 0
+    },
+    {
+      "name": "unusable-solar-does-not-consume-ac-budget",
+      "ac_w": 1100,
+      "pv_w": 520,
+      "house_w": 500,
+      "expected_dc_w": 800
+    }
+  ],
+  "projection": [
+    {
+      "name": "terminal-charge-rating",
+      "stored_kwh": 5,
+      "hours": 0.25,
+      "charge_w": 10000,
+      "discharge_w": 0,
+      "pv_w": 0,
+      "house_w": 500,
+      "expected": {
+        "charge_w": 5100,
+        "discharge_w": 0,
+        "charge_dc_w": 4000,
+        "discharge_dc_w": 0,
+        "battery_idle_w": 0,
+        "battery_kwh": 5.9
+      }
+    },
+    {
+      "name": "terminal-discharge-rating",
+      "stored_kwh": 5,
+      "hours": 0.25,
+      "charge_w": 0,
+      "discharge_w": 10000,
+      "pv_w": 0,
+      "house_w": 500,
+      "expected": {
+        "charge_w": 0,
+        "discharge_w": 3675,
+        "charge_dc_w": 0,
+        "discharge_dc_w": 5000,
+        "battery_idle_w": 0,
+        "battery_kwh": 3.4375
+      }
+    },
+    {
+      "name": "stored-ceiling",
+      "stored_kwh": 8.9,
+      "hours": 0.25,
+      "charge_w": 10000,
+      "discharge_w": 0,
+      "pv_w": 0,
+      "house_w": 500,
+      "expected": {
+        "charge_w": 655.5555555555555,
+        "discharge_w": 0,
+        "charge_dc_w": 444.44444444444446,
+        "discharge_dc_w": 0,
+        "battery_idle_w": 0,
+        "battery_kwh": 9
+      }
+    },
+    {
+      "name": "stored-floor",
+      "stored_kwh": 1.1,
+      "hours": 0.25,
+      "charge_w": 0,
+      "discharge_w": 10000,
+      "pv_w": 0,
+      "house_w": 500,
+      "expected": {
+        "charge_w": 0,
+        "discharge_w": 165,
+        "charge_dc_w": 0,
+        "discharge_dc_w": 320,
+        "battery_idle_w": 0,
+        "battery_kwh": 1
+      }
+    },
+    {
+      "name": "simultaneous-flow-below-storage-floor",
+      "stored_kwh": 0,
+      "hours": 0.25,
+      "charge_w": 10000,
+      "discharge_w": 10000,
+      "pv_w": 0,
+      "house_w": 500,
+      "expected": {
+        "charge_w": 5100,
+        "discharge_w": 2085,
+        "charge_dc_w": 4000,
+        "discharge_dc_w": 2880,
+        "battery_idle_w": 0,
+        "battery_kwh": 0
+      }
+    }
+  ]
+}

@@ -8,6 +8,7 @@ from __future__ import annotations
 from . import execution_replan as execution_evidence
 
 import asyncio
+from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -20,7 +21,7 @@ from .command_transport import CommandNotSent
 from . import home_runtime as rt
 from .home_host import HomeHost, HostPorts, DispatchRejected
 from .battery_native_adapter import SigenAdapter
-from .battery_conversion import CONVERSION_EVIDENCE_MS, battery_efficiencies, conversion_model, windows_from_statistics
+from .battery_conversion import CONVERSION_EVIDENCE_MS, Conversion, planning_physics, conversion_model, windows_from_statistics
 from .battery_physical import ExecutionConditions, BatteryOperation, ContextIdentity, Permissions, BatteryPlant
 from . import plan_execution as execution
 from .runtime_json import Records, runtime_digest as digest
@@ -87,9 +88,22 @@ def v1_supply_scope(plan, slot):
 
 def plan_contract(plan):
     """Read this plan's battery reference without granting command authority."""
+    if plan.get('schema_version', 0) >= 11:
+        if plan['battery_execution'].get('schema') != execution.SCHEMA_V3:
+            raise ValueError('Refined battery planning requires an execution v3 reference')
+        battery=plan.get('battery')
+        if not isinstance(battery,dict):
+            raise ValueError('Refined battery physical model is missing')
+        Conversion.read(battery.get('conversion'))
+        if any(type(battery.get(key)) not in (int,float) or not 0 < battery[key] <= 1
+               for key in ('charge_efficiency','discharge_efficiency')):
+            raise ValueError('Refined battery terminal/stored ratios are missing')
     contract = execution.read_contract(plan['battery_execution'])
     if contract.plan_id != plan.get('plan_id'):
         raise ValueError('Battery execution belongs to another plan')
+    if plan.get('schema_version', 0) >= 11 and contract.storage != execution.StorageRatios(
+            battery['charge_efficiency'], battery['discharge_efficiency']):
+        raise ValueError('Battery execution storage basis differs from its physical model')
     return contract
 
 
@@ -116,7 +130,7 @@ class BatteryRuntime:
         self.physical = physical
         self.profiler=ResourceProfiler()
         self.host=None;self.adapter=None;self._grant=None;self._identity=None
-        self._lock=asyncio.Lock();self._observe_lock=asyncio.Lock();self._closed=False;self._closing=False
+        self._lock=asyncio.Lock();self._observe_lock=asyncio.Lock();self._model_lock=asyncio.Lock();self._closed=False;self._closing=False
         self._options=None;self._devices=[];self._model=None;self._fits={};self._model_sources=None
         self._model_at=0;self._surface=None;self._source_cut=None;self._seeded=False
         self._mode_revision=0;self._mode=None;self._capture_revision=0;self._last_capture=None
@@ -357,8 +371,26 @@ class BatteryRuntime:
         value['display'] = battery_status_text(value)
         return value
 
-    def efficiencies(self):
-        """Measured AC-to-stored efficiencies for planning; None before a loss model.
+    async def _capture_loss_model(self, options, devices):
+        """One model owner serves planning capture and controller refresh."""
+        source=source_revision(options,devices)
+        async with self._model_lock:
+            if self._model is None or source!=self._model_sources or self.now()-self._model_at>=3600000:
+                series=await self.coordinator.async_battery_loss_statistics(options)
+                at=self.now()
+                windows=windows_from_statistics(series,source_revision=source,unit_scale=1,end_ms=at)
+                model,fits=conversion_model(windows,charge_efficiency=options['battery_charge_efficiency'],
+                    discharge_efficiency=options['battery_discharge_efficiency'],source_revision=source)
+                self._model,self._fits,self._model_sources,self._model_at=model,fits,source,at
+
+    async def async_planning_physics(self, options):
+        """Capture physical evidence without requiring a plan or actuator write."""
+        devices=await self.coordinator.async_battery_planned_devices()
+        await self._capture_loss_model(options,devices)
+        return deepcopy(self.planning_physics())
+
+    def planning_physics(self):
+        """Full conversion model and terminal/stored ratios for every projection.
 
         Refreshed with the hourly loss model from the same evidence period.
         """
@@ -366,12 +398,12 @@ class BatteryRuntime:
             return None
         account=self.host.state.execution.account if self.host else None
         key=(self._model.revision,self._model_at,account is not None)
-        if getattr(self,'_efficiency_key',None)!=key:
+        if getattr(self,'_physics_key',None)!=key:
             self._storage=(execution.storage_ratios(account,self._model_at-CONVERSION_EVIDENCE_MS,self._model_at)
                            if account is not None else {})
-            self._efficiencies=battery_efficiencies(self._model,self._fits,self._storage)
-            self._efficiency_key=key
-        return self._efficiencies
+            self._planning_physics=planning_physics(self._model,self._storage)
+            self._physics_key=key
+        return self._planning_physics
 
     def charge_target_outcomes(self,window_ms):
         """Measured charge targets due within the window: [(deadline_ms, shortfall_mwh)].
@@ -666,7 +698,6 @@ class BatteryRuntime:
         if battery_measurement_errors(options):
             raise BatteryMeasurementConfigurationError(options)
         self._devices=await self.coordinator.async_battery_planned_devices()
-        source=source_revision(options,self._devices)
         read=self.coordinator.ports.battery_report
         reports={e:read(e) for e in self._control_entities()}
         self._surface=native_surface(options,reports)
@@ -677,12 +708,7 @@ class BatteryRuntime:
             raise ValueError('Sigen PV First modes are not configured on this control entity')
         ratings=resolve_battery_quantities(options,read)
         self._ratings=ratings
-        if self._model is None or source!=self._model_sources or self.now()-self._model_at>=3600000:
-            series=await self.coordinator.async_battery_loss_statistics(options)
-            windows=windows_from_statistics(series,source_revision=source,unit_scale=1,end_ms=self.now())
-            self._model,self._fits=conversion_model(windows,charge_efficiency=options['battery_charge_efficiency'],
-                discharge_efficiency=options['battery_discharge_efficiency'],source_revision=source)
-            self._model_sources=source;self._model_at=self.now()
+        await self._capture_loss_model(options,self._devices)
         # Statistics and membership reads may cross a quarter or plan replacement.
         # Select the current captured slot after those awaits, preserving its timestamp.
         plan,slot=self.coordinator.binding_plan_for('battery',options)
@@ -732,8 +758,9 @@ class BatteryRuntime:
             contract.model_revision,'pv-first-dc-v2',catalog_revision)
         permissions=Permissions(True,True,True,
             contract.export_reserve_mwh/1e6,True,0,contract.model_revision)
+        physical=self.planning_physics()
         plant=BatteryPlant(ratings['battery_min_soc']*capacity,capacity,cc,dc,
-            options['battery_charge_efficiency'],options['battery_discharge_efficiency'],
+            physical['charge_efficiency'],physical['discharge_efficiency'],
             self.coordinator.house_import_limit_w(),plan['grid']['export_limit_w'],
             'discharged_storage',0,self._model)
         cut=contract.intervals[0].start_ms

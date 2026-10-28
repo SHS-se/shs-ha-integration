@@ -140,18 +140,32 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_planning_efficiencies_come_from_the_loss_model_and_journal(self):
-        # User requirement, 26 October 2026: efficiency is measured, not assumed.
+    async def test_planning_model_preserves_the_loss_curves_and_journal_storage_ratios(self):
         r = Rig()
         self.addAsyncCleanup(r.runtime.close)
         await r.start()
-        result = r.runtime.efficiencies()
+        result = r.runtime.planning_physics()
         storage = r.runtime.snapshot()['storage_evidence']
         self.assertEqual(set(storage), {'charge', 'discharge'})
         factor = lambda d: storage[d]['ratio'] if storage[d]['state'] == 'measured' else 1.0
-        self.assertEqual(result['charge_efficiency'], round(r.runtime._model.grid_charge.gain * factor('charge'), 4))
-        self.assertEqual(result['discharge_efficiency'], round(r.runtime._model.discharge.gain * factor('discharge'), 4))
-        self.assertIs(r.runtime.efficiencies(), result)
+        self.assertEqual(result['charge_efficiency'], factor('charge'))
+        self.assertEqual(result['discharge_efficiency'], factor('discharge'))
+        self.assertEqual(result['conversion'], r.runtime._model.wire())
+        self.assertIs(r.runtime.planning_physics(), result)
+
+    async def test_cold_planning_capture_uses_the_model_owner_without_plan_or_commands(self):
+        r = Rig()
+        self.addAsyncCleanup(r.runtime.close)
+        r.options['device_modes']['$battery']='monitoring'
+        r.plan = None
+        model = await r.runtime.async_planning_physics(r.options)
+        self.assertEqual(model['conversion'], r.runtime._model.wire())
+        self.assertEqual((model['charge_efficiency'], model['discharge_efficiency']), (1, 1))
+        self.assertEqual(r.calls, [])
+        self.assertIsNone(r.runtime.host)
+        model['conversion']['discharge']['gain']=.1
+        later=await r.runtime.async_planning_physics(r.options)
+        self.assertEqual(later['conversion'],r.runtime._model.wire())
 
     async def test_a_missed_charge_target_is_measured_for_input_accuracy(self):
         # User requirement, 19 October 2026: a banner only asks for manual action.

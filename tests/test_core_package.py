@@ -48,12 +48,32 @@ assert 'homeassistant' not in sys.modules
 assert 'home_runtime' not in sys.modules
 assert type(snapshot.session).__module__ == 'shs_core.home_runtime'
 digest=lambda value:hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
-print(json.dumps({'session':digest(encode_value(snapshot.session)), 'feedback':digest(feedback(snapshot.session.account,900000))}))
+# Preserve the pre-extraction bytes of this legacy physical system after the
+# explicit v3 representation migration. Assert the historical unit storage
+# law and absent installation demand before removing only those new fields;
+# v3 physical conservation/round trips have their own independent tests.
+def legacy_record(value):
+    if isinstance(value,list):return [legacy_record(row) for row in value]
+    if not isinstance(value,dict):return value
+    row={key:legacy_record(item) for key,item in value.items()}
+    if row.get('type')=='ReferenceInterval':
+        assert row.pop('installation_mwh')==0
+    if row.get('type')=='ExecutionContract':
+        assert row.pop('wire_schema')=='battery-plan-execution-v1'
+        assert row.pop('storage')=={'type':'StorageRatios','charge_efficiency':1.0,'discharge_efficiency':1.0}
+    return row
+print(json.dumps({'session':digest(legacy_record(encode_value(snapshot.session))), 'feedback':digest(feedback(snapshot.session.account,900000))}))
 ''', str(tmp)], cwd=tmp, check=True, capture_output=True, text=True)
             self.assertEqual(json.loads(result.stdout), {k:baseline[k] for k in ('session','feedback')})
         replay = subprocess.run([sys.executable, str(ROOT/'scripts/replay-home-runtime.py'),
             str(ROOT/'tests/fixtures/home-runtime-crash-recovery.json')], check=True, capture_output=True, text=True)
-        self.assertEqual(digest(json.loads(replay.stdout)), baseline['crash_replay'])
+        replayed = json.loads(replay.stdout)
+        # The new checkpoint version records the added v3 physical terms;
+        # this legacy crash trace has no battery reference to change. Keep
+        # its historical state/effects hash after projecting that version tag.
+        self.assertEqual(replayed['final_checkpoint']['schema_version'], 12)
+        replayed['final_checkpoint']['schema_version'] = 11
+        self.assertEqual(digest(replayed), baseline['crash_replay'])
 
     def test_packaged_controllers_execute_through_ports_without_ha(self):
         with tempfile.TemporaryDirectory() as tmp:

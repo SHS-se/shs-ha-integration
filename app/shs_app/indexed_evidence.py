@@ -44,7 +44,7 @@ def columns(name):
 
 class EvidenceDatabase:
     OPERATIONS = ('row','scan','at_or_before','lookup','meter_neighbours','meter_energy',
-                  'bindings','objective_catalog','objective_history','late_evidence')
+                  'bindings','objective_catalog','objective_history','late_evidence','storage_regimes')
     def __init__(self,path):
         self.path=path
         self.reader=ContextVar("evidence_reader",default=None)
@@ -284,6 +284,20 @@ class IndexedMeters(ex.MeterIndex):
 class AccountEvidence:
     def __init__(self,database,rows):self.database,self.rows=database,rows
 
+    def storage_regimes(self):
+        """Read only compact calibration terms, without hydrating old plans."""
+        count = min(len(self.rows['admissions']), self.database.counts['admissions'])
+        def read(db):
+            return db.execute('''SELECT at_ms,
+                coalesce(json_extract(payload,'$.contract.storage.charge_efficiency'),1.0),
+                coalesce(json_extract(payload,'$.contract.storage.discharge_efficiency'),1.0)
+                FROM admissions WHERE ordinal<? ORDER BY ordinal''', (count,)).fetchall()
+        # Existing persisted v1/v2 records used a unit terminal/storage law.
+        # New v3 wire records are strictly parsed before they reach this table.
+        rows = self.database.query(read, name='storage_regimes')
+        return [(at, ex.StorageRatios(charge, discharge)) for at, charge, discharge in rows] + [
+            (row.at_ms, row.contract.storage) for row in self.rows['admissions'][count:]]
+
     def build(self,base):
         account=object.__new__(ex.Account)
         account.__dict__.update(base.__dict__)
@@ -305,6 +319,7 @@ class AccountEvidence:
         evidence=AccountEvidence(self.database,rows)
         result=evidence.build(account)
         result.__dict__.update(changes)
+        ex._carry_storage_cache(account,result,changes)
         if 'meters' in changes:
             row=changes['meters'][-1]
             result.__dict__['_meter_bindings']={**account._meter_bindings,row.stream:(row.boundary,row.direction,row.physical_id)}

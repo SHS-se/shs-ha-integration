@@ -133,8 +133,10 @@ class BatteryOperation:
 class BatteryPlant:
     cutoff_kwh: float
     capacity_kwh: float
+    # Hardware/register capability at the battery-terminal DC boundary.
     charge_max_w: float
     discharge_max_w: float
+    # Terminal DC <-> stored energy only; AC losses live in conversion.
     charge_efficiency: float
     discharge_efficiency: float
     import_limit_w: float

@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 import unittest
 sys.path.append(str(Path(__file__).parents[1]/'custom_components'/'shs_energy'))
-from shs_core.battery_conversion import Curve, Conversion, LossWindow, battery_efficiencies, fit_branch, conversion_model, windows_from_statistics
+from shs_core.battery_conversion import Curve, Conversion, LossWindow, planning_physics, fit_branch, conversion_model, windows_from_statistics
 
 class ConversionTests(unittest.TestCase):
     def test_tiny_commands_cannot_erase_installation_overhead(self):
@@ -90,18 +90,18 @@ class ConversionTests(unittest.TestCase):
         self.assertAlmostEqual(model.discharge.gain,.9)
         self.assertEqual(fits['idle']['windows'],2000)
 
-    def test_planning_efficiency_joins_measured_conversion_and_storage(self):
-        # The planner gets the measured energy ratio, including overhead at
-        # the powers used, not a fitted gain that leaves overhead out.
+    def test_planning_receives_conversion_and_storage_as_separate_boundaries(self):
+        # User requirement, 28 October: live planning and simulation use the
+        # refined installation curves rather than aggregate AC percentages.
         steady=[LossWindow(i*300000,(i+1)*300000,'discharge',x/12,(.976*x-139)/12,'s',(.024*x+139)/12) for i,x in enumerate(range(600,3600,300))]
         model,fits=conversion_model(steady,charge_efficiency=.95,discharge_efficiency=.95,source_revision='s')
         self.assertEqual(fits['discharge']['model_source'],'measured')
         storage={'charge':{'state':'measured','ratio':.988},'discharge':{'state':'measured','ratio':.968}}
-        result=battery_efficiencies(model,fits,storage)
-        self.assertEqual(result['discharge_efficiency'],round(fits['discharge']['effective_energy_ratio']*.968,4))
-        self.assertLess(result['discharge_efficiency'],model.discharge.gain*.968)
-        self.assertEqual(result['charge_efficiency'],round(.95*.988,4))
-        self.assertEqual(result['conversion'],{'charge':'configured','discharge':'measured'})
-        self.assertEqual(result['storage'],{'charge':'measured','discharge':'measured'})
-        unmeasured=battery_efficiencies(model,fits,{})
-        self.assertEqual(unmeasured['storage'],{'charge':'unmeasured','discharge':'unmeasured'})
+        result=planning_physics(model,storage)
+        self.assertEqual(result['discharge_efficiency'],.968)
+        self.assertEqual(result['charge_efficiency'],.988)
+        self.assertEqual(result['conversion'],model.wire())
+        unmeasured=planning_physics(model,{})
+        self.assertEqual(unmeasured['charge_efficiency'],1)
+        self.assertEqual(unmeasured['discharge_efficiency'],1)
+        self.assertEqual(unmeasured['conversion'],model.wire())

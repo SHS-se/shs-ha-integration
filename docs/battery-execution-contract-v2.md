@@ -1,4 +1,4 @@
-# Battery execution contract v2
+# Battery execution contracts v2 and v3
 
 User requirement, 17 October 2026 (evening). The planner states each interval's
 battery mode and the exact demand the battery may cover. HA applies that law to
@@ -7,15 +7,22 @@ the same instruction it sends to HA.
 
 ## Versioning
 
-- HA sends snapshot schema 10 and accepts plan schema 10. For a schema-10
-  snapshot the planner returns plan `schema_version: 10` with
-  `battery_execution.schema = "battery-plan-execution-v2"`.
-- For schema-9 snapshots the planner keeps returning v1. Its `follows_demand`
-  is true only when the published discharge ceiling covers the served residual
-  demand, so an old client caps a partial allocation instead of draining.
-- HA reads v1 and v2 into the same domain. A v1 interval executes as it always
-  meant: `follows_demand` means follow demand, otherwise a fixed figure with no
-  import target, over the v1 `battery_supply_scope`.
+- HA sends snapshot schema 11. A schema-11 battery plan requires
+  `battery_execution.schema = "battery-plan-execution-v3"` and the full
+  physical model in `battery.conversion`; no old aggregate efficiency model
+  is inferred when that record is missing.
+- V3 retains the v2 demand and stated instructions below. Its required
+  `storage` object contains `charge_efficiency` and `discharge_efficiency`,
+  strictly terminal DC/stored-energy ratios. Every interval adds required
+  `installation_mwh` so inverter demand is distinct from house consumption.
+- Electrical conservation is PV + import + AC discharge = house load -
+  unserved + AC charge + export + curtailment + installation + rounding.
+  `model_revision` identifies the conversion curves and both storage ratios.
+- Durable historical v1/v2 records retain their original meaning. A v1 interval's
+  `follows_demand` means follow demand, otherwise a fixed figure with no import
+  target, over the v1 `battery_supply_scope`. Historical records lacking an
+  installation term retain zero for that term; this does not supply a missing
+  model for a new live schema-11 plan.
 
 ## Demand (contract field `demand`)
 
