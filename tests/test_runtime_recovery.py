@@ -21,6 +21,55 @@ from shs_core.home_runtime_checkpoint import encode_checkpoint, decode_checkpoin
 
 
 class RetryPreparationTests(unittest.TestCase):
+    def test_accepted_readback_drift_reconciles_after_effect_bound(self):
+        for superseded in (False, True):
+            with self.subTest(superseded=superseded):
+                h = Harness()
+                h.observe(target=controls("charge", 1200))
+                h.request(target=controls("charge", 1600))
+                h.propose(steps=(Step("charge", 1600, controls("charge", 1200),
+                    (Guard("ready", 1, 1),), Envelope(1600, 0), 20, 100,
+                    True, "synthetic-absolute-v1"),))
+                sent = h.durable()
+                issued = h.group().attempts[0]
+                h.event(TransportResult("battery", sent.attempt_id, "accepted", "ha_service_completed"))
+                if superseded:
+                    h.request(target=controls("charge", 0), revision=2)
+                # An early, mismatching report must not erase an issued effect.
+                h.now = issued.latest_effect_ms - 1
+                h.observe(target=controls("charge", 1599))
+                self.assertIn(issued.id, [a.id for a in h.group().attempts])
+                h.event(Tick(), issued.latest_effect_ms)
+                self.assertIn(issued.id, [a.id for a in h.group().attempts])
+                # A newly received post-bound report is the current native state.
+                h.observe(target=controls("charge", 1599))
+                self.assertNotIn(issued.id, [a.id for a in h.group().attempts])
+                self.assertIsNone(h.group().plan)
+                transition = next(e for e in h.effects if isinstance(e, NeedTransition))
+                self.assertEqual(transition.command_controls, controls("charge", 1599))
+                h.propose(); h.finish()
+                self.assertEqual(h.group().status, "adopted")
+
+    def test_accepted_drift_preserves_a_later_unresolved_issued_effect(self):
+        h = Harness()
+        h.observe(target=controls("charge", 1200))
+        def proposal(before, after):
+            return Step("charge", after, controls("charge", before),
+                (Guard("ready", 1, 1),), Envelope(max(before, after), 0),
+                20, 100, True, "synthetic-absolute-v1")
+        h.request(target=controls("charge", 1600))
+        h.propose(steps=(proposal(1200, 1600),)); first = h.durable()
+        first_bound = h.group().attempts[0].latest_effect_ms
+        h.event(TransportResult("battery", first.attempt_id, "accepted", "ha_service_completed"))
+        h.now += 10
+        h.request(target=controls("charge", 1700), revision=2)
+        h.propose(steps=(proposal(1600, 1700),)); second = h.durable()
+        h.now = first_bound
+        h.observe(target=controls("charge", 1599))
+        self.assertNotIn(first.attempt_id, [a.id for a in h.group().attempts])
+        self.assertIn(second.attempt_id, [a.id for a in h.group().attempts])
+        self.assertEqual(reservation(h.group(), h.now), Envelope(1700, 0))
+
     def test_post_bound_readback_cancels_unsent_retry_with_invalidated_or_advanced_plan(self):
         for matching in (False, True):
             with self.subTest(matching=matching):
@@ -179,6 +228,34 @@ class TransitionWorkerTests(unittest.TestCase):
 
 
 class ReliefTests(unittest.TestCase):
+    def test_accepted_ceiling_drift_can_stop_charging_under_overload(self):
+        h = Harness()
+        before = controls("charge", 1200)
+        h.observe(target=before)
+        h.request(target=controls("charge", 1600))
+        h.propose(steps=(Step("charge", 1600, before, (Guard("ready", 1, 1),),
+            Envelope(1600, 0), 20, 100, True, "synthetic-absolute-v1"),))
+        sent = h.durable(); bound = h.group().attempts[0].latest_effect_ms
+        h.event(TransportResult("battery", sent.attempt_id, "accepted", "ha_service_completed"))
+        h.request(target=controls("charge", 0), revision=2)
+        h.event(FrameObserved(replace(h.state.frame, revision=2, external=Envelope(9000, 0))))
+        h.now = bound
+        before, after = controls("charge", 1599), controls("charge", 0)
+        h.observe(target=before)
+        rule = ReliefRule("synthetic-stop-after-drift", before, after,
+            Envelope(1599, 0), Envelope(1599, 0), Envelope(0, 0),
+            (Guard("ready", 1, 1),), "synthetic-commissioned-stop")
+        step = Step("charge", 0, before, rule.native_guards, rule.during,
+            20, 100, True, rule.evidence, rule.id)
+        g = h.group(); job = g.transition_work
+        h.event(Proposed("battery", g.generation, g.desired.id, g.desired.revision,
+            g.observation.revision, g.spec.adapter_revision, (step,), job.token, (rule,)))
+        sent = h.durable()
+        self.assertEqual((sent.key, sent.value), ("charge", 0))
+        self.assertEqual(reservation(h.group(), h.now), Envelope(1599, 0))
+        h.settle(target=after)
+        self.assertEqual(reservation(h.group(), h.now), Envelope(0, 0))
+
     def relief(self, groups=("battery",), *, external=8000):
         h = Harness(groups)
         before, after = controls("charge", 4000), controls("charge")
