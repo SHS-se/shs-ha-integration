@@ -56,6 +56,17 @@ class BatterySupplyTests(unittest.TestCase):
         result = self.measure(SupplyScope('selected', True, ('ev', 'pool')), planned_readings={})
         self.assertEqual(result.house_supply_bound_w, 2000)
 
+    def test_issued_excluded_load_cannot_look_like_new_eligible_base(self):
+        scope = SupplyScope('selected',True,('pool',))
+        for house, meter in ((600,0),(7400,0),(7400,6800)):
+            result = self.measure(scope,house=replace(self.house,watts=house),pv=replace(self.pv,watts=0),
+                planned_readings={'ev':replace(self.devices['ev'],watts=meter)},excluded_bounds={'ev':6800})
+            self.assertLessEqual(result.eligible_gross_w,600)
+        # A native reservation never becomes permission to power that load.
+        selected = self.measure(SupplyScope('selected',False,('ev',)),
+            planned_readings={'ev':replace(self.devices['ev'],watts=0)},excluded_bounds={'ev':6800})
+        self.assertEqual(selected.eligible_gross_w,0)
+
     def test_unavailable_inputs_never_substitute_forecasts_or_ratings(self):
         scope=SupplyScope('selected',True)
         for changes in [dict(house=None),dict(pv=None),dict(planned_readings={}),dict(pv=replace(self.pv,boundary='dc')),

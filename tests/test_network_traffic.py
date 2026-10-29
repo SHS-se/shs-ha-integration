@@ -103,13 +103,13 @@ class ApiTrafficTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_acceptance_returns_receipt_without_waiting_or_resending_capture(self):
         client = self.api["ShsApiClient"](None, "https://example", "secret")
-        receipt = {"job_id": "job", "state": "pending", "pending": True, "retry_after_ms": 1000, "actual_slots_accepted": 1}
+        receipt = {"job_id": "job", "snapshot_id": "frozen", "state": "pending", "pending": True, "retry_after_ms": 1000, "actual_slots_accepted": 1}
         client._request = AsyncMock(return_value=receipt)
         self.assertEqual(await client.push_optimisation([{"start_ts": "quarter"}],
             {"snapshot_id": "frozen"}, replan_request_id="manual"), receipt)
         client._request.assert_awaited_once()
         body = client._request.call_args.kwargs["json_body"]
-        self.assertEqual(body["planning_exchange_version"], 2)
+        self.assertEqual(body["planning_exchange_version"], 3)
         self.assertEqual(body["replan_request_id"], "manual")
         self.assertEqual(body["snapshot"], {"snapshot_id": "frozen"})
 
@@ -118,7 +118,7 @@ class ApiTrafficTests(unittest.IsolatedAsyncioTestCase):
         client._request = AsyncMock(return_value={"job_id": "job", "state": "superseded", "pending": False})
         await client.planning_status("job")
         self.assertEqual(client._request.call_args.kwargs["json_body"], {
-            "api_version": 1, "planning_exchange_version": 2, "job_id": "job",
+            "api_version": 1, "planning_exchange_version": 3, "job_id": "job",
         })
         client._request.return_value = {"job_id": "different", "state": "superseded", "pending": False}
         with self.assertRaisesRegex(self.api["ShsApiError"], "another job"):
@@ -129,7 +129,7 @@ class ApiTrafficTests(unittest.IsolatedAsyncioTestCase):
         client._request = AsyncMock(return_value={"job_id": "job", "snapshot_id": "snapshot", "state": "pending", "pending": True, "retry_after_ms": 1000})
         await client.planning_submission_status("snapshot")
         self.assertEqual(client._request.call_args.kwargs["json_body"], {
-            "api_version": 1, "planning_exchange_version": 2, "snapshot_id": "snapshot",
+            "api_version": 1, "planning_exchange_version": 3, "snapshot_id": "snapshot",
         })
         client._request.return_value["snapshot_id"] = "different"
         with self.assertRaisesRegex(self.api["ShsApiError"], "another job"):

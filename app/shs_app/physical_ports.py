@@ -24,7 +24,9 @@ class RemoteDevices:
                  'options':digest(native_options(self.household.resolved_options()))}
         self.context = await self.gateway.call('policy', {'value':value})
         self.policy = value
-        return await self.gateway.call('synchronize', {'models':models})
+        result = await self.gateway.call('synchronize', {'models':models})
+        await self.household.async_capacity_recovered(result.pop('capacity_recoveries'))
+        return result
 
     async def ownership(self):
         return await self.gateway.call('ownership', {})
@@ -50,8 +52,9 @@ class RemoteDevices:
 
 
 class RemoteBattery:
-    def __init__(self, gateway, runtime, now):
+    def __init__(self, gateway, runtime, now, *, context):
         self.gateway, self.runtime, self.now = gateway, runtime, now
+        self.context = context
         self.grant = None
         self.routes = {}
         self.enabled = False
@@ -71,6 +74,15 @@ class RemoteBattery:
 
     async def import_capacity(self):
         return await self.gateway.call('source', {'operation':'battery_capacity', 'body':{}})
+
+    async def publish_target(self, request):
+        if not self.is_current(self.grant,self.runtime.identity()):
+            raise AdmissionPending('Battery writer is not current')
+        context = self.context()
+        if context is None:
+            raise AdmissionPending('Battery policy has not been admitted')
+        await self.gateway.call('battery_target',{'request':encode_value(request),
+            'grant':encode_value(self.grant),'context':context})
 
     async def publish_cover(self, offer):
         """Publish the capped instruction's promise to the gateway's final admission."""
@@ -111,10 +123,13 @@ class RemoteBattery:
             if str(error) == GRANT_NOT_CURRENT:
                 self.grant = None
                 self.routes.clear()
+                raise AdmissionPending(str(error)) from error
             raise
         proposal = decode_value(result['proposal'], rt.Proposed)
         key = (proposal.group_id, proposal.generation, proposal.request_id, proposal.request_revision)
-        self.routes[key] = [result['route_id'], proposal, 0]
+        previous = self.routes.get(key)
+        if previous is None or proposal.token >= previous[1].token:
+            self.routes[key] = (result['route_id'], proposal)
         return proposal
 
     async def dispatch(self, effect, authorize):
@@ -123,12 +138,12 @@ class RemoteBattery:
         route = self.routes.get(key)
         if route is None:
             raise DispatchRejected('Battery transition was not admitted on this connection')
-        identity, proposal, index = route
-        if index >= len(proposal.steps) or (proposal.steps[index].key, proposal.steps[index].value) != (effect.key, effect.value):
+        identity, proposal = route
+        index = effect.step_index
+        if type(index) is not int or not 0 <= index < len(proposal.steps) or (proposal.steps[index].key, proposal.steps[index].value) != (effect.key, effect.value):
             raise DispatchRejected('Battery send differs from the next admitted step')
         result = await self.gateway.call('battery_step', {'route_id':identity, 'index':index, 'send':encode_value(effect)})
         if result['status'] == 'not_sent':
             raise DispatchRejected('HA rejected the battery step before dispatch')
         if result['status'] != 'service_returned':
             raise CommandUncertain('Battery step outcome is uncertain; observe before replanning')
-        route[2] += 1

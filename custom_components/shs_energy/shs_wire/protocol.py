@@ -4,13 +4,13 @@ Capabilities name exact message schemas, not optional fallback behaviours.
 Migration identities describe provenance and never participate in negotiation.
 """
 
-PROTOCOL = 3
+PROTOCOL = 4
 CAPABILITIES = frozenset({
-    'ordered-receipts-v1', 'native-devices-v1', 'native-battery-v1',
+    'ordered-receipts-v1', 'native-devices-v1', 'native-battery-v2',
     'source-queries-v1', 'entity-projection-v2', 'app-requests-v1',
     'app-configuration-v1', 'processed-receipt-retirement-v1',
     'gateway-notifications-v1',
-    'source-admission-v1',
+    'source-admission-v1', 'coordinated-capacity-v1',
 })
 
 
@@ -46,6 +46,8 @@ def admit(requirement, available):
     if (type(requirement['protocol']) is not int or type(available['protocol']) is not int
             or requirement['protocol'] != PROTOCOL or available['protocol'] != PROTOCOL):
         raise ValueError(f'SHS requires companion protocol {PROTOCOL}; update the app and companion')
-    missing = _capabilities(requirement['requires']) - _capabilities(available['capabilities'])
+    requested = _capabilities(requirement['requires'])
+    provided = _capabilities(available['capabilities'])
+    missing = requested - provided
     if missing:
         raise ValueError('Update the SHS companion; required capabilities are missing: ' + ', '.join(sorted(missing)))

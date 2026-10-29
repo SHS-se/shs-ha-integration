@@ -17,6 +17,9 @@ from .home_runtime_checkpoint import encode_checkpoint, restore_checkpoint, rest
 from .resource_profiling import ResourceProfiler
 
 
+from .gateway_journal import AdmissionPending, GatewayConflict
+
+
 class DispatchRejected(Exception):
     """The transport port rejected a write before calling its service."""
 
@@ -239,6 +242,8 @@ class HomeHost:
         except TimeoutError:
             return (runtime.TransitionFailed(effect.group_id, effect.token, "retryable",
                 "Battery command preparation timed out; it will be retried."),)
+        except (AdmissionPending, GatewayConflict) as error:
+            return (runtime.TransitionFailed(effect.group_id, effect.token, "retryable", str(error)[:2000]),)
         except Exception as error:
             reason=f"Transition failed: {type(error).__name__}: {error}"
             self.ports.report(effect.group_id, reason)

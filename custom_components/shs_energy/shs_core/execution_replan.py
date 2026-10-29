@@ -90,7 +90,8 @@ def observe(journal, owner, slot, condition, *, recovery_requires_replan=False):
         journal.get('recovery_configuration', {}).pop(owner, None)
         # A still-executable accepted request can resume directly. Work
         # suppressed by either absence or fault needs a replacement schedule.
-        if recovery_requires_replan or not requested(owner, slot):
+        unavailable = slot.get("device_commands", {}).get(owner, {}).get("type") == "unavailable"
+        if recovery_requires_replan or unavailable:
             pending[owner] = {'owner': owner, 'status': 'recovered',
                               'cause': 'execution_recovered', 'blocked_intervals': []}
             return True
@@ -140,10 +141,18 @@ def admitted(journal, changes):
 def failed(journal, changes):
     """Keep failed evidence for the next existing exchange, without a solve loop."""
     for change in changes:
-        # Recovery observed while the job ran must not resurrect old absence.
-        if change['status'] != 'recovered' and change['owner'] not in journal.get('owners', {}):
-            continue
-        journal.setdefault('pending', {}).setdefault(change['owner'], deepcopy(change))
+        current = journal.get('owners', {}).get(change['owner'])
+        if change['status'] == 'recovered':
+            if current is not None:
+                continue
+            latest = change
+        else:
+            # A failed older capture cannot resurrect its old cause/opportunity.
+            # Off-slot current evidence stays available but requests no work.
+            if current is None or not current['blocked_intervals']:
+                continue
+            latest = current
+        journal.setdefault('pending', {}).setdefault(change['owner'], deepcopy(latest))
     journal['retry_on_exchange'] = True
 
 

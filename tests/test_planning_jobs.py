@@ -36,7 +36,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         h._sync_optimisation_issue = Mock()
         h.async_report_runtime = AsyncMock()
         h.async_battery_inputs_refresh = AsyncMock()
-        h.client = SimpleNamespace(push_optimisation=AsyncMock(return_value={
+        h.client = SimpleNamespace(submit_optimisation=AsyncMock(return_value={
             'job_id': 'job', 'state': 'pending', 'pending': True, 'retry_after_ms': 1000,
             'actuals_accepted_until': self.rig.now.isoformat(),
         }), planning_status=AsyncMock(), planning_submission_status=AsyncMock(), acknowledge_optimisation_plan=AsyncMock(), report_replan_failure=AsyncMock())
@@ -76,7 +76,8 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
 
         self.rig.history.statistics.side_effect = statistics
         await self.h.async_optimisation_push(force_plan=True, replan_request_id='synthetic-manual')
-        actuals, snapshot = self.h.client.push_optimisation.call_args.args[:2]
+        body = self.h.client.submit_optimisation.call_args.args[0]
+        actuals, snapshot = body["actual_slots"], body["snapshot"]
         self.assertEqual(snapshot['snapshot_id'], 'snapshot')
         self.assertEqual([row['start'] for row in actuals],
                          [start.isoformat(), (start + timedelta(minutes=15)).isoformat()])
@@ -90,11 +91,11 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('pipeline:planning',self.failures())
         self.assertEqual(self.h.optimisation_plan,self.plan)
         self.assertTrue(self.h.operational_status['actionable'])
-        self.h.client.push_optimisation.return_value={}
+        self.h.client.submit_optimisation.return_value={}
         self.h._price_quarters=lambda *args:[{'start':self.rig.now.isoformat()}]
         await self.h.async_optimisation_push()
         self.assertIn('pipeline:planning',self.failures())
-        self.h.client.push_optimisation.return_value={'job_id':'replacement','state':'pending','pending':True,'retry_after_ms':1000}
+        self.h.client.submit_optimisation.return_value={'job_id':'replacement','state':'pending','pending':True,'retry_after_ms':1000}
         pending=await self.accept('corrected')
         self.assertIn('pipeline:planning',self.failures())
         self.h.client.planning_status.return_value=self.published('replacement')
@@ -108,12 +109,12 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         await self.h._poll_planning_job(pending)
         self.assertIn('pipeline:delivery',self.failures())
         self.h._price_quarters=lambda *args:[{'start':self.rig.now.isoformat()}]
-        self.h.client.push_optimisation.side_effect=ShsApiError('Upload refused')
+        self.h.client.submit_optimisation.side_effect=ShsApiError('Upload refused')
         await self.h.async_optimisation_push()
         self.assertIn('pipeline:upload',self.failures())
         self.assertIn('pipeline:delivery',self.failures())
-        self.h.client.push_optimisation.side_effect=None
-        self.h.client.push_optimisation.return_value={}
+        self.h.client.submit_optimisation.side_effect=None
+        self.h.client.submit_optimisation.return_value={}
         await self.h.async_optimisation_push()
         self.assertNotIn('pipeline:upload',self.failures())
         self.assertIn('pipeline:delivery',self.failures())
@@ -121,13 +122,14 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.h.client.planning_status.return_value={'state':'pending','retry_after_ms':1000}
         await self.h._poll_planning_job(pending)
         self.assertNotIn('pipeline:delivery',self.failures())
-        self.h.client.acknowledge_optimisation_plan.side_effect=ShsApiError('Acknowledgement failed')
+        self.h.client.acknowledge_optimisation_plan.side_effect=ShsApiError('Acknowledgement failed', retryable=True)
         self.h.client.planning_status.return_value=self.published()
         await self.h._poll_planning_job(pending)
         self.assertIn('pipeline:acknowledgement',self.failures())
         self.assertEqual(self.h.optimisation_plan,self.candidate)
         stored=await self.h._store.async_load()
         self.h.client.acknowledge_optimisation_plan.side_effect=None
+        self.rig.now += timedelta(seconds=6)
         await self.h._retry_pending_plan_ack(stored)
         self.assertNotIn('pipeline:acknowledgement',self.failures())
 
@@ -204,15 +206,15 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
     async def test_normal_exchange_does_not_recapture_accepted_work_and_keeps_settings_available(self):
         await self.accept()
         self.h._build_optimisation_snapshot.reset_mock()
-        self.h.client.push_optimisation.reset_mock()
-        self.h.client.push_optimisation.return_value = {}
+        self.h.client.submit_optimisation.reset_mock()
+        self.h.client.submit_optimisation.return_value = {}
         self.h._price_quarters = lambda *args: [{'start': self.rig.now.isoformat()}]
         await self.h.async_optimisation_push()
         self.h._build_optimisation_snapshot.assert_not_awaited()
-        self.assertIsNone(self.h.client.push_optimisation.call_args.args[1])
+        self.assertIsNone(self.h.client.submit_optimisation.call_args.args[0].get("snapshot"))
         self.assertFalse(self.h.configuration_busy)
         self.assertEqual((await self.h.async_cached_exchange_status())['planning_job'], {'job_id': 'job', 'state': 'pending'})
-        self.h.client.push_optimisation.return_value = {'job_id': 'new-job', 'state': 'pending', 'pending': True, 'retry_after_ms': 1000}
+        self.h.client.submit_optimisation.return_value = {'job_id': 'new-job', 'state': 'pending', 'pending': True, 'retry_after_ms': 1000}
         await self.h.async_optimisation_push(force_plan=True, replan_request_id='new-manual')
         self.h._build_optimisation_snapshot.assert_awaited_once()
         self.assertEqual(self.rig.records.saved['optimisation_pending_job']['job_id'], 'new-job')
@@ -231,13 +233,13 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
                 stored[key] = expected
                 await self.h._store.async_save(stored)
                 self.h._build_optimisation_snapshot.reset_mock()
-                self.h.client.push_optimisation.reset_mock()
-                self.h.client.push_optimisation.return_value = {}
+                self.h.client.submit_optimisation.reset_mock()
+                self.h.client.submit_optimisation.return_value = {}
                 self.h._price_quarters = lambda *args: [{'start': self.rig.now.isoformat()}]
                 await self.h.async_optimisation_push(force_plan=True,
                     replan_reason='Battery controller: execution_contract_required. Consider a manual replan.')
                 self.h._build_optimisation_snapshot.assert_not_awaited()
-                self.assertIsNone(self.h.client.push_optimisation.call_args.args[1])
+                self.assertIsNone(self.h.client.submit_optimisation.call_args.args[0].get("snapshot"))
                 self.assertEqual(self.rig.records.saved[key], expected)
 
     async def test_host_loop_restores_receipt_and_manual_answer_after_restart(self):
@@ -251,6 +253,10 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restarted._answered_replan_request_id, 'manual')
         self.assertFalse(await restarted.async_answer_replan('manual'))
         restarted.client.planning_status.return_value = self.published()
+        record = await restarted._store.async_load()
+        if record.get('optimisation_pending_job'):
+            record['optimisation_pending_job'].pop('retry_at', None)
+            await restarted._store.async_save(record)
         installed = asyncio.Event()
         restarted.async_update_listeners = installed.set
         task = asyncio.create_task(restarted.async_planning_delivery())
@@ -266,15 +272,15 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         async def delayed(job):
             entered.set()
             await release.wait()
-            raise ShsApiError('connection lost')
+            raise ShsApiError('connection lost', retryable=True)
         self.h.client.planning_status.side_effect = delayed
         task = asyncio.create_task(self.h._poll_planning_job(pending))
         await entered.wait()
         async with self.h._push_lock:
             self.assertFalse(task.done())
         release.set()
-        self.assertEqual(await task, 5)
-        self.assertEqual(self.rig.records.saved['optimisation_pending_job'], pending)
+        self.assertGreater(await task, 0)
+        self.assertEqual(self.rig.records.saved['optimisation_pending_job']['job_id'], pending['job_id'])
         self.assertEqual(self.h.optimisation_plan, self.plan)
         self.h.client.acknowledge_optimisation_plan.assert_not_awaited()
 
@@ -291,7 +297,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
             self.h.client.acknowledge_optimisation_plan.assert_not_awaited()
 
     async def test_lost_acceptance_reply_recovers_by_snapshot_and_then_polls_job_only(self):
-        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
+        self.h.client.submit_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
         await self.h.async_answer_replan('manual')
         pending = (await self.h._store.async_read())['optimisation_pending_submission']
         self.assertEqual(pending['snapshot_id'], 'snapshot')
@@ -315,10 +321,10 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.h.optimisation_plan, self.candidate)
         self.h.client.planning_submission_status.assert_awaited_once_with('snapshot')
         self.h.client.planning_status.assert_awaited_once_with('job')
-        self.h.client.push_optimisation.assert_awaited_once()
+        self.h.client.submit_optimisation.assert_awaited_once()
 
     async def test_restart_recovers_a_lost_acceptance_reply_without_resending_capture(self):
-        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
+        self.h.client.submit_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
         await self.h.async_answer_replan('manual')
         rig = Rig(now=self.rig.now, options=self.rig.options, stored=self.rig.records.saved)
         restarted = rig.household
@@ -332,33 +338,38 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         restarted.client.planning_submission_status.return_value = {
             **self.published(), 'snapshot_id': 'snapshot',
         }
+        record = await restarted._store.async_load()
+        if record.get('optimisation_pending_job'):
+            record['optimisation_pending_job'].pop('retry_at', None)
+            await restarted._store.async_save(record)
         installed = asyncio.Event()
         restarted.async_update_listeners = installed.set
         task = asyncio.create_task(restarted.async_planning_delivery())
         await asyncio.wait_for(installed.wait(), timeout=1)
         self.assertEqual(restarted.optimisation_plan, self.candidate)
         restarted.client.planning_submission_status.assert_awaited_once_with('snapshot')
-        restarted.client.push_optimisation.assert_awaited_once()
+        restarted.client.submit_optimisation.assert_awaited_once()
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await task
 
-    async def test_never_accepted_submission_is_terminal_and_reports_only_that_capture(self):
-        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
+    async def test_never_accepted_submission_retries_same_capture_without_manual_failure(self):
+        self.h.client.submit_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
         await self.h.async_answer_replan('manual')
         pending = (await self.h._store.async_read())['optimisation_pending_submission']
         self.h.client.planning_submission_status.side_effect = ShsApiError('not accepted', code='planning_job_not_found')
         await self.h._poll_planning_job(pending)
-        self.assertNotIn('optimisation_pending_submission', self.rig.records.saved)
+        self.assertIn('optimisation_pending_submission', self.rig.records.saved)
         self.assertEqual(self.h.optimisation_plan, self.plan)
-        self.h.client.report_replan_failure.assert_awaited_once_with('manual', 'reply lost')
+        self.h.client.report_replan_failure.assert_not_awaited()
+        self.assertEqual(self.h.client.submit_optimisation.await_count, 2)
 
     async def test_missing_submission_preserves_original_546_across_restart(self):
         original = ShsConnectionError(
             'energy-optimisation-ingest returned HTTP 546 without an SHS API envelope',
             code='upstream_transport_failure', request_id='upload-request', retryable=True,
         )
-        self.h.client.push_optimisation.side_effect = original
+        self.h.client.submit_optimisation.side_effect = original
         await self.h.async_answer_replan('manual')
         rig = Rig(now=self.rig.now, options=self.rig.options, stored=self.rig.records.saved)
         restarted = rig.household
@@ -370,16 +381,14 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         )
         await restarted._poll_planning_job(pending)
         self.assertEqual(restarted.last_optimisation_error, str(original))
-        delivery = {item['key']: item for item in restarted.attention_items}['pipeline:delivery']
-        self.assertEqual(delivery['detail'], str(original))
-        self.assertNotIn('optimisation_pending_submission', rig.records.saved)
-        restarted.client.report_replan_failure.assert_awaited_once_with('manual', str(original))
+        self.assertIn('optimisation_pending_submission', rig.records.saved)
+        restarted.client.report_replan_failure.assert_not_awaited()
         self.assertEqual(restarted.optimisation_plan, self.plan)
 
     async def test_upload_failure_without_snapshot_identity_keeps_original_error(self):
         self.h._build_optimisation_snapshot.return_value = {}
         original = ShsApiError('ingest returned HTTP 546', retryable=True)
-        self.h.client.push_optimisation.side_effect = original
+        self.h.client.submit_optimisation.side_effect = original
         await self.h.async_optimisation_push(force_plan=True)
         self.assertEqual(self.h.last_optimisation_error, str(original))
         self.assertNotIn('optimisation_pending_submission', self.rig.records.saved)
@@ -388,7 +397,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         accepted = await self.accept()
         self.h._build_optimisation_snapshot.return_value = {'snapshot_id': 'replacement'}
         error = ShsApiError('invalid snapshot (Committed owner removed: old-meter)', code='invalid_snapshot')
-        self.h.client.push_optimisation.side_effect = error
+        self.h.client.submit_optimisation.side_effect = error
         await self.h.async_answer_replan('manual')
         self.assertNotIn('optimisation_pending_submission', self.rig.records.saved)
         self.assertEqual(self.rig.records.saved['optimisation_pending_job'], accepted)
@@ -399,7 +408,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_forced_telemetry_only_exchange_retains_existing_accepted_job(self):
         accepted = await self.accept()
-        self.h.client.push_optimisation.return_value = {}
+        self.h.client.submit_optimisation.return_value = {}
         await self.h.async_optimisation_push(force_plan=True)
         self.assertEqual(self.rig.records.saved['optimisation_pending_job'], accepted)
         self.assertNotIn('optimisation_pending_submission', self.rig.records.saved)
@@ -410,13 +419,13 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
     async def test_lost_replacement_lookup_not_found_retains_existing_accepted_job(self):
         accepted = await self.accept()
         self.h._build_optimisation_snapshot.return_value = {'snapshot_id': 'new-snapshot'}
-        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
+        self.h.client.submit_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
         await self.h.async_optimisation_push(force_plan=True, replan_request_id='new-manual')
         submission = self.rig.records.saved['optimisation_pending_submission']
         self.assertEqual(self.rig.records.saved['optimisation_pending_job'], accepted)
         self.h.client.planning_submission_status.side_effect = ShsApiError('not accepted', code='planning_job_not_found')
         await self.h._poll_planning_job(submission)
-        self.assertNotIn('optimisation_pending_submission', self.rig.records.saved)
+        self.assertIn('optimisation_pending_submission', self.rig.records.saved)
         self.assertEqual(self.rig.records.saved['optimisation_pending_job'], accepted)
         self.h.client.planning_status.return_value = self.published()
         await self.h._poll_planning_job(accepted)
@@ -437,12 +446,12 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         pending = await self.accept()
         self.h.client.planning_status.side_effect = ShsApiError('job missing', code='planning_job_not_found')
         await self.h._poll_planning_job(pending)
-        self.h.client.push_optimisation.return_value = {}
+        self.h.client.submit_optimisation.return_value = {}
         self.h._price_quarters = lambda *args: [{'start': self.rig.now.isoformat()}]
         await self.h.async_optimisation_push()
         self.assertIn('pipeline:delivery', self.failures())
         self.assertEqual(self.h.optimisation_plan, self.plan)
-        self.h.client.push_optimisation.return_value = self.published('replacement')
+        self.h.client.submit_optimisation.return_value = self.published('replacement')
         await self.h.async_optimisation_push(force_plan=True, replan_request_id='replacement')
         self.assertNotIn('pipeline:delivery', self.failures())
         self.assertEqual(self.h.optimisation_plan, self.candidate)
@@ -459,7 +468,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_published_plan_survives_configuration_confirmation_failure(self):
         self.h._record_device_exchange.side_effect = ShsApiError('configuration unavailable')
-        self.h.client.push_optimisation.return_value = self.published()
+        self.h.client.submit_optimisation.return_value = self.published()
         await self.h.async_optimisation_push(force_plan=True)
         self.assertEqual(self.h.optimisation_plan, self.candidate)
         self.assertIn('pipeline:configuration', self.failures())
@@ -467,7 +476,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.h.client.acknowledge_optimisation_plan.call_args.args[1], 'accepted')
         self.h._record_device_exchange.side_effect = None
         self.h._price_quarters = lambda *args: [{'start': self.rig.now.isoformat()}]
-        self.h.client.push_optimisation.return_value = {}
+        self.h.client.submit_optimisation.return_value = {}
         await self.h.async_optimisation_push()
         self.assertNotIn('pipeline:configuration', self.failures())
 

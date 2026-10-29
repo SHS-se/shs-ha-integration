@@ -22,13 +22,14 @@ class WireTests(unittest.TestCase):
         released = offer('companion-1')
         for version in ('app-1', 'app-2', 'app-3'):
             admit(hello(version), released)
-        for value in (None, dict(hello('app'),protocol=2), dict(hello('app'),core_sha256='ignored')):
+        for value in (None, dict(hello('app'),protocol=2), dict(hello('app'),protocol=3), dict(hello('app'),core_sha256='ignored')):
             with self.assertRaises(ValueError):admit(value,released)
         with self.assertRaisesRegex(ValueError,'missing: new-feature-v1'):
             admit(dict(hello('app'),requires=['new-feature-v1']),released)
         with self.assertRaisesRegex(ValueError,'unique'):
             admit(dict(hello('app'),requires=['x','x']),released)
         with self.assertRaises(ValueError):admit(hello('app'),None)
+        with self.assertRaises(ValueError):admit(hello('app'),dict(released,protocol=3))
 
     def test_large_projection_is_atomic_ordered_and_checksummed(self):
         value = {'plan':'å'*(5*1024*1024)}

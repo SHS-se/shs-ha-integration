@@ -9,6 +9,7 @@ from copy import deepcopy
 import logging
 
 from .command_transport import settled, CommandNotSent
+from .command_journal import now_ms
 from .gateway_journal import GatewayConflict
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class GatewayStream:
 
     def capture(self, kind, payload, *, ownership=None):
         """Assign local queue order in the source callback, including equal timestamps."""
-        args = (kind, payload) if ownership is None else (kind, payload, ownership)
+        args = (kind, payload, ownership, now_ms())
         return self._submit('record', args)
 
     def mark_dispatch(self, command_id):
@@ -52,7 +53,7 @@ class GatewayStream:
         if not self.accepting or self.failure:
             raise self.unavailable('reload the Home Assistant companion after correcting the cause') from self.failure
         if operation not in ('begin', 'disconnect', 'read', 'acknowledge_delivery', 'acknowledge_processed', 'snapshot',
-                             'load_record', 'save_record', 'prepare_command', 'finish_command', 'admit_route', 'read_route', 'begin_operation', 'finish_operation', 'command_outcome', 'activate', 'resume'):
+                             'load_record', 'save_record', 'coordinate_capacity', 'prepare_command', 'finish_command', 'admit_route', 'read_route', 'begin_operation', 'finish_operation', 'command_outcome', 'activate', 'resume'):
             raise ValueError('Unsupported gateway operation')
         # Connection loss may cancel the request, never its durable journal work.
         return await asyncio.shield(self._submit(operation, args))
@@ -100,7 +101,7 @@ class GatewayStream:
                     continue
                 try:
                     if len(batch) > 1:
-                        records = [values if len(values)==3 else (*values,None) for _,values,_ in batch]
+                        records = [values for _,values,_ in batch]
                         results = await settled(self.executor, self.journal.record_many, records)
                     else:
                         results = [await settled(self.executor, getattr(self.journal, name), *args)]
@@ -225,7 +226,10 @@ class GatewayCommands:
                 effect = self.capacity.describe_command(args[0]) if self.capacity else None
             except (ValueError, KeyError, TypeError) as error:
                 raise CommandNotSent(str(error)) from error
-            result = await self.stream.call('prepare_command', *args, effect)
+            try:
+                result = await self.stream.call('prepare_command', *args, effect)
+            except GatewayConflict as error:
+                raise CommandNotSent(str(error)) from error
             if self.capacity:
                 self.capacity.install_capacity(result['capacity'])
             return result['status']

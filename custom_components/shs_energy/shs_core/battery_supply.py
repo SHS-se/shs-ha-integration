@@ -182,7 +182,7 @@ def required_power_keys(scope, planned_keys):
 
 
 def measured_supply(scope, house, pv, planned_readings, planned_keys, *, now_ms,
-                    membership_revision, expected_membership_revision):
+                    membership_revision, expected_membership_revision, excluded_bounds=None):
     """Missing decomposition is unavailable; no forecast, rating or zero substitute.
 
     A supplied meter is one disjoint physical component. Hosts must establish
@@ -213,14 +213,15 @@ def measured_supply(scope, house, pv, planned_readings, planned_keys, *, now_ms,
     elif scope.include_base:
         # Base + selected = house - unselected. Selected device measurements
         # cancel exactly; their reporting cadence cannot block this scope.
-        eligible = house.watts - sum(planned_readings[k].watts for k in required)
+        eligible = house.watts - sum(max(planned_readings[k].watts,
+            _power((excluded_bounds or {}).get(planned_readings[k].source, 0))) for k in required)
     else:
         eligible = sum(planned_readings[k].watts for k in required)
     return proportional_supply(house.watts, pv.watts, eligible)
 
 
 def observe_supply(scope, options, devices, read_entity, *, at_ms, capture_lifetime_ms,
-                   boundary, membership_revision, expected_membership_revision, members=None):
+                   boundary, membership_revision, expected_membership_revision, members=None, excluded_bounds=None):
     """Resolve declared live bindings into one inspectable accounting result.
 
     `devices` is the acknowledged Included inventory. The host supplies its
@@ -267,5 +268,5 @@ def observe_supply(scope, options, devices, read_entity, *, at_ms, capture_lifet
     pv = reading(options.get("solar_production_power_entity"))
     result = measured_supply(scope, house, pv, readings, tuple(sorted(planned)), now_ms=at_ms,
         membership_revision=membership_revision,
-        expected_membership_revision=expected_membership_revision)
+        expected_membership_revision=expected_membership_revision, excluded_bounds=excluded_bounds)
     return result, (house, pv, *tuple(readings[key] for key in sorted(readings)))

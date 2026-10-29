@@ -10,6 +10,7 @@ from hashlib import sha256
 import json
 from math import isfinite
 
+from .native_numbers import canonical_metadata
 from .battery_supply import SupplyScope, observe_supply, required_power_keys
 from .device_power import planned_switch_bindings, read_device_power
 
@@ -116,7 +117,7 @@ def native_surface(options, reports):
         scale = Decimal(1000 if attributes["unit_of_measurement"] == "kW" else 1)
         try:
             low, high, quantum, watts = (Decimal(str(x)) * scale for x in
-                                        (attributes["min"], attributes["max"], attributes["step"], value["state"]))
+                                        (attributes["min"], attributes["max"], attributes["step"], canonical_metadata(value["state"], attributes)))
             if not all(x.is_finite() for x in (low, high, quantum, watts)) or not 0 <= low <= watts <= high or quantum <= 0:
                 raise ValueError("invalid native range")
             if (watts - low) % quantum:

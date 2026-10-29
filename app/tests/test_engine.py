@@ -511,7 +511,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         page = await client.call('receipts',dict(after=0,limit=256))
         await client.call('ack_delivery',dict(through=page['through']))
         await client.call('activate',dict(activation_id='battery-test',proof=proof))
-        writer = RemoteBattery(client,rig.runtime,lambda:rig.now)
+        writer = RemoteBattery(client,rig.runtime,lambda:rig.now,context=self.service.context)
         writer.enabled = True
         rig.coordinator.battery_writer = writer
         rig.runtime.physical = writer
@@ -536,6 +536,11 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(rig.runtime.host.state.frame.limits.import_w, limit)
                 self.assertEqual(rig.runtime.host.state.groups[0].status, 'adopted')
                 self.assertFalse(rig.runtime.host.state.groups[0].release_pending)
+                published=(await self.stream.call('load_record','grid_capacity'))['coordination']['withdrawal']
+                current=rig.runtime.host.state.groups[0].desired
+                self.assertEqual((published['request_id'],published['request_revision']),
+                                 (current.id,current.revision))
+                self.assertEqual(published['controls'],self.service.battery.target_controls(current))
 
     async def test_slow_route_admission_keeps_the_session_and_the_battery_grant(self):
         # 3 October 2026: HA's journal answered a battery route after the host's
@@ -729,7 +734,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         await call('ack_delivery',dict(through=page['through']))
         await call('activate',dict(activation_id='battery-test',proof=proof))
         bridge = SimpleNamespace(call=call,connected=True)
-        writer = RemoteBattery(bridge,rig.runtime,lambda:rig.now)
+        writer = RemoteBattery(bridge,rig.runtime,lambda:rig.now,context=self.service.context)
         writer.enabled = True
         rig.coordinator.battery_writer = writer
         rig.runtime.physical = writer

@@ -35,15 +35,17 @@ from .shs_core.battery_mode import promised_credit_w
 from .shs_core.battery_supply import proportional_supply
 from .shs_core.command_transport import CommandTransport
 from .shs_core.controller_inputs import ControllerInputs
-from .shs_core.device_gateway import DeviceGateway
+from .shs_core.device_gateway import DeviceGateway, DeviceIntent
 from .shs_core.device_operations import ControlDeadlineError, ControlObservationError, PowerHistoryError
-from .shs_core.gateway_journal import AdmissionPending, GatewayJournal, GatewayConflict
+from .shs_core.gateway_journal import AdmissionPending, GatewayJournal, GatewayConflict, digest
 from .shs_core.gateway_service import GatewayService, AppConnection
 from .shs_core.gateway_stream import GatewayCommands, GatewayOperations, GatewayRecord, GatewayStream
 from .shs_core.execution_configuration import ExecutionConfiguration
 from .shs_core.source_admission import (validate_bindings, ordered, FACT_ATTRIBUTES, native_pool_idle, owned_device_sources,
     validate_pool_pause, temperature_available, temperature_metadata)
 from .shs_core.native_commands import NativeExecutor
+from .shs_core.native_numbers import canonical_metadata, watts as native_watts
+from .shs_core.grid_capacity import capped_intention, ev_current_ceiling
 from .shs_core.connection_health import RetryBackoff
 
 _LOGGER = logging.getLogger(__name__)
@@ -258,7 +260,8 @@ class HomeAssistantSource:
                 # as dispatch. Its own envelope is supplied by the new target;
                 # older actuator sets remain independent reserved demand.
                 return {'external_import_w': self.import_required(exclude_device=capacity_key('battery', controls)),
-                        'import_limit_w': import_limit(self.service.import_limit_w)}
+                        'import_limit_w': import_limit(self.service.import_limit_w),
+                        'native_load_bounds':self.native_load_bounds()}
         if operation == 'admission':
             validate_bindings(body['bindings'])
             validate_pool_pause(body['pool_pause'])
@@ -476,7 +479,12 @@ class HomeAssistantSource:
         if action.service == 'turn_off':
             return self.describe_stop(action.entity)
         value = action.service.removeprefix('turn_') if action.service in ('turn_on', 'turn_off') else action.value
-        return self.describe_import(command.device, action.entity, value)
+        effect = self.describe_import(command.device, action.entity, value)
+        if effect is not None and effect['logical'] != 'battery':
+            required = self.import_required(effect=effect)
+            effect = {**effect, 'support_w':max(0.0,required-import_limit(self.service.import_limit_w)),
+                      'owner':command.device}
+        return effect
 
     def describe_import(self, device, entity, value):
         options = self.options()
@@ -490,21 +498,23 @@ class HomeAssistantSource:
             battery.surface(installed)  # Validate current native units and metadata.
             keys = ('battery_mode_entity', 'battery_charge_limit_entity', 'battery_discharge_limit_entity')
             controls = {installed[key]:(self.report(installed[key])['state'] if key == 'battery_mode_entity'
-                        else _current(self.report(installed[key])['state'])) for key in keys}
+                        else float(canonical_metadata(self.report(installed[key])['state'],self.report(installed[key])['attributes']))) for key in keys}
             identity = capacity_key('battery', controls)
             commanded = {**controls, **commanded_controls(self.capacity, identity)}
+            value = value if entity == installed['battery_mode_entity'] else float(canonical_metadata(value,self.report(entity)['attributes']))
             expected = {**commanded, entity:value}
             def envelope(values):
                 charge = self.report(installed['battery_charge_limit_entity'])
-                watts = _current(values[installed['battery_charge_limit_entity']])
-                watts *= 1000 if charge['attributes']['unit_of_measurement'] == 'kW' else 1
-                return battery_import_bound(values[installed['battery_mode_entity']],watts,catalog.charge_max_w,conversion)
+                ceiling = native_watts(values[installed['battery_charge_limit_entity']],charge['attributes'])
+                return battery_import_bound(values[installed['battery_mode_entity']],ceiling,catalog.charge_max_w,conversion)
             return {**base, 'device':identity, 'logical':'battery', 'before_w':envelope(controls), 'commanded_before_w':envelope(commanded),
                 'after_w':envelope(expected),
                 'possible_w':max(envelope(expected),envelope({**controls,entity:value})),
                 'controls':expected, 'sensor':installed['battery_power_measurement_entity'],
                 'signed':True, 'scale':1/conversion.grid_charge.gain,
-                'overhead_w':conversion.grid_charge.overhead_w, 'response_tolerance_w':100.0}
+                'overhead_w':conversion.grid_charge.overhead_w, 'response_tolerance_w':100.0,
+                'native_model':{'mode':installed['battery_mode_entity'], 'charge':installed['battery_charge_limit_entity'],
+                    'charge_max_w':catalog.charge_max_w, 'charge_unit':self.report(installed['battery_charge_limit_entity'])['attributes']['unit_of_measurement']}}
         record = self.service.physical.ownership.records.get(device, {})
         options = record.get('options', options)
         mappings = options.get('device_control_mappings', {})
@@ -523,7 +533,7 @@ class HomeAssistantSource:
                     'controls':{switch:'off'},'sensor':sensor}
             if self.report(current)['attributes'].get('unit_of_measurement') != 'A':
                 raise ValueError('EV current control must report amperes')
-            controls = {switch:self.report(switch)['state'], current:_current(self.report(current)['state'])}
+            controls = {switch:self.report(switch)['state'], current:float(canonical_metadata(self.report(current)['state'],self.report(current)['attributes']))}
             if controls[switch] not in ('on','off'):
                 raise ValueError('EV charging switch is unavailable for house import accounting')
             identity = capacity_key('ev', controls)
@@ -575,6 +585,12 @@ class HomeAssistantSource:
         if (effect['logical'] == 'battery' and action.entity == self.service.battery.installation[3]['battery_mode_entity']
                 and action.value in CHARGING_MODES and effect['possible_w'] > 0):
             reducing = False
+        if reducing and effect['logical'] == 'battery':
+            installed = self.service.battery.installation[3]
+            mode, ceiling = installed['battery_mode_entity'],installed['battery_discharge_limit_entity']
+            before = battery_discharge_ceiling(self.report(mode)['state'],_current(self.report(ceiling)['state']))
+            after = battery_discharge_ceiling(effect['controls'][mode],effect['controls'][ceiling])
+            reducing = after >= before
         if reducing:
             return
         self.admit_import(effect)
@@ -614,7 +630,10 @@ class HomeAssistantSource:
                     *([row['settled']] if row.get('settled') else [])])]
         if effect is not None and effect['logical'] == 'battery':
             settings += [effect['controls'], {**controls, effect['changed']:effect['controls'][effect['changed']]}]
-        ceiling = min(battery_discharge_ceiling(values[mode], _current(values[limit])*(1000 if unit == 'kW' else 1))
+        withdrawal = self.capacity.get('coordination',{}).get('withdrawal')
+        if withdrawal is not None and set(withdrawal['controls']) == set(controls):
+            settings.append(withdrawal['controls'])
+        ceiling = min(battery_discharge_ceiling(values[mode], native_watts(values[limit],self.report(limit)['attributes']))
                       for values in settings)
         credit = conversion.discharge.output(min(max(0.0, -measured), ceiling))
         offer = self.service.battery_cover
@@ -622,12 +641,212 @@ class HomeAssistantSource:
             return credit
         house, _ = power(self.report(options['house_consumption_power_entity']), source=options['house_consumption_power_entity'])
         pv, _ = power(self.report(options['solar_production_power_entity']), source=options['solar_production_power_entity'])
-        loads = sum(power(self.report(meter), source=meter)[0] for meter in offer['meters'])
+        bounds = self.native_load_bounds() if offer['include_base'] else {}
+        loads = sum(max(power(self.report(meter), source=meter)[0], bounds.get(meter,0)) for meter in offer['meters'])
         eligible = min(house, max(0.0, house - loads if offer['include_base'] else loads))
         bound = proportional_supply(house, pv, eligible).house_supply_bound_w
         return max(credit, promised_credit_w(import_after_w=max(0.0, import_after_w),
             import_target_w=offer['import_target_w'], eligible_bound_w=bound,
             discharge_ceiling_ac_w=min(offer['discharge_ac_max_w'], conversion.discharge.output(ceiling))))
+
+    async def capacity_update(self, operation, value):
+        self.install_capacity(await self.service.stream.call('coordinate_capacity',operation,value))
+
+    async def capacity_intention(self, value):
+        """Called under the existing device lock, after current owner authorization."""
+        await self.refresh_capacity()
+        await self.capacity_update('intention',value)
+        if value['operation'] != 'apply':
+            return value
+        caps = self.capacity.get('coordination',{}).get('caps',{})
+        cap = next((c for c in caps.values() if c['owner'] == value['device']),None)
+        if cap is None:
+            return value
+        owner = value['device']
+        if owner == 'ev':
+            entity, low, _ = self.service.physical.ev_mapping(self.options())
+            effect = self.describe_import(owner,entity,value['parameters']['current_a'])
+            if effect['device'] != cap['device']:
+                return value
+            try:
+                self.admit_import(effect)
+            except ControlDeadlineError:
+                pass
+            else:
+                await self.capacity_update('remove_cap',cap['device'])
+                return value
+            return capped_intention(value,cap['maximum_w'],native=self.report(entity)['attributes'],logical_minimum_a=low)
+        # Non-variable owners use their existing stop/permission semantics;
+        # active hot-water cycles and protected handovers still decide there.
+        record = self.service.physical.ownership.records.get(owner)
+        if record is None or set(record['originals']) != set(cap['resume_controls']):
+            return value
+        parameters = value['parameters']
+        if owner == 'pool':
+            requested = parameters['pool_permitted']
+        else:
+            command = parameters['commands'][owner.removeprefix('device:')]
+            requested = command.get('permitted') or command.get('on_seconds',0) > 0
+        if requested:
+            effect = self.capacity_resume_effect(cap)
+            if effect is not None:
+                try:
+                    self.admit_import(effect)
+                except ControlDeadlineError:
+                    pass
+                else:
+                    await self.capacity_update('remove_cap',cap['device'])
+                    return value
+        return capped_intention(value,cap['maximum_w'])
+
+    def capacity_resume_effect(self, cap):
+        row = self.capacity['devices'].get(cap['device'],{})
+        values = [*row.get('effects',{}).values(),*([row['settled']] if row.get('settled') else [])]
+        if not values:
+            return None
+        latest = max(values,key=lambda item:item['order'])
+        return {**latest,'controls':cap['resume_controls'],'after_w':cap['requested_w'],
+                'possible_w':cap['requested_w']}
+
+    async def capacity_recoveries(self):
+        """Positive capacity evidence independent of an executable plan slot.
+
+        Retain the cap until a current owner intention is admitted. Returning
+        this evidence neither sends a setting nor claims delivered service.
+        """
+        await self.refresh_capacity()
+        recovered = []
+        for identity,cap in self.capacity.get('coordination',{}).get('caps',{}).items():
+            owner = cap['owner']
+            if device_mode(self.options(),owner) != 'controlling':
+                continue
+            effect = self.capacity_resume_effect(cap)
+            if effect is None:
+                continue
+            try:
+                self.admit_import(effect)
+            except (ControlDeadlineError,ValueError,KeyError,TypeError):
+                continue
+            recovered.append(owner.removeprefix('device:') if owner.startswith('device:') else '$'+owner)
+        return sorted(set(recovered))
+
+    async def coordinate_battery(self, effect, authorize):
+        """Withdraw dependent demand through current owners before battery support.
+
+        No lock is held across perform(): that owner takes the same physical
+        lock. A new/current intention is required after a policy change; debt
+        and caps retain physical identity across that change.
+        """
+        from copy import deepcopy
+        from uuid import uuid4
+        battery = self.service.battery
+        installed = battery.installation[3]
+        controls = battery.target_controls(effect.request)
+        mode, limit_entity = installed['battery_mode_entity'],installed['battery_discharge_limit_entity']
+        attributes = self.report(limit_entity)['attributes']
+        target_ceiling = battery_discharge_ceiling(controls[mode],native_watts(controls[limit_entity],attributes))
+        current_ceiling = battery_discharge_ceiling(self.report(mode)['state'],native_watts(self.report(limit_entity)['state'],attributes))
+        token = digest({'request':effect.request.id,'revision':effect.request.revision,'controls':controls})
+        async with self.service.physical.lock:
+            authorize()
+            await self.refresh_capacity()
+            self.install_capacity(await battery.persist_target(effect.request,authorize))
+            authorize()
+            if target_ceiling >= current_ceiling:
+                return
+            descriptor = self.describe_import('battery',limit_entity,controls[limit_entity])
+            descriptor = {**descriptor,'controls':controls}
+            demand = self.import_required(effect=descriptor)
+            deficit = max(0.0,demand-self.discharge_credit(descriptor,demand)-import_limit(self.service.import_limit_w))
+            if deficit <= 0:
+                return
+            coordination = self.capacity['coordination']
+            candidates = []
+            for identity,row in self.capacity['devices'].items():
+                values = [*row['effects'].values(), *([row['settled']] if row.get('settled') else [])]
+                if not values:
+                    continue
+                latest = max(values,key=lambda item:item['order'])
+                owner = latest.get('owner',latest['logical'])
+                if latest['logical'] == 'battery' or device_mode(self.options(),owner) != 'controlling':
+                    continue
+                # Dependency is current physical viability, not only the
+                # credit needed at original admission. Base demand may have
+                # risen since this owner was admitted without borrowing.
+                kind = self.options().get('device_control_mappings',{}).get(owner.removeprefix('device:'),{}).get('control_type')
+                if owner not in ('ev','pool') and kind not in ('switch_schedule','permit_inhibit'):
+                    continue
+                if not self.service.physical.capacity_reduction_available(owner,coordination['intents'].get(owner)):
+                    continue
+                candidates.append((latest['order'],identity,owner,capacity_bound(row),latest['controls']))
+            caps, owners = {}, []
+            for _,identity,owner,bound,native_controls in sorted(candidates,reverse=True):
+                if deficit <= 0:
+                    break
+                if bound <= 0:
+                    continue
+                maximum = max(0.0,bound-deficit)
+                if owner == 'ev':
+                    mapping = next((m for m in self.options().get('device_control_mappings',{}).values()
+                        if m.get('control_type') == 'variable_power' and m.get('control_entity_id') in native_controls),None)
+                    if mapping is None:
+                        continue
+                    attributes = self.report(mapping['control_entity_id'])['attributes']
+                    maximum = ev_current_ceiling(maximum,attributes,mapping.get('minimum_value',attributes['min']))*EV_WATTS_PER_AMP
+                else:
+                    maximum = 0.0
+                previous = coordination['caps'].get(identity)
+                resume = previous if previous and previous['requested_w'] >= bound else {
+                    'resume_controls':native_controls,'requested_w':bound}
+                caps[identity] = {'device':identity,'owner':owner,'maximum_w':maximum,'withdrawal':token,
+                                  'resume_controls':resume['resume_controls'],'requested_w':resume['requested_w']}
+                owners.append(owner)
+                deficit -= bound-maximum
+            await self.capacity_update('caps',caps)
+            intents = deepcopy(self.capacity['coordination']['intents'])
+        for owner in owners:
+            authorize()
+            value = intents.get(owner)
+            if value is None:
+                continue
+            intent = DeviceIntent.parse(value)
+            try:
+                self.service.authorize_device(intent)
+            except AdmissionPending:
+                continue  # The current scheduler will provide this owner.
+            value.update(request_id=uuid4().hex,headroom_reserved=True)
+            await self.service.physical.perform(value)
+        async with self.service.physical.lock:
+            authorize()
+            await self.refresh_capacity()
+            demand = self.import_required(effect=descriptor)
+            if demand-self.discharge_credit(descriptor,demand) > import_limit(self.service.import_limit_w):
+                raise AdmissionPending('Waiting for dependent load reductions before withdrawing battery support')
+
+    def native_load_bounds(self):
+        """Causal excluded-load evidence, keyed by the reviewed meter partition."""
+        bounds = {}
+        def include(effect, bound):
+            if effect and effect['logical'] != 'battery' and effect['sensor']:
+                bounds[effect['sensor']] = max(bounds.get(effect['sensor'],0.0), bound)
+        for row in self.capacity['devices'].values():
+            issued = {**row, 'effects':{key:effect for key,effect in row['effects'].items()
+                      if effect['dispatch_through'] is not None}}
+            for effect in [*issued['effects'].values(), *([row['settled']] if row.get('settled') else [])]:
+                include(effect, capacity_bound(issued))
+        options = self.options()
+        switch = options.get('ev_charge_switch_entity')
+        if switch and device_mode(options,'ev') == 'controlling':
+            effect = self.describe_import('ev',switch,self.report(switch)['state'])
+            include(effect,effect['before_w'])
+        for owner, record in self.service.physical.ownership.records.items():
+            if owner in ('battery','ev') or device_mode(options,owner) != 'controlling':
+                continue
+            for entity in record['originals']:
+                effect = self.describe_import(owner,entity,self.report(entity)['state'])
+                if effect:
+                    include(effect,effect['before_w'])
+        return bounds
 
     def import_required(self, *, effect=None, exclude_device=None):
         options = self.options()
@@ -820,10 +1039,10 @@ async def open_gateway(hass, entry):
         lambda entity:item.platform if (item:=registry.async_get(entity)) else None)
     service.physical = DeviceGateway(inputs, source.options, GatewayRecord(stream,'ownership'), native,
         authorize=service.authorize_device, before_external=source.external_ready,
-        operations=GatewayOperations(stream, service.session))
+        operations=GatewayOperations(stream, service.session), capacity=source)
     now = lambda:int(datetime.now(timezone.utc).timestamp()*1000)
     service.battery = BatteryGateway(stream,service.physical,source.options,source.report,now,
-        authorize=service.authorize,session=service.session,context=service.context)
+        authorize=service.authorize,session=service.session,context=service.context, coordinate=source.coordinate_battery)
     try:
         await source.configuration.load(dict(entry.options))
         admission = await stream.call('load_record','source_admission')

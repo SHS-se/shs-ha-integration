@@ -251,6 +251,7 @@ class Proposed:
 
 @dataclass(frozen=True)
 class Send:
+    step_index: int
     group_id: str
     attempt_id: str
     key: str

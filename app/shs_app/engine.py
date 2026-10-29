@@ -242,7 +242,7 @@ class AppEngine:
         self.battery = h.battery_runtime = AppBatteryRuntime(h,controller,IndexedStorage(path,asyncio.to_thread,self.mirror),
             lambda:int(datetime.now(timezone.utc).timestamp()*1000))
         self.battery.profiler = self.profiler
-        self.writer = h.battery_writer = RemoteBattery(self.gateway,self.battery,self.battery.now)
+        self.writer = h.battery_writer = RemoteBattery(self.gateway,self.battery,self.battery.now,context=lambda:self.devices.context)
         self.battery.physical = self.writer
         self.battery.receipt_driven = True
         self.devices.reserve = self.battery.before_external_command

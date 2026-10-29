@@ -182,6 +182,7 @@ FIELDS = {
     'device': {'intent'},
     'battery_grant': {'identity', 'catalog', 'conversion', 'expires_at_ms'},
     'battery_route': {'effect', 'grant'},
+    'battery_target': {'request', 'grant', 'context'},
     'battery_step': {'route_id', 'index', 'send'},
     'battery_cover': {'offer'},
     'projection': {'value'},
@@ -297,6 +298,8 @@ class AppConnection(GatewayConnection):
             return await s.physical.perform(body['intent'])
         if op == 'battery_grant':
             return await s.battery.grant(body['identity'], body['catalog'], body['conversion'], body['expires_at_ms'])
+        if op == 'battery_target':
+            return await s.battery.publish_target(body['request'],body['grant'],body['context'])
         if op == 'battery_route':
             return await s.battery.propose(body['effect'], body['grant'])
         if op == 'battery_cover':

@@ -771,6 +771,9 @@ def _admissible(state, group, step, now):
     if _room(state, group, step, now) or _adds_nothing(state, group, step, now):
         return True
     rule = _relief_rule(group, step)
+    if rule is not None:
+        from .battery_native_adapter import live_relief
+        rule = live_relief(rule, group.observation)
     if (rule is None or not _fresh(state.frame, now) or not _fresh(group.observation, now)
             or any(a.stage != "prepared" for a in group.attempts)
             or not _same(group.observation.controls, rule.before)
@@ -1053,7 +1056,7 @@ def authorize_send(state: HomeState, send: Send, now_ms: int) -> bool:
             and send.generation == group.generation == attempt.generation
             and (send.request_id, send.request_revision) == (request.id, request.revision) == (attempt.request_id, attempt.request_revision)
             and purpose == attempt.purpose and send.send_by_ms == attempt.send_by_ms
-            and (send.key, send.value) == (attempt.step.key, attempt.step.value)
+            and (send.step_index, send.key, send.value) == (attempt.step_index, attempt.step.key, attempt.step.value)
             and _same(command_controls(group), attempt.step.before)
             and (purpose == "release" or not _is_battery(state, group) or state.execution.status == "active"))
 
@@ -1133,7 +1136,7 @@ def _drive(state, now, durable_revision, effects):
             elif durable_revision == prepared.prepared_revision:
                 attempt = replace(prepared, stage="sent", confirmation_deadline_ms=now + step.confirmation_timeout_ms)
                 group = replace(group, attempts=tuple(attempt if a.id == prepared.id else a for a in group.attempts), owned=True, status="executing", journal_fault=False)
-                effects.append(Send(group.spec.id, attempt.id, step.key, step.value, attempt.send_by_ms,
+                effects.append(Send(attempt.step_index, group.spec.id, attempt.id, step.key, step.value, attempt.send_by_ms,
                                     attempt.grant, attempt.generation, attempt.request_id, attempt.request_revision))
             else:
                 group = replace(group, status="journal_fault" if group.journal_fault else "awaiting_durability")

@@ -82,7 +82,7 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
         h.async_update_listeners = Mock()
         h.async_report_runtime = AsyncMock()
         h.async_battery_inputs_refresh = AsyncMock()
-        h.client = SimpleNamespace(push_optimisation=AsyncMock(return_value={}))
+        h.client = SimpleNamespace(submit_optimisation=AsyncMock(return_value={}))
         series = {
             TOTAL: five_minute_changes(CHARGE_KWH, CHARGE_START),
             LIFETIME: five_minute_changes(CHARGE_KWH, CHARGE_START + timedelta(hours=1)),
@@ -97,7 +97,7 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
 
         await h.async_optimisation_push(force_plan=True)
 
-        actuals = h.client.push_optimisation.await_args.args[0]
+        actuals = h.client.submit_optimisation.await_args.args[0]["actual_slots"]
         hourly = {}
         for row in actuals:
             hour = datetime.fromisoformat(row['start']).replace(minute=0)

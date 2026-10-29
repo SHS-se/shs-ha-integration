@@ -19,7 +19,7 @@ from uuid import uuid4
 from .replan_listener import listen_for_replans
 from . import execution_replan as execution_evidence
 from .native_configuration import native_options
-from .connection_health import ConnectionHealth
+from .connection_health import ConnectionHealth, RetryBackoff
 from .operational_attention import pipeline_issue
 from .battery_live import BatteryLiveInputs
 from .battery_conversion import CONVERSION_EVIDENCE_MS
@@ -544,6 +544,15 @@ class Household:
         self.last_optimisation_attempt = stored.get("last_optimisation_attempt")
         pending = stored.get("optimisation_pending_submission") or stored.get("optimisation_pending_job", {})
         self._answered_replan_request_id = pending.get("replan_request_id") or stored.get("answered_replan_request_id")
+        for key, stage in (("optimisation_pending_plan_ack", "acknowledgement"),
+                           ("optimisation_pending_submission", "delivery"), ("optimisation_pending_job", "delivery"),
+                           ("optimisation_recapture", "replan_request"), ("optimisation_requested_replan", "replan_request")):
+            terminal = stored.get(key, {}).get("terminal_error")
+            if terminal:
+                self._pipeline_error(stage, ShsApiError(terminal))
+        retry_error = stored.get("optimisation_pending_job", {}).get("last_error")
+        if retry_error:
+            self._pipeline_error('planning_retry', retry_error.get("detail") or retry_error["code"])
 
     async def async_battery_planned_devices(self):
         """Preserve website membership even when local control setup is invalid."""
@@ -721,7 +730,7 @@ class Household:
                     await self.async_optimisation_push(force_plan=True, replan_request_id=requested)
                     if self.last_optimisation_error is not None:
                         record = await self._store.async_read()
-                        pending = record.get("optimisation_pending_submission") or record.get("optimisation_pending_job", {})
+                        pending = record.get("optimisation_requested_replan") or record.get("optimisation_pending_submission") or record.get("optimisation_pending_job", {})
                         if requested != self._answered_replan_request_id and pending.get("replan_request_id") != requested:
                             await self._report_replan_failure(requested, self.last_optimisation_error)
                 except Exception as error:
@@ -3180,55 +3189,142 @@ class Household:
                 round(battery["soc"] * battery["capacity_kwh"] * 1e6), "planning_snapshot_soc", round(datetime.fromisoformat(snapshot["sources"]["battery"]["issued_at"]).timestamp()*1000))
         return snapshot
 
-    async def _retry_pending_plan_ack(self, stored: dict[str, Any]) -> bool:
-        """Retry one durable plan acknowledgement; return whether store changed."""
+    def _delivery_retry(self, record: dict, error: ShsApiError) -> None:
+        """Persist paced delivery, or an actionable terminal refusal."""
+        if not error.retryable:
+            record["terminal_error"] = str(error)
+            record.pop("retry_at", None)
+            return
+        record.pop("terminal_error", None)
+        backoff = RetryBackoff(initial=record.get("retry_ceiling", 5))
+        record["retry_at"] = (self.ports.utcnow() + timedelta(seconds=backoff.next())).isoformat()
+        record["retry_ceiling"] = backoff.ceiling
+
+    def _delivery_delay(self, record: dict) -> float:
+        due = record.get("retry_at")
+        return max(0, (datetime.fromisoformat(due) - self.ports.utcnow()).total_seconds()) if due else 0
+
+    async def _retry_pending_plan_ack(self, stored: dict[str, Any], *, exchange=False) -> bool:
+        """Deliver one exact ACK independently from planning and upload work."""
         if not self.control_authority:
             return stored.pop("optimisation_pending_plan_ack", None) is not None
         pending = stored.get("optimisation_pending_plan_ack")
-        if not isinstance(pending, dict) or not isinstance(
-            pending.get("plan"), dict
-        ):
+        if not isinstance(pending, dict) or not isinstance(pending.get("plan"), dict):
             return False
+        if self._delivery_delay(pending) or (pending.get("terminal_error") and not exchange):
+            return False
+        pending.pop("terminal_error", None)
         try:
             await self.client.acknowledge_optimisation_plan(
-                pending["plan"],
-                str(pending["outcome"]),
-                pending.get("error"),
-            )
+                pending["plan"], str(pending["outcome"]), pending.get("error"))
         except (KeyError, TypeError) as err:
             self._pipeline_error('acknowledgement', err)
-            _LOGGER.error("Cannot acknowledge plan without contract identifiers: %s", err)
-            stored.pop("optimisation_pending_plan_ack", None)
+            pending["terminal_error"] = str(err)
             return True
         except ShsApiError as err:
             if err.code == "stale_plan_ack":
                 self._pipeline_error('acknowledgement', None)
-                _LOGGER.info("Discarding acknowledgement for superseded plan: %s", err)
                 stored.pop("optimisation_pending_plan_ack", None)
                 return True
             self._pipeline_error('acknowledgement', err)
-            _LOGGER.warning("Plan acknowledgement will be retried: %s", err)
-            return False
+            self._delivery_retry(pending, err)
+            _LOGGER.warning("Plan acknowledgement failed: %s", err)
+            return True
         self._pipeline_error('acknowledgement', None)
         stored.pop("optimisation_pending_plan_ack", None)
         return True
+
+    def _queue_planning_recapture(self, stored, pending, *, replaces_job_id=None) -> None:
+        """Retire obsolete input into fresh-capture intent, keeping its purpose."""
+        intent = {"replan_request_id": pending.get("replan_request_id")}
+        if replaces_job_id is not None:
+            intent["replaces_job_id"] = replaces_job_id
+        if pending.get("execution_replan"):
+            intent["execution_replan"] = pending["execution_replan"]
+            journal = stored.setdefault("execution_replanning", {})
+            execution_evidence.failed(journal, pending["execution_replan"]["changes"])
+            journal.pop("retry_on_exchange", None)
+        stored["optimisation_recapture"] = intent
+        self._planning_job_wake.set()
+
+    async def _request_recapture(self, stored, recapture) -> bool:
+        """Acquire and persist current capture purpose; telemetry can still run."""
+        if stored.get("optimisation_pending_plan_ack") or recapture.get("terminal_error") or self._delivery_delay(recapture):
+            return False
+        try:
+            request_id = await self.client.request_replan(reason=recapture["request_reason"])
+        except ShsApiError as error:
+            self._pipeline_error('replan_request', error)
+            self._delivery_retry(recapture, error)
+            await self._store.async_save(stored)
+            self.async_update_listeners()
+            return False
+        recapture["replan_request_id"] = request_id
+        recapture.pop("request_reason")
+        recapture.pop("retry_at", None)
+        recapture.pop("retry_ceiling", None)
+        await self._store.async_save(stored)
+        self._pipeline_error('replan_request', None)
+        return True
+
+    def _queue_ended_publication(self, stored, result, pending) -> None:
+        """A finite published horizon can end while its delivery is interrupted.
+
+        Validate the published contract at issuance before recognizing its actual
+        final slot end. Contract/schema defects remain terminal; source age and
+        a validity timestamp alone cannot authorize this refresh.
+        """
+        if result.get("state") != "published" or stored.get("optimisation_pending_submission"):
+            return
+        plan = result["plan"]
+        try:
+            issued = datetime.fromisoformat(plan["issued_at"])
+            validate_plan_contract(plan, issued)
+            slots = plan["plans"]["priority"]["slots"]
+            end = datetime.fromisoformat(slots[-1]["start"]) + timedelta(minutes=plan["slot_minutes"])
+        except (OptimisationInputError, KeyError, TypeError, ValueError):
+            return
+        if end > self.ports.utcnow():
+            return
+        self._queue_planning_recapture(stored, pending)
+        stored["optimisation_recapture"].update({
+            "published_job_id": result["job_id"],
+            "original_replan_request_id": pending.get("replan_request_id"),
+            "replan_request_id": None,
+            "request_reason": "capture_horizon_ended",
+        })
 
     @staticmethod
     def _planning_receipt_identity(pending: dict[str, Any]) -> tuple:
         return pending.get("job_id"), pending.get("snapshot_id")
 
+    def _planning_retry_status(self, stored, result) -> None:
+        error = result.get("last_error") if result.get("state") == "pending" else None
+        self._pipeline_error('planning_retry', (error.get("detail") or error["code"]) if error else None)
+        job = stored.get("optimisation_pending_job")
+        if job and job["job_id"] == result.get("job_id"):
+            if error:
+                job["last_error"] = error
+            else:
+                job.pop("last_error", None)
+
     async def _journal_planning_acceptance(self, stored, result, pending) -> None:
         stored.pop("optimisation_pending_submission", None)
+        stored.pop("optimisation_recapture", None)
         if pending.get("execution_replan"):
             execution_evidence.admitted(stored.setdefault("execution_replanning", {}), pending["execution_replan"]["changes"])
+        # Even an inline terminal receipt stays recoverable until plan/ACK or
+        # recapture intent is saved. A crash between these stages loses no work.
+        stored["optimisation_pending_job"] = {
+            key: value for key, value in pending.items()
+            if key not in ("snapshot_id", "devices", "body", "submission_error", "retry_at", "retry_ceiling", "terminal_error", "recapture_required")
+        }
+        job = stored["optimisation_pending_job"]
+        job["job_id"] = result["job_id"]
+        job["execution_availability"] = pending.get("body", {}).get("snapshot", {}).get("execution_availability", [])
         if result["state"] == "pending":
-            stored["optimisation_pending_job"] = {
-                key: value for key, value in pending.items()
-                if key not in ("snapshot_id", "devices", "submission_error")
-            }
-            stored["optimisation_pending_job"]["job_id"] = result["job_id"]
-        else:
-            stored.pop("optimisation_pending_job", None)
+            job["retry_at"] = (self.ports.utcnow() + timedelta(milliseconds=result["retry_after_ms"])).isoformat()
+        self._planning_retry_status(stored, result)
         if pending.get("replan_request_id"):
             stored["answered_replan_request_id"] = pending["replan_request_id"]
             self._answered_replan_request_id = pending["replan_request_id"]
@@ -3245,40 +3341,66 @@ class Household:
                 if recovering_submission else self.client.planning_status(pending["job_id"])
             )
         except ShsApiError as error:
-            failure = error
-            if recovering_submission and error.code == "planning_job_not_found" and pending.get("submission_error"):
-                failure = ShsApiError(**pending["submission_error"])
             async with self._push_lock:
-                stored = await self._store.async_read() or {}
+                stored = await self._store.async_load() or {}
                 if self._planning_receipt_identity(stored.get(record_key, {})) != self._planning_receipt_identity(pending):
                     return 0
-                self.last_optimisation_error = str(failure)
-                self._pipeline_error('delivery', failure)
-                if error.code == "planning_job_not_found":
-                    stored = await self._store.async_load()
-                    stored.pop(record_key, None)
-                    if pending.get("execution_replan"):
-                        journal = stored.setdefault("execution_replanning", {})
-                        execution_evidence.failed(journal, pending["execution_replan"]["changes"])
-                        if recovering_submission and failure.retryable:
-                            journal.pop("retry_on_exchange", None)
+                record = stored[record_key]
+                if recovering_submission and error.code == "planning_job_not_found":
+                    if (record.get("recapture_required") or "body" not in record or record["body"].get("planning_exchange_version") == 2):
+                        # One-way migration: old releases lacked replayable bytes
+                        # or captured a retired exchange contract.
+                        # A confirmed missing receipt permits a NEW capture, never
+                        # reconstructing an unknown body under its old identity.
+                        stored.pop(record_key)
+                        self._queue_planning_recapture(stored, pending)
+                        await self._store.async_save(stored)
+                        return 0
+                    try:
+                        result = await self.client.submit_optimisation(record["body"])
+                    except ShsApiError as failure:
+                        error = failure
+                    else:
+                        error = None
+                if error is not None and recovering_submission and error.recapture:
+                    stored.pop(record_key)
+                    self._queue_planning_recapture(stored, pending)
+                    await self._store.async_save(stored)
+                    return 0
+                if error is not None:
+                    self.last_optimisation_error = str(error)
+                    self._pipeline_error('delivery', error)
+                    if error.code == "planning_job_not_found" or (recovering_submission and not error.retryable):
+                        stored.pop(record_key, None)
+                        if pending.get("execution_replan"):
+                            execution_evidence.failed(stored.setdefault("execution_replanning", {}), pending["execution_replan"]["changes"])
+                    else:
+                        self._delivery_retry(record, error)
                     await self._store.async_save(stored)
                     self.async_update_listeners()
-                else:
-                    self.async_update_listeners()
-                    return 5
-            if recovering_submission and pending.get("replan_request_id"):
-                await self._report_replan_failure(pending["replan_request_id"], str(failure))
-            return 0
+                    if recovering_submission and not error.retryable and pending.get("replan_request_id"):
+                        await self._report_replan_failure(pending["replan_request_id"], str(error))
+                    return self._delivery_delay(record) if error.retryable else 0
         async with self._push_lock:
             stored = await self._store.async_load() or {}
             if self._planning_receipt_identity(stored.get(record_key, {})) != self._planning_receipt_identity(pending):
                 return 0
             self._pipeline_error('delivery', None)
-            if result["state"] == "pending" and not recovering_submission:
+            self._planning_retry_status(stored, result)
+            if result.get("state") == "pending" and not recovering_submission:
+                record = stored[record_key]
+                record.pop("terminal_error", None)
+                record.pop("retry_ceiling", None)
+                record["retry_at"] = (self.ports.utcnow() + timedelta(milliseconds=result["retry_after_ms"])).isoformat()
+                await self._store.async_save(stored)
+                self.last_optimisation_error = None
+                self.async_update_listeners()
                 return result["retry_after_ms"] / 1000
             if recovering_submission:
-                await self._journal_planning_acceptance(stored, result, pending)
+                if result.get("job_id"):
+                    await self._journal_planning_acceptance(stored, result, pending)
+                else:
+                    stored.pop("optimisation_pending_submission", None)
                 self._pipeline_error('upload', None)
                 try:
                     await self._record_device_exchange(stored, pending["devices"], result)
@@ -3300,16 +3422,20 @@ class Household:
                 self.actuals_accepted_until = stored.get("optimisation_actuals_accepted_until")
                 self.replan_recommendations = stored["replan_recommendations"] = result.get("replan_recommendations", [])
                 self.last_optimisation_push = stored["last_optimisation_push"] = self.ports.utcnow().isoformat()
-            if result["state"] == "published":
+            if result.get("state") == "published":
                 await self._accept_returned_plan(stored, result["plan"])
-            elif result["state"] == "failed":
+                self._queue_ended_publication(stored, result, pending)
+            elif result.get("state") == "failed":
                 self.last_optimisation_error = result.get("detail") or result.get("code") or "planning failed"
                 self._pipeline_error('planning', self.last_optimisation_error)
-                if pending.get("execution_replan"):
+                if result.get("recapture") and not stored.get("optimisation_pending_submission"):
+                    self._queue_planning_recapture(stored, pending,
+                        replaces_job_id=result["recapture"]["replaces_job_id"])
+                elif pending.get("execution_replan"):
                     execution_evidence.failed(stored.setdefault("execution_replanning", {}), pending["execution_replan"]["changes"])
-            if result["state"] == "superseded" and pending.get("execution_replan"):
+            if result.get("state") == "superseded" and pending.get("execution_replan"):
                 execution_evidence.failed(stored.setdefault("execution_replanning", {}), pending["execution_replan"]["changes"])
-            if result["state"] != "pending":
+            if result.get("state") in ("published", "failed", "superseded"):
                 # Superseded work supplies no replacement. Keep the accepted plan.
                 stored.pop("optimisation_pending_job", None)
             await self._store.async_save(stored)
@@ -3318,12 +3444,63 @@ class Household:
             self.async_update_listeners()
         await self.async_report_runtime()
         await self.async_battery_inputs_refresh()
-        return result["retry_after_ms"] / 1000 if result["state"] == "pending" else 0
+        return result["retry_after_ms"] / 1000 if result.get("state") == "pending" else 0
 
     def _execution_configuration(self) -> str:
         """Identity of the settings HA checks device work against."""
         return hashlib.sha256(json.dumps(native_options(self.resolved_options()),
             sort_keys=True, default=str).encode()).hexdigest()
+
+    def _suppressed_execution_owners(self, stored) -> set[str]:
+        owners = {row["owner"] for row in (self.optimisation_plan or {}).get("execution_availability", [])}
+        for key in ("optimisation_pending_submission", "optimisation_pending_job"):
+            receipt = stored.get(key, {})
+            owners.update(change["owner"] for change in receipt.get("execution_replan", {}).get("changes", [])
+                          if change["status"] != "recovered")
+            owners.update(row["owner"] for row in receipt.get("body", {}).get("snapshot", {}).get("execution_availability", []))
+            owners.update(row["owner"] for row in receipt.get("execution_availability", []))
+        plan = self.optimisation_plan or {}
+        for slot in plan.get("plans", {}).get("priority", {}).get("slots", []):
+            owners.update(owner for owner, command in slot.get("device_commands", {}).items()
+                          if command.get("type") == "unavailable")
+        return owners
+
+    def _retain_relevant_recoveries(self, stored) -> None:
+        pending = stored.get("execution_replanning", {}).get("pending", {})
+        relevant = self._suppressed_execution_owners(stored)
+        for owner, change in list(pending.items()):
+            if change["status"] == "recovered" and owner not in relevant:
+                pending.pop(owner)
+
+    async def async_capacity_recovered(self, owners: list[str]) -> None:
+        """Consume positive gateway headroom proof for known capacity curtailment.
+
+        A suppressed owner has no executable demand intent to retry. Its gateway
+        still owns the original demand witness; this evidence can recover that
+        specific opportunity independently of the currently suppressed schedule.
+        """
+        if not self.control_authority or not owners:
+            return
+        async with self._push_lock:
+            stored = await self._store.async_load() or {}
+            journal = stored.get("execution_replanning", {})
+            options = self.resolved_options()
+            relevant = self._suppressed_execution_owners(stored)
+            changed = False
+            for owner in set(owners):
+                row = journal.get("owners", {}).get(owner)
+                if (not row or row["status"] != "temporarily_absent"
+                        or execution_evidence.cause_identity(row["cause"]) != "house_import_capacity"
+                        or device_mode(options, owner) != "controlling"):
+                    continue
+                execution_evidence.observe(journal, owner, {}, None,
+                    recovery_requires_replan=owner in relevant)
+                changed = True
+            if not changed:
+                return
+            await self._store.async_save(stored)
+        self._planning_job_wake.set()
+        self.async_update_listeners()
 
     async def async_execution_observed(self, device, plan, slot, condition) -> None:
         """Journal Controlling evidence; the existing delivery owner replans it."""
@@ -3351,10 +3528,8 @@ class Household:
             elif (condition is not None and condition["status"] == "faulted" and not owner.startswith("$")
                     and not condition.get("recover_when_entities")):
                 condition = {**condition, "recover_when_configuration": self._execution_configuration()}
-            receipt = current.get("optimisation_pending_submission") or current.get("optimisation_pending_job") or {}
-            recovery_in_flight = any(change["owner"] == owner and change["status"] != "recovered"
-                for change in receipt.get("execution_replan", {}).get("changes", []))
-            execution_evidence.observe(journal, owner, slot, condition, recovery_requires_replan=recovery_in_flight)
+            recovery_required = owner in self._suppressed_execution_owners(current)
+            execution_evidence.observe(journal, owner, slot, condition, recovery_requires_replan=recovery_required)
             if journal == current.get("execution_replanning", {}):
                 return
             stored = await self._store.async_load() or {}
@@ -3364,37 +3539,50 @@ class Household:
         self.async_update_listeners()
 
     async def async_planning_delivery(self) -> None:
-        """Host-owned delivery loop resumes journalled jobs after activation."""
+        """One owner schedules due outbox, job, ACK and fresh-capture work."""
         while True:
             self._planning_job_wake.clear()
             async with self._push_lock:
-                stored = await self._store.async_read() or {}
-                pending = stored.get("optimisation_pending_submission") or stored.get("optimisation_pending_job")
+                stored = await self._store.async_load() or {}
+                if await self._retry_pending_plan_ack(stored):
+                    await self._store.async_save(stored)
+                    self.async_update_listeners()
+                ack = stored.get("optimisation_pending_plan_ack")
+                candidates = [stored[key] for key in ("optimisation_pending_submission", "optimisation_pending_job")
+                              if stored.get(key) and not stored[key].get("terminal_error")]
+                pending = next((row for row in candidates if not self._delivery_delay(row)), None)
                 journal = stored.get("execution_replanning", {})
-                execution_due = bool(journal.get("pending")) and not journal.get("retry_on_exchange")
-            if not pending and execution_due:
+                requested = stored.get("optimisation_requested_replan")
+                manual_due = bool(requested) and not requested.get("terminal_error")
+                recapture = stored.get("optimisation_recapture")
+                capture_due = (not recapture.get("terminal_error") and not self._delivery_delay(recapture)) if recapture else (
+                    self.control_authority and bool(journal.get("pending")) and not journal.get("retry_on_exchange"))
+                capture_due = (manual_due or capture_due) and not ack and (manual_due or not stored.get("optimisation_pending_submission"))
+                if stored.get("optimisation_pending_job") and not recapture and not manual_due:
+                    capture_due = False
+                delays = [self._delivery_delay(row) for row in candidates if self._delivery_delay(row)]
+                if ack and not ack.get("terminal_error"):
+                    delays.append(self._delivery_delay(ack))
+                if recapture and not recapture.get("terminal_error") and self._delivery_delay(recapture):
+                    delays.append(self._delivery_delay(recapture))
+            if capture_due:
                 await self.async_optimisation_push(force_plan=True)
+                # A missing physical input remains visible. Retry on the next
+                # delivery wake, paced independently of ordinary telemetry.
                 self._planning_job_wake.clear()
-                async with self._push_lock:
-                    current = await self._store.async_read() or {}
-                    if current.get("optimisation_pending_submission") or current.get("optimisation_pending_job"):
-                        continue
-                # Transport failure has no new sensor event; retry through this
-                # same receipt owner, rather than starting another runtime.
-                try:
-                    await asyncio.wait_for(self._planning_job_wake.wait(), timeout=5)
-                except asyncio.TimeoutError:
-                    pass
+                delay = 5
+            elif pending:
+                delay = await self._poll_planning_job(pending)
+                if delays and delay:
+                    delay = min(delay, *delays)
+            else:
+                delay = min(delays) if delays else None
+            if delay == 0:
                 continue
-            if not pending:
-                await self._planning_job_wake.wait()
-                continue
-            delay = await self._poll_planning_job(pending)
-            if delay:
-                try:
-                    await asyncio.wait_for(self._planning_job_wake.wait(), timeout=delay)
-                except asyncio.TimeoutError:
-                    pass
+            try:
+                await asyncio.wait_for(self._planning_job_wake.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
 
     async def _accept_returned_plan(self, stored, returned_plan) -> None:
         """Validate, retain or install and journal the exact plan acknowledgement."""
@@ -3485,7 +3673,12 @@ class Household:
         """
         async with self._planning_exchange():
             stored = await self._store.async_load() or {}
-            if await self._retry_pending_plan_ack(stored):
+            if replan_request_id is not None:
+                stored["optimisation_requested_replan"] = {"replan_request_id": replan_request_id}
+                await self._store.async_save(stored)
+            else:
+                replan_request_id = stored.get("optimisation_requested_replan", {}).get("replan_request_id")
+            if await self._retry_pending_plan_ack(stored, exchange=True):
                 await self._store.async_save(stored)
             self.last_optimisation_attempt = self.ports.utcnow().isoformat()
             stored["last_optimisation_attempt"] = self.last_optimisation_attempt
@@ -3493,13 +3686,25 @@ class Household:
             self.optimisation_plan = self.optimisation_plan or stored.get(
                 "optimisation_plan"
             )
+            recapture = stored.get("optimisation_recapture") if replan_request_id is None else None
+            recapture_ready = (await self._request_recapture(stored, recapture)
+                               if recapture and recapture.get("request_reason") else True)
+            if recapture:
+                replan_request_id = recapture.get("replan_request_id")
+            self._retain_relevant_recoveries(stored)
             journal = stored.get("execution_replanning", {})
             execution_changes = list(journal.get("pending", {}).values())
             execution_request = None
-            if execution_changes and self.optimisation_plan and replan_request_id is None:
+            if self.control_authority and execution_changes and self.optimisation_plan:
                 execution_request = {"request_id": str(uuid4()),
                     "accepted_plan_id": self.optimisation_plan["plan_id"],
                     "observed_at": self.ports.utcnow().isoformat(), "changes": execution_changes}
+            if recapture and not recapture.get("published_job_id") and recapture.get("execution_replan") and not execution_request:
+                # Recovery already restored all useful work. Do not invent a
+                # changed owner merely to spend an obsolete capture ticket.
+                stored.pop("optimisation_recapture", None)
+                recapture = None
+                await self._store.async_save(stored)
             snapshot_error: str | None = None
             stage = 'collection'
             try:
@@ -3599,10 +3804,12 @@ class Household:
                 plan_due = optimisation_plan_due(
                     last_plan,
                     self.ports.utcnow(),
-                    force=force_plan or execution_request is not None,
+                    force=force_plan or replan_request_id is not None or execution_request is not None or bool(recapture),
                     retry_after_error=bool(self.last_optimisation_error),
-                ) and (replan_request_id is not None or not (
+                ) and (replan_request_id is not None or recapture is not None or not (
                     stored.get("optimisation_pending_job") or stored.get("optimisation_pending_submission")))
+                if stored.get("optimisation_pending_plan_ack") or not recapture_ready:
+                    plan_due = False
                 snapshot = None
                 if plan_due:
                     mode = self.resolved_options()[OPT_PLANNING_MODE]
@@ -3692,59 +3899,67 @@ class Household:
                     and not pool_slots
                 ):
                     self.last_optimisation_error = snapshot_error
+                    if snapshot_error and stored.get("optimisation_requested_replan"):
+                        stored["optimisation_requested_replan"]["terminal_error"] = snapshot_error
+                        await self._store.async_save(stored)
                     self.async_update_listeners()
                     return
+                body = ShsApiClient.prepare_optimisation_submission(
+                    actuals,
+                    snapshot,
+                    devices,
+                    thermal_slots,
+                    price_slots,
+                    pool_slots,
+                    device_inventory_complete=True,
+                    replan_request_id=replan_request_id,
+                    replan_recommendation=(replan_reason or "Integration configuration or controller conditions changed. Review the retained schedule and consider a manual replan.")
+                        if force_plan and replan_request_id is None and execution_request is None else None,
+                    execution_replan=execution_request if snapshot is not None else None,
+                    equipment=self.equipment_presence(),
+                    replaces_job_id=recapture.get("replaces_job_id") if recapture else None,
+                )
                 if snapshot is not None and snapshot.get("snapshot_id"):
+                    if stored.get("optimisation_requested_replan", {}).get("replan_request_id") == replan_request_id:
+                        stored.pop("optimisation_requested_replan", None)
+                    stored.pop("optimisation_recapture", None)
                     stored["optimisation_pending_submission"] = {
                         "snapshot_id": snapshot["snapshot_id"],
                         "replan_request_id": replan_request_id,
                         "devices": devices,
+                        "body": body,
                         **({"execution_replan": execution_request} if execution_request is not None else {}),
                     }
                     await self._store.async_save(stored)
                 ingest_started = monotonic()
                 stage = 'upload'
                 try:
-                    result = await self.client.push_optimisation(
-                        actuals,
-                        snapshot,
-                        devices,
-                        thermal_slots,
-                        price_slots,
-                        pool_slots,
-                        device_inventory_complete=True,
-                        replan_request_id=replan_request_id,
-                        replan_recommendation=(replan_reason or "Integration configuration or controller conditions changed. Review the retained schedule and consider a manual replan.")
-                            if force_plan and replan_request_id is None and execution_request is None else None,
-                        execution_replan=execution_request if snapshot is not None else None,
-                        equipment=self.equipment_presence(),
-                    )
+                    result = await self.client.submit_optimisation(body)
                 except ShsApiError as error:
                     # A definitive rejection has no job to recover. Keep the
                     # original reason instead of replacing it with a later 404.
-                    if not error.retryable and snapshot is not None:
+                    if not error.retryable and not error.recapture and snapshot is not None:
                         stored.pop("optimisation_pending_submission", None)
                         if execution_request is not None:
                             execution_evidence.failed(stored.setdefault("execution_replanning", {}), execution_request["changes"])
                         await self._store.async_save(stored)
                     elif snapshot is not None and snapshot.get("snapshot_id"):
-                        # Recovery may find a committed job despite a lost reply.
-                        # If none exists, report the upload failure that caused
-                        # recovery, including its original request identity.
+                        # Receipt lookup resolves ambiguous admission. A missing
+                        # receipt retries these exact bytes, including after restart.
+                        if error.recapture:
+                            stored["optimisation_pending_submission"]["recapture_required"] = True
                         stored["optimisation_pending_submission"]["submission_error"] = {
                             "message": error.message, "code": error.code,
                             "request_id": error.request_id, "path": error.path,
-                            "retryable": error.retryable,
+                            "retryable": error.retryable, "recapture": error.recapture,
                         }
                         await self._store.async_save(stored)
                     raise
                 self._pipeline_error('upload', None)
                 stage = 'configuration'
                 if result.get("job_id"):
-                    await self._journal_planning_acceptance(stored, result, {
-                        "replan_request_id": replan_request_id,
-                        **({"execution_replan": execution_request} if execution_request is not None else {}),
-                    })
+                    await self._journal_planning_acceptance(stored, result,
+                        stored["optimisation_pending_submission"])
                 else:
                     # The server accepted telemetry without starting a solve.
                     if snapshot is not None:
@@ -3797,13 +4012,22 @@ class Household:
                 result.get("thermal_slots_accepted") or 0
             )
             await self._accept_returned_plan(stored, result.get("plan"))
+            self._queue_ended_publication(stored, result, stored.get("optimisation_pending_job", {}))
             if result.get("state") == "pending":
                 self.last_optimisation_error = None
             elif result.get("state") == "failed":
                 self.last_optimisation_error = result.get("detail") or result.get("code") or "planning failed"
                 self._pipeline_error('planning', self.last_optimisation_error)
-                if execution_request is not None:
+                if result.get("recapture"):
+                    self._queue_planning_recapture(stored, {
+                        "replan_request_id": replan_request_id, "execution_replan": execution_request},
+                        replaces_job_id=result["recapture"]["replaces_job_id"])
+                elif execution_request is not None:
                     execution_evidence.failed(stored.setdefault("execution_replanning", {}), execution_request["changes"])
+            if result.get("state") in ("published", "failed", "superseded"):
+                stored.pop("optimisation_pending_job", None)
+            if snapshot_error and stored.get("optimisation_requested_replan"):
+                stored["optimisation_requested_replan"]["terminal_error"] = snapshot_error
             stored["last_optimisation_push"] = self.last_optimisation_push
             await self._store.async_save(stored)
             if await self._retry_pending_plan_ack(stored):

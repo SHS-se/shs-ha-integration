@@ -153,24 +153,89 @@ send a command proves a held actuator stopped consuming power. Actual state,
 SOC, targets, deadlines and measured delivery continue through the existing
 snapshot/accounting fields; there is no second additive missed-energy input.
 
-The journal retains pending evidence across restart and ambiguous transport,
-uses snapshot receipt recovery before another capture, and clears only changes
-included in the accepted submission. Newer evidence for another owner remains
-pending. Failed or superseded jobs retain unresolved evidence for the next
-existing exchange instead of repeatedly solving on every controller tick. A
-late failed job cannot resurrect absence already observed recovered. A later
-missed conditional charging interval is new absolute evidence; another report
-or replacement plan ID for the same fault is not.
+The journal retains the exact credential-free outgoing envelope before its first
+HTTP attempt. Its nested key order is canonicalized using the same encoder as
+the durable store before that first attempt; restarting cannot change the server's
+capture hash. After an ambiguous upload, snapshot receipt lookup comes first. A
+confirmed absent receipt retries the same body and identities, with persisted
+paced retries. An accepted job and the last accepted plan remain available while
+a replacement upload is pending. A newer submission fences late old replies.
+Even an inline terminal receipt remains a durable job until its plan and exact
+ACK, terminal outcome, or fresh-capture intent are saved.
+
+Planning exchange version 3 permits an authenticated failed `planner_upgraded`
+`capture_horizon_ended`, or `accepted_reference_changed` receipt to authorize `recapture: {replaces_job_id}`. Fresh inputs receive a new
+snapshot identity and carry `replaces_job_id` at the ingest boundary. The server
+checks the same household, current publication/head, accepted-reference revision
+and original purpose. Manual requests keep their request identity; execution
+requests receive a new identity and carry the newest relevant owner evidence.
+Ownership-change recapture may name the newly accepted household reference.
+A definite pre-admission ownership conflict carries an explicit recapture
+disposition; receipt lookup still comes first, and confirmed absence retires the
+old immutable body into fresh-capture intent without inventing a replacement job. Unchanged commitments, original
+service deadlines and physical permissions remain authoritative. Obsolete
+body-less or exchange-version-2 outboxes first recover a receipt; only a confirmed
+absence migrates them into fresh-capture intent under the existing manual or
+execution authority. They never invent the missing body or a replacement job ID.
+
+A published plan whose actual final slot has ended before delivery keeps its
+historical published outcome. HA reports the exact acceptance/rejection first,
+then uses the existing authenticated, idempotent household replan request to
+obtain current capture authority. The source job and original purpose remain
+journalled until that request identity and fresh outbox are saved. An already
+outstanding request is consumed even if HA previously answered the same ID.
+This capture carries current unresolved `execution_availability`; unresolved
+owner rows remain intact, and pending execution evidence clears only when its
+matching explicit execution envelope is admitted. Ordinary commitment and original
+service-deadline rules still apply. Schema faults and a validity timestamp
+alone do not trigger this finite-horizon repair.
+
+ACK-only work is selected independently by the same delivery loop, with durable
+retry pacing and exact plan identifiers. Every planning snapshot waits until its
+outstanding exact plan acknowledgement settles; telemetry continues. Incoming
+manual requests are saved before this wait in a separate durable intent. Only
+persisting that request's new exact outbox consumes the intent, so an older late
+admission cannot erase a newer request. A fresh capture can carry both the manual
+request and current scoped execution evidence; acknowledgement and admission do
+not clear unrelated or newer evidence. A lost
+ACK never starts another solve. Terminal authorization/contract errors remain
+actionable; retryable worker failures retain the same accepted job and expose
+the server's pending retry status separately from terminal planning failures.
+
+Only evidence included in an accepted submission is cleared. Newer evidence for
+another owner remains pending. Failed or superseded jobs retain unresolved
+evidence for the next existing exchange instead of repeatedly solving on every
+controller tick. A late failed job cannot resurrect absence already observed
+recovered. A later missed conditional charging interval is new absolute evidence;
+another report or replacement plan ID for the same fault is not.
 
 A successful still-authorised execution resumes an unchanged schedule directly.
 Recovery forces another capture if absence or fault suppressed the remaining
-accepted work, or its blocked-work capture is still in flight. When a generic command
+accepted work, or its blocked-work capture is still in flight. A harmless off-slot
+fault followed by recovery queues no planning change. Queued recoveries are checked
+again against accepted/in-flight suppression before capture, so a never-published
+fault cannot poison another owner's repair. Positive gateway headroom proof can
+recover an existing `house_import_capacity` temporary curtailment even when the
+accepted plan suppresses that opportunity and supplies no executable demand intent.
+Curtailment masks only its blocked interval, not every future charging opportunity.
+Recovery clears only that cause under current Controlling authority; unrelated
+hardware faults remain unresolved.
+When a generic command
 is unavailable, the executor can read mapped sources without writing settings;
 only the specific source previously observed unavailable can establish source
 recovery. An unsupported result or an unchanged readable actuator cannot prove a
 failed write repaired. Existing controller/pipeline errors remain visible, and
 the configuration panel shows automatic replanning and conditional car charging
 without asking for a manual replan.
+
+The execution envelope identifies the accepted household reference Q. Battery
+failure intervals and the 100 Wh scheduled-work test come from the durable native
+battery account B, which may differ after an isolated battery handover refusal.
+Snapshot battery feedback identifies B's exact previous contract; household ACK
+does not assert battery acceptance. A valid battery observation can clear its
+previous failure after B's finite horizon ends, without granting any new work.
+A non-controlling Test mirror retains actual snapshot availability but emits no
+execution replan or physical-owner-driven solve/ACK loop.
 
 ### Preserve the next hour for unaffected loads
 

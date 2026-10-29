@@ -78,7 +78,7 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
     def send(self, index=0):
         p = self.proposal
         step = p.steps[index]
-        return encode_value(rt.Send(p.group_id, 'attempt-'+str(index), step.key, step.value,
+        return encode_value(rt.Send(index, p.group_id, 'attempt-'+str(index), step.key, step.value,
             self.rig.now+10000, self.grant, p.generation, p.request_id, p.request_revision))
 
     async def step(self, index=0):

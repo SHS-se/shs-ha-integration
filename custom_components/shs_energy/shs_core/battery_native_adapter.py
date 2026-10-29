@@ -127,3 +127,27 @@ class SigenAdapter:
             steps.append(step);before=step.after
         return Proposed(effect.group_id,effect.generation,effect.request.id,effect.request.revision,
                         effect.observation.revision,effect.adapter_revision,tuple(steps),effect.token,tuple(relief))
+
+
+def live_relief(rule, observation):
+    """Rebind the Sigen monotone ceiling relation to current measured flow.
+
+    Generic commissioned edges remain exact samples. This adapter's declared
+    ceiling decrease bounds transient flow by the current observed envelope;
+    it does not depend on the old meter value being bit-for-bit unchanged.
+    """
+    if (observation is None or rule.evidence != "sigen-modbus-v2.9-ess-pv-first"
+            or dict(observation.controls) != dict(rule.before)):
+        return rule
+    changed = [(key, value) for key, value in rule.after if dict(rule.before).get(key) != value]
+    if len(changed) != 1:
+        return rule
+    key, value = changed[0]
+    before = dict(rule.before)[key]
+    if type(value) not in (int, float) or type(before) not in (int, float) or value >= before:
+        return rule
+    observed = observation.envelope
+    if rule.settled.import_w > observed.import_w or rule.settled.export_w > observed.export_w:
+        return rule
+    from dataclasses import replace
+    return replace(rule, observed=observed, during=observed)

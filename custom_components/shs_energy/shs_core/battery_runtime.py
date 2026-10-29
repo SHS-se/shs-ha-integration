@@ -790,6 +790,11 @@ class BatteryRuntime:
             if self.host.state.execution.account.contract==contract:
                 self._notify_planning(None)  # Publish actual admission without requesting another plan.
         await self.host.accept(rt.Tick())
+        if self.host._fault:
+            raise ValueError('battery command journal is unavailable')
+        current_group=next(g for g in self.host.state.groups if g.spec.id==group.spec.id)
+        if self.physical is not None and current_group.status=='adopted' and current_group.desired is not None:
+            await self.physical.publish_target(current_group.desired)
         if getattr(self.physical,'publish_cover',None) is not None:
             await self.physical.publish_cover(self._cover_offer())
         session=self.host.state.execution
@@ -797,8 +802,6 @@ class BatteryRuntime:
             'reason':'Following the battery plan' if mode=='controlling' else 'Testing the plan; battery settings are not being changed'}
             if session.status in ('active','diagnostic_only') else
             {'state':'limited','reason':self._holding('Waiting for a current battery plan and measurements')})
-        if self.host._fault:
-            raise ValueError('battery command journal is unavailable')
 
     def _demand_sources(self):
         # Grid headroom always uses the house meter, which already includes
@@ -984,7 +987,7 @@ class BatteryRuntime:
         try:
             accounting,evidence=observe_supply(scope,options,self._devices,reports.get,at_ms=now,capture_lifetime_ms=CAPTURE_LIFETIME_MS,
                 boundary='configured_household_reported_power',membership_revision=source,expected_membership_revision=self._model_sources,
-                members=members)
+                members=members, excluded_bounds=(self._native_capacity or {}).get('native_load_bounds', {}))
         except ValueError as error:
             raise BatteryPowerReadingError(str(error)) from error
         battery,_=power(reports[options['battery_power_measurement_entity']],source=options['battery_power_measurement_entity'],signed=True)
@@ -1132,9 +1135,23 @@ class BatteryRuntime:
     def _queue_execution(self, condition):
         # Never wait for the household exchange lock while holding a battery
         # observation/receipt lock: snapshot capture reads this same account.
-        plan,slot=self.coordinator.binding_plan_for('battery', self.controller.options())
-        if not plan or not slot:
+        account = self.host.state.execution.account if self.host else self._bootstrap
+        contract = account.contract
+        now = self.now()
+        if contract is None or (condition is not None and contract.interval(now) is None):
             return
+        # Household acceptance can advance while this native account retains B.
+        # Derive only B's actual quarter opportunity; feedback names its exact
+        # contract independently of the household envelope's accepted-plan ID.
+        start = now // 900000 * 900000
+        energy = {'charge': 0.0, 'discharge': 0.0}
+        for row in contract.intervals:
+            overlap = max(0, min(start + 900000, row.end_ms, contract.valid_until_ms) - max(start, row.start_ms))
+            for direction in energy:
+                energy[direction] += getattr(row, direction + '_ac_mwh') * overlap / (row.end_ms - row.start_ms)
+        slot = {'start': iso(start), 'battery_charge_w': energy['charge'] / 250,
+                'battery_discharge_w': energy['discharge'] / 250}
+        plan = {'plan_id': contract.plan_id}
         has_work=execution_evidence.requested('$battery',slot)
         if condition == self._execution_condition and (condition is None or self._execution_had_work or not has_work):
             if self._replan_pending and (self._replan_task is None or self._replan_task.done()):

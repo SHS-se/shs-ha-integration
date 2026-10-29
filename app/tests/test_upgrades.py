@@ -23,7 +23,7 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             result = await open_runtime_schema(self.root, self.identity, self.activation,
                 dict(self.pair, app_version=version, core_sha256='c'*64))
             self.assertEqual(result['identity'],self.identity)
-            self.assertEqual(result['protocol'],3)
+            self.assertEqual(result['protocol'],4)
         self.assertEqual(self.activation,original)
 
     async def test_rejects_foreign_identity_and_future_schema_without_rewriting(self):
