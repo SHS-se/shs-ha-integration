@@ -29,5 +29,15 @@ async def open_runtime_schema(root, identity, activation, release):
             raise GatewayConflict('Finish the original runtime activation before upgrading')
         await record.async_save(expected)
     elif current != expected:
-        raise GatewayConflict('Unsupported app runtime schema or installation identity; an explicit upgrade is required')
+        # Protocol 3 was the previous app/gateway handshake, not the imported
+        # provenance pair's protocol. Only an already active identical runtime
+        # can roll its app-owned marker forward under AppEngine's writer lease.
+        previous = dict(schema=1, protocol=3, identity=identity)
+        if (PROTOCOL == 4 and current == previous
+                and type(current.get('schema')) is int and type(current.get('protocol')) is int
+                and activation is not None and activation['state'] == 'active'):
+            await record.async_save(expected)
+            current = expected
+        else:
+            raise GatewayConflict('Unsupported app runtime schema or installation identity; an explicit upgrade is required')
     return current or expected
