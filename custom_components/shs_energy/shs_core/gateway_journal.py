@@ -343,16 +343,18 @@ class GatewayJournal:
             db.execute('UPDATE authority SET session=NULL')
             self._append(db, 'gap', {'reason': 'session_disconnect', 'previous_session': session})
 
-    def record(self, kind, payload, ownership=None):
-        return self.record_many(((kind,payload,ownership),))[0]
+    def record(self, kind, payload, ownership=None, received_at_ms=None):
+        at = now_ms() if received_at_ms is None else received_at_ms
+        return self.record_many(((kind,payload,ownership,at),))[0]
 
     def record_many(self, records):
         """Already queued facts share durability; their received order is exact."""
+        records = [(*record,now_ms()) if len(record)==3 else record for record in records]
         with closing(self.connect()) as db, db:
             self._owner(db)
             return [self._record(db,*record) for record in records]
 
-    def _record(self, db, kind, payload, ownership=None):
+    def _record(self, db, kind, payload, ownership, received_at_ms):
         if kind not in ('observation', 'configuration', 'outcome'):
             raise ValueError('Only source observations, configuration or command outcomes may be recorded')
         if type(payload) is not dict:
@@ -375,6 +377,11 @@ class GatewayJournal:
                 db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', ('power_peaks', encoded(peaks)))
             capacity = self._capacity(db)
             before = capacity['revision']
+            tracked = {key for row in capacity['devices'].values() for effect in row['effects'].values()
+                       for key in (*effect['controls'], effect['sensor']) if key}
+            if entity in tracked:
+                capacity.setdefault('receipts', {})[entity] = {'ordinal':ordinal, 'at_ms':received_at_ms}
+                capacity['revision'] += 1
             self._settle_capacity(db, capacity)
             if capacity['revision'] != before:
                 self._save_capacity(db, capacity)
@@ -385,7 +392,18 @@ class GatewayJournal:
         def latest(entity):
             row = db.execute('SELECT receipt,payload FROM latest WHERE entity=?', (entity,)).fetchone()
             return (row[0], json.loads(row[1])) if row else (0, None)
-        observe_capacity(capacity, db.execute('SELECT high FROM transport').fetchone()[0], latest)
+        reconciled = observe_capacity(capacity, db.execute('SELECT high FROM transport').fetchone()[0], latest)
+        for effect, matching in reconciled:
+            if not effect.get('route_id'):
+                continue
+            route = db.execute('SELECT payload,next_step FROM routes WHERE id=?', (effect['route_id'],)).fetchone()
+            if route is None or route['next_step'] != effect['step_index']:
+                continue
+            if matching:
+                db.execute("UPDATE routes SET next_step=next_step+1,status='active' WHERE id=?", (effect['route_id'],))
+                GatewayJournal._complete_battery_release(db,_restored(route['payload']),route['next_step']+1)
+            else:
+                db.execute("UPDATE routes SET status='obsolete' WHERE id=?", (effect['route_id'],))
 
     def read(self, session, after, limit=256):
         cursor(after)
@@ -504,14 +522,76 @@ class GatewayJournal:
     def _capacity(db):
         row = db.execute("SELECT payload FROM records WHERE name='grid_capacity'").fetchone()
         value = json.loads(row[0]) if row else empty_capacity()
-        if (value.get('schema') != 1 or type(value.get('revision')) is not int or value['revision'] < 0
+        if (value.get('schema') not in (1,2) or type(value.get('revision')) is not int or value['revision'] < 0
                 or type(value.get('devices')) is not dict):
             raise JournalStorageError('Invalid durable house import accounting')
-        return canonicalize_capacity(value)
+        legacy = value['schema'] == 1
+        canonicalize_capacity(value)
+        if legacy:
+            # Rebuild only derived battery capability metadata from the
+            # already-admitted installation/routes. Historical outcomes stay
+            # untouched. Persisted completion bounds dispatch above; the old
+            # request expiry also bounds it when no completion was retained.
+            physical = db.execute("SELECT payload FROM records WHERE name='physical'").fetchone()
+            installation = json.loads(physical[0]) if physical else None
+            if installation:
+                options, catalog = installation['options'], installation['catalog']
+                model = {'mode':options['battery_mode_entity'],'charge':options['battery_charge_limit_entity'],
+                         'charge_max_w':catalog['charge_max_w']}
+                for row in value['devices'].values():
+                    for effect in [*row['effects'].values(), *([row['settled']] if row.get('settled') else [])]:
+                        if effect['logical'] == 'battery' and model['mode'] in effect['controls']:
+                            effect['native_model'] = model
+                    for command_id,effect in row['effects'].items():
+                        if effect['logical'] != 'battery':
+                            continue
+                        command = db.execute('SELECT route_id,step_index,finished_at_ms FROM commands WHERE command_id=?',(command_id,)).fetchone()
+                        if command is None or command['route_id'] is None:
+                            continue
+                        route = db.execute('SELECT payload FROM routes WHERE id=?',(command['route_id'],)).fetchone()
+                        payload = _restored(route[0]) if route else None
+                        if payload is None:
+                            continue
+                        step = payload['proposal']['steps'][command['step_index']]
+                        if step['evidence'] == 'sigen-modbus-v2.9-ess-pv-first':
+                            upper = payload['effect']['request']['valid_until_ms']
+                            if command['finished_at_ms'] is not None:
+                                upper = min(upper,command['finished_at_ms'])
+                            effect.update(route_id=command['route_id'],step_index=command['step_index'],
+                                latest_effect_ms=upper+step['latest_effect_delay_ms'])
+        return value
 
     @staticmethod
     def _save_capacity(db, value):
         db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', ('grid_capacity', encoded(value)))
+
+    def coordinate_capacity(self, operation, value):
+        """Serialize support intent and caps with native preparation and evidence."""
+        with closing(self.connect()) as db, db:
+            self._owner(db)
+            capacity = self._capacity(db)
+            state = capacity.setdefault('coordination', {'withdrawal':None, 'caps':{}, 'intents':{}})
+            if operation == 'intention':
+                state['intents'][value['device']] = value
+            elif operation == 'withdrawal':
+                previous = state['withdrawal']
+                if previous is not None and previous['context'] == value['context']:
+                    if (value['request_revision'] < previous['request_revision'] or
+                            value['request_revision'] == previous['request_revision'] and
+                            (value['request_id'],value['controls']) != (previous['request_id'],previous['controls'])):
+                        raise GatewayConflict('Battery target request superseded')
+                if previous == value:
+                    return capacity
+                state['withdrawal'] = value
+            elif operation == 'caps':
+                state['caps'].update(value)
+            elif operation == 'remove_cap':
+                state['caps'].pop(value, None)
+            else:
+                raise ValueError('Unsupported capacity coordination operation')
+            capacity['revision'] += 1
+            self._save_capacity(db,capacity)
+            return capacity
 
     def prepare_command(self, command, effect=None):
         payload = command.payload()
@@ -531,12 +611,18 @@ class GatewayJournal:
             index = command.step_index if isinstance(command, RoutedCommand) else None
             if route_id:
                 route = db.execute('SELECT * FROM routes WHERE id=?', (route_id,)).fetchone()
-                if route is None or route['session'] != owner['session'] or route['status'] != 'active' or route['next_step'] != index:
+                if route is None or route['session'] != owner['session'] or route['next_step'] != index:
                     raise GatewayConflict('Battery step is outside its admitted route')
+                repeat = route['status'] == 'uncertain' and _restored(route['payload'])['proposal']['steps'][index]['repeat_identical']
+                if route['status'] != 'active' and not repeat:
+                    raise GatewayConflict('Battery route requires physical reconciliation')
             db.execute("INSERT INTO commands VALUES (?,?,?,?,'prepared',?,NULL,NULL,?,?)",
                        (command.id, fingerprint, _pack(payload), ('physical:'+self.boot) if isinstance(command, ObligationCommand) else owner['session'], now_ms(), route_id, index))
             capacity = self._capacity(db)
             through = db.execute('SELECT high FROM transport').fetchone()[0]
+            if effect is not None and isinstance(command, RoutedCommand):
+                effect = {**effect, 'latest_effect_ms':command.latest_effect_ms,
+                          'route_id':command.route_id, 'step_index':command.step_index}
             prepare_capacity(capacity, command.id, effect, through)
             self._save_capacity(db, capacity)
             return {'status':'new', 'capacity':capacity}
@@ -562,11 +648,11 @@ class GatewayJournal:
                 command_row = db.execute('SELECT route_id,step_index FROM commands WHERE command_id=?', (command.id,)).fetchone()
                 if command_row['route_id']:
                     if status == 'service_returned':
-                        db.execute('UPDATE routes SET next_step=next_step+1 WHERE id=? AND next_step=?', (command_row['route_id'], command_row['step_index']))
+                        db.execute("UPDATE routes SET next_step=next_step+1,status='active' WHERE id=? AND next_step=? AND status!='obsolete'", (command_row['route_id'], command_row['step_index']))
                         route = db.execute('SELECT payload,next_step FROM routes WHERE id=?', (command_row['route_id'],)).fetchone()
                         self._complete_battery_release(db,_restored(route['payload']),route['next_step'])
-                    else:
-                        db.execute('UPDATE routes SET status=? WHERE id=?', (status, command_row['route_id']))
+                    elif status == 'uncertain':
+                        db.execute('UPDATE routes SET status=? WHERE id=? AND next_step=? AND status!="obsolete"', (status, command_row['route_id'],command_row['step_index']))
                 self._append(db, 'outcome', {'command_id': command.id, 'status': status, 'reason': reason})
             capacity = self._capacity(db)
             finish_capacity(capacity, command.id, status)

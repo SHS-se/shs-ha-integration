@@ -121,6 +121,20 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         await self.native('ev-full', 'ev', 'number.ev', 'set_value', 16)
         self.assertEqual(len(self.calls), 1)
 
+    async def test_prepared_reservation_is_not_yet_causal_but_final_check_reads_live_house(self):
+        self.charging_car_at_minimum()
+        self.discharging(0)
+        self.cover()
+        prepare = self.journal.prepare_command
+        def changed_house(command,effect=None):
+            result = prepare(command,effect)
+            self.rows['sensor.house']['state'] = '14000'
+            return result
+        self.journal.prepare_command = changed_house
+        with self.assertRaises(ControlDeadlineError):
+            await self.native('synthetic-house-change','ev','number.ev','set_value',16)
+        self.assertEqual(self.calls,[])
+
     async def test_promise_lapses_without_an_offer_validity_or_discharge_setting(self):
         self.charging_car_at_minimum()
         for case in ('none', 'expired', 'standby', 'outside_scope'):
@@ -230,7 +244,7 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         await self.native('ev-start', 'ev', 'switch.ev', 'turn_on')
         self.rows['select.mode']['state'] = 'Command Charging (PV First)'
         before = await self.source.request('battery_capacity', {})
-        self.assertEqual(before, {'external_import_w': 12040, 'import_limit_w': 15000})
+        self.assertEqual(before, {'external_import_w': 12040, 'import_limit_w': 15000, 'native_load_bounds':{'sensor.ev':11040}})
         await self.native('battery-start', 'battery', 'number.charge', 'set_value', 1)
         self.assertGreater(self.source.import_required(), before['external_import_w'])
         self.assertEqual(await self.source.request('battery_capacity', {}), before)
@@ -251,12 +265,12 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.source.bindings = {'sensor.ev': frozenset(('capture', 'device'))}
         self.service.import_limit_w = 15000
         self.assertEqual(await self.source.request('battery_capacity', {}),
-                         {'external_import_w': 1000, 'import_limit_w': 15000})
+                         {'external_import_w': 1000, 'import_limit_w': 15000, 'native_load_bounds':{'sensor.ev':0}})
         descriptor = self.source.describe_import('ev', 'switch.ev', 'on')
         self.assertEqual(descriptor['sensor'], 'sensor.ev')
         await self.native('aliased-ev-start', 'ev', 'switch.ev', 'turn_on')
         self.assertEqual(await self.source.request('battery_capacity', {}),
-                         {'external_import_w': 12040, 'import_limit_w': 15000})
+                         {'external_import_w': 12040, 'import_limit_w': 15000, 'native_load_bounds':{'sensor.ev':11040}})
         self.rows['select.mode']['state'] = 'Command Charging (PV First)'
         with self.assertRaises(ControlDeadlineError):
             await self.native('battery-over-pending-ev', 'battery', 'number.charge', 'set_value', 4)
@@ -294,7 +308,7 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.rows['sensor.house']['state'] = '4000'
         self.service.import_limit_w = 15000
         self.assertEqual(await self.source.request('battery_capacity', {}),
-                         {'external_import_w':4000, 'import_limit_w':15000})
+                         {'external_import_w':4000, 'import_limit_w':15000, 'native_load_bounds':{'sensor.ev':0}})
         first = self.source.describe_import('device:sensor.hot_water_energy', 'switch.water', 'on')
         second = self.source.describe_import('device:sensor.water_boiler_energy', 'switch.water', 'on')
         self.assertEqual(first['device'], second['device'])

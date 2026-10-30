@@ -40,12 +40,12 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
     async def test_absence_is_durable_and_deduplicated_across_plan_ids_but_new_opportunity_replans(self):
         await self.observe()
         await self.h.async_optimisation_push()
-        sent = self.h.client.push_optimisation.call_args.kwargs
+        sent = self.h.client.submit_optimisation.call_args.args[0]
         request = sent['execution_replan']
         self.assertEqual(request['accepted_plan_id'], self.plan['plan_id'])
         self.assertEqual(request['changes'][0]['owner'], '$ev')
-        self.assertIsNone(sent['replan_recommendation'])
-        self.assertEqual(self.h.client.push_optimisation.call_args.args[1]['execution_availability'], request['changes'])
+        self.assertIsNone(sent.get('replan_recommendation'))
+        self.assertEqual(self.h.client.submit_optimisation.call_args.args[0].get("snapshot")['execution_availability'], request['changes'])
         pending = self.rig.records.saved['optimisation_pending_job']
         self.assertEqual(pending['execution_replan'], request)
         self.h.client.planning_status.return_value = jobs.PlanningJobTests.published(self)
@@ -78,15 +78,16 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
         await self.observe('pool', 'faulted', 'ActuatorUnavailableError:switch.pool')
         await self.observe('ev')
         await self.h.async_optimisation_push()
-        request = self.h.client.push_optimisation.call_args.kwargs['execution_replan']
+        request = self.h.client.submit_optimisation.call_args.args[0]['execution_replan']
         self.assertEqual({c['owner'] for c in request['changes']}, {'$pool', '$ev'})
         pending = self.rig.records.saved['optimisation_pending_job']
+        self.candidate['execution_availability'] = deepcopy(pending['execution_replan']['changes'])
         self.h.client.planning_status.return_value = jobs.PlanningJobTests.published(self)
         await self.h._poll_planning_job(pending)
         await self.h.async_optimisation_push(force_plan=True)
-        snapshot = self.h.client.push_optimisation.call_args.args[1]
+        snapshot = self.h.client.submit_optimisation.call_args.args[0].get("snapshot")
         self.assertIn('$pool', {c['owner'] for c in snapshot['execution_availability']})
-        self.assertIsNone(self.h.client.push_optimisation.call_args.kwargs['execution_replan'])
+        self.assertIsNone(self.h.client.submit_optimisation.call_args.args[0].get('execution_replan'))
         await self.h.async_execution_observed('pool', self.h.optimisation_plan, {**self.slot, 'pool_w': 0}, None)
         journal = self.rig.records.saved['execution_replanning']
         self.assertEqual(journal['pending']['$pool']['status'], 'recovered')
@@ -100,7 +101,7 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
             {'status': 'faulted', 'cause': 'ActuatorUnavailableError:switch.heater',
              'recover_when_entities': ['switch.heater']})
         await self.h.async_optimisation_push()
-        change = self.h.client.push_optimisation.call_args.kwargs['execution_replan']['changes'][0]
+        change = self.h.client.submit_optimisation.call_args.args[0]['execution_replan']['changes'][0]
         self.assertEqual(set(change), {'owner', 'status', 'cause', 'blocked_intervals'})
         off = {**slot, 'device_loads_w': {}, 'device_commands': {'heater': {'type': 'unavailable', 'reason': 'Fault'}}}
         await self.h.async_execution_observed('device:heater', self.plan, off, {'available_entities': ['sensor.power']})
@@ -124,7 +125,7 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
         cause = 'GatewayRejected: Interrupted device operation; reconcile physical observations before a new intention'
         await self.h.async_execution_observed('device:heater', self.plan, slot, {'status': 'faulted', 'cause': cause})
         await self.h.async_optimisation_push()
-        change = self.h.client.push_optimisation.call_args.kwargs['execution_replan']['changes'][0]
+        change = self.h.client.submit_optimisation.call_args.args[0]['execution_replan']['changes'][0]
         self.assertEqual(change, {'owner': 'heater', 'status': 'faulted', 'cause': cause,
                                   'blocked_intervals': change['blocked_intervals']})
         await self.h.async_execution_observed('device:heater', self.plan, held, {'available_entities': ['climate.heater']})
@@ -160,17 +161,18 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
         await self.observe()
         await self.h.async_optimisation_push()
         pending = self.rig.records.saved['optimisation_pending_job']
+        self.candidate['execution_availability'] = deepcopy(pending['execution_replan']['changes'])
         self.h.client.planning_status.return_value = jobs.PlanningJobTests.published(self)
         await self.h._poll_planning_job(pending)
         # The accepted replacement removed the missed current opportunity and
-        # has no remaining charging before departure in this same quarter.
+        # has no remaining charging in this same quarter.
         off = {**self.slot, 'ev_target_current_a': 0, 'ev_w': 0}
         await self.h.async_execution_observed('ev', self.h.optimisation_plan, off, None)
         journal = self.rig.records.saved['execution_replanning']
         self.assertNotIn('$ev', journal['owners'])
         self.assertEqual(journal['pending']['$ev']['status'], 'recovered')
         await self.h.async_optimisation_push()
-        request = self.h.client.push_optimisation.call_args.kwargs['execution_replan']
+        request = self.h.client.submit_optimisation.call_args.args[0]['execution_replan']
         self.assertEqual(request['accepted_plan_id'], self.candidate['plan_id'])
         self.assertEqual(request['changes'], [{'owner': '$ev', 'status': 'recovered',
             'cause': 'execution_recovered', 'blocked_intervals': []}])
@@ -185,9 +187,9 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
         await self.observe('pool', 'faulted', 'unavailable')
         self.rig.options['device_modes']['$pool'] = 'planning'
         await self.h.async_optimisation_push(force_plan=True)
-        sent = self.h.client.push_optimisation.call_args
-        self.assertEqual(sent.args[1]['execution_availability'], [])
-        self.assertIsNone(sent.kwargs['execution_replan'])
+        sent = self.h.client.submit_optimisation.call_args
+        self.assertEqual(sent.args[0]['snapshot']['execution_availability'], [])
+        self.assertIsNone(sent.args[0].get('execution_replan'))
         journal = self.rig.records.saved['execution_replanning']
         self.assertNotIn('$pool', journal['owners'])
         self.assertNotIn('$pool', journal['pending'])
@@ -205,9 +207,9 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
             return snapshot
         self.h._build_optimisation_snapshot.side_effect = without_heater
         await self.h.async_optimisation_push(force_plan=True)
-        sent = self.h.client.push_optimisation.call_args
-        self.assertEqual(sent.args[1]['execution_availability'], [])
-        self.assertIsNone(sent.kwargs['execution_replan'])
+        sent = self.h.client.submit_optimisation.call_args
+        self.assertEqual(sent.args[0]['snapshot']['execution_availability'], [])
+        self.assertIsNone(sent.args[0].get('execution_replan'))
         journal = self.rig.records.saved['execution_replanning']
         for field in ('owners', 'pending', 'recovery_sources'):
             self.assertNotIn('heater', journal[field])
@@ -216,8 +218,8 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
         await self.observe('pool', 'faulted', 'unavailable')
         self.rig.options['excluded_device_readings'] = ['$pool']
         await self.h.async_optimisation_push(force_plan=True)
-        self.assertEqual(self.h.client.push_optimisation.call_args.args[1]['execution_availability'], [])
-        self.assertIsNone(self.h.client.push_optimisation.call_args.kwargs['execution_replan'])
+        self.assertEqual(self.h.client.submit_optimisation.call_args.args[0].get("snapshot")['execution_availability'], [])
+        self.assertIsNone(self.h.client.submit_optimisation.call_args.args[0].get('execution_replan'))
 
     async def test_failed_job_retains_evidence_without_per_tick_solve_loop(self):
         await self.observe()
@@ -233,7 +235,7 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('pipeline:planning', {i['key'] for i in self.h.attention_items})
 
     async def test_lost_transport_recovers_exact_request_and_newer_failure_survives_receipt(self):
-        self.h.client.push_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
+        self.h.client.submit_optimisation.side_effect = ShsApiError('reply lost', retryable=True)
         await self.observe()
         await self.h.async_optimisation_push()
         pending = self.rig.records.saved['optimisation_pending_submission']
@@ -290,14 +292,14 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
         async def submit(*args, **kwargs):
             accepted.set()
             return {'job_id': 'automatic', 'state': 'pending', 'retry_after_ms': 1000}
-        self.h.client.push_optimisation.side_effect = submit
+        self.h.client.submit_optimisation.side_effect = submit
         self.h.client.planning_status.return_value = {'state': 'pending', 'retry_after_ms': 1000}
         task = asyncio.create_task(self.h.async_planning_delivery())
         try:
             await asyncio.wait_for(accepted.wait(), timeout=1)
-            self.assertEqual(self.h.client.push_optimisation.await_count, 1)
-            self.assertIsNotNone(self.h.client.push_optimisation.call_args.kwargs['execution_replan'])
-            self.assertIsNone(self.h.client.push_optimisation.call_args.kwargs['replan_request_id'])
+            self.assertEqual(self.h.client.submit_optimisation.await_count, 1)
+            self.assertIsNotNone(self.h.client.submit_optimisation.call_args.args[0].get('execution_replan'))
+            self.assertIsNone(self.h.client.submit_optimisation.call_args.args[0].get('replan_request_id'))
         finally:
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
@@ -321,7 +323,7 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
             @asynccontextmanager
             async def request(self, method, url, **options):
                 bodies.append(json.loads(json.dumps(options['json'])))
-                envelope = {'api_version': API_VERSION, 'ok': True, 'request_id': 'receipt', 'data': {'job_id': 'automatic', 'state': 'pending', 'pending': True, 'retry_after_ms': 1000}}
+                envelope = {'api_version': API_VERSION, 'ok': True, 'request_id': 'receipt', 'data': {'job_id': 'automatic', 'snapshot_id': 'snapshot', 'state': 'pending', 'pending': True, 'retry_after_ms': 1000}}
                 yield SimpleNamespace(status=200, headers={}, read=AsyncMock(return_value=json.dumps(envelope).encode()),
                     json=AsyncMock(return_value=envelope))
         client = ShsApiClient(Session(), 'https://example.invalid', 'token')
@@ -453,16 +455,29 @@ class ControllerEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.store.saved)
 
 
-class BatteryEvidenceQueueTests(unittest.TestCase):
-    def test_same_battery_fault_seen_off_reaches_journal_when_work_becomes_due(self):
+class BatteryEvidenceQueueTests(unittest.IsolatedAsyncioTestCase):
+    async def test_same_battery_fault_seen_off_reaches_journal_when_accepted_work_becomes_due(self):
+        from dataclasses import replace
         rig = battery_tests.Rig()
+        await rig.start()
+        self.addAsyncCleanup(rig.runtime.close)
         runtime = rig.runtime
         runtime._notify_planning = Mock()
-        slot = rig.plan['plans']['priority']['slots'][0]
+        runtime._execution_observations.clear()
+        runtime._execution_condition = None
+        runtime._execution_had_work = False
+        accepted = runtime.host.state.execution.account
+        runtime._bootstrap = accepted
+        runtime.host = None
+        row = accepted.contract.intervals[0]
+        off = replace(row, charge_ac_mwh=0, import_mwh=row.load_mwh,
+                      stored_end_mwh=row.stored_start_mwh, rounding_mwh=0)
+        runtime._bootstrap = replace(accepted, admissions=(*accepted.admissions[:-1],
+            replace(accepted.admissions[-1], contract=replace(accepted.contract, intervals=(off,)))))
         condition = {'status': 'faulted', 'cause': 'battery_command_failed'}
         runtime._queue_execution(condition)
         self.assertEqual(len(runtime._execution_observations), 1)
-        slot['battery_charge_w'] = 2000
+        runtime._bootstrap = accepted
         runtime._queue_execution(condition)
         self.assertEqual(len(runtime._execution_observations), 2)
         runtime._queue_execution(condition)

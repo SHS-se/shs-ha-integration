@@ -126,6 +126,7 @@ class Command:
 class RoutedCommand(Command):
     route_id: str
     step_index: int
+    latest_effect_ms: int
 
 
 @dataclass(frozen=True)

@@ -502,6 +502,17 @@ class DeviceOperations:
             raise ValueError("The control entity changed while this device was Controlling; set it to "
                              "Verification and back to Controlling to apply the change")
 
+    def heating_permission_for(self, mapping, commanded, planned, demand):
+        """The same active-cycle rule for execution and capacity feasibility."""
+        entity = actuator_targets(mapping)[0]
+        permission = self.actuator_state(entity).state
+        if permission not in ('on','off'):
+            raise ValueError('Hot-water permission switch must report on or off')
+        # Only heating SHS permitted may finish; an outside ON during an
+        # inhibition never acquires protection.
+        permitted = permission == 'on' and commanded.get(entity,'on') == 'on'
+        return heating_permission(planned,permitted,demand)
+
     async def execute_device(self, device, options, slot):
         key = device.removeprefix("device:")
         mapping = options["device_control_mappings"][key]
@@ -582,13 +593,7 @@ class DeviceOperations:
         else:
             on = command["permitted"] if kind == "permit_inhibit" else command["on_seconds"] == 900
             if water:
-                permission = self.actuator_state(targets[0]).state
-                if permission not in ("on", "off"):
-                    raise ValueError("Hot-water permission switch must report on or off")
-                # Only heating SHS permitted may finish; a switch turned on
-                # outside SHS during an inhibition is switched back off.
-                permitted = permission == "on" and commanded.get(targets[0], "on") == "on"
-                on = heating_permission(command["permitted"], permitted, demand)
+                on = self.heating_permission_for(mapping,commanded,command["permitted"],demand)
             values = {entity: "on" if on else "off" for entity in targets}
         reverted = {entity: state for entity, state in outside.items()
                     if entity in values and not self.matches(entity, values[entity])}

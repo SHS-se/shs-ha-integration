@@ -113,7 +113,7 @@ class PricePushWiringTests(unittest.TestCase):
         self.assertIn("price_slots = self._price_quarters(", COORDINATOR)
         calls = [node for node in ast.walk(ast.parse(COORDINATOR))
                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                 and node.func.attr == "push_optimisation"]
+                 and node.func.attr == "prepare_optimisation_submission"]
         self.assertTrue(any(
             [arg.id if isinstance(arg, ast.Name) else None for arg in call.args[:5]]
             == ["actuals", "snapshot", "devices", "thermal_slots", "price_slots"]

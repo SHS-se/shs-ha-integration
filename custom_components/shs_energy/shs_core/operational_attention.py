@@ -13,6 +13,7 @@ STAGES = {
     'pool_inputs': ('Pool observations could not be collected', 'Inspect the reported source. Other household data can still be sent.'),
     'upload': ('Planning data could not be sent', 'Check the server connection. A new plan cannot be requested until the upload succeeds.'),
     'configuration': ('Server configuration could not be confirmed', 'Refresh website choices and inspect the reported configuration problem.'),
+    'planning_retry': ('The server is retrying planning', 'SHS retries the same accepted planning job automatically. The previous accepted plan remains subject to its existing validity.'),
     'planning': ('The server could not create a plan', 'Inspect the reported planning failure. The previous accepted plan remains subject to its existing validity.'),
     'delivery': ('The new plan could not be received', 'SHS retries delivery automatically. The previous accepted plan remains subject to its existing validity.'),
     'plan': ('No executable plan is available', 'Inspect the planning inputs and server connection. Devices hold the last settings SHS sent.'),
@@ -31,6 +32,8 @@ STAGES = {
 
 def pipeline_issue(stage, detail, *, fix=None, key=None):
     title, next_step = STAGES[stage]
+    if stage in ('delivery', 'acknowledgement') and getattr(detail, 'retryable', None) is False:
+        next_step = 'Correct the reported authorization or contract failure. The last accepted plan remains subject to its existing validity.'
     if stage == 'delivery' and getattr(detail, 'code', None) == 'planning_job_not_found':
         next_step = 'The server no longer has this job. Request a new plan. Devices hold the last settings SHS sent.'
     return dict(key='pipeline:'+(key or stage), stage=stage, severity='error', title=title,

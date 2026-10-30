@@ -26,6 +26,10 @@ from shs_core.battery_mode import promised_credit_w
 from shs_core.battery_supply import proportional_supply
 from shs_core.connection_health import RetryBackoff
 from shs_core.battery_native_adapter import SigenAdapter
+from shs_core.native_numbers import service_watts, canonical_metadata, watts as native_watts
+from shs_core.grid_capacity import capped_intention, ev_current_ceiling
+from shs_core.device_gateway import DeviceIntent
+from shs_core.gateway_journal import AdmissionPending
 from shs_core.device_operations import ControlDeadlineError, ControlObservationError, PowerHistoryError
 from shs_core.source_admission import (validate_bindings, ordered, FACT_ATTRIBUTES, native_pool_idle, owned_device_sources,
     validate_pool_pause, temperature_available, temperature_metadata)
@@ -76,7 +80,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         entry = SimpleNamespace(async_on_unload=lambda remove:None, async_create_background_task=background)
         passthrough = lambda function:function
         registry = SimpleNamespace(async_get=lambda entity:None)
-        adapter = load_adapter('gateway.py', dict(asyncio=asyncio, datetime=datetime, timezone=timezone, json=json,
+        adapter = load_adapter('gateway.py', dict(asyncio=asyncio, service_watts=service_watts, canonical_metadata=canonical_metadata, native_watts=native_watts, capped_intention=capped_intention, ev_current_ceiling=ev_current_ceiling, DeviceIntent=DeviceIntent, AdmissionPending=AdmissionPending, digest=digest, datetime=datetime, timezone=timezone, json=json,
             logging=logging, Path=Path, perf_counter=perf_counter, thread_time=thread_time, GatewayConflict=GatewayConflict,
             callback=passthrough, vol=SimpleNamespace(Required=lambda key:key),
             websocket_api=SimpleNamespace(require_admin=passthrough, async_response=passthrough,

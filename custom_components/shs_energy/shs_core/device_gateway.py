@@ -18,7 +18,7 @@ from .device_operations import (DeviceOperations, ControlDeadlineError, ControlO
                                 correction_details)
 from .device_ownership import DeviceOwnership
 from .operating_modes import device_mode
-from .hot_water import HotWaterConfigurationError
+from .hot_water import HotWaterConfigurationError, is_hot_water
 from .gateway_journal import AdmissionPending, GatewayConflict
 
 
@@ -48,9 +48,10 @@ class DeviceIntent:
 
 
 class DeviceGateway(DeviceOperations):
-    def __init__(self, inputs, options, ownership_store, native_executor, *, authorize, before_external, operations):
+    def __init__(self, inputs, options, ownership_store, native_executor, *, authorize, before_external, operations, capacity=None):
         self.inputs, self.options = inputs, options
         self.operations = operations
+        self.capacity = capacity
         self.ownership = DeviceOwnership(ownership_store)
         self.native_executor = native_executor
         self.authorize, self.external_ready = authorize, before_external
@@ -179,6 +180,25 @@ class DeviceGateway(DeviceOperations):
             return {'device_models':p['models']}, dict(start=p['start'], device_commands=p['commands'])
         raise ValueError('Battery control requires an admitted native transition')
 
+    def capacity_reduction_available(self, owner, value):
+        """Expose existing physical run protections without selecting a schedule."""
+        if owner in ('ev','pool'):
+            return True
+        if value is None:
+            return False
+        key = owner.removeprefix('device:')
+        model = next((m for m in value['parameters'].get('models',[]) if m['key']==key),None)
+        record = self.ownership.records.get(owner)
+        if model is None or record is None:
+            return False
+        if not is_hot_water(model):
+            return True
+        mapping = self.options().get('device_control_mappings',{}).get(key,{})
+        try:
+            return not self.heating_permission_for(mapping,record.get('last_commands',{}),False,self.watts(mapping['power']))
+        except (ValueError,KeyError,TypeError,IndexError):
+            return False  # Unknown physical evidence cannot promise relief.
+
     async def synchronize(self, models):
         """Canonical mode transitions and run clocks, without executing a plan."""
         async with self.lock:
@@ -192,7 +212,8 @@ class DeviceGateway(DeviceOperations):
                     changed = True
                 elif device_mode(options, device) == 'controlling' and record.pop('restoration_pending', None) is not None:
                     changed = True
-            return self.ownership.snapshot()
+            recoveries = await self.capacity.capacity_recoveries() if self.capacity is not None else []
+            return {**self.ownership.snapshot(), 'capacity_recoveries':recoveries}
 
     def make_command(self, identity, phase, action):
         if self.local_obligation:
@@ -256,6 +277,9 @@ class DeviceGateway(DeviceOperations):
             self.active_slot = self.slot
             self.active_options = deepcopy(self.options())
             self.authorize(intent)
+            effective = await self.capacity.capacity_intention(value) if self.capacity is not None else value
+            self.plan, self.slot = self._decode(DeviceIntent.parse(effective))
+            self.active_slot = self.slot
             prior = await self.operations.begin(value)
             if prior['state'] == 'completed':
                 return {**prior['result'], 'ownership':self.ownership.snapshot()}
@@ -288,6 +312,9 @@ class DeviceGateway(DeviceOperations):
                     error.update(entity=exception.entity, unavailable=exception.unavailable)
             finally:
                 self.restoring = False
+            if result is not None and effective != value:
+                result['capacity_curtailed'] = True
+                result['execution_condition'] = {'status':'temporarily_absent', 'cause':'house_import_capacity'}
             response = dict(result=result, error=error, reservation_required=self.reservation_required, ownership=self.ownership.snapshot(),
                         reports=self.reports, reads=sorted(self.reads),
                         deadlines=[{'device':d,'name':n,'at':at} for (d,n),at in self.deadlines.items()],

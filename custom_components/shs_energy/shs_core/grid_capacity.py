@@ -2,6 +2,7 @@
 from math import isfinite
 
 from .native_readings import power
+from .native_numbers import equal as numbers_equal
 from .const import EU_AC_PHASE_COUNT, EU_AC_PHASE_VOLTAGE
 
 EV_WATTS_PER_AMP = EU_AC_PHASE_COUNT * EU_AC_PHASE_VOLTAGE
@@ -68,7 +69,7 @@ def required_import(house_w, devices):
 
 
 def empty_capacity():
-    return {'schema': 1, 'revision': 0, 'devices': {}}
+    return {'schema': 2, 'revision': 0, 'devices': {}, 'receipts': {}}
 
 
 def _superseded(effect, order, confirmed):
@@ -82,6 +83,9 @@ def canonicalize_capacity(capacity):
     Keep every unresolved effect. A later confirmed setting can supersede only
     the same successful/witnessed writes that ordinary observation can retire.
     """
+    if capacity['schema'] == 1:
+        capacity.update(schema=2, receipts={})
+        capacity['revision'] += 1
     if not any(key.startswith('device:') and '@' in key for key in capacity['devices']):
         return capacity
     devices = {}
@@ -153,7 +157,7 @@ def _matches(row, value):
     state = row.get('attributes', {}).get('temperature') if row.get('entity_id', '').startswith('climate.') else row.get('state')
     if type(value) in (int, float):
         try:
-            return isfinite(float(state)) and abs(float(state)-value) < 1e-6
+            return numbers_equal(state, value, row.get('attributes'))
         except (ValueError, TypeError):
             return False
     return state == value
@@ -167,10 +171,36 @@ def observe_capacity(capacity, ordinal, latest):
     lower command, since that timed-out write may still arrive at equipment.
     """
     changed = False
+    reconciled = []
     for row in capacity['devices'].values():
+        settled = row.get('settled')
+        if settled and settled.get('native_model'):
+            changed_receipt = max((latest(entity)[0] for entity in settled['controls']),default=0)
+            sensor_receipt = latest(settled['sensor'])[0]
+            if (changed_receipt > settled['confirmed'] and sensor_receipt >= changed_receipt
+                    and any(not _matches(latest(entity)[1],value) for entity,value in settled['controls'].items())):
+                actual = _native_observation(settled,latest)
+                if actual is not None:
+                    row['settled'] = {**settled,'controls':actual[0],'after_w':actual[1],'confirmed':ordinal}
+                    changed = True
         for identity, effect in list(row['effects'].items()):
             fence = effect['dispatch_through']
             if fence is None:
+                continue
+            actual = _bounded_observation(capacity, effect, latest)
+            if actual is not None:
+                matching = all(_matches(latest(entity)[1], value) for entity,value in effect['controls'].items())
+                observed = {**effect, 'controls':actual[0], 'after_w':actual[1], 'confirmed':ordinal}
+                if effect['order'] >= row.get('settled', {}).get('order', -1):
+                    row['settled'] = observed
+                # A native response bound covers only effects whose own bound
+                # has elapsed and whose dispatch precedes this observation.
+                for previous_id, previous in list(row['effects'].items()):
+                    if previous['order'] <= effect['order'] and (_superseded(previous,effect['order'],ordinal)
+                            or _bounded_observation(capacity, previous, latest) is not None):
+                        del row['effects'][previous_id]
+                reconciled.append((effect, matching))
+                changed = True
                 continue
             controls = effect.get('acknowledgements',effect['controls'])
             if not all(_matches(latest(entity)[1], value) for entity, value in controls.items()):
@@ -207,6 +237,47 @@ def observe_capacity(capacity, ordinal, latest):
                     changed = True
     if changed:
         capacity['revision'] += 1
+    return reconciled
+
+
+def _bounded_observation(capacity, effect, latest):
+    model, deadline = effect.get('native_model'), effect.get('latest_effect_ms')
+    if model is None or deadline is None or effect['dispatch_through'] is None:
+        return None
+    receipts = capacity.get('receipts', {})
+    # The changed control and physical response must genuinely arrive after
+    # the native bound. Old cached reports cannot acquire a fresh timestamp.
+    for entity in (effect['changed'], effect['sensor']):
+        receipt = receipts.get(entity, {})
+        if receipt.get('ordinal', 0) <= effect['dispatch_through'] or receipt.get('at_ms', -1) < deadline:
+            return None
+    return _native_observation(effect,latest)
+
+
+def _native_observation(effect, latest):
+    model = effect['native_model']
+    from .native_numbers import canonical_metadata, watts
+    try:
+        controls = {}
+        for entity, expected in effect['controls'].items():
+            report = latest(entity)[1]
+            controls[entity] = (float(canonical_metadata(report['state'], report['attributes']))
+                if type(expected) in (float,int) else report['state'])
+            if type(expected) is str and report['state'] not in report['attributes'].get('options', (expected,)):
+                return None
+        mode = controls[model['mode']]
+        ceiling = watts(controls[model['charge']], latest(model['charge'])[1]['attributes'])
+        if mode == 'Command Charging (PV First)':
+            bound = (ceiling + effect['overhead_w'])*effect['scale'] if ceiling else 0.0
+        elif mode in NON_GRID_MODES:
+            bound = 0.0
+        else:
+            bound = (model['charge_max_w']+effect['overhead_w'])*effect['scale']
+        measured, _ = power(latest(effect['sensor'])[1], source=effect['sensor'], signed=True)
+        actual = (max(0.0, measured)+effect['overhead_w'])*effect['scale'] if measured>0 else 0.0
+        return controls, max(bound, actual)
+    except (TypeError,ValueError,KeyError):
+        return None
 
 
 def _current(value):
@@ -314,3 +385,37 @@ class HouseMeterError(GridCapacityConfigurationError):
         self.fix = {'kind':'fields','fields':[{'scope':'configuration','key':key,
             'message':'; '.join(messages)} for key,messages in fields.items()]}
         self.next_step = 'Open Energy and select Instantaneous house consumption.'
+
+
+def ev_current_ceiling(maximum_w, attributes, logical_minimum_a):
+    from .native_numbers import floor_native, decimal
+    current = floor_native(decimal(maximum_w)/decimal(EV_WATTS_PER_AMP),attributes)
+    return 0.0 if current is None or current < decimal(logical_minimum_a) else float(current)
+
+
+def capped_intention(value, maximum_w, *, native=None, logical_minimum_a=0):
+    """Apply a physical ceiling to a current semantic intent, preserving service clocks."""
+    from copy import deepcopy
+    result = deepcopy(value)
+    p = result['parameters']
+    if result['operation'] != 'apply':
+        return result
+    owner = result['device']
+    if owner == 'ev':
+        if native is None:
+            raise ValueError('EV capacity requires its native current metadata')
+        current = ev_current_ceiling(maximum_w,native,logical_minimum_a)
+        p['current_a'] = min(p['current_a'], current)
+        p['minimum_a'] = min(p['minimum_a'], p['current_a'])
+    elif owner == 'pool':
+        p.update(heating_w=0, pool_permitted=False)
+    else:
+        key = owner.removeprefix('device:')
+        command = p['commands'][key]
+        if command['type'] == 'switch_schedule':
+            command['on_seconds'] = 0
+        elif command['type'] == 'permit_inhibit':
+            command['permitted'] = False
+        else:
+            raise ValueError('This native owner has no supported demand reduction')
+    return result

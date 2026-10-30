@@ -246,7 +246,7 @@ class AppEngine:
         for household in self.households.values():
             household.battery_model_runtime = self.battery
         self.battery.profiler = self.profiler
-        self.writer = h.battery_writer = RemoteBattery(self.gateway,self.battery,self.battery.now)
+        self.writer = h.battery_writer = RemoteBattery(self.gateway,self.battery,self.battery.now,context=lambda:self.devices.context)
         self.battery.physical = self.writer
         self.battery.receipt_driven = True
         self.devices.reserve = self.battery.before_external_command

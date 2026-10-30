@@ -46,7 +46,7 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
         c._sync_plan_refused_issue=Mock();c._sync_optimisation_issue=Mock()
         c.async_update_listeners=Mock();c.async_report_runtime=AsyncMock()
         c.async_battery_inputs_refresh=AsyncMock()
-        c.client=SimpleNamespace(push_optimisation=AsyncMock())
+        c.client=SimpleNamespace(submit_optimisation=AsyncMock())
 
     def assert_retained(self):
         self.assertEqual(self.c.optimisation_plan,self.plan)
@@ -57,7 +57,7 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_request_after_configuration_change_retains_schedule_through_restore(self):
         self.c._plan_configuration_changed=True
         self.c._store.saved['plan_configuration_changed']=True
-        self.c.client.push_optimisation.side_effect=ShsApiError('Planning worker returned HTTP 546')
+        self.c.client.submit_optimisation.side_effect=ShsApiError('Planning worker returned HTTP 546')
         await self.c.async_optimisation_push(force_plan=True)
         self.assert_retained()
         self.assertIn('HTTP 546',self.c.last_optimisation_error)
@@ -68,7 +68,7 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
     async def test_unreadable_replacement_preserves_cache_and_acknowledges_rejection(self):
         candidate=replacement_plan(self.plan)
         candidate['schema_version']=999
-        self.c.client.push_optimisation.return_value={'plan':candidate,'actuals_accepted_until':self.now.isoformat()}
+        self.c.client.submit_optimisation.return_value={'plan':candidate,'actuals_accepted_until':self.now.isoformat()}
         await self.c.async_optimisation_push(force_plan=True)
         self.assert_retained()
         self.assertEqual(self.c._store.saved['optimisation_pending_plan_ack']['outcome'],'rejected')
@@ -77,9 +77,10 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
     async def test_partial_replacements_keep_available_device_instructions(self):
         for branch in ('root', 'execution_plan'):
             with self.subTest(branch=branch):
+                self.setUp()  # Independent candidates must not inherit the prior case's pending ACK.
                 candidate=replacement_plan(self.plan)
                 (candidate if branch=='root' else candidate[branch])['status']='infeasible'
-                self.c.client.push_optimisation.return_value={'plan':candidate}
+                self.c.client.submit_optimisation.return_value={'plan':candidate}
                 await self.c.async_optimisation_push(force_plan=True)
                 self.assertEqual(self.c.optimisation_plan,candidate)
                 self.assertEqual(self.c._store.saved['optimisation_pending_plan_ack']['outcome'],'accepted')
@@ -90,7 +91,7 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
         candidate=replacement_plan(self.plan)
         self.c.battery_runtime=SimpleNamespace(validate_plan_response=Mock(side_effect=ValueError('Invalid handover')),
             reject_plan_response=AsyncMock())
-        self.c.client.push_optimisation.return_value={'plan':candidate}
+        self.c.client.submit_optimisation.return_value={'plan':candidate}
         await self.c.async_optimisation_push(force_plan=True)
         self.assertEqual(self.c.optimisation_plan,candidate)
         self.assertEqual(self.c._store.saved['optimisation_pending_plan_ack']['outcome'],'accepted')
@@ -158,7 +159,7 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_replacement_or_missing_snapshot_inputs_keep_the_running_plan(self):
         self.c._build_optimisation_snapshot.side_effect=OptimisationInputError('Price input unavailable')
         self.c._price_quarters=lambda *args:[{'start':self.now.isoformat()}]
-        self.c.client.push_optimisation.return_value={}
+        self.c.client.submit_optimisation.return_value={}
         await self.c.async_optimisation_push(force_plan=True)
         self.assert_retained()
         self.assertEqual(self.c.last_optimisation_error,'Price input unavailable')
@@ -166,7 +167,7 @@ class ContinuityTests(unittest.IsolatedAsyncioTestCase):
     async def test_ready_replacement_replaces_the_cache_and_clears_refresh_pending(self):
         candidate=replacement_plan(self.plan)
         self.c._plan_configuration_changed=True
-        self.c.client.push_optimisation.return_value={'plan':candidate}
+        self.c.client.submit_optimisation.return_value={'plan':candidate}
         await self.c.async_optimisation_push(force_plan=True)
         self.assertEqual(self.c.optimisation_plan,candidate)
         self.assertEqual(self.c._store.saved['optimisation_plan'],candidate)

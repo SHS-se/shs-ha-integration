@@ -191,14 +191,10 @@ async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
 async def _async_stop_runtime(coordinator):
     service = coordinator.service
-    if service.closed:
-        return
     service.source.closed = True
     try:
         await service.close()
     finally:
-        await service.stream.close()
-        await coordinator.hass.async_add_executor_job(service.stream.journal.close)
         coordinator.hass.data.get('shs_energy_gateways', {}).pop(coordinator.entry.entry_id, None)
 
 

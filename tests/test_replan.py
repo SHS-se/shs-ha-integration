@@ -84,7 +84,7 @@ class ReplanWiringTests(unittest.TestCase):
     def test_the_request_travels_with_the_snapshot_that_answers_it(self) -> None:
         # Only a generated plan settles a request, and only a snapshot produces
         # one, so the id is attached inside the snapshot branch.
-        push = API[API.index("async def push_optimisation") :]
+        push = API[API.index("def prepare_optimisation_submission") :]
         snapshot_branch = push[push.index('body["snapshot"] = snapshot') :]
         self.assertIn(
             'body["replan_request_id"] = replan_request_id', snapshot_branch

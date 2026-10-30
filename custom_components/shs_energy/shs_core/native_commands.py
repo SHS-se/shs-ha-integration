@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from math import isfinite
 
 from .command_journal import NativeAction
+from .native_numbers import canonical_metadata, equal as numbers_equal
 
 
 def finite(value):
@@ -31,18 +32,12 @@ def native_command(entity, value, state, *, temperature_unit):
         raise ValueError(f'{entity} is unavailable')
     domain = entity.split('.')[0]
     if domain in ('number', 'input_number'):
-        value = finite(value)
-        low, high = finite(state.attributes['min']), finite(state.attributes['max'])
-        step = finite(state.attributes.get('step', 1))
-        if not low <= value <= high or step <= 0:
-            raise ValueError(f'{entity}: target outside hardware bounds')
-        if abs((value-low)/step - round((value-low)/step)) > 1e-5:
-            raise ValueError(f'{entity}: target is not a supported step')
-        service = 'set_value'
         try:
-            equal = abs(finite(state.state) - value) < 1e-6
-        except (TypeError, ValueError):
-            equal = False
+            value = float(canonical_metadata(value, state.attributes))
+        except ValueError as error:
+            raise ValueError(f'{entity}: target outside hardware bounds or supported step: {error}') from error
+        service = 'set_value'
+        equal = numbers_equal(state.state, value, state.attributes)
     elif domain == 'climate':
         value = finite(value)
         low, high = finite(state.attributes['min_temp']), finite(state.attributes['max_temp'])
@@ -98,7 +93,12 @@ class NativeExecutor:
                 current = native_command(action.entity, value, self.read_state(action.entity),
                     temperature_unit=self.temperature_unit() if action.entity.startswith('climate.') else None)
                 if current.action != action:
-                    raise ValueError('Native command differs from its validated setting')
+                    # Keep the adapter's exact wire scalar (Sigen truncates its
+                    # gain conversion) while validating its canonical intent.
+                    if (current.action.entity != action.entity or current.action.service != action.service
+                            or action.service != 'set_value' or not numbers_equal(current.value, action.value,
+                                self.read_state(action.entity).attributes)):
+                        raise ValueError('Native command differs from its validated setting')
             except (KeyError, TypeError, ValueError) as error:
                 raise CommandNotSent(str(error)) from error
 

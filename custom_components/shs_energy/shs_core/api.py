@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import ssl
@@ -15,6 +16,7 @@ import aiohttp
 import certifi
 
 from .network_traffic import NetworkTraffic
+from .command_journal import encoded
 
 from .execution_replan import ExecutionReplan
 from .api_contract import (
@@ -29,6 +31,8 @@ _LOGGER = logging.getLogger(__name__)
 # Explicitly use the patched Mozilla bundle, including when Home Assistant's
 # shared session was created with an older host trust store.
 _TLS_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+
+PLANNING_EXCHANGE_VERSION = 3
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 # Preparation may include history reads. Solving runs as a durable cloud job
@@ -48,12 +52,14 @@ class ShsApiError(Exception):
         request_id: str | None = None,
         path: str | None = None,
         retryable: bool = False,
+        recapture: bool = False,
     ) -> None:
         self.message = message
         self.code = code
         self.request_id = request_id
         self.path = path
         self.retryable = retryable
+        self.recapture = recapture
         suffix = f" [request_id={request_id}]" if request_id else ""
         super().__init__(f"{message}{suffix}")
 
@@ -178,7 +184,7 @@ class ShsApiClient:
                         )
                         if details not in (None, ""):
                             message = f"{message} ({details})"
-                        error_type = ShsConnectionError if resp.status >= 500 else ShsApiError
+                        error_type = ShsConnectionError if structured_error.get("retryable") is True else ShsApiError
                         raise error_type(
                             message,
                             code=str(structured_error.get("code") or "api_error"),
@@ -189,13 +195,15 @@ class ShsApiClient:
                                 else None
                             ),
                             retryable=bool(structured_error.get("retryable")),
+                            recapture=(structured_error.get("code") == "accepted_reference_changed"
+                                       and isinstance(details, dict) and details.get("recapture") is True),
                         )
-                    error_type = ShsConnectionError if resp.status >= 500 else ShsApiError
+                    error_type = ShsConnectionError if resp.status >= 500 or resp.status == 429 else ShsApiError
                     raise error_type(
                         f"{path} returned HTTP {resp.status} without an SHS API envelope",
                         code="upstream_transport_failure",
                         request_id=response_request_id,
-                        retryable=resp.status >= 500,
+                        retryable=resp.status >= 500 or resp.status == 429,
                     )
                 if (
                     payload.get("api_version") != API_VERSION
@@ -268,12 +276,12 @@ class ShsApiClient:
             raise ShsApiError("Website did not confirm storing the current HA status")
         return result
 
-    async def request_replan(self) -> str:
+    async def request_replan(self, *, reason: str = "integration_replan") -> str:
         """Queue the same household request used by the website button."""
         result = await self._request(
             "POST", "integration-status",
             json_body={"api_version": API_VERSION, "request_replan": True,
-                       "reason": "integration_replan"},
+                       "reason": reason},
         )
         request_id = result.get("replan_request_id")
         if not isinstance(request_id, str) or not request_id:
@@ -338,8 +346,12 @@ class ShsApiClient:
             },
         )
 
-    async def push_optimisation(
-        self,
+    async def push_optimisation(self, *args, **kwargs) -> dict[str, Any]:
+        """Send a non-durable telemetry exchange using the shared envelope."""
+        return await self.submit_optimisation(self.prepare_optimisation_submission(*args, **kwargs))
+
+    @staticmethod
+    def prepare_optimisation_submission(
         actual_slots: list[dict[str, Any]],
         snapshot: dict[str, Any] | None = None,
         devices: list[dict[str, Any]] | None = None,
@@ -352,8 +364,9 @@ class ShsApiClient:
         replan_recommendation: str | None = None,
         execution_replan: ExecutionReplan | None = None,
         equipment: dict[str, bool] | None = None,
+        replaces_job_id: str | None = None,
     ) -> dict[str, Any]:
-        """Push aggregate, per-device and thermal quarters, plus a plan."""
+        """Build one canonical credential-free telemetry/capture envelope."""
         body: dict[str, Any] = {
             "api_version": API_VERSION,
             "accepted_plan_schema_versions": sorted(
@@ -382,18 +395,32 @@ class ShsApiClient:
             body["pool_slots"] = pool_slots
         if snapshot is not None:
             body["snapshot"] = snapshot
-            body["planning_exchange_version"] = 2
+            body["planning_exchange_version"] = PLANNING_EXCHANGE_VERSION
             if execution_replan is not None:
                 body["execution_replan"] = execution_replan
             # Only a snapshot can answer a request, because only a snapshot
             # produces a plan. The server refuses the pair without one.
             if replan_request_id is not None:
                 body["replan_request_id"] = replan_request_id
+            if replaces_job_id is not None:
+                body["replaces_job_id"] = replaces_job_id
+        elif replaces_job_id is not None:
+            raise ValueError("recapture requires a fresh snapshot")
+        # Match the durable journal before the FIRST send: nested key order
+        # contributes to the server capture hash, including after restart.
+        return json.loads(encoded(body))
+
+    async def submit_optimisation(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Send the exact credential-free envelope journalled by the caller."""
         result = await self._request(
             "POST", "energy-optimisation-ingest", json_body=body,
         )
-        if execution_replan is not None or "job_id" in result or result.get("pending") is True or result.get("plan") is not None:
+        requires_receipt = any(body.get(key) is not None for key in
+                               ("execution_replan", "replan_request_id", "replaces_job_id"))
+        if requires_receipt or "job_id" in result or result.get("pending") is True or result.get("plan") is not None:
             self._validate_planning_receipt(result)
+            if result.get("snapshot_id") != body.get("snapshot", {}).get("snapshot_id"):
+                raise ShsApiError("planning response belongs to another snapshot", code="invalid_response_envelope", path="energy-optimisation-ingest")
         return result
 
     @staticmethod
@@ -417,12 +444,22 @@ class ShsApiClient:
                      and isinstance(result.get("snapshot_id"), str) and bool(result["snapshot_id"])
                      and result["plan_id"] == plan.get("plan_id")
                      and result["snapshot_id"] == plan.get("snapshot_id"))
+        last_error = result.get("last_error")
+        if last_error is not None:
+            valid = (valid and state == "pending" and isinstance(last_error, dict)
+                     and all(isinstance(last_error.get(key), str) and bool(last_error[key])
+                             for key in ("code", "detail")))
+        recapture = result.get("recapture")
+        if recapture is not None:
+            valid = (valid and state == "failed" and result.get("code") in ("planner_upgraded", "capture_horizon_ended", "accepted_reference_changed")
+                     and isinstance(recapture, dict) and set(recapture) == {"replaces_job_id"}
+                     and recapture["replaces_job_id"] == result.get("job_id"))
         if not valid:
             raise ShsApiError("planning response has an invalid job receipt", code="invalid_response_envelope", path="energy-optimisation-ingest")
 
     async def _planning_status(self, identity: str, value: str) -> dict[str, Any]:
         result = await self._request("POST", "energy-optimisation-ingest", json_body={
-            "api_version": API_VERSION, "planning_exchange_version": 2,
+            "api_version": API_VERSION, "planning_exchange_version": PLANNING_EXCHANGE_VERSION,
             identity: value,
         })
         self._validate_planning_receipt(result)

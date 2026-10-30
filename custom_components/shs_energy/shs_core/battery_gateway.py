@@ -16,14 +16,16 @@ from .operating_modes import device_mode
 from .runtime_json import decode_value, encode_value, runtime_digest
 
 from .native_configuration import native_options
+from .native_numbers import service_watts, watts as native_watts
 
 OWNER = 'shs-household-battery'
 
 
 class BatteryGateway:
-    def __init__(self, stream, physical, options, reports, clock, *, authorize, session, context):
+    def __init__(self, stream, physical, options, reports, clock, *, authorize, session, context, coordinate=None):
         self.stream, self.physical, self.options, self.reports, self.now = stream, physical, options, reports, clock
         self.authorize, self.session, self.context = authorize, session, context
+        self.coordinate = coordinate
         self.record = GatewayRecord(stream, 'physical')
         self.obligation_store = GatewayRecord(stream, 'battery_obligation')
         self.obligation = {'pending':False, 'command':None, 'fault':None}
@@ -116,6 +118,18 @@ class BatteryGateway:
             raise GatewayConflict('Battery release differs from its native baseline')
         if effect.purpose != 'release' and (runtime_digest(native_options(self.options())) != identity.config_revision or device_mode(self.options(), 'battery') != 'controlling'):
             raise GatewayConflict('Battery optimisation permission changed')
+        if effect.purpose != 'release':
+            self.check_request(effect.request,grant)
+        if self.coordinate is not None and effect.purpose != 'release':
+            context = self.context()
+            def authorize():
+                self.authorize('battery_route')
+                self.check_request(effect.request,grant)
+                if (context != self.context() or not self.fence.is_current(grant,self.identity())
+                        or self.now() >= effect.request.valid_until_ms):
+                    raise GatewayConflict('Battery coordination authority changed')
+            await self.coordinate(effect, authorize)
+            authorize()
         proposal = SigenAdapter(catalog, conversion).propose(effect)
         payload = {'effect':effect_wire, 'proposal':encode_value(proposal), 'grant':grant_wire, 'context':self.context()}
         route_id = digest({'session':self.session(), **payload})
@@ -134,28 +148,23 @@ class BatteryGateway:
             if type(index) is not int or not 0 <= index < len(proposal.steps):
                 raise ValueError('Invalid admitted battery step')
             send = decode_value(send_wire, rt.Send)
+            if send.step_index != index:
+                raise GatewayConflict('Send names a different logical step')
             step = proposal.steps[index]
             if ((send.group_id, send.generation, send.request_id, send.request_revision, send.key, send.value, send.grant)
                     != (proposal.group_id, proposal.generation, proposal.request_id, proposal.request_revision, step.key, step.value, grant)):
                 raise GatewayConflict('Send differs from its admitted battery step')
             options = self.installation[3] if self.installation else {}
             action = self.action(step,options)
-            command = RoutedCommand('route:'+route_id+':'+str(index), 'battery', effect.group_id, 'battery', action, route_id, index)
+            command = RoutedCommand('route:'+route_id+':'+str(index)+':'+send.attempt_id, 'battery', effect.group_id, 'battery', action, route_id, index, send.send_by_ms+step.latest_effect_delay_ms)
             def check():
                 self.authorize('battery_step')
                 if self.context() != payload['context'] or self.now() >= send.send_by_ms:
                     raise GatewayConflict('Battery policy or dispatch deadline changed')
                 if not self.fence.is_current(grant, self.identity()):
                     raise GatewayConflict('Battery grant revoked before dispatch')
-                current = self.options()
                 if effect.purpose != 'release':
-                    if (runtime_digest(native_options(current)) != grant.config_revision or device_mode(current, 'battery') != 'controlling'
-                            or not current.get('battery_enabled', True) or '$battery' in current.get('excluded_device_readings', [])
-                            or self.now() >= effect.request.valid_until_ms):
-                        raise GatewayConflict('Battery request or configuration changed')
-                    for key in ('control_override_entity', 'battery_control_override_entity'):
-                        if current.get(key) and (self.reports(current[key]) or {}).get('state') != 'off':
-                            raise GatewayConflict('Battery manual override active')
+                    self.check_request(effect.request,grant)
             try:
                 self.authorize('battery_step')
                 previous = await self.stream.call('command_outcome', command.id)
@@ -175,6 +184,55 @@ class BatteryGateway:
                 if effect.purpose == 'release':
                     self.obligation = await self.obligation_store.async_load()
 
+    def target_controls(self, request):
+        if {key for key,_ in request.target} != {self.installation[3][key] for key in CONTROL_OPTIONS}:
+            raise GatewayConflict('Battery target differs from its native surface')
+        mode = self.installation[3]['battery_mode_entity']
+        return {key:(value if key == mode else service_watts(value,self.reports(key)['attributes']))
+                for key,value in request.target}
+
+    async def persist_target(self, request, authorize):
+        """Caller holds the physical lock; this publishes intent, never a write."""
+        authorize()
+        controls = self.target_controls(request)
+        value = {'id':digest({'request':request.id,'revision':request.revision,'controls':controls}),
+                 'controls':controls,'context':self.context(),'request_id':request.id,
+                 'request_revision':request.revision,'valid_until_ms':request.valid_until_ms}
+        capacity = await self.stream.call('coordinate_capacity','withdrawal',value)
+        authorize()
+        return capacity
+
+    async def publish_target(self, request_wire, grant_wire, context):
+        """Publish a durable adopted target that requires no native transition."""
+        request = decode_value(request_wire,rt.Request)
+        grant = decode_value(grant_wire,rt.WriterGrant)
+        def authorize():
+            self.authorize('battery_target')
+            if context != self.context():
+                raise GatewayConflict('Battery target context changed')
+            if not self.fence.is_current(grant,self.identity()):
+                raise GatewayConflict(rt.GRANT_NOT_CURRENT)
+            self.check_request(request,grant)
+            mode = self.installation[3]['battery_mode_entity']
+            actual = {key:(self.reports(key)['state'] if key == mode else
+                native_watts(self.reports(key)['state'],self.reports(key)['attributes'])) for key,_ in request.target}
+            if actual != dict(request.target):
+                raise GatewayConflict('Battery adopted target no longer matches native controls')
+        async with self.physical.lock:
+            await self.persist_target(request,authorize)
+        return {}
+
+    def check_request(self, request, grant):
+        """Recheck the same live authority before coordination and native send."""
+        current = self.options()
+        if (runtime_digest(native_options(current)) != grant.config_revision or device_mode(current,'battery') != 'controlling'
+                or not current.get('battery_enabled',True) or '$battery' in current.get('excluded_device_readings',[])
+                or self.now() >= request.valid_until_ms):
+            raise GatewayConflict('Battery request or configuration changed')
+        for key in ('control_override_entity','battery_control_override_entity'):
+            if current.get(key) and (self.reports(current[key]) or {}).get('state') != 'off':
+                raise GatewayConflict('Battery manual override active')
+
     def revoke(self):
         # Synchronous socket/configuration fence, before queued disk work.
         self.fence.revoke()
@@ -192,9 +250,8 @@ class BatteryGateway:
     def action(self, step, options):
         if step.key == options['battery_mode_entity']:
             return NativeAction(step.key,'select_option',step.value)
-        field = 'charge' if step.key == options['battery_charge_limit_entity'] else 'discharge'
-        limit = self.surface(options)['limits'][field]
-        return NativeAction(step.key,'set_value',step.value/(1000 if limit['unit']=='kW' else 1))
+        attributes = self.reports(step.key)['attributes']
+        return NativeAction(step.key,'set_value',service_watts(step.value, attributes))
 
     def released(self, options):
         """Whether the settings themselves hand the battery back.

@@ -698,16 +698,18 @@ def _settle(group, now):
     observation = group.observation
     remaining = []
     plan = group.plan
+    readback_drift = False
     for attempt in group.attempts:
         # A fresh sample after the adapter's last possible effect settles old effects,
         # whether the setting matches current intent or represents external drift.
         acknowledged = (attempt.stage == "accepted"
                         and _fresh(observation, now) and observation.revision > attempt.observed_revision
                         and _same(observation.controls, command_controls(group)))
-        settled = acknowledged or (attempt.stage in ("sent", "ambiguous") and _fresh(observation, now)
+        settled = acknowledged or (attempt.stage in ("sent", "ambiguous", "accepted") and _fresh(observation, now)
                    and observation.at_ms >= attempt.latest_effect_ms
                    and observation.revision > attempt.observed_revision)
         if settled:
+            readback_drift |= attempt.stage == "accepted" and not acknowledged
             if attempt.stage != "accepted" and preparation_matches(plan, attempt):
                 if _same(observation.controls, attempt.step.after) and _guards(attempt.step.native_guards, observation):
                     plan = replace(plan, index=plan.index + 1)
@@ -717,6 +719,13 @@ def _settle(group, now):
             if attempt.stage == "sent" and now >= attempt.confirmation_deadline_ms:
                 attempt = replace(attempt, stage="ambiguous")
             remaining.append(attempt)
+    # A completed HA call is not an eternal native-state override. Once every
+    # issued effect is reconciled, a post-bound readback also supersedes command
+    # progress whose exact setting the equipment did not retain. Rebuild from
+    # that reading; do not round it or erase any later unresolved issued effect.
+    reconciled_drift = readback_drift and not any(a.stage != "prepared" for a in remaining)
+    if reconciled_drift:
+        plan = None
     # A retry is unsent software work. Advancing or invalidating its sequence
     # must cancel it in the same state update; issued effects remain independent.
     remaining = tuple(a for a in remaining if a.stage != "prepared" or preparation_matches(plan, a))
@@ -725,7 +734,8 @@ def _settle(group, now):
     if (plan is not None and plan.index == len(plan.steps) and not remaining
             and _fresh(observation, now) and _same(observation.controls, plan.steps[-1].after)):
         plan = None
-    return replace(group, attempts=remaining, plan=plan)
+    return replace(group, attempts=remaining, plan=plan,
+                   transition_work=None if reconciled_drift else group.transition_work)
 
 
 def _relief_rule(group, step):
@@ -761,6 +771,9 @@ def _admissible(state, group, step, now):
     if _room(state, group, step, now) or _adds_nothing(state, group, step, now):
         return True
     rule = _relief_rule(group, step)
+    if rule is not None:
+        from .battery_native_adapter import live_relief
+        rule = live_relief(rule, group.observation)
     if (rule is None or not _fresh(state.frame, now) or not _fresh(group.observation, now)
             or any(a.stage != "prepared" for a in group.attempts)
             or not _same(group.observation.controls, rule.before)
@@ -1043,7 +1056,7 @@ def authorize_send(state: HomeState, send: Send, now_ms: int) -> bool:
             and send.generation == group.generation == attempt.generation
             and (send.request_id, send.request_revision) == (request.id, request.revision) == (attempt.request_id, attempt.request_revision)
             and purpose == attempt.purpose and send.send_by_ms == attempt.send_by_ms
-            and (send.key, send.value) == (attempt.step.key, attempt.step.value)
+            and (send.step_index, send.key, send.value) == (attempt.step_index, attempt.step.key, attempt.step.value)
             and _same(command_controls(group), attempt.step.before)
             and (purpose == "release" or not _is_battery(state, group) or state.execution.status == "active"))
 
@@ -1123,7 +1136,7 @@ def _drive(state, now, durable_revision, effects):
             elif durable_revision == prepared.prepared_revision:
                 attempt = replace(prepared, stage="sent", confirmation_deadline_ms=now + step.confirmation_timeout_ms)
                 group = replace(group, attempts=tuple(attempt if a.id == prepared.id else a for a in group.attempts), owned=True, status="executing", journal_fault=False)
-                effects.append(Send(group.spec.id, attempt.id, step.key, step.value, attempt.send_by_ms,
+                effects.append(Send(attempt.step_index, group.spec.id, attempt.id, step.key, step.value, attempt.send_by_ms,
                                     attempt.grant, attempt.generation, attempt.request_id, attempt.request_revision))
             else:
                 group = replace(group, status="journal_fault" if group.journal_fault else "awaiting_durability")

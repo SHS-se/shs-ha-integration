@@ -8,7 +8,8 @@ import asyncio
 from copy import deepcopy
 import logging
 
-from .command_transport import settled, CommandNotSent
+from .command_transport import settled, settle_task, CommandNotSent
+from .command_journal import now_ms
 from .gateway_journal import GatewayConflict
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ class GatewayStream:
             raise ValueError('Positive receipt queue capacity required')
         self.queue = asyncio.Queue(maxsize=capacity)
         self.task = None
+        self.closing = False
         self.failure = None
         self.accepting = False
         self.listeners = set()
@@ -31,10 +33,11 @@ class GatewayStream:
             raise RuntimeError('Receipt stream already started')
         self.accepting = True
         self.task = asyncio.create_task(self._run())
+        self.task.add_done_callback(self._worker_done)
 
     def capture(self, kind, payload, *, ownership=None):
         """Assign local queue order in the source callback, including equal timestamps."""
-        args = (kind, payload) if ownership is None else (kind, payload, ownership)
+        args = (kind, payload, ownership, now_ms())
         return self._submit('record', args)
 
     def mark_dispatch(self, command_id):
@@ -52,7 +55,7 @@ class GatewayStream:
         if not self.accepting or self.failure:
             raise self.unavailable('reload the Home Assistant companion after correcting the cause') from self.failure
         if operation not in ('begin', 'disconnect', 'read', 'acknowledge_delivery', 'acknowledge_processed', 'snapshot',
-                             'load_record', 'save_record', 'prepare_command', 'finish_command', 'admit_route', 'read_route', 'begin_operation', 'finish_operation', 'command_outcome', 'activate', 'resume'):
+                             'load_record', 'save_record', 'coordinate_capacity', 'prepare_command', 'finish_command', 'admit_route', 'read_route', 'begin_operation', 'finish_operation', 'command_outcome', 'activate', 'resume'):
             raise ValueError('Unsupported gateway operation')
         # Connection loss may cancel the request, never its durable journal work.
         return await asyncio.shield(self._submit(operation, args))
@@ -76,67 +79,111 @@ class GatewayStream:
                 exc_info=(type(error), error, error.__traceback__))
         self.accepting = False
 
+    def _reject(self, item):
+        if item is not None:
+            receiver=item[2]
+            if not receiver.done():
+                receiver.set_exception(self.unavailable('receipt worker stopped before confirmation'))
+
+    def _reject_queue(self):
+        while not self.queue.empty():
+            self._reject(self.queue.get_nowait())
+            self.queue.task_done()
+
+    def _worker_done(self, worker):
+        # A task cancelled before its first turn never enters _run's finally.
+        error = asyncio.CancelledError() if worker.cancelled() else worker.exception()
+        if error is not None:
+            self.fail(error,'worker')
+        self.accepting = False
+        self._reject_queue()
+
     async def _run(self):
         pending = None
         has_pending = False
-        while True:
-            item = pending if has_pending else await self.queue.get()
-            has_pending = False
-            batch = [item]
-            try:
-                if item is None:
+        batch = []
+        try:
+            while True:
+                if self.closing and not has_pending and self.queue.empty():
                     return
-                name, args, future = item
-                if name == 'record':
-                    while not self.queue.empty():
-                        following = self.queue.get_nowait()
-                        if following is None or following[0] != 'record':
-                            pending, has_pending = following, True
-                            break
-                        batch.append(following)
-                if self.failure:
-                    for _, _, receiver in batch:
-                        if not receiver.done(): receiver.set_exception(self.unavailable('receipt persistence failed'))
-                    continue
+                item = pending if has_pending else await self.queue.get()
+                has_pending = False
+                batch = [item]
                 try:
-                    if len(batch) > 1:
-                        records = [values if len(values)==3 else (*values,None) for _,values,_ in batch]
-                        results = await settled(self.executor, self.journal.record_many, records)
-                    else:
-                        results = [await settled(self.executor, getattr(self.journal, name), *args)]
-                except (GatewayConflict, ValueError) as error:
+                    if item is None:
+                        return
+                    name, args, future = item
                     if name == 'record':
+                        while not self.queue.empty():
+                            following = self.queue.get_nowait()
+                            if following is None or following[0] != 'record':
+                                pending, has_pending = following, True
+                                break
+                            batch.append(following)
+                    if self.failure:
+                        for _, _, receiver in batch:
+                            if not receiver.done(): receiver.set_exception(self.unavailable('receipt persistence failed'))
+                        continue
+                    try:
+                        if len(batch) > 1:
+                            records = [values for _,values,_ in batch]
+                            results = await settled(self.executor, self.journal.record_many, records)
+                        else:
+                            results = [await settled(self.executor, getattr(self.journal, name), *args)]
+                    except (GatewayConflict, ValueError) as error:
+                        if name == 'record':
+                            self.fail(error, name)
+                        for _, _, receiver in batch:
+                            if not receiver.done(): receiver.set_exception(error)
+                    except Exception as error:
                         self.fail(error, name)
-                    for _, _, receiver in batch:
-                        if not receiver.done(): receiver.set_exception(error)
-                except Exception as error:
-                    self.fail(error, name)
-                    for _, _, receiver in batch:
-                        if not receiver.done(): receiver.set_exception(error)
-                else:
-                    if name == 'record':
-                        self.metrics['fact_commits'] += 1
-                        self.metrics['facts'] += len(batch)
-                        self.metrics['max_batch'] = max(self.metrics['max_batch'],len(batch))
-                    if name in ('record', 'begin', 'disconnect', 'activate', 'finish_command'):
-                        for listener in tuple(self.listeners):
-                            listener()
-                    for (_, _, receiver), result in zip(batch, results):
-                        if not receiver.done():
-                            if self.failure:
-                                receiver.set_exception(self.unavailable('stream faulted during persistence'))
-                            else:
-                                receiver.set_result(result)
-            finally:
-                for _ in batch:
-                    self.queue.task_done()
+                        for _, _, receiver in batch:
+                            if not receiver.done(): receiver.set_exception(error)
+                    else:
+                        if name == 'record':
+                            self.metrics['fact_commits'] += 1
+                            self.metrics['facts'] += len(batch)
+                            self.metrics['max_batch'] = max(self.metrics['max_batch'],len(batch))
+                        if name in ('record', 'begin', 'disconnect', 'activate', 'finish_command'):
+                            for listener in tuple(self.listeners):
+                                listener()
+                        for (_, _, receiver), result in zip(batch, results):
+                            if not receiver.done():
+                                if self.failure:
+                                    receiver.set_exception(self.unavailable('stream faulted during persistence'))
+                                else:
+                                    receiver.set_result(result)
+                finally:
+                    for _ in batch:
+                        self.queue.task_done()
+        except BaseException as error:
+            self.fail(error,'worker')
+            raise
+        finally:
+            self.accepting = False
+            for item in batch:
+                self._reject(item)
+            if has_pending:
+                self._reject(pending)
+                self.queue.task_done()
+            self._reject_queue()
 
     async def close(self):
         self.accepting = False
-        if self.task:
-            await self.queue.put(None)
-            await self.task
-            self.task = None
+        worker = self.task
+        if worker is None:
+            return
+        if not self.closing:
+            self.closing = True
+            # Wake an idle worker. A full queue already wakes it; the closing
+            # flag makes it exit after draining that queue and any lookahead.
+            if not worker.done() and not self.queue.full():
+                self.queue.put_nowait(None)
+        try:
+            await settle_task(worker)
+        finally:
+            if worker.done() and self.task is worker:
+                self.task = None
 
 
 class GatewayConnection:
@@ -225,7 +272,10 @@ class GatewayCommands:
                 effect = self.capacity.describe_command(args[0]) if self.capacity else None
             except (ValueError, KeyError, TypeError) as error:
                 raise CommandNotSent(str(error)) from error
-            result = await self.stream.call('prepare_command', *args, effect)
+            try:
+                result = await self.stream.call('prepare_command', *args, effect)
+            except GatewayConflict as error:
+                raise CommandNotSent(str(error)) from error
             if self.capacity:
                 self.capacity.install_capacity(result['capacity'])
             return result['status']
