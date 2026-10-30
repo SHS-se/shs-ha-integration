@@ -38,7 +38,7 @@ PURE_MODULES = (
     "shs_core.battery_supply", "shs_core.battery_mode", "shs_core.home_host", "shs_core.battery_native_adapter",
     "shs_core.controller", "shs_core.battery_live", "shs_core.battery_writer", "shs_core.battery_runtime", "shs_core.battery_conversion",
     "shs_core.presentation", "shs_core.plan_execution", "shs_core.battery_physical", "shs_core.execution_storage", "execution_migration",
-    "shs_core.api_contract", "shs_core.durable_record", "shs_core.verification_storage",
+    "shs_core.api_contract", "shs_core.car_plug", "shs_core.durable_record", "shs_core.verification_storage",
     "shs_core.const", "shs_core.replan_listener", "shs_core.connection_health",
     "shs_core.device_controls",
     "shs_core.device_commands",

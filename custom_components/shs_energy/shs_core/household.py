@@ -23,6 +23,7 @@ from .connection_health import ConnectionHealth, RetryBackoff
 from .operational_attention import pipeline_issue
 from .battery_live import BatteryLiveInputs
 from .battery_conversion import CONVERSION_EVIDENCE_MS
+from .car_plug import observe_plug
 from .durable_record import DurableRecord
 from .operating_modes import device_mode, operating_mode_identity
 
@@ -2865,6 +2866,16 @@ class Household:
         if ev_battery and 1 <= ev_battery["capacity_kwh"] <= 500:
             # Remembered for a later reading at 0 %, when none can be derived.
             stored["ev_capacity_kwh"] = ev_battery["capacity_kwh"]
+        if ev_battery:
+            # Saved before any plan can use it, so a restart cannot grant a fresh grace.
+            cable = ev_battery["source_entity_ids"]["connected"]
+            cable_state = self.ports.read_state(cable)
+            plug = observe_plug(stored.get("ev_plug"), cable, ev_battery["connected"],
+                getattr(cable_state, "last_changed", None), self.ports.utcnow())
+            if plug != stored.get("ev_plug"):
+                stored["ev_plug"] = plug
+                await self._store.async_save(stored)
+            ev_battery["plugged_in_at"] = plug["plugged_in_at"]
 
         if self.tariff_catalog is None:
             raise OptimisationInputError(
