@@ -173,21 +173,30 @@ class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         order=[]
         async def stream_close():order.append('stream')
         def journal_close():order.append('journal')
-        async def service_close():
-            self.assertTrue(service.source.closed)
-            order.append('revoke_and_settle')
+        from shs_core.gateway_service import GatewayService
         async def platforms(*args):order.append('platforms');return True
-        service=SimpleNamespace(closed=False,source=SimpleNamespace(closed=False),close=service_close,
-            stream=SimpleNamespace(close=stream_close,journal=SimpleNamespace(close=journal_close)))
-        hass=SimpleNamespace(data={'shs_energy_gateways':{'entry':service}},async_add_executor_job=asyncio.to_thread,
+        def service_for(*, fail=False):
+            stream=SimpleNamespace(close=stream_close,journal=SimpleNamespace(close=journal_close),
+                executor=asyncio.to_thread,listeners=set())
+            service=GatewayService(stream,{},SimpleNamespace(closed=False))
+            async def battery():
+                self.assertTrue(service.source.closed)
+                if fail:raise OSError('physical handback failed')
+            async def devices():order.append('settle')
+            service.battery=SimpleNamespace(revoke=lambda:order.append('revoke'),maintain_obligation=battery)
+            service.physical=SimpleNamespace(maintain_obligations=devices)
+            return service
+        service=service_for()
+        hass=SimpleNamespace(data={'shs_energy_gateways':{'entry':service}},
             config_entries=SimpleNamespace(async_unload_platforms=platforms))
         coordinator=SimpleNamespace(service=service,hass=hass,entry=SimpleNamespace(entry_id='entry'),platforms_loaded=True)
         self.assertTrue(await namespace['async_unload_entry'](hass,SimpleNamespace(runtime_data=coordinator)))
-        self.assertEqual(order,['revoke_and_settle','stream','journal','platforms'])
+        self.assertEqual(order,['revoke','settle','stream','journal','platforms'])
         self.assertFalse(hass.data['shs_energy_gateways'])
+        await namespace['_async_stop_runtime'](coordinator)
+        self.assertEqual(order,['revoke','settle','stream','journal','platforms'])
         order.clear()
-        async def failed():raise OSError('physical handback failed')
-        service.close=failed
+        coordinator.service=service_for(fail=True)
         with self.assertRaises(OSError):
             await namespace['async_unload_entry'](hass,SimpleNamespace(runtime_data=coordinator))
-        self.assertEqual(order,['stream','journal'])
+        self.assertEqual(order,['revoke','stream','journal'])

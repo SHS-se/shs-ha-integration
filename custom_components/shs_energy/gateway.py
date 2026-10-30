@@ -383,7 +383,7 @@ class HomeAssistantSource:
         self.power_entities = self.power_history_sources()
         self.power_settings = self.power_setting_sources()
         sources = lambda: self.power_history_sources() | self.power_setting_sources()
-        if self.power_history_pending or not sources() - self.power_history_loaded:
+        if self.closed or self.power_history_pending or not sources() - self.power_history_loaded:
             return
         self.power_history_pending = True
         async def collect():
@@ -410,6 +410,8 @@ class HomeAssistantSource:
                         _LOGGER.exception('Could not read device peak power history; retrying')
                         await asyncio.sleep(retries.next())
                         continue
+                    if self.closed:
+                        return
                     merge_power_peaks(self.power_peaks, history)
                     await self.service.stream.call('save_record', 'power_peaks', self.power_peaks)
                     self.power_history_loaded.update(pending)
@@ -935,9 +937,11 @@ class HomeAssistantSource:
     def attach(self):
         @callback
         def matches(data):
-            return data.get('entity_id') in self.entities
+            return not self.closed and data.get('entity_id') in self.entities
         @callback
         def observe(event):
+            if self.closed:
+                return
             entity = event.data['entity_id']
             state = event.data.get('new_state')
             if state and state.attributes.get('entity_id') and er.async_get(self.hass).async_get(entity):
@@ -967,12 +971,13 @@ class HomeAssistantSource:
                 self.intake_counts['bytes'] += len(json.dumps(row))
                 receipt = self.service.stream.capture('observation', row)
                 def committed(future):
-                    if (entity in self.capacity_entities and not self.capacity_refresh_pending
+                    if (not self.closed and entity in self.capacity_entities and not self.capacity_refresh_pending
                             and not future.cancelled() and future.exception() is None):
                         self.capacity_refresh_pending = True
                         async def refresh():
                             try:
-                                await self.refresh_capacity()
+                                if not self.closed:
+                                    await self.refresh_capacity()
                             finally:
                                 self.capacity_refresh_pending = False
                         self.entry.async_create_background_task(self.hass, refresh(), name='shs_import_capacity')
@@ -992,7 +997,7 @@ class HomeAssistantSource:
                     _LOGGER.exception('SHS gateway observation persistence unavailable')
         @callback
         def metadata_changed(event):
-            if self.metadata_unchanged():
+            if self.closed or self.metadata_unchanged():
                 return
             self.service.invalidate_context()
             self.entry.async_create_background_task(self.hass, self.refresh_configuration(), name='shs_gateway_configuration')

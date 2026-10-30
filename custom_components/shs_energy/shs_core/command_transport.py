@@ -12,7 +12,11 @@ class CommandUncertain(RuntimeError):
 
 async def settled(executor, function, *args):
     """Do not abandon an executor write when its awaiting task is cancelled."""
-    future = asyncio.ensure_future(executor(function, *args))
+    return await settle_task(asyncio.ensure_future(executor(function, *args)))
+
+
+async def settle_task(future):
+    """Finish an owned task despite repeated cancellation of its waiter."""
     cancelled = False
     while not future.done():
         try:

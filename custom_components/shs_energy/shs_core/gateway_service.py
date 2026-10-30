@@ -11,6 +11,7 @@ from uuid import uuid4
 from .gateway_journal import AdmissionPending, GatewayConflict, digest
 from .native_configuration import native_options
 from .gateway_stream import GatewayConnection
+from .command_transport import settled, settle_task
 
 
 class GatewayService:
@@ -32,6 +33,7 @@ class GatewayService:
         self.pending = {}
         self.projection = None
         self.closed = False
+        self.close_task = None
         self.obligation_event = asyncio.Event()
         self.obligation_task = None
         self.obligation_error = None
@@ -154,16 +156,35 @@ class GatewayService:
                 pass
 
     async def close(self):
-        self.closed = True
-        self.stream.listeners.discard(self.receipts_changed)
-        self.revoke()
-        self.obligation_event.set()
-        if self.obligation_task:
-            await self.obligation_task
-        if self.connection:
-            await self.connection.close()
-        await self.battery.maintain_obligation()
-        await self.physical.maintain_obligations()
+        if self.close_task is None:
+            # Quiesce producers and authority synchronously before any await.
+            self.closed = True
+            self.source.closed = True
+            self.stream.listeners.discard(self.receipts_changed)
+            self.revoke()
+            self.obligation_event.set()
+            self.close_task = asyncio.create_task(self._close())
+        await settle_task(self.close_task)
+
+    async def _close(self):
+        try:
+            if self.obligation_task:
+                try:
+                    await settle_task(self.obligation_task)
+                except asyncio.CancelledError:
+                    # HA cancels entry background tasks during shutdown. Its
+                    # physical journal work has settled before the task exits.
+                    if not self.obligation_task.cancelled():
+                        raise
+            if self.connection:
+                await self.connection.close()
+            await self.battery.maintain_obligation()
+            await self.physical.maintain_obligations()
+        finally:
+            try:
+                await self.stream.close()
+            finally:
+                await settled(self.stream.executor,self.stream.journal.close)
 
 
 APP_REQUESTS = frozenset(('configuration', 'refresh', 'refresh_devices', 'cached_devices', 'cached_home', 'cached_planning',

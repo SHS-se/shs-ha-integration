@@ -12,6 +12,14 @@ the app reducer. A later reply cannot advance another step or invalidate its
 success. Supported identical assignments may retry while retaining all earlier
 unknown effects.
 
+Shutdown first quiesces source callbacks and revokes admission. One service-owned
+completion task settles physical work, drains the receipt worker, and releases
+its journal lease in that order. Concurrent or repeatedly cancelled close callers
+cannot cancel that drain. Unexpected worker termination rejects every outstanding
+receiver, including a batched lookahead, after the in-flight storage call settles;
+it does not rewrite a committed native outcome. Restart alone still sends no
+restoration setting.
+
 Native numbers share a decimal tick codec. It accepts floating representation
 noise, never an adjacent hardware step. The Sigen adapter also preserves the
 specific wire float that its truncating `int(value * 1000)` conversion needs.
