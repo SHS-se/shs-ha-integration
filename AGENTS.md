@@ -1,3 +1,9 @@
+# Other repository
+
+The website, planner and backend are in the separate `smart-home-solutions`
+repository, checked out beside this one as `smart-home-solutions-t-by`. Before
+changing anything there, read its `AGENTS.md` and follow it.
+
 # Integration changes
 
 Follow [the constraint requirements](docs/constraint-requirements.md). Do not
