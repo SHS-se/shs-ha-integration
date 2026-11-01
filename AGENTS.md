@@ -4,6 +4,45 @@ The website, planner and backend are in the separate `smart-home-solutions`
 repository, checked out beside this one as `smart-home-solutions-t-by`. Before
 changing anything there, read its `AGENTS.md` and follow it.
 
+# Working in this checkout
+
+Other sessions and the user work in this tree too. Before editing or committing,
+check the branch and `git status --porcelain`. If not on `main` with a clean tree,
+switch to `main`. If not on `main` with staged or uncommitted changes, stop and
+tell the user instead of switching, stashing or committing; they may be mid-merge.
+
+Stage files by name, never with `git add -A` or `git add .`. Account for every
+line of `git status` before committing; an untracked file you did not write is not
+yours to add. Check `git diff --cached --stat` for changes larger than you made.
+
+Never use `git stash` to compare against `HEAD`; an interrupted command leaves the
+work stranded. Read the test, inspect the history or use a temporary worktree.
+
+# Answering questions about the setup
+
+For what a home has, what is configured or whether prerequisites are met, query
+the Home Assistant connector and search earlier sessions when those tools are
+available. Do not answer from source or vendor documentation alone. Verify entity
+IDs, units and current values before recommending anything built on them.
+
+# Naming and navigation
+
+Call the Home Assistant side "the app" when talking to the user, not "the
+integration"; the repository name predates the conversion. Do not give click paths
+from section ids, `"tab"` values or card titles in `configuration_fields.py`, which
+are not navigation. Check `TABS` in `web/src/configuration-editor.js` or the running
+app, or say the path is unverified. What the planner needs to know about the home
+is asked in the website home profile, not added as an app setting.
+
+# Runtime checkpoint
+
+`home_runtime_checkpoint.py` persists validated dataclasses, and decoding runs every
+`__post_init__` against data written by the previous version. Changing validation on
+a dataclass reachable from `HomeState` makes setup fail outright unless the checkpoint
+migrates it. Bump its `schema_version` and add a one-way, idempotent upgrade beside
+the existing ones, rewriting the stored record rather than discarding it. Reproduce
+the failure first by decoding JSON in the old shape.
+
 # Integration changes
 
 Follow [the constraint requirements](docs/constraint-requirements.md). Do not
