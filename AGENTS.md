@@ -1,3 +1,20 @@
+# Highest priority: planning and execution keep running
+
+Planning on the website and execution in the Home Assistant app are the highest
+priority features of this system. Neither may stop unless a critical error makes it
+impossible to perform its function, such as the database being unavailable.
+
+- **Planning** must be durable, recover from errors automatically, and tolerate data
+  gaps and unavailable sensors. Leaving an individual device out of a plan is
+  acceptable if the user is shown a warning. Stopping the whole planner is not.
+- **Execution** must be durable, recover from errors automatically, and tolerate data
+  gaps and unavailable sensors. Not executing an individual device is acceptable if
+  the user is shown a warning. Stopping all execution is not.
+
+A general preference for failing fast does not apply to these two paths. A device
+that execution cannot act on still follows Control continuity below: it holds the
+last setting SHS sent.
+
 # Other repository
 
 The website, planner and backend are in the separate `smart-home-solutions`
