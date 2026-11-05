@@ -106,6 +106,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         self.source = adapter.HomeAssistantSource(self.hass, entry)
         self.service = GatewayService(self.stream, IDENTITY, self.source)
         self.service.physical, self.service.battery = self.physical, self.gateway
+        self.physical.restoring = False
         self.source.service = self.service
         self.service.import_limit_w = 10000
         installed = dict(self.options, _observed_entities=[])

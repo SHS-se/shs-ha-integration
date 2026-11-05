@@ -521,6 +521,12 @@ class HomeAssistantSource:
         options = record.get('options', options)
         mappings = options.get('device_control_mappings', {})
         if device == 'ev':
+            if not self.service.physical.restoring:
+                # The captured options belong to explicit handover. A meter
+                # change keeps ownership, but import checks use the admitted
+                # current mapping just as scheduled device execution does.
+                options = self.options()
+                mappings = options.get('device_control_mappings', {})
             switch = options['ev_charge_switch_entity']
             ev = [(key,m) for key,m in mappings.items() if m.get('control_type') == 'variable_power'
                   and m.get('control_entity_id') and (not record or m.get('control_entity_id') in record['originals'])]

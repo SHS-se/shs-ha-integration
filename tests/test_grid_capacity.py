@@ -293,6 +293,43 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
             self.source.describe_import('ev', 'switch.ev', 'on')
         self.assertFalse(self.calls)
 
+    async def test_ev_power_mapping_change_uses_current_meter_without_releasing_ownership(self):
+        self.configure_ev()
+        record = self.physical.ownership.records['ev']
+        record['options'] = deepcopy(record['options'])
+        mapping = record['options']['device_control_mappings']['ev']
+        record['options']['device_control_mappings'] = {
+            'sensor.car_lifetime': {**mapping, 'power': 'sensor.retired_ev'},
+            'sensor.car_total': deepcopy(mapping),
+        }
+        captured = deepcopy(record)
+        options = self.source.configuration.options()
+        mapping = options['device_control_mappings']['ev']
+        options['device_control_mappings'] = {
+            'sensor.car_lifetime': {**mapping, 'power': 'sensor.retired_ev'},
+            'sensor.car_total': {**mapping, 'power': 'sensor.combined_ev'},
+        }
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.source.bindings = {'sensor.combined_ev': frozenset(('capture', 'device'))}
+        self.rows['sensor.combined_ev'] = {**self.rows['sensor.ev'], 'state':'8000'}
+        self.rows['sensor.ev']['state'] = '0'
+        self.rows['sensor.house']['state'] = '12000'
+        self.rows['switch.ev']['state'] = 'on'
+        self.rows['number.ev']['state'] = '12'
+        self.service.import_limit_w = 15000
+
+        descriptor = self.source.describe_import('ev', 'switch.ev', 'on')
+        self.assertEqual(descriptor['sensor'], 'sensor.combined_ev')
+        self.assertEqual(self.source.import_required(), 12280)
+        self.assertTrue(self.source.external_ready('ev', entity='switch.ev', value='on'))
+        self.assertEqual(record, captured)
+        self.assertFalse(self.calls)
+
+        self.physical.restoring = True
+        self.source.bindings['sensor.ev'] = frozenset(('capture', 'device'))
+        self.assertEqual(self.source.describe_import('ev', 'switch.ev', 'on')['sensor'], 'sensor.ev')
+        self.assertEqual(record, captured)
+
     async def test_boiler_counter_aliases_share_one_native_load_and_durable_reservation(self):
         self.configure_ev()
         options = self.source.configuration.options()
