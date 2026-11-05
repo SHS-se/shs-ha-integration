@@ -70,6 +70,14 @@ class ControlDeadlineError(ValueError):
     """The next eligible transition already has an explicit wake-up deadline."""
 
 
+class ControlPlanError(ValueError):
+    """An explicit invalid plan command needs a changed plan, not a software retry."""
+
+
+class ControlCommandError(ValueError):
+    """An attempted command did not receive its required physical confirmation."""
+
+
 def correction_details(error):
     if isinstance(error, (HotWaterConfigurationError, GridCapacityConfigurationError)):
         return {"fix": error.fix, "next_step": error.next_step}
@@ -270,7 +278,7 @@ class DeviceOperations:
                 self.check_authority()
                 if predicate():
                     return
-                raise ValueError(error) from None
+                raise ControlCommandError(error) from None
 
     def device_deadline(self, name, when):
         if self.scheduler is not None and not self.verifying:
@@ -385,9 +393,9 @@ class DeviceOperations:
         target_soc = self.fraction(options.get("ev_target_soc_entity"))
         current = finite(slot["ev_target_current_a"])
         if current and not low <= current <= high:
-            raise ValueError("planned EV current exceeds reviewed bounds")
+            raise ControlPlanError("planned EV current exceeds reviewed bounds")
         if not finite(slot["ev_min_current_a"]) <= current <= finite(slot["ev_max_current_a"]):
-            raise ValueError("planned EV current exceeds its slot envelope")
+            raise ControlPlanError("planned EV current exceeds its slot envelope")
         self.check_targets("ev", [entity, switch])
         await self.capture("ev", options, [entity, switch])
         if current == 0 or connected in ("off", "false", "disconnected") or soc >= target_soc:

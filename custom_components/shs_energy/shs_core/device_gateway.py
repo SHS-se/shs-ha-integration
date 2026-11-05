@@ -5,6 +5,7 @@ rechecks permission at each native dispatch and retains physical obligations.
 No cloud client, household coordinator, accounting archive or policy loop lives here.
 """
 import asyncio
+import sqlite3
 from copy import deepcopy
 from dataclasses import dataclass
 from uuid import uuid4
@@ -14,12 +15,13 @@ from datetime import datetime, timedelta, timezone
 
 from .api_contract import INTEGRATION_VERSION
 from .controller_metrics import ControllerMetrics
-from .device_operations import (DeviceOperations, ControlDeadlineError, ControlObservationError, PowerHistoryError,
+from .device_operations import (DeviceOperations, ControlDeadlineError, ControlObservationError, ControlPlanError, ControlCommandError, PowerHistoryError,
                                 correction_details)
 from .device_ownership import DeviceOwnership
 from .operating_modes import device_mode
 from .hot_water import HotWaterConfigurationError, is_hot_water
-from .gateway_journal import AdmissionPending, GatewayConflict
+from .gateway_journal import AdmissionPending, GatewayConflict, GatewayRejected, JournalStorageError
+from .command_transport import CommandUncertain
 
 
 @dataclass(frozen=True)
@@ -306,15 +308,21 @@ class DeviceGateway(DeviceOperations):
                     else:
                         result = await self.execute_device(intent.device, self.active_options, self.slot)
             except Exception as exception:
-                error = {'message':str(exception), 'kind':'deadline' if isinstance(exception, ControlDeadlineError) else 'observation' if isinstance(exception, ControlObservationError) else 'configuration' if isinstance(exception, HotWaterConfigurationError) else 'admission' if isinstance(exception, AdmissionPending) else 'rejected',
+                # In this owner transaction a permission change is a refused
+                # command, not a lost app session. Durable corruption still faults it.
+                if isinstance(exception, (JournalStorageError, sqlite3.DatabaseError)):
+                    raise
+                error = {'message':str(exception), 'kind':'plan' if isinstance(exception, ControlPlanError) else 'deadline' if isinstance(exception, ControlDeadlineError) else 'observation' if isinstance(exception, ControlObservationError) else 'configuration' if isinstance(exception, HotWaterConfigurationError) else 'admission' if isinstance(exception, AdmissionPending) else 'rejected' if isinstance(exception, (GatewayConflict, GatewayRejected, ControlCommandError, CommandUncertain)) else 'internal',
                          'details':correction_details(exception)}
                 if isinstance(exception, ControlObservationError):
                     error.update(entity=exception.entity, unavailable=exception.unavailable)
             finally:
                 self.restoring = False
-            if result is not None and effective != value:
-                result['capacity_curtailed'] = True
-                result['execution_condition'] = {'status':'temporarily_absent', 'cause':'house_import_capacity'}
+            if result is not None and self.capacity is not None:
+                condition = self.capacity.capacity_condition(value, effective)
+                if condition is not None and result.get('execution_condition') is None:
+                    result['capacity_curtailed'] = True
+                    result['execution_condition'] = condition
             response = dict(result=result, error=error, reservation_required=self.reservation_required, ownership=self.ownership.snapshot(),
                         reports=self.reports, reads=sorted(self.reads),
                         deadlines=[{'device':d,'name':n,'at':at} for (d,n),at in self.deadlines.items()],

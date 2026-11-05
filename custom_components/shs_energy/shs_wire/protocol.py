@@ -4,13 +4,14 @@ Capabilities name exact message schemas, not optional fallback behaviours.
 Migration identities describe provenance and never participate in negotiation.
 """
 
-PROTOCOL = 4
+PROTOCOL = 5
 CAPABILITIES = frozenset({
     'ordered-receipts-v1', 'native-devices-v1', 'native-battery-v2',
     'source-queries-v1', 'entity-projection-v2', 'app-requests-v1',
     'app-configuration-v1', 'processed-receipt-retirement-v1',
     'gateway-notifications-v1',
     'source-admission-v1', 'coordinated-capacity-v1',
+    'ev-current-capacity-v1', 'typed-device-plan-errors-v1',
 })
 
 

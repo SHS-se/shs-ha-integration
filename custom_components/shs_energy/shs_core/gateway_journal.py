@@ -72,6 +72,12 @@ class AdmissionPending(GatewayConflict, GatewayRejected):
     """
 
 
+def critical_gateway_error(error):
+    """Integrity and lost session authority cannot be repaired as one device refusal."""
+    return (isinstance(error, (JournalStorageError, sqlite3.DatabaseError))
+            or isinstance(error, GatewayConflict) and not isinstance(error, AdmissionPending))
+
+
 def digest(value):
     return sha256(encoded(value).encode()).hexdigest()
 

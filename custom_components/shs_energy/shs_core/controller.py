@@ -15,7 +15,8 @@ from time import perf_counter
 from uuid import uuid4
 
 from .command_journal import Command
-from .gateway_journal import AdmissionPending
+from .gateway_journal import AdmissionPending, GatewayRejected, critical_gateway_error
+from .command_transport import CommandUncertain
 from . import execution_replan as execution_evidence
 from .native_commands import finite, native_command
 from .device_ownership import DeviceOwnership, decode_ownership
@@ -27,11 +28,12 @@ from .battery_commands import validate_battery_command, battery_mode_key
 from .configuration_values import resolve_battery_quantities, resolve_quantity
 from .device_commands import actuator_targets, execution_setup_errors, validate_commands
 from .hot_water import HotWaterConfigurationError
+from .grid_capacity import GridCapacityConfigurationError
 from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path, pool_permission
 
 _LOGGER = logging.getLogger(__name__)
 from .device_operations import (DeviceOperations, ControlObservationError, ActuatorUnavailableError,
-    PlanChangedError, ControlDeadlineError, correction_details, checked_state, battery_limit_value,
+    PlanChangedError, ControlDeadlineError, ControlPlanError, ControlCommandError, correction_details, checked_state, battery_limit_value,
     DEVICES, CONFIRM_SECONDS,
     OBSERVATION_GRACE_SECONDS)
 
@@ -100,12 +102,16 @@ class ScheduledController(DeviceOperations):
                 raise ControlDeadlineError(error['message'])
             if error['kind'] == 'admission':
                 raise AdmissionPending(error['message'])
+            if error['kind'] == 'plan':
+                raise ControlPlanError(error['message'])
+            if error['kind'] == 'internal':
+                raise RuntimeError(error['message'])
             if error['kind'] == 'observation':
                 exception = ControlObservationError(error['message'], error['entity'],
                     error['details'].get('next_step', ''), unavailable=error['unavailable'])
                 exception.details = error['details']
                 raise exception
-            raise ValueError(error['message'])
+            raise GatewayRejected(error['message'])
         return response['result']
 
     async def execute_pool(self, options, slot):
@@ -171,8 +177,11 @@ class ScheduledController(DeviceOperations):
         self.status[device] = value
         _LOGGER.info("Scheduled %s: %s", device, value)
         for listener, reports in tuple(self.listeners):
-            if reports is None or reports(device):
-                listener()
+            try:
+                if reports is None or reports(device):
+                    listener()
+            except Exception:
+                _LOGGER.exception("Cannot notify a %s status listener; control continues", device)
 
     def publish_battery_status(self):
         """Mirror the battery owner's own status without evaluating other devices."""
@@ -528,132 +537,165 @@ class ScheduledController(DeviceOperations):
             }).hex()
             for device in (*DEVICES, *sorted(generic)):
                 if device == "battery":
-                    self.publish_battery_status()
+                    try:
+                        self.publish_battery_status()
+                    except Exception as err:
+                        self.report(device, 'fault', reason=str(err), retry_automatically=True,
+                                    fix={'kind': 'diagnostics'})
                     continue
                 if devices is not None and device not in devices:
                     continue
                 self.device = device
-                plan, slot = self.coordinator.binding_plan_for(device, options)
-                self.active_options, self.active_slot = deepcopy(options), deepcopy(slot)
-                self.active_plan_id = plan.get("plan_id")
-                if self.scheduler is not None:
-                    self.scheduler.begin_device(device)
-                key = repr((options, plan.get("plan_id"), slot))
-                self.metrics.begin_device(device, {
-                    "mode": device_mode(options, device), "shared": metrics_context,
-                    "override": self.ownership.overrides.get(device),
-                    "ownership": self.ownership.records.get(device), "failed": self.failed.get(device),
-                })
-                self.begin_diagnostic_evaluation(device, options, slot, plan, trigger)
                 try:
-                    record = self.ownership.records.get(device)
-                    inactive = self.inactive_status(device, options)
-                    if record and (inactive or device_mode(options, device) != "controlling"):
-                        # The only handover: the select (Verification included), or a
-                        # setting that removes the device from it. Nothing else hands a
-                        # device back, and Verification must not stop doing so; the
-                        # history of both mistakes is in docs/control-continuity.md.
-                        await self.restore(device)
-                        # The next attempt starts from the handed-back device, not the failed one.
-                        self.failed.pop(device, None)
-                    elif self.devices is None and record and record.get("restoration_pending"):
-                        # Returned to Controlling before the handover finished: control continues.
-                        del record["restoration_pending"]
-                        await self.save()
-                    # Verification only logs commands; a missing plan there is a wait, not a blocked plan.
-                    controlling = device_mode(options, device) == "controlling"
-                    if inactive:
-                        self.failed.pop(device, None)
-                        self.end_gap(device)
-                        self.report(device, **inactive)
-                        continue
-                    if hold := self.hold_reason(device, options):
-                        self.report(device, "idle", reason=self.holding(device, hold), execution_blocked=controlling)
-                        continue
-                    supported = (plan.get("schema_version", 0) >= 7 and device.removeprefix("device:") in slot.get("device_commands", {})
-                                 if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device))
-                    if not slot or not supported:
-                        self.report(device, "idle", reason=self.holding(device, "No current plan for this device"), execution_blocked=controlling)
-                        continue
-                    if device == "pool" and pool_permission(plan, slot) is None:
-                        self.failed.pop(device, None)
-                        self.end_gap(device)
-                        self.report(device, "idle", reason=self.holding(device,
-                            "No accepted pool instruction covers this interval; existing settings are retained"),
-                            execution_blocked=controlling)
-                        continue
-                    if self.failed.get(device) == key:
-                        continue
-                    if device_mode(options, device) == "control_verification":
-                        # Re-evaluate each scheduler tick; observations can change
-                        # the command inside the same quarter.
-                        await self.verify(device, options, slot, plan)
-                        continue
-                    result = (await self.execute_device(device, options, slot) if device.startswith("device:")
-                              else await getattr(self, f"execute_{device}")(options, slot))
-                    self.failed.pop(device, None)
-                    self.end_gap(device)
-                    if result.get("state") == "unsupported":
-                        if "execution_available_entities" in result:
-                            await self.record_execution(device, plan, slot,
-                                {"available_entities": result["execution_available_entities"]})
-                    else:
-                        await self.record_execution(device, plan, slot, result.get("execution_condition"))
-                    self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"))
-                except Exception as err:
-                    if isinstance(err,ControlDeadlineError):
-                        self.failed.pop(device,None)
-                        self.report(device,"pending",reason=str(err),retry_automatically=True,
-                                    execution_blocked=device_mode(options, device) == "controlling")
-                        continue
-                    if isinstance(err, AdmissionPending):
-                        # HA refuses work only until the app holds a settings
-                        # change it is installing; nothing was sent, and the
-                        # device is not faulted (docs/control-continuity.md).
-                        self.failed.pop(device, None)
-                        self.report(device, "pending", reason=self.holding(device,
-                            f"Waiting for Home Assistant to admit the current settings ({err})"),
-                            retry_automatically=True, execution_blocked=device_mode(options, device) == "controlling")
-                        continue
-                    if (isinstance(err, PlanChangedError)
-                            and self.coordinator.current_plan_slot is not None
-                            and self.coordinator.operational_status["actionable"]
-                            and self.options() == options and self.eligible_now(device, options)):
-                        # Replacement is not loss of ownership. Stop the stale
-                        # sequence; the next evaluation reads actual settings
-                        # and completes the new command from that state.
-                        self.failed.pop(device, None)
-                        self.report(device, "pending", reason=str(err), retry_automatically=True,
-                                    **correction_details(err))
-                        if self.scheduler is not None:
-                            self.scheduler.request("plan_replaced")
-                        continue
-                    if (not isinstance(err, (PlanChangedError, HotWaterConfigurationError))
-                            and execution_evidence.requested(execution_evidence.owner_key(device), slot)):
-                        await self.record_execution(device, plan, slot, {"status": "faulted",
-                            "cause": execution_evidence.fault_cause(err),
-                            **({"recover_when_entities": [err.entity]} if isinstance(err, ControlObservationError)
-                                and err.unavailable and err.entity else {})})
-                    if isinstance(err, ControlObservationError) and err.transient:
-                        # Nothing is written or handed back while an entity is away. A
-                        # handover the select already asked for stays queued for its return.
-                        self.failed.pop(device, None)
-                        self.report_gap(device, err, slot=slot, plan=plan)
-                        continue
-                    # Faults never release control; the device keeps the last setting SHS sent.
-                    # A new observation can repair this fault without a new plan.
-                    retry = isinstance(err, ControlObservationError)
-                    if retry:
-                        self.failed.pop(device, None)
-                    else:
-                        self.failed[device] = key
-                    self.report(device, "fault", reason=self.holding(device, str(err)), retry_automatically=retry,
-                                **correction_details(err))
-                finally:
-                    self.metrics.end_device()
+                    plan, slot = self.coordinator.binding_plan_for(device, options)
+                    self.active_options, self.active_slot = deepcopy(options), deepcopy(slot)
+                    self.active_plan_id = plan.get("plan_id")
                     if self.scheduler is not None:
-                        self.scheduler.end_device(device)
-                    await self.finish_diagnostic_evaluation()
+                        self.scheduler.begin_device(device)
+                    key = repr((options, plan.get("plan_id"), slot))
+                    self.metrics.begin_device(device, {
+                        "mode": device_mode(options, device), "shared": metrics_context,
+                        "override": self.ownership.overrides.get(device),
+                        "ownership": self.ownership.records.get(device), "failed": self.failed.get(device),
+                    })
+                    self.begin_diagnostic_evaluation(device, options, slot, plan, trigger)
+                    try:
+                        record = self.ownership.records.get(device)
+                        inactive = self.inactive_status(device, options)
+                        if record and (inactive or device_mode(options, device) != "controlling"):
+                            # The only handover: the select (Verification included), or a
+                            # setting that removes the device from it. Nothing else hands a
+                            # device back, and Verification must not stop doing so; the
+                            # history of both mistakes is in docs/control-continuity.md.
+                            await self.restore(device)
+                            # The next attempt starts from the handed-back device, not the failed one.
+                            self.failed.pop(device, None)
+                        elif self.devices is None and record and record.get("restoration_pending"):
+                            # Returned to Controlling before the handover finished: control continues.
+                            del record["restoration_pending"]
+                            await self.save()
+                        # Verification only logs commands; a missing plan there is a wait, not a blocked plan.
+                        controlling = device_mode(options, device) == "controlling"
+                        if inactive:
+                            self.failed.pop(device, None)
+                            self.end_gap(device)
+                            self.report(device, **inactive)
+                            continue
+                        if hold := self.hold_reason(device, options):
+                            self.report(device, "idle", reason=self.holding(device, hold), execution_blocked=controlling)
+                            continue
+                        supported = (plan.get("schema_version", 0) >= 7 and device.removeprefix("device:") in slot.get("device_commands", {})
+                                     if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device))
+                        if not slot or not supported:
+                            self.report(device, "idle", reason=self.holding(device, "No current plan for this device"), execution_blocked=controlling)
+                            continue
+                        if device == "pool" and pool_permission(plan, slot) is None:
+                            self.failed.pop(device, None)
+                            self.end_gap(device)
+                            self.report(device, "idle", reason=self.holding(device,
+                                "No accepted pool instruction covers this interval; existing settings are retained"),
+                                execution_blocked=controlling)
+                            continue
+                        if self.failed.get(device) == key:
+                            continue
+                        if device_mode(options, device) == "control_verification":
+                            # Re-evaluate each scheduler tick; observations can change
+                            # the command inside the same quarter.
+                            await self.verify(device, options, slot, plan)
+                            continue
+                        result = (await self.execute_device(device, options, slot) if device.startswith("device:")
+                                  else await getattr(self, f"execute_{device}")(options, slot))
+                        self.failed.pop(device, None)
+                        self.end_gap(device)
+                        if result.get("state") == "unsupported":
+                            if "execution_available_entities" in result:
+                                await self.record_execution(device, plan, slot,
+                                    {"available_entities": result["execution_available_entities"]})
+                        else:
+                            await self.record_execution(device, plan, slot, result.get("execution_condition"))
+                        self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"))
+                    except Exception as err:
+                        if not isinstance(err, (ControlObservationError, ControlPlanError, PlanChangedError,
+                                ControlDeadlineError, AdmissionPending, HotWaterConfigurationError,
+                                GridCapacityConfigurationError, GatewayRejected, ControlCommandError, CommandUncertain)):
+                            raise  # Software/bookkeeping failures are not failed equipment.
+                        if isinstance(err,ControlDeadlineError):
+                            self.failed.pop(device,None)
+                            self.report(device,"pending",reason=str(err),retry_automatically=True,
+                                        execution_blocked=device_mode(options, device) == "controlling")
+                            continue
+                        if isinstance(err, AdmissionPending):
+                            # HA refuses work only until the app holds a settings
+                            # change it is installing; nothing was sent, and the
+                            # device is not faulted (docs/control-continuity.md).
+                            self.failed.pop(device, None)
+                            self.report(device, "pending", reason=self.holding(device,
+                                f"Waiting for Home Assistant to admit the current settings ({err})"),
+                                retry_automatically=True, execution_blocked=device_mode(options, device) == "controlling")
+                            continue
+                        if (isinstance(err, PlanChangedError)
+                                and self.coordinator.current_plan_slot is not None
+                                and self.coordinator.operational_status["actionable"]
+                                and self.options() == options and self.eligible_now(device, options)):
+                            # Replacement is not loss of ownership. Stop the stale
+                            # sequence; the next evaluation reads actual settings
+                            # and completes the new command from that state.
+                            self.failed.pop(device, None)
+                            self.report(device, "pending", reason=str(err), retry_automatically=True,
+                                        **correction_details(err))
+                            if self.scheduler is not None:
+                                self.scheduler.request("plan_replaced")
+                            continue
+                        if (isinstance(err, (ControlObservationError, GatewayRejected, ControlCommandError, CommandUncertain))
+                                and execution_evidence.requested(execution_evidence.owner_key(device), slot)):
+                            await self.record_execution(device, plan, slot, {"status": "faulted",
+                                "cause": execution_evidence.fault_cause(err),
+                                **({"recover_when_entities": [err.entity]} if isinstance(err, ControlObservationError)
+                                    and err.unavailable and err.entity else {})})
+                        if isinstance(err, ControlObservationError) and err.transient:
+                            # Nothing is written or handed back while an entity is away. A
+                            # handover the select already asked for stays queued for its return.
+                            self.failed.pop(device, None)
+                            self.report_gap(device, err, slot=slot, plan=plan)
+                            continue
+                        # Faults never release control; the device keeps the last setting SHS sent.
+                        # A new observation can repair this fault without a new plan.
+                        retry = isinstance(err, ControlObservationError)
+                        if retry:
+                            self.failed.pop(device, None)
+                        else:
+                            self.failed[device] = key
+                        self.report(device, "fault", reason=self.holding(device, str(err)), retry_automatically=retry,
+                                    **correction_details(err))
+                except Exception as err:
+                    if critical_gateway_error(err):
+                        raise
+                    # Binding and bookkeeping are part of this owner's turn. They
+                    # cannot suppress healthy siblings or manufacture physical evidence.
+                    self.failed.pop(device, None)
+                    self.report(device, "fault", reason=self.holding(device, str(err)),
+                                retry_automatically=True, execution_blocked=device_mode(options, device) == "controlling",
+                                fix={"kind": "diagnostics"})
+                    if self.scheduler is not None:
+                        self.scheduler.device_deadline(device, "evaluation_retry",
+                            datetime.now(timezone.utc) + timedelta(seconds=5))
+                    _LOGGER.exception("Cannot evaluate %s; other devices continue", device)
+                finally:
+                    try:
+                        if self.metrics.active is not None:
+                            self.metrics.end_device()
+                        if self.scheduler is not None:
+                            self.scheduler.end_device(device)
+                    except Exception as err:
+                        self.diagnostics_error = str(err)
+                        _LOGGER.warning("Cannot finish %s bookkeeping: %s", device, err)
+                    try:
+                        await self.finish_diagnostic_evaluation()
+                    except Exception as err:
+                        self.diagnostic_evaluation = None
+                        self.diagnostics_error = str(err)
+                        self.diagnostics_failed_evaluations += 1
+                        _LOGGER.warning("Cannot finish %s diagnostics: %s", device, err)
 
     async def async_stop(self, _event=None):
         if self.closed:

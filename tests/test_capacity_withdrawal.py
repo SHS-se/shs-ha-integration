@@ -114,12 +114,12 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
         await self.source.coordinate_battery(self.stop,lambda:None)
         self.assertEqual(float(self.rows['number.ev']['state']),13)
 
-    async def test_new_feasible_intent_clears_scoped_curtailment_without_original_16a(self):
+    async def test_reduced_intent_retains_cap_until_original_demand_has_headroom(self):
         await self.configure_owner()
         await self.source.coordinate_battery(self.stop,lambda:None)
         capped=await self.owner.perform({**self.value,'request_id':'curtailed'})
         self.assertEqual(capped['result']['execution_condition'],
-            {'status':'temporarily_absent','cause':'house_import_capacity'})
+            {'status':'capacity_limited','cause':'house_import_capacity','maximum_current_a':13})
         import test_execution_replan as delivery_fixtures
         delivery=delivery_fixtures.ExecutionReplanTests()
         delivery.setUp()
@@ -129,19 +129,41 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
         body=delivery.h.client.submit_optimisation.call_args.args[0]
         availability=body['snapshot']['execution_availability']
         self.assertEqual(len(availability),1)
-        self.assertEqual(availability[0]['status'],'temporarily_absent')
+        self.assertEqual(availability[0]['status'],'capacity_limited')
+        self.assertEqual(availability[0]['maximum_current_a'],13)
         self.assertEqual(availability[0]['blocked_intervals'][0]['start'],slot['start'])
         feasible={**self.value,'request_id':'feasible','parameters':{**self.value['parameters'],'current_a':13}}
         healthy=await self.owner.perform(feasible)
         self.assertIsNone(healthy['error'])
-        self.assertIsNone(healthy['result'].get('execution_condition'))
-        self.assertEqual(self.source.capacity['coordination']['caps'],{})
+        self.assertEqual(healthy['result']['execution_condition'], capped['result']['execution_condition'])
+        self.assertTrue(self.source.capacity['coordination']['caps'])
         self.assertEqual(float(self.rows['number.ev']['state']),13)
         await delivery.h.async_execution_observed('ev',delivery.plan,{**slot,'ev_target_current_a':13},
             healthy['result'].get('execution_condition'))
         journal=delivery.rig.records.saved['execution_replanning']
-        self.assertNotIn('$ev',journal['owners'])
-        self.assertEqual(journal['pending']['$ev']['status'],'recovered')
+        self.assertEqual(journal['owners']['$ev']['status'],'capacity_limited')
+        self.assertFalse(journal['pending'], 'A reduced replacement is not full-demand recovery')
+        self.base_w = 1000
+        self.rows['sensor.house']['state'] = str(self.base_w + 13*690)
+        await self.record('sensor.house')
+        recovered = await self.source.capacity_recoveries()
+        self.assertEqual(recovered, ['$ev'])
+        await delivery.h.async_capacity_recovered(recovered)
+        journal = delivery.rig.records.saved['execution_replanning']
+        self.assertNotIn('$ev', journal['owners'])
+        self.assertEqual(journal['pending']['$ev']['status'], 'recovered')
+        resumed = await self.owner.perform({**feasible, 'request_id':'full-headroom'})
+        self.assertIsNone(resumed['result'].get('execution_condition'))
+        self.assertEqual(self.source.capacity['coordination']['caps'], {})
+
+    async def test_positive_capacity_does_not_hide_a_disconnected_car(self):
+        await self.configure_owner()
+        await self.source.coordinate_battery(self.stop,lambda:None)
+        self.rows['binary_sensor.ev']['state'] = 'off'
+        result = await self.owner.perform({**self.value, 'request_id':'disconnected'})
+        self.assertIsNone(result['error'])
+        self.assertEqual(result['result']['execution_condition'],
+                         {'status':'temporarily_absent', 'cause':'vehicle_disconnected'})
 
     async def test_newest_protected_water_does_not_block_older_reducible_ev(self):
         await self.configure_owner()

@@ -1541,7 +1541,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       pending ? "Automatically updating the household plan." : "The plan includes the observed device availability.";
     return `<aside class="card" role="status" data-execution-replanning><h2>Device availability</h2>
       <p>${progress} Other executable loads keep their commitments for the next hour.</p>
-      ${owners.length ? `<ul>${owners.map(change => `<li><strong>${this._escape(name(change.owner))}:</strong> ${change.status === "faulted" ? "Unavailable until recovery is observed." : change.owner === "$ev" ? "Future charging remains conditional on connection." : "The missed interval will be rescheduled."}</li>`).join("")}</ul>` : ""}</aside>`;
+      ${owners.length ? `<ul>${owners.map(change => `<li><strong>${this._escape(name(change.owner))}:</strong> ${change.status === "capacity_limited" ? `Charging remains available at ${this._escape(change.maximum_current_a)} A; remaining work is rescheduled.` : change.status === "faulted" ? "Unavailable until recovery is observed." : change.owner === "$ev" ? "Future charging remains conditional on connection." : "The missed interval will be rescheduled."}</li>`).join("")}</ul>` : ""}</aside>`;
   }
 
   _renderReplanRecommendations() {

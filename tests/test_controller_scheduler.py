@@ -95,6 +95,39 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.calls.clear()
 
+    async def test_shared_failure_keeps_queued_work_and_retries_without_a_new_sensor_event(self):
+        from unittest.mock import AsyncMock
+        self.controller.initialized = True
+        self.controller._async_tick = AsyncMock(side_effect=[RuntimeError('Synthetic policy admission'), None])
+        self.scheduler.request('manual', {'ev'})
+        await self.drain()
+        self.assertIn('ev', self.scheduler.pending)
+        self.assertEqual(self.controller.status['ev']['state'], 'pending')
+        self.assertEqual(self.controller._async_tick.await_count, 1)
+        self.advance(5)
+        await self.drain()
+        self.assertEqual(self.controller._async_tick.await_count, 2)
+        self.assertFalse(self.scheduler.pending)
+        self.assertNotIn((None, 'tick_retry'), self.scheduler.deadlines)
+
+    async def test_owner_binding_retry_recovers_with_the_same_plan_and_no_new_reading(self):
+        from unittest.mock import AsyncMock
+        self.options['device_modes'] = {'$ev':'controlling','$pool':'controlling'}
+        await self.controller.async_start()
+        original = self.coordinator.binding_plan_for
+        def broken(device, options):
+            if device == 'ev':raise KeyError('Synthetic binding')
+            return original(device, options)
+        self.coordinator.binding_plan_for = broken
+        self.scheduler.request('manual', {'ev'})
+        await self.drain()
+        self.assertEqual(self.controller.status['ev']['state'], 'fault')
+        self.assertIn(('ev', 'evaluation_retry'), self.scheduler.deadlines)
+        self.coordinator.binding_plan_for = original
+        self.advance(5)
+        await self.drain()
+        self.assertEqual(self.controller.status['ev']['state'], 'commanded')
+
     async def test_idle_pool_temperature_storm_does_not_evaluate_and_heating_slot_does(self):
         await self.start_live_pool()
         before=self.evaluations('pool')

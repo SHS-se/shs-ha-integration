@@ -77,3 +77,25 @@ class HistoryRetryTests(unittest.IsolatedAsyncioTestCase):
                 await engine.calendar()
         self.assertFalse(h.attention_items)
         self.assertEqual(push.await_count, 2)
+
+    async def test_unexpected_price_failure_keeps_healthy_backend_running_and_clears_on_recovery(self):
+        rigs = [Rig(now=datetime(2026,10,16,10,tzinfo=timezone.utc)) for _ in range(2)]
+        failed,healthy = [r.household for r in rigs]
+        calls = 0
+        async def prices():
+            nonlocal calls
+            calls += 1
+            if calls == 1:raise TypeError('Synthetic source shape')
+        failed.async_price_refresh = AsyncMock(side_effect=prices)
+        healthy.async_price_refresh = AsyncMock()
+        for h in (failed,healthy):h.async_scheduled_push = AsyncMock()
+        engine = AppEngine.__new__(AppEngine)
+        engine.households = {'production':failed,'test':healthy}
+        engine.profiler = AppProfiler();engine.wake_projection = asyncio.Event()
+        async def retry(_delay):
+            healthy.async_price_refresh.assert_awaited_once()
+            if calls == 2:raise asyncio.CancelledError
+            self.assertTrue(any(i['stage']=='prices' for i in failed.attention_items))
+        with patch('shs_app.engine.asyncio.sleep',side_effect=retry):
+            with self.assertRaises(asyncio.CancelledError):await engine.calendar()
+        self.assertFalse(any(i['stage']=='prices' for i in failed.attention_items))

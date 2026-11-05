@@ -1645,3 +1645,13 @@ test('mapped power source correction opens the device field and clears after sav
   panel._data.attention=[];
   assert.equal(panel._fieldProblems(field.key,'mapping','water').length,0);
 });
+
+test('reduced car current is described as available charging rather than a disconnected car', () => {
+  const panel = Object.create(context.Panel.prototype);
+  panel._data = {readiness: {execution_replanning: {owners: {$ev: {
+    owner: '$ev', status: 'capacity_limited', cause: 'house_import_capacity', maximum_current_a: 13,
+  }}}}};
+  const html = panel._renderExecutionReplanning();
+  assert.match(html, /Charging remains available at 13 A/);
+  assert.doesNotMatch(html, /conditional on connection|Unavailable until recovery/);
+});

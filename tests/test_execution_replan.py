@@ -493,3 +493,19 @@ class ForcedReceiptTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ShsApiError, 'invalid job receipt'):
             await client.push_optimisation([], {'snapshot_id': 'snapshot'}, execution_replan={
                 'request_id': 'request', 'accepted_plan_id': 'accepted', 'observed_at': '2026-10-23T10:00:00Z', 'changes': []})
+
+
+class ReducedCapacityEvidenceTests(unittest.TestCase):
+    def test_current_changes_are_durable_and_same_episode_does_not_repeat(self):
+        journal = {}
+        slot = {'start': '2026-01-01T00:00:00+00:00', 'ev_target_current_a': 16}
+        condition = {'status':'capacity_limited', 'cause':'house_import_capacity', 'maximum_current_a':13}
+        self.assertTrue(evidence.observe(journal, '$ev', slot, condition))
+        captured = deepcopy(journal['pending']['$ev'])
+        evidence.admitted(journal, [captured])
+        journal = json.loads(json.dumps(journal))
+        self.assertFalse(evidence.observe(journal, '$ev', slot, condition))
+        self.assertFalse(journal['pending'])
+        self.assertTrue(evidence.observe(journal, '$ev', slot, {**condition, 'maximum_current_a':7}))
+        self.assertEqual(journal['pending']['$ev']['maximum_current_a'], 7)
+        self.assertEqual(captured['maximum_current_a'], 13)

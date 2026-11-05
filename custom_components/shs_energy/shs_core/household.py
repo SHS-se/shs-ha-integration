@@ -3500,7 +3500,7 @@ class Household:
             changed = False
             for owner in set(owners):
                 row = journal.get("owners", {}).get(owner)
-                if (not row or row["status"] != "temporarily_absent"
+                if (not row or row["status"] not in ("temporarily_absent", "capacity_limited")
                         or execution_evidence.cause_identity(row["cause"]) != "house_import_capacity"
                         or device_mode(options, owner) != "controlling"):
                     continue

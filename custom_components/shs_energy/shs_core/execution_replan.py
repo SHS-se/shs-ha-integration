@@ -5,7 +5,7 @@ never resets an episode: unchanged equipment cannot create a replan loop.
 """
 from copy import deepcopy
 from datetime import datetime, timedelta
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, NotRequired
 
 
 class BlockedInterval(TypedDict):
@@ -15,9 +15,10 @@ class BlockedInterval(TypedDict):
 
 class ExecutionChange(TypedDict):
     owner: str
-    status: Literal['temporarily_absent', 'faulted', 'recovered']
+    status: Literal['temporarily_absent', 'faulted', 'recovered', 'capacity_limited']
     cause: str
     blocked_intervals: list[BlockedInterval]
+    maximum_current_a: NotRequired[int]
 
 
 class ExecutionReplan(TypedDict):
@@ -98,18 +99,24 @@ def observe(journal, owner, slot, condition, *, recovery_requires_replan=False):
         pending.pop(owner, None)
         return False
     status, cause = condition['status'], condition['cause']
-    if status not in ('faulted', 'temporarily_absent'):
+    if status not in ('faulted', 'temporarily_absent', 'capacity_limited'):
         raise ValueError('unsupported execution availability')
     intervals = []
     if slot and requested(owner, slot):
         start = datetime.fromisoformat(slot['start'].replace('Z', '+00:00'))
         intervals = [{'start': start.isoformat(), 'end': (start + timedelta(minutes=15)).isoformat()}]
     change = {'owner': owner, 'status': status, 'cause': cause, 'blocked_intervals': intervals}
-    if previous and previous['status'] == status and cause_identity(previous['cause']) == cause_identity(cause):
+    if status == 'capacity_limited':
+        maximum = condition['maximum_current_a']
+        if owner != '$ev' or type(maximum) is not int or maximum <= 0 or cause != 'house_import_capacity':
+            raise ValueError('EV capacity requires a positive integer current ceiling')
+        change['maximum_current_a'] = maximum
+    if (previous and previous['status'] == status and cause_identity(previous['cause']) == cause_identity(cause)
+            and previous.get('maximum_current_a') == change.get('maximum_current_a')):
         if (status == 'faulted' and previous['blocked_intervals']) or not intervals or previous['blocked_intervals'] == intervals:
             return False
     # Keep the last blocked absolute opportunity through off slots/replacement.
-    if previous and status == 'temporarily_absent' and not intervals:
+    if previous and status in ('temporarily_absent', 'capacity_limited') and not intervals:
         change['blocked_intervals'] = previous['blocked_intervals']
     rows[owner] = change
     sources = condition.get('recover_when_entities')

@@ -245,6 +245,60 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         finally:
             task.cancel();await asyncio.gather(task,return_exceptions=True)
 
+    async def test_periodic_unexpected_source_error_retries_without_ending_its_lane(self):
+        engine=self.engine();dashboard=self.dashboard(engine)
+        retried=asyncio.Event()
+        calls=0
+        async def operation():
+            nonlocal calls
+            calls+=1
+            if calls==1:raise KeyError('Synthetic optional source')
+            retried.set();await asyncio.Future()
+        task=asyncio.create_task(engine.periodic(operation,0))
+        try:
+            await asyncio.wait_for(retried.wait(),1)
+            self.assertFalse(task.done())
+            self.assertIn('Synthetic optional source',dashboard.payload()['attention'][0]['detail'])
+        finally:
+            task.cancel();await asyncio.gather(task,return_exceptions=True)
+
+    async def test_projection_retries_current_inputs_and_keeps_sibling_work_alive(self):
+        from unittest.mock import AsyncMock
+        engine=self.engine();dashboard=self.dashboard(engine)
+        retry,release,recovered=asyncio.Event(),asyncio.Event(),asyncio.Event()
+        calls=0
+        async def project():
+            nonlocal calls
+            calls+=1
+            if calls==1:
+                engine.operation_error('projection_build',TypeError('Synthetic device display'))
+                raise TypeError('Synthetic device display')
+            retry.set();await release.wait()
+            engine.operation_error('projection_build',None)
+            recovered.set();await asyncio.Future()
+        engine.project=project
+        engine.wake_projection.set()
+        with patch('shs_app.engine.RetryBackoff',return_value=SimpleNamespace(next=lambda:0,reset=lambda:None)):
+            task=asyncio.create_task(engine.projections())
+            sibling=asyncio.create_task(asyncio.Event().wait())
+            try:
+                await asyncio.wait_for(retry.wait(),1)
+                self.assertFalse(task.done());self.assertFalse(sibling.done())
+                self.assertIn('Synthetic device display',dashboard.payload()['attention'][0]['detail'])
+                release.set();await asyncio.wait_for(recovered.wait(),1)
+                self.assertEqual(dashboard.payload()['attention'],[])
+            finally:
+                task.cancel();sibling.cancel()
+                await asyncio.gather(task,sibling,return_exceptions=True)
+
+    async def test_critical_session_or_storage_error_still_ends_auxiliary_lane(self):
+        import sqlite3
+        engine=self.engine()
+        for error in (GatewayConflict('Synthetic lost session'),sqlite3.DatabaseError('Synthetic control DB')):
+            async def operation():raise error
+            with self.assertRaises(type(error)):
+                await engine.periodic(operation,0)
+
     async def test_source_admission_finishes_before_a_new_configuration_is_installed(self):
         engine=self.engine()
         await engine.load();await engine.activate()

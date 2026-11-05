@@ -19,7 +19,7 @@ from shs_core.controller_inputs import ControllerInputs
 from shs_core.controller_scheduler import ControllerScheduler
 from shs_core.durable_record import DurableRecord
 from shs_core.execution_storage import ExecutionStorage
-from shs_core.gateway_journal import GatewayConflict, validate_identity
+from shs_core.gateway_journal import GatewayConflict, critical_gateway_error, validate_identity
 from shs_core.household import Household
 from shs_core.household_ports import HouseholdPorts
 from shs_core.receipt_inbox import ReceiptInbox
@@ -51,6 +51,11 @@ from shs_core.source_admission import source_bindings, pool_paused
 from shs_core.operational_attention import pipeline_issue, merge_attention
 from shs_core.configuration_schema import resolve_configuration
 from shs_core.controller_inputs import configured_entity_ids
+
+
+def critical_runtime_error(error):
+    """Only lost session authority or durable integrity requires restarting all lanes."""
+    return (isinstance(error, (GatewayDisconnected, BackendChanged)) or critical_gateway_error(error))
 
 
 LOGGER = logging.getLogger(__name__)
@@ -459,11 +464,21 @@ class AppEngine:
                 self.operation_error('projection', None, stage='projection')
 
     async def projections(self):
+        retries = RetryBackoff()
         while True:
             await self.wake_projection.wait()
             self.wake_projection.clear()
-            await self.project()
-            await asyncio.sleep(1)
+            try:
+                await self.project()
+            except Exception as error:
+                if critical_runtime_error(error):
+                    raise
+                LOGGER.warning('Status projection failed; execution continues: %s', error)
+                await asyncio.sleep(retries.next())
+                self.wake_projection.set()
+            else:
+                retries.reset()
+                await asyncio.sleep(1)
 
     async def periodic(self, operation, seconds):
         profile = PERIODIC_PROFILES.get(operation.__name__)
@@ -475,9 +490,9 @@ class AppEngine:
                 else:
                     await operation()
                 self.operation_error('periodic:'+operation.__name__, None)
-            except (ValueError, OSError) as error:
+            except Exception as error:
                 self.operation_error('periodic:'+operation.__name__, error)
-                if isinstance(error, GatewayConflict): raise
+                if critical_runtime_error(error): raise
                 LOGGER.warning('Background operation %s failed: %s: %s',operation.__name__,type(error).__name__,error,exc_info=LOGGER.isEnabledFor(logging.DEBUG))
             await asyncio.sleep(seconds)
 
@@ -638,25 +653,35 @@ class AppEngine:
         await self.gateway.call('reply',{'request_id':request['id'],'result':result,'error':error})
 
     async def calendar(self):
-        last_quarter = None
-        last_day = None
+        # Each backend owns its successful clocks. A failed source cannot
+        # advance its clock or prevent a healthy backend from being refreshed.
+        last_quarter, last_day = {}, {}
         while True:
-            now = self.household.local_now()
-            quarter = (now.date(),now.hour,now.minute//15,now.fold)
-            new_quarter = quarter != last_quarter
-            if new_quarter:
-                for h in self.households.values():
-                    await h.async_price_refresh()
-                last_quarter = quarter
-            daily_due = last_day != now.date() and (now.hour,now.minute) >= (PUSH_TIME_HOUR,PUSH_TIME_MINUTE)
-            history = [(env,h) for env,h in self.households.items() if daily_due or (
-                new_quarter and any(item.get('stage') in ('history_pricing','history_upload')
-                                    for item in h.attention_items))]
-            if history:
-                with self.profiler.measure('history_upload'):
-                    await asyncio.gather(*(self.cloud_job(env,h.async_scheduled_push,stage='history_upload') for env,h in history))
-            if daily_due:
-                last_day = now.date()
+            for environment, household in self.households.items():
+                stage = 'prices'
+                try:
+                    now = household.local_now()
+                    quarter = (now.date(),now.hour,now.minute//15,now.fold)
+                    new_quarter = quarter != last_quarter.get(environment)
+                    if new_quarter:
+                        await household.async_price_refresh()
+                        household._pipeline_error('prices', None)
+                        last_quarter[environment] = quarter
+                    daily_due = last_day.get(environment) != now.date() and (now.hour,now.minute) >= (PUSH_TIME_HOUR,PUSH_TIME_MINUTE)
+                    history = daily_due or (new_quarter and any(
+                        item.get('stage') in ('history_pricing','history_upload') for item in household.attention_items))
+                    if history:
+                        stage = 'history_upload'
+                        with self.profiler.measure('history_upload'):
+                            await household.async_scheduled_push()
+                    if daily_due:
+                        last_day[environment] = now.date()
+                except Exception as error:
+                    if critical_runtime_error(error):
+                        raise
+                    household._pipeline_error(stage,error)
+                    self.wake_projection.set()
+                    LOGGER.warning('%s calendar %s failed; other backends continue: %s',environment,stage,error)
             await asyncio.sleep(5)
 
     async def run(self):

@@ -676,8 +676,11 @@ class HomeAssistantSource:
             effect = self.describe_import(owner,entity,value['parameters']['current_a'])
             if effect['device'] != cap['device']:
                 return value
+            resume = self.capacity_resume_effect(cap)
             try:
-                self.admit_import(effect)
+                if resume is None:
+                    raise ControlDeadlineError('Waiting for original-demand capacity evidence')
+                self.admit_import(resume)
             except ControlDeadlineError:
                 pass
             else:
@@ -706,6 +709,20 @@ class HomeAssistantSource:
                     await self.capacity_update('remove_cap',cap['device'])
                     return value
         return capped_intention(value,cap['maximum_w'])
+
+    def capacity_condition(self, value, effective):
+        """A still-active positive cap is reduced service, including when the plan now fits it."""
+        cap = next((c for c in self.capacity.get('coordination', {}).get('caps', {}).values()
+                    if c['owner'] == value['device']), None)
+        if cap is not None and value['device'] == 'ev':
+            entity, low, _ = self.service.physical.ev_mapping(self.options())
+            current = ev_current_ceiling(cap['maximum_w'], self.report(entity)['attributes'], low)
+            if current > 0:
+                return {'status': 'capacity_limited', 'cause': 'house_import_capacity',
+                        'maximum_current_a': int(current)}
+        if effective != value or cap is not None:
+            return {'status': 'temporarily_absent', 'cause': 'house_import_capacity'}
+        return None
 
     def capacity_resume_effect(self, cap):
         row = self.capacity['devices'].get(cap['device'],{})

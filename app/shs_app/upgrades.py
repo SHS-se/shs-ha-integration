@@ -29,11 +29,11 @@ async def open_runtime_schema(root, identity, activation, release):
             raise GatewayConflict('Finish the original runtime activation before upgrading')
         await record.async_save(expected)
     elif current != expected:
-        # Protocol 3 was the previous app/gateway handshake, not the imported
-        # provenance pair's protocol. Only an already active identical runtime
-        # can roll its app-owned marker forward under AppEngine's writer lease.
-        previous = dict(schema=1, protocol=3, identity=identity)
-        if (PROTOCOL == 4 and current == previous
+        # Known protocol 3/4 markers have this identical storage shape. Roll
+        # only the app-owned handshake marker forward in one atomic write;
+        # imported provenance, commands, receipts and checkpoints stay exact.
+        previous = [dict(schema=1, protocol=version, identity=identity) for version in (3, 4)]
+        if (PROTOCOL == 5 and current in previous
                 and type(current.get('schema')) is int and type(current.get('protocol')) is int
                 and activation is not None and activation['state'] == 'active'):
             await record.async_save(expected)

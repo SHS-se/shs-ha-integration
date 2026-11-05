@@ -1,8 +1,12 @@
 """Device-scoped event scheduling with one-shot deadlines and no idle sweep."""
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from .source_admission import pool_paused, pool_temperature_sources, temperature_available, temperature_metadata
+from .gateway_journal import critical_gateway_error
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ControllerScheduler:
@@ -54,6 +58,22 @@ class ControllerScheduler:
             trigger = next(iter(reasons)) if len(reasons) == 1 else "coalesced"
             try:
                 await self.controller.async_tick(trigger=trigger, devices=devices)
+                self.cancel((None, 'tick_retry'))
+            except Exception as error:
+                if critical_gateway_error(error):
+                    raise
+                # A shared admission failure must not lose the event that
+                # requested evaluation. Restart also reevaluates every owner.
+                for device, received in self.dispatched.items():
+                    self.pending.setdefault(device, received)
+                self.reasons.update(reasons)
+                for device in (devices if devices is not None else self.controller.status):
+                    self.controller.report(device, 'pending', reason=str(error),
+                        retry_automatically=True, execution_blocked=True, fix={'kind': 'diagnostics'})
+                _LOGGER.exception('Controller evaluation interrupted; retaining queued work')
+                self._schedule((None, 'tick_retry'), self.now() + timedelta(seconds=5),
+                               lambda: self.request('timer'))
+                return
             finally:
                 self.dispatched = {}
 
@@ -102,7 +122,8 @@ class ControllerScheduler:
         old = self.dependencies.get(device, set())
         current = self.reads.pop(device, set())
         # A suppressed permanent failure still needs its recovery dependencies.
-        if not current and device in self.controller.failed:
+        if not current and (device in self.controller.failed or
+                            self.controller.status.get(device, {}).get("retry_automatically")):
             current = old
         self.dependencies[device] = current
         in_use = set().union(*self.dependencies.values())

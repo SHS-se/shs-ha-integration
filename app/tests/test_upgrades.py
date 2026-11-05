@@ -28,7 +28,7 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             result = await open_runtime_schema(self.root, self.identity, self.activation,
                 dict(self.pair, app_version=version, core_sha256='c'*64))
             self.assertEqual(result['identity'],self.identity)
-            self.assertEqual(result['protocol'],4)
+            self.assertEqual(result['protocol'],5)
         self.assertEqual(self.activation,original)
 
     async def test_rejects_foreign_identity_and_future_schema_without_rewriting(self):
@@ -88,7 +88,7 @@ class ExistingProtocolMarkerTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(RecordStore, '_write', record_write):
                 migrated = await open_runtime_schema(self.root, self.identity, self.activation,
                     dict(self.pair, app_version='new', core_sha256='c'*64))
-                self.assertEqual(migrated, dict(schema=1, protocol=4, identity=self.identity))
+                self.assertEqual(migrated, dict(schema=1, protocol=5, identity=self.identity))
                 first_bytes = self.record.path.read_bytes()
                 reopened = await open_runtime_schema(self.root, self.identity, self.activation,
                     dict(self.pair, app_version='newer', core_sha256='d'*64))
@@ -101,6 +101,14 @@ class ExistingProtocolMarkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.activation, original_activation)
         self.assert_provenance_unchanged()
 
+    async def test_protocol_four_marker_rolls_forward_without_altering_control_evidence(self):
+        await self.seed_previous_marker()
+        await self.record.async_save(dict(self.previous, protocol=4))
+        result = await open_runtime_schema(self.root,self.identity,self.activation,self.pair)
+        self.assertEqual(result['protocol'],5)
+        self.assert_provenance_unchanged()
+        self.assertEqual(await open_runtime_schema(self.root,self.identity,self.activation,self.pair),result)
+
     async def test_failed_atomic_replace_preserves_protocol_three_and_retry_completes(self):
         await self.seed_previous_marker()
         before = self.record.path.read_bytes()
@@ -111,7 +119,7 @@ class ExistingProtocolMarkerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.record.path.read_bytes(), before)
             self.assertEqual(await self.record.async_load(), self.previous)
             migrated = await open_runtime_schema(self.root, self.identity, self.activation, self.pair)
-            self.assertEqual(migrated['protocol'], 4)
+            self.assertEqual(migrated['protocol'], 5)
             self.assertEqual(await self.record.async_load(), migrated)
         self.assert_provenance_unchanged()
 
@@ -127,7 +135,7 @@ class ExistingProtocolMarkerTests(unittest.IsolatedAsyncioTestCase):
             with patch('shs_app.records.os.fsync', side_effect=interrupted_sync):
                 with self.assertRaisesRegex(OSError, 'directory sync interruption'):
                     await open_runtime_schema(self.root, self.identity, self.activation, self.pair)
-            self.assertEqual((await self.record.async_load())['protocol'], 4)
+            self.assertEqual((await self.record.async_load())['protocol'], 5)
             installed = self.record.path.read_bytes()
             await open_runtime_schema(self.root, self.identity, self.activation, self.pair)
             self.assertEqual(self.record.path.read_bytes(), installed)
@@ -146,7 +154,7 @@ class ExistingProtocolMarkerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_or_foreign_previous_marker_is_never_rewritten(self):
         await self.seed_previous_marker()
-        for value in (dict(self.previous, protocol=2), dict(self.previous, protocol=5),
+        for value in (dict(self.previous, protocol=2), dict(self.previous, protocol=6),
                       dict(self.previous, schema=2), dict(self.previous, schema=True),
                       dict(self.previous, identity=dict(self.identity, migration_id='foreign')),
                       dict(self.previous, unknown='field')):
