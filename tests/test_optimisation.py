@@ -33,6 +33,7 @@ from shs_core.optimisation import (  # noqa: E402
     utc_slots,
     validate_service_windows,
     validate_plan_contract,
+    with_device_quarters,
 )
 
 
@@ -1137,3 +1138,21 @@ class RemedyClassificationTests(unittest.TestCase):
             validate_plan_contract(None, datetime(2026, 8, 31, tzinfo=timezone.utc))
 
         self.assertEqual(caught.exception.remedy, REMEDY_DEFECT)
+
+
+class DeviceQuarterUploadTests(unittest.TestCase):
+    def test_device_quarters_ride_household_rows_or_travel_alone(self) -> None:
+        quality = {"aggregation": "sum_of_recorder_5minute_changes", "duration_seconds": 900}
+        household = [{"start": "2026-11-06T19:45:00+00:00", "total_load_kwh": .5, "quality": quality}]
+        devices = [
+            {"start": "2026-11-06T19:45:00+00:00", "device_energy_kwh": {"pool": .2}, "quality": quality},
+            {"start": "2026-11-06T20:00:00+00:00", "device_energy_kwh": {"pool": .9}, "quality": quality},
+            {"start": "2026-11-06T20:15:00+00:00", "device_energy_kwh": {}, "quality": quality},
+        ]
+        merged = with_device_quarters(household, devices)
+        self.assertEqual([row["start"] for row in merged],
+                         ["2026-11-06T19:45:00+00:00", "2026-11-06T20:00:00+00:00"])
+        self.assertEqual(merged[0]["total_load_kwh"], .5)
+        self.assertEqual(merged[0]["device_energy_kwh"], {"pool": .2})
+        self.assertNotIn("total_load_kwh", merged[1])
+        self.assertEqual(with_device_quarters([], devices[1:2]), devices[1:2])

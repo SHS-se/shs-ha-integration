@@ -69,7 +69,9 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
             'category': 'pool_heating', 'planning_role': 'controllable'}]
 
         async def statistics(begin, end, entities, period, units, kinds):
-            self.assertEqual((begin, end, period), (start, boundary, '5minute'))
+            # Recent quarters behind the watermark are re-offered, so a late
+            # statistic fills its quarter instead of becoming a permanent hole.
+            self.assertEqual((begin, end, period), (boundary - timedelta(hours=2), boundary, '5minute'))
             return {entity: [{'start': (start + timedelta(minutes=5*i)).timestamp(),
                               'change': .1 if entity == 'sensor.synthetic_grid' else (0 if i < 3 else .3)}
                              for i in range(6)] for entity in entities}
@@ -83,6 +85,32 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
                          [start.isoformat(), (start + timedelta(minutes=15)).isoformat()])
         self.assertEqual([row['device_energy_kwh']['synthetic_pool'] for row in actuals], [0, .9])
         self.assertEqual([row['quality']['duration_seconds'] for row in actuals], [900, 900])
+
+    async def test_device_quarters_upload_without_a_household_meter_or_its_quarter(self):
+        """The heater's quarter is evidence of its own: neither a missing grid
+        meter nor that meter's late quarter may hold it back."""
+        from datetime import timezone
+        boundary = datetime(2026, 11, 6, 20, 15, tzinfo=timezone.utc)
+        self.rig.now = boundary + timedelta(seconds=40)
+        self.rig.records.saved['optimisation_actuals_accepted_until'] = (boundary - timedelta(minutes=30)).isoformat()
+        self.h._prepared_device_inventory.return_value = [{
+            'key': 'synthetic_pool', 'statistic_id': 'sensor.synthetic_pool',
+            'category': 'pool_heating', 'planning_role': 'controllable'}]
+        newest = boundary - timedelta(minutes=15)
+
+        async def statistics(begin, end, entities, period, units, kinds):
+            # The grid meter has not settled its newest quarter; the heater has.
+            return {entity: [{'start': (newest - timedelta(minutes=15) + timedelta(minutes=5*i)).timestamp(), 'change': .1}
+                             for i in range(6 if entity == 'sensor.synthetic_pool' else 3)] for entity in entities}
+
+        self.rig.history.statistics.side_effect = statistics
+        for entities in ({'grid_import': ['sensor.synthetic_grid']}, {}):
+            self.h._configured_entities = lambda entities=entities: entities
+            await self.h.async_optimisation_push(force_plan=True, replan_request_id='synthetic-manual')
+            actuals = self.h.client.submit_optimisation.call_args.args[0]["actual_slots"]
+            by_start = {row['start']: row for row in actuals}
+            self.assertAlmostEqual(by_start[newest.isoformat()]['device_energy_kwh']['synthetic_pool'], .3)
+            self.assertNotIn('grid_import_kwh', by_start[newest.isoformat()])
 
     async def test_failed_solve_survives_telemetry_and_new_pending_work_until_a_plan_is_accepted(self):
         pending=await self.accept('manual')

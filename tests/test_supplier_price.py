@@ -169,7 +169,7 @@ class SensorWiringTests(unittest.TestCase):
     def test_startup_planning_waits_for_entity_providers(self) -> None:
         helper = ENGINE[ENGINE.index('    async def planning(self, household):'):ENGINE.index('    async def resources(self):')]
         self.assertIn('await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)',helper)
-        self.assertIn('self.periodic(household.async_replan_poll,PLAN_EXCHANGE_INTERVAL_MINUTES*60)',helper)
+        self.assertIn('self.periodic(household.async_replan_poll,PLAN_EXCHANGE_INTERVAL_MINUTES*60,\n            offset=random.uniform(*PLAN_EXCHANGE_OFFSET_SECONDS))',helper)
         self.assertIn('lambda h=h:self.planning(h)',ENGINE)
 
     def test_transient_startup_gaps_do_not_raise_an_immediate_repair(self) -> None:

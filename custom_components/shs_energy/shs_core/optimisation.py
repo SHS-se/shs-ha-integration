@@ -491,6 +491,22 @@ def aggregate_device_changes(
     ]
 
 
+def with_device_quarters(
+    actuals: list[dict[str, Any]], device_quarters: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach each quarter's device energy to its household row, and keep the
+    device quarters that have no household row as rows of their own."""
+    by_start = {row["start"]: row for row in actuals}
+    merged = list(actuals)
+    for quarter in device_quarters:
+        row = by_start.get(quarter["start"])
+        if row is not None:
+            row["device_energy_kwh"] = quarter["device_energy_kwh"]
+        elif quarter["device_energy_kwh"]:
+            merged.append(dict(quarter))
+    return sorted(merged, key=lambda row: row["start"])
+
+
 def _quantile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     if not ordered:

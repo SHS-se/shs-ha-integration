@@ -6,6 +6,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import random
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,7 +15,7 @@ from shs_core.api import ShsApiClient, ShsApiError
 from .runtime import AppBatteryRuntime
 from .profiling import AppProfiler, profiled
 from shs_core.command_journal import WriterLease
-from shs_core.const import CONF_BASE_URL, CONF_DEVICE_TOKEN, PLAN_EXCHANGE_INTERVAL_MINUTES, OPTIMISATION_STARTUP_DELAY_SECONDS, PUSH_TIME_HOUR, PUSH_TIME_MINUTE
+from shs_core.const import CONF_BASE_URL, CONF_DEVICE_TOKEN, PLAN_EXCHANGE_INTERVAL_MINUTES, PLAN_EXCHANGE_OFFSET_SECONDS, OPTIMISATION_STARTUP_DELAY_SECONDS, PUSH_TIME_HOUR, PUSH_TIME_MINUTE
 from shs_core.controller import ScheduledController
 from shs_core.controller_inputs import ControllerInputs
 from shs_core.controller_scheduler import ControllerScheduler
@@ -66,6 +68,13 @@ PERIODIC_PROFILES = {'battery_inputs':'battery_inputs',
 def encode(value):
     return json.dumps(value, separators=(',', ':'), allow_nan=False).encode()
 
+
+
+def seconds_until_aligned(now: float, period: float, offset: float) -> float:
+    """Seconds from `now` until the next instant `offset` past a multiple of
+    `period` (epoch seconds), at least one second away."""
+    following = ((now - offset) // period + 1) * period + offset
+    return max(1.0, following - now)
 
 class NoNativeServices:
     async def execute(self, *args, **kwargs):
@@ -480,7 +489,10 @@ class AppEngine:
                 retries.reset()
                 await asyncio.sleep(1)
 
-    async def periodic(self, operation, seconds):
+    async def periodic(self, operation, seconds, offset=None):
+        """Run `operation` every `seconds`. With `offset`, each run starts that
+        many seconds after a multiple of `seconds`, so the cadence cannot drift
+        by the operation's own run time."""
         profile = PERIODIC_PROFILES.get(operation.__name__)
         while True:
             try:
@@ -494,7 +506,7 @@ class AppEngine:
                 self.operation_error('periodic:'+operation.__name__, error)
                 if critical_runtime_error(error): raise
                 LOGGER.warning('Background operation %s failed: %s: %s',operation.__name__,type(error).__name__,error,exc_info=LOGGER.isEnabledFor(logging.DEBUG))
-            await asyncio.sleep(seconds)
+            await asyncio.sleep(seconds if offset is None else seconds_until_aligned(time.time(), seconds, offset))
 
     async def planning(self, household):
         await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)
@@ -503,7 +515,8 @@ class AppEngine:
             await self.request_plan(household)
             if household._plan_configuration_changed:
                 await asyncio.sleep(5)
-        await self.periodic(household.async_replan_poll,PLAN_EXCHANGE_INTERVAL_MINUTES*60)
+        await self.periodic(household.async_replan_poll,PLAN_EXCHANGE_INTERVAL_MINUTES*60,
+            offset=random.uniform(*PLAN_EXCHANGE_OFFSET_SECONDS))
 
     async def complete_backend_selection(self, household):
         if household is not self.household or self.backends.data['admitted_for'] == self.environment:

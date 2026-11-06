@@ -201,6 +201,9 @@ EV_CHARGE_EFFICIENCY = 0.92
 DEFAULT_EV_KWH_PER_KM = 0.16
 
 OPTIMISATION_ACTUAL_BACKFILL_HOURS = 72
+# Electrical quarters behind the accepted watermark are re-offered for this
+# long, so a quarter whose statistics settled late is filled rather than lost.
+OPTIMISATION_ACTUAL_RESWEEP_HOURS = 2
 OPTIMISATION_PROFILE_DAYS = 10
 
 # Thermal history rides the same quarter-hour grid as electrical actuals. The
@@ -247,8 +250,14 @@ ISSUE_POOL_CONTROL = "pool_control"
 STORAGE_VERSION = 1
 STORAGE_KEY_TEMPLATE = "shs_energy.{entry_id}"
 
-# A local interval avoids synchronising every installation on market quarters.
+# Exchanges run once per quarter, a fixed per-installation offset after the
+# quarter boundary. The offset lets Home Assistant compile the quarter's last
+# five-minute statistic first, so each exchange carries the quarter that just
+# ended. A free-running timer drifted across the quarter and delivered that
+# quarter up to fifteen minutes late. Drawing the offset from a window keeps
+# installations spread out rather than synchronised on market quarters.
 PLAN_EXCHANGE_INTERVAL_MINUTES = 15
+PLAN_EXCHANGE_OFFSET_SECONDS = (20.0, 200.0)
 PRICE_REFRESH_SECOND = 5
 PUSH_TIME_HOUR = 0
 PUSH_TIME_MINUTE = 20

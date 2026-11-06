@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).parents[2]/'tests'))
 import test_migration_export as export_fixtures
 from shs_app.migration_import import import_export
 from shs_app.gateway_seed import seed_gateway
-from shs_app.engine import AppEngine
+from shs_app.engine import AppEngine, seconds_until_aligned
 from shs_core.const import CONF_BASE_URL, CONF_DEVICE_TOKEN
 from shs_core.gateway_journal import AdmissionPending, GatewayJournal, GatewayConflict
 from shs_core.gateway_service import GatewayService, AppConnection
@@ -812,3 +812,16 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             await engine.load()
         self.assertFalse(self.service.active)
         self.assertFalse(self.native_calls)
+
+
+class ExchangeAlignmentTests(unittest.TestCase):
+    def test_exchange_starts_at_its_offset_after_each_quarter_however_long_a_run_took(self):
+        quarter = datetime(2026, 11, 6, 20, 15, tzinfo=timezone.utc).timestamp()
+        # A run that ended mid-quarter waits for the next quarter plus offset.
+        self.assertEqual(seconds_until_aligned(quarter + 400, 900, 30), 900 + 30 - 400)
+        # A run that ended just before this quarter's offset still waits for it.
+        self.assertEqual(seconds_until_aligned(quarter + 10, 900, 30), 20)
+        # A slow run that overran its slot never drifts: it waits for the next slot.
+        self.assertEqual(seconds_until_aligned(quarter + 30 + 920, 900, 30), 880)
+        # Never a busy loop.
+        self.assertEqual(seconds_until_aligned(quarter + 30 + 900 - .2, 900, 30), 1.0)

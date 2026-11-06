@@ -303,8 +303,13 @@ def build_services(
     local_tz: tzinfo,
     ev_capacity_kwh: float | None = None,
     device_actuals: list[dict[str, Any]] = (),
+    counter_delivered: dict[date, dict[str, float]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any] | None]:
     """Build the deferrable services, their sample counts and EV battery state.
+
+    ``counter_delivered`` is each meter's own reading since local midnight. It
+    and the quarter sum both count delivered energy that has been observed, so
+    the larger stands: a late quarter cannot make the boiler owe energy twice.
 
     ``ev_capacity_kwh`` is the battery size last derived from the car's own
     readings, used while it reports no charge to derive one from.
@@ -408,9 +413,9 @@ def build_services(
                 model["inference"]["daily_energy_kwh_by_weekday"][day.weekday()]
                 for model in boiler_models
             )
-            delivered_kwh = service_energy_today(
+            delivered_kwh = max(service_energy_today(
                 device_actuals, (model["key"] for model in boiler_models), day, local_tz,
-            )
+            ), sum((counter_delivered or {}).get(day, {}).get(model["key"], 0.0) for model in boiler_models))
             required_kwh = max(0.0, target_kwh - delivered_kwh)
             services.append({
                 "id": f"boiler:{day.isoformat()}",

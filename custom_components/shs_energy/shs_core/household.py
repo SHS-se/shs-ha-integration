@@ -92,6 +92,7 @@ from .const import (
     PLANNING_MODE_DISABLED,
     PLANNING_MODE_LIVE,
     OPTIMISATION_ACTUAL_BACKFILL_HOURS,
+    OPTIMISATION_ACTUAL_RESWEEP_HOURS,
     OPTIMISATION_HORIZON_HOURS,
     OPTIMISATION_PROFILE_DAYS,
     OPTIMISATION_STARTUP_ISSUE_GRACE_SECONDS,
@@ -110,6 +111,7 @@ from .device_controls import (
 )
 from .hot_water import RUNNING_PEAK_MIN_W, is_hot_water, hot_water_setup_errors
 from .optimisation import (
+    with_device_quarters,
     OptimisationInputError,
     REMEDY_DEFECT,
     REMEDY_SETTING,
@@ -2574,6 +2576,7 @@ class Household:
         device_models: list[dict[str, Any]],
         ev_capacity_kwh: float | None = None,
         device_actuals: list[dict[str, Any]] = (),
+        counter_delivered: dict[Any, dict[str, float]] | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any] | None]:
         """Inject Home Assistant's clock and entity reads into pure planning."""
         return build_services(
@@ -2584,6 +2587,7 @@ class Household:
             local_tz=self.ports.home().timezone,
             ev_capacity_kwh=ev_capacity_kwh,
             device_actuals=device_actuals,
+            counter_delivered=counter_delivered,
         )
 
     async def _boiler_running_power_w(self, devices, mappings, start, end):
@@ -2647,6 +2651,40 @@ class Household:
                 if at == boundary and type(previous) in (int, float) and isfinite(previous) and isfinite(current) and usable_device_quarter_kwh(current - previous):
                     energy[key] = current - previous
         return [{"start": start.isoformat(), "device_energy_kwh": energy}] if energy else []
+
+    async def _boiler_delivered_today(self, models, captured, local_tz):
+        """Hot-water electricity since local midnight, from each meter's own
+        counter: the live reading less its midnight statistic. A late or
+        incomplete quarter cannot hide energy from it. A meter that reset or
+        has no midnight statistic is left out, so the quarter sum stands."""
+        sensors = {model["key"]: model["statistic_id"] for model in models if is_hot_water(model)}
+        if not sensors:
+            return {}
+        today = captured.astimezone(local_tz).date()
+        midnight = datetime.combine(today, datetime.min.time(), local_tz).astimezone(timezone.utc)
+        statistics = await self.ports.history.statistics(
+            midnight - timedelta(minutes=5), midnight, set(sensors.values()), "5minute", {"energy": "kWh"}, {"state"},
+        )
+        delivered = {}
+        for key, sensor in sensors.items():
+            live = self.ports.read_state(sensor)
+            factor = {"kWh": 1, "Wh": .001, "MWh": 1000}.get(
+                live.attributes.get("unit_of_measurement")) if live is not None else None
+            if factor is None:
+                continue
+            try:
+                current = float(live.state) * factor
+            except (ValueError, TypeError):
+                continue
+            for row in statistics.get(sensor, []):
+                at = row.get("start")
+                if type(at) in (int, float):
+                    at = datetime.fromtimestamp(at, timezone.utc)
+                previous = row.get("state")
+                if at == midnight - timedelta(minutes=5) and type(previous) in (int, float) \
+                        and isfinite(previous) and isfinite(current) and current >= previous:
+                    delivered[key] = current - previous
+        return {today: delivered} if delivered else {}
 
     @staticmethod
     def _observe_calibration(
@@ -2862,6 +2900,7 @@ class Household:
             device_models,
             stored.get("ev_capacity_kwh"),
             [*device_profile_actuals, *await self._boiler_delivered_current_quarter(device_models, captured)],
+            await self._boiler_delivered_today(device_models, captured, self.ports.home().timezone),
         )
         if ev_battery and 1 <= ev_battery["capacity_kwh"] <= 500:
             # Remembered for a later reading at 0 %, when none can be derived.
@@ -3727,11 +3766,15 @@ class Household:
                 complete_end = quarter_start(self.ports.utcnow())
                 accepted = stored.get("optimisation_actuals_accepted_until")
                 if accepted:
-                    # Re-send the last accepted quarter once. The database
-                    # upsert keeps the unique row count at 96/day, while a
-                    # recorder category that settled late can fill a prior
-                    # sparse row without sending raw samples.
-                    start = datetime.fromisoformat(accepted)
+                    # Re-offer the recent quarters behind the watermark. The
+                    # database upsert keeps the unique row count at 96/day,
+                    # while a quarter whose statistics settled late, or a
+                    # device quarter that was incomplete, is filled rather
+                    # than left as a permanent hole.
+                    start = min(
+                        datetime.fromisoformat(accepted).astimezone(timezone.utc),
+                        complete_end - timedelta(hours=OPTIMISATION_ACTUAL_RESWEEP_HOURS),
+                    )
                 else:
                     start = complete_end - timedelta(
                         hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS
@@ -3749,19 +3792,12 @@ class Household:
                 if measured:
                     self.measured_quarters = prune_quarters({**self.measured_quarters,
                         **quarter_completeness(actuals, entities, start, complete_end)}, complete_end)
-                if actuals and devices:
-                    device_actuals = await self._device_actual_quarters(
-                        devices, start, complete_end
-                    )
-                    device_energy_by_start = {
-                        row["start"]: row["device_energy_kwh"]
-                        for row in device_actuals
-                    }
-                    for row in actuals:
-                        if row["start"] in device_energy_by_start:
-                            row["device_energy_kwh"] = device_energy_by_start[
-                                row["start"]
-                            ]
+                if devices and start < complete_end:
+                    # Device energy is its own evidence. A quarter whose grid,
+                    # solar or battery meters are incomplete, or a home with no
+                    # household meter, still uploads its device quarters.
+                    actuals = with_device_quarters(
+                        actuals, await self._device_actual_quarters(devices, start, complete_end))
                 # Consume forecast/actual pairs on every quarter-hour exchange,
                 # not only during the hourly replan. Otherwise three out of
                 # four observations would pass the upload watermark before the

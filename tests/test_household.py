@@ -54,6 +54,33 @@ class HouseholdTests(unittest.IsolatedAsyncioTestCase):
             read_entity=lambda _: None, local_tz=timezone.utc, device_actuals=actuals)
         self.assertEqual(services[0]["required_kwh"], 1.5)
 
+    async def test_boiler_delivery_today_counts_its_meter_when_quarters_are_late(self):
+        from shs_core.planning import build_services
+        rig = Rig()
+        captured = datetime(2026, 8, 15, 12, 0, 6, tzinfo=timezone.utc)
+        midnight = datetime(2026, 8, 15, tzinfo=timezone.utc)
+        rig.states["sensor.boiler_energy"] = SimpleNamespace(state="104", attributes={"unit_of_measurement": "kWh"})
+        rig.history.statistics.return_value = {"sensor.boiler_energy": [{"start": midnight - timedelta(minutes=5), "state": 100}]}
+        model = {"key": "boiler", "statistic_id": "sensor.boiler_energy", "category": "hot_water",
+            "control_type": "permit_inhibit", "planning_role": "controllable", "profile_sample_count": 96,
+            "active_power_w": 3000, "forecast_w_by_slot": [0] * 4,
+            "inference": {"daily_energy_kwh_by_weekday": {day: 5 for day in range(7)}}}
+        today = await rig.household._boiler_delivered_today([model], captured, timezone.utc)
+        self.assertEqual(today, {midnight.date(): {"boiler": 4}})
+        # The 11:45 quarter and the elapsed seconds since 12:00 have not arrived
+        # as quarters; the counter already includes them.
+        quarters = [{"start": midnight.replace(hour=1).isoformat(), "device_energy_kwh": {"boiler": 3}}]
+        horizon = [captured.replace(second=0) + timedelta(minutes=15 * i) for i in range(4)]
+        plan = lambda counter: build_services({"device_control_mappings": {"boiler": {
+            "control_type": "permit_inhibit", "actuator_entity_ids": ["switch.boiler"]}}},
+            horizon, [model], read_entity=lambda _: None, local_tz=timezone.utc,
+            device_actuals=quarters, counter_delivered=counter)[0][0]["required_kwh"]
+        self.assertEqual(plan(None), 2)
+        self.assertEqual(plan(today), 1)
+        # A meter that reset since midnight is left out; the quarter sum stands.
+        rig.states["sensor.boiler_energy"] = SimpleNamespace(state="0.5", attributes={"unit_of_measurement": "kWh"})
+        self.assertEqual(await rig.household._boiler_delivered_today([model], captured, timezone.utc), {})
+
     async def test_boiler_rating_uses_median_recorder_peaks_in_watts(self):
         rig = Rig()
         rig.history.statistics.return_value = {"sensor.boiler_power": [
