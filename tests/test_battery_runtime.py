@@ -1303,6 +1303,36 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
                         r.runtime.validate_plan_response(candidate)
                 finally:await r.runtime.close()
 
+    async def test_missing_website_house_limit_uses_the_plan_limit_without_a_fault(self):
+        # Late data is normal: the tariff catalogue can be unreachable after a
+        # restart. Execution continues under the accepted plan's limit and says so.
+        r=Rig();await r.start()
+        try:
+            r.coordinator.house_import_limit_w=lambda:None
+            await r.advance()
+            self.assertEqual(r.runtime.snapshot()['fault_history'],[])
+            self.assertEqual(r.runtime.host.state.authority.plant.import_limit_w,r.plan['grid']['import_limit_w'])
+            codes=[w['code'] for w in r.runtime.snapshot()['planning_warnings']]
+            self.assertIn('house_limit_from_plan',codes)
+            r.coordinator.house_import_limit_w=lambda:r.plan['grid']['import_limit_w']
+            await r.advance()
+            codes=[w['code'] for w in r.runtime.snapshot()['planning_warnings']]
+            self.assertNotIn('house_limit_from_plan',codes)
+        finally:await r.runtime.close()
+
+    async def test_refresh_fault_logs_its_traceback_once_per_distinct_fault(self):
+        r=Rig();await r.start()
+        try:
+            async def broken():raise ValueError('synthetic refresh fault')
+            r.runtime._refresh=broken
+            with self.assertLogs('shs_core.battery_runtime','WARNING') as logs:
+                await r.runtime.refresh();await r.runtime.refresh()
+            failures=[record for record in logs.records if 'Battery refresh failed' in record.getMessage()]
+            self.assertEqual(len(failures),1)
+            self.assertIsNotNone(failures[0].exc_info)
+            self.assertEqual(r.runtime.snapshot()['fault_history'][-1]['count'],2)
+        finally:await r.runtime.close()
+
     async def test_another_device_entering_verification_is_not_a_battery_fault(self):
         # User requirement, 19 October 2026: Verification of another device has
         # no effect on plan execution. A receipt observed before the next

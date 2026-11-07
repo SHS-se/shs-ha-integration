@@ -94,6 +94,45 @@ class ReliefObservationTests(unittest.TestCase):
         h.observe(envelope=rt.Envelope(2003, 0))
         self.assertIsNotNone(h.durable())
 
+    def test_repeat_proposal_under_new_flow_keeps_in_flight_relief_checkable(self):
+        """A re-proposed ceiling decrease never rewrites the proof of a sent step.
+
+        Synthetic replay of a production fault (7 Nov 2026): a discharge ceiling
+        decrease was sent, the next tick proposed the same decrease under a
+        slightly different measured flow, and the checkpoint check rejected the
+        sent attempt's relief. The battery host stopped and the app restarted.
+        """
+        from shs_core.battery_native_adapter import SigenAdapter
+        from shs_core.home_runtime_checkpoint import _check_state
+        from test_home_runtime_execution import Harness as PolicyHarness, native
+        policy = PolicyHarness()
+        adapter = SigenAdapter(policy.authority.catalog, policy.authority.plant.conversion)
+        h = Harness(limit=1000)
+        h.state = replace(h.state, groups=(replace(h.group(), spec=replace(h.group().spec,
+            adapter_revision=adapter.catalog.adapter_revision)),))
+        before = native('Command Charging (PV First)', 2000)
+        target = native('Command Charging (PV First)', 0)
+        h.observe(target=before, envelope=rt.Envelope(2001, 0))
+        h.request(target=target)
+        effect = next(e for e in h.effects if isinstance(e, rt.NeedTransition))
+        first = adapter.propose(effect)
+        h.event(first)
+        self.assertIsNotNone(h.durable())
+        sent = next(a for a in h.group().attempts if a.stage != 'prepared')
+        self.assertIsNotNone(sent.step.relief_id)
+        # The plant has not applied it yet, flow moved by a few watts, and the
+        # owner restates the same target under a new request revision.
+        h.now += 1000
+        h.observe(target=before, envelope=rt.Envelope(1990, 0))
+        h.request(target=target, revision=2)
+        repeat = next(e for e in h.effects if isinstance(e, rt.NeedTransition))
+        second = adapter.propose(repeat)
+        self.assertNotEqual(first.relief_rules[0], second.relief_rules[0])
+        h.event(second)
+        _check_state(h.state)
+        rules = {r.id: r for r in h.group().spec.relief_rules}
+        self.assertEqual(rules[sent.step.relief_id], first.relief_rules[0])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -32,6 +32,7 @@ from .battery_supply import SupplyScope, observe_supply, required_power_keys
 from .device_power import planned_switch_bindings
 from .configuration_schema import METADATA_KEYS
 from .configuration_values import resolve_battery_quantities
+from .planning_warnings import planning_warning
 from .energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
 from .device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
 from .operating_modes import device_mode
@@ -547,13 +548,15 @@ class BatteryRuntime:
                 self._queue_execution({'status': 'faulted', 'cause': 'battery_transition_failed'})
 
     def _record_fault(self,source,reason):
+        """Record a fault; True when it differs from the previous one."""
         now=iso(self.now())
         if self._fault_history and (self._fault_history[-1]['source'],self._fault_history[-1]['reason'])==(source,reason):
             self._fault_history[-1].update(last_at=now,count=self._fault_history[-1]['count']+1)
-        else:
-            self._fault_history.append({'at':now,'last_at':now,'count':1,'source':source,'reason':reason,
-                'source_cut':iso(self._source_cut) if self._source_cut is not None else None})
-            del self._fault_history[:-64]
+            return False
+        self._fault_history.append({'at':now,'last_at':now,'count':1,'source':source,'reason':reason,
+            'source_cut':iso(self._source_cut) if self._source_cut is not None else None})
+        del self._fault_history[:-64]
+        return True
 
     async def refresh(self):
         """Advance the battery owner; the coordinator publishes its status afterwards."""
@@ -566,7 +569,9 @@ class BatteryRuntime:
                 self._last_error=None
             except Exception as error:
                 self._last_error=f'{type(error).__name__}: {error}'
-                self._record_fault('refresh',self._last_error)
+                if self._record_fault('refresh',self._last_error):
+                    # Once per distinct fault: the diagnostics keep only its message.
+                    _LOGGER.warning('Battery refresh failed; retrying automatically: %s',self._last_error,exc_info=True)
                 # A fault never releases: the battery keeps the last settings SHS sent.
                 self._status={'state':'fault','reason':self._holding(self._last_error)}
                 if isinstance(error, (BatteryMeasurementConfigurationError, BatteryPowerReadingError)):
@@ -759,9 +764,21 @@ class BatteryRuntime:
         permissions=Permissions(True,True,True,
             contract.export_reserve_mwh/1e6,True,0,contract.model_revision)
         physical=self.planning_physics()
+        import_limit=self.coordinator.house_import_limit_w()
+        self._limit_warnings=[]
+        if import_limit is None:
+            # The website tariff has not arrived since the app started, or the
+            # cloud is unreachable. The accepted plan was built under the house
+            # limit current when it was planned; the gateway still bounds every
+            # native increase by the last limit it admitted.
+            import_limit=plan['grid']['import_limit_w']
+            self._limit_warnings=[planning_warning('house_limit_from_plan','battery_execution',
+                'The house import limit has not arrived from the website yet.',
+                "Execution uses the limit the accepted plan was made with until it does.",
+                severity='info',evidence={'import_limit_w':import_limit})]
         plant=BatteryPlant(ratings['battery_min_soc']*capacity,capacity,cc,dc,
             physical['charge_efficiency'],physical['discharge_efficiency'],
-            self.coordinator.house_import_limit_w(),plan['grid']['export_limit_w'],
+            import_limit,plan['grid']['export_limit_w'],
             'discharged_storage',0,self._model)
         cut=contract.intervals[0].start_ms
         keys=self._control_entities()
@@ -1031,7 +1048,7 @@ class BatteryRuntime:
             value,_=power(reports[entity],source=entity)
             external.append(rt.ExternalDemand(key,rt.Envelope(value,0),rt.Envelope(0,0)))
         external_w=sum(e.observed.import_w for e in external)
-        warnings = list(accounting.planning_warnings)
+        warnings = [*accounting.planning_warnings,*getattr(self,'_limit_warnings',())]
         if warnings!=getattr(self,'_measurements',{}).get('planning_warnings', []):
             for warning in warnings:
                 _LOGGER.warning('Battery measurement reconciliation: %s', warning)

@@ -121,8 +121,13 @@ class SigenAdapter:
             # mode cannot increase battery import/export beyond its prior bound.
             if key!=c.mode_key and value<dict(before)[key] and b!=a and b.import_w<=a.import_w and b.export_w<=a.export_w:
                 from hashlib import sha256
-                relief_id="sigen-ceiling-"+sha256(repr((before,key,value)).encode()).hexdigest()[:24]
-                relief.append(ReliefRule(relief_id,before,after,a,possible,b,effect.request.native_guards,"sigen-modbus-v2.9-ess-pv-first"))
+                # The id names the whole proof, measured flow included. The kernel
+                # merges rules by id, so an id shared by two proofs lets a repeat
+                # proposal rewrite the proof of a step already sent, and the
+                # checkpoint then rejects that attempt.
+                proof=(before,after,a,possible,b,effect.request.native_guards)
+                relief_id="sigen-ceiling-"+sha256(repr(proof).encode()).hexdigest()[:24]
+                relief.append(ReliefRule(relief_id,*proof,"sigen-modbus-v2.9-ess-pv-first"))
             step=Step(key,value,before,effect.request.native_guards,possible,75000,75000,True,"sigen-modbus-v2.9-ess-pv-first",relief_id)
             steps.append(step);before=step.after
         return Proposed(effect.group_id,effect.generation,effect.request.id,effect.request.revision,
