@@ -15,7 +15,9 @@ class RemoteDevices:
         self.gateway, self.household = gateway, household
         self.context = None
         self.reserve = None
+        self.wake_battery = None
         self.policy = None
+        self.heating = {}
 
     async def synchronize(self, models):
         # Update the command epoch before returning a physical ownership view.
@@ -25,6 +27,7 @@ class RemoteDevices:
         self.context = await self.gateway.call('policy', {'value':value})
         self.policy = value
         result = await self.gateway.call('synchronize', {'models':models})
+        self.heating = result.pop('heating', {})
         await self.household.async_capacity_recovered(result.pop('capacity_recoveries'))
         return result
 
@@ -36,16 +39,19 @@ class RemoteDevices:
         return await self.synchronize((self.household.optimisation_plan or {}).get('device_models', []))
 
 
-    async def perform(self, device, operation, plan, slot):
+    async def perform(self, device, operation, plan, slot, *, heating=None):
         if self.context is None:
             raise AdmissionPending('Device policy has not been admitted')
         intent = device_intent(device, operation, plan, slot,
-            configuration_revision=self.context['configuration_revision'], policy_revision=self.context['policy_revision'])
+            configuration_revision=self.context['configuration_revision'], policy_revision=self.context['policy_revision'], heating=heating)
         response = await self.gateway.call('device', {'intent':intent})
-        if response['reservation_required']:
+        if response['reservation_required'] and (operation != 'heat' or response['error'] is not None):
             if self.reserve is None:
                 raise GatewayConflict('External demand reservation is not connected')
-            if self.reserve(device):
+            ready = self.reserve(device)
+            if operation == 'heat':
+                self.wake_battery()
+            elif ready:
                 intent.update(request_id=uuid4().hex, headroom_reserved=True)
                 response = await self.gateway.call('device', {'intent':intent})
         return response

@@ -26,7 +26,7 @@ PURE_MODULES = (
     "gateway_wire", "shs_core.entity_views", "shs_core.native_configuration", "shs_wire.entity_modes",
     "shs_wire.protocol", "shs_core.native_records", "shs_core.native_readings", "shs_core.device_power",
     "shs_core.execution_replan", "shs_core.execution_configuration", "shs_core.discovery", "shs_core.configuration_view",
-    "shs_core.gateway_service", "shs_core.runtime_projection",
+    "shs_core.gateway_service", "shs_core.runtime_projection", "shs_core.heating_overrides",
     "shs_core.battery_gateway",
     "shs_core.device_port",
     "shs_core.device_gateway",
@@ -70,7 +70,7 @@ HOME_ASSISTANT_MODULES = (
     "configuration", "refresh",
     "recorder_source",
     "diagnostics",
-    "sensor",
+    "sensor", "number", "button", "heating_entities",
     "controller_events", "battery_sigen",
 )
 

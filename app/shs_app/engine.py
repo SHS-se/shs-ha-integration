@@ -105,6 +105,7 @@ class AppEngine:
         self.operation_errors = {}
         self.timers = set()
         self.wake_projection = asyncio.Event()
+        self.wake_battery = asyncio.Event()
         self.closed = False
         self.lease = None
         self.inbox = None
@@ -264,6 +265,7 @@ class AppEngine:
         self.battery.physical = self.writer
         self.battery.receipt_driven = True
         self.devices.reserve = self.battery.before_external_command
+        self.devices.wake_battery = self.wake_battery.set
         await self.battery.load()
         self.battery.reconcile()
         self.checkpoint_digest = await asyncio.to_thread(self.battery.store.checkpoint_digest)
@@ -403,14 +405,22 @@ class AppEngine:
                 self._processed_ack = completed
 
     async def receipts(self):
-        after = {'receipts':0, 'requests':0}
+        after = {'receipts':0, 'requests':0, 'heating':0, 'heating_capacity':0}
         while True:
             changed = await self.gateway.call('updates', {'after':after})
+            if changed['heating'] != after['heating']:
+                self.scheduler.request('heating_override')
+                self.wake_projection.set()
             if changed['receipts'] != after['receipts']:
                 page = await self.gateway.receive()
                 while page['through'] < page['high']:
                     page = await self.gateway.receive()
             await self.consume()
+            if changed['heating_capacity'] != after['heating_capacity']:
+                zones = {owner for owner, row in self.devices.heating.get('zones', {}).items()
+                         if row.get('expires_at')}
+                if zones:
+                    self.scheduler.request('heating_capacity', zones)
             if changed['requests'] != after['requests']:
                 for request in await self.gateway.call('requests',{}):
                     self.spawn(self.answer(request),'shs_app_request_'+request['operation'])
@@ -452,10 +462,16 @@ class AppEngine:
             value['configuration'] = self.configuration.status()
             if self.started:
                 value['execution_devices'] = [{key:deepcopy(device.get(key)) for key in
-                    ('key','name','planned','system_member','permission','mode')}
+                    ('key','name','planned','system_member','permission','mode','category')}
                     for device in await self.editor.devices(self.cached['planning'],include_suggestions=False)]
                 with self.profiler.measure('native_projection_build'):
                     native = project_entities(self,value['execution_devices'])
+                    for device in value['execution_devices']:
+                        if device['category'] == 'heating':
+                            _, slot = h.binding_plan_for(device['permission']['controller_id'], h.resolved_options())
+                            command = (slot or {}).get('device_commands', {}).get(device['key'], {})
+                            if command.get('type') == 'setpoint':
+                                device['planned_target_c'] = command['target_c']
             self.publish_ui(value)
         except Exception as error:
             self.operation_error('projection_build', error)
@@ -489,12 +505,14 @@ class AppEngine:
                 retries.reset()
                 await asyncio.sleep(1)
 
-    async def periodic(self, operation, seconds, offset=None):
+    async def periodic(self, operation, seconds, offset=None, *, wake=None):
         """Run `operation` every `seconds`. With `offset`, each run starts that
         many seconds after a multiple of `seconds`, so the cadence cannot drift
         by the operation's own run time."""
         profile = PERIODIC_PROFILES.get(operation.__name__)
         while True:
+            if wake is not None:
+                wake.clear()
             try:
                 if profile:
                     with self.profiler.measure(profile):
@@ -506,7 +524,12 @@ class AppEngine:
                 self.operation_error('periodic:'+operation.__name__, error)
                 if critical_runtime_error(error): raise
                 LOGGER.warning('Background operation %s failed: %s: %s',operation.__name__,type(error).__name__,error,exc_info=LOGGER.isEnabledFor(logging.DEBUG))
-            await asyncio.sleep(seconds if offset is None else seconds_until_aligned(time.time(), seconds, offset))
+            delay = seconds if offset is None else seconds_until_aligned(time.time(), seconds, offset)
+            if wake is None:
+                await asyncio.sleep(delay)
+            else:
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(wake.wait(), delay)
 
     async def planning(self, household):
         await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)
@@ -708,7 +731,7 @@ class AppEngine:
             # Cloud jobs start only after the durable ownership handover.
             self.wake_projection.set()
             jobs = [self.spawn(self.receipts(),'receipts'),self.spawn(self.projections(),'projections'),
-                self.spawn(self.periodic(self.battery_inputs,5),'battery_inputs'),
+                self.spawn(self.periodic(self.battery_inputs,5,wake=self.wake_battery),'battery_inputs'),
                 self.spawn(self.periodic(self.resources,60),'runtime_resources'),self.spawn(self.calendar(),'calendar'),
                 self.spawn(self.restart(),'backend_restart')]
             for environment, h in self.households.items():

@@ -39,6 +39,10 @@ def native_command(entity, value, state, *, temperature_unit):
         service = 'set_value'
         equal = numbers_equal(state.state, value, state.attributes)
     elif domain == 'climate':
+        if value in ('off', 'heat'):
+            if value not in state.attributes.get('hvac_modes', ()) or temperature_unit != '°C':
+                raise ValueError(f'{entity}: thermostat mode is unavailable')
+            return NativeCommand(NativeAction(entity, 'set_hvac_mode', value), value, state.state == value)
         value = finite(value)
         low, high = finite(state.attributes['min_temp']), finite(state.attributes['max_temp'])
         if state.state != 'heat' or temperature_unit != '°C':
@@ -46,7 +50,8 @@ def native_command(entity, value, state, *, temperature_unit):
         if not low <= value <= high:
             raise ValueError(f'{entity}: target outside hardware bounds')
         service = 'set_temperature'
-        equal = abs(finite(state.attributes['temperature']) - value) < 1e-6
+        measured = state.attributes.get('temperature')
+        equal = measured is not None and abs(finite(measured) - value) < 1e-6
     elif domain in ('select', 'input_select'):
         if value not in state.attributes.get('options', []):
             raise ValueError(f'{entity}: unsupported mode {value}')

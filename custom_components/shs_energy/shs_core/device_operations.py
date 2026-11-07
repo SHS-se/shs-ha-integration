@@ -70,6 +70,10 @@ class ControlDeadlineError(ValueError):
     """The next eligible transition already has an explicit wake-up deadline."""
 
 
+class HeatingDeferred(ControlDeadlineError):
+    """A user heating request is being arbitrated or has been superseded."""
+
+
 class ControlPlanError(ValueError):
     """An explicit invalid plan command needs a changed plan, not a software retry."""
 
@@ -169,7 +173,7 @@ class DeviceOperations:
 
     def requires_grid_capacity(self, entity, value):
         """Stopping a switch, or setting EV current while off, adds no demand."""
-        if entity.split('.')[0] in ('switch', 'input_boolean') and value == 'off':
+        if entity.split('.')[0] in ('switch', 'input_boolean', 'climate') and value == 'off':
             return False
         if self.device == 'ev':
             record = self.ownership.records.get('ev')
@@ -215,7 +219,7 @@ class DeviceOperations:
             self.diagnostic_evaluation["commands"].append(command)
         try:
             record = self.ownership.records.get(getattr(self, "device", ""))
-            if record is not None and not self.restoring:
+            if record is not None and not self.restoring and service != 'set_hvac_mode':
                 record.setdefault("last_commands", {})[entity] = value
                 await self.save()
             self.check_authority()
@@ -255,7 +259,7 @@ class DeviceOperations:
         if state is None or state.state in ("unknown", "unavailable"):
             return False
         if isinstance(value, (int, float)):
-            measured = state.attributes["temperature"] if entity.startswith("climate.") else state.state
+            measured = state.attributes.get("temperature") if entity.startswith("climate.") else state.state
             try:
                 return abs(finite(measured) - value) < 1e-6
             except (TypeError, ValueError):
@@ -318,13 +322,18 @@ class DeviceOperations:
                     if self.verifying:
                         continue
                     # Unavailable is unknown, never changed: the handover waits for it.
-                    self.actuator_state(entity)
+                    state = self.actuator_state(entity)
+                    if record.get('heating_suspended') == entity and state.state == 'off':
+                        continue
                     if not self.matches(entity, expected) and not self.matches(entity, original[entity]):
                         changed.add(entity)
                 if changed:
                     record["externally_changed"] = sorted(changed)
                     await self.save()
                 for entity, value in original.items():
+                    if record.get('heating_suspended') == entity and self.actuator_state(entity).state == 'off':
+                        await self.command(entity, 'heat')
+                        await self.confirm(lambda: self.matches(entity, 'heat'), 'Thermostat has not returned to heating mode')
                     if entity not in record.get("externally_changed", []):
                         await self.command(entity, value)
             elif device == "battery":
@@ -521,12 +530,27 @@ class DeviceOperations:
         permitted = permission == 'on' and commanded.get(entity,'on') == 'on'
         return heating_permission(planned,permitted,demand)
 
-    async def execute_device(self, device, options, slot):
+    async def suspend_thermostat(self, device, options, entity):
+        state = self.actuator_state(entity)
+        if not entity.startswith('climate.') or not {'off', 'heat'} <= set(state.attributes.get('hvac_modes', ())):
+            raise HeatingDeferred('Thermostat cannot pause heating')
+        if state.state not in ('off', 'heat'):
+            raise HeatingDeferred('Thermostat cannot pause its current mode')
+        record = self.ownership.records.get(device)
+        if state.state == 'heat' or record and record.get('heating_suspended') == entity:
+            record = await self.capture(device, options, [entity])
+            record['heating_suspended'] = entity
+            await self.save()
+            await self.command(entity, 'off')
+        return {'state': 'manual', 'reason': 'Making room for a heating override'}
+
+    async def execute_device(self, device, options, slot, *, target_c=None, suspend_heat=False):
         key = device.removeprefix("device:")
         mapping = options["device_control_mappings"][key]
         selected, _ = self.binding_execution_plan(device, options)
         models = selected["device_models"]
-        command = slot_command(slot, key)
+        command = (slot_command(slot, key) if target_c is None
+                   else {"type": "setpoint", "target_c": target_c})
         if command["type"] == "unavailable":
             # A plan that cannot drive the device releases nothing; only the select does.
             # Positive availability observations can recover a known missing
@@ -562,6 +586,13 @@ class DeviceOperations:
             raise ValueError("actuator is assigned to a system controller")
         self.check_targets(device, targets)
         record = self.ownership.records.get(device)
+        if suspend_heat:
+            return await self.suspend_thermostat(device, options, targets[0])
+        if record and (entity := record.get('heating_suspended')):
+            if self.actuator_state(entity).state == 'off':
+                await self.command(entity, 'heat')
+                if not self.matches(entity, 'heat'):
+                    raise HeatingDeferred('Resuming scheduled heating')
         commanded = dict(record.get("last_commands", {})) if record else {}
         for entity in commanded:
             # Unavailable is unknown, never an external change.
@@ -604,13 +635,14 @@ class DeviceOperations:
                 on = self.heating_permission_for(mapping,commanded,command["permitted"],demand)
             values = {entity: "on" if on else "off" for entity in targets}
         reverted = {entity: state for entity, state in outside.items()
-                    if entity in values and not self.matches(entity, values[entity])}
+                    if target_c is None and entity in values and not self.matches(entity, values[entity])}
         if reverted and not self.verifying:
             _LOGGER.warning("%s: switching back %s, changed outside SHS", device,
                             ", ".join(f"{entity} ({state})" for entity, state in reverted.items()))
         record = await self.capture(device, options, targets)
         for entity, value in values.items():
             await self.command(entity, value)
+        record.pop('heating_suspended', None)
         await self.save()
         if kind == "setpoint":
             decision = {"kind": kind, "target_c": sorted(set(values.values()))}

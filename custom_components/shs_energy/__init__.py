@@ -20,7 +20,7 @@ from .shs_core.const import CONFIGURABLE_CATEGORIES, CONFIG_ENTRY_VERSION, PRICE
 from .configuration import entity_area_id
 from .migration import mapped_entity_ids, migrate_options
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SELECT]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SELECT, Platform.NUMBER, Platform.BUTTON]
 
 ShsEnergyConfigEntry = ConfigEntry
 

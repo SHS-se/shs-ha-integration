@@ -66,7 +66,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.call('synchronize',{'models':self.coordinator.optimisation_plan['device_models']})
 
     async def test_notification_wait_is_idle_without_journal_calls_and_wakes_after_commit(self):
-        after=await self.call('updates',{'after':{'receipts':0,'requests':0}})
+        after=await self.call('updates',{'after':{'receipts':0,'requests':0,'heating':0,'heating_capacity':0}})
         from unittest.mock import patch
         waiting=asyncio.create_task(self.call('updates',{'after':after}))
         await asyncio.sleep(0)

@@ -154,7 +154,7 @@ def finish_capacity(capacity, command_id, status):
 def _matches(row, value):
     if row is None:
         return False
-    state = row.get('attributes', {}).get('temperature') if row.get('entity_id', '').startswith('climate.') else row.get('state')
+    state = row.get('attributes', {}).get('temperature') if row.get('entity_id', '').startswith('climate.') and type(value) in (int, float) else row.get('state')
     if type(value) in (int, float):
         try:
             return numbers_equal(state, value, row.get('attributes'))

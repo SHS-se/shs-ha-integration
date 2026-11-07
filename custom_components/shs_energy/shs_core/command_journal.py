@@ -88,7 +88,7 @@ class NativeAction:
         domain = self.entity.split('.')[0]
         allowed = {'number': {'set_value': 'value'}, 'input_number': {'set_value': 'value'},
                    'select': {'select_option': 'option'}, 'input_select': {'select_option': 'option'},
-                   'climate': {'set_temperature': 'temperature'},
+                   'climate': {'set_temperature': 'temperature', 'set_hvac_mode': 'hvac_mode'},
                    'switch': {'turn_on': None, 'turn_off': None},
                    'input_boolean': {'turn_on': None, 'turn_off': None}}
         if self.service not in allowed.get(domain, {}):
@@ -96,6 +96,8 @@ class NativeAction:
         field = allowed[domain][self.service]
         if field in ('value', 'temperature') and (isinstance(self.value, bool) or not isinstance(self.value, (int, float))):
             raise ValueError('Numeric action requires a number')
+        if field == 'hvac_mode' and self.value not in ('off', 'heat'):
+            raise ValueError('Unsupported thermostat mode')
         if field == 'option' and not isinstance(self.value, str):
             raise ValueError('Select action requires an option')
         if field is None and self.value is not None:

@@ -146,6 +146,19 @@
     }
   },
   "entity": {
+    "number": {
+      "heating_target": {
+        "name": "Heating target"
+      },
+      "heating_minutes": {
+        "name": "Override time"
+      }
+    },
+    "button": {
+      "heating_resume": {
+        "name": "Return to plan"
+      }
+    },
     "sensor": {
       "subscription": {
         "name": "Subscription"

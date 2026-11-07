@@ -34,8 +34,11 @@ from .device_controls import battery_control_errors, pool_control_errors, pool_c
 _LOGGER = logging.getLogger(__name__)
 from .device_operations import (DeviceOperations, ControlObservationError, ActuatorUnavailableError,
     PlanChangedError, ControlDeadlineError, ControlPlanError, ControlCommandError, correction_details, checked_state, battery_limit_value,
-    DEVICES, CONFIRM_SECONDS,
+    DEVICES, CONFIRM_SECONDS, HeatingDeferred,
     OBSERVATION_GRACE_SECONDS)
+
+
+from .heating_overrides import active_heating
 
 
 class ScheduledController(DeviceOperations):
@@ -81,9 +84,12 @@ class ScheduledController(DeviceOperations):
         (self.ownership.records, self.ownership.overrides,
          self.ownership.retired_pool_temperature_settings) = decode_ownership(value)
 
-    async def _physical(self, device, operation, options, slot=None):
-        plan, _ = self.coordinator.binding_plan_for(device, options)
-        response = await self.devices.perform(device, operation, plan, slot)
+    async def _physical(self, device, operation, options, slot=None, *, heating=None, models=None):
+        if heating is not None:
+            response = await self.devices.perform(device, operation, {'device_models': models}, None, heating=heating)
+        else:
+            plan, _ = self.coordinator.binding_plan_for(device, options)
+            response = await self.devices.perform(device, operation, plan, slot)
         self.adopt_ownership(response['ownership'])
         for deadline in response['deadlines']:
             if self.scheduler:
@@ -98,6 +104,8 @@ class ScheduledController(DeviceOperations):
         if error:
             if error['kind'] == 'configuration':
                 raise HotWaterConfigurationError(options)
+            if error['kind'] == 'heating':
+                raise HeatingDeferred(error['message'])
             if error['kind'] == 'deadline':
                 raise ControlDeadlineError(error['message'])
             if error['kind'] == 'admission':
@@ -535,7 +543,11 @@ class ScheduledController(DeviceOperations):
                 "requested_types": self.requested_types,
                 "requested_systems": sorted(self.requested_systems, key=str),
             }).hex()
-            for device in (*DEVICES, *sorted(generic)):
+            book = getattr(self.devices, 'heating', {})
+            now = datetime.now(timezone.utc)
+            manual = {device: active for device in generic
+                      if (active := active_heating(book, options, device, now))}
+            for device in (*sorted(manual), *DEVICES, *sorted(generic - manual.keys())):
                 if device == "battery":
                     try:
                         self.publish_battery_status()
@@ -546,13 +558,14 @@ class ScheduledController(DeviceOperations):
                 if devices is not None and device not in devices:
                     continue
                 self.device = device
+                heating = manual.get(device)
                 try:
                     plan, slot = self.coordinator.binding_plan_for(device, options)
                     self.active_options, self.active_slot = deepcopy(options), deepcopy(slot)
                     self.active_plan_id = plan.get("plan_id")
                     if self.scheduler is not None:
                         self.scheduler.begin_device(device)
-                    key = repr((options, plan.get("plan_id"), slot))
+                    key = repr((options, plan.get("plan_id"), slot, heating))
                     self.metrics.begin_device(device, {
                         "mode": device_mode(options, device), "shared": metrics_context,
                         "override": self.ownership.overrides.get(device),
@@ -584,6 +597,14 @@ class ScheduledController(DeviceOperations):
                         if hold := self.hold_reason(device, options):
                             self.report(device, "idle", reason=self.holding(device, hold), execution_blocked=controlling)
                             continue
+                        if heating:
+                            if self.failed.get(device) == key:
+                                continue
+                            result = await self._physical(device, 'heat', options, heating=heating, models=requested)
+                            self.failed.pop(device, None)
+                            self.end_gap(device)
+                            self.report(device, **result)
+                            continue
                         supported = (plan.get("schema_version", 0) >= 7 and device.removeprefix("device:") in slot.get("device_commands", {})
                                      if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device))
                         if not slot or not supported:
@@ -611,7 +632,7 @@ class ScheduledController(DeviceOperations):
                             if "execution_available_entities" in result:
                                 await self.record_execution(device, plan, slot,
                                     {"available_entities": result["execution_available_entities"]})
-                        else:
+                        elif not result.get("heating_curtailed"):
                             await self.record_execution(device, plan, slot, result.get("execution_condition"))
                         self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"))
                     except Exception as err:
@@ -619,6 +640,10 @@ class ScheduledController(DeviceOperations):
                                 ControlDeadlineError, AdmissionPending, HotWaterConfigurationError,
                                 GridCapacityConfigurationError, GatewayRejected, ControlCommandError, CommandUncertain)):
                             raise  # Software/bookkeeping failures are not failed equipment.
+                        if isinstance(err, HeatingDeferred):
+                            self.failed.pop(device, None)
+                            self.report(device, "manual", reason=str(err))
+                            continue
                         if isinstance(err,ControlDeadlineError):
                             self.failed.pop(device,None)
                             self.report(device,"pending",reason=str(err),retry_automatically=True,
@@ -646,7 +671,7 @@ class ScheduledController(DeviceOperations):
                             if self.scheduler is not None:
                                 self.scheduler.request("plan_replaced")
                             continue
-                        if (isinstance(err, (ControlObservationError, GatewayRejected, ControlCommandError, CommandUncertain))
+                        if (not heating and isinstance(err, (ControlObservationError, GatewayRejected, ControlCommandError, CommandUncertain))
                                 and execution_evidence.requested(execution_evidence.owner_key(device), slot)):
                             await self.record_execution(device, plan, slot, {"status": "faulted",
                                 "cause": execution_evidence.fault_cause(err),

@@ -3,9 +3,11 @@ from uuid import uuid4
 from .device_controls import pool_requested_w, pool_permission
 
 
-def device_intent(device, operation, plan, slot, *, configuration_revision, policy_revision):
+def device_intent(device, operation, plan, slot, *, configuration_revision, policy_revision, heating=None):
     parameters = {}
-    if operation == 'apply':
+    if operation == 'heat':
+        parameters = dict(revision=heating['revision'], target_c=heating['target_c'], models=plan['device_models'])
+    elif operation == 'apply':
         parameters = {'start': slot['start']}
         if device == 'ev':
             parameters.update(current_a=slot['ev_target_current_a'], minimum_a=slot['ev_min_current_a'],

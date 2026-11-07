@@ -16,10 +16,14 @@ from datetime import datetime, timedelta, timezone
 from .api_contract import INTEGRATION_VERSION
 from .controller_metrics import ControllerMetrics
 from .device_operations import (DeviceOperations, ControlDeadlineError, ControlObservationError, ControlPlanError, ControlCommandError, PowerHistoryError,
-                                correction_details)
+                                correction_details, HeatingDeferred)
+from .heating_overrides import active_heating
 from .device_ownership import DeviceOwnership
 from .operating_modes import device_mode
 from .hot_water import HotWaterConfigurationError, is_hot_water
+from .device_commands import actuator_targets
+from .device_controls import pool_control_mapping
+from .grid_capacity import EV_WATTS_PER_AMP
 from .gateway_journal import AdmissionPending, GatewayConflict, GatewayRejected, JournalStorageError
 from .command_transport import CommandUncertain
 
@@ -42,7 +46,7 @@ class DeviceIntent:
         result = cls(**deepcopy(value))
         if (type(result.request_id) is not str or not result.request_id or
                 type(result.device) is not str or not result.device or
-                result.operation not in ('apply', 'release') or
+                result.operation not in ('apply', 'release', 'heat', 'curtail') or
                 type(result.parameters) is not dict or type(result.headroom_reserved) is not bool or
                 any(type(v) is not int or v < 0 for v in (result.configuration_revision, result.policy_revision))):
             raise ValueError('Invalid device intention')
@@ -50,10 +54,11 @@ class DeviceIntent:
 
 
 class DeviceGateway(DeviceOperations):
-    def __init__(self, inputs, options, ownership_store, native_executor, *, authorize, before_external, operations, capacity=None):
+    def __init__(self, inputs, options, ownership_store, native_executor, *, authorize, before_external, operations, capacity=None, heating=None):
         self.inputs, self.options = inputs, options
         self.operations = operations
         self.capacity = capacity
+        self.heating = heating
         self.ownership = DeviceOwnership(ownership_store)
         self.native_executor = native_executor
         self.authorize, self.external_ready = authorize, before_external
@@ -81,9 +86,22 @@ class DeviceGateway(DeviceOperations):
         self.sequence = 0
         self.local_obligation = False
         self.pool_pause = None
+        self.heating_limit = None
+        self.heating_needs_capacity = False
 
     def before_external_command(self, device, *, entity, value):
+        if not self.local_obligation and self.intent.operation == 'heat':
+            try:
+                if self.external_ready(device, entity=entity, value=value, priority=True):
+                    return True
+            except ControlDeadlineError:
+                pass
+            self.heating_needs_capacity = True
+            self.device_deadline('heating_capacity', datetime.now(timezone.utc) + timedelta(seconds=5))
+            raise HeatingDeferred('Making room for the heating override')
         if not self.local_obligation and not self.intent.headroom_reserved:
+            if self.heating is not None and self.capacity.heating_effects():
+                self.capacity.admit_import(self.capacity.describe_import(device, entity, value))
             self.reservation_required = True
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
             return False
@@ -151,6 +169,18 @@ class DeviceGateway(DeviceOperations):
         global_override = options.get('control_override_entity')
         if excluded or (override and self.state(override).state != 'off') or (global_override and self.state(global_override).state != 'off'):
             raise GatewayConflict('Device is excluded, disabled or manually overridden')
+        if self.heating is not None:
+            active = active_heating(self.heating.value, options, self.device, self.heating.now())
+            if self.intent.operation == 'heat':
+                p = self.intent.parameters
+                if not active or (active['revision'], active['target_c']) != (p['revision'], p['target_c']):
+                    raise HeatingDeferred('Heating target changed')
+            elif self.intent.operation in ('apply', 'curtail'):
+                if active:
+                    raise HeatingDeferred('Following the heating override')
+                if (self.intent.operation == 'curtail' and self.heating_limit is None
+                        or self.heating_limit and not self.capacity.heating_cap_current(self.heating_limit)):
+                    raise HeatingDeferred('Heating priority changed')
         if self.intent.operation == 'apply':
             start = datetime.fromisoformat(self.slot['start'].replace('Z', '+00:00'))
             if not start <= datetime.now(timezone.utc) < start+timedelta(minutes=15):
@@ -159,6 +189,18 @@ class DeviceGateway(DeviceOperations):
     def _decode(self, intent):
         """Convert the finite semantic payload to the shared operation inputs."""
         p = intent.parameters
+        if intent.operation == 'heat':
+            if (set(p) != {'revision', 'target_c', 'models'} or not intent.device.startswith('device:')
+                    or type(p['revision']) is not int or type(p['target_c']) not in (int, float)
+                    or not any(model['key'] == intent.device.removeprefix('device:')
+                               and model.get('category') == 'heating' and model.get('control_type') == 'setpoint'
+                               for model in p['models'])):
+                raise ValueError('Invalid room heating intention')
+            return {'device_models': p['models']}, None
+        if intent.operation == 'curtail':
+            if set(p) != {'models'} or type(p['models']) is not list:
+                raise ValueError('Invalid heating relief intention')
+            return {'device_models': p['models']}, None
         if intent.operation != 'apply':
             if p:
                 raise ValueError('Release/inhibit do not take native settings')
@@ -265,14 +307,62 @@ class DeviceGateway(DeviceOperations):
                 self.sequence = 0
                 self.local_obligation = True
                 try:
+                    if self.heating is not None:
+                        await self.heating.retire(self.active_options, released=device)
                     await self.restore(device)
                 except Exception as error:
                     self.report(device,'pending',reason=str(error),**correction_details(error))
                 finally:
                     self.local_obligation = False
                     self.restoring = False
+    async def curtail(self):
+        owner, cap, options = self.device, self.heating_limit, self.active_options
+        record = self.ownership.records[owner]
+        if owner == 'ev':
+            switch = options['ev_charge_switch_entity']
+            entity, _ = self.capacity.flexible_ev(options, record)
+            self.check_targets(owner, [switch, entity])
+            amps = cap['maximum_w'] / EV_WATTS_PER_AMP
+            if amps == 0:
+                await self.command(switch, 'off')
+            elif self.actuator_state(switch).state == 'on' and self.number(entity) > amps:
+                await self.command(entity, amps)
+        elif owner == 'pool':
+            _, mapping = pool_control_mapping(options, self.plan['device_models'])
+            targets = actuator_targets(mapping)
+            self.check_targets(owner, targets)
+            await self.command(targets[0], 'off')
+        else:
+            key = owner.removeprefix('device:')
+            mapping = options['device_control_mappings'][key]
+            targets = actuator_targets(mapping)
+            self.check_targets(owner, targets)
+            if cap.get('thermostat'):
+                return await self.suspend_thermostat(owner, options, targets[0])
+            if mapping['control_type'] not in ('switch_schedule', 'permit_inhibit'):
+                raise HeatingDeferred('Device no longer offers heating capacity')
+            model = next((item for item in self.plan['device_models'] if item['key'] == key), {})
+            if is_hot_water(model) and self.heating_permission_for(
+                    mapping, record.get('last_commands', {}), False, self.watts(mapping['power'])):
+                raise HeatingDeferred('Hot water is completing its active cycle')
+            await self.command(targets[0], 'off')
+        return {'state': 'manual', 'reason': 'Making room for a heating override'}
+
     async def perform(self, value):
         intent = DeviceIntent.parse(value)
+        response = await self._perform(intent, value)
+        if not response.get('heating_needs_capacity'):
+            return response
+
+        self.authorize(intent)
+        if await self.capacity.make_heating_room(value):
+            return {**response, 'reservation_required': True}
+        # A reducer may report immediately. Recheck the native guard in this
+        # event, and rely on the observation wake if the watts are still pending.
+        retry = {**value, 'request_id': uuid4().hex}
+        return await self._perform(DeviceIntent.parse(retry), retry)
+
+    async def _perform(self, intent, value):
         async with self.lock:
             self.intent, self.device = intent, intent.device
             self.plan, self.slot = self._decode(intent)
@@ -280,6 +370,8 @@ class DeviceGateway(DeviceOperations):
             self.active_options = deepcopy(self.options())
             self.authorize(intent)
             effective = await self.capacity.capacity_intention(value) if self.capacity is not None else value
+            self.heating_limit = (self.capacity.heating_cap(intent.device)
+                                  if self.heating is not None and intent.operation in ('apply', 'curtail') else None)
             self.plan, self.slot = self._decode(DeviceIntent.parse(effective))
             self.active_slot = self.slot
             prior = await self.operations.begin(value)
@@ -289,6 +381,7 @@ class DeviceGateway(DeviceOperations):
                 raise GatewayConflict('Interrupted device operation; reconcile physical observations before a new intention')
             self.sequence = 0
             self.reservation_required = False
+            self.heating_needs_capacity = False
             self.reads = set()
             self.reports = {}
             self.deadlines = {}
@@ -298,27 +391,39 @@ class DeviceGateway(DeviceOperations):
                 if intent.operation == 'release':
                     self.restoring = True
                     self.check_authority()
+                    if self.heating is not None:
+                        await self.heating.retire(self.active_options, released=intent.device)
                     await self.restore(intent.device)
                 else:
                     self.check_authority()
-                    if intent.device == 'pool':
+                    if intent.operation == 'curtail':
+                        result = await self.curtail()
+                    elif intent.device == 'pool':
                         result = await self.execute_pool(self.active_options, self.slot)
                     elif intent.device == 'ev':
                         result = await self.execute_ev(self.active_options, self.slot)
+                    elif intent.operation == 'heat':
+                        result = await self.execute_device(intent.device, self.active_options, None,
+                                                           target_c=intent.parameters['target_c'])
+                        result.update(state='manual', reason='Following the heating override')
                     else:
-                        result = await self.execute_device(intent.device, self.active_options, self.slot)
+                        cap = self.heating_limit
+                        result = await self.execute_device(intent.device, self.active_options, self.slot,
+                                                           suspend_heat=bool(cap and cap.get('thermostat')))
             except Exception as exception:
                 # In this owner transaction a permission change is a refused
                 # command, not a lost app session. Durable corruption still faults it.
                 if isinstance(exception, (JournalStorageError, sqlite3.DatabaseError)):
                     raise
-                error = {'message':str(exception), 'kind':'plan' if isinstance(exception, ControlPlanError) else 'deadline' if isinstance(exception, ControlDeadlineError) else 'observation' if isinstance(exception, ControlObservationError) else 'configuration' if isinstance(exception, HotWaterConfigurationError) else 'admission' if isinstance(exception, AdmissionPending) else 'rejected' if isinstance(exception, (GatewayConflict, GatewayRejected, ControlCommandError, CommandUncertain)) else 'internal',
+                error = {'message':str(exception), 'kind':'heating' if isinstance(exception, HeatingDeferred) else 'plan' if isinstance(exception, ControlPlanError) else 'deadline' if isinstance(exception, ControlDeadlineError) else 'observation' if isinstance(exception, ControlObservationError) else 'configuration' if isinstance(exception, HotWaterConfigurationError) else 'admission' if isinstance(exception, AdmissionPending) else 'rejected' if isinstance(exception, (GatewayConflict, GatewayRejected, ControlCommandError, CommandUncertain)) else 'internal',
                          'details':correction_details(exception)}
                 if isinstance(exception, ControlObservationError):
                     error.update(entity=exception.entity, unavailable=exception.unavailable)
             finally:
                 self.restoring = False
             if result is not None and self.capacity is not None:
+                if self.heating_limit:
+                    result.update(heating_curtailed=True, reason='Making room for a heating override')
                 condition = self.capacity.capacity_condition(value, effective)
                 if condition is not None and result.get('execution_condition') is None:
                     result['capacity_curtailed'] = True
@@ -327,6 +432,8 @@ class DeviceGateway(DeviceOperations):
                         reports=self.reports, reads=sorted(self.reads),
                         deadlines=[{'device':d,'name':n,'at':at} for (d,n),at in self.deadlines.items()],
                         diagnostics=deepcopy(self.diagnostic_evaluation))
+            if self.heating_needs_capacity:
+                response['heating_needs_capacity'] = True
             await self.operations.finish(value, response)
             if intent.device == 'pool':
                 self.pool_pause = (dict(configuration_revision=intent.configuration_revision,

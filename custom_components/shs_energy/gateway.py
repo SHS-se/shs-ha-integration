@@ -36,9 +36,10 @@ from .shs_core.battery_supply import proportional_supply
 from .shs_core.command_transport import CommandTransport
 from .shs_core.controller_inputs import ControllerInputs
 from .shs_core.device_gateway import DeviceGateway, DeviceIntent
-from .shs_core.device_operations import ControlDeadlineError, ControlObservationError, PowerHistoryError
+from .shs_core.device_operations import ControlDeadlineError, ControlObservationError, PowerHistoryError, HeatingDeferred
 from .shs_core.gateway_journal import AdmissionPending, GatewayJournal, GatewayConflict, digest
 from .shs_core.gateway_service import GatewayService, AppConnection
+from .shs_core.heating_overrides import HeatingOverrides, active_heating, heating_binding
 from .shs_core.gateway_stream import GatewayCommands, GatewayOperations, GatewayRecord, GatewayStream
 from .shs_core.execution_configuration import ExecutionConfiguration
 from .shs_core.source_admission import (validate_bindings, ordered, FACT_ATTRIBUTES, native_pool_idle, owned_device_sources,
@@ -76,6 +77,7 @@ class HomeAssistantSource:
         self.live_changes = {}
         self.fact_versions = {}
         self.capacity = empty_capacity()
+        self.heating_waiting = set()
         self.power_peaks = {}
         self.power_entities = set()
         self.power_settings = set()
@@ -227,6 +229,8 @@ class HomeAssistantSource:
                        for entity in sorted(self.entities) if self.execution_source(entity)]
             self.service.configuration_revision = await future
             await asyncio.gather(*pending)
+            if self.service.heating is not None:
+                await self.service.heating.retire(self.options())
             self.service.configuration_pending = False
 
     async def request(self, operation, body):
@@ -259,7 +263,8 @@ class HomeAssistantSource:
                 # Size this battery against the same native/device reservations
                 # as dispatch. Its own envelope is supplied by the new target;
                 # older actuator sets remain independent reserved demand.
-                return {'external_import_w': self.import_required(exclude_device=capacity_key('battery', controls)),
+                return {'external_import_w': self.import_required(exclude_device=capacity_key('battery', controls),
+                                                                 reserved=self.heating_effects()),
                         'import_limit_w': import_limit(self.service.import_limit_w),
                         'native_load_bounds':self.native_load_bounds()}
         if operation == 'admission':
@@ -478,7 +483,7 @@ class HomeAssistantSource:
 
     def describe_command(self, command):
         action = command.action
-        if action.service == 'turn_off':
+        if action.service == 'turn_off' or action.service == 'set_hvac_mode' and action.value == 'off':
             return self.describe_stop(action.entity)
         value = action.service.removeprefix('turn_') if action.service in ('turn_on', 'turn_off') else action.value
         effect = self.describe_import(command.device, action.entity, value)
@@ -580,7 +585,7 @@ class HomeAssistantSource:
                 'controls':expected, 'sensor':self.power_source(mapping,key)}
 
     def check_command(self, command):
-        if command.action.service == 'turn_off':
+        if command.action.service == 'turn_off' or command.action.service == 'set_hvac_mode' and command.action.value == 'off':
             return
         effect = self.describe_command(command)
         if effect is None:
@@ -605,10 +610,14 @@ class HomeAssistantSource:
 
     def admit_import(self, effect):
         limit = import_limit(self.service.import_limit_w)
-        demand = self.import_required(effect=effect)
+        reserved = self.heating_effects()
+        demand = self.import_required(effect=effect, reserved=reserved)
         credit = self.discharge_credit(effect, demand)
         required = max(0.0, demand-credit)
         if required > limit:
+            if reserved and effect and effect.get('logical') not in reserved:
+                # A valid room request keeps its place while other equipment reduces.
+                raise HeatingDeferred('Making room for a heating override')
             detail = f' after {credit:.0f} W battery discharge' if credit else ''
             raise ControlDeadlineError(f'Waiting for house import capacity: {required:.0f} W required{detail}, {limit:.0f} W house limit')
 
@@ -663,6 +672,8 @@ class HomeAssistantSource:
     async def capacity_intention(self, value):
         """Called under the existing device lock, after current owner authorization."""
         await self.refresh_capacity()
+        if value['operation'] in ('heat', 'curtail'):
+            return value
         await self.capacity_update('intention',value)
         if value['operation'] != 'apply':
             return value
@@ -670,7 +681,23 @@ class HomeAssistantSource:
         cap = next((c for c in caps.values() if c['owner'] == value['device']),None)
         if cap is None:
             return value
+        if cap.get('heating') and not self.heating_cap_current(cap):
+            await self.capacity_update('remove_cap', cap['device'])
+            return value
+        if cap.get('heating') and value['device'] in self.heating_effects():
+            # A newer explicit user request outranks an existing scheduled cap.
+            return value
         owner = value['device']
+        if cap.get('thermostat'):
+            resume = self.capacity_resume_effect(cap)
+            if resume is not None:
+                try:
+                    self.admit_import(resume)
+                except ControlDeadlineError:
+                    pass
+                else:
+                    await self.capacity_update('remove_cap',cap['device'])
+            return value
         if owner == 'ev':
             entity, low, _ = self.service.physical.ev_mapping(self.options())
             effect = self.describe_import(owner,entity,value['parameters']['current_a'])
@@ -710,10 +737,192 @@ class HomeAssistantSource:
                     return value
         return capped_intention(value,cap['maximum_w'])
 
+    def heating_cap_current(self, cap):
+        heating = self.service.heating
+        options = self.options()
+        now = heating.now()
+        if cap['owner'] not in heating.value['order']:
+            return False
+        return any((active := active_heating(heating.value, options, owner, now))
+                   and active['revision'] == revision
+                   for owner, revision in cap.get('heating', {}).items())
+
+    def heating_cap(self, owner):
+        return next((cap for cap in self.capacity.get('coordination', {}).get('caps', {}).values()
+                     if cap['owner'] == owner and cap.get('heating')), None)
+
+    def heating_effects(self):
+        heating = self.service.heating
+        if heating is None:
+            return {}
+        options, now = self.options(), heating.now()
+        effects = {}
+        for owner in heating.value['zones']:
+            try:
+                if row := active_heating(heating.value, options, owner, now):
+                    entity = heating_binding(options, owner)[0]
+                    native = self.report(entity) or {}
+                    if native.get('state') in (None, 'unknown', 'unavailable'):
+                        continue
+                    record = self.service.physical.ownership.records.get(owner, {})
+                    if entity.startswith('climate.') and native['state'] != 'heat':
+                        if native['state'] != 'off' or record.get('heating_suspended') != entity:
+                            continue
+                    if record and set(record['originals']) != {entity}:
+                        continue
+                    mapping = options['device_control_mappings'][owner.removeprefix('device:')]
+                    for override in (options.get('control_override_entity'), mapping.get('control_override_entity')):
+                        if override and (self.report(override) or {}).get('state') != 'off':
+                            break
+                    else:
+                        effects[owner] = self.describe_import(owner, entity, row['target_c'])
+            except (ValueError, KeyError, TypeError, ControlObservationError):
+                # A room with missing physical evidence cannot suppress healthy owners.
+                continue
+        return effects
+
+    def heating_request_current(self, request):
+        heating = self.service.heating
+        active = active_heating(heating.value, self.options(), request['device'], heating.now())
+        parameters = request['parameters']
+        return bool(active and (active['revision'], active['target_c']) == (parameters['revision'], parameters['target_c'])
+                    and request['device'] in self.heating_effects())
+
+    @staticmethod
+    def flexible_ev(options, record):
+        switch = options['ev_charge_switch_entity']
+        candidates = {(mapping['control_entity_id'], mapping['minimum_value'])
+                      for mapping in options.get('device_control_mappings', {}).values()
+                      if mapping.get('control_type') == 'variable_power'
+                      and mapping.get('control_entity_id') in record['originals']}
+        if len(candidates) != 1 or switch not in record['originals']:
+            raise ValueError('EV has no current reduction control')
+        return candidates.pop()
+
+    async def make_heating_room(self, request):
+        """Use spare capacity before asking ranked owners for physical relief."""
+        from uuid import uuid4
+
+        owner_request = request['device']
+        self.heating_waiting.discard(owner_request)
+        if not self.heating_request_current(request):
+            return False
+        physical = self.service.physical
+        reductions = []
+        battery_needed = False
+        async with physical.lock:
+            await self.refresh_capacity()
+            if not self.heating_request_current(request):
+                return False
+            reserved = self.heating_effects()
+            effect = reserved[request['device']]
+            try:
+                demand = self.import_required(effect=effect, reserved=reserved)
+                deficit = demand - self.discharge_credit(effect, demand) - import_limit(self.service.import_limit_w)
+            except (ControlObservationError, ValueError, KeyError, TypeError):
+                return False  # The room's own execution reports the actual missing evidence.
+            if deficit <= 0:
+                return False
+            self.heating_waiting.add(owner_request)
+            options = self.options()
+            heating = self.service.heating
+            now = heating.now()
+            coordination = self.capacity.get('coordination', {})
+            caps = {}
+            for owner in heating.value['order']:
+                if deficit <= 0:
+                    break
+                if (active_heating(heating.value, options, owner, now)
+                        or device_mode(options, owner) != 'controlling'):
+                    continue
+                if owner == 'battery':
+                    battery = self.service.battery
+                    if battery.installation is not None:
+                        installed = battery.installation[3]
+                        mode = installed['battery_mode_entity']
+                        try:
+                            descriptor = self.describe_import(owner, mode, self.report(mode)['state'])
+                        except (ControlObservationError, ValueError, KeyError, TypeError):
+                            continue
+                        possible = max(descriptor['before_w'], capacity_bound(self.capacity['devices'].get(descriptor['device'], {})))
+                        if possible > 0:
+                            battery_needed = True
+                            deficit -= possible
+                    continue
+                value = coordination.get('intents', {}).get(owner)
+                try:
+                    if (value is None or value['operation'] != 'apply'
+                            or not physical.capacity_reduction_available(owner, value)):
+                        continue
+                except (ControlObservationError, ValueError, KeyError, TypeError):
+                    continue
+                record = physical.ownership.records.get(owner)
+                if not record:
+                    continue
+                identity = capacity_key(owner, record['originals'])
+                row = self.capacity['devices'].get(identity, {})
+                bound = capacity_bound(row)
+                if bound <= 0:
+                    continue
+                thermostat = False
+                if owner.startswith('device:'):
+                    key = owner.removeprefix('device:')
+                    mapping = options.get('device_control_mappings', {}).get(key, {})
+                    kind = mapping.get('control_type')
+                    if kind not in ('setpoint', 'switch_schedule', 'permit_inhibit'):
+                        continue
+                    if kind == 'setpoint':
+                        entity = next(iter(record['originals']), '')
+                        native = self.report(entity) or {}
+                        sensor = self.power_source(mapping, key)
+                        thermostat = (entity.startswith('climate.') and sensor
+                                      and native.get('state') in ('off', 'heat')
+                                      and {'off', 'heat'} <= set(native.get('attributes', {}).get('hvac_modes', ())))
+                        if not thermostat:
+                            continue
+                        try:
+                            if native['state'] == 'heat' and power(self.report(sensor), source=sensor)[0] <= 0:
+                                continue
+                        except (ValueError, KeyError, TypeError):
+                            continue
+                previous = coordination.get('caps', {}).get(identity)
+                maximum = 0.0
+                if owner == 'ev':
+                    try:
+                        entity, low = self.flexible_ev(options, record)
+                        maximum = ev_current_ceiling(max(0.0, bound - deficit),
+                            self.report(entity)['attributes'], low) * EV_WATTS_PER_AMP
+                    except (ControlObservationError, ValueError, KeyError, TypeError):
+                        continue
+                if previous is not None:
+                    maximum = min(maximum, previous['maximum_w'])
+                caps[identity] = dict(device=identity, owner=owner, maximum_w=maximum,
+                    withdrawal='heating', resume_controls=commanded_controls(self.capacity, identity),
+                    requested_w=max(bound, (previous or {}).get('requested_w', 0)),
+                    heating={owner_request:request['parameters']['revision']},
+                    thermostat=bool(thermostat))
+                reductions.append(dict(request_id=uuid4().hex, device=owner, operation='curtail',
+                    configuration_revision=request['configuration_revision'],
+                    policy_revision=request['policy_revision'], headroom_reserved=False,
+                    parameters={'models': value['parameters'].get('models', [])}))
+                deficit -= bound - maximum
+            if caps:
+                await self.capacity_update('caps', caps)
+        for value in reductions:
+            if not self.heating_request_current(request):
+                break
+            try:
+                await physical.perform(value)
+            except (AdmissionPending, GatewayConflict, ControlObservationError, ValueError, KeyError, TypeError):
+                continue
+        return battery_needed and self.heating_request_current(request)
+
     def capacity_condition(self, value, effective):
         """A still-active positive cap is reduced service, including when the plan now fits it."""
         cap = next((c for c in self.capacity.get('coordination', {}).get('caps', {}).values()
                     if c['owner'] == value['device']), None)
+        if cap is not None and cap.get('heating'):
+            return None
         if cap is not None and value['device'] == 'ev':
             entity, low, _ = self.service.physical.ev_mapping(self.options())
             current = ev_current_ceiling(cap['maximum_w'], self.report(entity)['attributes'], low)
@@ -743,7 +952,7 @@ class HomeAssistantSource:
         recovered = []
         for identity,cap in self.capacity.get('coordination',{}).get('caps',{}).items():
             owner = cap['owner']
-            if device_mode(self.options(),owner) != 'controlling':
+            if cap.get('heating') or device_mode(self.options(),owner) != 'controlling':
                 continue
             effect = self.capacity_resume_effect(cap)
             if effect is None:
@@ -873,7 +1082,7 @@ class HomeAssistantSource:
                     include(effect,effect['before_w'])
         return bounds
 
-    def import_required(self, *, effect=None, exclude_device=None):
+    def import_required(self, *, effect=None, exclude_device=None, reserved=None):
         options = self.options()
         if house_meter_errors(options):
             raise HouseMeterError(options)
@@ -926,6 +1135,8 @@ class HomeAssistantSource:
         for row in self.capacity['devices'].values():
             for descriptor in [*row['effects'].values(), *([row['settled']] if row.get('settled') else [])]:
                 include(descriptor, capacity_bound(row))
+        for reservation in (reserved or {}).values():
+            include(reservation, reservation['possible_w'])
         if effect is not None:
             include(effect, max(effect['before_w'],effect['after_w'],effect['possible_w']))
         partitions, used = [], set()
@@ -944,13 +1155,19 @@ class HomeAssistantSource:
             partitions.append((measured, bound))
         return required_import(house, partitions)
 
-    def external_ready(self, device, *, entity=None, value=None):
+    def external_ready(self, device, *, entity=None, value=None, priority=False):
         # The app has already reserved unknown pending demand. HA independently
         # checks the current battery response at the final native boundary.
         battery = self.service.battery
         try:
             if entity is not None:
                 self.admit_import(self.describe_import(device, entity, value))
+            # Manual demand shares the durable native import envelope with the
+            # battery, including all in-flight charge. When that envelope fits,
+            # forcing charge to stop would spend another load's flexibility.
+            if priority:
+                self.heating_waiting.discard(device)
+                return True
             return battery.installation is None or battery_released(battery.installation[3], self.report)
         except (ControlDeadlineError, GridCapacityConfigurationError, ControlObservationError):
             raise
@@ -994,6 +1211,11 @@ class HomeAssistantSource:
                 self.intake_counts['bytes'] += len(json.dumps(row))
                 receipt = self.service.stream.capture('observation', row)
                 def committed(future):
+                    if (not self.closed and self.heating_waiting and
+                            (entity in self.capacity_entities or entity == self.options().get('house_consumption_power_entity'))
+                            and not future.cancelled() and future.exception() is None):
+                        self.heating_waiting.clear()
+                        self.service.wake_heating_capacity()
                     if (not self.closed and entity in self.capacity_entities and not self.capacity_refresh_pending
                             and not future.cancelled() and future.exception() is None):
                         self.capacity_refresh_pending = True
@@ -1053,6 +1275,7 @@ async def open_gateway(hass, entry):
     stream.start()
     source = HomeAssistantSource(hass, entry)
     service = GatewayService(stream, identity, source)
+    service.heating = HeatingOverrides(GatewayRecord(stream, 'heating_overrides'), service.heating_changed)
     source.service = service
     source.configuration = ExecutionConfiguration(GatewayRecord(stream,'execution_configuration'),
         source.invalidate, source.refresh_configuration)
@@ -1067,12 +1290,13 @@ async def open_gateway(hass, entry):
         lambda entity:item.platform if (item:=registry.async_get(entity)) else None)
     service.physical = DeviceGateway(inputs, source.options, GatewayRecord(stream,'ownership'), native,
         authorize=service.authorize_device, before_external=source.external_ready,
-        operations=GatewayOperations(stream, service.session), capacity=source)
+        operations=GatewayOperations(stream, service.session), capacity=source, heating=service.heating)
     now = lambda:int(datetime.now(timezone.utc).timestamp()*1000)
     service.battery = BatteryGateway(stream,service.physical,source.options,source.report,now,
         authorize=service.authorize,session=service.session,context=service.context, coordinate=source.coordinate_battery)
     try:
         await source.configuration.load(dict(entry.options))
+        await service.heating.load()
         admission = await stream.call('load_record','source_admission')
         if admission is not None:
             source.install_bindings(admission)
@@ -1085,6 +1309,7 @@ async def open_gateway(hass, entry):
         source.attach()
         await source.refresh_configuration()
     except BaseException:
+        service.heating.close()
         await stream.close()
         await hass.async_add_executor_job(journal.close)
         raise

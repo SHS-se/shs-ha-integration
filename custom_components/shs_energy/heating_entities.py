@@ -1,0 +1,91 @@
+"""Home Assistant controls projected from the gateway's room instructions."""
+from datetime import timedelta
+from math import ceil
+
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import async_get_current_platform
+from homeassistant.helpers.event import async_track_time_interval
+
+from .shs_core.const import CONF_DEVICE_TOKEN_ID, DOMAIN
+from .shs_core.gateway_journal import GatewayConflict
+
+
+class HeatingEntity:
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+
+    def __init__(self, entry, owner, row, field):
+        self.entry, self.owner, self.row, self.field = entry, owner, row, field
+        self._attr_unique_id = f'{entry.entry_id}_heating_{owner}_{field}'
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f'{entry.data[CONF_DEVICE_TOKEN_ID]}:heating:{owner}')},
+            name=row['name'], manufacturer='Smart Home Solutions')
+
+    @property
+    def available(self):
+        return self.entry.runtime_data.online and self.row['controlling']
+
+    async def change(self, value):
+        try:
+            await self.entry.runtime_data.service.change_heating(
+                dict(owner=self.owner, field=self.field, value=value))
+        except (GatewayConflict, ValueError, TypeError) as error:
+            raise HomeAssistantError(str(error)) from error
+
+    @property
+    def minutes(self):
+        from datetime import datetime
+        end = self.row['expires_at']
+        now = self.entry.runtime_data.service.heating.now()
+        return max(0, ceil((datetime.fromisoformat(end) - now).total_seconds() / 60)) if end else self.row['minutes']
+
+
+async def setup_heating_entities(hass, entry, make):
+    """Use one lifecycle for the two writable numbers and the resume button."""
+    coordinator = entry.runtime_data
+    platform = async_get_current_platform()
+    entities = {}
+    task = None
+    dirty = False
+
+    async def refresh():
+        nonlocal dirty
+        while dirty:
+            dirty = False
+            if not coordinator.online:
+                for group in entities.values():
+                    for entity in group:
+                        entity.async_write_ha_state()
+                continue
+            zones = coordinator.service.heating_controls()['zones']
+            for owner in entities.keys() - zones.keys():
+                for entity in entities.pop(owner):
+                    await entity.async_remove(force_remove=True)
+            additions = []
+            for owner, row in zones.items():
+                if owner not in entities:
+                    entities[owner] = make(entry, owner, row)
+                    additions.extend(entities[owner])
+                else:
+                    for entity in entities[owner]:
+                        entity.row = row
+                        entity.async_write_ha_state()
+            if additions:
+                await platform.async_add_entities(additions)
+
+    def schedule(_now=None):
+        nonlocal task, dirty
+        dirty = True
+        if task is None or task.done():
+            task = entry.async_create_background_task(hass, refresh(), name='shs_heating_entities')
+
+    def stop():
+        if task is not None:
+            task.cancel()
+
+    entry.async_on_unload(stop)
+    entry.async_on_unload(coordinator.async_add_listener(schedule))
+    entry.async_on_unload(async_track_time_interval(hass, schedule, timedelta(minutes=1)))
+    dirty = True
+    await refresh()

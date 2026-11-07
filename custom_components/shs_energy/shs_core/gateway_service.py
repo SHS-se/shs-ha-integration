@@ -12,6 +12,7 @@ from .gateway_journal import AdmissionPending, GatewayConflict, digest
 from .native_configuration import native_options
 from .gateway_stream import GatewayConnection
 from .command_transport import settled, settle_task
+from .heating_overrides import DEFAULT_MINUTES, active_heating, heating_binding
 
 
 class GatewayService:
@@ -29,6 +30,7 @@ class GatewayService:
         self.active = False
         self.physical = None
         self.battery = None
+        self.heating = None
         self.reconciliation = None
         self.pending = {}
         self.projection = None
@@ -37,13 +39,77 @@ class GatewayService:
         self.obligation_event = asyncio.Event()
         self.obligation_task = None
         self.obligation_error = None
-        self.updates = {'receipts':0, 'requests':0}
+        self.updates = {'receipts':0, 'requests':0, 'heating':0, 'heating_capacity':0}
         self.update_event = asyncio.Event()
         self.stream.listeners.add(self.receipts_changed)
 
     def receipts_changed(self):
         self.updates['receipts'] += 1
         self.update_event.set()
+
+    def wake_heating_capacity(self):
+        self.updates['heating_capacity'] += 1
+        self.update_event.set()
+
+    def heating_changed(self):
+        self.updates['heating'] += 1
+        self.update_event.set()
+        self.source.heating_waiting.clear()
+        if self.source.projection:
+            self.source.projection.async_update_listeners()
+
+    def heating_inventory(self):
+        return {row['permission']['controller_id']: row for row in
+                (self.projection or {}).get('execution_devices', [])
+                if row['planned'] and not row.get('system_member')}
+
+    def heating_controls(self):
+        options = self.source.options()
+        book = self.heating.value
+        now = self.heating.now()
+        inventory = self.heating_inventory()
+        zones = {}
+        for owner, row in inventory.items():
+            binding = heating_binding(options, owner)
+            if row.get('category') != 'heating' or not binding:
+                continue
+            native = self.source.report(binding[0]) or {}
+            attrs = native.get('attributes', {})
+            climate = binding[0].startswith('climate.')
+            saved = book['zones'].get(owner, {})
+            active = active_heating(book, options, owner, now)
+            planned = row.get('planned_target_c')
+            zones[owner] = dict(name=row['name'], target_c=active['target_c'] if active else planned,
+                planned_target_c=planned, expires_at=active['expires_at'] if active else None,
+                min_c=attrs.get('min_temp' if climate else 'min'),
+                max_c=attrs.get('max_temp' if climate else 'max'),
+                step=attrs.get('target_temp_step' if climate else 'step', 0.1),
+                applied_c=attrs.get('temperature') if climate else native.get('state'),
+                minutes=saved.get('minutes', DEFAULT_MINUTES),
+                controlling=row['mode'] == 'controlling' and options.get('device_modes', {}).get(row['key']) == 'controlling')
+        mappings = options.get('device_control_mappings', {})
+        loads = {}
+        for owner, row in inventory.items():
+            mapping = mappings.get(row['key'], {})
+            if owner in ('battery', 'ev', 'pool') or mapping.get('control_type') in ('switch_schedule', 'permit_inhibit'):
+                loads[owner] = row['name']
+            elif owner in zones and heating_binding(options, owner)[0].startswith('climate.'):
+                loads[owner] = row['name']
+        return dict(zones=zones, loads=loads, order=book['order'])
+
+    async def change_heating(self, body):
+        if not self.active or self.closed:
+            raise AdmissionPending('SHS is reconnecting')
+        if type(body) is not dict or type(body.get('owner')) not in (str, type(None)):
+            raise ValueError('Invalid heating control request')
+        controls = self.heating_controls()
+        options = self.source.options()
+        owner = body.get('owner')
+        zone = controls['zones'].get(owner)
+        equipment = ((heating_binding(options, owner), zone['min_c'], zone['max_c'])
+                     if zone and zone['controlling'] else None)
+        await self.heating.change(body, options, equipment, set(controls['loads']))
+        return self.heating_controls()
 
     async def wait_updates(self, after):
         if (type(after) is not dict or set(after) != set(self.updates)
@@ -98,6 +164,8 @@ class GatewayService:
     async def configuration_changed(self, value):
         # Host invalidates synchronously before it creates this coroutine.
         self.configuration_revision = await self.stream.capture('configuration', value)
+        if self.heating is not None:
+            await self.heating.retire(self.source.options())
         self.configuration_pending = False
 
     def invalidate_configuration(self):
@@ -159,6 +227,8 @@ class GatewayService:
         if self.close_task is None:
             # Quiesce producers and authority synchronously before any await.
             self.closed = True
+            if self.heating is not None:
+                self.heating.close()
             self.source.closed = True
             self.stream.listeners.discard(self.receipts_changed)
             self.revoke()
@@ -200,6 +270,7 @@ FIELDS = {
     'policy': {'value'},
     'ownership': set(),
     'synchronize': {'models'},
+    'heating': {'edit'},
     'device': {'intent'},
     'battery_grant': {'identity', 'catalog', 'conversion', 'expires_at_ms'},
     'battery_route': {'effect', 'grant'},
@@ -314,8 +385,16 @@ class AppConnection(GatewayConnection):
         if op == 'ownership':
             return s.physical.ownership.snapshot()
         if op == 'synchronize':
-            return await s.physical.synchronize(body['models'])
+            result = await s.physical.synchronize(body['models'])
+            if s.heating is not None:
+                result['heating'] = s.heating.value
+            return result
+        if op == 'heating':
+            return (await s.change_heating(body['edit']) if body['edit'] is not None
+                    else s.heating_controls())
         if op == 'device':
+            if type(body['intent']) is dict and body['intent'].get('operation') == 'curtail':
+                raise ValueError('Heating relief is selected by the gateway')
             return await s.physical.perform(body['intent'])
         if op == 'battery_grant':
             return await s.battery.grant(body['identity'], body['catalog'], body['conversion'], body['expires_at_ms'])

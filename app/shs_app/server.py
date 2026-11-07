@@ -21,6 +21,7 @@ from shs_core.api import ShsConnectionError, connection_trace
 from .records import RecordStore
 from .gateway_client import GatewayDisconnected
 from shs_wire.protocol import PROTOCOL
+from shs_core.gateway_journal import GatewayConflict
 from shs_core.operational_attention import execution_attention, merge_attention, pipeline_issue
 
 LOGGER = logging.getLogger(__name__)
@@ -285,6 +286,20 @@ def create_app(observer, static, *, trusted_peer="172.30.32.2"):
                 field_errors=getattr(error,'field_errors',{}),configuration=runtime.configuration.status()),
                 status=409,headers={'Cache-Control':'no-store'})
 
+    async def heating(request):
+        edit = None
+        if request.method == 'POST':
+            if request.content_type != 'application/json' or request.headers.get('Sec-Fetch-Site') in ('cross-site','same-site'):
+                raise web.HTTPForbidden(text='Heating changes must originate in the SHS app')
+            edit = await request.json()
+            if type(edit) is not dict:
+                raise web.HTTPBadRequest(text='Invalid heating control request')
+        try:
+            result = await engine().gateway.call('heating', {'edit': edit})
+        except (GatewayConflict, ValueError) as error:
+            return web.json_response({'message': str(error)}, status=409)
+        return web.json_response(result, headers={'Cache-Control': 'no-store'})
+
     async def diagnostics(request):
         from .downloads import controller_download
         content,summary = await controller_download(engine())
@@ -293,6 +308,8 @@ def create_app(observer, static, *, trusted_peer="172.30.32.2"):
             'X-SHS-Diagnostics-Summary':json.dumps(summary),'Cache-Control':'no-store'})
 
     app.router.add_get("/api/state", state)
+    app.router.add_get("/api/heating", heating)
+    app.router.add_post("/api/heating", heating)
     app.router.add_post('/api/configuration/{action}',configuration)
     app.router.add_get('/api/diagnostics/controller.json.gz',diagnostics)
     async def app_logs(request):
