@@ -1080,19 +1080,18 @@ def storage_ratios(account, since_ms, at_ms):
     stored/terminal; discharging is terminal/stored. Energies are summed, so
     state-of-charge resolution averages out rather than biasing the ratio.
     """
+    quarter = 900000
+    boundaries = range(-(-since_ms // quarter) * quarter, at_ms + 1, quarter)
     rows = account.observations
-    if hasattr(rows, 'at_or_before'):
-        lookup = rows.at_or_before
+    if hasattr(rows, 'at_or_before_boundaries'):
+        observations = rows.at_or_before_boundaries(boundaries)
     else:
         ordered = sorted((r for r in rows if r.at_ms <= at_ms), key=lambda r: r.at_ms)
         times = [r.at_ms for r in ordered]
-        lookup = lambda t: ordered[i - 1] if (i := bisect_right(times, t)) else None
+        observations = (ordered[i - 1] if (i := bisect_right(times, t)) else None for t in boundaries)
     totals = {"charge": [0, 0, 0], "discharge": [0, 0, 0]}
-    boundary = -(-since_ms // 900000) * 900000
-    previous = lookup(boundary)
-    while boundary + 900000 <= at_ms:
-        boundary += 900000
-        current = lookup(boundary)
+    previous = None
+    for current in observations:
         if previous and current and previous.measured and current.measured and current.at_ms > previous.at_ms:
             charged = measured(account.meter_index, "charge", previous.at_ms, current.at_ms)
             discharged = measured(account.meter_index, "discharge", previous.at_ms, current.at_ms)

@@ -27,6 +27,17 @@ BOUNDARY_EDGES = """SELECT
         WHERE stream=:stream AND right_ms>=:end),:end) AND left_ms<:end"""
 METER_COLUMNS='event_id,stream,direction,boundary,epoch,source_at_ms,total_mwh,receipt,physical_id'
 KINDS={'admissions':ex.Admission,'reconciliations':ex.StateReconciliation}
+OBSERVATION_BOUNDARIES = '''WITH arrivals AS (
+    SELECT 0 AS bucket, max(ordinal) AS ordinal
+    FROM observations WHERE at_ms<=:first AND ordinal<:prefix
+    UNION ALL
+    SELECT (at_ms-:first+:step-1)/:step AS bucket, max(ordinal) AS ordinal
+    FROM observations INDEXED BY observation_time
+    WHERE at_ms>:first AND at_ms<=:last AND ordinal<:prefix
+    GROUP BY bucket
+)
+SELECT bucket, ordinal, at_ms, stored_mwh, source, measured
+FROM arrivals JOIN observations USING (ordinal)'''
 
 
 def encode(value):return json.dumps(value,separators=(',',':'),allow_nan=False)
@@ -165,6 +176,31 @@ class EvidenceRows(Sequence):
         if pending:return pending
         row=self.database.query(lambda db:db.execute(f'SELECT {columns(self.name)} FROM {self.name} WHERE at_ms<=? AND ordinal<? ORDER BY ordinal DESC LIMIT 1',(at_ms,self.tail_start)).fetchone(),name='at_or_before')
         return decode_row(self.name,row) if row else None
+
+    def at_or_before_boundaries(self, boundaries: range):
+        """Read each time bucket once, preserving the latest eligible arrival."""
+        if not boundaries:
+            return []
+        first, last, step = boundaries[0], boundaries[-1], boundaries.step
+        parameters = dict(first=first, last=last, step=step, prefix=self.tail_start)
+        rows = self.database.query(
+            lambda db: db.execute(OBSERVATION_BOUNDARIES, parameters).fetchall(),
+            name='at_or_before',
+        )
+        arrivals = {bucket: (ordinal, decode_row(self.name, row)) for bucket, ordinal, *row in rows}
+        for ordinal, observation in enumerate(self.tail, self.tail_start):
+            if observation.at_ms <= last:
+                bucket = (max(0, observation.at_ms-first)+step-1)//step
+                arrivals[bucket] = ordinal, observation
+
+        latest = (-1, None)
+        observations = []
+        for bucket in range(len(boundaries)):
+            arrival = arrivals.get(bucket)
+            if arrival is not None and arrival[0] > latest[0]:
+                latest = arrival
+            observations.append(latest[1])
+        return observations
 
 
 class EvidenceLookup:

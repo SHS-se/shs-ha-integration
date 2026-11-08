@@ -168,6 +168,24 @@ class IndexedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows.at_or_before(150).at_ms,100)
         self.assertIsNone(rows.at_or_before(50))
 
+    async def test_quarter_observations_match_arrival_order_across_committed_and_pending_rows(self):
+        account = self.account
+        for i, (at, measured) in enumerate(((0, True), (3*QUARTER, True), (QUARTER+1, False),
+                                            (QUARTER, True), (4*QUARTER, True))):
+            account = ex.observe_state(account, ex.StateObservation(at, 5_000_000+i, 'synthetic', measured))
+        await self.save(account)
+        committed = self.store._session.account.observations
+        rows = committed.append_record(ex.StateObservation(QUARTER+1, 5_000_100, 'synthetic', False))
+        rows = rows.append_record(ex.StateObservation(6*QUARTER, 5_000_200, 'synthetic', True))
+        boundaries = range(0, 6*QUARTER, QUARTER)
+
+        for view in (committed, rows):
+            expected = [view.at_or_before(boundary) for boundary in boundaries]
+            queries_before = self.store.evidence.metrics['at_or_before_calls']
+            self.assertEqual(view.at_or_before_boundaries(boundaries), expected)
+            self.assertEqual(self.store.evidence.metrics['at_or_before_calls'] - queries_before, 1)
+        self.assertEqual(rows.at_or_before_boundaries(range(0)), [])
+
     async def test_unordered_corrections_resets_and_boundary_blocks_match_reference(self):
         reference=ex.Account();indexed=self.account
         rng=random.Random(187)
