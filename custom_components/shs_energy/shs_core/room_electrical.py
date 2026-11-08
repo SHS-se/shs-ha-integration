@@ -8,6 +8,7 @@ from bisect import bisect_right
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from math import isfinite
+from statistics import median
 from time import perf_counter
 import asyncio
 import logging
@@ -36,7 +37,7 @@ class OnPowerEvidence:
     condition: OnCondition | None = None
 
     def as_inference(self):
-        return {"method": "room_observed_on_power_v1", **asdict(self)}
+        return {"method": "room_observed_on_power_median_v1", **asdict(self)}
 
 
 def actuator_on(entity, state, attributes):
@@ -72,7 +73,7 @@ def _spans(entity, rows, end):
 
 
 def room_on_power(*, conditions, power_means, actuator_rows, start, end):
-    """Compute supported means; missing/mixed/shared observations stay unknown."""
+    """Estimate typical draw from fully attributed heating intervals."""
     spans = {entity: _spans(entity, rows, end) for entity, rows in actuator_rows.items()}
     def covers(entity, begin, finish, expected):
         starts, intervals = spans.get(entity, ([], []))
@@ -83,7 +84,7 @@ def room_on_power(*, conditions, power_means, actuator_rows, start, end):
         return left <= begin and right >= finish and value is expected
     result = {}
     for key, condition in conditions.items():
-        energy_wh, hours, count = 0.0, 0.0, 0
+        observed = []
         for at, watts in power_means.get(condition.power, []):
             finish = at + PERIOD
             if at < start or finish > end or type(watts) not in (float, int) or not isfinite(watts) or watts < 0:
@@ -92,12 +93,10 @@ def room_on_power(*, conditions, power_means, actuator_rows, start, end):
                 continue
             if not all(covers(e, at, finish, False) for e in condition.off):
                 continue
-            duration = PERIOD.total_seconds()/3600
-            energy_wh += watts*duration
-            hours += duration
-            count += 1
-        result[key] = OnPowerEvidence(energy_wh/hours if hours else None, hours, count,
-                                     "recorded_on_intervals" if hours else "no_on_coverage", condition)
+            observed.append(watts)
+        hours = len(observed) * PERIOD.total_seconds() / 3600
+        result[key] = OnPowerEvidence(median(observed) if observed else None, hours, len(observed),
+                                     "recorded_on_intervals" if observed else "no_on_coverage", condition)
     return result
 
 

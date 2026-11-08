@@ -27,6 +27,12 @@ class OnPowerTests(unittest.TestCase):
         self.assertEqual(found.intervals,2)
         self.assertEqual(found.source,'recorded_on_intervals')
 
+    def test_typical_on_draw_resists_an_isolated_meter_spike(self):
+        found = self.learn([row(0, 'heating')], [(at(0), 1100), (at(5), 4900), (at(10), 1200)])
+        self.assertEqual(found.expected_w, 1200)
+        self.assertEqual(found.intervals, 3)
+        self.assertEqual(found.on_hours, 0.25)
+
     def test_mixed_and_unknown_buckets_are_not_prorated(self):
         found=self.learn([row(0,'heating'),row(2,'idle'),(at(5),'unavailable',{}),row(10,'heating')])
         self.assertEqual(found.expected_w,2)
