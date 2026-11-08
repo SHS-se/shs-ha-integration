@@ -110,6 +110,7 @@ from .device_controls import (
     requested_controllable_devices,
 )
 from .hot_water import RUNNING_PEAK_MIN_W, is_hot_water, hot_water_setup_errors
+from .pool_observations import observation_signature, pool_observation_entities, quarter_settings, with_pool_observations
 from .optimisation import (
     with_device_quarters,
     OptimisationInputError,
@@ -2523,12 +2524,40 @@ class Household:
         start: datetime,
         end: datetime,
     ) -> list[dict[str, Any]]:
-        """Return complete per-device Energy Dashboard quarters."""
+        """Return complete per-device Energy Dashboard quarters.
+
+        A pool device's quarters also carry its power setting and metered heat
+        when it names them, so the website learns both from the same quarters.
+        """
         statistic_by_key = self._device_statistics(devices)
+        observed = self._pool_observations(devices)
+        heat = {key: entry["heat"] for key, entry in observed.items() if "heat" in entry}
         statistics = await self._statistics_changes(
-            sorted(set(statistic_by_key.values())), start, end, "5minute"
+            sorted(set(statistic_by_key.values()) | set(heat.values())), start, end, "5minute"
         )
-        return self._device_changes(statistic_by_key, statistics)
+        quarters = self._device_changes(statistic_by_key, statistics)
+        if not observed:
+            return quarters
+        settings: dict[str, dict[str, float]] = {}
+        setting_entities = sorted({entry["setting"] for entry in observed.values() if "setting" in entry})
+        if setting_entities:
+            # A setting is an observation like any other: unreadable history
+            # leaves the quarters without one, it does not withhold the energy.
+            try:
+                states = await self.ports.history.states(start, end, setting_entities, with_attributes=False)
+            except HouseholdReadError as err:
+                _LOGGER.warning("Pool power settings could not be read: %s", err)
+                states = {}
+            settings = {key: quarter_settings(states.get(entry["setting"], []), start, end)
+                        for key, entry in observed.items() if "setting" in entry}
+        return with_pool_observations(quarters, settings, aggregate_device_changes(
+            {key: statistics.get(entity, []) for key, entity in heat.items()}))
+
+    def _pool_observations(self, devices: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+        options = self.resolved_options()
+        mappings = options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
+        return pool_observation_entities(devices, mappings if isinstance(mappings, dict) else {},
+                                         options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY))
 
     def _device_statistics(self, devices):
         from .configuration_schema import shared_devices
@@ -3768,6 +3797,7 @@ class Household:
                 # suppressed readings that the recorder had already finished.
                 complete_end = quarter_start(self.ports.utcnow())
                 accepted = stored.get("optimisation_actuals_accepted_until")
+                observation_signature_now = observation_signature(self._pool_observations(devices))
                 if accepted:
                     # Re-offer the recent quarters behind the watermark. The
                     # database upsert keeps the unique row count at 96/day,
@@ -3778,6 +3808,12 @@ class Household:
                         datetime.fromisoformat(accepted).astimezone(timezone.utc),
                         complete_end - timedelta(hours=OPTIMISATION_ACTUAL_RESWEEP_HOURS),
                     )
+                    # A newly named power setting or heat meter is learned from
+                    # the retained quarters too, not only from those to come.
+                    if observation_signature_now != stored.get(
+                        "optimisation_pool_observations_sent", observation_signature({})
+                    ):
+                        start = complete_end - timedelta(hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS)
                 else:
                     start = complete_end - timedelta(
                         hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS
@@ -4055,6 +4091,7 @@ class Household:
                 stored["optimisation_actuals_accepted_until"] = result[
                     "actuals_accepted_until"
                 ]
+                stored["optimisation_pool_observations_sent"] = observation_signature_now
             if result.get("thermal_slots_accepted_until"):
                 stored["thermal_slots_accepted_until"] = result[
                     "thermal_slots_accepted_until"

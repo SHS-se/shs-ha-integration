@@ -35,7 +35,7 @@ class PoolContractTests(unittest.TestCase):
         returning "pool" the moment the method changed — which is why choosing
         a power control moved the card's header to "No room".
         """
-        expected = ["actuator_entity_ids", "power", "power_setting_entity_id"]
+        expected = ["actuator_entity_ids", "power", "power_setting_entity_id", "heat_energy_entity_id"]
         for method in CONTROL_FIELDS:
             self.assertEqual(keys(method, "pool"), expected, method)
 
@@ -51,18 +51,20 @@ class PoolContractTests(unittest.TestCase):
             self.assertNotIn(absent, keys("switch_schedule", "pool"))
 
     def test_the_power_setting_is_observed_and_belongs_only_to_the_pool(self):
+        observed = ["power_setting_entity_id", "heat_energy_entity_id"]
         self.assertEqual(
             [field["key"] for field in OBSERVATION_FIELDS["pool"]],
-            ["power_setting_entity_id"],
+            observed,
         )
         for method in CONTROL_FIELDS:
             for path in PATHS:
                 if path == "pool":
                     continue
-                self.assertNotIn(
-                    "power_setting_entity_id", keys(method, path),
-                    f"{method} on {path} was offered the pool's observation",
-                )
+                for key in observed:
+                    self.assertNotIn(
+                        key, keys(method, path),
+                        f"{method} on {path} was offered the pool's observation",
+                    )
 
     def test_nothing_writes_the_power_setting(self):
         """It is an observation, so no executor may treat it as a target.
@@ -75,6 +77,7 @@ class PoolContractTests(unittest.TestCase):
             "control_type": "switch_schedule",
             "actuator_entity_ids": ["switch.pool"],
             "power_setting_entity_id": "number.desired_charge_power_pool_1",
+            "heat_energy_entity_id": "sensor.pool_produced_heat_energy",
         }
         self.assertEqual(actuator_targets(mapping), ["switch.pool"])
 
@@ -151,7 +154,7 @@ class RoutingTests(unittest.TestCase):
         )
         self.assertEqual(
             keys("variable_power", path),
-            ["actuator_entity_ids", "power", "power_setting_entity_id"],
+            ["actuator_entity_ids", "power", "power_setting_entity_id", "heat_energy_entity_id"],
         )
 
 

@@ -143,6 +143,33 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row['device_energy_kwh']['synthetic_pool'] for row in actuals], [0, .9])
         self.assertEqual([row['quality']['duration_seconds'] for row in actuals], [900, 900])
 
+    async def test_a_newly_observed_pool_setting_resends_the_retained_quarters_once(self):
+        """Naming a power setting or heat meter is learned from history too."""
+        from datetime import timezone
+        boundary = datetime(2026, 11, 8, 9, tzinfo=timezone.utc)
+        self.rig.now = boundary + timedelta(minutes=3)
+        self.rig.records.saved['optimisation_actuals_accepted_until'] = (boundary - timedelta(minutes=15)).isoformat()
+        self.h._prepared_device_inventory.return_value = [{
+            'key': 'synthetic_pump', 'statistic_id': 'sensor.synthetic_pump',
+            'category': 'pool_heating', 'planning_role': 'controllable'}]
+        self.h.client.submit_optimisation.return_value = {
+            **self.h.client.submit_optimisation.return_value, 'actuals_accepted_until': boundary.isoformat()}
+        observed = {'synthetic_pump': {'setting': 'number.synthetic_capacity'}}
+        self.h._pool_observations = lambda devices: observed
+        begins = []
+
+        async def statistics(begin, end, entities, period, units, kinds):
+            begins.append(begin)
+            return {}
+
+        self.rig.history.statistics.side_effect = statistics
+        for _ in range(2):
+            await self.h.async_optimisation_push(force_plan=True, replan_request_id='synthetic-manual')
+        observed['synthetic_pump']['heat'] = 'sensor.synthetic_heat'
+        await self.h.async_optimisation_push(force_plan=True, replan_request_id='synthetic-manual')
+        self.assertEqual(begins, [boundary - timedelta(hours=72), boundary - timedelta(hours=2),
+                                  boundary - timedelta(hours=72)])
+
     async def test_device_quarters_upload_without_a_household_meter_or_its_quarter(self):
         """The heater's quarter is evidence of its own: neither a missing grid
         meter nor that meter's late quarter may hold it back."""

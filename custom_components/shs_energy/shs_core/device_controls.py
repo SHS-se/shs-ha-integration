@@ -83,6 +83,7 @@ _ENTITY_FIELDS_BY_CONTROL_TYPE: dict[str, tuple[str, ...]] = {
         # is listed here so a deleted entity is reported rather than silently
         # ignored — being read rather than written makes it no less a reference.
         "power_setting_entity_id",
+        "heat_energy_entity_id",
     ),
     "variable_power": ("control_entity_id",),
 }

@@ -222,14 +222,27 @@ POOL_POWER_SETTING_FIELD = _field(
     "entity",
     domains=("number", "input_number", "sensor"),
     help_text=(
-        "Optional. The heat pump's own target output setting. SHS only reads this, "
-        "to learn how the pool's efficiency changes with it. Nothing writes to it, "
-        "and the plan does not choose it."
+        "Optional. This device's own power setting, such as a heat pump's target "
+        "output or a pump's capacity. SHS only reads this, to learn the device's "
+        "draw and the pool's efficiency at each setting. Nothing writes to it, and "
+        "the plan does not choose it."
+    ),
+)
+
+POOL_HEAT_METER_FIELD = _field(
+    "heat_energy_entity_id",
+    "Heat output meter",
+    "entity",
+    domains=("sensor",),
+    help_text=(
+        "Optional. A meter of the heat this device delivers to the pool, such as a "
+        "heat pump's own produced-heat counter, in kWh. SHS only reads this, to "
+        "learn the heater's efficiency at each power setting."
     ),
 )
 
 OBSERVATION_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
-    "pool": (POOL_POWER_SETTING_FIELD,),
+    "pool": (POOL_POWER_SETTING_FIELD, POOL_HEAT_METER_FIELD),
 }
 
 # What a path's own executor runs, whatever method the website shows.
