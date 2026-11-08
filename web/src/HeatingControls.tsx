@@ -2,7 +2,7 @@ import {useEffect, useRef, useState} from 'react';
 import {fetchApp} from './ingress';
 
 type Zone = {
-  name: string; planned_target_c: number | null;
+  name: string; planned_target_c: number | null; room_target_c?: number | null;
   min_c: number | null; max_c: number | null; step: number;
   applied_c: number | null; expires_at: string | null;
   minutes: number; controlling: boolean;
@@ -102,10 +102,10 @@ export function HeatingControls() {
         const disabled = saving || !zone.controlling;
         return <div className="controller-row" key={owner}>
           <h3>{zone.name}</h3>
-          <NumberEdit label="Setpoint temperature (°C)" value={zone.applied_c} min={zone.min_c ?? undefined}
+          <NumberEdit label="Setpoint temperature (°C)" value={zone.room_target_c ?? zone.applied_c} min={zone.min_c ?? undefined}
             max={zone.max_c ?? undefined} step={zone.step} disabled={disabled}
             commit={value => void change({owner, field: 'target', value})}/>
-          {zone.applied_c == null && Object.keys(zone.relay_states ?? {}).length > 0 &&
+          {(zone.room_target_c ?? zone.applied_c) == null && Object.keys(zone.relay_states ?? {}).length > 0 &&
             <p className="muted">The plan switches heating on and off. Enter a setpoint to override it.</p>}
           <NumberEdit label={zone.expires_at ? 'Remaining minutes' : 'Override duration (minutes)'} value={remaining}
             min={1} step={1} disabled={disabled} commit={value => void change({owner, field: 'minutes', value})}/>

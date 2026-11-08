@@ -1155,7 +1155,7 @@ def validate_plan_contract(plan: Any, now: datetime) -> None:
                        for owner, mode in scope["modes"].items())):
             raise OptimisationInputError("plan operating modes are invalid")
         execution = plan.get("execution_plan")
-        if (not isinstance(execution, dict) or execution.get("schema_version") in (9, 10, 11)
+        if (not isinstance(execution, dict) or execution.get("schema_version") in (9, 10, 11, 12)
                 or "execution_plan" in execution):
             raise OptimisationInputError("plan requires a self-contained execution plan")
         if any(execution.get(key) != plan.get(key) for key in ("plan_id", "snapshot_id")):

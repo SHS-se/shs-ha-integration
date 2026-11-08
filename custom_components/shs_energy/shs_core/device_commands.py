@@ -17,10 +17,17 @@ def validate_commands(commands, models):
         kind = command.get('type')
         if kind == 'unavailable':
             valid = set(command) == {'type', 'reason'} and isinstance(command['reason'], str) and bool(command['reason'])
+        elif kind == 'room_relay':
+            valid = (kinds[key] in ('switch_schedule', 'room_relay')
+                and set(command) == {'type', 'room_key', 'target_c'}
+                and isinstance(command['room_key'], str) and bool(command['room_key'])
+                and numeric(command['target_c']))
         elif kind != kinds[key]:
             valid = False
         elif kind == 'setpoint':
-            valid = (set(command) == {'type', 'target_c', 'minimum_c', 'maximum_c'}
+            fields = {'type', 'target_c', 'minimum_c', 'maximum_c'}
+            valid = (set(command) - {'room_target_c'} == fields
+                and ('room_target_c' not in command or numeric(command['room_target_c']))
                 and all(numeric(command.get(k)) for k in ('target_c', 'minimum_c', 'maximum_c'))
                 and command['minimum_c'] <= command['target_c'] <= command['maximum_c'])
         elif kind == 'permit_inhibit':

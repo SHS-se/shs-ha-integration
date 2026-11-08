@@ -436,6 +436,8 @@ def capped_intention(value, maximum_w, *, native=None, logical_minimum_a=0):
         command = p['commands'][key]
         if command['type'] == 'switch_schedule':
             command['on_seconds'] = 0
+        elif command['type'] == 'room_relay':
+            p['commands'][key] = {'type': 'switch_schedule', 'on_seconds': 0}
         elif command['type'] == 'permit_inhibit':
             command['permitted'] = False
         else:

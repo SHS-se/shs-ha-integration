@@ -735,6 +735,20 @@ class HomeAssistantSource:
             return
         self.admit_import(effect)
 
+    def battery_capacity_sources(self):
+        battery = self.service.battery
+        if battery.installation is None:
+            return ()
+        installed = battery.installation[3]
+        return tuple(installed[key] for key in ('battery_power_measurement_entity',
+            'battery_mode_entity', 'battery_discharge_limit_entity', 'battery_charge_limit_entity'))
+
+    def scheduled_heating_over_limit(self):
+        # Count existing effects only. New room requests are admitted separately
+        # and cannot trigger relief from a running load.
+        demand = self.import_required()
+        return demand - self.discharge_credit(import_after_w=demand) > import_limit(self.service.import_limit_w)
+
     def admit_import(self, effect):
         limit = import_limit(self.service.import_limit_w)
         reserved = self.heating_effects()
@@ -851,7 +865,7 @@ class HomeAssistantSource:
             requested = parameters['pool_permitted']
         else:
             command = parameters['commands'][owner.removeprefix('device:')]
-            requested = command.get('permitted') or command.get('on_seconds',0) > 0
+            requested = command['type'] == 'room_relay' or command.get('permitted') or command.get('on_seconds',0) > 0
         if requested:
             effect = self.capacity_resume_effect(cap)
             if effect is not None:

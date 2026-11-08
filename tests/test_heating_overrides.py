@@ -6,7 +6,7 @@ from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, Mock
 
 import test_gateway_metadata as metadata
-from shs_core.device_operations import HeatingDeferred
+from shs_core.device_operations import ControlDeadlineError, HeatingDeferred
 
 from test_controller import State, Store
 import test_device_commands as device_fixtures
@@ -105,6 +105,82 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         request = device_intent(OWNER, operation, self.plan, slot, configuration_revision=1,
                                 policy_revision=1, heating=row)
         return {**request, 'headroom_reserved': True}
+
+    async def test_scheduled_relay_regulates_and_defers_or_sheds_without_manual_relief(self):
+        self.options['device_control_mappings']['heater'].update(
+            control_type='switch_schedule', actuator_entity_ids=['switch.heater'],
+            room_area_id='room', temperature_entity_id='sensor.room')
+        self.options['house_consumption_power_entity'] = 'sensor.house'
+        self.models[0]['control_type'] = 'switch_schedule'
+        self.states['switch.heater'] = State('off')
+        self.states['sensor.room'] = State('19.9', unit_of_measurement='°C')
+        self.capacity.battery_capacity_sources = lambda: ('sensor.battery',)
+        self.capacity.scheduled_heating_over_limit = Mock(return_value=True)
+
+        async def send(domain, service, data, blocking):
+            self.calls.append(service)
+            self.states['switch.heater'].state = service.removeprefix('turn_')
+        self.hass.services.async_call = send
+
+        def admit(device, entity, value, **kwargs):
+            if self.capacity.scheduled_heating_over_limit.return_value:
+                raise ControlDeadlineError('Waiting for house import capacity')
+            return True
+        self.physical.external_ready = admit
+        slot = dict(start=datetime.now(timezone.utc).isoformat(),
+                    device_commands={'heater': {'type':'room_relay', 'room_key':'room', 'target_c':20}})
+
+        async def apply():
+            intent = device_intent(OWNER, 'apply', self.plan, slot, configuration_revision=1, policy_revision=1)
+            return await self.physical.perform({**intent, 'headroom_reserved': True})
+
+        denied = await apply()
+        self.assertEqual(denied['error']['kind'], 'deadline')
+        self.assertEqual(self.calls, [])
+        self.assertTrue({'sensor.room', 'sensor.house', 'sensor.battery'} <= set(denied['reads']))
+
+        self.capacity.scheduled_heating_over_limit.return_value = False
+        self.assertIsNone((await apply())['error'])
+        self.assertEqual(self.calls, ['turn_on'])
+
+        self.states['sensor.room'].state = '20.1'
+        self.assertTrue((await apply())['result']['decision']['on'])
+        self.capacity.scheduled_heating_over_limit.return_value = True
+        self.assertTrue((await apply())['result']['heating_curtailed'])
+        self.assertEqual(self.calls, ['turn_on', 'turn_off'])
+
+        self.states['sensor.room'].state = '19.8'
+        self.capacity.scheduled_heating_over_limit.return_value = False
+        self.assertIsNone((await apply())['error'])
+        self.assertEqual(self.calls, ['turn_on', 'turn_off', 'turn_on'])
+
+        self.states['sensor.room'].state = 'unavailable'
+        self.assertEqual((await apply())['error']['kind'], 'observation')
+        self.assertEqual(self.states['switch.heater'].state, 'on')
+
+        slot['device_commands']['heater']['room_key'] = 'different_room'
+        self.assertEqual((await apply())['error']['kind'], 'plan')
+        self.assertEqual(self.calls, ['turn_on', 'turn_off', 'turn_on'])
+        self.capacity.make_heating_room.assert_not_awaited()
+
+    async def test_running_native_thermostat_is_paused_and_resumes_at_the_room_target(self):
+        self.capacity.battery_capacity_sources = lambda: ()
+        self.capacity.scheduled_heating_over_limit = Mock(return_value=True)
+        slot = dict(start=datetime.now(timezone.utc).isoformat(), device_commands={'heater': {
+            'type': 'setpoint', 'target_c': 22.5, 'room_target_c': 22, 'minimum_c': 5, 'maximum_c': 35}})
+
+        async def apply():
+            request = device_intent(OWNER, 'apply', self.plan, slot, configuration_revision=1, policy_revision=1)
+            return await self.physical.perform({**request, 'headroom_reserved': True})
+
+        limited = await apply()
+        self.assertTrue(limited['result']['heating_curtailed'])
+        self.assertEqual(self.states['climate.heater'].state, 'off')
+        self.capacity.scheduled_heating_over_limit.return_value = False
+        self.assertIsNone((await apply())['error'])
+        self.assertEqual(self.states['climate.heater'].state, 'heat')
+        self.assertEqual(self.states['climate.heater'].attributes['temperature'], 22.5)
+        self.capacity.make_heating_room.assert_not_awaited()
 
     async def test_writable_setpoint_reads_equipment_until_override_is_applied(self):
         native = {'state': 'heat', 'attributes': self.states['climate.heater'].attributes}

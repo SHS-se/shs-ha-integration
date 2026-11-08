@@ -23,7 +23,7 @@ from .device_commands import actuator_targets, execution_setup_errors, slot_comm
 from .hot_water import is_hot_water, heating_permission, hot_water_setup_errors, HotWaterConfigurationError
 from .device_controls import pool_control_errors, pool_control_mapping, planning_path
 from .device_controls import pool_requested_w, pool_permission
-from .heating_overrides import relay_heat, room_temperature
+from .heating_overrides import heating_binding, relay_heat, room_temperature
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -545,6 +545,9 @@ class DeviceOperations:
             await self.command(entity, 'off')
         return {'state': 'manual', 'reason': 'Making room for a heating override'}
 
+    def shed_scheduled_heat(self, entity, state):
+        return False
+
     async def execute_device(self, device, options, slot, *, target_c=None, suspend_heat=False):
         key = device.removeprefix("device:")
         mapping = options["device_control_mappings"][key]
@@ -566,8 +569,14 @@ class DeviceOperations:
                     available.append(entity)
             return {"state": "unsupported", "reason": self.holding(device, command["reason"]),
                     "execution_available_entities": available}
-        kind = command["type"]
-        if kind != mapping["control_type"]:
+        kind = mapping["control_type"]
+        room_relay = command["type"] == "room_relay"
+        if room_relay:
+            if (kind != "switch_schedule" or command["room_key"] != mapping.get("room_area_id")
+                    or not heating_binding(options, device)
+                    or not any(m["key"] == key and m.get("category") == "heating" for m in models)):
+                raise ControlPlanError("The planned room no longer matches the heater's reviewed room and sensor")
+        elif command["type"] != kind:
             raise ValueError("the website command does not match the reviewed local method")
         errors = execution_setup_errors(mapping)
         if errors:
@@ -589,6 +598,9 @@ class DeviceOperations:
         record = self.ownership.records.get(device)
         if suspend_heat:
             return await self.suspend_thermostat(device, options, targets[0])
+        if "room_target_c" in command and self.shed_scheduled_heat(targets[0], self.actuator_state(targets[0])):
+            await self.suspend_thermostat(device, options, targets[0])
+            return self.scheduled_heat_limited()
         if record and (entity := record.get('heating_suspended')):
             if self.actuator_state(entity).state == 'off':
                 await self.command(entity, 'heat')
@@ -631,14 +643,20 @@ class DeviceOperations:
                 # the heat it was planned rather than less.
                 values[entity] = origin + floor((command["target_c"] - origin) / step + 0.5 + 1e-9) * step
         else:
-            if target_c is not None and kind == "switch_schedule":
+            if room_relay or (target_c is not None and kind == "switch_schedule"):
                 sensor = mapping["temperature_entity_id"]
                 measured = self.state(sensor)
                 try:
                     temperature = room_temperature(sensor, measured.state, measured.attributes, self.inputs.temperature_unit())
                 except (TypeError, ValueError) as error:
                     raise ControlObservationError(str(error), sensor, 'Check the configured room temperature sensor.') from error
-                on = relay_heat(temperature, target_c, self.actuator_state(targets[0]).state) == 'on'
+                state = self.actuator_state(targets[0])
+                target = command["target_c"]
+                on = relay_heat(temperature, target, state.state) == 'on'
+                if room_relay and self.shed_scheduled_heat(targets[0], state) and on:
+                    await self.capture(device, options, targets)
+                    await self.command(targets[0], 'off')
+                    return self.scheduled_heat_limited()
             else:
                 on = command["permitted"] if kind == "permit_inhibit" else command["on_seconds"] == 900
             if water:
@@ -668,6 +686,11 @@ class DeviceOperations:
             result.update(reason="Switched back after a change outside SHS; " + result["reason"],
                           reverted_external_change=reverted)
         return result
+
+    @staticmethod
+    def scheduled_heat_limited():
+        return {"state": "limited", "reason": "Scheduled heating paused for the house import limit",
+                "heating_curtailed": True, "retry_automatically": True}
 
     def preview_state(self, entity):
         """Read real HA state without scheduling observations or changing journals."""

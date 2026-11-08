@@ -81,3 +81,14 @@ test('a relay room accepts a setpoint while following an on/off plan', async ({p
   await temperature.press('Enter');
   await expect(temperature).toHaveValue('22');
 });
+
+test('a relay room displays its planned temperature before an override', async ({page}) => {
+  await page.route('**/api/heating', route => route.fulfill({json: {zones: {'room:hall': {
+    name: 'Hall', planned_target_c: 20.5, room_target_c: 20.5, applied_c: null,
+    min_c: null, max_c: null, step: .1, expires_at: null, minutes: 60,
+    controlling: true, relay_states: {'device:heater': 'off'},
+  }}, loads: {}, order: []}}));
+  await page.goto('./#controller');
+  await expect(page.getByRole('spinbutton', {name: 'Setpoint temperature (°C)'})).toHaveValue('20.5');
+  await expect(page.getByText('The plan switches heating on and off.', {exact: false})).toHaveCount(0);
+});

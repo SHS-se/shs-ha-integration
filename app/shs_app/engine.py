@@ -50,6 +50,7 @@ from .configuration_editor import ConfigurationEditor
 from .entities import project_entities
 from shs_core.native_configuration import native_options
 from shs_core.source_admission import source_bindings, pool_paused
+from shs_core.device_commands import slot_command
 from shs_core.heating_overrides import heating_members
 from shs_core.operational_attention import pipeline_issue, merge_attention
 from shs_core.configuration_schema import resolve_configuration
@@ -424,6 +425,12 @@ class AppEngine:
             await self.consume()
             if changed['heating_capacity'] != after['heating_capacity']:
                 zones = heating_members(self.devices.heating)
+                slot = self.household.current_plan_slot or {}
+                commands = slot.get('device_commands')
+                if isinstance(commands, dict):
+                    zones.update('device:' + key for key, command in commands.items()
+                                 if isinstance(command, dict) and
+                                 (command.get('type') == 'room_relay' or 'room_target_c' in command))
                 if zones:
                     self.scheduler.request('heating_capacity', zones)
             if changed['requests'] != after['requests']:
@@ -491,9 +498,16 @@ class AppEngine:
                             if area and kind in ('setpoint', 'switch_schedule'):
                                 device.update(room_area_id=area, room_name=names.get(area))
                             _, slot = h.binding_plan_for(owner, options)
-                            command = (slot or {}).get('device_commands', {}).get(device['key'], {})
+                            try:
+                                command = slot_command(slot or {}, device['key'])
+                            except ValueError:
+                                continue
                             if command.get('type') == 'setpoint':
                                 device['planned_target_c'] = command['target_c']
+                                if 'room_target_c' in command:
+                                    device['planned_room_target_c'] = command['room_target_c']
+                            elif command.get('type') == 'room_relay' and command['room_key'] == area:
+                                device['planned_room_target_c'] = command['target_c']
             self.publish_ui(value)
         except Exception as error:
             self.operation_error('projection_build', error)

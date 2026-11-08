@@ -126,7 +126,9 @@ class GatewayService:
                         steps.append(attrs.get('target_temp_step' if climate else 'step', .1))
             controlling_room |= controlling
         active = active_room_heating(book, room, now)
-        planned = self.single_heating_value(row.get('planned_target_c') for row, _ in members.values())
+        room_target = self.single_heating_value(row.get('planned_room_target_c') for row, _ in members.values())
+        planned = room_target if room_target is not None else self.single_heating_value(
+            row.get('planned_target_c') for row, _ in members.values())
         applied = self.single_heating_value(thermostats.values()) if None not in thermostats.values() else None
         if active and relay_states.keys() & active.get('bindings', {}).keys():
             applied = active['target_c']
@@ -134,6 +136,7 @@ class GatewayService:
         name = names.get(area, area) if area else next(iter(members.values()))[0]['name']
         return dict(name=name, area_id=area, area_name=names.get(area), entity_owner=anchor,
             target_c=active['target_c'] if active else planned, planned_target_c=planned,
+            room_target_c=active['target_c'] if active and room_target is not None else room_target,
             expires_at=active['expires_at'] if active else None, applied_c=applied,
             min_c=max(lower, default=None), max_c=min(upper, default=None),
             step=steps[0] if len(steps) == 1 else .1,
@@ -457,7 +460,10 @@ class AppConnection(GatewayConnection):
             return await s.battery.propose(body['effect'], body['grant'])
         if op == 'battery_cover':
             from .battery_mode import read_cover_offer
-            s.battery_cover = read_cover_offer(body['offer'])
+            cover = read_cover_offer(body['offer'])
+            if cover != s.battery_cover:
+                s.battery_cover = cover
+                s.wake_heating_capacity()
             return {}
         if op == 'battery_step':
             return await s.battery.step(body['route_id'], body['index'], body['send'])

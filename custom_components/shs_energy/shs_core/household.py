@@ -2919,10 +2919,16 @@ class Household:
             ),
         )
         # Native state is read at capture, independently of historical models.
+        from .heating_overrides import heating_binding
         from .planning import thermostat_facts
         for model in device_models:
             if model["control_type"] == "setpoint" and model.get("planning_service") != "pool":
                 model["thermostat"] = thermostat_facts(control_mappings.get(model["key"], {}), self.ports.read_state)
+            if model["control_type"] == "switch_schedule" and model.get("category") == "heating" and model.get("planning_service") != "pool":
+                binding = heating_binding(options, "device:" + model["key"])
+                if binding:
+                    state = self.ports.read_state(binding[0])
+                    model["relay_on"] = state.state == "on" if state and state.state in ("on", "off") else None
         self.optimisation_degraded_devices = degraded_devices
         self._sync_degraded_device_issue()
         modelled_device_keys = tuple(

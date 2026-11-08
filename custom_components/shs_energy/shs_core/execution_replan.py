@@ -71,7 +71,7 @@ def requested(owner, slot):
         # Nothing executes it, so recovery cannot resume it: it needs a plan.
         return False
     return bool(command.get('permitted') or command.get('on_seconds', 0) or command.get('value', 0)
-                or command.get('type') == 'setpoint' or slot.get('device_loads_w', {}).get(owner, 0))
+                or command.get('type') in ('setpoint', 'room_relay') or slot.get('device_loads_w', {}).get(owner, 0))
 
 
 def observe(journal, owner, slot, condition, *, recovery_requires_replan=False):

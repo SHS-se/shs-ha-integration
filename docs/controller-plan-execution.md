@@ -732,3 +732,23 @@ New native-target commands use hardware bounds in `minimum_c`/`maximum_c`; room
 comfort bounds remain in the thermal zone. Execution still rounds each requested
 target to the nearest hardware step, halves up. Acknowledged settings do not
 promise delivered watts. No execution, ownership, or release rule changes here.
+
+### Planned room temperature control
+
+Schema 12 gives every planned heated room a common temperature target. Native
+thermostat commands include that target and the supported setting to write.
+A room relay command binds the target to its reviewed room and uses the same
+live temperature and switching rule as a manual override. Previously accepted
+whole-quarter switch commands retain their original meaning.
+
+Normal room heating rechecks current house demand and battery support. A new
+call for heat waits at the shared import admission boundary. If existing demand
+or reservations exceed the house limit, running scheduled room relays and
+thermostats with an available stop control can pause and later resume through
+the same owner. Enabled native thermostats reserve their possible ON draw.
+Scheduled heating cannot request relief from EV charging or pool heating.
+The explicit manual override retains its configured flexibility order.
+
+An observation gap or loss of plan or app authority holds the last setting.
+The website already refits rooms from metered heater energy and measured
+temperatures, including heat delivered outside the forecast.

@@ -116,6 +116,19 @@ class DeviceGateway(DeviceOperations):
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
             raise
 
+    def shed_scheduled_heat(self, entity, state):
+        if self.capacity is None:
+            return False
+        options = self.active_options
+        self.observed_state(options.get('house_consumption_power_entity'))
+        for source in self.capacity.battery_capacity_sources():
+            self.observed_state(source)
+        domain = entity.split('.')[0]
+        running = (state.state == 'on' if domain in ('switch', 'input_boolean') else
+                   domain == 'climate' and state.state == 'heat'
+                   and {'off', 'heat'} <= set(state.attributes.get('hvac_modes', ())))
+        return running and self.capacity.scheduled_heating_over_limit()
+
     async def load(self):
         await self.ownership.load()
 

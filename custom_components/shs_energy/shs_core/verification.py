@@ -36,6 +36,8 @@ def operation_name(device, kind, slot, result):
     command = slot["device_commands"][device.removeprefix("device:")]
     if kind == "permit_inhibit":
         return "permit" if result["decision"]["permitted"] else "inhibit"
+    if command["type"] == "room_relay":
+        return "on" if result["decision"]["on"] else "off"
     return "on" if command["on_seconds"] else "off"
 
 
