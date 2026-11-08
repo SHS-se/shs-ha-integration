@@ -143,7 +143,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row['device_energy_kwh']['synthetic_pool'] for row in actuals], [0, .9])
         self.assertEqual([row['quality']['duration_seconds'] for row in actuals], [900, 900])
 
-    async def test_a_newly_observed_pool_setting_resends_the_retained_quarters_once(self):
+    async def test_a_newly_observed_device_setting_resends_the_retained_quarters_once(self):
         """Naming a power setting or heat meter is learned from history too."""
         from datetime import timezone
         boundary = datetime(2026, 11, 8, 9, tzinfo=timezone.utc)
@@ -155,7 +155,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.h.client.submit_optimisation.return_value = {
             **self.h.client.submit_optimisation.return_value, 'actuals_accepted_until': boundary.isoformat()}
         observed = {'synthetic_pump': {'setting': 'number.synthetic_capacity'}}
-        self.h._pool_observations = lambda devices: observed
+        self.h._device_observations = lambda devices: observed
         begins = []
 
         async def statistics(begin, end, entities, period, units, kinds):

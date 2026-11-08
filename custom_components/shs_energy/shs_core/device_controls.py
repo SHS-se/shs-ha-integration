@@ -85,7 +85,7 @@ _ENTITY_FIELDS_BY_CONTROL_TYPE: dict[str, tuple[str, ...]] = {
         "power_setting_entity_id",
         "heat_energy_entity_id",
     ),
-    "variable_power": ("control_entity_id",),
+    "variable_power": ("control_entity_id", "heat_energy_entity_id"),
 }
 
 def _present(value: Any) -> bool:

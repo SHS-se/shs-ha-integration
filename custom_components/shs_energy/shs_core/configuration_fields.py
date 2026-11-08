@@ -229,21 +229,30 @@ POOL_POWER_SETTING_FIELD = _field(
     ),
 )
 
-POOL_HEAT_METER_FIELD = _field(
+HEAT_METER_FIELD = _field(
     "heat_energy_entity_id",
     "Heat output meter",
     "entity",
     domains=("sensor",),
     help_text=(
-        "Optional. A meter of the heat this device delivers to the pool, such as a "
-        "heat pump's own produced-heat counter, in kWh. SHS only reads this, to "
-        "learn the heater's efficiency at each power setting."
+        "Optional. A meter of the heat this device delivers, such as a heat pump's "
+        "own produced-heat counter, in kWh. SHS only reads this, to learn the "
+        "device's efficiency at each power setting."
     ),
 )
 
 OBSERVATION_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
-    "pool": (POOL_POWER_SETTING_FIELD, POOL_HEAT_METER_FIELD),
+    "pool": (POOL_POWER_SETTING_FIELD, HEAT_METER_FIELD),
 }
+
+# Observations a variable-power device carries on any path that can deliver
+# heat. Its power or current control is already its setting; a pool device names
+# one above, because the pool drives it as a relay. A car charger delivers no
+# heat, so its card is unchanged and only its current is observed.
+METHOD_OBSERVATION_FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
+    "variable_power": (HEAT_METER_FIELD,),
+}
+METHOD_OBSERVATION_EXCLUDED_PATHS = frozenset({"ev"})
 
 # What a path's own executor runs, whatever method the website shows.
 #
@@ -310,6 +319,9 @@ def control_fields(
     elif is_room_thermal_control(contract, category) and contract != "setpoint":
         fields = (OPTIONAL_TEMPERATURE_FIELD, *fields)
     fields = (*fields, *OBSERVATION_FIELDS.get(path or "", ()))
+    if path not in METHOD_OBSERVATION_EXCLUDED_PATHS:
+        fields = (*fields, *(field for field in METHOD_OBSERVATION_FIELDS.get(control_type, ())
+                             if field["key"] not in {existing["key"] for existing in fields}))
     primary = {"actuator_entity_ids": 0, "control_entity_id": 0, "power": 1}
     return tuple(sorted(fields, key=lambda field: primary.get(field["key"], 2)))
 

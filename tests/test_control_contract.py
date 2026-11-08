@@ -51,20 +51,30 @@ class PoolContractTests(unittest.TestCase):
             self.assertNotIn(absent, keys("switch_schedule", "pool"))
 
     def test_the_power_setting_is_observed_and_belongs_only_to_the_pool(self):
-        observed = ["power_setting_entity_id", "heat_energy_entity_id"]
         self.assertEqual(
             [field["key"] for field in OBSERVATION_FIELDS["pool"]],
-            observed,
+            ["power_setting_entity_id", "heat_energy_entity_id"],
         )
         for method in CONTROL_FIELDS:
             for path in PATHS:
                 if path == "pool":
                     continue
-                for key in observed:
-                    self.assertNotIn(
-                        key, keys(method, path),
-                        f"{method} on {path} was offered the pool's observation",
-                    )
+                self.assertNotIn(
+                    "power_setting_entity_id", keys(method, path),
+                    f"{method} on {path} was offered the pool's observation",
+                )
+
+    def test_every_variable_power_card_offers_a_heat_meter_and_no_other_method_does(self):
+        """Its power or current control is already its setting; heat is the one thing to add.
+        A car charger delivers no heat, so its card is left as it was."""
+        for method in CONTROL_FIELDS:
+            for path in PATHS:
+                if path == "pool":
+                    continue
+                offered = "heat_energy_entity_id" in keys(method, path)
+                self.assertEqual(offered, method == "variable_power" and path != "ev", f"{method} on {path}")
+        self.assertEqual(keys("variable_power", None).count("heat_energy_entity_id"), 1)
+        self.assertEqual(keys("variable_power", "pool").count("heat_energy_entity_id"), 1)
 
     def test_nothing_writes_the_power_setting(self):
         """It is an observation, so no executor may treat it as a target.

@@ -1,12 +1,12 @@
-"""Pool devices send the setting that held through each quarter and the heat metered in it."""
+"""Variable-power and pool devices send the setting that held through each quarter and the heat metered in it."""
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components/shs_energy"))
-from shs_core.pool_observations import (
-    observation_signature, pool_observation_entities, quarter_settings, with_pool_observations,
+from shs_core.device_observations import (
+    device_observation_entities, observation_signature, quarter_settings, with_device_observations,
 )
 from household_fixture import Rig
 
@@ -63,11 +63,34 @@ class EntityTests(unittest.TestCase):
             "pump": {"power_setting_entity_id": "number.pump"},
             "floor": {"power_setting_entity_id": "number.floor"},
         }
-        self.assertEqual(pool_observation_entities(self.devices, mappings, None), {
+        self.assertEqual(device_observation_entities(self.devices, mappings, None), {
             "heater": {"setting": "number.nibe", "heat": "sensor.heat"},
             "pump": {"setting": "number.pump"},
         })
-        self.assertEqual(pool_observation_entities(self.devices, {"pump": {"power_setting_entity_id": ""}}, None), {})
+        self.assertEqual(device_observation_entities(self.devices, {"pump": {"power_setting_entity_id": ""}}, None), {})
+
+    def test_every_variable_power_device_is_observed_at_its_own_control(self):
+        """A charger's current, or a heat pump's output dial, is its setting."""
+        devices = [
+            {"key": "charger", "category": "ev_charging", "control_type": "variable_power"},
+            {"key": "heat_pump", "category": "heating_other", "control_type": "variable_power"},
+            {"key": "pool_pump", "category": "pool_heating", "control_type": "variable_power"},
+            {"key": "relay", "category": "heating_other", "control_type": "switch_schedule"},
+        ]
+        mappings = {
+            "charger": {"control_type": "variable_power", "control_entity_id": "number.charger_current"},
+            "heat_pump": {"control_type": "variable_power", "control_entity_id": "number.output",
+                          "heat_energy_entity_id": "sensor.produced_heat"},
+            # A pool device is driven as a relay: only a named setting is observed.
+            "pool_pump": {"control_type": "variable_power", "control_entity_id": "number.ignored"},
+            "relay": {"control_type": "switch_schedule", "heat_energy_entity_id": "sensor.not_variable"},
+        }
+        self.assertEqual(device_observation_entities(devices, mappings, None), {
+            "charger": {"setting": "number.charger_current"},
+            "heat_pump": {"setting": "number.output", "heat": "sensor.produced_heat"},
+        })
+        mappings["heat_pump"]["power_setting_entity_id"] = "number.own_dial"
+        self.assertEqual(device_observation_entities(devices, mappings, None)["heat_pump"]["setting"], "number.own_dial")
 
     def test_signature_follows_what_is_observed(self):
         one = {"heater": {"setting": "number.nibe"}}
@@ -81,7 +104,7 @@ class AttachTests(unittest.TestCase):
             {"start": iso(0), "device_energy_kwh": {"heater": .75, "pump": .1}},
             {"start": iso(15), "device_energy_kwh": {"pump": .1}},
         ]
-        result = with_pool_observations(quarters,
+        result = with_device_observations(quarters,
             {"heater": {iso(0): 12.0, iso(15): 12.0}, "pump": {iso(15): 80.0}},
             [{"start": iso(0), "device_energy_kwh": {"heater": 3.0}},
              {"start": iso(15), "device_energy_kwh": {"heater": 3.1}}])
