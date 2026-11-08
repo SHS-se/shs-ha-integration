@@ -70,7 +70,7 @@ HOME_ASSISTANT_MODULES = (
     "configuration", "refresh",
     "recorder_source",
     "diagnostics",
-    "sensor", "number", "button", "heating_entities",
+    "sensor", "number", "button", "heating_entities", "equipment",
     "controller_events", "battery_sigen",
 )
 

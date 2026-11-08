@@ -6,12 +6,12 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import async_get_current_platform
 
-from .shs_core.const import DOMAIN, CONF_CUSTOMER_NAME, CONF_DEVICE_TOKEN_ID
+from .shs_core.const import DOMAIN
 from .control_configuration import async_execution_devices, async_set_execution_mode
+from .equipment import equipment_device_info, update_device_info
 from .shs_wire.entity_modes import MODES
 
 
@@ -78,7 +78,7 @@ class ExecutionModeEntities:
                 additions = []
                 for key, device in wanted.items():
                     if key in self.entities:
-                        self.entities[key].update_device(device)
+                        self.entities[key].update_device(self.hass, device)
                     else:
                         entity = ExecutionModeSelect(self.entry, device, self.prefix + key)
                         self.entities[key] = entity
@@ -103,11 +103,7 @@ class ExecutionModeSelect(SelectEntity):
         self._unsubscribe_battery = None
         self.device = device
         self._attr_unique_id = unique_id
-        self._attr_translation_placeholders = {'device': device['name']}
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.data[CONF_DEVICE_TOKEN_ID])},
-            name=entry.data.get(CONF_CUSTOMER_NAME) or 'Smart Home Solutions',
-            manufacturer='Smart Home Solutions', entry_type=DeviceEntryType.SERVICE)
+        self._attr_device_info = equipment_device_info(entry, device['permission']['controller_id'], device['name'])
 
     async def async_added_to_hass(self):
         self.active = True
@@ -136,13 +132,20 @@ class ExecutionModeSelect(SelectEntity):
 
     @property
     def extra_state_attributes(self):
-        projection=self.entry.runtime_data.projection
-        return projection['entities']['modes'].get(self.device['key'],{}).get('attributes',{}) if projection else {}
+        coordinator = self.entry.runtime_data
+        projection = coordinator.projection
+        if projection is None:
+            return {}
+        key = self.device['key']
+        summary = projection['entities'].get('values', {}).get(f'{self.entry.entry_id}_devices_controller', {})
+        details = summary.get('attributes', {}).get('devices', {}).get(key, {})
+        return {**details, **projection['entities']['modes'].get(key, {}).get('attributes', {})}
 
     @callback
-    def update_device(self, device):
+    def update_device(self, hass, device):
         self.device = device
-        self._attr_translation_placeholders = {'device': device['name']}
+        update_device_info(hass, self.entry, 'select', self,
+            equipment_device_info(self.entry, device['permission']['controller_id'], device['name']))
         if self.active:
             self.async_write_ha_state()
 

@@ -23,6 +23,13 @@ def load_adapter(filename, namespace):
     return SimpleNamespace(**namespace)
 
 
+def load_equipment(**ports):
+    return load_adapter('equipment.py', dict(
+        DeviceInfo=dict, DeviceEntryType=SimpleNamespace(SERVICE='service'),
+        DOMAIN=const.DOMAIN, CONF_CUSTOMER_NAME=const.CONF_CUSTOMER_NAME,
+        CONF_DEVICE_TOKEN_ID=const.CONF_DEVICE_TOKEN_ID, **ports))
+
+
 def device(key='$battery', *, planned=True, reason=None, name='House battery'):
     system = key[1:] if key.startswith('$') else None
     return {'key': key, 'name': name, 'system': system, 'planned': planned,
@@ -83,11 +90,11 @@ class Rig:
         self.entry.runtime_data.service=SimpleNamespace(request_app=request_app)
 
         self.shared.async_set_execution_mode.__globals__['async_execution_devices'] = self.get_devices
+        equipment = load_equipment()
         self.adapter = load_adapter('select.py', {'asyncio': asyncio, 'callback': lambda fn: fn,
             'SelectEntity': Entity, 'EntityCategory': SimpleNamespace(CONFIG='config'),
-            'DeviceInfo': dict, 'DeviceEntryType': SimpleNamespace(SERVICE='service'),
-            'DOMAIN': const.DOMAIN, 'CONF_CUSTOMER_NAME': const.CONF_CUSTOMER_NAME,
-            'CONF_DEVICE_TOKEN_ID': const.CONF_DEVICE_TOKEN_ID, 'MODES': ('control_verification','controlling'),
+            'equipment_device_info': equipment.equipment_device_info, 'update_device_info': Mock(),
+            'DOMAIN': const.DOMAIN, 'MODES': ('control_verification','controlling'),
             'device_mode': device_mode, 'HomeAssistantError': RuntimeError,
             'async_execution_devices': self.get_devices,
             'async_set_execution_mode': self.shared.async_set_execution_mode,
@@ -133,6 +140,19 @@ class Rig:
 
 
 class SelectTests(unittest.IsolatedAsyncioTestCase):
+    async def test_each_planned_owner_has_its_own_page_and_status(self):
+        r = Rig()
+        await r.manager.refresh()
+        battery, heater = r.manager.entities['$battery'], r.manager.entities['sensor.heater']
+        self.assertEqual(battery._attr_device_info['identifiers'], {(const.DOMAIN, 'token:heating:battery')})
+        self.assertEqual(heater._attr_device_info['identifiers'], {(const.DOMAIN, 'token:heating:device:sensor.heater')})
+        self.assertEqual(heater._attr_unique_id, 'home_execution_mode_sensor.heater')
+        r.entry.runtime_data.projection['entities']['values'] = {'home_devices_controller': {
+            'attributes': {'devices': {'sensor.heater': {'state': 'verified', 'measured_power_w': 0},
+                                        'sensor.fridge': {'state': 'idle'}}}}}
+        self.assertEqual(heater.extra_state_attributes, {'state': 'verified', 'measured_power_w': 0})
+        self.assertEqual(battery.extra_state_attributes, {})
+
     async def test_projection_refresh_rewrites_select_values_without_reloading_inventory(self):
         r=Rig();await r.manager.refresh()
         battery,heater=r.manager.entities['$battery'],r.manager.entities['sensor.heater']

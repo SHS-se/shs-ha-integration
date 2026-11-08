@@ -208,7 +208,7 @@
     },
     "select": {
       "execution_mode": {
-        "name": "{device} execution mode",
+        "name": "Execution mode",
         "state": {
           "control_verification": "Verification",
           "controlling": "Controlling"

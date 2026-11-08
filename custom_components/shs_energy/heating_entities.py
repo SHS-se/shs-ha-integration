@@ -4,11 +4,10 @@ from math import ceil
 
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import async_get_current_platform
 from homeassistant.helpers.event import async_track_time_interval
 
-from .shs_core.const import CONF_DEVICE_TOKEN_ID, DOMAIN
+from .equipment import equipment_device_info
 from .shs_core.gateway_journal import GatewayConflict
 
 
@@ -19,9 +18,7 @@ class HeatingEntity:
     def __init__(self, entry, owner, row, field):
         self.entry, self.owner, self.row, self.field = entry, owner, row, field
         self._attr_unique_id = f'{entry.entry_id}_heating_{owner}_{field}'
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f'{entry.data[CONF_DEVICE_TOKEN_ID]}:heating:{owner}')},
-            name=row['name'], manufacturer='Smart Home Solutions')
+        self._attr_device_info = equipment_device_info(entry, owner, row['name'])
 
     @property
     def available(self):

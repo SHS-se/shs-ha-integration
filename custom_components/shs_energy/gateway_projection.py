@@ -38,7 +38,7 @@ class GatewayProjection(DataUpdateCoordinator[dict]):
         if len(ids)!=len(set(ids)) or any(not key.startswith(self.entry.entry_id+'_') for key in ids):
             raise ValueError('Invalid SHS sensor identity')
         if set(ids)!=set(value['entities']['values']):raise ValueError('SHS sensor values differ from catalogue')
-        catalogue=dict(schema=1,sensors=deepcopy(sensors),devices=[{**{k:deepcopy(row.get(k)) for k in ('key','name','planned','system_member')},
+        catalogue=dict(schema=1,sensors=deepcopy(sensors),devices=[{**{k:deepcopy(v) for k,v in row.items() if k in ('key','name','planned','system_member','category')},
             'permission':{'controller_id':row['permission']['controller_id']}} for row in value['execution_devices']],app_url=value['app_url'])
         if catalogue!=self.catalogue:
             await self.record.async_save(catalogue)
