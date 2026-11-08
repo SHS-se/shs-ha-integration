@@ -199,6 +199,55 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         await engine.project()
         self.assertFalse(any(i['key']=='pipeline:app:projection' for i in dashboard.payload()['attention']))
 
+    async def test_room_save_succeeds_while_ha_captures_the_new_area(self):
+        from aiohttp.test_utils import TestClient, TestServer
+        from shs_app.server import create_app
+        from unittest.mock import AsyncMock
+
+        engine = self.engine()
+        await engine.load()
+        await engine.activate()
+        engine.gateway.connected['contract'] = {'companion_version':'companion'}
+        dashboard = self.dashboard(engine)
+        source = self.service.source
+        request = source.request
+        room = {'device_key':'sensor.aircon_energy',
+                'meters':['sensor.aircon_energy', 'sensor.aircon_power'], 'area_id':'entrance_hall'}
+        areas = dict.fromkeys(room['meters'], 'garage')
+
+        async def move_meters(operation, body):
+            if operation != 'device_room':
+                return await request(operation, body)
+            self.assertEqual(body, room)
+            areas.update(dict.fromkeys(body['meters'], body['area_id']))
+            # The registry events immediately pause gateway admission while HA
+            # captures the new metadata. The two entity updates already succeeded.
+            self.service.invalidate_context()
+            return {}
+
+        source.request = move_meters
+        source.publish.reset_mock()
+        engine.wake_projection.clear()
+        with (patch.object(engine.editor, 'view', AsyncMock(side_effect=lambda: {'areas': areas.copy()})),
+              patch.object(engine, 'cloud_job', AsyncMock())):
+            async with TestClient(TestServer(create_app(dashboard, self.root, trusted_peer='127.0.0.1'))) as client:
+                async with client.post('/api/configuration/device_room', json=room) as response:
+                    result = await response.json()
+                    self.assertEqual(response.status, 200, result)
+                    self.assertEqual(result['areas'], dict.fromkeys(room['meters'], 'entrance_hall'))
+
+        self.assertTrue(self.service.configuration_pending)
+        self.assertTrue(engine.wake_projection.is_set())
+        engine.wake_projection.clear()
+        await engine.project()
+        self.assertTrue(engine.wake_projection.is_set())
+        source.publish.assert_not_awaited()
+        self.assertNotIn('projection', engine.operation_errors)
+        self.service.configuration_pending = False
+        await engine.project()
+        source.publish.assert_awaited_once()
+        self.assertFalse(self.native_calls)
+
     async def test_background_failure_is_visible_during_startup_and_a_replacement_clears_it(self):
         engine=self.engine();dashboard=self.dashboard(engine)
         async def broken():raise ValueError('Receipt ingestion stopped')

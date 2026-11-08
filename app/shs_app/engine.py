@@ -21,7 +21,7 @@ from shs_core.controller_inputs import ControllerInputs
 from shs_core.controller_scheduler import ControllerScheduler
 from shs_core.durable_record import DurableRecord
 from shs_core.execution_storage import ExecutionStorage
-from shs_core.gateway_journal import GatewayConflict, critical_gateway_error, validate_identity
+from shs_core.gateway_journal import AdmissionPending, GatewayConflict, critical_gateway_error, validate_identity
 from shs_core.household import Household
 from shs_core.household_ports import HouseholdPorts
 from shs_core.receipt_inbox import ReceiptInbox
@@ -504,6 +504,10 @@ class AppEngine:
             try:
                 await self.gateway.project(dict(schema=2,entities=native,execution_devices=value['execution_devices'],
                     configuration=value['configuration'],repairs=value['repairs'],app_url=self.app_url))
+            except AdmissionPending:
+                # Metadata is still being captured. Publish the next projection
+                # on the normal cadence once the gateway can accept it.
+                self.wake_projection.set()
             except Exception as error:
                 self.operation_error('projection', error, stage='projection')
                 raise

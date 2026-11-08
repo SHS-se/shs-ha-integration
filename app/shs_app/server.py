@@ -277,8 +277,13 @@ def create_app(observer, static, *, trusted_peer="172.30.32.2"):
             body = await request.json()
             if type(body) is not dict:
                 raise ValueError('Configuration request must be an object')
-            result = await runtime.editor.action(request.match_info['action'],body)
-            if request.match_info['action'] not in ('pair_backend','select_backend'):
+            action = request.match_info['action']
+            result = await runtime.editor.action(action,body)
+            if action == 'device_room':
+                # The registry write can briefly pause native projection
+                # admission. The response already has the saved room.
+                runtime.wake_projection.set()
+            elif action not in ('pair_backend','select_backend'):
                 await runtime.project()
             return web.json_response(result,headers={'Cache-Control':'no-store'})
         except (ValueError,TypeError,KeyError) as error:
