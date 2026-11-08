@@ -2,6 +2,7 @@
 from datetime import timedelta
 from math import ceil
 
+from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import async_get_current_platform
@@ -74,6 +75,7 @@ async def setup_heating_entities(hass, entry, make):
             if additions:
                 await platform.async_add_entities(additions)
 
+    @callback
     def schedule(_now=None):
         nonlocal task, dirty
         dirty = True

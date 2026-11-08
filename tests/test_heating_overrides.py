@@ -1,4 +1,5 @@
 """Manual targets use the native owner and retain normal handover semantics."""
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
@@ -10,6 +11,7 @@ from shs_core.device_operations import HeatingDeferred
 from test_controller import State, Store
 import test_device_commands as device_fixtures
 from test_device_gateway import MemoryOperations
+from test_execution_mode_select import load_adapter
 from command_fixture import controller_inputs
 from shs_core.device_gateway import DeviceGateway
 from shs_core.device_port import device_intent
@@ -18,6 +20,39 @@ from shs_core.grid_capacity import capacity_bound, dispatch_capacity, empty_capa
 
 
 OWNER = 'device:heater'
+
+
+class HeatingEntityTimerTests(IsolatedAsyncioTestCase):
+    async def test_timer_refresh_runs_on_home_assistants_event_loop(self):
+        def callback(action):
+            action.in_event_loop = True
+            return action
+
+        timers = []
+        platform = SimpleNamespace(async_add_entities=AsyncMock())
+        adapter = load_adapter('heating_entities.py', {
+            'callback': callback, 'timedelta': timedelta,
+            'async_get_current_platform': lambda: platform,
+            'async_track_time_interval': lambda hass, action, interval: timers.append(action),
+        })
+        row = {'minutes': 60}
+        entity = SimpleNamespace(row=row, async_write_ha_state=Mock())
+        coordinator = SimpleNamespace(online=True, async_add_listener=Mock(),
+            service=SimpleNamespace(heating_controls=lambda: {'zones': {OWNER: row}}))
+        tasks = []
+        def background(hass, work, name):
+            task = asyncio.create_task(work, name=name)
+            tasks.append(task)
+            return task
+        entry = SimpleNamespace(runtime_data=coordinator, async_on_unload=Mock(),
+                                async_create_background_task=background)
+        await adapter.setup_heating_entities(None, entry, lambda *args: [entity])
+        self.assertTrue(getattr(timers[0], 'in_event_loop', False))
+        row = {'minutes': 59}
+        timers[0](datetime.now(timezone.utc))
+        await tasks[0]
+        self.assertEqual(entity.row, row)
+        entity.async_write_ha_state.assert_called_once()
 
 
 class HeatingOverridesTests(IsolatedAsyncioTestCase):
