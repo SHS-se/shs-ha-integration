@@ -148,8 +148,12 @@ class RemoteBattery:
         index = effect.step_index
         if type(index) is not int or not 0 <= index < len(proposal.steps) or (proposal.steps[index].key, proposal.steps[index].value) != (effect.key, effect.value):
             raise DispatchRejected('Battery send differs from the next admitted step')
-        result = await self.gateway.call('battery_step', {'route_id':identity, 'index':index, 'send':encode_value(effect)})
+        try:
+            result = await self.gateway.call('battery_step', {'route_id':identity, 'index':index, 'send':encode_value(effect)})
+        except AdmissionPending as error:
+            # HA refused admission before the native call could start.
+            raise DispatchRejected(str(error)) from error
         if result['status'] == 'not_sent':
-            raise DispatchRejected('HA rejected the battery step before dispatch')
+            raise DispatchRejected(f"HA rejected the battery step before dispatch: {result['reason']}")
         if result['status'] != 'service_returned':
             raise CommandUncertain('Battery step outcome is uncertain; observe before replanning')

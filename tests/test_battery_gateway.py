@@ -106,8 +106,23 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
             self.policy += 1
             return result
         self.journal.prepare_command = prepare
-        self.assertEqual((await self.step())['status'], 'not_sent')
+        outcome = await self.step()
+        self.assertEqual(outcome['status'], 'not_sent')
+        self.assertIn('older configuration or policy', outcome['reason'])
+        self.assertEqual(await self.step(), outcome)
         self.assertFalse(self.calls)
+
+    async def test_stale_route_reports_reason_and_can_be_prepared_again(self):
+        self.policy += 1
+        outcome = await self.step()
+        self.assertEqual(outcome['status'], 'not_sent')
+        self.assertIn('older configuration or policy', outcome['reason'])
+        self.assertFalse(self.calls)
+        self.assertIsNone(await self.stream.call('command_outcome', outcome['command_id']))
+
+        self.route = await self.gateway.propose(encode_value(self.effect), encode_value(self.grant))
+        self.assertEqual((await self.step())['status'], 'service_returned')
+        self.assertEqual(len(self.calls), 1)
 
     async def test_socket_revocation_during_prepare_is_not_sent(self):
         original = self.journal.prepare_command

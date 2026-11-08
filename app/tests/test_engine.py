@@ -773,6 +773,33 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(writer.grant,granted)
         self.assertEqual(self.service.battery.fence.snapshot()['epoch'],epoch)
 
+    async def test_step_refused_during_metadata_capture_is_readmitted_without_uncertainty(self):
+        rig = self.battery_rig()
+        socket, client, writer = await self.remote_battery(rig)
+        step = socket.hold('battery_step')
+        await rig.runtime.open()
+        await rig.runtime.refresh()
+        async with asyncio.timeout(2):
+            while not writer.routes:
+                await asyncio.sleep(.001)
+        grant = writer.grant
+        self.service.invalidate_context()
+        step.set()
+        host = rig.runtime.host
+        await asyncio.wait_for(host.idle(), 2)
+        group = host.state.groups[0]
+        self.assertIn('Reconcile and activate', rig.runtime.snapshot()['runtime_reason'])
+        self.assertFalse(self.native_calls)
+        self.assertFalse(group.attempts)
+        self.assertIsNone(group.plan)
+        self.assertNotEqual(rig.runtime.snapshot()['state'], 'fault')
+
+        self.service.configuration_pending = False
+        await rig.advance(group.retry_not_before_ms - rig.now)
+        self.assertEqual(rig.rows['select.mode']['state'], 'Command Charging (PV First)')
+        self.assertIs(writer.grant, grant)
+        self.assertIs(client.socket, socket)
+
     async def test_lost_app_session_keeps_the_battery_settings(self):
         # An app restart, crash or dropped socket is not a release. HA fences the
         # writer and leaves the battery in the mode the controller last set.

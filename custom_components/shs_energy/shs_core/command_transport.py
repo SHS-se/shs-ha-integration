@@ -76,7 +76,10 @@ class CommandTransport:
                 await asyncio.wait_for(dispatch(), timeout)
             except BaseException as error:
                 if prepared:
-                    await self._finish(command, 'uncertain' if started else 'not_sent', type(error).__name__)
+                    reason = type(error).__name__
+                    if not started and str(error):
+                        reason = f'{reason}: {error}'
+                    await self._finish(command, 'uncertain' if started else 'not_sent', reason)
                 raise
             await self._finish(command, 'service_returned')
 

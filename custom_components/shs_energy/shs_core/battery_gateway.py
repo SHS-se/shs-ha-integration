@@ -157,10 +157,13 @@ class BatteryGateway:
             options = self.installation[3] if self.installation else {}
             action = self.action(step,options)
             command = RoutedCommand('route:'+route_id+':'+str(index)+':'+send.attempt_id, 'battery', effect.group_id, 'battery', action, route_id, index, send.send_by_ms+step.latest_effect_delay_ms)
+            identifiers = {'command_id':command.id, 'attempt_id':send.attempt_id}
             def check():
                 self.authorize('battery_step')
-                if self.context() != payload['context'] or self.now() >= send.send_by_ms:
-                    raise GatewayConflict('Battery policy or dispatch deadline changed')
+                if self.context() != payload['context']:
+                    raise GatewayConflict('Battery command belongs to an older configuration or policy')
+                if self.now() >= send.send_by_ms:
+                    raise GatewayConflict('Battery dispatch deadline passed')
                 if not self.fence.is_current(grant, self.identity()):
                     raise GatewayConflict('Battery grant revoked before dispatch')
                 if effect.purpose != 'release':
@@ -169,17 +172,18 @@ class BatteryGateway:
                 self.authorize('battery_step')
                 previous = await self.stream.call('command_outcome', command.id)
                 if previous is not None:
-                    return {'status':previous['status'], 'command_id':command.id, 'attempt_id':send.attempt_id}
+                    return {**previous, **identifiers}
                 try:
                     check()
                     await self.physical.native_executor.execute(command, authorize=check, timeout=75)
-                except Exception:
+                except Exception as error:
                     outcome = await self.stream.call('command_outcome', command.id)
                     # No journal record means dispatch was not entered. A prepared
                     # record without an outcome must be treated as uncertain.
-                    status = outcome['status'] if outcome else 'not_sent'
-                    return {'status':status, 'command_id':command.id, 'attempt_id':send.attempt_id}
-                return {'status':'service_returned', 'command_id':command.id, 'attempt_id':send.attempt_id}
+                    if outcome is None:
+                        outcome = {'status':'not_sent', 'reason':str(error)}
+                    return {**outcome, **identifiers}
+                return {'status':'service_returned', 'reason':None, **identifiers}
             finally:
                 if effect.purpose == 'release':
                     self.obligation = await self.obligation_store.async_load()

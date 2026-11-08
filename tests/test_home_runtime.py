@@ -176,6 +176,17 @@ class HomeRuntimeTests(unittest.TestCase):
         self.assertEqual([a.id for a in h.group().attempts], [original.id])
         self.assertGreater(h.group().retry_not_before_ms, h.now)
 
+    def test_not_sent_retries_with_a_new_transition(self):
+        h = Harness(); h.request(); h.propose(); first = h.durable()
+        h.event(TransportResult("battery", first.attempt_id, "not_sent", "old policy"))
+        self.assertIsNone(h.group().plan)
+        self.assertFalse(h.group().attempts)
+        h.event(Tick(), h.group().retry_not_before_ms)
+        self.assertTrue(any(isinstance(effect, NeedTransition) for effect in h.effects))
+        self.assertFalse(any(isinstance(effect, Send) for effect in h.effects))
+        h.propose(); h.finish()
+        self.assertEqual(h.group().status, "adopted")
+
     def test_nonrepeatable_and_obsolete_effects_block_incompatible_writes(self):
         h = Harness(); h.request()
         steps = synthetic_steps(h.group().observation.controls, h.group().desired.target, repeat=False)

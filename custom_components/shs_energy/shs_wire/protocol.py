@@ -12,6 +12,7 @@ CAPABILITIES = frozenset({
     'gateway-notifications-v2',
     'source-admission-v1', 'coordinated-capacity-v1',
     'ev-current-capacity-v1', 'typed-device-plan-errors-v1', 'room-heating-overrides-v1',
+    'battery-refusal-reasons-v1',
 })
 
 

@@ -1455,7 +1455,11 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
             attempt = next((a for a in group.attempts if a.id == event.attempt_id), None)
             if attempt is not None and attempt.stage != "prepared":
                 if event.outcome == "not_sent" and attempt.stage != "accepted":
-                    group = replace(group, attempts=tuple(a for a in group.attempts if a.id != attempt.id))
+                    # Readmit the rejected sequence against current gateway policy
+                    # after the existing retry delay. Keep any earlier issued effects.
+                    plan = None if preparation_matches(group.plan, attempt) else group.plan
+                    group = replace(group, plan=plan, attempts=tuple(a for a in group.attempts
+                        if a.id != attempt.id and (plan is not None or a.stage != "prepared")))
                 else:
                     # One service result owns command progression. Queue delay,
                     # duplicate results and superseded requests cannot turn a
