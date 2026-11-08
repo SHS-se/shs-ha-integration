@@ -15,6 +15,7 @@ from shs_core.device_gateway import DeviceGateway
 from shs_core.gateway_journal import GatewayConflict, digest
 from shs_core.gateway_service import GatewayService, AppConnection
 from shs_core.gateway_stream import GatewayStream, GatewayRecord, GatewayCommands, GatewayOperations
+from shs_core.heating_overrides import HeatingOverrides
 from shs_core.native_commands import NativeExecutor
 
 
@@ -64,6 +65,20 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.call('activate',{'activation_id':'activation','proof':result['reconciliation']['proof']})
         await self.call('policy',{'value':{'plan':'plan','import_limit_w':10000,'options':digest(__import__('shs_core.native_configuration',fromlist=['native_options']).native_options(self.controller.options()))}})
         await self.call('synchronize',{'models':self.coordinator.optimisation_plan['device_models']})
+
+    async def test_heating_overrides_load_and_persist_through_the_real_gateway_store(self):
+        store = GatewayRecord(self.stream, 'heating_overrides')
+        heating = HeatingOverrides(store, lambda: None)
+        await heating.load()
+        self.assertEqual(heating.value['zones'], {})
+        await heating.change({'owner': None, 'field': 'order', 'value': ['pool']},
+                             self.options, None, {'pool'})
+        reopened = HeatingOverrides(store, lambda: None)
+        await reopened.load()
+        self.assertEqual(reopened.value, heating.value)
+        self.assertEqual(reopened.value['order'], ['pool'])
+        await self.activate()
+        self.assertTrue(self.service.active)
 
     async def test_notification_wait_is_idle_without_journal_calls_and_wakes_after_commit(self):
         after=await self.call('updates',{'after':{'receipts':0,'requests':0,'heating':0,'heating_capacity':0}})

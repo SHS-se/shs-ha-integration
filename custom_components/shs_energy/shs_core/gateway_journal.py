@@ -20,6 +20,11 @@ from .grid_capacity import empty_capacity, canonicalize_capacity, prepare_capaci
 
 PROTOCOL = 2
 RECEIPT_KINDS = frozenset(('gap', 'session', 'configuration', 'observation', 'outcome', 'activation'))
+PHYSICAL_RECORDS = frozenset({
+    'ownership', 'battery_writer', 'physical', 'battery_obligation',
+    'execution_configuration', 'entity_catalogue', 'source_admission',
+    'house_import_limit', 'grid_capacity', 'power_peaks', 'heating_overrides',
+})
 _LOGGER = logging.getLogger(__name__)
 _PACKED_TABLES = {
     'commands': ("command_id TEXT PRIMARY KEY, digest TEXT NOT NULL, payload BLOB NOT NULL CHECK(typeof(payload)='blob'), session TEXT NOT NULL, status TEXT NOT NULL, prepared_at_ms INTEGER NOT NULL, finished_at_ms INTEGER, reason TEXT, route_id TEXT, step_index INTEGER", ('payload',)),
@@ -494,7 +499,7 @@ class GatewayJournal:
             return {'activation': activation_id, 'receipt': receipt}
 
     def load_record(self, name):
-        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission', 'house_import_limit', 'grid_capacity', 'power_peaks'):
+        if name not in PHYSICAL_RECORDS:
             raise ValueError('Unknown physical gateway record')
         with closing(self.connect(readonly=True)) as db:
             self._owner(db)
@@ -504,7 +509,7 @@ class GatewayJournal:
             return canonicalize_capacity(value) if name == 'grid_capacity' and value is not None else value
 
     def save_record(self, name, value):
-        if name not in ('ownership', 'battery_writer', 'physical', 'battery_obligation', 'execution_configuration', 'entity_catalogue', 'source_admission', 'house_import_limit', 'grid_capacity', 'power_peaks') or type(value) is not dict:
+        if name not in PHYSICAL_RECORDS or type(value) is not dict:
             raise ValueError('Invalid physical gateway record')
         if name == 'ownership':
             decode_ownership(value)
