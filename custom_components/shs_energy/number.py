@@ -18,6 +18,7 @@ class HeatingNumber(HeatingEntity, NumberEntity):
     @property
     def available(self):
         return super().available and (self.field != 'target'
+            or bool(self.row.get('relay_states'))
             or self.row['min_c'] is not None and self.row['max_c'] is not None)
 
     @property
@@ -26,12 +27,16 @@ class HeatingNumber(HeatingEntity, NumberEntity):
 
     @property
     def native_min_value(self):
-        return self.row['min_c'] if self.field == 'target' else 1
+        if self.field != 'target':
+            return 1
+        minimum = self.row['min_c']
+        return minimum if minimum is not None else super().native_min_value
 
     @property
     def native_max_value(self):
         if self.field == 'target':
-            return self.row['max_c']
+            maximum = self.row['max_c']
+            return maximum if maximum is not None else super().native_max_value
         now = self.entry.runtime_data.service.heating.now()
         return (datetime.max.replace(tzinfo=now.tzinfo) - now) // timedelta(minutes=1)
 
@@ -41,7 +46,8 @@ class HeatingNumber(HeatingEntity, NumberEntity):
 
     @property
     def extra_state_attributes(self):
-        return {key: self.row[key] for key in ('planned_target_c', 'applied_c', 'expires_at')}
+        return {key: self.row.get(key) for key in ('planned_target_c', 'applied_c', 'expires_at',
+                                                    'relay_states', 'equipment_targets')}
 
     async def async_set_native_value(self, value):
         await self.change(value)

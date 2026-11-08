@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import async_get_current_platform
 
 from .shs_core.const import DOMAIN
 from .control_configuration import async_execution_devices, async_set_execution_mode
-from .equipment import equipment_device_info, update_device_info
+from .equipment import assign_equipment_area, equipment_device_info, update_device_info
 from .shs_wire.entity_modes import MODES
 
 
@@ -103,10 +103,23 @@ class ExecutionModeSelect(SelectEntity):
         self._unsubscribe_battery = None
         self.device = device
         self._attr_unique_id = unique_id
-        self._attr_device_info = equipment_device_info(entry, device['permission']['controller_id'], device['name'])
+        self._attr_device_info = self.equipment_info(device)
+        if device.get('room_area_id') or device.get('category') == 'heating':
+            self._attr_translation_key = 'heater_execution_mode'
+            self._attr_translation_placeholders = {'device': device['name']}
+
+    def equipment_info(self, device):
+        area = device.get('room_area_id')
+        if area:
+            name = device.get('room_name')
+            return equipment_device_info(self.entry, f'room:{area}', name or area, area=name)
+        return equipment_device_info(self.entry, device['permission']['controller_id'],
+                                     device['name'], area=device.get('equipment_area'))
 
     async def async_added_to_hass(self):
         self.active = True
+        if area := self._attr_device_info.get('suggested_area'):
+            assign_equipment_area(self.hass, self.device_entry, area)
         self._unsubscribe_battery = self.entry.runtime_data.async_add_battery_listener(self._battery_updated)
 
     async def async_will_remove_from_hass(self):
@@ -144,8 +157,7 @@ class ExecutionModeSelect(SelectEntity):
     @callback
     def update_device(self, hass, device):
         self.device = device
-        update_device_info(hass, self.entry, 'select', self,
-            equipment_device_info(self.entry, device['permission']['controller_id'], device['name']))
+        update_device_info(hass, self.entry, 'select', self, self.equipment_info(device))
         if self.active:
             self.async_write_ha_state()
 

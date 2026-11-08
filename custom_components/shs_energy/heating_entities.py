@@ -4,10 +4,12 @@ from math import ceil
 
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.entity_platform import async_get_current_platform
 from homeassistant.helpers.event import async_track_time_interval
 
 from .equipment import equipment_device_info
+from .shs_core.const import DOMAIN
 from .shs_core.gateway_journal import GatewayConflict
 
 
@@ -17,8 +19,8 @@ class HeatingEntity:
 
     def __init__(self, entry, owner, row, field):
         self.entry, self.owner, self.row, self.field = entry, owner, row, field
-        self._attr_unique_id = f'{entry.entry_id}_heating_{owner}_{field}'
-        self._attr_device_info = equipment_device_info(entry, owner, row['name'])
+        self._attr_unique_id = f"{entry.entry_id}_heating_{row.get('entity_owner', owner)}_{field}"
+        self._attr_device_info = equipment_device_info(entry, owner, row['name'], area=row.get('area_name'))
 
     @property
     def available(self):
@@ -37,6 +39,32 @@ class HeatingEntity:
         end = self.row['expires_at']
         now = self.entry.runtime_data.service.heating.now()
         return max(0, ceil((datetime.fromisoformat(end) - now).total_seconds() / 60)) if end else self.row['minutes']
+
+
+def registered_room_controls(hass, entry, owner, row):
+    """Keep the room's registered controls, including the earlier thermostat IDs."""
+    prefix = f'{entry.entry_id}_heating_'
+    registry = er.async_get(hass)
+    info = equipment_device_info(entry, owner, row['name'])
+    device = dr.async_get(hass).async_get_device(identifiers=info['identifiers'])
+    if device is not None:
+        candidates = sorted(
+            item.unique_id.removeprefix(prefix).removesuffix('_target')
+            for item in er.async_entries_for_device(registry, device.id, include_disabled_entities=True)
+            if item.platform == DOMAIN and item.unique_id.startswith(prefix)
+            and item.unique_id.endswith('_target'))
+        if candidates:
+            return candidates[0]
+    for prior in sorted(row['equipment_targets']):
+        entity_id = registry.async_get_entity_id('number', DOMAIN, f'{prefix}{prior}_target')
+        if entity_id is None:
+            continue
+        entity = registry.async_get(entity_id)
+        old = dr.async_get(hass).async_get(entity.device_id) if entity.device_id else None
+        old_info = equipment_device_info(entry, prior, row['name'])
+        if old is not None and old.identifiers == old_info['identifiers']:
+            return prior
+    return owner
 
 
 async def setup_heating_entities(hass, entry, make):
@@ -63,6 +91,8 @@ async def setup_heating_entities(hass, entry, make):
             additions = []
             for owner, row in zones.items():
                 if owner not in entities:
+                    if row.get('area_id'):
+                        row = {**row, 'entity_owner': registered_room_controls(hass, entry, owner, row)}
                     entities[owner] = make(entry, owner, row)
                     additions.extend(entities[owner])
                 else:

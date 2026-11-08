@@ -23,6 +23,7 @@ from .device_commands import actuator_targets, execution_setup_errors, slot_comm
 from .hot_water import is_hot_water, heating_permission, hot_water_setup_errors, HotWaterConfigurationError
 from .device_controls import pool_control_errors, pool_control_mapping, planning_path
 from .device_controls import pool_requested_w, pool_permission
+from .heating_overrides import relay_heat, room_temperature
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -550,7 +551,7 @@ class DeviceOperations:
         selected, _ = self.binding_execution_plan(device, options)
         models = selected["device_models"]
         command = (slot_command(slot, key) if target_c is None
-                   else {"type": "setpoint", "target_c": target_c})
+                   else {"type": mapping["control_type"], "target_c": target_c})
         if command["type"] == "unavailable":
             # A plan that cannot drive the device releases nothing; only the select does.
             # Positive availability observations can recover a known missing
@@ -630,7 +631,16 @@ class DeviceOperations:
                 # the heat it was planned rather than less.
                 values[entity] = origin + floor((command["target_c"] - origin) / step + 0.5 + 1e-9) * step
         else:
-            on = command["permitted"] if kind == "permit_inhibit" else command["on_seconds"] == 900
+            if target_c is not None and kind == "switch_schedule":
+                sensor = mapping["temperature_entity_id"]
+                measured = self.state(sensor)
+                try:
+                    temperature = room_temperature(sensor, measured.state, measured.attributes, self.inputs.temperature_unit())
+                except (TypeError, ValueError) as error:
+                    raise ControlObservationError(str(error), sensor, 'Check the configured room temperature sensor.') from error
+                on = relay_heat(temperature, target_c, self.actuator_state(targets[0]).state) == 'on'
+            else:
+                on = command["permitted"] if kind == "permit_inhibit" else command["on_seconds"] == 900
             if water:
                 on = self.heating_permission_for(mapping,commanded,command["permitted"],demand)
             values = {entity: "on" if on else "off" for entity in targets}
@@ -647,7 +657,7 @@ class DeviceOperations:
         if kind == "setpoint":
             decision = {"kind": kind, "target_c": sorted(set(values.values()))}
         elif kind == "switch_schedule":
-            decision = {"kind": kind, "on": command["on_seconds"] > 0}
+            decision = {"kind": kind, "on": on}
         else:
             decision = {"kind": kind, "permitted": on}
             if demand is not None:

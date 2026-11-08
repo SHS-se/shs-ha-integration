@@ -58,3 +58,26 @@ test('read and override the equipment setpoint from the controller', async ({pag
     {owner: room, field: 'resume', value: null},
   ]);
 });
+
+test('a relay room accepts a setpoint while following an on/off plan', async ({page}) => {
+  const room = 'room:bathroom';
+  const zone = {name: 'Bathroom', planned_target_c: null, applied_c: null as number | null,
+    min_c: null, max_c: null, step: .1, expires_at: null as string | null, minutes: 60,
+    controlling: true, relay_states: {'device:wall-heater': 'off'}};
+  await page.route('**/api/heating', async route => {
+    if (route.request().method() === 'POST') {
+      const edit = route.request().postDataJSON();
+      expect(edit).toEqual({owner: room, field: 'target', value: 22});
+      zone.applied_c = edit.value;
+      zone.expires_at = new Date(Date.now() + 3600000).toISOString();
+    }
+    await route.fulfill({json: {zones: {[room]: zone}, loads: {}, order: []}});
+  });
+  await page.goto('./#controller');
+  const temperature = page.getByRole('spinbutton', {name: 'Setpoint temperature (°C)'});
+  await expect(temperature).toHaveValue('');
+  await expect(page.getByText('The plan switches heating on and off.', {exact: false})).toBeVisible();
+  await temperature.fill('22');
+  await temperature.press('Enter');
+  await expect(temperature).toHaveValue('22');
+});

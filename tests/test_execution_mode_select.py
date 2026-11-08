@@ -38,6 +38,7 @@ def device(key='$battery', *, planned=True, reason=None, name='House battery'):
 
 class Entity:
     hass = None
+    device_entry = None
     writes = 0
     async def async_remove(self, *, force_remove=False):
         self.removed = force_remove
@@ -94,6 +95,7 @@ class Rig:
         self.adapter = load_adapter('select.py', {'asyncio': asyncio, 'callback': lambda fn: fn,
             'SelectEntity': Entity, 'EntityCategory': SimpleNamespace(CONFIG='config'),
             'equipment_device_info': equipment.equipment_device_info, 'update_device_info': Mock(),
+            'assign_equipment_area': Mock(),
             'DOMAIN': const.DOMAIN, 'MODES': ('control_verification','controlling'),
             'device_mode': device_mode, 'HomeAssistantError': RuntimeError,
             'async_execution_devices': self.get_devices,
@@ -140,6 +142,21 @@ class Rig:
 
 
 class SelectTests(unittest.IsolatedAsyncioTestCase):
+    async def test_heaters_share_room_page_but_keep_independent_execution_entities(self):
+        r = Rig()
+        first = {**device('sensor.floor', name='Floor heater'), 'category': 'heating',
+                 'room_area_id': 'bathroom', 'room_name': 'Bathroom'}
+        second = {**first, **device('sensor.rack', name='Towel rack')}
+        r.devices[:] = [first, second]
+        await r.manager.refresh()
+        floor, rack = r.manager.entities['sensor.floor'], r.manager.entities['sensor.rack']
+        self.assertEqual(floor._attr_device_info, rack._attr_device_info)
+        self.assertEqual(floor._attr_device_info['suggested_area'], 'Bathroom')
+        self.assertEqual(floor._attr_translation_placeholders, {'device': 'Floor heater'})
+        self.assertEqual(rack._attr_translation_placeholders, {'device': 'Towel rack'})
+        self.assertEqual(floor._attr_unique_id, 'home_execution_mode_sensor.floor')
+        self.assertEqual(rack._attr_unique_id, 'home_execution_mode_sensor.rack')
+
     async def test_each_planned_owner_has_its_own_page_and_status(self):
         r = Rig()
         await r.manager.refresh()

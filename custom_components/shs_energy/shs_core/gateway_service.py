@@ -12,8 +12,9 @@ from .gateway_journal import AdmissionPending, GatewayConflict, digest
 from .native_configuration import native_options
 from .gateway_stream import GatewayConnection
 from .command_transport import settled, settle_task
-from .heating_overrides import DEFAULT_MINUTES, active_heating, heating_binding
+from .heating_overrides import DEFAULT_MINUTES, active_room_heating, heating_binding, heating_room
 from .native_commands import finite
+from .operating_modes import device_mode
 
 
 class GatewayService:
@@ -64,45 +65,85 @@ class GatewayService:
                 (self.projection or {}).get('execution_devices', [])
                 if row['planned'] and not row.get('system_member')}
 
+    @staticmethod
+    def heating_rooms(options, inventory):
+        rooms = {}
+        for owner, row in inventory.items():
+            binding = heating_binding(options, owner)
+            if not binding or (row.get('category') != 'heating'
+                    and not (row.get('category') == 'pool_heating' and len(binding) == 1)):
+                continue
+            rooms.setdefault(heating_room(options, owner), {})[owner] = (row, binding)
+        return rooms
+
     def heating_controls(self):
         options = self.source.options()
         book = self.heating.value
         now = self.heating.now()
         inventory = self.heating_inventory()
-        zones = {}
-        for owner, row in inventory.items():
-            binding = heating_binding(options, owner)
-            if row.get('category') != 'heating' or not binding:
-                continue
-            native = self.source.report(binding[0]) or {}
-            attrs = native.get('attributes', {})
-            climate = binding[0].startswith('climate.')
-            state = native.get('state')
-            reported = attrs.get('temperature') if climate else state
-            try:
-                applied = finite(reported) if state not in (None, 'unknown', 'unavailable') else None
-            except (TypeError, ValueError):
-                applied = None
-            saved = book['zones'].get(owner, {})
-            active = active_heating(book, options, owner, now)
-            planned = row.get('planned_target_c')
-            zones[owner] = dict(name=row['name'], target_c=active['target_c'] if active else planned,
-                planned_target_c=planned, expires_at=active['expires_at'] if active else None,
-                min_c=attrs.get('min_temp' if climate else 'min'),
-                max_c=attrs.get('max_temp' if climate else 'max'),
-                step=attrs.get('target_temp_step' if climate else 'step', 0.1),
-                applied_c=applied,
-                minutes=saved.get('minutes', DEFAULT_MINUTES),
-                controlling=row['mode'] == 'controlling' and options.get('device_modes', {}).get(row['key']) == 'controlling')
+        rooms = self.heating_rooms(options, inventory)
+        names = self.source.area_names() if any(room.startswith('room:') for room in rooms) else {}
+        zones = {room: self.heating_control(room, members, options, book, now, names)
+                 for room, members in rooms.items()}
         mappings = options.get('device_control_mappings', {})
         loads = {}
         for owner, row in inventory.items():
             mapping = mappings.get(row['key'], {})
             if owner in ('battery', 'ev', 'pool') or mapping.get('control_type') in ('switch_schedule', 'permit_inhibit'):
                 loads[owner] = row['name']
-            elif owner in zones and heating_binding(options, owner)[0].startswith('climate.'):
+            elif (members := rooms.get(heating_room(options, owner), {})) and owner in members and (
+                    members[owner][1][0].startswith('climate.')):
                 loads[owner] = row['name']
         return dict(zones=zones, loads=loads, order=book['order'])
+
+    def heating_control(self, room, members, options, book, now, names):
+        area = room.removeprefix('room:') if room.startswith('room:') else None
+        thermostats, relay_states = {}, {}
+        lower, upper, steps = [], [], []
+        controlling_room = False
+        for owner, (row, binding) in members.items():
+            native = self.source.report(binding[0]) or {}
+            state, attrs = native.get('state'), native.get('attributes', {})
+            controlling = row['mode'] == 'controlling' and device_mode(options, owner) == 'controlling'
+            if len(binding) == 2:
+                relay_states[owner] = state if state in ('on', 'off') else None
+                if controlling:
+                    steps.append(.1)
+            else:
+                climate = binding[0].startswith('climate.')
+                try:
+                    reported = attrs.get('temperature') if climate else state
+                    applied = finite(reported) if state not in (None, 'unknown', 'unavailable') else None
+                except (TypeError, ValueError):
+                    applied = None
+                thermostats[owner] = applied
+                if controlling:
+                    minimum = attrs.get('min_temp' if climate else 'min')
+                    maximum = attrs.get('max_temp' if climate else 'max')
+                    if minimum is not None and maximum is not None:
+                        lower.append(minimum)
+                        upper.append(maximum)
+                        steps.append(attrs.get('target_temp_step' if climate else 'step', .1))
+            controlling_room |= controlling
+        active = active_room_heating(book, room, now)
+        planned = self.single_heating_value(row.get('planned_target_c') for row, _ in members.values())
+        applied = self.single_heating_value(thermostats.values()) if None not in thermostats.values() else None
+        if active and relay_states.keys() & active.get('bindings', {}).keys():
+            applied = active['target_c']
+        anchor = min(thermostats, default=room)
+        name = names.get(area, area) if area else next(iter(members.values()))[0]['name']
+        return dict(name=name, area_id=area, area_name=names.get(area), entity_owner=anchor,
+            target_c=active['target_c'] if active else planned, planned_target_c=planned,
+            expires_at=active['expires_at'] if active else None, applied_c=applied,
+            min_c=max(lower, default=None), max_c=min(upper, default=None),
+            step=steps[0] if len(steps) == 1 else .1,
+            minutes=book['zones'].get(room, {}).get('minutes', DEFAULT_MINUTES),
+            controlling=controlling_room, relay_states=relay_states, equipment_targets=thermostats)
+
+    @staticmethod
+    def single_heating_value(values):
+        distinct = {value for value in values if value is not None}
+        return next(iter(distinct)) if len(distinct) == 1 else None
 
     async def change_heating(self, body):
         if not self.active or self.closed:
@@ -113,8 +154,13 @@ class GatewayService:
         options = self.source.options()
         owner = body.get('owner')
         zone = controls['zones'].get(owner)
-        equipment = ((heating_binding(options, owner), zone['min_c'], zone['max_c'])
-                     if zone and zone['controlling'] else None)
+        equipment = None
+        if zone and zone['controlling']:
+            rooms = self.heating_rooms(options, self.heating_inventory())
+            bindings = {device: binding for device, (row, binding) in rooms.get(owner, {}).items()
+                        if row['mode'] == 'controlling' and device_mode(options, device) == 'controlling'}
+            if bindings:
+                equipment = (bindings if zone['area_id'] else bindings[owner], zone['min_c'], zone['max_c'])
         await self.heating.change(body, options, equipment, set(controls['loads']))
         return self.heating_controls()
 

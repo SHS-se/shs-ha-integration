@@ -21,7 +21,8 @@ def equipment_sensors(entry, devices):
         groups += ((boiler, 'Hot water', ('boiler_planned_request',)),)
     placements = {}
     for owner, name, sensors in groups:
-        info = equipment_device_info(entry, owner, owners.get(owner, {}).get('name', name))
+        row = owners.get(owner, {})
+        info = equipment_device_info(entry, owner, row.get('name', name), area=row.get('equipment_area'))
         for sensor in sensors:
             placements[f'{entry.entry_id}_{sensor}'] = info
     return placements

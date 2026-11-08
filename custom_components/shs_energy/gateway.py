@@ -39,7 +39,8 @@ from .shs_core.device_gateway import DeviceGateway, DeviceIntent
 from .shs_core.device_operations import ControlDeadlineError, ControlObservationError, PowerHistoryError, HeatingDeferred
 from .shs_core.gateway_journal import AdmissionPending, GatewayJournal, GatewayConflict, digest
 from .shs_core.gateway_service import GatewayService, AppConnection
-from .shs_core.heating_overrides import HeatingOverrides, active_heating, heating_binding
+from .shs_core.heating_overrides import (HeatingOverrides, active_heating, heating_binding,
+    heating_members, relay_heat, room_temperature)
 from .shs_core.gateway_stream import GatewayCommands, GatewayOperations, GatewayRecord, GatewayStream
 from .shs_core.execution_configuration import ExecutionConfiguration
 from .shs_core.source_admission import (validate_bindings, ordered, FACT_ATTRIBUTES, native_pool_idle, owned_device_sources,
@@ -104,6 +105,9 @@ class HomeAssistantSource:
         if self.configuration.value['revision']==0:
             return resolved_options(self.hass,options)  # One-time adoption source.
         return {key:value for key,value in options.items() if key!='_observed_entities'}
+
+    def area_names(self):
+        return area_name_by_id(self.hass)
 
     def context(self, entities=None):
         h = self.hass
@@ -776,10 +780,10 @@ class HomeAssistantSource:
             return {}
         options, now = self.options(), heating.now()
         effects = {}
-        for owner in heating.value['zones']:
+        for owner in heating_members(heating.value):
             try:
                 if row := active_heating(heating.value, options, owner, now):
-                    entity = heating_binding(options, owner)[0]
+                    entity, *sensors = heating_binding(options, owner)
                     native = self.report(entity) or {}
                     if native.get('state') in (None, 'unknown', 'unavailable'):
                         continue
@@ -794,7 +798,16 @@ class HomeAssistantSource:
                         if override and (self.report(override) or {}).get('state') != 'off':
                             break
                     else:
-                        effects[owner] = self.describe_import(owner, entity, row['target_c'])
+                        value = row['target_c']
+                        if sensors:
+                            sensor = sensors[0]
+                            observed = self.report(sensor)
+                            temperature = room_temperature(sensor, observed['state'], observed['attributes'],
+                                                           self.hass.config.units.temperature_unit)
+                            value = relay_heat(temperature, value, native['state'])
+                            if value == 'off':
+                                continue
+                        effects[owner] = self.describe_import(owner, entity, value)
             except (ValueError, KeyError, TypeError, ControlObservationError):
                 # A room with missing physical evidence cannot suppress healthy owners.
                 continue
@@ -1316,7 +1329,7 @@ async def open_gateway(hass, entry):
         authorize=service.authorize,session=service.session,context=service.context, coordinate=source.coordinate_battery)
     try:
         await source.configuration.load(dict(entry.options))
-        await service.heating.load()
+        await service.heating.load(source.options())
         admission = await stream.call('load_record','source_admission')
         if admission is not None:
             source.install_bindings(admission)

@@ -50,6 +50,8 @@ from .configuration_editor import ConfigurationEditor
 from .entities import project_entities
 from shs_core.native_configuration import native_options
 from shs_core.source_admission import source_bindings, pool_paused
+from shs_core.heating_overrides import heating_members
+from shs_core.device_commands import actuator_targets
 from shs_core.operational_attention import pipeline_issue, merge_attention
 from shs_core.configuration_schema import resolve_configuration
 from shs_core.controller_inputs import configured_entity_ids
@@ -417,8 +419,7 @@ class AppEngine:
                     page = await self.gateway.receive()
             await self.consume()
             if changed['heating_capacity'] != after['heating_capacity']:
-                zones = {owner for owner, row in self.devices.heating.get('zones', {}).items()
-                         if row.get('expires_at')}
+                zones = heating_members(self.devices.heating)
                 if zones:
                     self.scheduler.request('heating_capacity', zones)
             if changed['requests'] != after['requests']:
@@ -466,12 +467,31 @@ class AppEngine:
                     for device in await self.editor.devices(self.cached['planning'],include_suggestions=False)]
                 with self.profiler.measure('native_projection_build'):
                     native = project_entities(self,value['execution_devices'])
+                    options = h.resolved_options()
+                    names = self.mirror.context.get('area_names', {})
+                    areas = self.mirror.context.get('entity_areas', {})
                     for device in value['execution_devices']:
-                        if device['category'] == 'heating':
-                            _, slot = h.binding_plan_for(device['permission']['controller_id'], h.resolved_options())
+                        owner = device['permission']['controller_id']
+                        mapping = options.get('device_control_mappings', {}).get(device['key'], {})
+                        kind = mapping.get('control_type')
+                        if owner.startswith('device:') and (device['category'] == 'heating'
+                                or device['category'] == 'pool_heating' and kind == 'setpoint'):
+                            area = mapping.get('room_area_id')
+                            if area and kind in ('setpoint', 'switch_schedule'):
+                                device.update(room_area_id=area, room_name=names.get(area))
+                            _, slot = h.binding_plan_for(owner, options)
                             command = (slot or {}).get('device_commands', {}).get(device['key'], {})
                             if command.get('type') == 'setpoint':
                                 device['planned_target_c'] = command['target_c']
+                        elif owner in ('ev', 'pool', 'battery') or device['category'] == 'hot_water':
+                            controls = {*actuator_targets(mapping), mapping.get('control_entity_id')}
+                            if owner == 'ev':
+                                controls.add(options.get('ev_charge_switch_entity'))
+                            elif owner == 'battery':
+                                controls.add(options.get('battery_mode_entity'))
+                            equipment_areas = {areas[e] for e in controls if e in areas and areas[e]}
+                            if len(equipment_areas) == 1:
+                                device['equipment_area'] = names.get(equipment_areas.pop())
             self.publish_ui(value)
         except Exception as error:
             self.operation_error('projection_build', error)

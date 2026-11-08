@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from math import isfinite
 
 from .device_commands import actuator_targets, execution_setup_errors
+from .native_commands import finite
 from .operating_modes import device_mode
 
 
@@ -21,18 +22,56 @@ def heating_binding(options, owner):
     key = owner.removeprefix('device:')
     mapping = options.get('device_control_mappings', {}).get(key, {})
     targets = actuator_targets(mapping)
-    if (key in options.get('excluded_device_readings', ()) or mapping.get('control_type') != 'setpoint'
+    kind = mapping.get('control_type')
+    if (key in options.get('excluded_device_readings', ()) or kind not in ('setpoint', 'switch_schedule')
             or execution_setup_errors(mapping)):
         return None
+    if kind == 'switch_schedule':
+        sensor = mapping.get('temperature_entity_id')
+        if not sensor or not mapping.get('room_area_id'):
+            return None
+        return [targets[0], sensor]
     return [targets[0]]
 
 
+def heating_room(options, owner):
+    mapping = options.get('device_control_mappings', {}).get(owner.removeprefix('device:'), {})
+    area = mapping.get('room_area_id')
+    return f'room:{area}' if area else owner
+
+
+def heating_members(book):
+    return {owner for zone, row in book.get('zones', {}).items() if row.get('expires_at')
+            for owner in row.get('bindings', {zone: row.get('binding')})}
+
+
+def relay_heat(current_c, target_c, state):
+    """Start below the setpoint; allow a small deadband before turning off."""
+    return 'on' if current_c < target_c + (.25 if state == 'on' else 0) else 'off'
+
+
+def room_temperature(entity, state, attributes, climate_unit):
+    if entity.startswith('climate.'):
+        unit, value = climate_unit, attributes.get('current_temperature')
+    else:
+        unit, value = attributes.get('unit_of_measurement'), state
+    if state in (None, 'unknown', 'unavailable') or unit != '°C':
+        raise ValueError(f'{entity} must report a room temperature in Celsius')
+    return finite(value)
+
+
+def active_room_heating(book, room, now):
+    row = book.get('zones', {}).get(room, {})
+    if row.get('expires_at') and now < datetime.fromisoformat(row['expires_at']):
+        return row
+    return None
+
+
 def active_heating(book, options, owner, now):
-    row = book.get('zones', {}).get(owner, {})
+    row = active_room_heating(book, heating_room(options, owner), now)
     binding = heating_binding(options, owner)
-    if (binding is not None and row.get('binding') == binding and row.get('expires_at')
-            and device_mode(options, owner) == 'controlling'
-            and now < datetime.fromisoformat(row['expires_at'])):
+    if (row and binding and row.get('bindings', {owner: row.get('binding')}).get(owner) == binding
+            and device_mode(options, owner) == 'controlling'):
         return row
     return None
 
@@ -45,11 +84,39 @@ class HeatingOverrides:
         self.expiry = None
         self.closed = False
 
-    async def load(self):
+    async def load(self, options=None):
         saved = await self.store.async_load()
         if saved is not None:
             self.value = saved
+            if options is not None:
+                await self.move_device_overrides(options)
         self.schedule_expiry()
+
+    async def move_device_overrides(self, options):
+        """Move earlier device controls into rooms without adding heater demand."""
+        updated = deepcopy(self.value)
+        zones = updated['zones']
+        now = self.now()
+        for owner, row in self.value['zones'].items():
+            room = heating_room(options, owner)
+            if room == owner:
+                continue
+            del zones[owner]
+            prior = zones.get(room, {})
+            active = bool(active_room_heating(self.value, owner, now)
+                          and row.get('binding') == heating_binding(options, owner)
+                          and device_mode(options, owner) == 'controlling')
+            prior_active = bool(active_room_heating(updated, room, now))
+            if (prior_active, prior.get('revision', 0)) >= (active, row.get('revision', 0)) and prior:
+                continue
+            migrated = {key: row[key] for key in ('revision', 'minutes') if key in row}
+            if active:
+                migrated.update(bindings={owner: row['binding']}, target_c=row['target_c'],
+                                expires_at=row['expires_at'])
+            zones[room] = migrated
+        if updated != self.value:
+            await self.store.async_save(updated)
+            self.value = updated
 
     def schedule_expiry(self):
         self.cancel_expiry()
@@ -91,14 +158,15 @@ class HeatingOverrides:
                     raise ValueError('This heating zone has no available temperature control')
                 binding, lower, upper = equipment
                 now = self.now()
-                active = active_heating(new, options, owner, now)
+                active = (active_room_heating(new, owner, now) if isinstance(binding, dict)
+                          else active_heating(new, options, owner, now))
                 row = new['zones'].setdefault(owner, {})
-                row['binding'] = binding
                 if field == 'target':
                     if type(value) not in (int, float) or not isfinite(value):
                         raise ValueError('Enter a valid temperature')
                     if (lower is not None and value < lower) or (upper is not None and value > upper):
                         raise ValueError('Choose a temperature within the equipment range')
+                    row['bindings' if isinstance(binding, dict) else 'binding'] = binding
                     row['target_c'] = value
                     row['expires_at'] = (active['expires_at'] if active else
                         (now + timedelta(minutes=row.get('minutes', DEFAULT_MINUTES))).isoformat())
@@ -130,15 +198,21 @@ class HeatingOverrides:
     async def retire(self, options, *, released=None):
         """Only an explicit binding or permission change retires an instruction."""
         async with self.lock:
-            obsolete = [owner for owner, row in self.value['zones'].items() if row.get('expires_at')
-                        and (owner == released or heating_binding(options, owner) != row['binding']
-                             or device_mode(options, owner) != 'controlling')]
-            if not obsolete:
-                return
             new = deepcopy(self.value)
-            for owner in obsolete:
-                new['zones'][owner].pop('expires_at', None)
-                new['zones'][owner].pop('target_c', None)
+            for room, row in new['zones'].items():
+                if not row.get('expires_at'):
+                    continue
+                bindings = row.get('bindings', {room: row.get('binding')})
+                current = {owner: binding for owner, binding in bindings.items()
+                           if binding and owner != released and heating_room(options, owner) == room
+                           and binding == heating_binding(options, owner) and device_mode(options, owner) == 'controlling'}
+                if not current:
+                    row.pop('expires_at', None)
+                    row.pop('target_c', None)
+                if 'bindings' in row:
+                    row['bindings'] = current
+            if new == self.value:
+                return
             new['revision'] += 1
             await self.store.async_save(new)
             self.value = new

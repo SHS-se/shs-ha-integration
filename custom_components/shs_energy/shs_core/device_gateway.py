@@ -198,7 +198,8 @@ class DeviceGateway(DeviceOperations):
             if (set(p) != {'revision', 'target_c', 'models'} or not intent.device.startswith('device:')
                     or type(p['revision']) is not int or type(p['target_c']) not in (int, float)
                     or not any(model['key'] == intent.device.removeprefix('device:')
-                               and model.get('category') == 'heating' and model.get('control_type') == 'setpoint'
+                               and model.get('category') in ('heating', 'pool_heating')
+                               and model.get('control_type') in ('setpoint', 'switch_schedule')
                                for model in p['models'])):
                 raise ValueError('Invalid room heating intention')
             return {'device_models': p['models']}, None

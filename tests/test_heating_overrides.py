@@ -16,7 +16,8 @@ from command_fixture import controller_inputs
 from shs_core.device_gateway import DeviceGateway
 from shs_core.device_port import device_intent
 from shs_core.gateway_service import GatewayService
-from shs_core.heating_overrides import HeatingOverrides, active_heating, heating_binding
+from shs_core.heating_overrides import (HeatingOverrides, active_heating, heating_binding,
+    heating_members, relay_heat, room_temperature)
 from shs_core.grid_capacity import capacity_bound, dispatch_capacity, empty_capacity, finish_capacity, observe_capacity, prepare_capacity
 
 
@@ -145,6 +146,93 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         entity.row = service.heating_controls()['zones'][OWNER]
         self.assertEqual(entity.native_value, 19.5)
 
+    async def test_mixed_room_override_shares_target_and_restores_the_relay_plan(self):
+        room = 'room:bathroom'
+        relay = 'device:rack'
+        self.options['device_control_mappings']['heater']['room_area_id'] = 'bathroom'
+        self.options['device_control_mappings']['rack'] = {
+            'room_area_id': 'bathroom', 'temperature_entity_id': 'sensor.room',
+            'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.rack']}
+        self.options['device_modes']['rack'] = 'controlling'
+        self.models.append(dict(key='rack', category='heating', control_type='switch_schedule'))
+        self.states['sensor.room'] = State('20.5', unit_of_measurement='°C')
+        self.states['switch.rack'] = State('off')
+        send_thermostat = self.hass.services.async_call
+
+        async def send(domain, service, data, blocking):
+            if domain == 'switch':
+                self.states['switch.rack'].state = service.removeprefix('turn_')
+                self.calls.append(service)
+            else:
+                await send_thermostat(domain, service, data, blocking)
+        self.hass.services.async_call = send
+
+        def report(entity):
+            state = self.states.get(entity)
+            return dict(state=state.state, attributes=state.attributes) if state else None
+        source = SimpleNamespace(options=lambda: self.options, report=report,
+                                 area_names=lambda: {'bathroom': 'Bathroom'})
+        service = GatewayService(SimpleNamespace(listeners=set()), {}, source)
+        service.active = True
+        service.heating = self.book
+        service.projection = {'execution_devices': [
+            dict(key=key, name=key, category='heating', planned=True, mode='controlling',
+                 permission={'controller_id': owner})
+            for key, owner in (('heater', OWNER), ('rack', relay))]}
+        zones = service.heating_controls()['zones']
+        self.assertEqual(list(zones), [room])
+        self.assertEqual(zones[room]['entity_owner'], OWNER)
+        await service.change_heating(dict(owner=room, field='minutes', value=1))
+        await service.change_heating(dict(owner=room, field='target', value=22))
+        manual = self.book.value['zones'][room]
+        self.assertEqual(heating_members(self.book.value), {OWNER, relay})
+        self.assertEqual(active_heating(self.book.value, self.options, relay, self.clock), manual)
+
+        result = await self.physical.perform(self.intent('heat', manual))
+        self.assertIsNone(result['error'])
+        slot = dict(start=self.clock.isoformat(), device_commands={
+            'rack': {'type': 'switch_schedule', 'on_seconds': 0}})
+        def relay_intent(operation, heating=None):
+            return device_intent(relay, operation, self.plan, slot, configuration_revision=1,
+                                 policy_revision=1, heating=heating)
+
+        result = await self.physical.perform(relay_intent('heat', manual))
+        self.assertIsNone(result['error'])
+        self.assertIn('sensor.room', result['reads'])
+        self.assertEqual(self.states['switch.rack'].state, 'on')
+        self.states['sensor.room'].state = 'unavailable'
+        result = await self.physical.perform(relay_intent('heat', manual))
+        self.assertEqual(result['error']['kind'], 'observation')
+        self.assertEqual(self.states['switch.rack'].state, 'on')
+        self.states['sensor.room'].state = '22.3'
+        self.assertIsNone((await self.physical.perform(relay_intent('heat', manual)))['error'])
+        self.assertEqual(self.states['switch.rack'].state, 'off')
+        self.states['sensor.room'].state = '21.9'
+        self.assertIsNone((await self.physical.perform(relay_intent('heat', manual)))['error'])
+        self.assertEqual(self.states['switch.rack'].state, 'on')
+
+        self.clock += timedelta(minutes=1)
+        self.assertIsNone((await self.physical.perform(relay_intent('apply')))['error'])
+        self.assertEqual(self.states['switch.rack'].state, 'off')
+        self.assertIsNone(service.heating_controls()['zones'][room]['expires_at'])
+
+    async def test_saved_device_override_moves_to_room_without_adding_members(self):
+        legacy = (await self.edit('target', 22))['zones'][OWNER]
+        self.options['device_control_mappings']['heater']['room_area_id'] = 'bathroom'
+        self.options['device_control_mappings']['rack'] = {
+            'room_area_id': 'bathroom', 'temperature_entity_id': 'sensor.room',
+            'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.rack']}
+        self.options['device_modes']['rack'] = 'controlling'
+        reopened = HeatingOverrides(self.book.store, Mock(), now=lambda: self.clock)
+        self.addCleanup(reopened.close)
+        await reopened.load(self.options)
+        saved = reopened.value['zones']['room:bathroom']
+        self.assertEqual(saved['expires_at'], legacy['expires_at'])
+        self.assertEqual(saved['bindings'], {OWNER: ['climate.heater']})
+        self.assertIsNone(active_heating(reopened.value, self.options, 'device:rack', self.clock))
+        await reopened.load(self.options)
+        self.assertEqual(reopened.value['zones'], {'room:bathroom': saved})
+
     async def test_duration_edits_and_restart_use_one_absolute_end(self):
         first = (await self.edit('target', 22))['zones'][OWNER]
         self.assertEqual(datetime.fromisoformat(first['expires_at']) - self.clock, timedelta(minutes=60))
@@ -248,6 +336,30 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
 
 class HeatingCapacityTests(IsolatedAsyncioTestCase):
     asyncSetUp = metadata.MetadataTests.asyncSetUp
+
+    async def test_room_relay_reserves_capacity_only_while_calling_for_heat(self):
+        owner = 'device:rack'
+        self.options['device_control_mappings'] = {'rack': {
+            'room_area_id': 'bathroom', 'temperature_entity_id': 'sensor.room',
+            'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.rack']}}
+        self.options['device_modes'] = {'rack': 'controlling'}
+        self.source.configuration.options = lambda: self.options
+        now = datetime.now(timezone.utc)
+        self.service.heating = SimpleNamespace(now=lambda: now, value={'zones': {'room:bathroom': {
+            'bindings': {owner: heating_binding(self.options, owner)}, 'target_c': 22, 'revision': 1,
+            'expires_at': (now + timedelta(minutes=1)).isoformat()}}})
+        self.rows.update({'sensor.room': {'state': '21', 'attributes': {'unit_of_measurement': '°C'}},
+                          'switch.rack': {'state': 'off', 'attributes': {}}})
+        self.source.report = self.rows.get
+        effect = {'logical': owner, 'possible_w': 750}
+        self.source.describe_import = Mock(return_value=effect)
+        namespace = self.source.heating_effects.__globals__
+        namespace.update(active_heating=active_heating, heating_binding=heating_binding,
+                         heating_members=heating_members, relay_heat=relay_heat, room_temperature=room_temperature)
+        self.assertEqual(self.source.heating_effects(), {owner: effect})
+        self.source.describe_import.assert_called_once_with(owner, 'switch.rack', 'on')
+        self.rows['sensor.room']['state'] = '23'
+        self.assertEqual(self.source.heating_effects(), {})
 
     def make_room(self):
         now = datetime.now(timezone.utc)

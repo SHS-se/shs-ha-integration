@@ -6,6 +6,7 @@ type Zone = {
   min_c: number | null; max_c: number | null; step: number;
   applied_c: number | null; expires_at: string | null;
   minutes: number; controlling: boolean;
+  relay_states?: Record<string, 'on' | 'off' | null>;
 };
 type Controls = {zones: Record<string, Zone>; loads: Record<string, string>; order: string[]};
 type Edit = {owner: string; field: 'target' | 'minutes' | 'resume'; value: number | null}
@@ -104,6 +105,8 @@ export function HeatingControls() {
           <NumberEdit label="Setpoint temperature (°C)" value={zone.applied_c} min={zone.min_c ?? undefined}
             max={zone.max_c ?? undefined} step={zone.step} disabled={disabled}
             commit={value => void change({owner, field: 'target', value})}/>
+          {zone.applied_c == null && Object.keys(zone.relay_states ?? {}).length > 0 &&
+            <p className="muted">The plan switches heating on and off. Enter a setpoint to override it.</p>}
           <NumberEdit label={zone.expires_at ? 'Remaining minutes' : 'Override duration (minutes)'} value={remaining}
             min={1} step={1} disabled={disabled} commit={value => void change({owner, field: 'minutes', value})}/>
           {zone.expires_at && <button type="button" disabled={disabled}
