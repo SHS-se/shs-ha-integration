@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import async_get_current_platform
 
 from .shs_core.const import DOMAIN
 from .control_configuration import async_execution_devices, async_set_execution_mode
-from .equipment import assign_equipment_area, equipment_device_info, update_device_info
+from .equipment import assign_equipment_area, equipment_device_info, remove_empty_heater_device, update_device_info
 from .shs_wire.entity_modes import MODES
 
 
@@ -85,6 +85,10 @@ class ExecutionModeEntities:
                         additions.append(entity)
                 if additions:
                     await self.add_entities(additions)
+                for device in wanted.values():
+                    if device.get('room_area_id'):
+                        remove_empty_heater_device(self.hass, self.entry,
+                            device['permission']['controller_id'], device['name'])
                 if not self.dirty:
                     return
 

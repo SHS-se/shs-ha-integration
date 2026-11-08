@@ -97,3 +97,16 @@ class SensorMetadataTests(unittest.TestCase):
         equipment.update_device_info(None, entry, 'sensor', entity, info)
         registry.async_update_entity.assert_called_once_with('sensor.custom_boiler_request', device_id='boiler-page')
         self.assertEqual(entity.unique_id, 'home_boiler_planned_request')
+
+    def test_legacy_heater_page_is_retired_only_after_all_entities_move(self):
+        registry = Mock()
+        devices = Mock()
+        devices.async_get_device.return_value = SimpleNamespace(id='old-page', config_entry_id='home')
+        entries = Mock(side_effect=[[SimpleNamespace(disabled_by='user')], []])
+        equipment = load_equipment(er=SimpleNamespace(async_get=lambda _: registry, async_entries_for_device=entries),
+                                   dr=SimpleNamespace(async_get=lambda _: devices))
+        entry = SimpleNamespace(entry_id='home', data={'device_token_id': 'token'})
+        equipment.remove_empty_heater_device(None, entry, 'device:sensor.heater', 'Heater')
+        devices.async_remove_device.assert_not_called()
+        equipment.remove_empty_heater_device(None, entry, 'device:sensor.heater', 'Heater')
+        devices.async_remove_device.assert_called_once_with('old-page')

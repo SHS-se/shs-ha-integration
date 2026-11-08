@@ -95,7 +95,7 @@ class Rig:
         self.adapter = load_adapter('select.py', {'asyncio': asyncio, 'callback': lambda fn: fn,
             'SelectEntity': Entity, 'EntityCategory': SimpleNamespace(CONFIG='config'),
             'equipment_device_info': equipment.equipment_device_info, 'update_device_info': Mock(),
-            'assign_equipment_area': Mock(),
+            'assign_equipment_area': Mock(), 'remove_empty_heater_device': Mock(),
             'DOMAIN': const.DOMAIN, 'MODES': ('control_verification','controlling'),
             'device_mode': device_mode, 'HomeAssistantError': RuntimeError,
             'async_execution_devices': self.get_devices,

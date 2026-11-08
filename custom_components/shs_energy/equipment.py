@@ -34,3 +34,13 @@ def update_device_info(hass, entry, domain, entity, info):
         if info.get('suggested_area'):
             assign_equipment_area(hass, device, info['suggested_area'])
         registry.async_update_entity(entity_id, device_id=device.id)
+
+
+def remove_empty_heater_device(hass, entry, owner, name):
+    """Retire the old SHS device page only after its registered entities move."""
+    registry = dr.async_get(hass)
+    info = equipment_device_info(entry, owner, name)
+    device = registry.async_get_device(identifiers=info['identifiers'])
+    if (device is not None and device.config_entry_id == entry.entry_id
+            and not er.async_entries_for_device(er.async_get(hass), device.id, include_disabled_entities=True)):
+        registry.async_remove_device(device.id)
