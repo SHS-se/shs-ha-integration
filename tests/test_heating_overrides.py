@@ -74,8 +74,10 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
             capacity_condition=lambda *args:None,
             heating_cap=lambda owner:None,
             heating_cap_current=lambda cap:True,
+            heating_effects=lambda:{},
             describe_import=lambda *args:{},
             admit_import=Mock(),
+            lowers_heating_target=Mock(return_value=False),
         )
         self.physical = DeviceGateway(controller_inputs(self.hass), self.controller.options, self.store,
             self.controller.native_executor, authorize=lambda intent:None, before_external=lambda *args, **kwargs:True,
@@ -135,6 +137,29 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         result = await self.physical.perform(self.intent('apply'))
         self.assertIsNone(result['error'])
         self.assertEqual(self.states['climate.heater'].attributes['temperature'], 19)
+
+    async def test_expiry_lowers_target_without_waiting_for_battery_charging_to_stop(self):
+        await self.edit('minutes', 1)
+        manual = (await self.edit('target', 22))['zones'][OWNER]
+        self.physical.external_ready = Mock(side_effect=lambda device, *, entity, value,
+                priority=False, require_battery_release=True: priority or not require_battery_release)
+        self.capacity.lowers_heating_target.side_effect = lambda entity, value: (
+            value <= self.states[entity].attributes['temperature'])
+        result = await self.physical.perform(self.intent('heat', manual))
+        self.assertIsNone(result['error'])
+        self.clock += timedelta(minutes=1)
+
+        scheduled = {**self.intent('apply'), 'headroom_reserved': False}
+        result = await self.physical.perform(scheduled)
+        self.assertIsNone(result['error'])
+        self.assertFalse(result['reservation_required'])
+        self.assertEqual(result['deadlines'], [])
+        self.assertEqual(self.states['climate.heater'].attributes['temperature'], 19)
+
+        self.states['climate.heater'].attributes['temperature'] = 18
+        result = await self.physical.perform({**scheduled, 'request_id': 'raise'})
+        self.assertTrue(result['reservation_required'])
+        self.assertEqual(self.states['climate.heater'].attributes['temperature'], 18)
 
     async def test_capacity_shortfall_reduces_load_and_retries_the_same_event(self):
         latest = (await self.edit('target', 22))['zones'][OWNER]

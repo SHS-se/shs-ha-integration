@@ -27,6 +27,22 @@ class ImportArithmeticTests(unittest.TestCase):
 class LiveImportTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = metadata.MetadataTests.asyncSetUp
 
+    async def test_lower_heating_target_checks_live_and_pending_settings(self):
+        entity = 'climate.heater'
+        self.source.report = self.rows.get
+        self.rows[entity] = {'state': 'heat', 'attributes': {'temperature': 22}}
+        self.assertTrue(self.source.lowers_heating_target(entity, 21))
+        self.assertFalse(self.source.lowers_heating_target(entity, 23))
+
+        self.source.capacity['devices']['device@climate.heater'] = {'effects': {
+            'earlier': {'order': 1, 'controls': {entity: 20}},
+            'proposed': {'order': 2, 'controls': {entity: 21}},
+        }}
+        self.assertFalse(self.source.lowers_heating_target(entity, 21))
+        self.assertTrue(self.source.lowers_heating_target(entity, 19))
+        self.rows[entity]['state'] = 'off'
+        self.assertFalse(self.source.lowers_heating_target(entity, 19))
+
     def configure_ev(self):
         options = self.source.configuration.options()
         options.update(ev_charge_switch_entity='switch.ev', device_control_mappings={

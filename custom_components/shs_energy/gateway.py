@@ -44,7 +44,7 @@ from .shs_core.gateway_stream import GatewayCommands, GatewayOperations, Gateway
 from .shs_core.execution_configuration import ExecutionConfiguration
 from .shs_core.source_admission import (validate_bindings, ordered, FACT_ATTRIBUTES, native_pool_idle, owned_device_sources,
     validate_pool_pause, temperature_available, temperature_metadata)
-from .shs_core.native_commands import NativeExecutor
+from .shs_core.native_commands import NativeExecutor, finite
 from .shs_core.native_numbers import canonical_metadata, watts as native_watts
 from .shs_core.grid_capacity import capped_intention, ev_current_ceiling
 from .shs_core.connection_health import RetryBackoff
@@ -445,6 +445,25 @@ class HomeAssistantSource:
                     pass
                 return True
         return False
+
+    def lowers_heating_target(self, entity, value):
+        state = self.report(entity)
+        if not state or state['state'] != 'heat':
+            return False
+        try:
+            if value > finite(state['attributes'].get('temperature')):
+                return False
+            # The live target can lag an earlier accepted write. Check pending
+            # settings too, including when this command has just been prepared.
+            for row in self.capacity['devices'].values():
+                settled_order = row.get('settled', {}).get('order', -1)
+                for effect in row['effects'].values():
+                    controls = effect['controls']
+                    if effect['order'] > settled_order and entity in controls and value > finite(controls[entity]):
+                        return False
+        except (TypeError, ValueError):
+            return False
+        return True
 
     def power_source(self, mapping, key):
         sensor = mapping.get('power')
@@ -1155,7 +1174,7 @@ class HomeAssistantSource:
             partitions.append((measured, bound))
         return required_import(house, partitions)
 
-    def external_ready(self, device, *, entity=None, value=None, priority=False):
+    def external_ready(self, device, *, entity=None, value=None, priority=False, require_battery_release=True):
         # The app has already reserved unknown pending demand. HA independently
         # checks the current battery response at the final native boundary.
         battery = self.service.battery
@@ -1168,7 +1187,8 @@ class HomeAssistantSource:
             if priority:
                 self.heating_waiting.discard(device)
                 return True
-            return battery.installation is None or battery_released(battery.installation[3], self.report)
+            return (not require_battery_release or battery.installation is None
+                    or battery_released(battery.installation[3], self.report))
         except (ControlDeadlineError, GridCapacityConfigurationError, ControlObservationError):
             raise
         except (ValueError, KeyError, TypeError):

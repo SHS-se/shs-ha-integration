@@ -99,13 +99,18 @@ class DeviceGateway(DeviceOperations):
             self.heating_needs_capacity = True
             self.device_deadline('heating_capacity', datetime.now(timezone.utc) + timedelta(seconds=5))
             raise HeatingDeferred('Making room for the heating override')
-        if not self.local_obligation and not self.intent.headroom_reserved:
+        lowering_heat = (self.intent.operation == 'apply' and entity.startswith('climate.')
+                         and isinstance(value, float) and self.capacity is not None
+                         and self.capacity.lowers_heating_target(entity, value))
+        if not lowering_heat and not self.local_obligation and not self.intent.headroom_reserved:
             if self.heating is not None and self.capacity.heating_effects():
                 self.capacity.admit_import(self.capacity.describe_import(device, entity, value))
             self.reservation_required = True
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
             return False
         try:
+            if lowering_heat:
+                return self.external_ready(device, entity=entity, value=value, require_battery_release=False)
             return self.external_ready(device, entity=entity, value=value)
         except (ControlDeadlineError, PowerHistoryError):
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
