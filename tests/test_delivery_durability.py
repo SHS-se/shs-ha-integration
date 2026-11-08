@@ -210,6 +210,24 @@ class DeliveryDurabilityTests(IsolatedAsyncioTestCase):
         self.assertNotIn('optimisation_recapture', self.rig.records.saved)
         self.assertEqual(self.h.optimisation_plan, self.plan)
 
+    async def test_an_unreadable_receipt_retires_the_job_into_a_fresh_capture(self):
+        """8 Nov: one receipt the app could not read held its job for good, and
+        no plan was captured again. A transient failure still keeps the job."""
+        pending = await self.accept('manual')
+        self.h.client.planning_status.side_effect = ShsApiError('slow', retryable=True)
+        await self.h._poll_planning_job(pending)
+        self.assertIn('optimisation_pending_job', self.rig.records.saved)
+        self.h.client.planning_status.side_effect = ShsApiError(
+            'planning response has an invalid job receipt', code='invalid_response_envelope')
+        await self.h._poll_planning_job(pending)
+        self.assertNotIn('optimisation_pending_job', self.rig.records.saved)
+        self.assertEqual(self.rig.records.saved['optimisation_recapture'], {'replan_request_id': 'manual'})
+        self.h._build_optimisation_snapshot.return_value = {'snapshot_id': 'fresh'}
+        self.h.client.submit_optimisation.return_value = self.pending_receipt('fresh', 'fresh-job')
+        await self.h.async_optimisation_push(force_plan=True)
+        body = self.h.client.submit_optimisation.call_args.args[0]
+        self.assertEqual((body['replan_request_id'], body['snapshot']['snapshot_id']), ('manual', 'fresh'))
+
     async def test_bodyless_and_version_two_outboxes_migrate_only_after_missing_receipt(self):
         for body in (None, {'planning_exchange_version': 2, 'snapshot': {'snapshot_id': 'obsolete'}}):
             with self.subTest(body=body):

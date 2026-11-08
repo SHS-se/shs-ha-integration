@@ -3465,6 +3465,20 @@ class Household:
                     self._queue_planning_recapture(stored, pending)
                     await self._store.async_save(stored)
                     return 0
+                if error is not None and not recovering_submission and error.code == "invalid_response_envelope":
+                    # A receipt this app cannot read will not become readable by
+                    # asking again. Keeping the job blocked every later capture,
+                    # so planning stopped; it is retired into a fresh capture
+                    # with the same purpose, and the error stays visible.
+                    _LOGGER.warning("Planning job %s has an unreadable receipt; capturing afresh: %s",
+                                    pending.get("job_id"), error)
+                    self.last_optimisation_error = str(error)
+                    self._pipeline_error('delivery', error)
+                    stored.pop(record_key)
+                    self._queue_planning_recapture(stored, pending)
+                    await self._store.async_save(stored)
+                    self.async_update_listeners()
+                    return 0
                 if error is not None:
                     self.last_optimisation_error = str(error)
                     self._pipeline_error('delivery', error)
