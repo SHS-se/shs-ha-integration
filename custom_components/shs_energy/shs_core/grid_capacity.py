@@ -106,8 +106,11 @@ def canonicalize_capacity(capacity):
     return capacity
 
 
-def capacity_bound(device):
-    return max([device.get('settled', {}).get('after_w', 0.0)] +
+def capacity_bound(device, *, settled_limit=None):
+    settled = device.get('settled', {}).get('after_w', 0.0)
+    if settled_limit is not None:
+        settled = min(settled, settled_limit)
+    return max([settled] +
                [effect['peak_w'] for effect in device.get('effects', {}).values()])
 
 
@@ -123,7 +126,11 @@ def prepare_capacity(capacity, command_id, effect, through):
     if effect is None:
         return
     row = capacity['devices'].setdefault(effect['device'], {'effects': {}})
-    peak = max(capacity_bound(row), effect['before_w'], effect['after_w'], effect['possible_w'])
+    settled_limit = None
+    if row.get('settled', {}).get('sensor') == effect.get('sensor'):
+        settled_limit = effect.get('sum_power_w')
+    peak = max(capacity_bound(row, settled_limit=settled_limit),
+               effect['before_w'], effect['after_w'], effect['possible_w'])
     row['effects'][command_id] = {**effect, 'peak_w': peak, 'order': through,
                                   'status': 'prepared', 'witnessed': None, 'dispatch_through':None}
     capacity['revision'] += 1
@@ -303,7 +310,11 @@ def merge_power_peaks(peaks, observed):
     changed = False
     for entity, value in observed.items():
         watts = positive_power(value)
-        if watts is not None and watts > peaks.get(entity, 0):
+        # Recorder can confirm an unused channel at zero. That is evidence
+        # for one member of a sum, but is never a standalone load rating.
+        if watts is None and type(value) in (float, int) and value == 0:
+            watts = 0.0
+        if watts is not None and (entity not in peaks or watts > peaks[entity]):
             peaks[entity] = watts
             changed = True
     return changed
@@ -341,7 +352,7 @@ def observe_setting_peak(peaks, row, setting, setting_state):
         peaks, {setting_peak_key(row['entity_id'], setting, value): watts}))
 
 
-def device_power_bound(mapping, peaks, setting_state=None):
+def device_power_bound(mapping, peaks, setting_state=None, *, members=None):
     """Use literal Power watts or the mapped sensor's greatest recorded watts.
 
     Equipment with a native power setting draws according to that setting, so
@@ -355,11 +366,22 @@ def device_power_bound(mapping, peaks, setting_state=None):
         return None
     setting = mapping.get('power_setting_entity_id')
     value = power_setting_value(setting_state) if isinstance(setting, str) else None
-    if value is not None:
-        watts = positive_power(peaks.get(setting_peak_key(source, setting, value)))
-        if watts is not None:
-            return watts
-    return positive_power(peaks.get(source))
+
+    def maximum(entity):
+        if value is not None:
+            watts = positive_power(peaks.get(setting_peak_key(entity, setting, value)))
+            if watts is not None:
+                return watts
+        return peaks.get(entity)
+
+    if members is None:
+        return positive_power(maximum(source))
+    # Each member supplies its own upper bound. They need not have reached
+    # their maxima together. Historical totals may include removed members.
+    values = [maximum(entity) for entity in members]
+    if any(watts is None for watts in values):
+        return None
+    return positive_power(sum(values))
 
 
 class GridCapacityConfigurationError(ValueError):

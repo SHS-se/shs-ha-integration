@@ -136,6 +136,8 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             er=SimpleNamespace(async_get=lambda hass:registry, EVENT_ENTITY_REGISTRY_UPDATED=REGISTRY_UPDATED),
             dr=SimpleNamespace(EVENT_DEVICE_REGISTRY_UPDATED='device_registry_updated'),
             ar=SimpleNamespace(EVENT_AREA_REGISTRY_UPDATED='area_registry_updated'),
+            async_dispatcher_connect=lambda hass,signal,handler:hass.listen(signal,handler),
+            SIGNAL_CONFIG_ENTRY_CHANGED='config_entry_changed',
             EVENT_STATE_CHANGED='state_changed', EVENT_STATE_REPORTED='state_reported',
             EVENT_CORE_CONFIG_UPDATE=CORE_CONFIG_UPDATE,
             json_bytes=lambda value:json.dumps(value).encode(), json_loads=json.loads,

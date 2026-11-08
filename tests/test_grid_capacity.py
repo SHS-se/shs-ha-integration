@@ -956,6 +956,60 @@ class NativePowerHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.source.collect_power_history()
         self.assertFalse(self.source.power_history_pending)
 
+    async def test_group_membership_edit_rebuilds_import_reservation_without_a_restart(self):
+        self.configure_pool()
+        groups = {
+            'sensor.pool': {'type':'sum', 'entities':['sensor.phases','sensor.heat_pump']},
+            'sensor.phases': {'type':'sum', 'entities':['phase1-id','sensor.phase2']},
+        }
+        er = self.source.sum_power_members.__globals__['er']
+        er.async_resolve_entity_id = lambda registry,ref: 'sensor.phase1' if ref == 'phase1-id' else ref
+        er.async_get(self.hass).async_get = lambda entity: (
+            SimpleNamespace(platform='group', config_entry_id=entity) if entity in groups else None)
+        self.hass.config_entries = SimpleNamespace(
+            async_get_entry=lambda key:SimpleNamespace(domain='group',options=groups[key]))
+        self.source.execution_source = lambda entity:False
+        archived = {'sensor.pool':4692, 'sensor.phase1':1589, 'sensor.phase2':1615,
+                    'sensor.heat_pump':1488, 'sensor.phase3':0}
+        self.source.history.power_peaks.side_effect = lambda keys: {k:archived.get(k) for k in keys}
+        await self.stream.call('save_record', 'power_peaks', {'sensor.pool':4692})
+        await self.source.refresh_capacity()
+        self.source.collect_power_history()
+        await asyncio.gather(*self.tasks)
+        self.source.history.power_peaks.assert_awaited_once_with(
+            {'sensor.ev','sensor.phase1','sensor.phase2','sensor.heat_pump'})
+        self.rows['sensor.house']['state'] = '11500'
+        with self.assertRaisesRegex(ControlDeadlineError, '16192 W required'):
+            await self.native('old-members','device:pool','switch.pool','turn_on')
+
+        # Include an existing confirmed reservation with the old combined rating.
+        identity = capacity_key('device:pool', ('switch.pool',))
+        settled = {'device':identity, 'logical':'device:pool', 'owner':'device:pool',
+                   'controls':{'switch.pool':'on'}, 'sensor':'sensor.pool', 'order':1, 'after_w':4692}
+        row = {'settled':settled, 'effects':{}}
+        self.source.install_capacity({**empty_capacity(), 'devices':{identity:row},
+                                      'revision':self.source.capacity['revision'] + 1})
+        self.source.heating_waiting.add('device:pool')
+        groups['sensor.pool']['entities'] = ['sensor.phases','sensor.phase3']
+        self.hass.listeners['config_entry_changed'][0](
+            'updated', self.hass.config_entries.async_get_entry('sensor.pool'))
+        await asyncio.gather(*self.tasks)
+        self.source.history.power_peaks.assert_awaited_with({'sensor.phase3'})
+        self.assertNotIn('sensor.heat_pump', self.source.power_entities)
+        self.assertGreater(self.service.updates['heating_capacity'], 0)
+        self.assertEqual(self.journal.load_record('power_peaks')['sensor.pool'], 4692)
+        self.assertEqual(self.journal.load_record('power_peaks')['sensor.phase3'], 0)
+        self.assertEqual(self.source.import_required(), 14704)
+        self.assertEqual(self.source.native_load_bounds()['sensor.pool'], 3204)
+        self.assertFalse(self.calls)
+
+        effect = self.source.describe_import('device:pool','switch.pool','on')
+        preview = deepcopy(self.source.capacity)
+        prepare_capacity(preview, 'new-members', effect, 2)
+        self.assertEqual(preview['devices'][identity]['effects']['new-members']['peak_w'], 3204)
+        row['effects']['still-in-flight'] = {'peak_w':4800}
+        self.assertEqual(self.source.reserved_power_bound(row), 4800)
+
     async def test_higher_replaceable_report_during_history_scan_is_durable(self):
         self.configure_pool()
         started, finish = asyncio.Event(), asyncio.Event()

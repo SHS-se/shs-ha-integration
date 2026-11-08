@@ -10,9 +10,11 @@ from time import perf_counter, thread_time
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.energy import async_get_manager
+from homeassistant.config_entries import SIGNAL_CONFIG_ENTRY_CHANGED
 from homeassistant.const import EVENT_STATE_CHANGED, EVENT_STATE_REPORTED, EVENT_CORE_CONFIG_UPDATE
 from homeassistant.core import callback
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.json import json_bytes
 from homeassistant.util.json import json_loads
 
@@ -82,6 +84,7 @@ class HomeAssistantSource:
         self.heating_waiting = set()
         self.power_peaks = {}
         self.power_entities = set()
+        self.power_groups = {}
         self.power_settings = set()
         self.power_history_loaded = set()
         self.power_history_pending = False
@@ -400,6 +403,33 @@ class HomeAssistantSource:
             for mapping in options.get('device_control_mappings', {}).values()
             if isinstance(sensor := mapping.get('power'), str) and '.' in sensor}
 
+    def sum_power_members(self, source):
+        """Current leaf meters of a native SUM helper, including nested sums."""
+        if not isinstance(source, str):
+            return None
+        registry = er.async_get(self.hass)
+
+        def visit(entity, ancestors):
+            item = registry.async_get(entity)
+            if not item or item.platform != 'group' or not item.config_entry_id:
+                return None
+            entry = self.hass.config_entries.async_get_entry(item.config_entry_id)
+            if not entry or entry.options.get('type') != 'sum':
+                return None
+            if entity in ancestors:
+                return ()
+            leaves = []
+            for reference in entry.options.get('entities', ()):
+                member = er.async_resolve_entity_id(registry, reference)
+                if member is None:
+                    return ()
+                nested = visit(member, ancestors | {entity})
+                if nested == ():
+                    return ()
+                leaves.extend((member,) if nested is None else nested)
+            return tuple(leaves)
+        return visit(source, set())
+
     def power_setting_sources(self):
         """(Power sensor, native power setting) pairs whose peaks are kept per setting value."""
         option_sets = [self.options(), *(record['options'] for record in
@@ -412,7 +442,26 @@ class HomeAssistantSource:
     def mapped_power_bound(self, mapping):
         setting = mapping.get('power_setting_entity_id')
         state = (self.report(setting) or {}).get('state') if isinstance(setting, str) else None
-        return device_power_bound(mapping, self.power_peaks, state)
+        return device_power_bound(mapping, self.power_peaks, state,
+                                  members=self.sum_power_members(mapping.get('power')))
+
+    def reserved_power_bound(self, row):
+        """Use current member bounds for settled loads and preserve issued effects."""
+        settled = row.get('settled', {})
+        source = settled.get('sensor')
+        owner = settled.get('owner')
+        limit = None
+        if owner and settled.get('after_w') and self.sum_power_members(source) is not None:
+            record = self.service.physical.ownership.records.get(owner, {})
+            options = record.get('options', self.options())
+            mappings = options.get('device_control_mappings', {})
+            limits = [self.mapped_power_bound(mapping) for key, mapping in mappings.items()
+                      if mapping.get('power') == source
+                      and (not owner.startswith('device:') or key == owner.removeprefix('device:'))
+                      and set(actuator_targets(mapping)) == set(settled['controls'])]
+            if limits and all(value is not None for value in limits):
+                limit = max(limits)
+        return capacity_bound(row, settled_limit=limit)
 
     def observe_setting_peaks(self, row):
         raised = False
@@ -422,10 +471,22 @@ class HomeAssistantSource:
         return raised
 
     def collect_power_history(self):
-        self.power_entities = self.power_history_sources()
-        self.power_settings = self.power_setting_sources()
-        sources = lambda: self.power_history_sources() | self.power_setting_sources()
-        if self.closed or self.power_history_pending or not sources() - self.power_history_loaded:
+        if self.closed:
+            return
+        roots = self.power_history_sources()
+        groups = {source: self.sum_power_members(source) for source in roots}
+        if self.power_groups != groups:
+            self.power_groups = groups
+            self.wake_heating_capacity()
+
+        def leaves(source):
+            members = groups[source]
+            return (source,) if members is None else members
+        self.power_entities = {leaf for source in roots for leaf in leaves(source)}
+        self.power_settings = {(leaf, setting) for source, setting in self.power_setting_sources()
+                               for leaf in leaves(source)}
+        sources = lambda: self.power_entities | self.power_settings
+        if self.power_history_pending or not sources() - self.power_history_loaded:
             return
         self.power_history_pending = True
         async def collect():
@@ -454,9 +515,11 @@ class HomeAssistantSource:
                         continue
                     if self.closed:
                         return
-                    merge_power_peaks(self.power_peaks, history)
+                    updated = merge_power_peaks(self.power_peaks, history)
                     await self.service.stream.call('save_record', 'power_peaks', self.power_peaks)
                     self.power_history_loaded.update(pending)
+                    if updated:
+                        self.wake_heating_capacity()
                     _LOGGER.info('Device historical power peaks (W): %s',
                         {key:self.power_peaks[key] for key in sorted(self.power_peaks)
                          if key in entities or key.partition('@')[0] in {sensor for sensor, _ in settings}})
@@ -464,6 +527,11 @@ class HomeAssistantSource:
             finally:
                 self.power_history_pending = False
         self.entry.async_create_background_task(self.hass, collect(), name='shs_device_power_history')
+
+    def wake_heating_capacity(self):
+        if self.heating_waiting:
+            self.heating_waiting.clear()
+            self.service.wake_heating_capacity()
 
     def requires_command(self, entity, value):
         # A stale equality cannot cancel an accepted, still outstanding effect.
@@ -530,10 +598,12 @@ class HomeAssistantSource:
             descriptors = [*row['effects'].values(), *([row['settled']] if row.get('settled') else [])]
             for previous in sorted(descriptors,key=lambda d:d['order'],reverse=True):
                 if entity in previous['controls']:
+                    previous = {key:value for key,value in previous.items() if key != 'sum_power_w'}
+                    bound = self.reserved_power_bound(row)
                     return {**previous,'changed':entity,
                         'controls':{**commanded_controls(self.capacity,device),entity:'off'},
                         'acknowledgements':{entity:'off'},
-                        'before_w':capacity_bound(row),'commanded_before_w':capacity_bound(row),
+                        'before_w':bound,'commanded_before_w':bound,
                         'after_w':0.0,'possible_w':0.0}
         return None
 
@@ -638,7 +708,8 @@ class HomeAssistantSource:
                                 for target,v in values.items()) else 0.0
         return {**base, 'device':identity, 'before_w':demand(controls), 'commanded_before_w':demand(commanded), 'after_w':demand(expected),
                     'possible_w':max(demand(expected),demand({**controls,entity:value})),
-                'controls':expected, 'sensor':self.power_source(mapping,key)}
+                'controls':expected, 'sensor':self.power_source(mapping,key),
+                **({'sum_power_w': rated} if self.sum_power_members(mapping.get('power')) is not None else {})}
 
     def check_command(self, command):
         if command.action.service == 'turn_off' or command.action.service == 'set_hvac_mode' and command.action.value == 'off':
@@ -909,7 +980,7 @@ class HomeAssistantSource:
                             descriptor = self.describe_import(owner, mode, self.report(mode)['state'])
                         except (ControlObservationError, ValueError, KeyError, TypeError):
                             continue
-                        possible = max(descriptor['before_w'], capacity_bound(self.capacity['devices'].get(descriptor['device'], {})))
+                        possible = max(descriptor['before_w'], self.reserved_power_bound(self.capacity['devices'].get(descriptor['device'], {})))
                         if possible > 0:
                             battery_needed = True
                             deficit -= possible
@@ -926,7 +997,7 @@ class HomeAssistantSource:
                     continue
                 identity = capacity_key(owner, record['originals'])
                 row = self.capacity['devices'].get(identity, {})
-                bound = capacity_bound(row)
+                bound = self.reserved_power_bound(row)
                 if bound <= 0:
                     continue
                 thermostat = False
@@ -1077,7 +1148,7 @@ class HomeAssistantSource:
                     continue
                 if not self.service.physical.capacity_reduction_available(owner,coordination['intents'].get(owner)):
                     continue
-                candidates.append((latest['order'],identity,owner,capacity_bound(row),latest['controls']))
+                candidates.append((latest['order'],identity,owner,self.reserved_power_bound(row),latest['controls']))
             caps, owners = {}, []
             for _,identity,owner,bound,native_controls in sorted(candidates,reverse=True):
                 if deficit <= 0:
@@ -1131,8 +1202,9 @@ class HomeAssistantSource:
         for row in self.capacity['devices'].values():
             issued = {**row, 'effects':{key:effect for key,effect in row['effects'].items()
                       if effect['dispatch_through'] is not None}}
+            bound = self.reserved_power_bound(issued)
             for effect in [*issued['effects'].values(), *([row['settled']] if row.get('settled') else [])]:
-                include(effect, capacity_bound(issued))
+                include(effect, bound)
         options = self.options()
         switch = options.get('ev_charge_switch_entity')
         if switch and device_mode(options,'ev') == 'controlling':
@@ -1198,8 +1270,9 @@ class HomeAssistantSource:
                                 source=installed['battery_power_measurement_entity'], signed=True)
             include(descriptor, max(descriptor['before_w'], conversion.grid_charge.input(max(0.0, measured))))
         for row in self.capacity['devices'].values():
+            bound = self.reserved_power_bound(row)
             for descriptor in [*row['effects'].values(), *([row['settled']] if row.get('settled') else [])]:
-                include(descriptor, capacity_bound(row))
+                include(descriptor, bound)
         for reservation in (reserved or {}).values():
             include(reservation, reservation['possible_w'])
         if effect is not None:
@@ -1243,7 +1316,8 @@ class HomeAssistantSource:
     def attach(self):
         @callback
         def matches(data):
-            return not self.closed and data.get('entity_id') in self.entities
+            entity = data.get('entity_id')
+            return not self.closed and (entity in self.entities or entity in self.power_entities)
         @callback
         def observe(event):
             if self.closed:
@@ -1277,11 +1351,11 @@ class HomeAssistantSource:
                 self.intake_counts['bytes'] += len(json.dumps(row))
                 receipt = self.service.stream.capture('observation', row)
                 def committed(future):
-                    if (not self.closed and self.heating_waiting and
-                            (entity in self.capacity_entities or entity == self.options().get('house_consumption_power_entity'))
+                    if (not self.closed and
+                            (raised_peak or entity in self.capacity_entities
+                             or entity == self.options().get('house_consumption_power_entity'))
                             and not future.cancelled() and future.exception() is None):
-                        self.heating_waiting.clear()
-                        self.service.wake_heating_capacity()
+                        self.wake_heating_capacity()
                     if (not self.closed and entity in self.capacity_entities and not self.capacity_refresh_pending
                             and not future.cancelled() and future.exception() is None):
                         self.capacity_refresh_pending = True
@@ -1308,10 +1382,20 @@ class HomeAssistantSource:
                     _LOGGER.exception('SHS gateway observation persistence unavailable')
         @callback
         def metadata_changed(event):
-            if self.closed or self.metadata_unchanged():
+            if self.closed:
+                return
+            self.collect_power_history()
+            if self.metadata_unchanged():
                 return
             self.service.invalidate_context()
             self.entry.async_create_background_task(self.hass, self.refresh_configuration(), name='shs_gateway_configuration')
+        @callback
+        def group_changed(change, entry):
+            if entry.domain == 'group':
+                self.collect_power_history()
+
+        self.entry.async_on_unload(async_dispatcher_connect(
+            self.hass, SIGNAL_CONFIG_ENTRY_CHANGED, group_changed))
         for event in (EVENT_STATE_CHANGED, EVENT_STATE_REPORTED):
             self.entry.async_on_unload(self.hass.bus.async_listen(event, observe, event_filter=matches))
         for event in (EVENT_CORE_CONFIG_UPDATE, er.EVENT_ENTITY_REGISTRY_UPDATED,
