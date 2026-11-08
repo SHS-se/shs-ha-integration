@@ -8,7 +8,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.entity_platform import async_get_current_platform
 from homeassistant.helpers.event import async_track_time_interval
 
-from .equipment import equipment_device_info
+from .equipment import equipment_device, equipment_device_info, equipment_identifier
 from .shs_core.const import DOMAIN
 from .shs_core.gateway_journal import GatewayConflict
 
@@ -45,8 +45,7 @@ def registered_room_controls(hass, entry, owner, row):
     """Keep the room's registered controls, including the earlier thermostat IDs."""
     prefix = f'{entry.entry_id}_heating_'
     registry = er.async_get(hass)
-    info = equipment_device_info(entry, owner, row['name'])
-    device = dr.async_get(hass).async_get_device(identifiers=info['identifiers'])
+    device = equipment_device(hass, entry, owner)
     if device is not None:
         candidates = sorted(
             item.unique_id.removeprefix(prefix).removesuffix('_target')
@@ -61,8 +60,7 @@ def registered_room_controls(hass, entry, owner, row):
             continue
         entity = registry.async_get(entity_id)
         old = dr.async_get(hass).async_get(entity.device_id) if entity.device_id else None
-        old_info = equipment_device_info(entry, prior, row['name'])
-        if old is not None and old.identifiers == old_info['identifiers']:
+        if old is not None and equipment_identifier(entry, prior) in old.identifiers:
             return prior
     return owner
 

@@ -87,8 +87,7 @@ class ExecutionModeEntities:
                     await self.add_entities(additions)
                 for device in wanted.values():
                     if device.get('room_area_id'):
-                        remove_empty_heater_device(self.hass, self.entry,
-                            device['permission']['controller_id'], device['name'])
+                        remove_empty_heater_device(self.hass, self.entry, device['permission']['controller_id'])
                 if not self.dirty:
                     return
 

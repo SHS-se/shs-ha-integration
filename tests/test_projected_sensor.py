@@ -101,12 +101,13 @@ class SensorMetadataTests(unittest.TestCase):
     def test_legacy_heater_page_is_retired_only_after_all_entities_move(self):
         registry = Mock()
         devices = Mock()
-        devices.async_get_device.return_value = SimpleNamespace(id='old-page', config_entry_id='home')
+        old = SimpleNamespace(id='old-page', identifiers={('shs_energy', 'token:heating:device:sensor.heater')})
         entries = Mock(side_effect=[[SimpleNamespace(disabled_by='user')], []])
         equipment = load_equipment(er=SimpleNamespace(async_get=lambda _: registry, async_entries_for_device=entries),
-                                   dr=SimpleNamespace(async_get=lambda _: devices))
+                                   dr=SimpleNamespace(async_get=lambda _: devices,
+                                       async_entries_for_config_entry=lambda reg, entry: [old] if entry == 'home' else []))
         entry = SimpleNamespace(entry_id='home', data={'device_token_id': 'token'})
-        equipment.remove_empty_heater_device(None, entry, 'device:sensor.heater', 'Heater')
+        equipment.remove_empty_heater_device(None, entry, 'device:sensor.heater')
         devices.async_remove_device.assert_not_called()
-        equipment.remove_empty_heater_device(None, entry, 'device:sensor.heater', 'Heater')
+        equipment.remove_empty_heater_device(None, entry, 'device:sensor.heater')
         devices.async_remove_device.assert_called_once_with('old-page')

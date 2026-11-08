@@ -5,13 +5,22 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from .shs_core.const import CONF_DEVICE_TOKEN_ID, DOMAIN
 
 
+def equipment_identifier(entry, owner):
+    return DOMAIN, f'{entry.data[CONF_DEVICE_TOKEN_ID]}:heating:{owner}'
+
+
 def equipment_device_info(entry, owner, name, *, area=None):
-    # Keep the existing floor-heater device IDs when their other entities join.
-    info = DeviceInfo(identifiers={(DOMAIN, f'{entry.data[CONF_DEVICE_TOKEN_ID]}:heating:{owner}')},
+    info = DeviceInfo(identifiers={equipment_identifier(entry, owner)},
         name=name, manufacturer='Smart Home Solutions')
     if area:
         info['suggested_area'] = area
     return info
+
+
+def equipment_device(hass, entry, owner):
+    identifier = equipment_identifier(entry, owner)
+    devices = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+    return next((device for device in devices if identifier in device.identifiers), None)
 
 
 def assign_equipment_area(hass, device, area_name):
@@ -36,11 +45,9 @@ def update_device_info(hass, entry, domain, entity, info):
         registry.async_update_entity(entity_id, device_id=device.id)
 
 
-def remove_empty_heater_device(hass, entry, owner, name):
+def remove_empty_heater_device(hass, entry, owner):
     """Retire the old SHS device page only after its registered entities move."""
-    registry = dr.async_get(hass)
-    info = equipment_device_info(entry, owner, name)
-    device = registry.async_get_device(identifiers=info['identifiers'])
-    if (device is not None and device.config_entry_id == entry.entry_id
-            and not er.async_entries_for_device(er.async_get(hass), device.id, include_disabled_entities=True)):
-        registry.async_remove_device(device.id)
+    device = equipment_device(hass, entry, owner)
+    if device is not None and not er.async_entries_for_device(
+            er.async_get(hass), device.id, include_disabled_entities=True):
+        dr.async_get(hass).async_remove_device(device.id)
