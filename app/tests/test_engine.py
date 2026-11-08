@@ -365,9 +365,11 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             for calculation in calculations.values():self.assertEqual(calculation.call_count,2)
 
     async def test_pool_projects_separate_heater_and_pump_meter_readings(self):
+        from unittest.mock import AsyncMock
         from shs_app.entities import project_entities
         engine = self.engine()
         await engine.load()
+        await engine.activate()
         devices = []
         for member, value, unit in (('heater', '2.9', 'kW'), ('pump', '413', 'W')):
             power_id = f'sensor.pool_{member}_power'
@@ -380,6 +382,11 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         pool = [row for row in native['sensors'] if row.get('equipment_owner') == 'pool']
         self.assertEqual([row['name'] for row in pool], ['Pool heater power', 'Pool pump power'])
         self.assertEqual([native['values'][row['unique_id']]['value'] for row in pool], [2900, 413])
+        engine.editor.devices = AsyncMock(return_value=devices)
+        await engine.project()
+        self.assertEqual([row['key'] for row in self.published[-1]['execution_devices']],
+                         ['sensor.pool_heater_energy', 'sensor.pool_pump_energy'])
+        self.assertEqual(engine.pool_power_entities, {'sensor.pool_heater_power', 'sensor.pool_pump_power'})
         engine.mirror.rows['sensor.pool_pump_power']['state'] = 'unavailable'
         native = project_entities(engine, devices)
         self.assertFalse(native['values'][pool[1]['unique_id']]['available'])

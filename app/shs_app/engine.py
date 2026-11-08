@@ -474,11 +474,12 @@ class AppEngine:
                     for device in devices]
                 with self.profiler.measure('native_projection_build'):
                     native = project_entities(self,devices)
-                    self.pool_power_entities = {
-                        value['attributes']['power_source']
-                        for sensor in native['sensors'] if sensor.get('equipment_owner') == 'pool'
-                        if (value := native['values'][sensor['unique_id']])['attributes']['power_source']
-                    }
+                    self.pool_power_entities = set()
+                    for sensor in native['sensors']:
+                        if sensor.get('equipment_owner') == 'pool':
+                            source = native['values'][sensor['unique_id']]['attributes']['power_source']
+                            if source:
+                                self.pool_power_entities.add(source)
                     options = h.resolved_options()
                     names = self.mirror.context.get('area_names', {})
                     areas = self.mirror.context.get('entity_areas', {})
