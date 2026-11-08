@@ -1,9 +1,9 @@
 import {expect, test} from '@playwright/test';
 
-test('edit the heating target, duration, and flexibility order from the controller', async ({page}) => {
+test('read and override the equipment setpoint from the controller', async ({page}) => {
   const room = 'device:living-room';
   const zone = {
-    name: 'Living room', target_c: 20, planned_target_c: 20, applied_c: 20,
+    name: 'Living room', target_c: 20, planned_target_c: 20, applied_c: 20.5,
     min_c: 5, max_c: 35, step: .5, expires_at: null as string | null,
     minutes: 60, controlling: true,
   };
@@ -21,6 +21,7 @@ test('edit the heating target, duration, and flexibility order from the controll
       } else if (edit.field === 'resume') {
         zone.expires_at = null;
         zone.target_c = zone.planned_target_c;
+        zone.applied_c = zone.planned_target_c;
       } else if (edit.field === 'order') {
         controls.order = edit.value;
       }
@@ -28,11 +29,19 @@ test('edit the heating target, duration, and flexibility order from the controll
     await route.fulfill({json: controls});
   });
   await page.goto('./#controller');
-  const temperature = page.getByRole('spinbutton', {name: 'Heating target (°C)'});
-  await expect(temperature).toHaveValue('20');
+  const temperature = page.getByRole('spinbutton', {name: 'Setpoint temperature (°C)'});
+  await expect(temperature).toHaveValue('20.5');
+  const planned = page.getByText('Planned setpoint 20 °C');
+  await expect(planned).toBeHidden();
+  await page.getByText('Plan details', {exact: true}).click();
+  await expect(planned).toBeVisible();
+  await page.getByText('Plan details', {exact: true}).click();
   await temperature.fill('22');
   await temperature.press('Enter');
   await expect(page.getByRole('spinbutton', {name: 'Remaining minutes'})).toHaveValue('60');
+  await expect(temperature).toHaveValue('20.5');
+  zone.applied_c = 22;
+  await expect(temperature).toHaveValue('22');
   const remaining = page.getByRole('spinbutton', {name: 'Remaining minutes'});
   await remaining.fill('25');
   await remaining.press('Enter');

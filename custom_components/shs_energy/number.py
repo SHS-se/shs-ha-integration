@@ -22,7 +22,7 @@ class HeatingNumber(HeatingEntity, NumberEntity):
 
     @property
     def native_value(self):
-        return self.row['target_c'] if self.field == 'target' else self.minutes
+        return self.row['applied_c'] if self.field == 'target' else self.minutes
 
     @property
     def native_min_value(self):

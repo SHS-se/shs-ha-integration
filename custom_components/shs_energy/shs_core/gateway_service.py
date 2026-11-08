@@ -13,6 +13,7 @@ from .native_configuration import native_options
 from .gateway_stream import GatewayConnection
 from .command_transport import settled, settle_task
 from .heating_overrides import DEFAULT_MINUTES, active_heating, heating_binding
+from .native_commands import finite
 
 
 class GatewayService:
@@ -76,6 +77,12 @@ class GatewayService:
             native = self.source.report(binding[0]) or {}
             attrs = native.get('attributes', {})
             climate = binding[0].startswith('climate.')
+            state = native.get('state')
+            reported = attrs.get('temperature') if climate else state
+            try:
+                applied = finite(reported) if state not in (None, 'unknown', 'unavailable') else None
+            except (TypeError, ValueError):
+                applied = None
             saved = book['zones'].get(owner, {})
             active = active_heating(book, options, owner, now)
             planned = row.get('planned_target_c')
@@ -84,7 +91,7 @@ class GatewayService:
                 min_c=attrs.get('min_temp' if climate else 'min'),
                 max_c=attrs.get('max_temp' if climate else 'max'),
                 step=attrs.get('target_temp_step' if climate else 'step', 0.1),
-                applied_c=attrs.get('temperature') if climate else native.get('state'),
+                applied_c=applied,
                 minutes=saved.get('minutes', DEFAULT_MINUTES),
                 controlling=row['mode'] == 'controlling' and options.get('device_modes', {}).get(row['key']) == 'controlling')
         mappings = options.get('device_control_mappings', {})

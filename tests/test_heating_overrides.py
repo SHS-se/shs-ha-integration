@@ -11,10 +11,11 @@ from shs_core.device_operations import HeatingDeferred
 from test_controller import State, Store
 import test_device_commands as device_fixtures
 from test_device_gateway import MemoryOperations
-from test_execution_mode_select import load_adapter
+from test_execution_mode_select import load_adapter, load_equipment
 from command_fixture import controller_inputs
 from shs_core.device_gateway import DeviceGateway
 from shs_core.device_port import device_intent
+from shs_core.gateway_service import GatewayService
 from shs_core.heating_overrides import HeatingOverrides, active_heating, heating_binding
 from shs_core.grid_capacity import capacity_bound, dispatch_capacity, empty_capacity, finish_capacity, observe_capacity, prepare_capacity
 
@@ -103,6 +104,46 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         request = device_intent(OWNER, operation, self.plan, slot, configuration_revision=1,
                                 policy_revision=1, heating=row)
         return {**request, 'headroom_reserved': True}
+
+    async def test_writable_setpoint_reads_equipment_until_override_is_applied(self):
+        native = {'state': 'heat', 'attributes': self.states['climate.heater'].attributes}
+        source = SimpleNamespace(options=lambda: self.options, report=lambda entity: native)
+        service = GatewayService(SimpleNamespace(listeners=set()), {}, source)
+        service.active = True
+        service.heating = self.book
+        service.projection = {'execution_devices': [dict(key='heater', name='Heater', category='heating',
+            planned=True, mode='controlling', permission={'controller_id': OWNER}, planned_target_c=19)]}
+
+        equipment = load_equipment()
+        heating = load_adapter('heating_entities.py', {'callback': lambda fn: fn,
+            'equipment_device_info': equipment.equipment_device_info})
+        number = load_adapter('number.py', {'HeatingEntity': heating.HeatingEntity, 'NumberEntity': object,
+            'NumberDeviceClass': SimpleNamespace(TEMPERATURE='temperature', DURATION='duration'),
+            'NumberMode': SimpleNamespace(BOX='box')})
+        entry = SimpleNamespace(entry_id='home', data={'device_token_id': 'token'},
+            runtime_data=SimpleNamespace(service=service, online=True))
+        entity = number.HeatingNumber(entry, OWNER, service.heating_controls()['zones'][OWNER], 'target')
+        self.assertEqual(entity.native_value, 20)
+        self.assertEqual(entity.extra_state_attributes['planned_target_c'], 19)
+
+        await entity.async_set_native_value(22)
+        entity.row = service.heating_controls()['zones'][OWNER]
+        self.assertEqual(entity.row['target_c'], 22)
+        self.assertEqual(entity.native_value, 20)
+        manual = active_heating(self.book.value, self.options, OWNER, self.clock)
+        result = await self.physical.perform(self.intent('heat', manual))
+        self.assertIsNone(result['error'])
+        entity.row = service.heating_controls()['zones'][OWNER]
+        self.assertEqual(entity.native_value, 22)
+
+        native['state'] = 'unavailable'
+        entity.row = service.heating_controls()['zones'][OWNER]
+        self.assertIsNone(entity.native_value)
+
+        self.options['device_control_mappings']['heater']['actuator_entity_ids'] = ['number.target']
+        native.update(state='19.5', attributes={'min': 5, 'max': 35, 'step': .5})
+        entity.row = service.heating_controls()['zones'][OWNER]
+        self.assertEqual(entity.native_value, 19.5)
 
     async def test_duration_edits_and_restart_use_one_absolute_end(self):
         first = (await self.edit('target', 22))['zones'][OWNER]

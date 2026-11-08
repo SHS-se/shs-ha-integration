@@ -148,7 +148,7 @@
   "entity": {
     "number": {
       "heating_target": {
-        "name": "Heating target"
+        "name": "Setpoint temperature"
       },
       "heating_minutes": {
         "name": "Override time"

@@ -2,9 +2,9 @@ import {useEffect, useRef, useState} from 'react';
 import {fetchApp} from './ingress';
 
 type Zone = {
-  name: string; target_c: number | null; planned_target_c: number | null;
+  name: string; planned_target_c: number | null;
   min_c: number | null; max_c: number | null; step: number;
-  applied_c: number | string | null; expires_at: string | null;
+  applied_c: number | null; expires_at: string | null;
   minutes: number; controlling: boolean;
 };
 type Controls = {zones: Record<string, Zone>; loads: Record<string, string>; order: string[]};
@@ -101,16 +101,18 @@ export function HeatingControls() {
         const disabled = saving || !zone.controlling;
         return <div className="controller-row" key={owner}>
           <h3>{zone.name}</h3>
-          <p className="muted">Plan {zone.planned_target_c == null ? 'unavailable' : `${zone.planned_target_c} °C`}
-            {zone.applied_c != null && ` · Equipment target ${zone.applied_c} °C`}</p>
-          <NumberEdit label="Heating target (°C)" value={zone.target_c} min={zone.min_c ?? undefined}
+          <NumberEdit label="Setpoint temperature (°C)" value={zone.applied_c} min={zone.min_c ?? undefined}
             max={zone.max_c ?? undefined} step={zone.step} disabled={disabled}
             commit={value => void change({owner, field: 'target', value})}/>
           <NumberEdit label={zone.expires_at ? 'Remaining minutes' : 'Override duration (minutes)'} value={remaining}
             min={1} step={1} disabled={disabled} commit={value => void change({owner, field: 'minutes', value})}/>
           {zone.expires_at && <button type="button" disabled={disabled}
             onClick={() => void change({owner, field: 'resume', value: null})}>Return to plan</button>}
-          {!zone.controlling && <p className="muted">Enable Controlling to change this room’s target.</p>}
+          {!zone.controlling && <p className="muted">Enable Controlling to change this room’s setpoint.</p>}
+          {zone.planned_target_c != null && <details>
+            <summary>Plan details</summary>
+            <p className="muted">Planned setpoint {zone.planned_target_c} °C</p>
+          </details>}
         </div>;
       })}
     </section>
