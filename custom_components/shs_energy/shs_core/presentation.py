@@ -241,7 +241,9 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         device["planning_system"] = mapped_planning_path(
             device, mapping, options.get("pool_water_temperature_entity")
         )
-        if system == "pool" or is_hot_water(device):
+        # A pool member's card is the pool's contract too: its switch, power and
+        # observed setting, whatever method the website shows.
+        if system == "pool" or device["planning_system"] == "pool" or is_hot_water(device):
             device["fields"] = list(_control_fields(device))
         if system == "pool":
             errors = {}

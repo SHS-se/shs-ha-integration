@@ -311,6 +311,19 @@ def mapping_errors(
     return errors
 
 
+def pool_mapping(mapping: Any, control_type: str | None) -> Any:
+    """A pool device's saved mapping, read for the method the website shows now.
+
+    The pool drives every member as one relay whatever its method, so the card
+    and the saved keys are the same for each method. Choosing another method on
+    the website must not discard the switch and power already saved, nor take
+    the device out of the pool until it is saved again.
+    """
+    if isinstance(mapping, dict) and mapping and control_type in CONTROL_TYPES:
+        return {**mapping, "control_type": control_type}
+    return mapping
+
+
 def mapping_report(
     requested_control_type: str | None,
     mapping: dict[str, Any] | None,
@@ -324,6 +337,8 @@ def mapping_report(
     pool_water_entity: str | None = None,
 ) -> dict[str, Any]:
     """Build the privacy-minimised status uploaded to the website."""
+    if pool_control:
+        mapping = pool_mapping(mapping, requested_control_type)
     if pool_control and mapping and mapping.get("control_type") != requested_control_type:
         return mapping_report(requested_control_type, mapping, known_entity_ids, entity_names, area_names, entity_area_ids)
     if pool_control:

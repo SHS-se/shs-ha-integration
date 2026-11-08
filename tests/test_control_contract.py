@@ -109,6 +109,24 @@ class PoolContractTests(unittest.TestCase):
             "the contract the executor actually runs must be accepted",
         )
 
+    def test_choosing_another_method_keeps_a_pool_devices_saved_switch(self):
+        """A pool device saved as an on/off schedule stays ready, and stays in the
+        pool, when the website changes its method to Variable power."""
+        from shs_core.device_controls import apply_requested_configuration, mapping_report, pool_mapping
+        saved = {"control_type": "switch_schedule", "actuator_entity_ids": ["switch.pool_pump"],
+                 "power": "sensor.pool_pump_power", "power_setting_entity_id": "number.pump_capacity"}
+        known = {"switch.pool_pump", "sensor.pool_pump_power", "number.pump_capacity", "sensor.water"}
+        report = mapping_report("variable_power", saved, known, pool_control=True, pool_water_entity="sensor.water")
+        self.assertEqual((report["mapping_status"], report["mapped_control_type"]), ("ready", "variable_power"))
+        devices = [{"key": "pump", "category": "pool_heating", "suggested_load_type": "variable_full_load"}]
+        apply_requested_configuration(devices, {"pump": {"planning_role": "controllable", "control_type": "variable_power"}},
+                                      {"pump": saved}, known, pool_water_entity="sensor.water")
+        self.assertEqual((devices[0]["planning_role"], devices[0]["control_type"]), ("controllable", "variable_power"))
+        # Only the method is read anew; nothing else about the saved mapping changes.
+        self.assertEqual(pool_mapping(saved, "variable_power"), {**saved, "control_type": "variable_power"})
+        self.assertIsNone(pool_mapping(None, "variable_power"))
+        self.assertEqual(pool_mapping(saved, None), saved)
+
     def test_local_contract_leaves_every_other_pairing_alone(self):
         for method in CONTROL_FIELDS:
             for path in (None, "room", "boiler", "ev"):

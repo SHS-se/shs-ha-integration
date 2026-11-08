@@ -43,7 +43,7 @@ from .const import (
 from .const import (
     OPTIMISATION_PROFILE_DAYS,
 )
-from .device_controls import CONTROL_TYPES, planning_path, mapped_planning_path
+from .device_controls import CONTROL_TYPES, planning_path, mapped_planning_path, pool_mapping
 from .optimisation import (
     OptimisationInputError,
     REMEDY_DEFECT,
@@ -342,6 +342,8 @@ def build_services(
                 continue
             control_type = model["control_type"]
             mapping = raw_mappings.get(str(model["key"]))
+            if path == "pool":
+                mapping = pool_mapping(mapping, control_type)
             if (
                 not isinstance(mapping, dict)
                 or mapping.get("control_type") != control_type

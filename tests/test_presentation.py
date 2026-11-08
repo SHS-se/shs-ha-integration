@@ -182,6 +182,20 @@ class PresentationTests(unittest.TestCase):
         self.assertNotIn('temperature_entity_id', {f['key'] for f in view['fields']})
         self.assertEqual(heater['fields'][0]['label'], 'Room temperature')
 
+    def test_a_variable_power_pool_member_keeps_the_pools_switch_and_setting(self):
+        """The pump's card lost its switch when its method changed to Variable power."""
+        self.options.update(pool_enabled=True, pool_water_temperature_entity='sensor.water')
+        heater = deepcopy(self.device)
+        heater.update(category='pool_heating', control_type='variable_power', mapping_error=None,
+                      mapping={'control_type': 'variable_power', 'actuator_entity_ids': ['switch.pool_heater']})
+        pump = {**deepcopy(heater), 'key': 'sensor.pump', 'statistic_id': 'sensor.pump', 'name': 'Pool pump',
+                'mapping': {'control_type': 'variable_power', 'actuator_entity_ids': ['switch.pool_pump']},
+                'fields': [{'key': 'control_entity_id'}, {'key': 'minimum_value'}, {'key': 'maximum_value'}]}
+        view = next(d for d in self.view([heater, pump]) if d['key'] == 'sensor.pump')
+        self.assertEqual(view['planning_system'], 'pool')
+        self.assertEqual([f['key'] for f in view['fields']],
+                         ['actuator_entity_ids', 'power', 'power_setting_entity_id', 'heat_energy_entity_id'])
+
     def test_unreadable_device_command_is_visible_and_corrected_command_restores_support(self):
         key = self.device['key']
         slot = self.plan['plans']['priority']['slots'][0]

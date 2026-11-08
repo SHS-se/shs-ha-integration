@@ -4,7 +4,7 @@ from . import const as shs_const
 from .configuration_schema import resolve_configuration
 from .configuration_fields import _control_fields
 from .discovery import suggest_device_control_mapping
-from .device_controls import apply_planner_support, mapping_report, is_room_thermal_control, mapped_planning_path
+from .device_controls import apply_planner_support, mapping_report, is_room_thermal_control, mapped_planning_path, pool_mapping
 from .presentation import complete_device_views
 
 def execution_device_views(catalog, context, explicit, choices, coordinator, *, include_suggestions=True):
@@ -22,6 +22,10 @@ def execution_device_views(catalog, context, explicit, choices, coordinator, *, 
     for device in requested:
         control_type = str(device.get("control_type") or (mappings.get(device["key"]) or {}).get("control_type") or "")
         saved = mappings.get(device["key"])
+        path = mapped_planning_path({**device, "control_type": control_type}, saved if isinstance(saved, dict) else {},
+                                    options.get("pool_water_temperature_entity"))
+        if path == "pool":
+            saved = pool_mapping(saved, control_type)
         saved_mapping = (
             dict(saved)
             if isinstance(saved, dict) and saved.get("control_type") == control_type
@@ -65,7 +69,7 @@ def execution_device_views(catalog, context, explicit, choices, coordinator, *, 
                     catalog, device, control_type
                 ) if include_suggestions else {}),
                 "execution_status": coordinator.controller.status.get("device:" + device["key"]),
-                "fields": _control_fields({**device, "control_type": control_type}),
+                "fields": _control_fields({**device, "control_type": control_type, "planning_system": path}),
                 **report,
             }
         )
