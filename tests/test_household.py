@@ -257,3 +257,36 @@ class HouseholdTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(restored.calls, [])
         finally:
             await restored.runtime.close()
+
+
+class IncompleteSetupTests(unittest.IsolatedAsyncioTestCase):
+    """8 Nov: one pool member's incomplete setup stopped the plan for the whole home."""
+
+    def test_an_incomplete_planned_device_is_a_warning_not_a_failure(self):
+        from shs_core.household import incomplete_setup_warnings
+        devices = [
+            {"key": "pump", "name": "Pool pump", "mapping_status": "invalid", "mapping_error": "number control entity is required"},
+            {"key": "heater", "name": "Pool heater", "mapping_status": "ready"},
+            {"key": "lamp", "name": "Lamp", "mapping_status": "not_configured"},
+        ]
+        requested = {"pump": {"planning_role": "controllable"}, "heater": {"planning_role": "controllable"},
+                     "lamp": {"planning_role": "base_load"}}
+        warnings = incomplete_setup_warnings(devices, requested)
+        self.assertEqual([(w["code"], w["scope"]) for w in warnings], [("device_setup_incomplete", "pump")])
+        self.assertIn("number control entity is required", warnings[0]["message"])
+        self.assertIn("rest of the home is planned", warnings[0]["consequence"])
+
+    async def test_the_snapshot_continues_past_an_incomplete_device(self):
+        from unittest.mock import patch
+        rig = Rig()
+        devices = [{"key": "pump", "name": "Pool pump", "category": "pool_heating", "mapping_status": "invalid"}]
+        stored = {"optimisation_device_configuration": {"pump": {"planning_role": "controllable"}}}
+
+        class Reached(Exception):
+            pass
+
+        def reached(*_args, **_kwargs):
+            raise Reached()
+        with patch("shs_core.operating_modes.planning_devices", reached):
+            with self.assertRaises(Reached):
+                await rig.household._build_optimisation_snapshot({"planning_mode": "live"}, {}, [], stored, devices)

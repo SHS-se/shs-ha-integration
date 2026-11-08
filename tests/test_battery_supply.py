@@ -122,8 +122,27 @@ class ParticipationTests(unittest.TestCase):
         demoted=reconcile_admissions(options,[{**self.device,'planning_role':'base_load'}],{})
         self.assertEqual(demoted['device_modes'],{})
         self.assertEqual(reconcile_admissions(demoted,[self.device],{})['device_modes']['heater'],'control_verification')
-        revised=reconcile_admissions(options,[{**self.device,'planning_choice_at':'role-2'}],{})
-        self.assertEqual(revised['device_modes']['heater'],'control_verification')
+        # Re-saving the same choice changes nothing that runs: control is kept.
+        resaved=reconcile_admissions(options,[{**self.device,'planning_choice_at':'role-2'}],{})
+        self.assertEqual(resaved['device_modes']['heater'],'controlling')
+        # Driving the device another way is a new admission.
+        rewired=reconcile_admissions(options,[{**self.device,'control_type':'variable_power','planning_choice_at':'role-2'}],{})
+        self.assertEqual(rewired['device_modes']['heater'],'control_verification')
+
+    def test_a_pool_members_method_change_keeps_the_pool_controlling(self):
+        """8 Nov: changing the pump's method on the website demoted the pool and
+        released the heater. The pool drives every member as one relay."""
+        pool=[dict(key='pool_heater',category='pool_heating',control_type='variable_power',
+                   planning_role='controllable',planning_choice_at='a'),
+              dict(key='pool_pump',category='pool_heating',control_type='switch_schedule',
+                   planning_role='controllable',planning_choice_at='b')]
+        options=reconcile_admissions({},pool,{})
+        self.assertEqual(options['device_modes'],{'$pool':'control_verification'})
+        options['device_modes']['$pool']='controlling'
+        changed=[pool[0],{**pool[1],'control_type':'variable_power','planning_choice_at':'c'}]
+        self.assertEqual(reconcile_admissions(options,changed,{})['device_modes'],{'$pool':'controlling'})
+        # A member joining or leaving the pool is still a new admission.
+        self.assertEqual(reconcile_admissions(options,pool[:1],{})['device_modes'],{'$pool':'control_verification'})
 
     def test_exclusion_removes_inventory_and_queued_authority_immediately(self):
         options=reconcile_admissions({},[self.device],{})

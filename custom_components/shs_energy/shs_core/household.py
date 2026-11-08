@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .planning_warnings import merge_warnings
+from .planning_warnings import merge_warnings, planning_warning
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -223,6 +223,23 @@ PLANNING_BANNER_BY_REMEDY: dict[str, tuple[str, str, dict[str, Any]]] = {
 
 class SupplierPricesUnavailable(Exception):
     """A snapshot needs prices that the price refresh has not yet received."""
+
+
+def incomplete_setup_warnings(devices: list[dict[str, Any]], requested: dict[str, Any]) -> list[dict[str, Any]]:
+    """A warning for each device Planned on the website whose setup is incomplete.
+
+    Such a device is already in base load (`apply_requested_configuration`), so
+    it is left out of control and the rest of the home is planned as usual. It
+    never stops the plan: one device that cannot be planned is a warning.
+    """
+    return [planning_warning(
+        "device_setup_incomplete", str(d["key"]),
+        f"{d.get('name') or d['key']}: Planned on the website, but its setup is incomplete"
+        + (f" ({d['mapping_error']})" if d.get("mapping_error") else "") + ".",
+        "It is planned as household consumption and not controlled until its setup is complete. "
+        "The rest of the home is planned as usual.",
+    ) for d in devices if requested.get(d["key"], {}).get("planning_role") == "controllable"
+        and d.get("mapping_status") != "ready"]
 
 
 class Household:
@@ -2792,11 +2809,10 @@ class Household:
         runtime = getattr(self, "battery_runtime", None) if self.control_authority else None
         scope_devices = shared_devices(devices, options)
         requested = stored.get("optimisation_device_configuration", {})
-        unready = [d for d in scope_devices if requested.get(d["key"], {}).get("planning_role") == "controllable"
-                   and d.get("mapping_status") != "ready"]
-        if unready:
-            raise OptimisationInputError("Planned device setup is incomplete: " + ", ".join(
-                str(d.get("name") or d["key"]) for d in unready))
+        incomplete_warnings = incomplete_setup_warnings(scope_devices, requested)
+        if incomplete_warnings:
+            _LOGGER.warning("Planned device setup is incomplete, planned as base load: %s",
+                            ", ".join(w["scope"] for w in incomplete_warnings))
         options = dict(options)
         # A store's local sensor configuration is not permission to share it.
         for system, category in (("ev", "ev_charging"), ("pool", "pool_heating")):
@@ -2920,7 +2936,7 @@ class Household:
             now=captured,
             current_residual_w=self._current_base_load_w(device_models, control_mappings),
         )
-        self.optimisation_warnings = merge_warnings(base_load["planning_warnings"],
+        self.optimisation_warnings = merge_warnings(base_load["planning_warnings"], incomplete_warnings,
             *[model.get("planning_warnings",[]) for model in device_models])
         if self.optimisation_warnings:
             _LOGGER.info("Planning evidence: %s", self.optimisation_warnings)

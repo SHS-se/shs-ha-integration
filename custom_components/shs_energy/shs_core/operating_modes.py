@@ -88,12 +88,30 @@ def scoped_plan(plan, options, device):
     return plan
 
 
+def admission_identity(owner, members):
+    """What a group executes: its members and the contract each is driven by.
+
+    A new admission resets the group to Verification, which releases control,
+    so only a change to what is executed may start one: a member joining or
+    leaving (inclusion, role, exclusion) or a member driven another way. The
+    website's choice time is not part of it, since re-saving a choice changes
+    nothing that runs. Nor is a pool member's method: the pool drives every
+    member as one relay whatever the website calls it.
+    """
+    if members is None:
+        return None
+    from .configuration_fields import PATH_CONTRACT
+    pool = PATH_CONTRACT["pool"] if owner == "$pool" else None
+    return sorted([key, pool or control] for key, _revision, control in members)
+
+
 def reconcile_admissions(options, devices, home):
     """Bind local grants to one acknowledged website admission per physical owner.
 
-    A changed member, role revision, exclusion or planning method starts a new
-    admission. Removing the saved grant also fences commands queued for the old
-    options before a release is attempted by the single existing writer.
+    A changed member, exclusion or executed control contract starts a new
+    admission (see `admission_identity`). Removing the saved grant also fences
+    commands queued for the old options before a release is attempted by the
+    single existing writer.
     """
     result = deepcopy(options)
     excluded = set(options.get("excluded_device_readings", []))
@@ -111,7 +129,7 @@ def reconcile_admissions(options, devices, home):
     previous = options.get("planning_admissions", {})
     modes = options.get("device_modes", {})
     result["device_modes"] = {key: modes.get(key, "control_verification")
-        if previous.get(key) == members else "control_verification"
+        if admission_identity(key, previous.get(key)) == admission_identity(key, members) else "control_verification"
         for key, members in groups.items()}
     result["planning_admissions"] = groups
     return result

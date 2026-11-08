@@ -28,7 +28,7 @@ control, and is the only time SHS sends a device its own settings.
 | Trigger | Why it is explicit |
 |---|---|
 | The select set to Verification | The user's choice on the select |
-| The device leaves the select: demoted to Monitoring on the website, excluded in HA, its system disabled, or re-admitted after a changed planning choice (which resets it to Verification) | The select no longer offers Controlling |
+| The device leaves the select: demoted to Monitoring on the website, excluded in HA, its system disabled, or re-admitted after a change to what it executes (which resets it to Verification): a member joining or leaving its group, or a member driven through another control contract. Re-saving a choice on the website is not one, and nor is a pool member's method, since the pool drives every member as one relay (user requirement, 8 November 2026, after a pool pump's method change switched the pool heater off). | The select no longer offers Controlling |
 | A configured manual-override entity turns on | A control the user configured for exactly this |
 
 If the actuator is unavailable when a release is due, the handover waits and
