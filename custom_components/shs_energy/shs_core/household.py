@@ -220,6 +220,10 @@ PLANNING_BANNER_BY_REMEDY: dict[str, tuple[str, str, dict[str, Any]]] = {
 }
 
 
+class SupplierPricesUnavailable(Exception):
+    """A snapshot needs prices that the price refresh has not yet received."""
+
+
 class Household:
     """Own planning state and exchanges through explicit source and host ports."""
 
@@ -418,9 +422,12 @@ class Household:
             self._pipeline_error('prices', err)
             _LOGGER.warning("Supplier price refresh failed: %s", err)
         else:
+            first_price_catalog = self.supplier_prices is None
             self.supplier_prices = prices
             self.last_price_error = None
             self._pipeline_error('prices', None)
+            if first_price_catalog:
+                self._planning_job_wake.set()
             price_questions = missing_input_labels(
                 prices, self.ports.home().language
             )
@@ -2142,7 +2149,6 @@ class Household:
         except (ShsApiError, SupplierPriceError, ValueError) as err:
             supplier_costs_completed = False
             supplier_costs = []
-            self.last_price_error = str(err)
             self._pipeline_error('history_pricing', err)
             _LOGGER.warning("Supplier-cost pricing failed: %s", err)
         else:
@@ -2275,10 +2281,7 @@ class Household:
         price_catalog = self.supplier_prices
         if price_catalog is None:
             reason = self.last_price_error or "supplier price download has not completed"
-            raise OptimisationInputError(
-                f"Supplier prices are unavailable: {reason}. This does not establish that supplier settings are missing.",
-                remedy=REMEDY_WAITING, fix={"kind": "none"},
-            )
+            raise SupplierPricesUnavailable(f"Supplier prices are unavailable: {reason}")
         if price_catalog.get("configuration") is None:
             raise OptimisationInputError(
                 "supplier and price area must be configured on the website",
@@ -3873,6 +3876,9 @@ class Household:
                             )
                             self._pipeline_error('inputs', None)
                             _LOGGER.debug("Replan %s fresh snapshot captured in %.0f ms", replan_request_id, (monotonic() - capture_started) * 1000)
+                        except SupplierPricesUnavailable as err:
+                            # Price refresh owns the notice and wakes pending captures on recovery.
+                            _LOGGER.debug("Planning capture is waiting for prices: %s", err)
                         except OptimisationInputError as err:
                             snapshot_error = str(err)
                             self._pipeline_error('inputs', err, fix=err.fix, covered_by=ISSUE_OPTIMISATION_CONFIGURATION)

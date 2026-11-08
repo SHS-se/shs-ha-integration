@@ -7,6 +7,7 @@ STAGES = {
     'cloud_status': ('Server connection failed', 'Check the server connection. SHS retries automatically.'),
     'tariff': ('Tariff data could not be received', 'Check the server connection and account settings.'),
     'prices': ('Electricity prices could not be received', 'Check the price source and server connection.'),
+    'price_sensors': ('Electricity price sensors could not be updated', 'Inspect the reported app error. SHS retries the sensor update automatically.'),
     'inputs': ('Planning data could not be collected', 'Inspect the reported source. SHS needs usable inputs to request a plan.'),
     'collection': ('Household readings could not be collected', 'Inspect the reported source. The next upload needs usable readings.'),
     'thermal_inputs': ('Room observations could not be collected', 'Inspect the reported source. Other household data can still be sent.'),

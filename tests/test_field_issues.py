@@ -1,5 +1,4 @@
 """Corrections carry source-owned destinations, not guesses from message text."""
-import ast
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -7,36 +6,25 @@ import unittest
 
 ROOT = Path(__file__).parents[1] / 'custom_components/shs_energy'
 sys.path.append(str(ROOT))
-from shs_core.optimisation import OptimisationInputError, REMEDY_WAITING
+from shs_core.household import Household, SupplierPricesUnavailable
+from shs_core.optimisation import OptimisationInputError
 from shs_core.device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError, battery_control_errors, pool_control_errors, mapping_report, apply_requested_configuration
-
-
-def price_catalog(coordinator):
-    cls = next(n for n in ast.parse((ROOT / 'shs_core/household.py').read_text()).body
-               if isinstance(n, ast.ClassDef) and n.name == 'Household')
-    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == '_supplier_price_catalog')
-    namespace = {'OptimisationInputError': OptimisationInputError, 'REMEDY_WAITING': REMEDY_WAITING}
-    exec(compile(ast.Module(body=[method], type_ignores=[]), 'shs_core/household.py', 'exec'), namespace)
-    return namespace['_supplier_price_catalog'](coordinator)
 
 
 class FieldIssueTests(unittest.TestCase):
     def test_download_failure_does_not_accuse_supplier_configuration(self):
         for error in [None, 'subscription_inactive', 'connection refused']:
-            with self.subTest(error=error), self.assertRaises(OptimisationInputError) as raised:
-                price_catalog(SimpleNamespace(supplier_prices=None, last_price_error=error))
-            self.assertEqual(raised.exception.remedy, REMEDY_WAITING)
-            self.assertEqual(raised.exception.fix, {'kind': 'none'})
-            self.assertNotIn('must be configured', str(raised.exception))
+            with self.subTest(error=error), self.assertRaises(SupplierPricesUnavailable):
+                Household._supplier_price_catalog(SimpleNamespace(supplier_prices=None, last_price_error=error))
 
     def test_explicit_missing_supplier_configuration_routes_to_website(self):
         with self.assertRaises(OptimisationInputError) as raised:
-            price_catalog(SimpleNamespace(supplier_prices={'configuration': None}))
+            Household._supplier_price_catalog(SimpleNamespace(supplier_prices={'configuration': None}))
         self.assertEqual(raised.exception.fix, {'kind': 'website', 'path': '/portal/settings/energy-tariffs'})
 
     def test_renewed_catalog_proceeds_without_a_configuration_warning(self):
         catalog = {'configuration': {'price_area': 'SE3'}}
-        self.assertIs(price_catalog(SimpleNamespace(supplier_prices=catalog)), catalog)
+        self.assertIs(Household._supplier_price_catalog(SimpleNamespace(supplier_prices=catalog)), catalog)
 
     def test_pool_highlights_switch_and_water_sensor(self):
         fields = {}

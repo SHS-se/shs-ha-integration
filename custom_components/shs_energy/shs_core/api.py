@@ -219,8 +219,9 @@ class ShsApiClient:
                 failed = False
                 return payload["data"]
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            detail = str(err) or type(err).__name__
             raise ShsConnectionError(
-                f"connection error calling {path}: {err}",
+                f"connection error calling {path}: {detail}",
                 code="upstream_transport_failure",
                 request_id=request_id,
                 retryable=True,

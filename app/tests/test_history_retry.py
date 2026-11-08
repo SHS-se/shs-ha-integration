@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).parents[2] / 'tests'))
 from household_fixture import Rig
 from shs_app.engine import AppEngine
 from shs_app.profiling import AppProfiler
-from shs_core.api import ShsApiError
+from shs_core.api import ShsApiError, ShsConnectionError
 from shs_core.const import CATEGORIES
 
 
@@ -92,10 +92,14 @@ class HistoryRetryTests(unittest.IsolatedAsyncioTestCase):
         engine = AppEngine.__new__(AppEngine)
         engine.households = {'production':failed,'test':healthy}
         engine.profiler = AppProfiler();engine.wake_projection = asyncio.Event()
+        failed._pipeline_error('prices', ShsConnectionError('Supplier prices timed out'))
+        failed.connection_health.episodes['prices']['observed_seconds'] = 3600
         async def retry(_delay):
             healthy.async_price_refresh.assert_awaited_once()
             if calls == 2:raise asyncio.CancelledError
-            self.assertTrue(any(i['stage']=='prices' for i in failed.attention_items))
+            self.assertTrue(any(i['stage']=='price_sensors' for i in failed.attention_items))
         with patch('shs_app.engine.asyncio.sleep',side_effect=retry):
             with self.assertRaises(asyncio.CancelledError):await engine.calendar()
-        self.assertFalse(any(i['stage']=='prices' for i in failed.attention_items))
+        self.assertFalse(any(i['stage']=='price_sensors' for i in failed.attention_items))
+        self.assertTrue(any(i['stage']=='prices' for i in failed.attention_items))
+        await failed.connection_health.close()

@@ -10,8 +10,10 @@ import unittest
 from unittest.mock import AsyncMock, Mock
 
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
-from household_fixture import Rig, replacement_plan
+from household_fixture import Rig, cloud_status, replacement_plan
 from shs_core.api import ShsApiError, ShsConnectionError
+from shs_core.const import ISSUE_OPTIMISATION_CONFIGURATION
+from shs_core.tariff import CALCULATION_VERSION, SCHEMA_VERSION
 
 
 class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
@@ -51,6 +53,61 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
 
     def failures(self):
         return {item['key']:item for item in self.h.attention_items}
+
+    async def test_supplier_timeout_keeps_replan_pending_and_reports_only_the_price_connection(self):
+        h = self.h
+        h._sync_optimisation_issue = MethodType(type(h)._sync_optimisation_issue, h)
+        h.client.status = AsyncMock(return_value=cloud_status(subscription_active=True))
+        h.client.tariff = AsyncMock(return_value={
+            'schema_version': SCHEMA_VERSION, 'calculation_version': CALCULATION_VERSION,
+            'timezone': 'Europe/Stockholm', 'configuration': None, 'profiles': [], 'missing_inputs': [],
+        })
+        h.client.prices = AsyncMock(side_effect=ShsConnectionError('Supplier price request timed out'))
+
+        async def snapshot(*_):
+            h._supplier_price_catalog()
+            return {'snapshot_id': 'snapshot'}
+
+        h._build_optimisation_snapshot.side_effect = snapshot
+        await h.async_request_refresh()
+        await h.async_optimisation_push(force_plan=True, replan_request_id='manual')
+
+        self.assertEqual(h.optimisation_plan, self.plan)
+        self.assertTrue(h.operational_status['actionable'])
+        self.assertNotIn(ISSUE_OPTIMISATION_CONFIGURATION, self.failures())
+        self.assertNotIn('pipeline:inputs', self.failures())
+        self.assertNotIn('pipeline:prices', self.failures())
+        self.assertEqual(h.optimisation_missing_inputs, [])
+        self.assertEqual(self.rig.records.saved['optimisation_requested_replan'], {'replan_request_id': 'manual'})
+        h.connection_health.episodes['prices']['observed_seconds'] = 3600
+        self.assertEqual(self.failures()['pipeline:prices']['fix'], {'kind': 'diagnostics'})
+
+        start = self.rig.now
+        h.client.prices.side_effect = None
+        h.client.prices.return_value = {
+            'schema_version': 1, 'missing_inputs': [], 'terms_valid_from': '2026-01-01',
+            'configuration': {'supplier': 'tibber', 'price_area': 'SE3'},
+            'forecast': [{'start': start.isoformat(), 'end': (start + timedelta(minutes=15)).isoformat(),
+                          'spot_price_sek_per_kwh': 0.5, 'supplier_import_price_sek_per_kwh': 0.6,
+                          'supplier_export_price_sek_per_kwh': 0.4}],
+        }
+        await h.async_request_refresh()
+        self.assertNotIn('pipeline:prices', self.failures())
+        self.assertTrue(h._planning_job_wake.is_set())
+        await h.async_optimisation_push()
+        self.assertEqual(self.rig.records.saved['optimisation_pending_job']['replan_request_id'], 'manual')
+
+    async def test_confirmed_missing_supplier_settings_still_link_to_the_website(self):
+        h = self.h
+        h._sync_optimisation_issue = MethodType(type(h)._sync_optimisation_issue, h)
+        h.supplier_prices = {'configuration': None}
+        h._build_optimisation_snapshot.side_effect = lambda *_: h._supplier_price_catalog()
+        await h.async_optimisation_push(force_plan=True)
+        issue = self.failures()[ISSUE_OPTIMISATION_CONFIGURATION]
+        self.assertEqual(issue['fix'], {'kind': 'website', 'path': '/portal/settings/energy-tariffs'})
+        self.assertTrue(any(key == ISSUE_OPTIMISATION_CONFIGURATION and severity == 'warning'
+                            for key, severity, _ in self.rig.repairs))
+        h.client.submit_optimisation.assert_not_awaited()
 
     async def test_manual_replan_uploads_completed_meter_evidence_across_dst(self):
         """Synthetic recorder changes, through the real exchange and aggregation.

@@ -694,14 +694,14 @@ class AppEngine:
         last_quarter, last_day = {}, {}
         while True:
             for environment, household in self.households.items():
-                stage = 'prices'
+                stage = 'price_sensors'
                 try:
                     now = household.local_now()
                     quarter = (now.date(),now.hour,now.minute//15,now.fold)
                     new_quarter = quarter != last_quarter.get(environment)
                     if new_quarter:
                         await household.async_price_refresh()
-                        household._pipeline_error('prices', None)
+                        household._pipeline_error(stage, None)
                         last_quarter[environment] = quarter
                     daily_due = last_day.get(environment) != now.date() and (now.hour,now.minute) >= (PUSH_TIME_HOUR,PUSH_TIME_MINUTE)
                     history = daily_due or (new_quarter and any(
