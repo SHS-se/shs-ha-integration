@@ -107,6 +107,7 @@ class AppEngine:
         self.operation_errors = {}
         self.timers = set()
         self.wake_projection = asyncio.Event()
+        self.pool_power_entities = set()
         self.wake_battery = asyncio.Event()
         self.closed = False
         self.lease = None
@@ -389,6 +390,10 @@ class AppEngine:
                     self.wake_projection.set()
                     if self.household.options_update_requires_reload():
                         await self.replan_all()
+                elif self.started and row['kind'] == 'observation':
+                    observation = row['payload']
+                    if observation['kind'] == 'state_change' and observation['entity_id'] in self.pool_power_entities:
+                        self.wake_projection.set()
             # Reuse the inbox's bounded pages. Startup saves once per page;
             # live operation keeps its existing five-second durability cadence.
             await self.battery.commit_evidence(force=not self.started)
@@ -462,11 +467,18 @@ class AppEngine:
             value['app_url'] = self.app_url
             value['configuration'] = self.configuration.status()
             if self.started:
+                devices = await self.editor.devices(self.cached['planning'], include_suggestions=False,
+                                                    context=self.mirror.context)
                 value['execution_devices'] = [{key:deepcopy(device.get(key)) for key in
-                    ('key','name','planned','system_member','permission','mode','category')}
-                    for device in await self.editor.devices(self.cached['planning'],include_suggestions=False)]
+                    ('key','name','planned','system_member','permission','mode','category','equipment_area')}
+                    for device in devices]
                 with self.profiler.measure('native_projection_build'):
-                    native = project_entities(self,value['execution_devices'])
+                    native = project_entities(self,devices)
+                    self.pool_power_entities = {
+                        value['attributes']['power_source']
+                        for sensor in native['sensors'] if sensor.get('equipment_owner') == 'pool'
+                        if (value := native['values'][sensor['unique_id']])['attributes']['power_source']
+                    }
                     options = h.resolved_options()
                     names = self.mirror.context.get('area_names', {})
                     areas = self.mirror.context.get('entity_areas', {})
@@ -483,7 +495,7 @@ class AppEngine:
                             command = (slot or {}).get('device_commands', {}).get(device['key'], {})
                             if command.get('type') == 'setpoint':
                                 device['planned_target_c'] = command['target_c']
-                        elif owner in ('ev', 'pool', 'battery') or device['category'] == 'hot_water':
+                        elif owner in ('ev', 'battery') or device['category'] == 'hot_water':
                             controls = {*actuator_targets(mapping), mapping.get('control_entity_id')}
                             if owner == 'ev':
                                 controls.add(options.get('ev_charge_switch_entity'))

@@ -23,14 +23,14 @@ def equipment_device(hass, entry, owner):
     return next((device for device in devices if identifier in device.identifiers), None)
 
 
-def assign_equipment_area(hass, device, area_name):
-    if device and not device.area_id and area_name:
+def assign_equipment_area(hass, device, area_name, *, follow=False):
+    if device and area_name and (follow or not device.area_id):
         area = ar.async_get(hass).async_get_area_by_name(area_name)
-        if area:
+        if area and area.id != device.area_id:
             dr.async_get(hass).async_update_device(device.id, area_id=area.id)
 
 
-def update_device_info(hass, entry, domain, entity, info):
+def update_device_info(hass, entry, domain, entity, info, *, follow_area=False):
     """Reattach an existing entity if its catalogue assignment changes."""
     if entity._attr_device_info == info:
         return
@@ -41,7 +41,7 @@ def update_device_info(hass, entry, domain, entity, info):
     if entity_id is not None:
         device = dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, **info)
         if info.get('suggested_area'):
-            assign_equipment_area(hass, device, info['suggested_area'])
+            assign_equipment_area(hass, device, info['suggested_area'], follow=follow_area)
         registry.async_update_entity(entity_id, device_id=device.id)
 
 

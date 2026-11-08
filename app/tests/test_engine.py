@@ -364,6 +364,26 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(refreshed['values']['entry_total_import_price']['attributes']['forecast'],[])
             for calculation in calculations.values():self.assertEqual(calculation.call_count,2)
 
+    async def test_pool_projects_separate_heater_and_pump_meter_readings(self):
+        from shs_app.entities import project_entities
+        engine = self.engine()
+        await engine.load()
+        devices = []
+        for member, value, unit in (('heater', '2.9', 'kW'), ('pump', '413', 'W')):
+            power_id = f'sensor.pool_{member}_power'
+            energy_id = f'sensor.pool_{member}_energy'
+            engine.mirror.rows[power_id] = dict(state=value, last_reported='2026-10-04T10:00:00Z',
+                attributes={'unit_of_measurement': unit, 'state_class': 'measurement'})
+            devices.append(dict(key=energy_id, statistic_id=energy_id, name=f'Pool {member}', planned=True,
+                permission={'controller_id': 'pool', 'reason': None}, mapping={'power': power_id}))
+        native = project_entities(engine, devices)
+        pool = [row for row in native['sensors'] if row.get('equipment_owner') == 'pool']
+        self.assertEqual([row['name'] for row in pool], ['Pool heater power', 'Pool pump power'])
+        self.assertEqual([native['values'][row['unique_id']]['value'] for row in pool], [2900, 413])
+        engine.mirror.rows['sensor.pool_pump_power']['state'] = 'unavailable'
+        native = project_entities(engine, devices)
+        self.assertFalse(native['values'][pool[1]['unique_id']]['available'])
+
     async def test_restart_acknowledges_delivery_even_without_new_receipts(self):
         from unittest.mock import AsyncMock
         engine=self.engine()

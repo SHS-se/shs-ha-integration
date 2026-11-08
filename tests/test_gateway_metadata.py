@@ -87,11 +87,13 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             websocket_api=SimpleNamespace(require_admin=passthrough, async_response=passthrough,
                 websocket_command=lambda schema:passthrough),
             er=SimpleNamespace(async_get=lambda hass:registry, EVENT_ENTITY_REGISTRY_UPDATED=REGISTRY_UPDATED),
+            dr=SimpleNamespace(EVENT_DEVICE_REGISTRY_UPDATED='device_registry_updated'),
+            ar=SimpleNamespace(EVENT_AREA_REGISTRY_UPDATED='area_registry_updated'),
             EVENT_STATE_CHANGED='state_changed', EVENT_STATE_REPORTED='state_reported',
             EVENT_CORE_CONFIG_UPDATE=CORE_CONFIG_UPDATE,
             json_bytes=lambda value:json.dumps(value).encode(), json_loads=json.loads,
             entity_display_name_by_id=lambda hass:dict(hass.names), area_name_by_id=lambda hass:dict(hass.areas),
-            entity_area_id_by_id=lambda hass:{}, RecorderSource=lambda hass:None,
+            entity_area_id_by_id=lambda hass:dict(getattr(hass, 'entity_areas', {})), RecorderSource=lambda hass:None,
             filter_sources=filter_sources, configured_entity_ids=configured_entity_ids, power=power, battery_released=battery_released,
             required_import=required_import, import_limit=import_limit, SigenAdapter=SigenAdapter,
             ControlDeadlineError=ControlDeadlineError, empty_capacity=empty_capacity, capacity_bound=capacity_bound,
@@ -401,6 +403,18 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(self.service.configuration_pending)
             await self.tasks.pop()
             self.assertEqual(self.service.configuration_revision, revision+1)
+
+    async def test_device_area_move_and_area_rename_reach_the_app_without_handover(self):
+        self.hass.entity_areas = {'sensor.pool_heater_power': 'pool_pump_room'}
+        self.hass.fire('device_registry_updated', action='update')
+        await self.tasks.pop()
+        self.assertEqual(self.source.last_context['entity_areas'], self.hass.entity_areas)
+        self.hass.areas['pool_pump_room'] = 'Pool equipment'
+        self.hass.fire('area_registry_updated', action='update')
+        await self.tasks.pop()
+        self.assertEqual(self.source.last_context['area_names'], self.hass.areas)
+        self.assertTrue(self.current())
+        self.assertFalse(self.calls)
 
     async def test_event_during_an_unsettled_capture_invalidates_again(self):
         self.service.invalidate_configuration()

@@ -4,6 +4,7 @@ from . import const as shs_const
 from .configuration_schema import resolve_configuration
 from .configuration_fields import _control_fields
 from .discovery import suggest_device_control_mapping
+from .device_commands import actuator_targets
 from .device_controls import apply_planner_support, mapping_report, is_room_thermal_control, mapped_planning_path, pool_mapping
 from .presentation import complete_device_views
 
@@ -75,7 +76,24 @@ def execution_device_views(catalog, context, explicit, choices, coordinator, *, 
         )
 
 
-    return complete_device_views(devices, options, choices, coordinator.operational_status,
+    views = complete_device_views(devices, options, choices, coordinator.operational_status,
         coordinator.optimisation_plan or {}, coordinator.controller.status, entity_names,
         area_names, datetime.now(timezone.utc), explicit.keys())
+    locate_pool(views, area_names, entity_area_ids)
+    return views
+
+
+def locate_pool(devices, names, areas):
+    """Locate the shared system by its meters, which can be remote from its controls."""
+    pool = [row for row in devices if row['planned'] and row['permission']['controller_id'] == 'pool']
+    meters, controls = set(), set()
+    for row in pool:
+        mapping = row['mapping']
+        sources = (row['statistic_id'], mapping.get('power'))
+        meters.update(areas[e] for e in sources if isinstance(e, str) and e in areas)
+        controls.update(areas[e] for e in actuator_targets(mapping) if e in areas)
+    locations = meters or controls
+    if len(locations) == 1 and (name := names.get(next(iter(locations)))):
+        for row in pool:
+            row.update(room_name=name, equipment_area=name)
 

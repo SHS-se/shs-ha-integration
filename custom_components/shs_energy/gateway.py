@@ -12,7 +12,7 @@ from homeassistant.components import websocket_api
 from homeassistant.components.energy import async_get_manager
 from homeassistant.const import EVENT_STATE_CHANGED, EVENT_STATE_REPORTED, EVENT_CORE_CONFIG_UPDATE
 from homeassistant.core import callback
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from homeassistant.helpers.json import json_bytes
 from homeassistant.util.json import json_loads
 
@@ -1281,7 +1281,8 @@ class HomeAssistantSource:
             self.entry.async_create_background_task(self.hass, self.refresh_configuration(), name='shs_gateway_configuration')
         for event in (EVENT_STATE_CHANGED, EVENT_STATE_REPORTED):
             self.entry.async_on_unload(self.hass.bus.async_listen(event, observe, event_filter=matches))
-        for event in (EVENT_CORE_CONFIG_UPDATE, er.EVENT_ENTITY_REGISTRY_UPDATED):
+        for event in (EVENT_CORE_CONFIG_UPDATE, er.EVENT_ENTITY_REGISTRY_UPDATED,
+                      dr.EVENT_DEVICE_REGISTRY_UPDATED, ar.EVENT_AREA_REGISTRY_UPDATED):
             self.entry.async_on_unload(self.hass.bus.async_listen(event, metadata_changed))
 
 

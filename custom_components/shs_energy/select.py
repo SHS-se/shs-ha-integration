@@ -122,7 +122,8 @@ class ExecutionModeSelect(SelectEntity):
     async def async_added_to_hass(self):
         self.active = True
         if area := self._attr_device_info.get('suggested_area'):
-            assign_equipment_area(self.hass, self.device_entry, area)
+            assign_equipment_area(self.hass, self.device_entry, area,
+                                  follow=self.device['permission']['controller_id'] == 'pool')
         self._unsubscribe_battery = self.entry.runtime_data.async_add_battery_listener(self._battery_updated)
 
     async def async_will_remove_from_hass(self):
@@ -160,7 +161,8 @@ class ExecutionModeSelect(SelectEntity):
     @callback
     def update_device(self, hass, device):
         self.device = device
-        update_device_info(hass, self.entry, 'select', self, self.equipment_info(device))
+        update_device_info(hass, self.entry, 'select', self, self.equipment_info(device),
+                           follow_area=device['permission']['controller_id'] == 'pool')
         if self.active:
             self.async_write_ha_state()
 

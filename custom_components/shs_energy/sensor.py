@@ -7,7 +7,7 @@ from .equipment import equipment_device_info, update_device_info
 from .shs_core.const import DOMAIN, CONF_CUSTOMER_NAME, CONF_DEVICE_TOKEN_ID
 
 
-def equipment_sensors(entry, devices):
+def equipment_sensors(entry, devices, descriptors=()):
     """Place the app's fixed equipment sensors using its device catalogue."""
     owners = {row['permission']['controller_id']: row for row in devices if not row.get('system_member')}
     water = [row for row in devices if row['planned'] and row.get('category') == 'hot_water']
@@ -25,6 +25,8 @@ def equipment_sensors(entry, devices):
         info = equipment_device_info(entry, owner, row.get('name', name), area=row.get('equipment_area'))
         for sensor in sensors:
             placements[f'{entry.entry_id}_{sensor}'] = info
+        if owner == 'pool':
+            placements.update((row['unique_id'], info) for row in descriptors if row.get('equipment_owner') == owner)
     return placements
 
 
@@ -39,9 +41,10 @@ async def async_setup_entry(hass,entry,async_add_entities):
     added={}
     def update_catalogue():
         additions=[]
-        placements = equipment_sensors(entry, coordinator.catalogue['devices'])
+        descriptors = coordinator.catalogue['sensors']
+        placements = equipment_sensors(entry, coordinator.catalogue['devices'], descriptors)
         home = home_device_info(entry)
-        for descriptor in coordinator.catalogue['sensors']:
+        for descriptor in descriptors:
             key=descriptor['unique_id']
             info = placements.get(key, home)
             if key not in added:
@@ -71,7 +74,7 @@ class ProjectedSensor(CoordinatorEntity,SensorEntity):
         native_types = {'entity_category': EntityCategory, 'device_class': SensorDeviceClass,
                         'state_class': SensorStateClass}
         for key, value in descriptor.items():
-            if key == 'unique_id':
+            if key in ('unique_id', 'equipment_owner'):
                 continue
             if key == 'name' and value is None and descriptor.get('translation_key'):
                 # HA gives an explicit None name precedence over translations.

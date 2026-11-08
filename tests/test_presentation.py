@@ -396,6 +396,15 @@ class PresentationTests(unittest.TestCase):
         self.assertIsNone(member['execution_reason'])
         self.assertEqual(member['system_fields'], [])
         self.assertEqual(member['planning_system'], 'pool')
+        from shs_core.configuration_view import locate_pool
+        locate_pool(views, {'pump_room': 'Pool pump room', 'pool': 'Pool room'},
+                    {'thermostat': 'pump_room', 'relay': 'pump_room', 'switch.pump': 'pool'})
+        self.assertEqual(pool['room_name'], 'Pool pump room')
+        self.assertEqual(member['room_name'], 'Pool pump room')
+        self.assertEqual(pool['equipment_area'], member['equipment_area'])
+        locate_pool(views, {'utility': 'Utility room'}, {'thermostat': 'utility', 'relay': 'utility'})
+        self.assertEqual(pool['equipment_area'], 'Utility room')
+        self.assertEqual(member['room_name'], 'Utility room')
         # A Monitoring meter on the pool path is background consumption, not a member.
         pump['planning_role'] = 'base_load'
         monitored = next(d for d in complete_device_views([heater, pump], self.options, self.choices,

@@ -98,6 +98,24 @@ class SensorMetadataTests(unittest.TestCase):
         registry.async_update_entity.assert_called_once_with('sensor.custom_boiler_request', device_id='boiler-page')
         self.assertEqual(entity.unique_id, 'home_boiler_planned_request')
 
+    def test_pool_member_readouts_share_the_pool_page_and_follow_meter_area(self):
+        registry = Mock()
+        equipment = load_equipment(dr=SimpleNamespace(async_get=lambda _: registry),
+            ar=SimpleNamespace(async_get=lambda _: SimpleNamespace(
+                async_get_area_by_name=lambda name: SimpleNamespace(id='pump_room'))))
+        adapter = sensor_adapter(equipment)
+        entry = SimpleNamespace(entry_id='home', data={'device_token_id': 'token'})
+        pool = {**device('$pool', name='Pool heater'), 'equipment_area': 'Pool pump room'}
+        descriptor = {'unique_id': 'home_pool_member_power:sensor.pump', 'equipment_owner': 'pool'}
+        locations = adapter.equipment_sensors(entry, [pool], [descriptor])
+        self.assertEqual(locations[descriptor['unique_id']], locations['home_pool_controller'])
+        self.assertEqual(locations[descriptor['unique_id']]['suggested_area'], 'Pool pump room')
+        registered = SimpleNamespace(id='pool-page', area_id='pool_room')
+        equipment.assign_equipment_area(None, registered, 'Pool pump room')
+        registry.async_update_device.assert_not_called()
+        equipment.assign_equipment_area(None, registered, 'Pool pump room', follow=True)
+        registry.async_update_device.assert_called_once_with('pool-page', area_id='pump_room')
+
     def test_legacy_heater_page_is_retired_only_after_all_entities_move(self):
         registry = Mock()
         devices = Mock()

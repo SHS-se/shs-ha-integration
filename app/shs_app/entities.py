@@ -1,6 +1,7 @@
 """Produce native HA entity descriptors and compact, already calculated values."""
 from types import SimpleNamespace
 from shs_core import entity_views as views
+from shs_core.native_readings import BatteryPowerReadingError, power
 from shs_core.presentation import controller_explanation
 from shs_core.operating_modes import device_mode
 
@@ -42,6 +43,22 @@ def project_entities(engine,devices):
         # Controller histories and complete runtime documents belong to app downloads.
         attributes={k:v for k,v in attributes.items() if k not in ('battery_runtime','traces','accounting_journal','fault_history')}
         values[key]=dict(value=sensor.native_value,attributes=attributes,available=sensor.available)
+    for device in devices:
+        if not device['planned'] or device['permission']['controller_id'] != 'pool':
+            continue
+        key = f"{context.entry.entry_id}_pool_member_power:{device['key']}"
+        source = device['mapping'].get('power')
+        catalogue.append(dict(unique_id=key, name=f"{device['name']} power", equipment_owner='pool',
+            device_class='power', native_unit_of_measurement='W', entity_category='diagnostic'))
+        reading = None
+        if isinstance(source, str):
+            try:
+                reading, _ = power(context.mirror.report(source), source=source)
+            except BatteryPowerReadingError:
+                pass
+        values[key] = dict(value=reading, available=reading is not None,
+            attributes={'power_source': source if isinstance(source, str) else None,
+                        'energy_source': device['statistic_id']})
     return dict(schema=1,sensors=catalogue,values=values,modes=project_modes(context,devices))
 
 

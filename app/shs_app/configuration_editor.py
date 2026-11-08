@@ -46,18 +46,19 @@ class ConfigurationEditor:
                 area_id=area,area_name=self.context['area_names'].get(area)))
         return result
 
-    async def devices(self, choices=None, *, include_suggestions=True):
+    async def devices(self, choices=None, *, include_suggestions=True, context=None):
         if self.catalog is None:
             await self.refresh_catalog()
         h = self.engine.household
         if choices is None:
             choices = await h.async_cached_planning_configuration()
         before = self.engine.configuration.options()
-        value = execution_device_views(self.catalog,self.context,before,choices,h,include_suggestions=include_suggestions)
+        context = self.context if context is None else context
+        value = execution_device_views(self.catalog,context,before,choices,h,include_suggestions=include_suggestions)
         initialised = initialise_device_inclusion(before,value)
         if initialised != before:
             await self.engine.configuration.admit(before,initialised)
-            value = execution_device_views(self.catalog,self.context,initialised,choices,h,include_suggestions=include_suggestions)
+            value = execution_device_views(self.catalog,context,initialised,choices,h,include_suggestions=include_suggestions)
         return value
 
     async def view(self, *, refresh_roles=False):
