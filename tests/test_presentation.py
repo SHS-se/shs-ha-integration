@@ -397,13 +397,15 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(member['system_fields'], [])
         self.assertEqual(member['planning_system'], 'pool')
         from shs_core.configuration_view import locate_pool
-        locate_pool(views, {'pump_room': 'Pool pump room', 'pool': 'Pool room'},
-                    {'thermostat': 'pump_room', 'relay': 'pump_room', 'switch.pump': 'pool'})
-        self.assertEqual(pool['room_name'], 'Pool pump room')
-        self.assertEqual(member['room_name'], 'Pool pump room')
-        self.assertEqual(pool['equipment_area'], member['equipment_area'])
-        locate_pool(views, {'utility': 'Utility room'}, {'thermostat': 'utility', 'relay': 'utility'})
-        self.assertEqual(pool['equipment_area'], 'Utility room')
+        pool.update(room_name='Pool pump room', equipment_area='Pool pump room')
+        member.update(room_name='Pool pump room', equipment_area='Pool pump room')
+        locate_pool(views)
+        self.assertEqual(pool['equipment_area'], 'Pool pump room')
+        self.assertEqual(member['equipment_area'], 'Pool pump room')
+        member.update(room_name='Utility room', equipment_area='Utility room')
+        locate_pool(views)
+        self.assertIsNone(pool['equipment_area'])
+        self.assertIsNone(member['equipment_area'])
         self.assertEqual(member['room_name'], 'Utility room')
         # A Monitoring meter on the pool path is background consumption, not a member.
         pump['planning_role'] = 'base_load'

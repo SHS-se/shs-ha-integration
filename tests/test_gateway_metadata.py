@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from time import perf_counter, thread_time
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import test_battery_gateway as battery_fixtures
 from gateway_fixture import IDENTITY
@@ -21,6 +21,7 @@ from shs_core.native_readings import power
 from shs_core.grid_capacity import (battery_released, required_import, import_limit,
     empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, observe_setting_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, battery_discharge_ceiling, CHARGING_MODES)
 from shs_core.device_commands import actuator_targets
+from shs_core.discovery import dashboard_meters, meter_room
 from shs_core.operating_modes import device_mode
 from shs_core.battery_mode import promised_credit_w
 from shs_core.battery_supply import proportional_supply
@@ -61,6 +62,52 @@ class Hass:
 
 
 class MetadataTests(unittest.IsolatedAsyncioTestCase):
+    async def test_device_room_updates_the_exact_energy_dashboard_pair(self):
+        energy, power = 'sensor.boiler_energy', 'sensor.boiler_power'
+        separate = 'sensor.other_power'
+        entries = {entity: SimpleNamespace(entity_id=entity, area_id=None)
+                   for entity in (energy, power, separate)}
+        self.hass.areas['laundry'] = 'Laundry'
+        preferences = {'device_consumption': [{'stat_consumption': energy, 'stat_rate': power}]}
+        source_globals = self.source.request.__globals__
+        registry = source_globals['er'].async_get(self.hass)
+        registry.async_get = entries.get
+        def update(entity, *, area_id):
+            entries[entity] = SimpleNamespace(entity_id=entity, area_id=area_id)
+        registry.async_update_entity = Mock(side_effect=update)
+        source_globals.update(async_get_manager=AsyncMock(return_value=SimpleNamespace(data=preferences)),
+                              dashboard_meters=dashboard_meters)
+        body = {'device_key': energy, 'meters': [energy, power], 'area_id': 'laundry'}
+        with self.assertRaisesRegex(ValueError, 'meters changed'):
+            await self.source.request('device_room', {**body, 'meters': [energy, separate]})
+        with self.assertRaisesRegex(ValueError, 'existing Home Assistant room'):
+            await self.source.request('device_room', {**body, 'area_id': 'removed'})
+        self.assertEqual(registry.async_update_entity.call_count, 0)
+        del entries[power]
+        with self.assertRaisesRegex(ValueError, 'needs a Home Assistant entity'):
+            await self.source.request('device_room', body)
+        self.assertEqual(registry.async_update_entity.call_count, 0)
+        entries[power] = SimpleNamespace(entity_id=power, area_id='garage')
+        before = meter_room((energy, power), {k: v.area_id for k, v in entries.items()}, self.hass.areas)
+        self.assertTrue(before['different_areas'])
+        self.assertIsNone(before['area_id'])
+        def fail_power(entity, *, area_id):
+            if entity == power:
+                raise RuntimeError('Registry rejected update')
+            update(entity, area_id=area_id)
+        registry.async_update_entity.side_effect = fail_power
+        with self.assertRaisesRegex(RuntimeError, 'Registry rejected update'):
+            await self.source.request('device_room', body)
+        self.assertIsNone(entries[energy].area_id)
+        registry.async_update_entity.reset_mock()
+        registry.async_update_entity.side_effect = update
+        await self.source.request('device_room', body)
+        await self.source.request('device_room', body)
+        self.assertEqual(registry.async_update_entity.call_count, 2)
+        self.assertIsNone(entries[separate].area_id)
+        after = meter_room((energy, power), {k: v.area_id for k, v in entries.items()}, self.hass.areas)
+        self.assertEqual(after['area_name'], 'Laundry')
+
     async def test_compact_thermostat_reports_keep_native_action_and_both_temperatures(self):
         now = datetime.now(timezone.utc)
         state = SimpleNamespace(state='heat', attributes=dict(temperature=21, current_temperature=20.5,

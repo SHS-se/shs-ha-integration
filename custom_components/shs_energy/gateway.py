@@ -16,7 +16,7 @@ from homeassistant.helpers import area_registry as ar, device_registry as dr, en
 from homeassistant.helpers.json import json_bytes
 from homeassistant.util.json import json_loads
 
-from .configuration import (area_name_by_id, entity_area_id_by_id,
+from .configuration import (area_name_by_id, entity_area_id, entity_area_id_by_id,
                             entity_display_name_by_id, resolved_options)
 from .recorder_source import RecorderSource
 from .shs_core.household_ports import HouseholdReadError, ConfigurationChanged
@@ -30,6 +30,7 @@ from .shs_core.native_readings import power
 from .shs_core.grid_capacity import (battery_released, required_import, import_limit,
     empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, observe_setting_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, battery_discharge_ceiling, CHARGING_MODES)
 from .shs_core.device_commands import actuator_targets
+from .shs_core.discovery import dashboard_meters
 from .shs_core.operating_modes import device_mode
 from .shs_core.battery_mode import promised_credit_w
 from .shs_core.battery_supply import proportional_supply
@@ -240,7 +241,8 @@ class HomeAssistantSource:
     async def request(self, operation, body):
         fields = {'credentials':set(),
             'admission':{'revision','bindings','pool_pause'}, 'live':{'after'},
-            'catalog':set(), 'battery_capacity':set(), 'planning_power_bounds':{'mappings'},
+            'catalog':set(), 'device_room':{'device_key','meters','area_id'},
+            'battery_capacity':set(), 'planning_power_bounds':{'mappings'},
             'configure':{'expected_revision','revision','options','digest'},
             'statistics':{'start','end','entities','period','units','kinds'},
             'states':{'start','end','entities','with_attributes'}, 'forecast':{'entity'}}
@@ -307,8 +309,35 @@ class HomeAssistantSource:
                     and versions[entity] == self.fact_versions.get(entity,0)}
             return dict(through=snapshot['through'],revision=revision,configuration_revision=configuration_revision,rows=rows,
                         counts={**self.intake_counts,**self.service.stream.metrics})
-        if operation == 'catalog':
+        if operation in ('catalog', 'device_room'):
             manager = await async_get_manager(self.hass)
+            preferences = manager.data or manager.default_preferences()
+            meters = dashboard_meters(preferences)
+            registry = er.async_get(self.hass)
+            if operation == 'device_room':
+                selected = meters.get(body['device_key'])
+                if not selected or list(selected) != body['meters']:
+                    raise ValueError('The Energy Dashboard meters changed. Refresh settings and choose the room again.')
+                area = body['area_id']
+                if not isinstance(area, str) or area not in self.area_names():
+                    raise ValueError('Choose an existing Home Assistant room.')
+                if any(set(selected).intersection(other) for key, other in meters.items()
+                       if key != body['device_key']):
+                    raise ValueError('A meter is shared with another Energy Dashboard device. Assign its room in Home Assistant.')
+                entries = [registry.async_get(entity) for entity in selected]
+                if any(entry is None for entry in entries):
+                    raise ValueError('Each configured Energy Dashboard meter needs a Home Assistant entity to assign its room.')
+                changed = []
+                try:
+                    for entry in entries:
+                        if entry.area_id != area:
+                            registry.async_update_entity(entry.entity_id, area_id=area)
+                            changed.append(entry)
+                except Exception:
+                    for entry in reversed(changed):
+                        registry.async_update_entity(entry.entity_id, area_id=entry.area_id)
+                    raise
+                return {}
             attributes = {'friendly_name','unit_of_measurement','device_class','state_class',
                 'min','max','step','options','hvac_modes','min_temp','max_temp','target_temp_step'}
             states = {}
@@ -320,7 +349,11 @@ class HomeAssistantSource:
                 states[state.entity_id] = dict(entity_id=state.entity_id,state=state.state,
                     attributes=selected,last_updated=state.last_updated.isoformat())
             return wire(dict(context=self.context(),states=states,
-                preferences=manager.data or manager.default_preferences()))
+                preferences=preferences, meter_areas={
+                    entity: entity_area_id(self.hass, entity)
+                    for entity in {entity for pair in meters.values() for entity in pair}
+                    if registry.async_get(entity) is not None
+                }))
         if operation == 'configure':
             result = await self.configuration.install(body)
             marker = {'settings_owner':'app'}

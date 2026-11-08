@@ -15,8 +15,6 @@ async def configuration_payload(editor, *, refresh_roles):
             if refresh_roles
             else await coordinator.async_cached_device_configuration()
         )
-        if refresh_roles:
-            coordinator._pipeline_error("website_choices", None)
     except (ShsApiError, KeyError, TypeError, ValueError) as err:
         if isinstance(err, ShsConnectionError):
             coordinator._pipeline_error("website_choices", err)
@@ -104,6 +102,7 @@ async def configuration_payload(editor, *, refresh_roles):
         "sections": _configuration_sections(battery_control_required=battery_required,
             house_control_required=any(device.get("planned") for device in devices)),
         "entities": editor.entities(),
+        "rooms": editor.context['area_names'],
         "devices": devices,
         "portal": {
             "status": "error" if portal_error else "synchronised",

@@ -126,7 +126,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         async def request(operation,body):
             if operation=='credentials':return self.entry['data']
             if operation=='battery_capacity':return {'external_import_w':self.external_import_w, 'import_limit_w':self.import_limit_w}
-            if operation=='catalog':return dict(context=self.context,states={},preferences={})
+            if operation=='catalog':return dict(context=self.context,states={},preferences={},meter_areas={})
             if operation in ('states','statistics'):return {}
             if operation == 'configure': return await self.configuration.install(body)
             if operation == 'admission':

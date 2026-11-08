@@ -79,9 +79,13 @@ class DeviceControlMappingTests(unittest.TestCase):
         self.assertIn("no longer exist", report["mapping_error"])
 
     def test_pending_request_remains_in_base_load(self) -> None:
+        from shs_core.api import ShsApiClient
+
         devices = [{
             "key": "sensor.hot_water_energy",
             "suggested_load_type": "duty_cycle",
+            "meter_room": {"area_id": "laundry", "area_name": "Laundry",
+                           "meters": ["sensor.hot_water_energy", "sensor.hot_water_power"]},
         }]
         requested = {
             "sensor.hot_water_energy": {
@@ -94,6 +98,10 @@ class DeviceControlMappingTests(unittest.TestCase):
         self.assertEqual(devices[0]["planning_role"], "base_load")
         self.assertIsNone(devices[0]["control_type"])
         self.assertEqual(devices[0]["mapping_status"], "not_configured")
+        upload = ShsApiClient.prepare_optimisation_submission([], devices=devices)["devices"][0]
+        self.assertNotIn("meter_room", upload)
+        self.assertEqual(upload["mapping_summary"]["meter_room_id"], "laundry")
+        self.assertEqual(upload["mapping_summary"]["meter_room_name"], "Laundry")
 
     def test_ready_request_becomes_a_separate_controllable_device(self) -> None:
         devices = [{

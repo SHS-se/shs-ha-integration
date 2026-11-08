@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from shs_core import const as c
 from shs_core.configuration_schema import prepare_options, save_device, resolve_configuration, initialise_device_inclusion
 from shs_core.configuration_view import execution_device_views
-from shs_core.discovery import CatalogState, DiscoveryCatalog, discover_configuration, _energy_dashboard_inventory
+from shs_core.discovery import (CatalogState, DiscoveryCatalog, discover_configuration,
+                                _energy_dashboard_inventory, dashboard_meters, meter_room)
 from shs_core.operating_modes import execution_mode_options
 from shs_core.presentation import system_fields
 from .configuration_view import configuration_payload
@@ -19,6 +20,7 @@ class ConfigurationEditor:
     async def refresh_catalog(self):
         value = await self.engine.gateway.call('source',dict(operation='catalog',body={}))
         self.context = value['context']
+        self.meter_areas = value['meter_areas']
         home = self.context['home']
         self.catalog = DiscoveryCatalog({key:CatalogState(row['entity_id'],row['state'],row['attributes'],
             datetime.fromisoformat(row['last_updated'])) for key,row in value['states'].items()},
@@ -26,7 +28,12 @@ class ConfigurationEditor:
 
     async def inventory(self):
         await self.refresh_catalog()
-        return _energy_dashboard_inventory(self.catalog,self.catalog.preferences)
+        meters = dashboard_meters(self.catalog.preferences)
+        devices = _energy_dashboard_inventory(self.catalog,self.catalog.preferences)
+        for device in devices:
+            device['meter_room'] = meter_room(meters[device['key']], self.meter_areas,
+                                             self.context['area_names'])
+        return devices
 
     def resolved_options(self):
         return resolve_configuration(self.engine.configuration.options(),self.catalog.latitude,self.catalog.longitude)
@@ -87,6 +94,14 @@ class ConfigurationEditor:
         h = self.engine.household
         if operation == 'get':
             return await self.view(refresh_roles=body.get('refresh_roles',False))
+        if operation == 'device_room':
+            await self.engine.gateway.call('source', dict(operation=operation,
+                body={key: body[key] for key in ('device_key', 'meters', 'area_id')}))
+            for environment, household in self.engine.households.items():
+                self.engine.spawn(self.engine.cloud_job(environment,
+                    household.async_refresh_device_configuration, stage='website_choices'),
+                    'device_room_sync_' + environment)
+            return await self.view()
         if operation in ('pair_backend','select_backend'):
             await getattr(self.engine,operation)(body)
             result = await self.view()

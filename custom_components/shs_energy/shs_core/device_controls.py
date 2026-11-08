@@ -550,6 +550,9 @@ def apply_requested_configuration(
         device["planning_role"] = "controllable" if ready else "base_load"
         device["control_type"] = requested_control if ready else None
         device.update({key: value for key, value in report.items() if key != "field_errors"})
+        if (room := device.get("meter_room")) is not None:
+            report["mapping_summary"].update(meter_room_id=room["area_id"],
+                                             meter_room_name=room["area_name"])
         reviewed_power = report["mapping_summary"].get("reviewed_power_w")
         if ready and isinstance(reviewed_power, (int, float)):
             device["active_power_w"] = float(reviewed_power)

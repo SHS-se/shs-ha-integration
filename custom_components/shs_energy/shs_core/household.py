@@ -1349,6 +1349,7 @@ class Household:
             self.async_update_listeners()
             requested = requested_controllable_devices(configuration)
         await self.async_report_runtime()
+        self._pipeline_error("website_choices", None)
         if configuration_changed and self.resolved_options()[OPT_PLANNING_MODE] == PLANNING_MODE_LIVE:
             self.ports.spawn(
                 self.async_optimisation_push(force_plan=True),

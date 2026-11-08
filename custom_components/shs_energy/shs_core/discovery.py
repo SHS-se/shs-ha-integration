@@ -164,6 +164,30 @@ def _category_for_device(name: str) -> str:
     return "household"
 
 
+def dashboard_meters(preferences):
+    """Return the configured meters by the inventory's consumption key."""
+    meters = {}
+    for row in preferences.get("device_consumption", ()):
+        if key := str(row.get("stat_consumption") or "").strip():
+            meters.setdefault(key, tuple(dict.fromkeys(
+                row[field] for field in ("stat_consumption", "stat_rate") if row.get(field)
+            )))
+    return meters
+
+
+def meter_room(meters, areas, names):
+    """Describe the dashboard meters, including disagreement or missing areas."""
+    assigned = {areas.get(entity) for entity in meters}
+    area = next(iter(assigned)) if len(assigned) == 1 else None
+    return {
+        "meters": list(meters),
+        "editable": all(entity in areas for entity in meters),
+        "area_id": area if area in names else None,
+        "area_name": names.get(area),
+        "different_areas": len(assigned) > 1,
+    }
+
+
 def _energy_dashboard_inventory(
     catalog: DiscoveryCatalog, preferences: dict[str, Any]
 ) -> list[dict[str, Any]]:

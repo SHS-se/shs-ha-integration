@@ -375,7 +375,8 @@ class ShsApiClient:
             ),
             "integration_version": INTEGRATION_VERSION,
             "actual_slots": actual_slots,
-            "devices": devices or [],
+            "devices": [{key: value for key, value in device.items() if key != "meter_room"}
+                        for device in devices or []],
         }
         if execution_replan is not None and snapshot is None:
             raise ValueError("execution replanning requires a captured snapshot")
