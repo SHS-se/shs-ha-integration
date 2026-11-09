@@ -226,6 +226,32 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
                          {'kind': 'ev', 'charging': False, 'current_a': 0,
                           'reason': 'plan requests charging off'})
 
+    async def test_ev_starts_within_live_limit_and_raises_current_when_the_car_allows_it(self):
+        self.options['device_modes']['$ev'] = 'controlling'
+        self.states['number.current'] = State(5, min=0, max=5, step=1, unit_of_measurement='A')
+        await self.controller.async_start()
+        self.assertEqual(self.calls, [('switch.charge', 'on')])
+        self.assertEqual(self.controller.status['ev']['requested_current_a'], 5)
+        self.assertEqual(self.controller.status['ev']['state'], 'limited')
+
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [('switch.charge', 'on')])
+        self.states['number.current'].attributes['max'] = 16
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [('switch.charge', 'on'), ('number.current', 10)])
+        self.assertEqual(self.controller.status['ev']['state'], 'commanded')
+        self.assertEqual(self.controller.status['ev']['requested_current_a'], 10)
+
+    async def test_ev_does_not_start_below_the_planned_minimum(self):
+        self.options['device_modes']['$ev'] = 'controlling'
+        self.states['number.current'] = State(3, min=0, max=3, step=1, unit_of_measurement='A')
+        await self.controller.async_start()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.states['switch.charge'].state, 'off')
+        self.assertIn('below the planned minimum', self.controller.status['ev']['reason'])
+        self.assertEqual(self.controller.status['ev']['fix'],
+                         {'kind': 'entity', 'entity_id': 'number.current'})
+
     async def test_disable_restores_and_other_devices_remain_disabled(self):
         self.options['device_modes']['$ev'] = 'controlling'
         await self.controller.async_start()

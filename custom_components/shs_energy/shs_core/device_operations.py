@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from .command_journal import Command
 from .native_commands import finite, native_command
+from .native_numbers import floor_native
 from .grid_capacity import GridCapacityConfigurationError
 from .device_ownership import DeviceOwnership
 from .api_contract import INTEGRATION_VERSION
@@ -405,7 +406,8 @@ class DeviceOperations:
         current = finite(slot["ev_target_current_a"])
         if current and not low <= current <= high:
             raise ControlPlanError("planned EV current exceeds reviewed bounds")
-        if not finite(slot["ev_min_current_a"]) <= current <= finite(slot["ev_max_current_a"]):
+        slot_minimum = finite(slot["ev_min_current_a"])
+        if not slot_minimum <= current <= finite(slot["ev_max_current_a"]):
             raise ControlPlanError("planned EV current exceeds its slot envelope")
         self.check_targets("ev", [entity, switch])
         await self.capture("ev", options, [entity, switch])
@@ -419,8 +421,24 @@ class DeviceOperations:
                         if connected in ("off", "false", "disconnected") and soc < target_soc else None),
                     "reason": "off slot, disconnected, or charge target reached",
                     "decision": {"kind": "ev", "charging": False, "current_a": 0, "reason": reason}}
-        await self.command(entity, current)
+        native = self.actuator_state(entity).attributes
+        available = current
+        if current > finite(native["max"]):
+            # Some chargers expose their full range only once charging starts.
+            # Apply a supported setting before enabling, then follow the
+            # reported range on the next evaluation.
+            ceiling = floor_native(current, native)
+            if ceiling is None or ceiling < max(low, slot_minimum) or ceiling <= 0:
+                raise ControlObservationError(f"{entity}: the car's available current is below the planned minimum",
+                    entity, "Inspect the available current reported by the car.")
+            available = float(ceiling)
+        await self.command(entity, available)
         await self.command(switch, "on")
+        if available < current:
+            return {"state": "limited", "requested_current_a": available,
+                    "reason": f"The car reports a limit of {available:g} A. The plan requests {current:g} A.",
+                    "fix": {"kind": "entity", "entity_id": entity},
+                    "decision": {"kind": "ev", "charging": True, "current_a": available}}
         return {"state": "commanded", "requested_current_a": current,
                 "reason": "current and charge switch accepted; delivered power not inferred",
                 "decision": {"kind": "ev", "charging": True, "current_a": current}}
