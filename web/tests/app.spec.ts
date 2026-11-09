@@ -1,4 +1,42 @@
 import {test,expect} from '@playwright/test';
+import type {State} from '../src/types';
+
+test('consumption keeps the same bottom-to-top order across plan days', async ({page}) => {
+  // Synthetic loads with a noisy first evening and more than eight active bands.
+  const loads = [
+    {key: 'charging', values: [8000, 8000, 0, 0, 0, 0]},
+    {key: 'pulses', values: [0, 100, 0, 0, 0, 100]},
+    {key: 'smooth', values: [800, 900, 1000, 1100, 1000, 900]},
+    {key: 'steady', values: [200, 200, 200, 200, 200, 200]},
+    ...Array.from({length: 6}, (_, i) => ({key: `constant-${i}`, values: [50, 50, 50, 50, 50, 50]})),
+  ];
+  await page.route('**/api/state', async route => {
+    const response = await route.fetch();
+    const state: State = await response.json();
+    const schedule = state.snapshot!.entries[0].schedule!;
+    const start = Date.parse('2026-08-17T20:45:00Z');
+    const template = schedule.household[0];
+    schedule.timezone = 'Europe/Stockholm';
+    schedule.devices = loads.map(({key}) => ({key, name: key, category: 'other'}));
+    schedule.household = Array.from({length: 192}, (_, i) => ({
+      ...template,
+      start: new Date(start + i * 900_000).toISOString(),
+      duration_hours: 0.25,
+      base_w: 500,
+      device_loads_w: Object.fromEntries(loads.map(load => [
+        load.key, load.key === 'steady' && i < 5 ? (i % 2 ? 290 : 110) : load.values[i % 6],
+      ])),
+    }));
+    await route.fulfill({json: state});
+  });
+  await page.goto('./#plan');
+  const bands = page.locator('[data-load-band]');
+  const order = () => bands.evaluateAll(paths => paths.map(path => path.getAttribute('data-load-band')));
+  const expected = ['base', ...loads.slice(4).map(load => load.key), 'steady', 'smooth', 'charging', 'pulses'];
+  await expect.poll(order).toEqual(expected);
+  await page.getByRole('button', {name: '08/17'}).click();
+  await expect.poll(order).toEqual(expected);
+});
 
 test('branded ingress dashboard, navigation, schedule inspection and themes',async({page},info)=>{
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));

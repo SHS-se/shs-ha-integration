@@ -7,9 +7,8 @@
 // where the power came from, what used it, what was left in store, the temperatures
 // expected.
 //
-// geometry.ts, price-bands.ts and power-flows.ts are the website's modules,
-// unchanged. Nothing in this directory imports from the rest of the app except
-// the wire types, so the directory is the unit a shared package would carry.
+// The geometry, price, power flow and consumption ordering modules are shared
+// with the website. Only the chart's wire types come from the rest of the app.
 
 import {useMemo, useRef, useState} from 'react';
 import type {KeyboardEvent, PointerEvent, ReactNode} from 'react';
@@ -19,6 +18,7 @@ import {
 } from './geometry';
 import {PRICE_RAMP_STEPS, priceBands, priceGradientStops} from './price-bands';
 import {powerFlowMagnitudes} from './power-flows';
+import {orderConsumptionStack} from './consumption-stack-order';
 import type {Plan, Slot, Temperature} from '../types';
 import './plan-chart.css';
 
@@ -28,8 +28,6 @@ const MARGIN_RIGHT = 92;
 const PLOT_W = VIEW_W - MARGIN_LEFT - MARGIN_RIGHT;
 const RIGHT = MARGIN_LEFT + PLOT_W;
 const GAP = 34;
-/** Eight is the ceiling on hues a reader can tell apart; the rest join base load. */
-const MAX_SERIES = 8;
 const HOUR_MS = 3_600_000;
 
 const COLOURS = {
@@ -162,15 +160,12 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
     const seen = [...new Set(slots.flatMap(slot => Object.keys(slot.device_loads_w ?? {})))];
     const order = [...listed.filter(key => seen.includes(key)), ...seen.filter(key => !listed.includes(key))];
     const running = order.filter(key => slots.some(slot => (slot.device_loads_w?.[key] ?? 0) > 0));
-    const drawn = running.slice(0, MAX_SERIES);
-    const folded = running.slice(MAX_SERIES);
-    const series: LoadSeries[] = drawn.map(key => ({
+    const series = orderConsumptionStack<LoadSeries>(running.map(key => ({
       key, slot: order.indexOf(key) % 9,
       name: displayName(key, plan.devices.find(device => device.key === key)?.name),
       values: slots.map(slot => slot.device_loads_w?.[key] ?? null),
-    }));
-    const base = slots.map(slot => slot.base_w === null ? null
-      : slot.base_w + folded.reduce((sum, key) => sum + (slot.device_loads_w?.[key] ?? 0), 0));
+    })));
+    const base = slots.map(slot => slot.base_w);
 
     return {days, series, base};
   }, [clock, plan.devices, slots]);
@@ -415,6 +410,7 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
         <PanelHeading title="Consumption" unit="kW · schedulable devices individually, the rest in base load · dotted = solar" y={load.top - 14}/>
         <Gridlines ticks={niceTicks(0, loadMax, 3)} y={loadY} format={fixed}/>
         {loadBands.map((band, index) => <path key={index === 0 ? 'base' : series[index - 1].key}
+          data-load-band={index === 0 ? 'base' : series[index - 1].key}
           d={stepBandPath(band, x, loadY)} fillOpacity={0.92}
           fill={index === 0 ? COLOURS.base : loadColour(series[index - 1].slot)}/>)}
         {loadBands.slice(0, -1).map((band, index) =>
