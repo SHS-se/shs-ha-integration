@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from .api_contract import INTEGRATION_VERSION
 from .controller_metrics import ControllerMetrics
 from .device_operations import (DeviceOperations, ControlDeadlineError, ControlObservationError, ControlPlanError, ControlCommandError, PowerHistoryError,
-                                correction_details, HeatingDeferred)
+                                correction_details, HeatingDeferred, PlanChangedError)
 from .heating_overrides import active_heating
 from .device_ownership import DeviceOwnership
 from .operating_modes import device_mode
@@ -201,8 +201,12 @@ class DeviceGateway(DeviceOperations):
                     raise HeatingDeferred('Heating priority changed')
         if self.intent.operation == 'apply':
             start = datetime.fromisoformat(self.slot['start'].replace('Z', '+00:00'))
-            if not start <= datetime.now(timezone.utc) < start+timedelta(minutes=15):
-                raise GatewayConflict('Binding device slot has ended or not started')
+            end = start + timedelta(minutes=15)
+            now = datetime.now(timezone.utc)
+            if not start <= now < end:
+                raise PlanChangedError('slot_expired' if now >= end else 'slot_not_started',
+                    'The device instruction is outside its binding quarter',
+                    {'original_slot_start': start.isoformat(), 'original_slot_end': end.isoformat()})
 
     def _decode(self, intent):
         """Convert the finite semantic payload to the shared operation inputs."""
@@ -436,7 +440,9 @@ class DeviceGateway(DeviceOperations):
                     raise
                 error = {'message':str(exception), 'kind':'heating' if isinstance(exception, HeatingDeferred) else 'plan' if isinstance(exception, ControlPlanError) else 'deadline' if isinstance(exception, ControlDeadlineError) else 'observation' if isinstance(exception, ControlObservationError) else 'configuration' if isinstance(exception, HotWaterConfigurationError) else 'admission' if isinstance(exception, AdmissionPending) else 'rejected' if isinstance(exception, (GatewayConflict, GatewayRejected, ControlCommandError, CommandUncertain)) else 'internal',
                          'details':correction_details(exception)}
-                if isinstance(exception, ControlObservationError):
+                if isinstance(exception, PlanChangedError):
+                    error.update(kind='plan_changed', message=exception.message)
+                elif isinstance(exception, ControlObservationError):
                     error.update(entity=exception.entity, unavailable=exception.unavailable)
             finally:
                 self.restoring = False

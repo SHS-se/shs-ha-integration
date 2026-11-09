@@ -425,6 +425,59 @@ class ControllerEvidenceTests(unittest.IsolatedAsyncioTestCase):
                          {'status': 'faulted', 'cause': 'GatewayRejected: Invalid EV intention'})
         self.assertEqual(self.controller.status['ev']['state'], 'fault')
 
+    async def test_binding_quarter_rollover_requests_a_fresh_evaluation_without_a_fault_replan(self):
+        self.options['device_modes']['$ev'] = 'controlling'
+        ownership = {'records': {}, 'overrides': {}, 'retired_pool_temperature_settings': {}}
+        self.controller.devices = SimpleNamespace(ownership=AsyncMock(return_value=ownership),
+            synchronize=AsyncMock(return_value=ownership), perform=AsyncMock(return_value=dict(
+                ownership=ownership, deadlines=[], reads=[], diagnostics={'commands': [], 'observations': {}},
+                error={'kind': 'plan_changed', 'message': 'The device instruction is outside its binding quarter',
+                       'details': {'blocked_reason': 'slot_expired', 'blocked_context': {}}})))
+        self.controller.scheduler = Mock()
+        await self.controller.async_start()
+        self.assertEqual(self.controller.status['ev']['state'], 'pending')
+        self.assertEqual(self.controller.status['ev']['blocked_reason'], 'slot_expired')
+        self.controller.scheduler.request.assert_any_call('plan_replaced')
+        self.coordinator.async_execution_observed.assert_not_awaited()
+        self.assertNotIn('ev', self.controller.failed)
+        self.coordinator.current_plan_slot = {**self.slot, 'start': '2026-09-08T12:15:00+00:00'}
+        self.controller.devices.perform.return_value.update(error=None, result={'state': 'controlling'})
+        await self.controller.async_tick(trigger='plan_replaced')
+        self.assertEqual(self.controller.status['ev']['state'], 'controlling')
+        self.assertEqual(self.controller.devices.perform.await_args.args[3], self.coordinator.current_plan_slot)
+        self.assertIsNone(self.coordinator.async_execution_observed.await_args.args[3])
+
+    async def test_room_sensor_gap_holds_and_resumes_from_the_same_planned_target(self):
+        owner = 'device:heater'
+        self.hass.config = SimpleNamespace(units=SimpleNamespace(temperature_unit='°C'))
+        self.options['device_modes']['heater'] = 'controlling'
+        self.options['device_control_mappings']['heater'] = {
+            'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.heater'],
+            'power': 1000, 'room_area_id': 'bedroom', 'temperature_entity_id': 'sensor.room'}
+        model = {'key': 'heater', 'control_type': 'switch_schedule', 'category': 'heating'}
+        self.coordinator.async_cached_device_configuration.return_value = [model]
+        self.coordinator.optimisation_plan.update(schema_version=12, device_models=[model])
+        command = {'type': 'room_relay', 'room_key': 'bedroom', 'target_c': 20}
+        self.slot['device_commands'] = {'heater': command}
+        self.states['switch.heater'] = controller_tests.State('on')
+        self.states['sensor.room'] = controller_tests.State('unavailable', unit_of_measurement='°C')
+
+        await self.controller.async_start()
+        status = self.controller.status[owner]
+        self.assertEqual(status['state'], 'pending')
+        self.assertTrue(status['execution_blocked'])
+        self.assertEqual(status['fix']['entity_id'], 'sensor.room')
+        self.coordinator.async_execution_observed.assert_not_awaited()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.states['switch.heater'].state, 'on')
+
+        self.states['sensor.room'].state = '21'
+        await self.controller.async_tick(devices={owner}, trigger='state_changed')
+        self.assertEqual(self.calls, [('switch.heater', 'off')])
+        self.assertEqual(self.coordinator.async_execution_observed.await_args.args,
+                         (owner, self.coordinator.optimisation_plan, self.slot, None))
+        self.assertIs(self.slot['device_commands']['heater'], command)
+
     async def test_verification_never_observes_execution_failure(self):
         self.options['device_modes']['$ev'] = 'control_verification'
         self.states['binary_sensor.connected'].state = 'off'

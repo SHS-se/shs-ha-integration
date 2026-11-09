@@ -112,6 +112,9 @@ class ScheduledController(DeviceOperations):
                 raise AdmissionPending(error['message'])
             if error['kind'] == 'plan':
                 raise ControlPlanError(error['message'])
+            if error['kind'] == 'plan_changed':
+                details = error['details']
+                raise PlanChangedError(details['blocked_reason'], error['message'], details['blocked_context'])
             if error['kind'] == 'internal':
                 raise RuntimeError(error['message'])
             if error['kind'] == 'observation':
@@ -671,8 +674,16 @@ class ScheduledController(DeviceOperations):
                             if self.scheduler is not None:
                                 self.scheduler.request("plan_replaced")
                             continue
-                        if (not heating and isinstance(err, (ControlObservationError, GatewayRejected, ControlCommandError, CommandUncertain))
-                                and execution_evidence.requested(execution_evidence.owner_key(device), slot)):
+                        owner = execution_evidence.owner_key(device)
+                        command = (slot or {}).get("device_commands", {}).get(owner, {})
+                        # A room target stays executable when its temperature
+                        # returns. Hold locally so a replan cannot erase it.
+                        room_temperature_gap = (isinstance(err, ControlObservationError) and err.unavailable
+                            and command.get("type") == "room_relay" and err.entity
+                            == options.get("device_control_mappings", {}).get(owner, {}).get("temperature_entity_id"))
+                        if (not heating and not room_temperature_gap
+                                and isinstance(err, (ControlObservationError, GatewayRejected, ControlCommandError, CommandUncertain))
+                                and execution_evidence.requested(owner, slot)):
                             await self.record_execution(device, plan, slot, {"status": "faulted",
                                 "cause": execution_evidence.fault_cause(err),
                                 **({"recover_when_entities": [err.entity]} if isinstance(err, ControlObservationError)

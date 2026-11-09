@@ -64,6 +64,7 @@ class PlanChangedError(ValueError):
     """A superseded execution snapshot, with evidence for the exact stop reason."""
     def __init__(self, code, message, context):
         super().__init__(f"plan changed or expired during execution: {message}")
+        self.message = message
         self.details = {"blocked_reason": code, "blocked_context": context}
 
 

@@ -83,6 +83,15 @@ class PhysicalGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['error']['message'], 'Reconcile and activate the current app session first')
         self.assertEqual(self.states['switch.pool'].state, 'off')
 
+    async def test_expired_binding_quarter_reports_a_plan_change_and_sends_nothing(self):
+        start = (datetime.now(timezone.utc) - timedelta(minutes=15, seconds=1)).isoformat()
+        result = await self.gateway.perform(self.request(start=start))
+        self.assertEqual(result['error']['kind'], 'plan_changed')
+        self.assertEqual(result['error']['details']['blocked_reason'], 'slot_expired')
+        self.assertEqual(result['error']['details']['blocked_context']['original_slot_start'], start)
+        self.assertEqual(self.calls, [])
+        self.assertFalse(result['ownership']['records'])
+
     async def test_verification_mode_hands_the_device_back_and_accepts_no_schedule(self):
         await self.gateway.perform(self.request())
         self.options['device_modes']['$pool'] = 'control_verification'
