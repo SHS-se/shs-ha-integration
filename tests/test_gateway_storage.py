@@ -11,7 +11,10 @@ import zlib
 
 from gateway_fixture import IDENTITY, seed
 from shs_core.command_journal import Command, NativeAction, encoded
+from shs_core.device_controls import pool_control_mapping
+from shs_core.device_port import device_intent
 from shs_core.gateway_journal import GatewayJournal, GatewayConflict, JournalStorageError, _unpack
+from shs_core.grid_capacity import empty_capacity
 
 
 class GatewayStorageTests(unittest.TestCase):
@@ -114,6 +117,33 @@ class GatewayStorageTests(unittest.TestCase):
         with self.assertRaises(GatewayConflict):
             self.journal.admit_route(session,'new-route',dict(self.route,context={}))
         with self.assertRaises(GatewayConflict): self.journal.admit_route(session,'route',self.route)
+
+    def test_capacity_intents_shrink_on_restart_and_keep_native_routing(self):
+        self.journal.open()
+        models = [
+            {'key':'heater', 'category':'heating', 'control_type':'switch_schedule', 'forecast':[1000]*96},
+            {'key':'pool', 'category':'pool_heating', 'control_type':'setpoint',
+             'mapping':{'temperature_entity_id':'sensor.water'}, 'forecast':[0]*96},
+        ]
+        command = {'type':'room_relay', 'room_key':'laundry', 'target_c':21}
+        commands = {'heater':command, 'pool':{'type':'setpoint', 'target_c':26}}
+        current = device_intent('device:heater', 'apply', {'device_models':models},
+                                {'start':'2026-11-09T00:00:00Z', 'device_commands':commands},
+                                configuration_revision=1, policy_revision=2)
+        legacy = {**current, 'parameters':{**current['parameters'], 'models':models, 'commands':commands}}
+        capacity = empty_capacity()
+        capacity['coordination'] = {'withdrawal':None, 'caps':{}, 'intents':{'device:heater':legacy}}
+        self.journal.save_record('grid_capacity', capacity)
+        self.journal.close()
+        self.journal.open()
+        self.assertEqual(self.journal.load_record('grid_capacity')['coordination']['intents']['device:heater'], current)
+        self.assertEqual(current['parameters']['commands'], {'heater':command})
+        self.assertTrue(all('forecast' not in model for model in current['parameters']['models']))
+        options = {'pool_water_temperature_entity':'sensor.water',
+                   'device_control_mappings':{'pool':{'actuator_entity_ids':['switch.pool']}}}
+        self.assertEqual(pool_control_mapping(options, current['parameters']['models']),
+                         pool_control_mapping(options, models))
+        self.assertIn('forecast', models[0])
 
     def test_corrupt_or_mixed_codec_evidence_fails_as_storage_not_request_error(self):
         for blob in (b'bad',zlib.compress(b'{}')[:-1],zlib.compress(b'{}')+b'trailing','{}'):

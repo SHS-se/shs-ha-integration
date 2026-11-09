@@ -16,6 +16,7 @@ import zlib
 
 from .command_journal import WriterLease, encoded, now_ms, RoutedCommand, ObligationCommand
 from .device_ownership import decode_ownership
+from .device_port import compact_device_intent
 from .grid_capacity import empty_capacity, canonicalize_capacity, prepare_capacity, finish_capacity, observe_capacity, dispatch_capacity, observe_power_peak, merge_power_peaks
 
 PROTOCOL = 2
@@ -231,6 +232,9 @@ class GatewayJournal:
                 db.execute("UPDATE sessions SET status='revoked' WHERE status='connected'")
                 db.execute('UPDATE authority SET boot=?,session=NULL', (self.boot,))
                 capacity = self._capacity(db)
+                intents = capacity.get('coordination', {}).get('intents', {})
+                for device, intent in intents.items():
+                    intents[device] = compact_device_intent(intent)
                 for command in db.execute("SELECT command_id,route_id FROM commands WHERE status='prepared'").fetchall():
                     finish_capacity(capacity, command['command_id'], 'uncertain')
                     db.execute("UPDATE commands SET status='uncertain',finished_at_ms=?,reason='gateway_interrupted' WHERE command_id=?", (now_ms(), command[0]))
@@ -363,9 +367,28 @@ class GatewayJournal:
         records = [(*record,now_ms()) if len(record)==3 else record for record in records]
         with closing(self.connect()) as db, db:
             self._owner(db)
-            return [self._record(db,*record) for record in records]
+            capacity = initial_revision = None
 
-    def _record(self, db, kind, payload, ownership, received_at_ms):
+            def settle(entity, ordinal, received_at_ms):
+                nonlocal capacity, initial_revision
+                if capacity is None:
+                    capacity = self._capacity(db)
+                    initial_revision = capacity['revision']
+                tracked = {key for row in capacity['devices'].values() for effect in row['effects'].values()
+                           for key in (*effect['controls'], effect['sensor']) if key}
+                if entity in tracked:
+                    capacity.setdefault('receipts', {})[entity] = {'ordinal':ordinal, 'at_ms':received_at_ms}
+                    capacity['revision'] += 1
+                self._settle_capacity(db, capacity)
+
+            # Each settlement sees only the current receipt prefix. Nothing
+            # outside this transaction can see an intermediate capacity value.
+            ordinals = [self._record(db, *record, settle=settle) for record in records]
+            if capacity is not None and capacity['revision'] != initial_revision:
+                self._save_capacity(db, capacity)
+            return ordinals
+
+    def _record(self, db, kind, payload, ownership, received_at_ms, *, settle):
         if kind not in ('observation', 'configuration', 'outcome'):
             raise ValueError('Only source observations, configuration or command outcomes may be recorded')
         if type(payload) is not dict:
@@ -386,16 +409,7 @@ class GatewayJournal:
             peaks = self._power_peaks(db)
             if observe_power_peak(peaks, payload):
                 db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', ('power_peaks', encoded(peaks)))
-            capacity = self._capacity(db)
-            before = capacity['revision']
-            tracked = {key for row in capacity['devices'].values() for effect in row['effects'].values()
-                       for key in (*effect['controls'], effect['sensor']) if key}
-            if entity in tracked:
-                capacity.setdefault('receipts', {})[entity] = {'ordinal':ordinal, 'at_ms':received_at_ms}
-                capacity['revision'] += 1
-            self._settle_capacity(db, capacity)
-            if capacity['revision'] != before:
-                self._save_capacity(db, capacity)
+            settle(entity, ordinal, received_at_ms)
         return ordinal
 
     @staticmethod
@@ -583,7 +597,7 @@ class GatewayJournal:
             capacity = self._capacity(db)
             state = capacity.setdefault('coordination', {'withdrawal':None, 'caps':{}, 'intents':{}})
             if operation == 'intention':
-                state['intents'][value['device']] = value
+                state['intents'][value['device']] = compact_device_intent(value)
             elif operation == 'withdrawal':
                 previous = state['withdrawal']
                 if previous is not None and previous['context'] == value['context']:

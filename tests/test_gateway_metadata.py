@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from time import perf_counter, thread_time
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import test_battery_gateway as battery_fixtures
 from gateway_fixture import IDENTITY
@@ -301,7 +301,6 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(self.source.fact_versions['sensor.b'],0)
 
     async def test_live_barrier_discards_frozen_reading_promoted_to_ordered_during_wait(self):
-        from unittest.mock import patch
         self.source.install_bindings(dict(revision=1,pool_pause=None,bindings={'sensor.a':['reference']}))
         async def barrier(*args):
             self.source.bindings['sensor.a']=frozenset({'capture'})
@@ -310,6 +309,22 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             frame=await self.source.request('live',{'after':None})
         self.assertEqual(frame['rows'],{})
         self.assertEqual(frame['configuration_revision'],1)
+
+    async def test_live_reuses_owned_sources_only_on_one_side_of_barrier(self):
+        self.source.install_bindings(dict(revision=1, pool_pause=None,
+            bindings={'sensor.a':['reference'], 'sensor.b':['reference']}))
+        self.source.entities = {'sensor.a', 'sensor.b'}
+
+        async def barrier(*args):
+            self.physical.ownership.records['pool'] = dict(originals={'sensor.a':{}}, options={})
+            return {'through':10}
+
+        with (patch.object(self.source, 'report', return_value={'state':'old'}),
+              patch.object(self.stream, 'call', side_effect=barrier),
+              patch.object(self.source, 'owned_sources', wraps=self.source.owned_sources) as owned):
+            frame = await self.source.request('live', {'after':None})
+        self.assertEqual(frame['rows'], {'sensor.b':{'state':'old'}})
+        self.assertEqual(owned.call_count, 2)
 
     def test_new_policy_invalidates_declared_pool_pause_while_switch_stays_off(self):
         from datetime import timedelta

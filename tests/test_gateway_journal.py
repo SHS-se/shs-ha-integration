@@ -5,10 +5,12 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from gateway_fixture import IDENTITY, seed
 from shs_core.command_journal import WriterActive
 from shs_core.gateway_journal import GatewayConflict, GatewayJournal
+from shs_core.grid_capacity import dispatch_capacity, empty_capacity, finish_capacity, prepare_capacity
 from shs_core.receipt_inbox import ReceiptInbox, processing_checkpoint
 
 
@@ -128,6 +130,29 @@ class GatewayTests(unittest.TestCase):
         rows = self.gateway.read(self.session, 0)['receipts'][-3:]
         self.assertEqual([r['payload']['value'] for r in rows], [1, 2, 3])
         self.assertEqual(self.gateway.snapshot(self.session)['observations']['sensor.power']['value']['value'], 3)
+
+    def test_receipt_batch_settles_each_prefix_with_one_capacity_load_and_save(self):
+        capacity = empty_capacity()
+        effect = dict(device='device@heater', logical='device:heater', changed='switch.heater',
+                      controls={'switch.heater':'on'}, sensor=None, before_w=0, after_w=500, possible_w=500)
+        through = self.gateway.snapshot(self.session)['through']
+        prepare_capacity(capacity, 'command', effect, through)
+        dispatch_capacity(capacity, 'command', through)
+        finish_capacity(capacity, 'command', 'service_returned')
+        self.gateway.save_record('grid_capacity', capacity)
+
+        records = [('observation', {'entity_id':'switch.heater', 'state':state}, None, received)
+                   for state, received in (('on', 10), ('off', 20))]
+        with (patch.object(self.gateway, '_capacity', wraps=self.gateway._capacity) as load,
+              patch.object(self.gateway, '_save_capacity', wraps=self.gateway._save_capacity) as save):
+            on, off = self.gateway.record_many(records)
+        self.assertEqual(off, on + 1)
+        load.assert_called_once()
+        save.assert_called_once()
+        current = self.gateway.load_record('grid_capacity')
+        self.assertEqual(current['devices']['device@heater']['settled']['confirmed'], on)
+        self.assertEqual(current['receipts']['switch.heater'], {'ordinal':on, 'at_ms':10})
+        self.assertEqual(self.gateway.snapshot(self.session)['observations']['switch.heater']['value']['state'], 'off')
 
     def test_delivery_requires_offered_receipts_and_does_not_grant_activation(self):
         high = self.gateway.snapshot(self.session)['through']

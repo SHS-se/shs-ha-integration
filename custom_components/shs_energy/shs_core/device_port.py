@@ -3,6 +3,22 @@ from uuid import uuid4
 from .device_controls import pool_requested_w, pool_permission
 
 
+def compact_device_intent(intent):
+    """Retain the native routing inputs and the owner's executable command."""
+    parameters = dict(intent['parameters'])
+    if 'models' in parameters:
+        # Other models still participate in pool/EV routing and actuator
+        # overlap checks. An explicit mapping takes precedence over local options.
+        fields = ('key', 'category', 'control_type', 'mapping')
+        parameters['models'] = [{field: model[field] for field in fields if field in model}
+                                for model in parameters['models']]
+    if 'commands' in parameters and intent['device'].startswith('device:'):
+        key = intent['device'].removeprefix('device:')
+        parameters['commands'] = {key: command for owner, command in parameters['commands'].items()
+                                  if owner == key}
+    return {**intent, 'parameters': parameters}
+
+
 def device_intent(device, operation, plan, slot, *, configuration_revision, policy_revision, heating=None):
     parameters = {}
     if operation == 'heat':
@@ -20,6 +36,6 @@ def device_intent(device, operation, plan, slot, *, configuration_revision, poli
             parameters.update(commands=slot['device_commands'], models=plan['device_models'])
         else:
             raise ValueError('Battery control requires an admitted route')
-    return dict(request_id=uuid4().hex, device=device, operation=operation,
+    return compact_device_intent(dict(request_id=uuid4().hex, device=device, operation=operation,
                 configuration_revision=configuration_revision, policy_revision=policy_revision,
-                parameters=parameters, headroom_reserved=False)
+                parameters=parameters, headroom_reserved=False))

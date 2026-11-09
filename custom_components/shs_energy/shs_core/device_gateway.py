@@ -453,12 +453,14 @@ class DeviceGateway(DeviceOperations):
                 if condition is not None and result.get('execution_condition') is None:
                     result['capacity_curtailed'] = True
                     result['execution_condition'] = condition
-            response = dict(result=result, error=error, reservation_required=self.reservation_required, ownership=self.ownership.snapshot(),
+            response = dict(result=result, error=error, reservation_required=self.reservation_required,
                         reports=self.reports, reads=sorted(self.reads),
                         deadlines=[{'device':d,'name':n,'at':at} for (d,n),at in self.deadlines.items()],
                         diagnostics=deepcopy(self.diagnostic_evaluation))
             if self.heating_needs_capacity:
                 response['heating_needs_capacity'] = True
+            # Ownership is persisted separately and replay supplies its current view.
+            ownership = self.ownership.snapshot()
             await self.operations.finish(value, response)
             if intent.device == 'pool':
                 self.pool_pause = (dict(configuration_revision=intent.configuration_revision,
@@ -467,4 +469,4 @@ class DeviceGateway(DeviceOperations):
                     if error is None and result and intent.operation == 'apply'
                     and result['requested_power_w'] == 0 and result['requested_switch_state'] == 'off'
                     else None)
-            return response
+            return {**response, 'ownership':ownership}

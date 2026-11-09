@@ -59,6 +59,19 @@ class PhysicalGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.pool'].state, 'off')
         self.assertEqual(released['ownership']['records'], {})
 
+    async def test_operation_replay_returns_current_ownership_without_repeating_command(self):
+        request = self.request()
+        first = await self.gateway.perform(request)
+        self.assertIsNone(first['error'])
+        self.assertIn('pool', first['ownership']['records'])
+        _, stored = self.gateway.operations.values[request['request_id']]
+        self.assertNotIn('ownership', stored)
+        await self.gateway.perform({**self.request('release'), 'request_id':'release'})
+        replay = await self.gateway.perform(request)
+        self.assertEqual(replay, {**stored, 'ownership':self.gateway.ownership.snapshot()})
+        self.assertEqual(replay['ownership']['records'], {})
+        self.assertEqual(self.states['switch.pool'].state, 'off')
+
     async def test_permission_change_during_durable_prepare_prevents_service(self):
         transport = self.gateway.native_executor.transport
         prepare = transport.journal.prepare

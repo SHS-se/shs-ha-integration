@@ -172,7 +172,7 @@ class HomeAssistantSource:
         return filter_sources(entities, self.hass.states.get,
             lambda key: item.platform if (item := registry.async_get(key)) else None)
 
-    def execution_source(self, entity):
+    def execution_source(self, entity, *, owned=None):
         # Prior durable input schemas drain normally until the explicit sealed
         # admission installation for the current canonical configuration.
         if self.admission is None or self.admission['revision'] != self.configuration.value['revision']:
@@ -180,7 +180,7 @@ class HomeAssistantSource:
         uses = self.bindings.get(entity, frozenset())
         # Ownership outlives configuration edits until explicit handover retires
         # it. Keep its former controls and override sources in the ordered plane.
-        if entity in self.owned_sources() or entity in self.capacity_entities:
+        if entity in self.capacity_entities or entity in (self.owned_sources() if owned is None else owned):
             uses = uses | {'device'}
         thermal = 'pool_temperature' in uses
         valid = (not self.pool_unavailable and all(temperature_available(self.hass.states.get(source))
@@ -304,11 +304,15 @@ class HomeAssistantSource:
             # Freeze selected values before the queue barrier in this loop turn.
             revision = self.live_revision
             configuration_revision = self.configuration.value['revision']
+            owned = self.owned_sources()
             rows = {entity:self.report(entity) for entity in self.entities
-                    if (after is None or self.live_changes.get(entity,0) > after) and not self.execution_source(entity)}
+                    if (after is None or self.live_changes.get(entity,0) > after)
+                    and not self.execution_source(entity, owned=owned)}
             versions = {entity:self.fact_versions.get(entity,0) for entity in rows}
             snapshot = await self.service.stream.call('snapshot',self.service.session())
-            rows = {entity:row for entity,row in rows.items() if not self.execution_source(entity)
+            # Ownership or a filter binding may have changed across the barrier.
+            owned = self.owned_sources() if rows else ()
+            rows = {entity:row for entity,row in rows.items() if not self.execution_source(entity, owned=owned)
                     and versions[entity] == self.fact_versions.get(entity,0)}
             return dict(through=snapshot['through'],revision=revision,configuration_revision=configuration_revision,rows=rows,
                         counts={**self.intake_counts,**self.service.stream.metrics})
