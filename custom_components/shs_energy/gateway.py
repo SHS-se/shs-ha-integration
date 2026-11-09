@@ -1,7 +1,7 @@
 """HA source, socket and native-service composition for the app gateway."""
 import asyncio
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
@@ -81,6 +81,7 @@ class HomeAssistantSource:
         self.live_changes = {}
         self.fact_versions = {}
         self.capacity = empty_capacity()
+        self.import_claims = {}
         self.heating_waiting = set()
         self.power_peaks = {}
         self.power_entities = set()
@@ -266,16 +267,16 @@ class HomeAssistantSource:
         if operation == 'battery_capacity':
             async with self.service.physical.lock:
                 await self.refresh_capacity()
-                options = self.options()
-                controls = [options[key] for key in ('battery_mode_entity',
-                    'battery_charge_limit_entity', 'battery_discharge_limit_entity')]
+                house = self.house_power()
+                claims = self.current_import_claims()
                 # Size this battery against the same native/device reservations
                 # as dispatch. Its own envelope is supplied by the new target;
                 # older actuator sets remain independent reserved demand.
-                return {'external_import_w': self.import_required(exclude_device=capacity_key('battery', controls),
-                                                                 reserved=self.heating_effects()),
+                return {'external_import_w': self.import_required(exclude_device=self.battery_capacity_key(),
+                    reserved=[*self.heating_effects().values(), *claims], house_w=house),
                         'import_limit_w': import_limit(self.service.import_limit_w),
-                        'native_load_bounds':self.native_load_bounds()}
+                        'native_load_bounds':self.native_load_bounds(), 'observed_house_w':house,
+                        'grid_charge_hold':bool(claims)}
         if operation == 'admission':
             validate_bindings(body['bindings'])
             validate_pool_pause(body['pool_pause'])
@@ -703,13 +704,12 @@ class HomeAssistantSource:
             if value == 'off':
                 return None
             raise PowerHistoryError(key, mapping)
-        controls = {target:self.report(target)['state'] for target in actuator_targets(mapping)}
+        controls = {target:(self.report(target) or {}).get('state') for target in actuator_targets(mapping)}
         identity = capacity_key('device:'+key, controls)
         commanded = {**controls, **commanded_controls(self.capacity, identity)}
         expected = {**commanded, entity:value}
         def demand(values):
-            return rated if any(v != 'off' and (v == 'on' or target.split('.')[0] not in ('switch','input_boolean'))
-                                for target,v in values.items()) else 0.0
+            return rated if any(state != 'off' for state in values.values()) else 0.0
         return {**base, 'device':identity, 'before_w':demand(controls), 'commanded_before_w':demand(commanded), 'after_w':demand(expected),
                     'possible_w':max(demand(expected),demand({**controls,entity:value})),
                 'controls':expected, 'sensor':self.power_source(mapping,key),
@@ -737,7 +737,42 @@ class HomeAssistantSource:
             reducing = after >= before
         if reducing:
             return
+        if effect['logical'] == 'battery' and effect['after_w'] > 0 and self.current_import_claims():
+            raise ControlDeadlineError('A device is waiting for battery charging to release grid capacity')
         self.admit_import(effect)
+
+    def battery_capacity_key(self, installed=None):
+        options = self.options() if installed is None else installed
+        return capacity_key('battery', [options[key] for key in ('battery_mode_entity',
+            'battery_charge_limit_entity', 'battery_discharge_limit_entity')])
+
+    def current_import_claims(self, *, exclude_owner=None):
+        now = datetime.now(timezone.utc)
+        context = self.service.context()
+        self.import_claims = {owner:row for owner,row in self.import_claims.items()
+            if row['context'] == context and (row['end'] is None or now < row['end'])}
+        return [row['effect'] for owner,row in self.import_claims.items() if owner != exclude_owner]
+
+    def clear_import_claim(self, owner):
+        self.import_claims.pop(owner, None)
+
+    def claim_import(self, intent, entity, value):
+        """Retain only feasible, described demand that is waiting for charging to yield."""
+        battery = self.service.battery
+        if (battery.installation is None or device_mode(self.options(), 'battery') != 'controlling'
+                or not battery.fence.snapshot()['grant_current']):
+            return False
+        effect = self.describe_import(intent.device, entity, value)
+        if effect is None:
+            return False
+        claims = self.current_import_claims(exclude_owner=intent.device)
+        if self.import_required(effect=effect, exclude_device=self.battery_capacity_key(),
+                reserved=[*self.heating_effects().values(), *claims]) > import_limit(self.service.import_limit_w):
+            return False
+        end = (datetime.fromisoformat(intent.parameters['start']) + timedelta(minutes=15)
+               if intent.operation == 'apply' else None)
+        self.import_claims[intent.device] = {'context':self.service.context(), 'end':end, 'effect':effect}
+        return True
 
     def battery_capacity_sources(self):
         battery = self.service.battery
@@ -750,13 +785,34 @@ class HomeAssistantSource:
     def scheduled_heating_over_limit(self):
         # Count existing effects only. New room requests are admitted separately
         # and cannot trigger relief from a running load.
-        demand = self.import_required()
-        return demand - self.discharge_credit(import_after_w=demand) > import_limit(self.service.import_limit_w)
+        house = self.house_power()
+        limit = import_limit(self.service.import_limit_w)
+        battery = self.service.battery
+        if battery.installation is not None and self.active_battery_target() is not None:
+            _, _, conversion, installed = battery.installation
+            mode = self.report(installed['battery_mode_entity'])['state']
+            if mode == 'Command Charging (PV First)':
+                sensor = installed['battery_power_measurement_entity']
+                measured, _ = power(self.report(sensor), source=sensor, signed=True)
+                if house + conversion.grid_charge.input(max(0, measured)) <= limit:
+                    # A connected charging controller can reduce its prospective
+                    # draw while the measured load remains within the limit.
+                    return self.import_required(exclude_device=self.battery_capacity_key(), house_w=house) > limit
+        demand = self.import_required(house_w=house)
+        return demand - self.discharge_credit(import_after_w=demand) > limit
+
+    def active_battery_target(self):
+        battery = self.service.battery
+        target = self.capacity.get('coordination', {}).get('withdrawal')
+        if (target and battery.fence.snapshot()['grant_current'] and target['context'] == battery.context()
+                and battery.now() < target['valid_until_ms']):
+            return target
+        return None
 
     def admit_import(self, effect):
         limit = import_limit(self.service.import_limit_w)
         reserved = self.heating_effects()
-        demand = self.import_required(effect=effect, reserved=reserved)
+        demand = self.import_required(effect=effect, reserved=reserved.values())
         credit = self.discharge_credit(effect, demand)
         required = max(0.0, demand-credit)
         if required > limit:
@@ -792,11 +848,14 @@ class HomeAssistantSource:
                     *([row['settled']] if row.get('settled') else [])])]
         if effect is not None and effect['logical'] == 'battery':
             settings += [effect['controls'], {**controls, effect['changed']:effect['controls'][effect['changed']]}]
-        withdrawal = self.capacity.get('coordination',{}).get('withdrawal')
-        if withdrawal is not None and set(withdrawal['controls']) == set(controls):
+        withdrawal = self.active_battery_target()
+        matching_withdrawal = withdrawal is not None and set(withdrawal['controls']) == set(controls)
+        if matching_withdrawal:
             settings.append(withdrawal['controls'])
         ceiling = min(battery_discharge_ceiling(values[mode], native_watts(values[limit],self.report(limit)['attributes']))
                       for values in settings)
+        if matching_withdrawal and 'route_support_w' in withdrawal:
+            ceiling = min(ceiling, withdrawal['route_support_w'])
         credit = conversion.discharge.output(min(max(0.0, -measured), ceiling))
         offer = self.service.battery_cover
         if offer is None or datetime.now(timezone.utc).timestamp() * 1000 >= offer['valid_until_ms']:
@@ -804,7 +863,10 @@ class HomeAssistantSource:
         house, _ = power(self.report(options['house_consumption_power_entity']), source=options['house_consumption_power_entity'])
         pv, _ = power(self.report(options['solar_production_power_entity']), source=options['solar_production_power_entity'])
         bounds = self.native_load_bounds() if offer['include_base'] else {}
-        loads = sum(max(power(self.report(meter), source=meter)[0], bounds.get(meter,0)) for meter in offer['meters'])
+        try:
+            loads = sum(max(power(self.report(meter), source=meter)[0], bounds.get(meter,0)) for meter in offer['meters'])
+        except ValueError:
+            return credit  # The observed discharge does not depend on the promised load partition.
         eligible = min(house, max(0.0, house - loads if offer['include_base'] else loads))
         bound = proportional_supply(house, pv, eligible).house_supply_bound_w
         return max(credit, promised_credit_w(import_after_w=max(0.0, import_after_w),
@@ -971,7 +1033,7 @@ class HomeAssistantSource:
             reserved = self.heating_effects()
             effect = reserved[request['device']]
             try:
-                demand = self.import_required(effect=effect, reserved=reserved)
+                demand = self.import_required(effect=effect, reserved=reserved.values())
                 deficit = demand - self.discharge_credit(effect, demand) - import_limit(self.service.import_limit_w)
             except (ControlObservationError, ValueError, KeyError, TypeError):
                 return False  # The room's own execution reports the actual missing evidence.
@@ -1118,7 +1180,7 @@ class HomeAssistantSource:
             recovered.append(owner.removeprefix('device:') if owner.startswith('device:') else '$'+owner)
         return sorted(set(recovered))
 
-    async def coordinate_battery(self, effect, authorize):
+    async def coordinate_battery(self, effect, proposal, route_id, authorize):
         """Withdraw dependent demand through current owners before battery support.
 
         No lock is held across perform(): that owner takes the same physical
@@ -1132,15 +1194,17 @@ class HomeAssistantSource:
         controls = battery.target_controls(effect.request)
         mode, limit_entity = installed['battery_mode_entity'],installed['battery_discharge_limit_entity']
         attributes = self.report(limit_entity)['attributes']
-        target_ceiling = battery_discharge_ceiling(controls[mode],native_watts(controls[limit_entity],attributes))
-        current_ceiling = battery_discharge_ceiling(self.report(mode)['state'],native_watts(self.report(limit_entity)['state'],attributes))
-        token = digest({'request':effect.request.id,'revision':effect.request.revision,'controls':controls})
+        states = [dict(effect.request.target), *(dict(step.after) for step in proposal.steps)]
+        route_support = min(battery_discharge_ceiling(state[mode], state[limit_entity]) for state in states)
         async with self.service.physical.lock:
             authorize()
             await self.refresh_capacity()
-            self.install_capacity(await battery.persist_target(effect.request,authorize))
+            self.install_capacity(await battery.persist_target(effect.request, authorize,
+                route_id=route_id, route_support_w=route_support))
             authorize()
-            if target_ceiling >= current_ceiling:
+            current_ceiling = battery_discharge_ceiling(self.report(mode)['state'],
+                native_watts(self.report(limit_entity)['state'],attributes))
+            if route_support >= current_ceiling:
                 return
             descriptor = self.describe_import('battery',limit_entity,controls[limit_entity])
             descriptor = {**descriptor,'controls':controls}
@@ -1186,7 +1250,7 @@ class HomeAssistantSource:
                 previous = coordination['caps'].get(identity)
                 resume = previous if previous and previous['requested_w'] >= bound else {
                     'resume_controls':native_controls,'requested_w':bound}
-                caps[identity] = {'device':identity,'owner':owner,'maximum_w':maximum,'withdrawal':token,
+                caps[identity] = {'device':identity,'owner':owner,'maximum_w':maximum,'withdrawal':route_id,
                                   'resume_controls':resume['resume_controls'],'requested_w':resume['requested_w']}
                 owners.append(owner)
                 deficit -= bound-maximum
@@ -1232,17 +1296,21 @@ class HomeAssistantSource:
             if owner in ('battery','ev') or device_mode(options,owner) != 'controlling':
                 continue
             for entity in record['originals']:
-                effect = self.describe_import(owner,entity,self.report(entity)['state'])
+                effect = self.describe_import(owner, entity, (self.report(entity) or {}).get('state'))
                 if effect:
                     include(effect,effect['before_w'])
         return bounds
 
-    def import_required(self, *, effect=None, exclude_device=None, reserved=None):
+    def house_power(self):
         options = self.options()
         if house_meter_errors(options):
             raise HouseMeterError(options)
-        house, _ = power(self.report(options['house_consumption_power_entity']),
-                         source=options['house_consumption_power_entity'])
+        entity = options['house_consumption_power_entity']
+        return power(self.report(entity), source=entity)[0]
+
+    def import_required(self, *, effect=None, exclude_device=None, reserved=(), house_w=None):
+        options = self.options()
+        house = self.house_power() if house_w is None else house_w
         bounds, meters, batteries = {}, {}, set()
         def include(descriptor, bound):
             device = descriptor['device']
@@ -1273,14 +1341,11 @@ class HomeAssistantSource:
             if not targets:
                 continue
             entity = targets[0]
-            row = self.report(entity)
-            if row is None:
-                raise ValueError(f'{entity}: native actuator is unavailable for house import accounting')
-            descriptor = self.describe_import(owner,entity,row['state'])
+            descriptor = self.describe_import(owner, entity, (self.report(entity) or {}).get('state'))
             if descriptor is not None:
                 include(descriptor,descriptor['before_w'])
         battery = self.service.battery
-        if battery.installation is not None:
+        if battery.installation is not None and exclude_device != self.battery_capacity_key(battery.installation[3]):
             _, _, conversion, installed = battery.installation
             mode = installed['battery_mode_entity']
             descriptor = self.describe_import('battery', mode, self.report(mode)['state'])
@@ -1291,7 +1356,7 @@ class HomeAssistantSource:
             bound = self.reserved_power_bound(row)
             for descriptor in [*row['effects'].values(), *([row['settled']] if row.get('settled') else [])]:
                 include(descriptor, bound)
-        for reservation in (reserved or {}).values():
+        for reservation in reserved:
             include(reservation, reservation['possible_w'])
         if effect is not None:
             include(effect, max(effect['before_w'],effect['after_w'],effect['possible_w']))
@@ -1306,7 +1371,12 @@ class HomeAssistantSource:
             if device not in batteries and len(sensors) == 1:
                 sensor = next(iter(sensors))
                 if sensor not in used:
-                    measured, _ = power(self.report(sensor), source=sensor)
+                    try:
+                        measured, _ = power(self.report(sensor), source=sensor)
+                    except ValueError:
+                        # With no partition measurement, subtract nothing from
+                        # the house reading and retain the full reviewed bound.
+                        pass
                     used.add(sensor)
             partitions.append((measured, bound))
         return required_import(house, partitions)

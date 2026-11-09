@@ -1,5 +1,4 @@
 """App-side semantic device and battery ports; no native service RPC."""
-from uuid import uuid4
 from shs_core.native_configuration import native_options
 from shs_core import home_runtime as rt
 from shs_core.command_transport import CommandUncertain
@@ -11,11 +10,10 @@ from shs_core.runtime_json import encode_value, decode_value
 
 
 class RemoteDevices:
-    def __init__(self, gateway, household):
+    def __init__(self, gateway, household, *, wake_battery):
         self.gateway, self.household = gateway, household
         self.context = None
-        self.reserve = None
-        self.wake_battery = None
+        self.wake_battery = wake_battery
         self.policy = None
         self.heating = {}
 
@@ -45,15 +43,8 @@ class RemoteDevices:
         intent = device_intent(device, operation, plan, slot,
             configuration_revision=self.context['configuration_revision'], policy_revision=self.context['policy_revision'], heating=heating)
         response = await self.gateway.call('device', {'intent':intent})
-        if response['reservation_required'] and (operation != 'heat' or response['error'] is not None):
-            if self.reserve is None:
-                raise GatewayConflict('External demand reservation is not connected')
-            ready = self.reserve(device)
-            if operation == 'heat':
-                self.wake_battery()
-            elif ready:
-                intent.update(request_id=uuid4().hex, headroom_reserved=True)
-                response = await self.gateway.call('device', {'intent':intent})
+        if response['reservation_required']:
+            self.wake_battery()
         return response
 
 

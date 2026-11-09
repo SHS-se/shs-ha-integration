@@ -564,11 +564,13 @@ class EntityCommandTests(unittest.IsolatedAsyncioTestCase):
         self.controller.confirm.assert_not_awaited()
 
     async def test_permission_change_during_persistence_prevents_service(self):
-        original_save = self.controller.save
-        async def save_and_revoke():
-            await original_save()
+        journal = self.controller.native_executor.transport.journal
+        prepare = journal.prepare
+        def prepare_and_revoke(command):
+            result = prepare(command)
             self.options['device_modes']['$pool'] = 'planning'
-        self.controller.save = save_and_revoke
+            return result
+        journal.prepare = prepare_and_revoke
         with self.assertRaisesRegex(ValueError, 'configuration changed'):
             await self.controller.command('switch.pool', 'on')
         self.hass.services.async_call.assert_not_awaited()

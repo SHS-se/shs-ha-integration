@@ -1,6 +1,7 @@
 """House-wide import checks use live readings and owned native settings."""
 import asyncio
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, AsyncMock, patch
@@ -13,6 +14,7 @@ from shs_core.grid_capacity import (required_import, import_limit, empty_capacit
     capacity_key, canonicalize_capacity)
 from shs_core.command_journal import Command, NativeAction
 from shs_core.device_operations import ControlDeadlineError
+from shs_core.device_gateway import DeviceIntent
 
 
 class ImportArithmeticTests(unittest.TestCase):
@@ -260,10 +262,97 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         await self.native('ev-start', 'ev', 'switch.ev', 'turn_on')
         self.rows['select.mode']['state'] = 'Command Charging (PV First)'
         before = await self.source.request('battery_capacity', {})
-        self.assertEqual(before, {'external_import_w': 12040, 'import_limit_w': 15000, 'native_load_bounds':{'sensor.ev':11040}})
+        self.assertEqual(before, {'external_import_w': 12040, 'import_limit_w': 15000, 'native_load_bounds':{'sensor.ev':11040}, 'observed_house_w':1000, 'grid_charge_hold':False})
         await self.native('battery-start', 'battery', 'number.charge', 'set_value', 1)
         self.assertGreater(self.source.import_required(), before['external_import_w'])
         self.assertEqual(await self.source.request('battery_capacity', {}), before)
+
+    async def test_unavailable_meter_keeps_the_reviewed_partition_without_blocking_battery(self):
+        self.charging_car_at_minimum()
+        self.rows['sensor.ev']['state'] = 'unavailable'
+        self.assertEqual(self.source.import_required(), 12450)
+        view = await self.source.request('battery_capacity', {})
+        self.assertEqual(view['external_import_w'], 12450)
+        self.assertEqual(view['native_load_bounds'], {'sensor.ev': 3450})
+
+    async def test_unavailable_switch_keeps_its_reviewed_bound(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        self.mapped_load('room', 'switch.room', 'unavailable', 2500, 'controlling')
+        self.assertEqual((await self.source.request('battery_capacity', {}))['external_import_w'], 3500)
+
+    async def test_unavailable_promise_meter_keeps_independent_measured_credit(self):
+        self.charging_car_at_minimum()
+        self.discharging(2500)
+        measured = self.source.discharge_credit()
+        self.cover()
+        self.rows['sensor.ev']['state'] = 'unavailable'
+        self.assertEqual(self.source.discharge_credit(import_after_w=18000), measured)
+
+    async def test_waiting_start_reserves_its_own_bound_and_expires_with_its_slot(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        self.mapped_load('room', 'switch.room', 'off', 2400, 'controlling')
+        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        self.rows['number.charge']['state'] = '2'
+        now = datetime.now(timezone.utc)
+        intent = DeviceIntent('synthetic-start', 'device:room', 'apply', 1, 1, {'start':now.isoformat()}, False)
+        self.assertFalse(self.source.external_ready(intent.device, entity='switch.room', value='on'))
+        self.assertTrue(self.source.claim_import(intent, 'switch.room', 'on'))
+        self.assertTrue(self.source.claim_import(intent, 'switch.room', 'on'))
+        view = await self.source.request('battery_capacity', {})
+        self.assertEqual(view['external_import_w'], 3400)
+        self.assertTrue(view['grid_charge_hold'])
+        with self.assertRaisesRegex(ControlDeadlineError, 'waiting for battery charging'):
+            await self.native('raise-charge-before-start', 'battery', 'number.charge', 'set_value', 3)
+        self.assertFalse(self.calls)
+        self.source.import_claims[intent.device]['end'] = now - timedelta(seconds=1)
+        view = await self.source.request('battery_capacity', {})
+        self.assertEqual(view['external_import_w'], 1000)
+        self.assertFalse(view['grid_charge_hold'])
+
+    async def test_impossible_or_unbounded_start_cannot_claim_battery_capacity(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        self.mapped_load('room', 'switch.room', 'off', 2400, 'controlling')
+        self.rows['sensor.house']['state'] = '14000'
+        intent = DeviceIntent('synthetic-start', 'device:room', 'apply', 1, 1,
+                              {'start':datetime.now(timezone.utc).isoformat()}, False)
+        self.assertFalse(self.source.claim_import(intent, 'switch.room', 'on'))
+        del self.source.power_peaks['sensor.room_power']
+        with self.assertRaisesRegex(ValueError, 'power'):
+            self.source.claim_import(intent, 'switch.room', 'on')
+        self.assertFalse(self.source.current_import_claims())
+
+    async def test_scheduled_heat_uses_measured_headroom_while_battery_can_reduce_charge(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        self.mapped_load('room', 'climate.room', 'heat', 4000, 'controlling', 2000)
+        self.rows['sensor.house']['state'] = '10000'
+        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        self.rows['number.charge']['state'] = '4'
+        self.rows['sensor.battery']['state'] = '3500'
+        self.assertGreater(self.source.import_required(), 15000)
+        self.assertTrue(self.source.scheduled_heating_over_limit(), 'A held battery cannot make room')
+        self.source.capacity['coordination'] = {'withdrawal': {
+            'controls': {'select.mode':'Command Charging (PV First)', 'number.charge':4, 'number.discharge':4},
+            'valid_until_ms':self.gateway.now()+1000, 'context':self.gateway.context(),
+        }}
+        self.assertFalse(self.source.scheduled_heating_over_limit())
+        self.rows['sensor.house']['state'] = '13000'
+        self.assertTrue(self.source.scheduled_heating_over_limit())
+
+    async def test_expired_unissued_battery_target_leaves_measured_credit_available(self):
+        self.charging_car_at_minimum()
+        self.discharging(3000)
+        credit = self.source.discharge_credit()
+        self.source.capacity['coordination'] = {'withdrawal': {
+            'controls': {'select.mode':'Standby', 'number.charge':0, 'number.discharge':0},
+            'valid_until_ms': self.gateway.now()+1, 'context':self.gateway.context(),
+        }}
+        self.assertEqual(self.source.discharge_credit(), 0)
+        self.rig.now += 1
+        self.assertEqual(self.source.discharge_credit(), credit)
 
     async def test_ev_meter_aliases_use_one_current_control_and_the_admitted_power_source(self):
         self.configure_ev()
@@ -281,12 +370,12 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.source.bindings = {'sensor.ev': frozenset(('capture', 'device'))}
         self.service.import_limit_w = 15000
         self.assertEqual(await self.source.request('battery_capacity', {}),
-                         {'external_import_w': 1000, 'import_limit_w': 15000, 'native_load_bounds':{'sensor.ev':0}})
+                         {'external_import_w': 1000, 'import_limit_w': 15000, 'native_load_bounds':{'sensor.ev':0}, 'observed_house_w':1000, 'grid_charge_hold':False})
         descriptor = self.source.describe_import('ev', 'switch.ev', 'on')
         self.assertEqual(descriptor['sensor'], 'sensor.ev')
         await self.native('aliased-ev-start', 'ev', 'switch.ev', 'turn_on')
         self.assertEqual(await self.source.request('battery_capacity', {}),
-                         {'external_import_w': 12040, 'import_limit_w': 15000, 'native_load_bounds':{'sensor.ev':11040}})
+                         {'external_import_w': 12040, 'import_limit_w': 15000, 'native_load_bounds':{'sensor.ev':11040}, 'observed_house_w':1000, 'grid_charge_hold':False})
         self.rows['select.mode']['state'] = 'Command Charging (PV First)'
         with self.assertRaises(ControlDeadlineError):
             await self.native('battery-over-pending-ev', 'battery', 'number.charge', 'set_value', 4)
@@ -361,7 +450,7 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.rows['sensor.house']['state'] = '4000'
         self.service.import_limit_w = 15000
         self.assertEqual(await self.source.request('battery_capacity', {}),
-                         {'external_import_w':4000, 'import_limit_w':15000, 'native_load_bounds':{'sensor.ev':0}})
+                         {'external_import_w':4000, 'import_limit_w':15000, 'native_load_bounds':{'sensor.ev':0}, 'observed_house_w':4000, 'grid_charge_hold':False})
         first = self.source.describe_import('device:sensor.hot_water_energy', 'switch.water', 'on')
         second = self.source.describe_import('device:sensor.water_boiler_energy', 'switch.water', 'on')
         self.assertEqual(first['device'], second['device'])

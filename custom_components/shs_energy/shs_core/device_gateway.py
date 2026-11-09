@@ -102,17 +102,25 @@ class DeviceGateway(DeviceOperations):
         lowering_heat = (self.intent.operation == 'apply' and entity.startswith('climate.')
                          and isinstance(value, float) and self.capacity is not None
                          and self.capacity.lowers_heating_target(entity, value))
-        if not lowering_heat and not self.local_obligation and not self.intent.headroom_reserved:
-            if self.heating is not None and self.capacity.heating_effects():
-                self.capacity.admit_import(self.capacity.describe_import(device, entity, value))
+        if self.capacity is None and not self.local_obligation and not self.intent.headroom_reserved:
             self.reservation_required = True
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
             return False
         try:
             if lowering_heat:
                 return self.external_ready(device, entity=entity, value=value, require_battery_release=False)
-            return self.external_ready(device, entity=entity, value=value)
-        except (ControlDeadlineError, PowerHistoryError):
+            if self.external_ready(device, entity=entity, value=value):
+                return True
+            if self.capacity is not None and not self.local_obligation:
+                self.reservation_required = self.capacity.claim_import(self.intent, entity, value)
+            self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
+            return False
+        except ControlDeadlineError:
+            self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
+            if self.capacity is not None and not self.local_obligation and not lowering_heat:
+                self.reservation_required = self.capacity.claim_import(self.intent, entity, value)
+            raise
+        except PowerHistoryError:
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
             raise
 
@@ -446,6 +454,8 @@ class DeviceGateway(DeviceOperations):
                     error.update(entity=exception.entity, unavailable=exception.unavailable)
             finally:
                 self.restoring = False
+            if self.capacity is not None and not self.reservation_required:
+                self.capacity.clear_import_claim(intent.device)
             if result is not None and self.capacity is not None:
                 if self.heating_limit:
                     result.update(heating_curtailed=True, reason='Making room for a heating override')

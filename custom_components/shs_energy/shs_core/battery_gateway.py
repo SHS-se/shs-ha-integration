@@ -120,6 +120,9 @@ class BatteryGateway:
             raise GatewayConflict('Battery optimisation permission changed')
         if effect.purpose != 'release':
             self.check_request(effect.request,grant)
+        proposal = SigenAdapter(catalog, conversion).propose(effect)
+        payload = {'effect':effect_wire, 'proposal':encode_value(proposal), 'grant':grant_wire, 'context':self.context()}
+        route_id = digest({'session':self.session(), **payload})
         if self.coordinate is not None and effect.purpose != 'release':
             context = self.context()
             def authorize():
@@ -128,11 +131,8 @@ class BatteryGateway:
                 if (context != self.context() or not self.fence.is_current(grant,self.identity())
                         or self.now() >= effect.request.valid_until_ms):
                     raise GatewayConflict('Battery coordination authority changed')
-            await self.coordinate(effect, authorize)
+            await self.coordinate(effect, proposal, route_id, authorize)
             authorize()
-        proposal = SigenAdapter(catalog, conversion).propose(effect)
-        payload = {'effect':effect_wire, 'proposal':encode_value(proposal), 'grant':grant_wire, 'context':self.context()}
-        route_id = digest({'session':self.session(), **payload})
         await self.stream.call('admit_route', self.session(), route_id, payload)
         if effect.purpose == 'release':
             self.obligation = await self.obligation_store.async_load()
@@ -175,6 +175,11 @@ class BatteryGateway:
                     return {**previous, **identifiers}
                 try:
                     check()
+                    if self.coordinate is not None and effect.purpose != 'release':
+                        capacity = await self.stream.call('load_record', 'grid_capacity')
+                        withdrawal = (capacity or {}).get('coordination', {}).get('withdrawal') or {}
+                        if withdrawal.get('route_id') != route_id:
+                            raise GatewayConflict('Battery route was superseded before dispatch')
                     await self.physical.native_executor.execute(command, authorize=check, timeout=75)
                 except Exception as error:
                     outcome = await self.stream.call('command_outcome', command.id)
@@ -195,13 +200,15 @@ class BatteryGateway:
         return {key:(value if key == mode else service_watts(value,self.reports(key)['attributes']))
                 for key,value in request.target}
 
-    async def persist_target(self, request, authorize):
+    async def persist_target(self, request, authorize, *, route_id=None, route_support_w=None):
         """Caller holds the physical lock; this publishes intent, never a write."""
         authorize()
         controls = self.target_controls(request)
         value = {'id':digest({'request':request.id,'revision':request.revision,'controls':controls}),
                  'controls':controls,'context':self.context(),'request_id':request.id,
                  'request_revision':request.revision,'valid_until_ms':request.valid_until_ms}
+        if route_id is not None:
+            value.update(route_id=route_id, route_support_w=route_support_w)
         capacity = await self.stream.call('coordinate_capacity','withdrawal',value)
         authorize()
         return capacity

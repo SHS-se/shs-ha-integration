@@ -246,7 +246,7 @@ class AppEngine:
             # An observing plan has no physical battery generation. Keep the
             # command journal, hold the last setting and request a fresh plan.
             h._plan_configuration_changed = True
-        self.devices = RemoteDevices(self.gateway,h)
+        self.devices = RemoteDevices(self.gateway, h, wake_battery=self.wake_battery.set)
         verification_store = VerificationStorage(stores/f'shs_energy.verification.{entry}.sqlite',asyncio.to_thread,
             record('verification.'),encode)
         controller = self.controller = ScheduledController(
@@ -267,8 +267,6 @@ class AppEngine:
         self.writer = h.battery_writer = RemoteBattery(self.gateway,self.battery,self.battery.now,context=lambda:self.devices.context)
         self.battery.physical = self.writer
         self.battery.receipt_driven = True
-        self.devices.reserve = self.battery.before_external_command
-        self.devices.wake_battery = self.wake_battery.set
         await self.battery.load()
         self.battery.reconcile()
         self.checkpoint_digest = await asyncio.to_thread(self.battery.store.checkpoint_digest)

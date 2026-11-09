@@ -83,6 +83,7 @@ class PhysicalGatewayTests(unittest.IsolatedAsyncioTestCase):
         result = await self.gateway.perform(self.request())
         self.assertEqual(result['error']['kind'], 'rejected')
         self.assertEqual(self.states['switch.pool'].state, 'off')
+        self.assertNotIn('switch.pool', result['ownership']['records']['pool'].get('last_commands', {}))
 
     async def test_settings_change_during_an_operation_is_an_admission_wait_not_a_rejection(self):
         admitted = []

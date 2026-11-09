@@ -50,7 +50,7 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
         async def send(domain,service,data):
             self.calls.append((domain,service,deepcopy(data)))
             entity=data['entity_id']
-            value=data.get('value',service.removeprefix('turn_'))
+            value=data.get('value',data.get('option',service.removeprefix('turn_')))
             self.rows[entity]['state']=str(value)
             await self.record(entity)
             if entity in ('number.ev','switch.ev'):
@@ -73,6 +73,12 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
         target=tuple((k,0 if k=='number.discharge' else v) for k,v in before)
         self.stop=replace(self.effect,request=replace(self.effect.request,target=target),command_controls=before)
 
+    async def coordinate_stop(self):
+        from shs_core.battery_native_adapter import SigenAdapter
+        _, catalog, conversion, _ = self.gateway.installation
+        proposal = SigenAdapter(catalog, conversion).propose(self.stop)
+        await self.source.coordinate_battery(self.stop, proposal, 'synthetic-stop-route', lambda:None)
+
     async def record(self, entity):
         row=deepcopy(self.rows[entity]);row['entity_id']=entity
         row.setdefault('last_reported','2026-10-01T00:00:00Z')
@@ -81,7 +87,7 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
     async def test_dependent_ev_reduces_before_zero_and_cap_prevents_bounce(self):
         await self.configure_owner()
         baseline=deepcopy(self.owner.ownership.records['ev']['originals'])
-        await self.source.coordinate_battery(self.stop,lambda:None)
+        await self.coordinate_stop()
         # 5,550 W base leaves 9,450 W for EV: 13 A is the largest native step.
         self.assertEqual(float(self.rows['number.ev']['state']),13)
         self.assertLessEqual(self.source.import_required(),15000)
@@ -94,6 +100,64 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
         await self.stop_battery()
         self.assertEqual([(call[2]['entity_id'],call[2].get('value')) for call in self.calls],
                          [('number.ev',16),('number.ev',13),('number.discharge',0)])
+
+    async def test_route_reduces_dependent_load_before_an_intermediate_zero_ceiling(self):
+        from shs_core.runtime_json import encode_value, decode_value
+        await self.configure_owner()
+        for entity in ('select.mode', 'number.charge', 'number.discharge', 'sensor.battery'):
+            await self.record(entity)
+        before = dict(self.stop.command_controls)
+        target = {**before, 'select.mode':'Maximum Self Consumption'}
+        effect = replace(self.stop, request=replace(self.stop.request, target=tuple(target.items())))
+        self.gateway.coordinate = self.source.coordinate_battery
+        route = await self.gateway.propose(encode_value(effect), encode_value(self.grant))
+        proposal = decode_value(route['proposal'], rt.Proposed)
+        self.assertEqual([(step.key, step.value) for step in proposal.steps],
+                         [('number.discharge', 0), ('select.mode', 'Maximum Self Consumption'),
+                          ('number.discharge', 4000)])
+        self.assertEqual(float(self.rows['number.ev']['state']), 13)
+        self.assertFalse(await self.source.capacity_recoveries())
+        for index, step in enumerate(proposal.steps):
+            send = rt.Send(index, proposal.group_id, f'synthetic-mode-change-{index}',
+                step.key, step.value, self.rig.now+10000, self.grant, proposal.generation,
+                proposal.request_id, proposal.request_revision)
+            result = await self.gateway.step(route['route_id'], index, encode_value(send))
+            self.assertEqual(result['status'], 'service_returned', result)
+            self.rows['sensor.battery']['state'] = '-3000' if index == 2 else '0'
+            await self.record('sensor.battery')
+        self.assertEqual(float(self.rows['number.discharge']['state']), 4)
+        self.assertFalse(await self.source.capacity_recoveries(), 'Route support is held until adoption')
+        await self.gateway.publish_target(encode_value(effect.request), encode_value(self.grant), self.gateway.context())
+        self.assertEqual(await self.source.capacity_recoveries(), ['$ev'])
+
+    async def test_invalid_route_cannot_reduce_other_loads_or_publish_withdrawal(self):
+        from shs_core.runtime_json import encode_value
+        await self.configure_owner()
+        self.gateway.coordinate = self.source.coordinate_battery
+        target = {**dict(self.stop.request.target), 'select.mode':'Unrecognised'}
+        effect = replace(self.stop, request=replace(self.stop.request, target=tuple(target.items())))
+        with self.assertRaisesRegex(ValueError, 'unsupported Sigen target'):
+            await self.gateway.propose(encode_value(effect), encode_value(self.grant))
+        self.assertEqual(float(self.rows['number.ev']['state']), 16)
+        self.assertIsNone(self.source.capacity['coordination']['withdrawal'])
+        self.assertFalse(self.source.capacity['coordination']['caps'])
+
+    async def test_new_target_fences_an_older_route_before_it_can_withdraw_support(self):
+        from shs_core.runtime_json import encode_value, decode_value
+        await self.configure_owner()
+        self.gateway.coordinate = self.source.coordinate_battery
+        route = await self.gateway.propose(encode_value(self.stop), encode_value(self.grant))
+        proposal = decode_value(route['proposal'], rt.Proposed)
+        newer = replace(self.stop.request, id='battery:newer', revision=self.stop.request.revision+1,
+                        target=self.stop.command_controls)
+        await self.gateway.publish_target(encode_value(newer), encode_value(self.grant), self.gateway.context())
+        step = proposal.steps[0]
+        send = rt.Send(0, proposal.group_id, 'synthetic-superseded-step', step.key, step.value,
+            self.rig.now+10000, self.grant, proposal.generation, proposal.request_id, proposal.request_revision)
+        result = await self.gateway.step(route['route_id'], 0, encode_value(send))
+        self.assertEqual(result['status'], 'not_sent')
+        self.assertIn('superseded', result['reason'])
+        self.assertEqual(float(self.rows['number.discharge']['state']), 4)
 
     async def stop_battery(self):
         from shs_core.runtime_json import encode_value,decode_value
@@ -111,12 +175,12 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
         await self.configure_owner(initial_base=1000)
         row=next(iter(self.source.capacity['devices'].values()))
         self.assertEqual(row['settled']['support_w'],0)
-        await self.source.coordinate_battery(self.stop,lambda:None)
+        await self.coordinate_stop()
         self.assertEqual(float(self.rows['number.ev']['state']),13)
 
     async def test_reduced_intent_retains_cap_until_original_demand_has_headroom(self):
         await self.configure_owner()
-        await self.source.coordinate_battery(self.stop,lambda:None)
+        await self.coordinate_stop()
         capped=await self.owner.perform({**self.value,'request_id':'curtailed'})
         self.assertEqual(capped['result']['execution_condition'],
             {'status':'capacity_limited','cause':'house_import_capacity','maximum_current_a':13})
@@ -158,7 +222,7 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_positive_capacity_does_not_hide_a_disconnected_car(self):
         await self.configure_owner()
-        await self.source.coordinate_battery(self.stop,lambda:None)
+        await self.coordinate_stop()
         self.rows['binary_sensor.ev']['state'] = 'off'
         result = await self.owner.perform({**self.value, 'request_id':'disconnected'})
         self.assertIsNone(result['error'])
@@ -192,7 +256,7 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
             'models':[{'key':'water','category':'hot_water','control_type':'permit_inhibit'}]}}
         result=await self.owner.perform(water)
         self.assertIsNone(result['error'],result['error'])
-        await self.source.coordinate_battery(self.stop,lambda:None)
+        await self.coordinate_stop()
         self.assertEqual(self.rows['switch.water']['state'],'on')
         self.assertEqual(self.rows['sensor.water']['state'],'3000')
         self.assertEqual(float(self.rows['number.ev']['state']),13)
@@ -203,7 +267,7 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_capacity_return_is_observable_without_an_executable_owner_intent(self):
         await self.configure_owner()
-        await self.source.coordinate_battery(self.stop,lambda:None)
+        await self.coordinate_stop()
         self.assertEqual(await self.source.capacity_recoveries(),[])
         # The replacement plan may now suppress EV entirely; no perform call
         # is required to detect independent house capacity returning.
@@ -220,19 +284,19 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
         self.policy+=1
         count=len(self.calls)
         with self.assertRaises(AdmissionPending):
-            await self.source.coordinate_battery(self.stop,lambda:None)
+            await self.coordinate_stop()
         self.assertEqual(len(self.calls),count)
         current={**self.value,'request_id':'new-policy','policy_revision':self.policy}
         result=await self.owner.perform(current)
         self.assertIsNone(result['error'])
         self.assertEqual(float(self.rows['number.ev']['state']),13)
-        await self.source.coordinate_battery(self.stop,lambda:None)
+        await self.coordinate_stop()
 
     async def test_adopted_current_target_replaces_old_withdrawal_without_a_write(self):
         from shs_core.runtime_json import encode_value
         from shs_core.gateway_journal import GatewayConflict
         await self.configure_owner()
-        await self.source.coordinate_battery(self.stop,lambda:None)
+        await self.coordinate_stop()
         retained=deepcopy(self.source.capacity['coordination']['caps'])
         self.assertEqual(self.source.discharge_credit(),0)
         request=replace(self.stop.request,id='battery:adopted',revision=self.stop.request.revision+1,

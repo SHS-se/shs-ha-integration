@@ -74,6 +74,8 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
             make_heating_room=AsyncMock(return_value=False),
             capacity_intention=AsyncMock(side_effect=lambda intent:intent),
             capacity_condition=lambda *args:None,
+            claim_import=Mock(return_value=True),
+            clear_import_claim=Mock(),
             heating_cap=lambda owner:None,
             heating_cap_current=lambda cap:True,
             heating_effects=lambda:{},
@@ -364,6 +366,7 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         self.states['climate.heater'].attributes['temperature'] = 18
         result = await self.physical.perform({**scheduled, 'request_id': 'raise'})
         self.assertTrue(result['reservation_required'])
+        self.assertEqual([row['name'] for row in result['deadlines']], ['battery_headroom'])
         self.assertEqual(self.states['climate.heater'].attributes['temperature'], 18)
 
     async def test_capacity_shortfall_reduces_load_and_retries_the_same_event(self):

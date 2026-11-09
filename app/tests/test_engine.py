@@ -121,11 +121,14 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         identity = {key:proof[key] for key in ('entry_id','migration_id','export_sha256','pair')}
         self.native_calls = []
         self.external_import_w = 1000
+        self.grid_charge_hold = False
         self.import_limit_w = 10000
         async def send(*args):self.native_calls.append(args)
         async def request(operation,body):
             if operation=='credentials':return self.entry['data']
-            if operation=='battery_capacity':return {'external_import_w':self.external_import_w, 'import_limit_w':self.import_limit_w}
+            if operation=='battery_capacity':
+                return {'external_import_w':self.external_import_w, 'import_limit_w':self.import_limit_w,
+                        'observed_house_w':1000, 'grid_charge_hold':self.grid_charge_hold}
             if operation=='catalog':return dict(context=self.context,states={},preferences={},meter_areas={})
             if operation in ('states','statistics'):return {}
             if operation == 'configure': return await self.configuration.install(body)
@@ -671,6 +674,31 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((published['request_id'],published['request_revision']),
                                  (current.id,current.revision))
                 self.assertEqual(published['controls'],self.service.battery.target_controls(current))
+
+    async def test_gateway_start_hold_uses_bounded_demand_and_retires_without_a_timer(self):
+        rig = self.battery_rig()
+        await self.remote_battery(rig)
+        self.external_import_w = 3400
+        self.grid_charge_hold = True
+        await rig.runtime.open()
+        for _ in range(3):
+            await rig.advance(1000)
+        state = rig.runtime.host.state
+        self.assertEqual(state.frame.external.import_w, 3400)
+        self.assertEqual(state.frame.limits.import_w, 3400)
+        self.assertEqual(state.execution.assessment.charge_dc_w, 0)
+
+        rig.rows['sensor.house']['state'] = '1300'
+        for event in await rig.runtime._observe('battery'):
+            await rig.runtime.host.accept(event)
+        self.assertEqual(rig.runtime.host.state.frame.external.import_w, 3700)
+
+        # The native effect still reserves the device's power after dispatch.
+        # That bound alone must no longer stop planned battery charging.
+        self.grid_charge_hold = False
+        for _ in range(3):
+            await rig.advance(1000)
+        self.assertGreater(rig.runtime.host.state.execution.assessment.charge_dc_w, 0)
 
     async def test_slow_route_admission_keeps_the_session_and_the_battery_grant(self):
         # 3 October 2026: HA's journal answered a battery route after the host's

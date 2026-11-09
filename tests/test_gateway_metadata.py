@@ -1,7 +1,7 @@
 """HA metadata events against the real battery fence, without installing HA."""
 import asyncio
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
@@ -31,7 +31,7 @@ from shs_core.native_numbers import service_watts, canonical_metadata, watts as 
 from shs_core.grid_capacity import capped_intention, ev_current_ceiling
 from shs_core.device_gateway import DeviceIntent
 from shs_core.gateway_journal import AdmissionPending
-from shs_core.device_operations import ControlDeadlineError, ControlObservationError, PowerHistoryError
+from shs_core.device_operations import ControlDeadlineError, ControlObservationError, HeatingDeferred, PowerHistoryError
 from shs_core.native_commands import finite
 from shs_core.source_admission import (validate_bindings, ordered, FACT_ATTRIBUTES, native_pool_idle, owned_device_sources,
     validate_pool_pause, temperature_available, temperature_metadata)
@@ -128,7 +128,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         entry = SimpleNamespace(async_on_unload=lambda remove:None, async_create_background_task=background)
         passthrough = lambda function:function
         registry = SimpleNamespace(async_get=lambda entity:None)
-        adapter = load_adapter('gateway.py', dict(asyncio=asyncio, finite=finite, service_watts=service_watts, canonical_metadata=canonical_metadata, native_watts=native_watts, capped_intention=capped_intention, ev_current_ceiling=ev_current_ceiling, DeviceIntent=DeviceIntent, AdmissionPending=AdmissionPending, digest=digest, datetime=datetime, timezone=timezone, json=json,
+        adapter = load_adapter('gateway.py', dict(asyncio=asyncio, finite=finite, service_watts=service_watts, canonical_metadata=canonical_metadata, native_watts=native_watts, capped_intention=capped_intention, ev_current_ceiling=ev_current_ceiling, DeviceIntent=DeviceIntent, AdmissionPending=AdmissionPending, digest=digest, datetime=datetime, timedelta=timedelta, timezone=timezone, json=json,
             logging=logging, Path=Path, perf_counter=perf_counter, thread_time=thread_time, GatewayConflict=GatewayConflict,
             callback=passthrough, vol=SimpleNamespace(Required=lambda key:key),
             websocket_api=SimpleNamespace(require_admin=passthrough, async_response=passthrough,
@@ -145,7 +145,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             entity_area_id_by_id=lambda hass:dict(getattr(hass, 'entity_areas', {})), RecorderSource=lambda hass:None,
             filter_sources=filter_sources, configured_entity_ids=configured_entity_ids, power=power, battery_released=battery_released,
             required_import=required_import, import_limit=import_limit, SigenAdapter=SigenAdapter,
-            ControlDeadlineError=ControlDeadlineError, empty_capacity=empty_capacity, capacity_bound=capacity_bound,
+            ControlDeadlineError=ControlDeadlineError, HeatingDeferred=HeatingDeferred, empty_capacity=empty_capacity, capacity_bound=capacity_bound,
             commanded_controls=commanded_controls, _current=_current, EV_WATTS_PER_AMP=EV_WATTS_PER_AMP, actuator_targets=actuator_targets, device_power_bound=device_power_bound, PowerHistoryError=PowerHistoryError,
             observe_power_peak=observe_power_peak, observe_setting_peak=observe_setting_peak, merge_power_peaks=merge_power_peaks, RetryBackoff=RetryBackoff, capacity_key=capacity_key, house_meter_errors=house_meter_errors,
             HouseMeterError=HouseMeterError, GridCapacityConfigurationError=GridCapacityConfigurationError, ControlObservationError=ControlObservationError,

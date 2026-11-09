@@ -1072,14 +1072,23 @@ class BatteryRuntime:
             state.groups[0].observation_revision, state.frame.revision if state.frame else 0)+1
         revision=self._capture_revision
         authority=state.authority
-        native_demand=self._native_capacity['external_import_w'] if self._native_capacity is not None else 0
-        import_limit=min(authority.plant.import_limit_w,self._native_capacity['import_limit_w']) if self._native_capacity is not None else authority.plant.import_limit_w
+        native_demand = 0
+        import_limit = authority.plant.import_limit_w
+        if self._native_capacity is not None:
+            native_demand = self._native_capacity['external_import_w']
+            house_basis = self._native_capacity['observed_house_w']
+            native_demand += max(0, accounting.house_w - house_basis)
+            import_limit = min(import_limit, self._native_capacity['import_limit_w'])
+        external_import = max(accounting.house_w, external_w, native_demand,
+            authority.plant.import_limit_w if self._external_pending else 0)
+        if self._native_capacity is not None and self._native_capacity['grid_charge_hold']:
+            import_limit = min(import_limit, external_import)
         observed=rt.Observed(group_id,rt.Observation(revision,now,valid,controls,
             ((rt.DISCHARGE_MEASUREMENT,max(0.0,-battery)),),envelope))
         # Gross nonbattery load is a conservative import frame. PV is included
         # separately as possible export, and never erased by a planned device.
         frame=rt.FrameObserved(rt.Frame(revision,now,valid,
-            rt.Envelope(max(accounting.house_w,external_w,native_demand,authority.plant.import_limit_w if self._external_pending else 0), max(0,accounting.pv_w-accounting.house_w)),
+            rt.Envelope(external_import, max(0,accounting.pv_w-accounting.house_w)),
             rt.Envelope(import_limit,authority.plant.export_limit_w),tuple(external)))
         self._frame_pending={frame.frame.revision:digest(self._external_pending)}
         energy=fraction*self._ratings['battery_capacity_kwh']

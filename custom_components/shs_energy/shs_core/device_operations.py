@@ -221,9 +221,6 @@ class DeviceOperations:
             self.diagnostic_evaluation["commands"].append(command)
         try:
             record = self.ownership.records.get(getattr(self, "device", ""))
-            if record is not None and not self.restoring and service != 'set_hvac_mode':
-                record.setdefault("last_commands", {})[entity] = value
-                await self.save()
             self.check_authority()
             if not equal:
                 if self.battery_writer_fence is not None:
@@ -248,6 +245,9 @@ class DeviceOperations:
                 await self.native_executor.execute(request, authorize=authorize,
                     timeout=CONFIRM_SECONDS, on_sent=sent)
                 command["transport"] = "accepted"
+            if record is not None and not self.restoring and service != 'set_hvac_mode':
+                record.setdefault("last_commands", {})[entity] = value
+                await self.save()
             # Service completion records an accepted setting. Ordinary readings
             # and explicit device workflows assess the physical response.
         except (Exception, asyncio.CancelledError) as err:
