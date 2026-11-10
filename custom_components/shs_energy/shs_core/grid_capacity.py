@@ -212,7 +212,7 @@ def observe_capacity(capacity, ordinal, latest):
             controls = effect.get('acknowledgements',effect['controls'])
             if not all(_matches(latest(entity)[1], value) for entity, value in controls.items()):
                 continue
-            acknowledgement, _ = latest(effect['changed'])
+            acknowledgement, actuator = latest(effect['changed'])
             if acknowledgement <= fence:
                 continue
             sensor = effect['sensor']
@@ -226,7 +226,12 @@ def observe_capacity(capacity, ordinal, latest):
                     watts, _ = power(report, source=sensor, signed=effect['signed'])
                     watts = max(0.0, watts)
                     watts = (watts + effect['overhead_w']) * effect['scale'] if watts else 0.0
-                    if watts > effect['after_w'] + effect['response_tolerance_w']:
+                    # A thermostat can draw standby power with its relay
+                    # inhibited. Its reported draw remains in the house budget.
+                    thermostat_off = (effect['changed'].startswith('climate.')
+                        and controls.get(effect['changed']) == 'off'
+                        and actuator.get('attributes', {}).get('hvac_action') in ('off', 'idle'))
+                    if not thermostat_off and watts > effect['after_w'] + effect['response_tolerance_w']:
                         continue
                 except (ValueError, KeyError, TypeError):
                     continue

@@ -217,6 +217,30 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         self.assertEqual(self.states['climate.heater'].attributes['temperature'], 22.5)
         self.capacity.make_heating_room.assert_not_awaited()
 
+    async def test_idle_paused_thermostat_does_not_reenable_for_a_charging_setback(self):
+        native = self.states['climate.heater']
+        native.state = 'off'
+        native.attributes.update(current_temperature=20.5, hvac_action='idle')
+        self.physical.ownership.records[OWNER] = {
+            'options': self.options, 'originals': {'climate.heater': 20},
+            'heating_suspended': 'climate.heater'}
+        slot = dict(start=datetime.now(timezone.utc).isoformat(), charge_setback=True,
+                    device_commands={'heater': {'type':'setpoint', 'target_c':20, 'minimum_c':18, 'maximum_c':22}})
+        def request():
+            return device_intent(OWNER, 'apply', self.plan, slot, configuration_revision=1, policy_revision=1)
+
+        result = await self.physical.perform(request())
+        self.assertIsNone(result['error'])
+        self.assertFalse(result['result']['decision']['heating'])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(native.state, 'off')
+
+        native.attributes['current_temperature'] = 19.5
+        result = await self.physical.perform(request())
+        self.assertIsNone(result['error'])
+        self.assertEqual(self.calls, ['set_hvac_mode'])
+        self.assertEqual(native.state, 'heat')
+
     async def test_writable_setpoint_reads_equipment_until_override_is_applied(self):
         native = {'state': 'heat', 'attributes': self.states['climate.heater'].attributes}
         source = SimpleNamespace(options=lambda: self.options, report=lambda entity: native)
@@ -539,5 +563,25 @@ class HeatingCapacityTests(IsolatedAsyncioTestCase):
         observe_capacity(capacity, 12, observations.__getitem__)
         self.assertEqual(capacity_bound(capacity['devices'][identity]), 2000)
         observations['sensor.other'] = (13, {**observations['sensor.other'][1], 'state':'0'})
+        observe_capacity(capacity, 13, observations.__getitem__)
+        self.assertEqual(capacity_bound(capacity['devices'][identity]), 0)
+
+    async def test_off_thermostat_with_standby_draw_releases_its_peak_after_readback(self):
+        capacity = empty_capacity()
+        entity, sensor = 'climate.room', 'sensor.room'
+        identity = 'device@climate.room'
+        effect = dict(device=identity, logical='device:room', changed=entity, sensor=sensor,
+                      before_w=2000, after_w=0, possible_w=0, controls={entity:'off'},
+                      signed=False, scale=1, overhead_w=0, response_tolerance_w=0)
+        prepare_capacity(capacity, 'pause', effect, 10)
+        dispatch_capacity(capacity, 'pause', 10)
+        finish_capacity(capacity, 'pause', 'service_returned')
+        observations = {
+            entity: (12, dict(entity_id=entity, state='off', attributes={'hvac_action':'idle'})),
+            sensor: (11, dict(state='1.7', last_reported='2026-10-17T00:00:00Z',
+                attributes={'unit_of_measurement':'W', 'state_class':'measurement'}))}
+        observe_capacity(capacity, 12, observations.__getitem__)
+        self.assertEqual(capacity_bound(capacity['devices'][identity]), 2000)
+        observations[sensor] = (13, observations[sensor][1])
         observe_capacity(capacity, 13, observations.__getitem__)
         self.assertEqual(capacity_bound(capacity['devices'][identity]), 0)

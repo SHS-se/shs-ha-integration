@@ -85,3 +85,8 @@ the one-degree margin and idle operation. It retains pending command effects
 and restores peak accounting when the proof is lost. A later increase still
 requires admission. The configured house import target continues to govern
 commanded increases. Live metering captures any transient overage.
+
+A thermostat already paused for capacity stays paused while the room is idle
+during planned charging. A confirmed Off mode with idle relay status and a
+subsequent valid meter report settles that pause. Standby power remains in the
+metered load partition.

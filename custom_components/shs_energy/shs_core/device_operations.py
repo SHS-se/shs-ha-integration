@@ -118,6 +118,14 @@ def battery_limit_value(entity, watts, state):
     return int(value / step + 1e-8) * step
 
 
+def rounded_setpoint(target, origin, step):
+    if step <= 0:
+        raise ValueError("invalid temperature step")
+    # The nearest native step, halves up, including above the plan's range
+    # when the thermostat cannot represent the exact target.
+    return origin + floor((target - origin) / step + 0.5 + 1e-9) * step
+
+
 class DeviceOperations:
     """Unscheduled physical transactions; the host supplies decision authority.
 
@@ -575,6 +583,27 @@ class DeviceOperations:
     def shed_scheduled_heat(self, entity, state):
         return False
 
+    def charge_setback_target(self, entity, state, planned, *, holding):
+        attrs = state.attributes
+        try:
+            if attrs.get('hvac_action') == 'heating':
+                return None
+            if attrs.get('hvac_action') not in ('idle', 'off'):
+                raise ValueError('The thermostat’s heating state is unavailable')
+            temperature = room_temperature(entity, state.state, attrs, self.inputs.temperature_unit())
+            # Use the planned target for the same 0.5 °C start margin as the room model.
+            if temperature <= planned - 0.5:
+                return None
+            supported = floor_native(temperature - CHARGE_SETBACK_C,
+                {'min': attrs['min_temp'], 'max': attrs['max_temp'], 'step': attrs.get('target_temp_step', 0.1)})
+            if supported is not None:
+                return min(planned, float(supported), finite(attrs['temperature']))
+        except (KeyError, TypeError, ValueError) as error:
+            if holding:
+                raise ControlObservationError(str(error), entity,
+                    'Check the thermostat’s room temperature and heating state.') from error
+        return None
+
     async def execute_device(self, device, options, slot, *, target_c=None, suspend_heat=False):
         key = device.removeprefix("device:")
         mapping = options["device_control_mappings"][key]
@@ -625,8 +654,22 @@ class DeviceOperations:
         record = self.ownership.records.get(device)
         if suspend_heat:
             return await self.suspend_thermostat(device, options, targets[0])
+        model = next(m for m in models if m["key"] == key)
+        charge_setback = (target_c is None and kind == 'setpoint' and slot.get('charge_setback')
+            and targets[0].startswith('climate.') and model.get('category') in ('heating', 'pool_heating')
+            and mapped_planning_path(model, mapping, options.get('pool_water_temperature_entity')) == 'room')
         if record and (entity := record.get('heating_suspended')):
-            if self.actuator_state(entity).state == 'off':
+            state = self.actuator_state(entity)
+            if state.state == 'off':
+                if charge_setback:
+                    step = finite(state.attributes.get('target_temp_step', 0.1))
+                    origin = finite(state.attributes['min_temp'])
+                    planned = rounded_setpoint(command['target_c'], origin, step)
+                    if self.charge_setback_target(entity, state, planned, holding=True) is not None:
+                        # A paused thermostat already cannot start. Leave it
+                        # paused until the room calls for heat or the slot changes.
+                        return {'state': 'commanded', 'reason': 'Idle thermostat remains paused during planned charging',
+                                'decision': {'kind': 'setpoint', 'heating': False, 'planned_target_c': planned}}
                 await self.command(entity, 'heat')
                 if not self.matches(entity, 'heat'):
                     raise HeatingDeferred('Resuming scheduled heating')
@@ -642,7 +685,6 @@ class DeviceOperations:
                    if not self.matches(entity, value)}
         values = {}
         demand = None
-        model = next(m for m in models if m["key"] == key)
         water = is_hot_water(model)
         setback = None
         if water:
@@ -661,35 +703,12 @@ class DeviceOperations:
                     if state.attributes.get("unit_of_measurement") != "°C":
                         raise ValueError("temperature control must use Celsius")
                     step, origin = finite(state.attributes.get("step", 1)), finite(state.attributes["min"])
-                if step <= 0:
-                    raise ValueError("invalid temperature step")
-                # The nearest hardware step, halves rounded up (user requirement,
-                # 19 October 2026): a 22.5 °C plan on a whole-degree thermostat
-                # is 23, even above the plan's 22.5 maximum, so the room gets
-                # the heat it was planned rather than less.
-                values[entity] = origin + floor((command["target_c"] - origin) / step + 0.5 + 1e-9) * step
-                if (target_c is None and slot.get('charge_setback') and entity.startswith('climate.')
-                        and model.get('category') in ('heating', 'pool_heating')
-                        and mapped_planning_path(model, mapping, options.get('pool_water_temperature_entity')) == 'room'):
-                    action = state.attributes.get('hvac_action')
-                    if action == 'idle':
-                        try:
-                            temperature = room_temperature(entity, state.state, state.attributes, self.inputs.temperature_unit())
-                        except (TypeError, ValueError) as error:
-                            if record and 'charge_setback_c' in record:
-                                raise ControlObservationError(str(error), entity,
-                                    'Check the thermostat’s room temperature reading.') from error
-                            continue
-                        # Use the planned target for the same 0.5 °C start margin as the room model.
-                        if temperature > values[entity] - 0.5:
-                            supported = floor_native(temperature - CHARGE_SETBACK_C,
-                                {'min': origin, 'max': state.attributes['max_temp'], 'step': step})
-                            if supported is not None:
-                                setback = min(values[entity], float(supported), finite(state.attributes['temperature']))
-                                values[entity] = setback
-                    elif action != 'heating' and record and 'charge_setback_c' in record:
-                        raise ControlObservationError('The thermostat’s heating state is unavailable', entity,
-                            'Check the heating state reported by the thermostat.')
+                values[entity] = rounded_setpoint(command["target_c"], origin, step)
+                if charge_setback:
+                    setback = self.charge_setback_target(entity, state, values[entity],
+                        holding=record is not None and 'charge_setback_c' in record)
+                    if setback is not None:
+                        values[entity] = setback
             if setback is None and "room_target_c" in command and self.shed_scheduled_heat(targets[0], self.actuator_state(targets[0])):
                 await self.suspend_thermostat(device, options, targets[0])
                 return self.scheduled_heat_limited()
