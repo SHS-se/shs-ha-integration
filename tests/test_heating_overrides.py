@@ -108,38 +108,19 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
                                 policy_revision=1, heating=row)
         return {**request, 'headroom_reserved': True}
 
-    async def test_idle_thermostat_sets_back_during_charging_then_restores_planned_heat(self):
+    async def test_scheduled_charging_keeps_the_rooms_accepted_target(self):
         native = self.states['climate.heater']
-        native.attributes.update(current_temperature=19.6, hvac_action='idle', target_temp_step=1)
+        native.attributes.update(temperature=18, current_temperature=19.6, hvac_action='idle', target_temp_step=1)
         slot = dict(start=datetime.now(timezone.utc).isoformat(), charge_setback=True,
                     device_commands={'heater': {'type':'setpoint', 'target_c':19, 'minimum_c':18, 'maximum_c':22}})
-        def request():
-            return device_intent(OWNER, 'apply', self.plan, slot, configuration_revision=1, policy_revision=1)
-
-        self.capacity.lowers_heating_target.return_value = True
-        self.physical.external_ready = Mock(return_value=False)
-        result = await self.physical.perform(request())
-        self.assertIsNone(result['error'])
-        self.assertEqual(native.attributes['temperature'], 18)
-        self.assertEqual(native.state, 'heat')
-        self.assertEqual(result['ownership']['records'][OWNER]['charge_setback_c'], 18)
-        self.assertEqual(result['result']['decision']['planned_target_c'], 19)
-        self.physical.external_ready.assert_not_called()
-
-        native.attributes.pop('current_temperature')
-        self.assertEqual((await self.physical.perform(request()))['error']['kind'], 'observation')
-        self.assertEqual(native.attributes['temperature'], 18)
-
-        native.attributes['current_temperature'] = 18.5
-        self.capacity.lowers_heating_target.return_value = False
-        deferred = await self.physical.perform(request())
-        self.assertTrue(deferred['reservation_required'])
-        self.assertEqual(native.attributes['temperature'], 18)
-        self.physical.external_ready.return_value = True
-        result = await self.physical.perform(request())
+        request = device_intent(OWNER, 'apply', self.plan, slot, configuration_revision=1, policy_revision=1)
+        self.physical.external_ready = Mock(return_value=True)
+        result = await self.physical.perform(request)
         self.assertIsNone(result['error'])
         self.assertEqual(native.attributes['temperature'], 19)
-        self.assertNotIn('charge_setback_c', result['ownership']['records'][OWNER])
+        self.assertEqual(native.state, 'heat')
+        self.physical.external_ready.assert_called_with(
+            OWNER, entity='climate.heater', value=19.0, require_battery_release=False)
 
     async def test_scheduled_relay_regulates_and_defers_or_sheds_without_manual_relief(self):
         self.options['device_control_mappings']['heater'].update(
@@ -421,6 +402,7 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         self.assertEqual(self.states['climate.heater'].attributes['temperature'], 19)
 
         self.states['climate.heater'].attributes['temperature'] = 18
+        self.physical.external_ready = Mock(side_effect=ControlDeadlineError('Waiting for house import capacity'))
         result = await self.physical.perform({**scheduled, 'request_id': 'raise'})
         self.assertTrue(result['reservation_required'])
         self.assertEqual([row['name'] for row in result['deadlines']], ['battery_headroom'])

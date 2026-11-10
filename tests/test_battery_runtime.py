@@ -140,6 +140,25 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_measured_grid_excess_lowers_charge_before_house_reading_catches_up(self):
+        r = Rig()
+        self.addAsyncCleanup(r.runtime.close)
+        r.plan['grid']['import_limit_w'] = 5000
+        r.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        r.rows['number.charge']['state'] = '1.8'
+        r.rows['sensor.battery']['state'] = '1800'
+        r.rows['sensor.grid']['state'] = '6000'
+        await r.start()
+
+        assessment = r.runtime.snapshot()['assessment']
+        self.assertEqual(assessment['reason'], 'import_headroom_reduced')
+        curve = r.runtime._model.grid_charge
+        self.assertAlmostEqual(assessment['charge_dc_w'], int(curve.output(curve.input(1800) - 1000)), delta=1)
+        r.rows['sensor.grid']['state'] = '2800'
+        await r.advance()
+        assessment = r.runtime.snapshot()['assessment']
+        self.assertEqual(assessment['charge_dc_w'], assessment['nominal_charge_dc_w'])
+
     async def test_planning_model_preserves_the_loss_curves_and_journal_storage_ratios(self):
         r = Rig()
         self.addAsyncCleanup(r.runtime.close)

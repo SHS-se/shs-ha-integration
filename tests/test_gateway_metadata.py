@@ -29,7 +29,6 @@ from shs_core.connection_health import RetryBackoff
 from shs_core.battery_native_adapter import SigenAdapter
 from shs_core.native_numbers import service_watts, canonical_metadata, watts as native_watts
 from shs_core.grid_capacity import capped_intention, ev_current_ceiling
-from shs_core.heating_overrides import CHARGE_SETBACK_C
 from shs_core.device_gateway import DeviceIntent
 from shs_core.gateway_journal import AdmissionPending
 from shs_core.device_operations import ControlDeadlineError, ControlObservationError, HeatingDeferred, PowerHistoryError
@@ -151,8 +150,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             observe_power_peak=observe_power_peak, observe_setting_peak=observe_setting_peak, merge_power_peaks=merge_power_peaks, RetryBackoff=RetryBackoff, capacity_key=capacity_key, house_meter_errors=house_meter_errors,
             HouseMeterError=HouseMeterError, GridCapacityConfigurationError=GridCapacityConfigurationError, ControlObservationError=ControlObservationError,
             battery_import_bound=battery_import_bound, battery_discharge_ceiling=battery_discharge_ceiling, CHARGING_MODES=CHARGING_MODES, device_mode=device_mode,
-            promised_credit_w=promised_credit_w, proportional_supply=proportional_supply,
-            CHARGE_SETBACK_C=CHARGE_SETBACK_C))
+            promised_credit_w=promised_credit_w, proportional_supply=proportional_supply))
         for key,value in dict(validate_bindings=validate_bindings,ordered=ordered,FACT_ATTRIBUTES=FACT_ATTRIBUTES,
                 native_pool_idle=native_pool_idle,owned_device_sources=owned_device_sources,validate_pool_pause=validate_pool_pause,
                 temperature_available=temperature_available,temperature_metadata=temperature_metadata).items():

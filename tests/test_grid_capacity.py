@@ -15,6 +15,7 @@ from shs_core.grid_capacity import (required_import, import_limit, empty_capacit
 from shs_core.command_journal import Command, NativeAction
 from shs_core.device_operations import ControlDeadlineError
 from shs_core.device_gateway import DeviceIntent
+from shs_core.gateway_journal import AdmissionPending
 
 
 class ImportArithmeticTests(unittest.TestCase):
@@ -324,22 +325,39 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
             self.source.claim_import(intent, 'switch.room', 'on')
         self.assertFalse(self.source.current_import_claims())
 
-    async def test_scheduled_heat_uses_measured_headroom_while_battery_can_reduce_charge(self):
+    async def test_missing_import_policy_is_pending_and_never_sends_an_increase(self):
+        self.configure_ev()
+        self.service.import_limit_w = None
+        with self.assertRaisesRegex(AdmissionPending, 'current website house import limit'):
+            await self.source.request('battery_capacity', {})
+        with self.assertRaisesRegex(AdmissionPending, 'current website house import limit'):
+            self.source.external_ready('ev', entity='switch.ev', value='on')
+        self.assertEqual(self.calls, [])
+        self.service.import_limit_w = 15000
+        self.assertTrue(self.source.external_ready('ev', entity='switch.ev', value='on'))
+
+    async def test_scheduled_heat_responds_only_to_measured_pressure_the_battery_cannot_clear(self):
         self.configure_ev()
         self.service.import_limit_w = 15000
         self.mapped_load('room', 'climate.room', 'heat', 4000, 'controlling', 2000)
+        options = self.source.configuration.options()
+        options['grid_power_entity'] = 'sensor.grid'
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.rows['sensor.grid'] = {**self.rows['sensor.house'], 'state': '14500'}
         self.rows['sensor.house']['state'] = '10000'
         self.rows['select.mode']['state'] = 'Command Charging (PV First)'
         self.rows['number.charge']['state'] = '4'
         self.rows['sensor.battery']['state'] = '3500'
         self.assertGreater(self.source.import_required(), 15000)
+        self.assertFalse(self.source.scheduled_heating_over_limit())
+        self.rows['sensor.grid']['state'] = '15500'
         self.assertTrue(self.source.scheduled_heating_over_limit(), 'A held battery cannot make room')
         self.source.capacity['coordination'] = {'withdrawal': {
             'controls': {'select.mode':'Command Charging (PV First)', 'number.charge':4, 'number.discharge':4},
             'valid_until_ms':self.gateway.now()+1000, 'context':self.gateway.context(),
         }}
         self.assertFalse(self.source.scheduled_heating_over_limit())
-        self.rows['sensor.house']['state'] = '13000'
+        self.rows['sensor.grid']['state'] = '20000'
         self.assertTrue(self.source.scheduled_heating_over_limit())
 
     async def test_expired_unissued_battery_target_leaves_measured_credit_available(self):
@@ -587,7 +605,7 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.rows['climate.room']['state'] = 'heat'
         self.assertEqual(self.source.import_required(), 6400)
 
-    async def test_confirmed_setback_frees_peak_but_pending_raise_or_missing_evidence_keeps_it(self):
+    async def test_acknowledged_thermostat_counts_metered_load_and_keeps_unresolved_peaks(self):
         self.configure_ev()
         self.rows['sensor.house']['state'] = '6500'
         self.mapped_load('room', 'climate.room', 'heat', 4800, 'controlling', 3)
@@ -595,7 +613,7 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         native.update(current_temperature=21.5, temperature=21, hvac_action='idle')
         owner = 'device:room'
         self.physical.ownership.records[owner] = {
-            'options': self.source.options(), 'originals': {'climate.room': 21}, 'charge_setback_c': 20}
+            'options': self.source.options(), 'originals': {'climate.room': 21}, 'last_commands': {'climate.room': 20}}
         self.assertEqual((await self.source.request('battery_capacity', {}))['external_import_w'], 11297)
         native['temperature'] = 20
         self.assertEqual((await self.source.request('battery_capacity', {}))['external_import_w'], 6500)
@@ -604,9 +622,9 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
             'effects': {}, 'settled': {**effect, 'owner': owner, 'order': 1}}
         self.assertEqual(self.source.import_required(), 6500)
         self.assertEqual(self.source.native_load_bounds()['sensor.room_power'], 0)
-        native['current_temperature'] = 20.9
-        self.assertEqual(self.source.import_required(), 11297)
-        native['current_temperature'] = 21.5
+        native.update(current_temperature=19, hvac_action='heating')
+        self.rows['sensor.room_power']['state'] = '300'
+        self.assertEqual(self.source.import_required(), 6500)
         self.rows['sensor.room_power']['state'] = 'unavailable'
         self.assertEqual(self.source.import_required(), 11300)
         self.rows['sensor.room_power']['state'] = '3'

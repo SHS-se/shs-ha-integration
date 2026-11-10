@@ -24,7 +24,7 @@ from .device_commands import actuator_targets, execution_setup_errors, slot_comm
 from .hot_water import is_hot_water, heating_permission, hot_water_setup_errors, HotWaterConfigurationError
 from .device_controls import mapped_planning_path, pool_control_errors, pool_control_mapping, planning_path
 from .device_controls import pool_requested_w, pool_permission
-from .heating_overrides import CHARGE_SETBACK_C, heating_binding, relay_heat, room_temperature
+from .heating_overrides import heating_binding, relay_heat, room_temperature
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -583,26 +583,19 @@ class DeviceOperations:
     def shed_scheduled_heat(self, entity, state):
         return False
 
-    def charge_setback_target(self, entity, state, planned, *, holding):
+    def paused_room_is_warm(self, entity, state, planned):
         attrs = state.attributes
         try:
             if attrs.get('hvac_action') == 'heating':
-                return None
+                return False
             if attrs.get('hvac_action') not in ('idle', 'off'):
                 raise ValueError('The thermostat’s heating state is unavailable')
             temperature = room_temperature(entity, state.state, attrs, self.inputs.temperature_unit())
             # Use the planned target for the same 0.5 °C start margin as the room model.
-            if temperature <= planned - 0.5:
-                return None
-            supported = floor_native(temperature - CHARGE_SETBACK_C,
-                {'min': attrs['min_temp'], 'max': attrs['max_temp'], 'step': attrs.get('target_temp_step', 0.1)})
-            if supported is not None:
-                return min(planned, float(supported), finite(attrs['temperature']))
+            return temperature > planned - 0.5
         except (KeyError, TypeError, ValueError) as error:
-            if holding:
-                raise ControlObservationError(str(error), entity,
-                    'Check the thermostat’s room temperature and heating state.') from error
-        return None
+            raise ControlObservationError(str(error), entity,
+                'Check the thermostat’s room temperature and heating state.') from error
 
     async def execute_device(self, device, options, slot, *, target_c=None, suspend_heat=False):
         key = device.removeprefix("device:")
@@ -665,7 +658,7 @@ class DeviceOperations:
                     step = finite(state.attributes.get('target_temp_step', 0.1))
                     origin = finite(state.attributes['min_temp'])
                     planned = rounded_setpoint(command['target_c'], origin, step)
-                    if self.charge_setback_target(entity, state, planned, holding=True) is not None:
+                    if self.paused_room_is_warm(entity, state, planned):
                         # A paused thermostat already cannot start. Leave it
                         # paused until the room calls for heat or the slot changes.
                         return {'state': 'commanded', 'reason': 'Idle thermostat remains paused during planned charging',
@@ -686,7 +679,6 @@ class DeviceOperations:
         values = {}
         demand = None
         water = is_hot_water(model)
-        setback = None
         if water:
             if hot_water_setup_errors(mapping):
                 raise HotWaterConfigurationError(mapping, key)
@@ -704,12 +696,7 @@ class DeviceOperations:
                         raise ValueError("temperature control must use Celsius")
                     step, origin = finite(state.attributes.get("step", 1)), finite(state.attributes["min"])
                 values[entity] = rounded_setpoint(command["target_c"], origin, step)
-                if charge_setback:
-                    setback = self.charge_setback_target(entity, state, values[entity],
-                        holding=record is not None and 'charge_setback_c' in record)
-                    if setback is not None:
-                        values[entity] = setback
-            if setback is None and "room_target_c" in command and self.shed_scheduled_heat(targets[0], self.actuator_state(targets[0])):
+            if "room_target_c" in command and self.shed_scheduled_heat(targets[0], self.actuator_state(targets[0])):
                 await self.suspend_thermostat(device, options, targets[0])
                 return self.scheduled_heat_limited()
         else:
@@ -740,16 +727,11 @@ class DeviceOperations:
         record = await self.capture(device, options, targets)
         for entity, value in values.items():
             await self.command(entity, value)
-        if setback is None:
-            record.pop('charge_setback_c', None)
-        else:
-            record['charge_setback_c'] = setback
+        record.pop('charge_setback_c', None)
         record.pop('heating_suspended', None)
         await self.save()
         if kind == "setpoint":
             decision = {"kind": kind, "target_c": sorted(set(values.values()))}
-            if setback is not None:
-                decision.update(charge_setback=True, planned_target_c=command['target_c'])
         elif kind == "switch_schedule":
             decision = {"kind": kind, "on": on}
         else:

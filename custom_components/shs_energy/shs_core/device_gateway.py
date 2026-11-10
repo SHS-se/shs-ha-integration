@@ -99,17 +99,17 @@ class DeviceGateway(DeviceOperations):
             self.heating_needs_capacity = True
             self.device_deadline('heating_capacity', datetime.now(timezone.utc) + timedelta(seconds=5))
             raise HeatingDeferred('Making room for the heating override')
-        lowering_heat = (self.intent.operation == 'apply' and entity.startswith('climate.')
-                         and isinstance(value, float) and self.capacity is not None
-                         and self.capacity.lowers_heating_target(entity, value))
-        if lowering_heat:
+        thermostat_target = (self.intent.operation == 'apply' and entity.startswith('climate.')
+                             and isinstance(value, float) and self.capacity is not None)
+        if thermostat_target and self.capacity.lowers_heating_target(entity, value):
             return True
         if self.capacity is None and not self.local_obligation and not self.intent.headroom_reserved:
             self.reservation_required = True
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
             return False
         try:
-            if self.external_ready(device, entity=entity, value=value):
+            if (self.external_ready(device, entity=entity, value=value, require_battery_release=False)
+                    if thermostat_target else self.external_ready(device, entity=entity, value=value)):
                 return True
             if self.capacity is not None and not self.local_obligation:
                 self.reservation_required = self.capacity.claim_import(self.intent, entity, value)
@@ -129,11 +129,13 @@ class DeviceGateway(DeviceOperations):
             return False
         options = self.active_options
         self.observed_state(options.get('house_consumption_power_entity'))
+        self.observed_state(options.get('grid_power_entity'))
         for source in self.capacity.battery_capacity_sources():
             self.observed_state(source)
         domain = entity.split('.')[0]
         running = (state.state == 'on' if domain in ('switch', 'input_boolean') else
                    domain == 'climate' and state.state == 'heat'
+                   and state.attributes.get('hvac_action', 'heating') == 'heating'
                    and {'off', 'heat'} <= set(state.attributes.get('hvac_modes', ())))
         return running and self.capacity.scheduled_heating_over_limit()
 

@@ -90,3 +90,13 @@ A thermostat already paused for capacity stays paused while the room is idle
 during planned charging. A confirmed Off mode with idle relay status and a
 subsequent valid meter report settles that pause. Standby power remains in the
 metered load partition.
+
+Later on 10 November the user requested measured import backoff. Normal
+charging now preserves scheduled thermostat targets. An acknowledged Heat
+thermostat with a valid dedicated meter contributes measured power to standing
+demand. Pending or uncertain writes and new mode starts retain their possible
+draw. The live grid meter can reduce a scheduled battery charge when actual
+import exceeds the target before the house meter catches up. Scheduled heat
+relief waits for actual grid pressure that a connected charging battery cannot
+clear. Waiting for the website import limit after a restart is an admission
+wait, with no equipment fault reported to planning.

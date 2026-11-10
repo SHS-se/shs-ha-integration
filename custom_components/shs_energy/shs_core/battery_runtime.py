@@ -18,6 +18,7 @@ from math import floor, isfinite
 
 from .command_journal import Command, NativeAction
 from .command_transport import CommandNotSent
+from .gateway_journal import AdmissionPending
 from . import home_runtime as rt
 from .home_host import HomeHost, HostPorts, DispatchRejected
 from .battery_native_adapter import SigenAdapter
@@ -567,6 +568,9 @@ class BatteryRuntime:
                 with self.profiler.measure('refresh'):
                     await self._refresh()
                 self._last_error=None
+            except AdmissionPending as error:
+                self._last_error=None
+                self._status={'state':'pending','reason':str(error),'retry_automatically':True}
             except Exception as error:
                 self._last_error=f'{type(error).__name__}: {error}'
                 if self._record_fault('refresh',self._last_error):
@@ -1056,7 +1060,8 @@ class BatteryRuntime:
         native=self.adapter.envelope(controls)
         # HA settings can be optimistic. Preserve actual measured battery flow
         # in the physical reservation until its response catches up.
-        envelope=rt.Envelope(max(native.import_w,self._model.grid_charge.input(max(0,battery))),
+        measured_charge_ac=self._model.grid_charge.input(max(0,battery))
+        envelope=rt.Envelope(max(native.import_w,measured_charge_ac),
                             max(native.export_w,self._model.discharge.output(max(0,-battery))))
         valid=now+CAPTURE_LIFETIME_MS
         if not self.receipt_driven:
@@ -1081,6 +1086,10 @@ class BatteryRuntime:
             import_limit = min(import_limit, self._native_capacity['import_limit_w'])
         external_import = max(accounting.house_w, external_w, native_demand,
             authority.plant.import_limit_w if self._external_pending else 0)
+        if grid > import_limit:
+            # Back off from actual charging when the grid meter sees a load
+            # increase before the gross house measurement reflects it.
+            external_import = max(external_import, grid - measured_charge_ac)
         if self._native_capacity is not None and self._native_capacity['grid_charge_hold']:
             import_limit = min(import_limit, external_import)
         observed=rt.Observed(group_id,rt.Observation(revision,now,valid,controls,
