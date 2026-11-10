@@ -101,6 +101,42 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(call[2]['entity_id'],call[2].get('value')) for call in self.calls],
                          [('number.ev',16),('number.ev',13),('number.discharge',0)])
 
+    async def test_scheduled_ev_start_uses_available_capacity_and_recovers_full_current(self):
+        await self.configure_owner(initial_base=1000)
+        self.rows['select.mode']['state'] = 'Standby'
+        self.rows['sensor.battery']['state'] = '0'
+        stop = {**self.value, 'request_id':'off-for-new-slot',
+                'parameters':{**self.value['parameters'], 'current_a':0}}
+        self.assertIsNone((await self.owner.perform(stop))['error'])
+        self.base_w = 11000
+        self.rows['sensor.house']['state'] = str(self.base_w)
+        await self.record('sensor.house')
+        start = {**self.value, 'request_id':'bounded-start',
+                 'parameters':{**self.value['parameters'], 'current_a':11, 'minimum_a':5}}
+        blocked = await self.owner.perform({**start, 'request_id':'minimum-does-not-fit',
+            'parameters':{**start['parameters'], 'minimum_a':6}})
+        self.assertEqual(blocked['error']['kind'], 'deadline')
+        self.assertEqual(self.rows['switch.ev']['state'], 'off')
+        self.assertFalse(self.source.capacity['coordination']['caps'])
+
+        self.calls.clear()
+        started = await self.owner.perform(start)
+        self.assertIsNone(started['error'], started['error'])
+        self.assertEqual([(c[2]['entity_id'], c[2].get('value')) for c in self.calls],
+                         [('number.ev', 5), ('switch.ev', None)])
+        self.assertEqual(started['result']['execution_condition'],
+                         {'status':'capacity_limited', 'cause':'house_import_capacity', 'maximum_current_a':5})
+        self.assertLessEqual(self.source.import_required(), 15000)
+
+        self.base_w = 7000
+        self.rows['sensor.house']['state'] = str(self.base_w + 5 * 690)
+        await self.record('sensor.house')
+        self.assertEqual(await self.source.capacity_recoveries(), ['$ev'])
+        resumed = await self.owner.perform({**start, 'request_id':'full-capacity-returns'})
+        self.assertIsNone(resumed['error'])
+        self.assertEqual(float(self.rows['number.ev']['state']), 11)
+        self.assertFalse(self.source.capacity['coordination']['caps'])
+
     async def test_route_reduces_dependent_load_before_an_intermediate_zero_ceiling(self):
         from shs_core.runtime_json import encode_value, decode_value
         await self.configure_owner()

@@ -394,6 +394,9 @@ class DeviceOperations:
             raise ValueError("EV current control must use amperes")
         return entity, finite(low), finite(high)
 
+    async def ev_import_current(self, entity, switch, current, minimum):
+        return current
+
     async def execute_ev(self, options, slot):
         entity, low, high = self.ev_mapping(options)
         switch = options.get("ev_charge_switch_entity")
@@ -432,13 +435,18 @@ class DeviceOperations:
                 raise ControlObservationError(f"{entity}: the car's available current is below the planned minimum",
                     entity, "Inspect the available current reported by the car.")
             available = float(ceiling)
-        await self.command(entity, available)
+        admitted = await self.ev_import_current(entity, switch, available, max(low, slot_minimum))
+        await self.command(entity, admitted)
         await self.command(switch, "on")
-        if available < current:
-            return {"state": "limited", "requested_current_a": available,
-                    "reason": f"The car reports a limit of {available:g} A. The plan requests {current:g} A.",
-                    "fix": {"kind": "entity", "entity_id": entity},
-                    "decision": {"kind": "ev", "charging": True, "current_a": available}}
+        if admitted < current:
+            reason = (f"House import capacity allows {admitted:g} A. The plan requests {current:g} A."
+                      if admitted < available else
+                      f"The car reports a limit of {available:g} A. The plan requests {current:g} A.")
+            result = {"state": "limited", "requested_current_a": admitted, "reason": reason,
+                      "decision": {"kind": "ev", "charging": True, "current_a": admitted}}
+            if admitted == available:
+                result["fix"] = {"kind": "entity", "entity_id": entity}
+            return result
         return {"state": "commanded", "requested_current_a": current,
                 "reason": "current and charge switch accepted; delivered power not inferred",
                 "decision": {"kind": "ev", "charging": True, "current_a": current}}

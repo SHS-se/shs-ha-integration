@@ -148,6 +148,11 @@ class DeviceGateway(DeviceOperations):
             raise GatewayConflict('Device operation changed')
         return self.plan, self.slot
 
+    async def ev_import_current(self, entity, switch, current, minimum):
+        if self.capacity is None:
+            return current
+        return await self.capacity.limit_ev_current(entity, switch, current, minimum)
+
     def observed_state(self, entity):
         if entity:
             self.reads.add(entity)

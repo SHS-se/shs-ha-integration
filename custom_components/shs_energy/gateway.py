@@ -1401,6 +1401,52 @@ class HomeAssistantSource:
         except (ValueError, KeyError, TypeError):
             return False
 
+    async def limit_ev_current(self, entity, switch, requested, minimum):
+        """Use a feasible scheduled current and retain the original target for recovery."""
+        native = self.report(entity)
+        if self.report(switch)['state'] == 'on':
+            measured_setting = float(canonical_metadata(native['state'], native['attributes']))
+            if requested <= measured_setting:
+                return requested
+            minimum = max(minimum, measured_setting)
+        effect = self.describe_import('ev', switch, 'on')
+        identity = effect['device']
+        if identity in self.capacity.get('coordination', {}).get('caps', {}):
+            return requested
+
+        # A current battery writer can release its charging load before the
+        # car starts. Other native and unsettled loads remain in the budget.
+        exclude = None
+        battery = self.service.battery
+        if self.active_battery_target() is not None and battery.installation is not None:
+            installed = battery.installation[3]
+            if self.report(installed['battery_mode_entity'])['state'] in CHARGING_MODES:
+                exclude = self.battery_capacity_key(installed)
+        limit = import_limit(self.service.import_limit_w)
+        reserved = self.heating_effects()
+        available = requested
+        while available >= minimum and available > 0:
+            watts = available * EV_WATTS_PER_AMP
+            desired = {**effect, 'after_w':watts, 'possible_w':watts,
+                       'controls':{**effect['controls'], entity:available}}
+            demand = self.import_required(effect=desired, exclude_device=exclude, reserved=reserved.values())
+            deficit = demand - self.discharge_credit(desired, demand) - limit
+            if deficit <= 0:
+                if available < requested:
+                    await self.capacity_update('caps', {identity: {
+                        'device':identity, 'owner':'ev', 'maximum_w':watts,
+                        'withdrawal':'house_import_capacity',
+                        'resume_controls':{**effect['controls'], entity:requested},
+                        'requested_w':requested * EV_WATTS_PER_AMP,
+                    }})
+                return available
+            reduced = ev_current_ceiling(watts - deficit, native['attributes'], minimum)
+            if reduced >= available:
+                break
+            available = reduced
+        # The normal admission check explains why even the requested start must wait.
+        return requested
+
     def attach(self):
         @callback
         def matches(data):
