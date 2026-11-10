@@ -136,6 +136,20 @@ class ScheduledController(DeviceOperations):
         return await super().execute_ev(options, slot)
 
     async def execute_device(self, device, options, slot):
+        key = device.removeprefix('device:')
+        if (slot.get('device_commands') or {}).get(key, {}).get('type') == 'setpoint':
+            for owner in ('battery', 'ev'):
+                if device_mode(options, owner) != 'controlling':
+                    continue
+                _, charging = self.coordinator.binding_plan_for(owner, options)
+                if not charging or charging['start'] != slot['start']:
+                    continue
+                command = charging.get('battery_command') or {}
+                requested = (command.get('operation') == 'grid_charge' if owner == 'battery'
+                             else (charging.get('ev_target_current_a') or 0) > 0)
+                if requested:
+                    slot = {**slot, 'charge_setback': True}
+                    break
         if self.devices is not None and not self.verifying:
             return await self._physical(device, 'apply', options, slot)
         return await super().execute_device(device, options, slot)

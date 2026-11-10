@@ -102,13 +102,13 @@ class DeviceGateway(DeviceOperations):
         lowering_heat = (self.intent.operation == 'apply' and entity.startswith('climate.')
                          and isinstance(value, float) and self.capacity is not None
                          and self.capacity.lowers_heating_target(entity, value))
+        if lowering_heat:
+            return True
         if self.capacity is None and not self.local_obligation and not self.intent.headroom_reserved:
             self.reservation_required = True
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
             return False
         try:
-            if lowering_heat:
-                return self.external_ready(device, entity=entity, value=value, require_battery_release=False)
             if self.external_ready(device, entity=entity, value=value):
                 return True
             if self.capacity is not None and not self.local_obligation:
@@ -117,7 +117,7 @@ class DeviceGateway(DeviceOperations):
             return False
         except ControlDeadlineError:
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
-            if self.capacity is not None and not self.local_obligation and not lowering_heat:
+            if self.capacity is not None and not self.local_obligation:
                 self.reservation_required = self.capacity.claim_import(self.intent, entity, value)
             raise
         except PowerHistoryError:
@@ -255,9 +255,11 @@ class DeviceGateway(DeviceOperations):
             return {'device_models':p['models'], 'pool':{'stop_temperature_c':p['stop_temperature_c']}}, dict(start=p['start'], pool_w=p['heating_w'], pool_permitted=p['pool_permitted'])
         if intent.device.startswith('device:'):
             key = intent.device.removeprefix('device:')
-            if set(p) != {'start', 'commands', 'models'} or key not in p['commands']:
+            if (set(p) - {'charge_setback'} != {'start', 'commands', 'models'}
+                    or type(p.get('charge_setback', False)) is not bool or key not in p['commands']):
                 raise ValueError('Invalid mapped device intention')
-            return {'device_models':p['models']}, dict(start=p['start'], device_commands=p['commands'])
+            return {'device_models':p['models']}, dict(start=p['start'], device_commands=p['commands'],
+                charge_setback=p.get('charge_setback', False))
         raise ValueError('Battery control requires an admitted native transition')
 
     def capacity_reduction_available(self, owner, value):

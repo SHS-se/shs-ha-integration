@@ -10,6 +10,7 @@ from .operating_modes import device_mode
 
 
 DEFAULT_MINUTES = 60
+CHARGE_SETBACK_C = 1.0
 
 
 def utcnow():

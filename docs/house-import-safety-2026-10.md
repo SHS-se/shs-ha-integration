@@ -74,3 +74,14 @@ Consequently these changes strengthen software admission substantially, but SHS 
 ## Validation
 
 Regressions exercise delayed EV and battery readings, stale-high reductions, restart loading, uncertain effects, dispatch ordering, actuator replacement, live house-load changes during prepare, recovery from unavailable input, rated relay demand, setup correction and unchanged Verification handover semantics. The full integration/app suites and browser tests accompany the change. Private uploaded captures are not committed.
+
+## Idle room thermostats during scheduled charging
+
+On 10 November 2026 the user requested a one-degree setback for idle heating
+thermostats when the accepted plan calls for charging. The app rounds down to
+the thermostat's supported step and preserves heating called for by the room
+plan. The gateway counts measured draw after it observes the app's lower target,
+the one-degree margin and idle operation. It retains pending command effects
+and restores peak accounting when the proof is lost. A later increase still
+requires admission. The configured house import target continues to govern
+commanded increases. Live metering captures any transient overage.

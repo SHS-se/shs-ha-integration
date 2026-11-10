@@ -22,9 +22,9 @@ from .controller_metrics import ControllerMetrics, fingerprint, record_time
 from .battery_commands import validate_battery_command, battery_mode_key
 from .device_commands import actuator_targets, execution_setup_errors, slot_command
 from .hot_water import is_hot_water, heating_permission, hot_water_setup_errors, HotWaterConfigurationError
-from .device_controls import pool_control_errors, pool_control_mapping, planning_path
+from .device_controls import mapped_planning_path, pool_control_errors, pool_control_mapping, planning_path
 from .device_controls import pool_requested_w, pool_permission
-from .heating_overrides import heating_binding, relay_heat, room_temperature
+from .heating_overrides import CHARGE_SETBACK_C, heating_binding, relay_heat, room_temperature
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -625,9 +625,6 @@ class DeviceOperations:
         record = self.ownership.records.get(device)
         if suspend_heat:
             return await self.suspend_thermostat(device, options, targets[0])
-        if "room_target_c" in command and self.shed_scheduled_heat(targets[0], self.actuator_state(targets[0])):
-            await self.suspend_thermostat(device, options, targets[0])
-            return self.scheduled_heat_limited()
         if record and (entity := record.get('heating_suspended')):
             if self.actuator_state(entity).state == 'off':
                 await self.command(entity, 'heat')
@@ -645,7 +642,9 @@ class DeviceOperations:
                    if not self.matches(entity, value)}
         values = {}
         demand = None
-        water = is_hot_water(next(m for m in models if m["key"] == key))
+        model = next(m for m in models if m["key"] == key)
+        water = is_hot_water(model)
+        setback = None
         if water:
             if hot_water_setup_errors(mapping):
                 raise HotWaterConfigurationError(mapping, key)
@@ -669,6 +668,31 @@ class DeviceOperations:
                 # is 23, even above the plan's 22.5 maximum, so the room gets
                 # the heat it was planned rather than less.
                 values[entity] = origin + floor((command["target_c"] - origin) / step + 0.5 + 1e-9) * step
+                if (target_c is None and slot.get('charge_setback') and entity.startswith('climate.')
+                        and model.get('category') in ('heating', 'pool_heating')
+                        and mapped_planning_path(model, mapping, options.get('pool_water_temperature_entity')) == 'room'):
+                    action = state.attributes.get('hvac_action')
+                    if action == 'idle':
+                        try:
+                            temperature = room_temperature(entity, state.state, state.attributes, self.inputs.temperature_unit())
+                        except (TypeError, ValueError) as error:
+                            if record and 'charge_setback_c' in record:
+                                raise ControlObservationError(str(error), entity,
+                                    'Check the thermostat’s room temperature reading.') from error
+                            continue
+                        # Use the planned target for the same 0.5 °C start margin as the room model.
+                        if temperature > values[entity] - 0.5:
+                            supported = floor_native(temperature - CHARGE_SETBACK_C,
+                                {'min': origin, 'max': state.attributes['max_temp'], 'step': step})
+                            if supported is not None:
+                                setback = min(values[entity], float(supported), finite(state.attributes['temperature']))
+                                values[entity] = setback
+                    elif action != 'heating' and record and 'charge_setback_c' in record:
+                        raise ControlObservationError('The thermostat’s heating state is unavailable', entity,
+                            'Check the heating state reported by the thermostat.')
+            if setback is None and "room_target_c" in command and self.shed_scheduled_heat(targets[0], self.actuator_state(targets[0])):
+                await self.suspend_thermostat(device, options, targets[0])
+                return self.scheduled_heat_limited()
         else:
             if room_relay or (target_c is not None and kind == "switch_schedule"):
                 sensor = mapping["temperature_entity_id"]
@@ -697,10 +721,16 @@ class DeviceOperations:
         record = await self.capture(device, options, targets)
         for entity, value in values.items():
             await self.command(entity, value)
+        if setback is None:
+            record.pop('charge_setback_c', None)
+        else:
+            record['charge_setback_c'] = setback
         record.pop('heating_suspended', None)
         await self.save()
         if kind == "setpoint":
             decision = {"kind": kind, "target_c": sorted(set(values.values()))}
+            if setback is not None:
+                decision.update(charge_setback=True, planned_target_c=command['target_c'])
         elif kind == "switch_schedule":
             decision = {"kind": kind, "on": on}
         else:

@@ -34,6 +34,8 @@ def device_intent(device, operation, plan, slot, *, configuration_revision, poli
                               models=plan['device_models'])
         elif device.startswith('device:'):
             parameters.update(commands=slot['device_commands'], models=plan['device_models'])
+            if slot.get('charge_setback'):
+                parameters['charge_setback'] = True
         else:
             raise ValueError('Battery control requires an admitted route')
     return compact_device_intent(dict(request_id=uuid4().hex, device=device, operation=operation,

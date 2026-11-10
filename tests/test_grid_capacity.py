@@ -587,6 +587,46 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.rows['climate.room']['state'] = 'heat'
         self.assertEqual(self.source.import_required(), 6400)
 
+    async def test_confirmed_setback_frees_peak_but_pending_raise_or_missing_evidence_keeps_it(self):
+        self.configure_ev()
+        self.rows['sensor.house']['state'] = '6500'
+        self.mapped_load('room', 'climate.room', 'heat', 4800, 'controlling', 3)
+        native = self.rows['climate.room']['attributes']
+        native.update(current_temperature=21.5, temperature=21, hvac_action='idle')
+        owner = 'device:room'
+        self.physical.ownership.records[owner] = {
+            'options': self.source.options(), 'originals': {'climate.room': 21}, 'charge_setback_c': 20}
+        self.assertEqual((await self.source.request('battery_capacity', {}))['external_import_w'], 11297)
+        native['temperature'] = 20
+        self.assertEqual((await self.source.request('battery_capacity', {}))['external_import_w'], 6500)
+        effect = self.source.describe_import(owner, 'climate.room', 20)
+        self.source.capacity['devices'][effect['device']] = {
+            'effects': {}, 'settled': {**effect, 'owner': owner, 'order': 1}}
+        self.assertEqual(self.source.import_required(), 6500)
+        self.assertEqual(self.source.native_load_bounds()['sensor.room_power'], 0)
+        native['current_temperature'] = 20.9
+        self.assertEqual(self.source.import_required(), 11297)
+        native['current_temperature'] = 21.5
+        self.rows['sensor.room_power']['state'] = 'unavailable'
+        self.assertEqual(self.source.import_required(), 11300)
+        self.rows['sensor.room_power']['state'] = '3'
+        raise_effect = self.source.describe_import(owner, 'climate.room', 22)
+        self.assertEqual(self.source.import_required(effect=raise_effect), 11297)
+        self.source.capacity['devices'][effect['device']]['effects']['waiting'] = {
+            **raise_effect, 'peak_w': 4800, 'order': 2}
+        self.assertEqual(self.source.import_required(), 11297)
+
+    async def test_lowering_thermostat_target_does_not_require_import_headroom(self):
+        self.configure_ev()
+        self.rows['sensor.house']['state'] = '14000'
+        self.mapped_load('room', 'climate.room', 'heat', 4800, 'controlling', 3)
+        self.rows['climate.room']['attributes'].update(min_temp=5, max_temp=30, target_temp_step=1)
+        await self.native('lower-room', 'device:room', 'climate.room', 'set_temperature', 18)
+        self.assertEqual(self.calls[0][2]['temperature'], 18)
+        with self.assertRaises(ControlDeadlineError):
+            await self.native('raise-room', 'device:room', 'climate.room', 'set_temperature', 20)
+        self.assertEqual(len(self.calls), 1)
+
     async def test_monitoring_demand_remains_in_house_meter_and_still_blocks_overload(self):
         self.configure_ev()
         self.service.import_limit_w = 15000

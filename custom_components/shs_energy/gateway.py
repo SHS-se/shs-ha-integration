@@ -42,7 +42,7 @@ from .shs_core.device_gateway import DeviceGateway, DeviceIntent
 from .shs_core.device_operations import ControlDeadlineError, ControlObservationError, PowerHistoryError, HeatingDeferred
 from .shs_core.gateway_journal import AdmissionPending, GatewayJournal, GatewayConflict, digest
 from .shs_core.gateway_service import GatewayService, AppConnection
-from .shs_core.heating_overrides import (HeatingOverrides, active_heating, heating_binding,
+from .shs_core.heating_overrides import (CHARGE_SETBACK_C, HeatingOverrides, active_heating, heating_binding,
     heating_members, relay_heat, room_temperature)
 from .shs_core.gateway_stream import GatewayCommands, GatewayOperations, GatewayRecord, GatewayStream
 from .shs_core.execution_configuration import ExecutionConfiguration
@@ -450,13 +450,44 @@ class HomeAssistantSource:
         return device_power_bound(mapping, self.power_peaks, state,
                                   members=self.sum_power_members(mapping.get('power')))
 
+    def confirmed_charge_setback(self, owner, entity, sensor):
+        if (not owner or not entity.startswith('climate.') or not sensor
+                or device_mode(self.options(), owner) != 'controlling'
+                or self.sum_power_members(sensor) is not None):
+            return False
+        record = self.service.physical.ownership.records.get(owner, {})
+        target = record.get('charge_setback_c')
+        if target is None or set(record['originals']) != {entity}:
+            return False
+        native = self.report(entity)
+        if not native or native['state'] != 'heat':
+            return False
+        attrs = native['attributes']
+        try:
+            power(self.report(sensor), source=sensor)
+            return (attrs.get('hvac_action') == 'idle'
+                    and finite(attrs['temperature']) == target
+                    and target <= finite(attrs['current_temperature']) - CHARGE_SETBACK_C)
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    def observed_device_bound(self, effect):
+        if self.confirmed_charge_setback(effect['logical'], effect['changed'], effect['sensor']):
+            return 0.0
+        return effect['before_w']
+
     def reserved_power_bound(self, row):
         """Use current member bounds for settled loads and preserve issued effects."""
         settled = row.get('settled', {})
         source = settled.get('sensor')
         owner = settled.get('owner')
         limit = None
-        if owner and settled.get('after_w') and self.sum_power_members(source) is not None:
+        targets = settled.get('controls', {})
+        if len(targets) == 1 and self.confirmed_charge_setback(owner, next(iter(targets)), source):
+            # Only the enabled peak is released. Actual draw remains in the
+            # meter partition, and capacity_bound retains every pending effect.
+            limit = 0.0
+        elif owner and settled.get('after_w') and self.sum_power_members(source) is not None:
             record = self.service.physical.ownership.records.get(owner, {})
             options = record.get('options', self.options())
             mappings = options.get('device_control_mappings', {})
@@ -716,13 +747,15 @@ class HomeAssistantSource:
                 **({'sum_power_w': rated} if self.sum_power_members(mapping.get('power')) is not None else {})}
 
     def check_command(self, command):
-        if command.action.service == 'turn_off' or command.action.service == 'set_hvac_mode' and command.action.value == 'off':
+        action = command.action
+        if action.service == 'turn_off' or action.service == 'set_hvac_mode' and action.value == 'off':
+            return
+        if action.service == 'set_temperature' and self.lowers_heating_target(action.entity, action.value):
             return
         effect = self.describe_command(command)
         if effect is None:
             return
         prepared = self.capacity['devices'].get(effect['device'], {}).get('effects', {}).get(command.id, effect)
-        action = command.action
         reducing = action.service == 'turn_off' or (
             effect['logical'] in ('ev','battery') and effect['possible_w'] <= effect['before_w']
             and effect['after_w'] <= prepared['commanded_before_w'])
@@ -1298,7 +1331,7 @@ class HomeAssistantSource:
             for entity in record['originals']:
                 effect = self.describe_import(owner, entity, (self.report(entity) or {}).get('state'))
                 if effect:
-                    include(effect,effect['before_w'])
+                    include(effect,self.observed_device_bound(effect))
         return bounds
 
     def house_power(self):
@@ -1343,7 +1376,7 @@ class HomeAssistantSource:
             entity = targets[0]
             descriptor = self.describe_import(owner, entity, (self.report(entity) or {}).get('state'))
             if descriptor is not None:
-                include(descriptor,descriptor['before_w'])
+                include(descriptor,self.observed_device_bound(descriptor))
         battery = self.service.battery
         if battery.installation is not None and exclude_device != self.battery_capacity_key(battery.installation[3]):
             _, _, conversion, installed = battery.installation
