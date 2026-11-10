@@ -58,6 +58,14 @@ combined on read, retaining every uncertain effect and using the latest confirme
 settlement. Supersession uses the same proof as normal observation, so an older
 never-witnessed uncertain write is not erased by a later OFF under another alias.
 
+For a single heating-only thermostat with reported activity and a direct power meter,
+SHS can learn the heating load from recent complete cycles. The largest
+corroborated startup draw sizes new commands, and time-weighted attributed
+energy sizes planning demand. A shared circuit remains in gross house demand
+and cannot offset an incremental thermostat reservation. Explicit ratings,
+SUM helpers and equipment with a native power setting keep their existing
+accounting. Inconclusive evidence leaves the retained meter rating in use.
+
 ## Complexity and practical limits
 
 The old EV/battery coordination was spread between the app's reservations, native battery transitions and HA's final device gate. The aggregate check is now shared at the common transport boundary, with one durable demand ledger in the existing journal. The ledger adds necessary state for outstanding effects; replacing it with a meter-only comparison would recreate the lag bugs. The battery's native multi-register transition state machine remains necessary and is not replaced by another executor.

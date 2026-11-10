@@ -13,6 +13,7 @@ from shs_core.grid_capacity import (required_import, import_limit, empty_capacit
     prepare_capacity, finish_capacity, observe_capacity, capacity_bound, dispatch_capacity, commanded_controls,
     capacity_key, canonicalize_capacity)
 from shs_core.command_journal import Command, NativeAction
+from shs_core.device_draw import DeviceDraw, DrawBinding
 from shs_core.device_operations import ControlDeadlineError
 from shs_core.device_gateway import DeviceIntent
 from shs_core.gateway_journal import AdmissionPending
@@ -692,6 +693,39 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
             **raise_effect, 'peak_w': 4800, 'order': 2}
         self.assertEqual(self.source.import_required(), 11297)
 
+    async def test_learned_thermostat_reserves_added_watts_over_outlet_load(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        self.mapped_load('room','climate.room','heat',4851.8,'controlling',3000)
+        native = self.rows['climate.room']['attributes']
+        native.update(temperature=20,current_temperature=21,hvac_action='idle',
+                      min_temp=5,max_temp=30,target_temp_step=1,hvac_modes=['off','heat'])
+        owner = 'device:room'
+        self.physical.ownership.records[owner] = {
+            'options':self.source.options(),'originals':{'climate.room':20},
+            'last_commands':{'climate.room':20}}
+        binding = DrawBinding('climate.room','sensor.room_power')
+        self.source.draw_bindings.add(binding)
+        self.source.device_draws[binding] = DeviceDraw(1000,450,3,400,{})
+        self.rows['sensor.house']['state'] = '6000'
+        effect = self.source.describe_import(owner,'climate.room',22)
+        self.assertEqual(effect['possible_w'],1000)
+        self.assertEqual(self.source.import_required(),6000)
+        self.assertEqual(self.source.import_required(effect=effect),7000)
+        self.rows['sensor.house']['state'] = '14500'
+        with self.assertRaisesRegex(ControlDeadlineError,'15500 W required'):
+            await self.native('draw-blocked',owner,'climate.room','set_temperature',22)
+        self.assertFalse(self.calls)
+        self.rows['sensor.house']['state'] = '13900'
+        await self.native('draw-admitted',owner,'climate.room','set_temperature',22)
+        self.assertEqual(len(self.calls),1)
+        self.assertEqual(self.source.import_required(),14900)
+        mappings = self.source.options()['device_control_mappings']
+        self.assertEqual((await self.source.request('planning_device_draws',{'mappings':mappings}))['room']['running_w'],450)
+        self.source.refresh_draw_bindings({'sensor.room_power':('sensor.replacement',)})
+        self.assertEqual(self.source.mapped_power_bound(mappings['room']),4851.8)
+        self.assertEqual(self.source.capacity['devices'][effect['device']]['effects']['draw-admitted']['peak_w'],1000)
+
     async def test_lowering_thermostat_target_does_not_require_import_headroom(self):
         self.configure_ev()
         self.rows['sensor.house']['state'] = '14000'
@@ -985,6 +1019,23 @@ class DurableDemandTests(unittest.TestCase):
         self.assertEqual(capacity_bound(self.capacity['devices']['ev']),11040)
         self.report(12,'sensor.ev','0')
         self.assertEqual(capacity_bound(self.capacity['devices']['ev']),0)
+
+    def test_attributed_thermostat_settles_with_later_shared_circuit_reading(self):
+        effect = {**self.effect(1000), 'device':'room', 'logical':'device:room',
+                  'changed':'climate.room', 'controls':{'climate.room':22},
+                  'sensor':'sensor.circuit','draw_power_w':1000}
+        prepare_capacity(self.capacity,'heat',effect,10)
+        self.report(11,'sensor.circuit','3000')
+        dispatch_capacity(self.capacity,'heat',11)
+        finish_capacity(self.capacity,'heat','service_returned')
+        self.rows['climate.room'] = (12, {'entity_id':'climate.room','state':'heat',
+            'attributes':{'temperature':22,'hvac_action':'heating'}})
+        observe_capacity(self.capacity,12,lambda key:self.rows.get(key,(0,None)))
+        row = self.capacity['devices']['room']
+        self.assertIn('heat',row['effects'])
+        self.report(13,'sensor.circuit','4000')
+        self.assertFalse(row['effects'])
+        self.assertEqual(row['settled']['after_w'],1000)
 
     def test_control_acknowledgement_without_power_cannot_free_ev_capacity(self):
         effect=self.effect(0,'off');effect['sensor']=None

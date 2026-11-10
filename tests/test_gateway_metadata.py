@@ -1,6 +1,7 @@
 """HA metadata events against the real battery fence, without installing HA."""
 import asyncio
 from copy import deepcopy
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import json
 import logging
@@ -21,6 +22,7 @@ from shs_core.native_readings import power
 from shs_core.grid_capacity import (battery_released, required_import, import_limit,
     empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, observe_setting_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, battery_discharge_ceiling, CHARGING_MODES)
 from shs_core.device_commands import actuator_targets
+from shs_core.device_draw import DrawBinding, HISTORY_WINDOW, REFRESH_INTERVAL, learn_device_draw
 from shs_core.discovery import dashboard_meters, meter_room
 from shs_core.operating_modes import device_mode
 from shs_core.battery_mode import promised_credit_w
@@ -129,6 +131,8 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
         passthrough = lambda function:function
         registry = SimpleNamespace(async_get=lambda entity:None)
         adapter = load_adapter('gateway.py', dict(asyncio=asyncio, finite=finite, service_watts=service_watts, canonical_metadata=canonical_metadata, native_watts=native_watts, capped_intention=capped_intention, ev_current_ceiling=ev_current_ceiling, DeviceIntent=DeviceIntent, AdmissionPending=AdmissionPending, digest=digest, datetime=datetime, timedelta=timedelta, timezone=timezone, json=json,
+            asdict=asdict, DrawBinding=DrawBinding, HISTORY_WINDOW=HISTORY_WINDOW, REFRESH_INTERVAL=REFRESH_INTERVAL,
+            learn_device_draw=learn_device_draw,
             logging=logging, Path=Path, perf_counter=perf_counter, thread_time=thread_time, GatewayConflict=GatewayConflict,
             callback=passthrough, vol=SimpleNamespace(Required=lambda key:key),
             websocket_api=SimpleNamespace(require_admin=passthrough, async_response=passthrough,

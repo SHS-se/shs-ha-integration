@@ -213,7 +213,8 @@ class AppEngine:
             lambda:self.mirror.context['area_names'],lambda:self.mirror.context['entity_areas'],
             self.editor.inventory,self.mirror.report,history,
             lambda:datetime.now(timezone.utc),lambda:not self.started,self.repair,self.wake_projection.set,self.spawn,
-            lambda mappings:history.source("planning_power_bounds", {"mappings":mappings}))
+            lambda mappings:history.source("planning_power_bounds", {"mappings":mappings}),
+            lambda mappings:history.source("planning_device_draws", {"mappings":mappings}))
         entry = self.identity['entry_id']
         stores = self.root/'stores'
         def record(prefix):

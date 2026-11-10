@@ -1,6 +1,7 @@
 """HA source, socket and native-service composition for the app gateway."""
 import asyncio
 from contextlib import closing
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import json
 import logging
@@ -32,6 +33,7 @@ from .shs_core.native_readings import power
 from .shs_core.grid_capacity import (battery_released, required_import, import_limit,
     empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, observe_setting_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, battery_discharge_ceiling, CHARGING_MODES)
 from .shs_core.device_commands import actuator_targets
+from .shs_core.device_draw import DrawBinding, HISTORY_WINDOW, REFRESH_INTERVAL, learn_device_draw
 from .shs_core.discovery import dashboard_meters
 from .shs_core.operating_modes import device_mode
 from .shs_core.battery_mode import promised_credit_w
@@ -89,6 +91,9 @@ class HomeAssistantSource:
         self.power_settings = set()
         self.power_history_loaded = set()
         self.power_history_pending = False
+        self.draw_bindings = set()
+        self.device_draws = {}
+        self.draw_refresh = asyncio.Event()
         self.capacity_entities = set()
         self.capacity_refresh_pending = False
         self.intake_counts = {'ordered':0, 'replaceable':0, 'bytes':0}
@@ -247,6 +252,7 @@ class HomeAssistantSource:
             'admission':{'revision','bindings','pool_pause'}, 'live':{'after'},
             'catalog':set(), 'device_room':{'device_key','meters','area_id'},
             'battery_capacity':set(), 'planning_power_bounds':{'mappings'},
+            'planning_device_draws':{'mappings'},
             'configure':{'expected_revision','revision','options','digest'},
             'statistics':{'start','end','entities','period','units','kinds'},
             'states':{'start','end','entities','with_attributes'}, 'forecast':{'entity'}}
@@ -254,12 +260,15 @@ class HomeAssistantSource:
             raise ValueError('Unsupported source request')
         if operation == 'credentials':
             return dict(self.entry.data)
-        if operation == 'planning_power_bounds':
+        if operation in ('planning_power_bounds', 'planning_device_draws'):
             # Planning and final dispatch share the same retained electrical
             # evidence. A quiet/currently limited sensor is not an ON rating.
             mappings = body['mappings']
             if mappings != self.options().get('device_control_mappings', {}):
                 raise GatewayConflict('Electrical capture belongs to another device configuration')
+            if operation == 'planning_device_draws':
+                return {key:asdict(draw) for key,mapping in mappings.items()
+                        if (draw := self.device_draw(mapping)) is not None}
             await self.refresh_capacity()
             if mappings != self.options().get('device_control_mappings', {}):
                 raise GatewayConflict('Device configuration changed during electrical capture')
@@ -445,10 +454,76 @@ class HomeAssistantSource:
             and isinstance(setting := mapping.get('power_setting_entity_id'), str) and '.' in setting}
 
     def mapped_power_bound(self, mapping):
+        if draw := self.device_draw(mapping):
+            return draw.startup_w
         setting = mapping.get('power_setting_entity_id')
         state = (self.report(setting) or {}).get('state') if isinstance(setting, str) else None
         return device_power_bound(mapping, self.power_peaks, state,
                                   members=self.sum_power_members(mapping.get('power')))
+
+    @staticmethod
+    def draw_binding(mapping):
+        meter = mapping.get('power')
+        if (mapping.get('control_type') != 'setpoint' or mapping.get('power_setting_entity_id')
+                or not isinstance(meter, str) or not meter.startswith('sensor.')):
+            return None
+        targets = actuator_targets(mapping)
+        if len(targets) == 1 and targets[0].startswith('climate.'):
+            return DrawBinding(targets[0], meter)
+        return None
+
+    def device_draw(self, mapping):
+        binding = self.draw_binding(mapping)
+        draw = self.device_draws.get(binding)
+        if draw is not None:
+            attrs = (self.report(binding.actuator) or {}).get('attributes', {})
+            modes = set(attrs.get('hvac_modes') or ())
+            if 'heat' in modes and modes <= {'heat', 'off'} and self.sum_power_members(binding.meter) is None:
+                return draw
+        return None
+
+    def refresh_draw_bindings(self, groups):
+        mappings = self.options().get('device_control_mappings', {})
+        group_members = {member for members in groups.values() if members for member in members}
+        bindings = {binding for mapping in mappings.values()
+                    if (binding := self.draw_binding(mapping)) is not None
+                    and groups[binding.meter] is None and binding.meter not in group_members
+                    and all(actuator_targets(other) == [binding.actuator]
+                            for other in mappings.values() if other.get('power') == binding.meter)}
+        if bindings != self.draw_bindings:
+            self.draw_bindings = bindings
+            self.device_draws = {binding:draw for binding,draw in self.device_draws.items() if binding in bindings}
+            self.draw_refresh.set()
+
+    async def learn_device_draws(self):
+        """Rebuild from retained Recorder evidence outside the command path."""
+        while not self.closed:
+            self.draw_refresh.clear()
+            bindings = self.draw_bindings
+            learned = {}
+            end = datetime.now(timezone.utc)
+            for binding in sorted(bindings, key=lambda item: (item.actuator, item.meter)):
+                try:
+                    rows = await self.history.states(end-HISTORY_WINDOW, end,
+                        [binding.actuator, binding.meter], with_attributes=True)
+                    draw = await self.hass.async_add_executor_job(learn_device_draw, binding,
+                        rows.get(binding.actuator, ()), rows.get(binding.meter, ()))
+                    if draw is not None:
+                        learned[binding] = draw
+                except Exception:
+                    _LOGGER.exception('Device power attribution history unavailable for %s; will retry', binding.actuator)
+            if self.closed:
+                return
+            if not self.draw_refresh.is_set() and self.device_draws != learned:
+                self.device_draws = learned
+                _LOGGER.info('Learned device power from heating cycles: %s',
+                    {binding.actuator:(draw.startup_w, draw.running_w, draw.cycles)
+                     for binding,draw in learned.items()})
+                self.wake_heating_capacity()
+            try:
+                await asyncio.wait_for(self.draw_refresh.wait(), REFRESH_INTERVAL.total_seconds())
+            except TimeoutError:
+                pass
 
     def metered_thermostat(self, owner, entity, sensor):
         if (not owner or not entity.startswith('climate.') or not sensor
@@ -486,7 +561,9 @@ class HomeAssistantSource:
             # Only the enabled peak is released. Actual draw remains in the
             # meter partition, and capacity_bound retains every pending effect.
             limit = 0.0
-        elif owner and settled.get('after_w') and self.sum_power_members(source) is not None:
+        elif owner and settled.get('after_w') and (
+                self.sum_power_members(source) is not None
+                or len(targets) == 1 and DrawBinding(next(iter(targets)), source) in self.device_draws):
             record = self.service.physical.ownership.records.get(owner, {})
             options = record.get('options', self.options())
             mappings = options.get('device_control_mappings', {})
@@ -510,6 +587,7 @@ class HomeAssistantSource:
             return
         roots = self.power_history_sources()
         groups = {source: self.sum_power_members(source) for source in roots}
+        self.refresh_draw_bindings(groups)
         if self.power_groups != groups:
             self.power_groups = groups
             self.wake_heating_capacity()
@@ -745,6 +823,7 @@ class HomeAssistantSource:
         return {**base, 'device':identity, 'before_w':demand(controls), 'commanded_before_w':demand(commanded), 'after_w':demand(expected),
                     'possible_w':max(demand(expected),demand({**controls,entity:value})),
                 'controls':expected, 'sensor':self.power_source(mapping,key),
+                **({'draw_power_w': rated} if self.device_draw(mapping) is not None else {}),
                 **({'sum_power_w': rated} if self.sum_power_members(mapping.get('power')) is not None else {})}
 
     def check_command(self, command):
@@ -1360,10 +1439,13 @@ class HomeAssistantSource:
         options = self.options()
         house = self.house_power() if house_w is None else house_w
         bounds, meters, batteries = {}, {}, set()
+        attributed_meters = set()
         def include(descriptor, bound):
             device = descriptor['device']
             bounds[device] = max(bounds.get(device, 0.0), bound)
             meters.setdefault(device, set()).update([descriptor['sensor']] if descriptor['sensor'] else [])
+            if descriptor.get('draw_power_w') is not None:
+                attributed_meters.add(descriptor['sensor'])
             if descriptor['logical'] == 'battery':
                 batteries.add(device)
         switch = options.get('ev_charge_switch_entity')
@@ -1418,7 +1500,9 @@ class HomeAssistantSource:
             # partitions. Retain the whole rated bound without subtracting it.
             if device not in batteries and len(sensors) == 1:
                 sensor = next(iter(sensors))
-                if sensor not in used:
+                # A learned draw is incremental. Outlets already in gross house
+                # demand cannot offset the possible draw of the heater.
+                if sensor not in used and sensor not in attributed_meters:
                     try:
                         measured, _ = power(self.report(sensor), source=sensor)
                     except ValueError:
@@ -1678,6 +1762,7 @@ async def open_gateway(hass, entry):
         await service.battery.open()
         source.attach()
         await source.refresh_configuration()
+        entry.async_create_background_task(hass, source.learn_device_draws(), name='shs_device_draw')
     except BaseException:
         service.heating.close()
         await stream.close()

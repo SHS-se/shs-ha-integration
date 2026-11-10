@@ -128,7 +128,7 @@ def prepare_capacity(capacity, command_id, effect, through):
     row = capacity['devices'].setdefault(effect['device'], {'effects': {}})
     settled_limit = None
     if row.get('settled', {}).get('sensor') == effect.get('sensor'):
-        settled_limit = effect.get('sum_power_w')
+        settled_limit = effect.get('draw_power_w', effect.get('sum_power_w'))
     peak = max(capacity_bound(row, settled_limit=settled_limit),
                effect['before_w'], effect['after_w'], effect['possible_w'])
     row['effects'][command_id] = {**effect, 'peak_w': peak, 'order': through,
@@ -228,10 +228,15 @@ def observe_capacity(capacity, ordinal, latest):
                     watts = (watts + effect['overhead_w']) * effect['scale'] if watts else 0.0
                     # A thermostat can draw standby power with its relay
                     # inhibited. Its reported draw remains in the house budget.
+                    activity = actuator.get('attributes', {}).get('hvac_action')
                     thermostat_off = (effect['changed'].startswith('climate.')
-                        and controls.get(effect['changed']) == 'off'
-                        and actuator.get('attributes', {}).get('hvac_action') in ('off', 'idle'))
-                    if not thermostat_off and watts > effect['after_w'] + effect['response_tolerance_w']:
+                        and controls.get(effect['changed']) == 'off' and activity in ('off', 'idle'))
+                    # For an attributed thermostat, circuit watts confirm the
+                    # meter reported but can include unrelated load. The
+                    # acknowledged thermostat also supplies its relay state.
+                    thermostat_attributed = (effect.get('draw_power_w') is not None
+                        and actuator.get('state') == 'heat' and activity in ('heating', 'idle'))
+                    if not (thermostat_off or thermostat_attributed) and watts > effect['after_w'] + effect['response_tolerance_w']:
                         continue
                 except (ValueError, KeyError, TypeError):
                     continue

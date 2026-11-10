@@ -8,11 +8,56 @@ from unittest.mock import AsyncMock
 from types import SimpleNamespace
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from shs_core.household_ports import HouseholdReadError, ConfigurationChanged
-from shs_core.room_electrical import OnCondition, capture_room_on_power, room_on_power
+from shs_core.room_electrical import OnCondition, attributed_device_quarters, capture_room_on_power, room_on_power
+from shs_core.device_draw import DrawBinding, learn_device_draw
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 def at(minutes): return START+timedelta(minutes=minutes)
 def row(minutes, action): return (at(minutes), 'heat', {'hvac_action': action})
+
+class AttributedDrawTests(unittest.TestCase):
+    def test_change_only_meter_can_measure_constant_load_cycles(self):
+        activity, power = [], []
+        for day in range(3):
+            start = START + timedelta(days=day, hours=12)
+            activity.extend((when,'heat',{'hvac_action':action}) for when,action in (
+                (start-timedelta(hours=1),'idle'), (start,'heating'),
+                (start+timedelta(minutes=10),'idle')))
+            if not power:
+                power.append((start-timedelta(hours=1),'3000',{'unit_of_measurement':'W'}))
+            power.extend((when,value,{'unit_of_measurement':'W'}) for when,value in (
+                (start,'4000'),(start+timedelta(minutes=10),'3000')))
+        draw = learn_device_draw(DrawBinding('climate.room','sensor.circuit'),activity,power)
+        self.assertEqual(draw.startup_w,1000)
+        self.assertEqual(draw.running_w,1000)
+
+    def test_repeated_cycles_separate_outlet_load_and_startup_from_running_power(self):
+        activity, power = [], []
+        # The first three days have the same heater on different outlet loads.
+        # On the fourth a lone faulty high reading coincides with startup.
+        for day, (outlets, peak) in enumerate(((2,986), (3100,969), (800,913), (2,4852))):
+            start = START + timedelta(days=day, minutes=15)
+            activity.extend((when, 'heat', {'hvac_action': action}) for when,action in (
+                (start-timedelta(minutes=3),'idle'), (start,'heating'),
+                (start+timedelta(seconds=145),'idle')))
+            power.extend((start+timedelta(seconds=offset),str((outlets+heater)/1000),
+                          {'unit_of_measurement':'kW'}) for offset,heater in (
+                (-120,0),(-60,0),(-4,peak),(2,695),(14,604),(30,480),(116,405),(139,0),(160,0)))
+        binding = DrawBinding('climate.room','sensor.circuit')
+        self.assertIsNone(learn_device_draw(binding,activity[:6],power[:18]))
+        draw = learn_device_draw(binding,activity,power)
+        self.assertEqual(draw.cycles,3)
+        self.assertAlmostEqual(draw.startup_w,986)
+        self.assertGreater(draw.running_w,400)
+        self.assertLess(draw.running_w,600)
+        self.assertAlmostEqual(sum(draw.quarter_kwh.values()),draw.running_w*draw.on_seconds/3_600_000)
+        # Keep unrelated metered energy and remove the misleading circuit total.
+        rows = [{"start": at(15).isoformat(), "device_energy_kwh":{"room":1.0,"other":0.3}},
+                {"start": at(30).isoformat(), "device_energy_kwh":{"room":0.8}}]
+        attributed = attributed_device_quarters(rows,{"room":{"quarter_kwh":draw.quarter_kwh}},START,at(45))
+        self.assertEqual(len(attributed),2)  # The measured cycle straddles the quarter.
+        self.assertEqual(attributed[1]["device_energy_kwh"]["other"],0.3)
+        self.assertLess(attributed[1]["device_energy_kwh"]["room"],0.1)
 
 class OnPowerTests(unittest.TestCase):
     def learn(self, rows, means=None, condition=None, extras=None):
@@ -78,6 +123,15 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
         h=self.history();found=await capture_room_on_power(h,[self.device()],{'room':self.mapping(1700)},START,at(15))
         self.assertEqual(found['room'].expected_w,1700)
         self.assertEqual(found['room'].source,'configured');h.states.assert_not_awaited();h.statistics.assert_not_awaited()
+
+    async def test_attributed_running_watts_replace_raw_room_means(self):
+        h = self.history()
+        found = await capture_room_on_power(h, [self.device()], {'room':self.mapping()}, START, at(15),
+            learned_draws={'room':{'startup_w':986,'running_w':455,'on_seconds':360,'cycles':3}})
+        self.assertEqual(found['room'].expected_w,455)
+        self.assertEqual(found['room'].as_inference()['method'],'room_attributed_cycle_energy_v1')
+        h.statistics.assert_not_awaited()
+        h.states.assert_not_awaited()
 
     async def test_remapping_cannot_reuse_old_sensor_or_prior_evidence(self):
         h=self.history()

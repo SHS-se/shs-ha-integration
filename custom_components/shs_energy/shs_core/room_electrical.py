@@ -19,6 +19,7 @@ from .household_ports import ConfigurationChanged, HouseholdReadError
 
 _LOGGER = logging.getLogger(__name__)
 PERIOD = timedelta(minutes=5)
+ATTRIBUTED_CYCLE_METHOD = "room_attributed_cycle_energy_v1"
 
 
 @dataclass(frozen=True)
@@ -35,9 +36,31 @@ class OnPowerEvidence:
     intervals: int
     source: str
     condition: OnCondition | None = None
+    cycles: int | None = None
 
     def as_inference(self):
-        return {"method": "room_observed_on_power_median_v1", **asdict(self)}
+        values = asdict(self)
+        method = ATTRIBUTED_CYCLE_METHOD
+        if self.cycles is None:
+            values.pop("cycles")
+            method = "room_observed_on_power_median_v1"
+        return {"method": method, **values}
+
+
+def attributed_device_quarters(rows, draws, start, end):
+    """Only subtract confidently attributed device energy from shared meters."""
+    if not draws:
+        return rows
+    by_start = {datetime.fromisoformat(row["start"]): {
+        **row, "device_energy_kwh": {key:value for key,value in row["device_energy_kwh"].items() if key not in draws}
+    } for row in rows}
+    for key, draw in draws.items():
+        for stamp, kwh in draw["quarter_kwh"].items():
+            at = datetime.fromisoformat(stamp)
+            if start <= at < end:
+                row = by_start.setdefault(at, {"start":stamp, "device_energy_kwh":{}})
+                row["device_energy_kwh"][key] = kwh
+    return [row for _, row in sorted(by_start.items()) if row["device_energy_kwh"]]
 
 
 def actuator_on(entity, state, attributes):
@@ -100,7 +123,8 @@ def room_on_power(*, conditions, power_means, actuator_rows, start, end):
     return result
 
 
-async def capture_room_on_power(history, devices, mappings, start, end, *, pool_water_entity=None):
+async def capture_room_on_power(history, devices, mappings, start, end, *, pool_water_entity=None,
+                                learned_draws=None):
     """Batch the existing history ports; numerical ownership stays in this module."""
     captured, conditions = {}, {}
     for device in devices:
@@ -111,6 +135,9 @@ async def capture_room_on_power(history, devices, mappings, start, end, *, pool_
         power = mapping.get("power")
         if type(power) in (int, float) and isfinite(power) and power > 0:
             captured[key] = OnPowerEvidence(float(power), 0, 0, "configured")
+        elif draw := (learned_draws or {}).get(key):
+            captured[key] = OnPowerEvidence(draw["running_w"], draw["on_seconds"] / 3600,
+                                            0, "attributed_cycles", cycles=draw["cycles"])
         elif isinstance(power, str):
             other = [m for k, m in mappings.items() if k != key and m.get("power") == power]
             conditions[key] = OnCondition(power, tuple(actuator_targets(mapping)),

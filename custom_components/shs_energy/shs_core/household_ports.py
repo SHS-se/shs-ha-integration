@@ -66,3 +66,4 @@ class HouseholdPorts:
     publish: Callable[[], None]
     spawn: Callable[[Coroutine, str], Any]
     electrical_power_bounds: Callable[[dict[str, dict]], Awaitable[dict[str, float | None]]]
+    electrical_device_draws: Callable[[dict[str, dict]], Awaitable[dict[str, dict]]]

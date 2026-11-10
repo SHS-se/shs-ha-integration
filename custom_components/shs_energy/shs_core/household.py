@@ -1190,6 +1190,8 @@ class Household:
 
     def _current_base_load_w(self, models, mappings):
         """Measured residual for a home with no recorder profile yet."""
+        from .room_electrical import ATTRIBUTED_CYCLE_METHOD
+
         entity = self.resolved_options().get("house_consumption_power_entity")
         state = self.ports.read_state(entity) if isinstance(entity, str) else None
         if state is None or state.attributes.get("unit_of_measurement") not in ("W", "kW"):
@@ -1204,6 +1206,8 @@ class Household:
         # observed running cycle with no history must remain in the residual;
         # its capacity is not an all-day consumption forecast.
         for model in models:
+            if (model.get("inference", {}).get("on_power") or {}).get("method") == ATTRIBUTED_CYCLE_METHOD:
+                continue  # A shared live meter cannot prove this device's current draw.
             mapping = mappings.get(model["key"], {})
             if isinstance(mapping.get("power"), str):
                 forecast = model.get("forecast_w_by_slot", [])
@@ -2900,9 +2904,13 @@ class Household:
                 "device control mappings must be an object",
                 remedy=REMEDY_DEFECT,
             )
-        from .room_electrical import capture_room_on_power
+        from .room_electrical import attributed_device_quarters, capture_room_on_power
+        learned_draws = await self.ports.electrical_device_draws(control_mappings)
+        device_profile_actuals = attributed_device_quarters(device_profile_actuals, learned_draws,
+                                                             profile_start, profile_end)
         room_on_power = await capture_room_on_power(self.ports.history, devices, control_mappings,
-            profile_start, profile_end, pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY))
+            profile_start, profile_end, pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
+            learned_draws=learned_draws)
         electrical_bounds = await self.ports.electrical_power_bounds(control_mappings)
         device_models, degraded_devices = build_device_models(
             devices,

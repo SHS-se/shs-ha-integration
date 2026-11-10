@@ -83,6 +83,7 @@ class Rig:
             history=self.history, utcnow=lambda: self.now, recovering=lambda: False,
             repair=lambda *args: self.repairs.append(args), publish=lambda: self.published.append(True), spawn=spawn,
             electrical_power_bounds=electrical_power_bounds,
+            electrical_device_draws=AsyncMock(return_value={}),
         )
         self.household = Household(ports, self.client,
             store=DurableRecord(self.records, json.dumps, json.loads), battery_inputs_store=self.battery_store, connection_store=Store(), control_authority=True)
