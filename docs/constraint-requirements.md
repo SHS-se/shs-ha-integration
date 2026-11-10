@@ -29,10 +29,17 @@ house demand.
 User requirement, 10 November 2026. In a slot already authorising grid charging,
 the app may use power that the measured house leaves unused in the accepted
 budget. It still observes the import limit, hardware ratings, EV current
-envelope and accepted charge targets. The house battery has priority over an
-optional car increase. Unused capacity never creates a charging slot.
-When a scheduled thermostat change needs import capacity, reserve the
-pending heater draw and reduce battery charging only by the capacity needed.
+envelope and accepted charge targets. The accepted charging allocations take
+priority over optional increases; filling the house battery first was an incident
+response, not a permanent controller policy. Unused capacity never creates a
+charging slot. When a scheduled device start needs import capacity, reserve its
+pending draw and reduce battery charging only by the capacity needed.
+
+User clarification, 10 November 2026: react to measured overload by reducing car
+or house-battery charging, or both, before applying a heater setback. Restore
+the accepted settings as demand falls. Pending command effects remain separate
+from settled measured draw. A missing required reading holds the last setting;
+it must not reset a charger from its optional increase to its nominal setting.
 
 Process events in the order received. Our own locally generated revisions may
 track that order and identify superseded work. Timestamps from devices or other

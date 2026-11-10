@@ -885,11 +885,10 @@ class HomeAssistantSource:
             return False
         end = (datetime.fromisoformat(intent.parameters['start']) + timedelta(minutes=15)
                if intent.operation == 'apply' else None)
-        # A scheduled thermostat setpoint needs only its own watts. Discrete
-        # starts still use the existing full charge release handshake.
-        thermostat = intent.operation == 'apply' and entity.startswith('climate.') and isinstance(value, float)
+        # Every described scheduled start needs only its incremental watts.
+        # Keep the full-release handshake for explicit heating overrides.
         self.import_claims[intent.device] = {'context':self.service.context(), 'end':end,
-                                            'effect':{**effect, 'hold_charge':not thermostat}}
+                                            'effect':{**effect, 'hold_charge':intent.operation != 'apply'}}
         return True
 
     def battery_capacity_sources(self):
@@ -911,16 +910,65 @@ class HomeAssistantSource:
             return False
         if grid <= limit:
             return False
+        _, battery_w = self.battery_charge_relief()
+        return grid - battery_w - self.ev_charge_relief() > limit
+
+    def measured_control_power(self, entity, *, signed=False):
+        report = self.report(entity)
+        try:
+            return power(report, source=entity, signed=signed)[0]
+        except (TypeError, ValueError, KeyError) as error:
+            raise ControlObservationError(str(error), entity,
+                'Wait for the power reading to return; control resumes automatically.',
+                unavailable=not report or report.get('state') in ('unknown', 'unavailable')) from error
+
+    def battery_charge_relief(self):
+        """Only a current writer can promise to reduce measured battery charge."""
         battery = self.service.battery
         if battery.installation is not None and self.active_battery_target() is not None:
             _, _, conversion, installed = battery.installation
-            mode = self.report(installed['battery_mode_entity'])['state']
-            if mode == 'Command Charging (PV First)':
-                sensor = installed['battery_power_measurement_entity']
-                measured, _ = power(self.report(sensor), source=sensor, signed=True)
-                # Let the connected battery lower its charge first.
-                return grid - conversion.grid_charge.input(max(0, measured)) > limit
-        return True
+            if self.report(installed['battery_mode_entity'])['state'] == 'Command Charging (PV First)':
+                measured = self.measured_control_power(installed['battery_power_measurement_entity'], signed=True)
+                return self.battery_capacity_key(installed), conversion.grid_charge.input(max(0, measured))
+        return None, 0.0
+
+    def ev_charge_relief(self):
+        """An executable scheduled EV request can yield all of its measured draw."""
+        options = self.options()
+        value = self.capacity.get('coordination', {}).get('intents', {}).get('ev')
+        if device_mode(options, 'ev') != 'controlling' or not value or value['operation'] != 'apply':
+            return 0.0
+        try:
+            intent = DeviceIntent.parse(value)
+            self.service.authorize_device(intent)
+            start = datetime.fromisoformat(intent.parameters['start'])
+            if not start <= datetime.now(timezone.utc) < start + timedelta(minutes=15):
+                return 0.0
+            if intent.parameters['current_a'] <= 0:
+                return 0.0
+            physical = self.service.physical
+            if '$ev' in options.get('excluded_device_readings', ()) or not options.get('ev_enabled', True):
+                return 0.0
+            for override in (options.get('control_override_entity'), options.get('ev_control_override_entity')):
+                if override and physical.state(override).state != 'off':
+                    return 0.0
+            record = physical.ownership.records.get('ev', {})
+            entity, minimum = self.flexible_ev(options, record)
+            physical.actuator_state(entity)
+            self.measured_control_power(options['house_consumption_power_entity'])
+            ev_current_ceiling(intent.parameters['current_a'] * EV_WATTS_PER_AMP,
+                self.report(entity)['attributes'], minimum)
+            if physical.actuator_state(options['ev_charge_switch_entity']).state != 'on':
+                return 0.0
+            # These inputs are required by execute_ev before it can reduce.
+            if physical.state(options['ev_connected_entity']).state not in ('on', 'off', 'true', 'false', 'connected', 'disconnected'):
+                return 0.0
+            physical.fraction(options['ev_soc_entity'])
+            physical.fraction(options['ev_target_soc_entity'])
+            effect = self.describe_import('ev', entity, self.report(entity)['state'])
+            return self.measured_control_power(effect['sensor'])
+        except (AdmissionPending, ControlObservationError, ValueError, KeyError, TypeError):
+            return 0.0
 
     def active_battery_target(self):
         battery = self.service.battery
@@ -1435,7 +1483,7 @@ class HomeAssistantSource:
         entity = options['house_consumption_power_entity']
         return power(self.report(entity), source=entity)[0]
 
-    def import_required(self, *, effect=None, exclude_device=None, reserved=(), house_w=None):
+    def import_required(self, *, effect=None, exclude_device=None, exclude_devices=(), reserved=(), house_w=None):
         options = self.options()
         house = self.house_power() if house_w is None else house_w
         bounds, meters, batteries = {}, {}, set()
@@ -1492,7 +1540,7 @@ class HomeAssistantSource:
             include(effect, max(effect['before_w'],effect['after_w'],effect['possible_w']))
         partitions, used = [], set()
         for device, bound in bounds.items():
-            if device == exclude_device:
+            if device == exclude_device or device in exclude_devices:
                 continue
             measured = 0.0
             sensors = meters[device]
@@ -1536,12 +1584,28 @@ class HomeAssistantSource:
     async def limit_ev_current(self, entity, switch, requested, minimum):
         """Use a feasible scheduled current and retain the original target for recovery."""
         native = self.report(entity)
-        if self.report(switch)['state'] == 'on':
-            measured_setting = float(canonical_metadata(native['state'], native['attributes']))
-            if requested <= measured_setting:
-                return requested
-            minimum = max(minimum, measured_setting)
         effect = self.describe_import('ev', switch, 'on')
+        ev = self.measured_control_power(effect['sensor'])
+        house = self.measured_control_power(self.options()['house_consumption_power_entity'])
+        grid_entity = self.options().get('grid_power_entity')
+        grid = self.measured_control_power(grid_entity, signed=True) if grid_entity else None
+        if self.report(switch)['state'] == 'on':
+            battery, relief = self.battery_charge_relief()
+            reserved = [*self.heating_effects().values(), *self.current_import_claims(exclude_owner='ev')]
+            other = self.import_required(exclude_device=effect['device'], exclude_devices=(battery,),
+                reserved=reserved, house_w=max(0.0, house - ev))
+            credit = self.discharge_credit(import_after_w=other + requested * EV_WATTS_PER_AMP)
+            other -= credit
+            if grid is not None:
+                # A configured grid meter additionally catches demand changes
+                # ahead of the gross-house reading. Never substitute one meter
+                # for the other: native battery demand remains in the gross check.
+                other = max(grid - ev - relief, other)
+            available = ev_current_ceiling(max(0.0, self.house_import_limit() - other),
+                native['attributes'], minimum)
+            # Absolute residual demand stays stable both before and after the
+            # charger meter catches up. Keep the plan target for recovery.
+            return min(requested, available)
         identity = effect['device']
         if identity in self.capacity.get('coordination', {}).get('caps', {}):
             return requested
@@ -1579,20 +1643,25 @@ class HomeAssistantSource:
         # The normal admission check explains why even the requested start must wait.
         return requested
 
-    def ev_spare_current(self, entity, switch, scheduled, maximum, house_budget):
+    def ev_spare_current(self, entity, switch, scheduled, maximum, house_budget, *, hold_increase=False):
         """Spend only observed spare power after the scheduled car has started."""
         try:
             if self.report(switch)['state'] != 'on':
                 return scheduled
             effect = self.describe_import('ev', switch, 'on')
             identity, sensor = effect['device'], effect['sensor']
+            if hold_increase:
+                native = self.report(entity)
+                observed = float(canonical_metadata(native['state'], native['attributes']))
+                issued = commanded_controls(self.capacity, identity, issued_only=True)
+                maximum = min(maximum, max(scheduled, finite(issued.get(entity, observed))))
             if identity in self.capacity.get('coordination', {}).get('caps', {}):
                 return scheduled
-            ev, _ = power(self.report(sensor), source=sensor)
+            ev = self.measured_control_power(sensor)
             grid_entity = self.options().get('grid_power_entity')
             if ev <= 0 or not grid_entity:
                 return scheduled
-            grid, _ = power(self.report(grid_entity), source=grid_entity, signed=True)
+            grid = self.measured_control_power(grid_entity, signed=True)
             house = max(0.0, self.house_power() - ev)
             limit = self.house_import_limit()
             reserved = [*self.heating_effects().values(), *self.current_import_claims(exclude_owner='ev')]
@@ -1605,11 +1674,18 @@ class HomeAssistantSource:
             available = ev_current_ceiling(ceiling, self.report(entity)['attributes'], scheduled)
             if available <= scheduled:
                 return scheduled
+            native = self.report(entity)
+            if available <= float(canonical_metadata(native['state'], native['attributes'])):
+                # The old charging envelope must remain reserved for other
+                # writers, but cannot force a small reduction down to nominal.
+                return available
             watts = available * EV_WATTS_PER_AMP
             desired = {**effect, 'after_w':watts, 'possible_w':watts,
                        'controls':{**effect['controls'], entity:available}}
             if self.import_required(effect=desired, reserved=reserved) <= limit:
                 return available
+        except ControlObservationError:
+            raise
         except (KeyError, TypeError, ValueError):
             # Optional current needs complete live evidence. The normal
             # scheduled command still goes through its own admission.

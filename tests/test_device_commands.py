@@ -2,13 +2,15 @@
 from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 import unittest
 import test_controller as fixtures
 State = fixtures.State
 from shs_core.controller import ScheduledController
 from command_fixture import native_executor, controller_inputs
 from shs_core.device_commands import validate_commands
+from shs_core.device_port import device_intent
+from shs_core.device_gateway import DeviceGateway, DeviceIntent
 
 
 class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -35,19 +37,67 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.heater'].state, 'on')
         self.assertNotIn('device:heater', self.controller.ownership.records)
 
-    async def test_car_spare_budget_waits_until_the_battery_charge_slot_is_over(self):
+    async def test_car_spare_budget_protects_battery_allocation_not_the_whole_slot(self):
         self.controller.devices = object()
         self.controller._physical = AsyncMock()
         self.options['device_modes']['$battery'] = 'controlling'
         self.slot.update(ev_target_current_a=10, load_w=10500, ev_w=6900, battery_idle_w=100,
                          battery_command={'operation': 'grid_charge'})
         await self.controller.execute_ev(self.options, self.slot)
+        self.assertTrue(self.controller._physical.await_args.args[3]['hold_spare_increase'])
+        selected = self.controller._physical.await_args.args[3]
+        self.slot.update(ev_min_current_a=5, ev_max_current_a=16)
+        selected = {**selected, 'ev_min_current_a':5, 'ev_max_current_a':16}
+        intent = device_intent('ev', 'apply', self.coordinator.optimisation_plan, selected,
+            configuration_revision=1, policy_revision=1)
+        _, decoded = DeviceGateway._decode(None, DeviceIntent.parse(intent))
+        self.assertTrue(decoded['hold_spare_increase'])
+
+        self.controller.battery_runtime = SimpleNamespace(ev_spare_capacity_available=Mock(return_value=True))
+        await self.controller.execute_ev(self.options, self.slot)
+        self.assertEqual(self.controller._physical.await_args.args[3]['spare_house_w'], 3500)
+        self.controller.battery_runtime.ev_spare_capacity_available.assert_called_with(self.slot['start'])
+        self.controller.battery_runtime.ev_spare_capacity_available.return_value = False
+        await self.controller.execute_ev(self.options, self.slot)
         self.assertNotIn('spare_house_w', self.controller._physical.await_args.args[3])
+
+        self.controller.battery_runtime.ev_spare_capacity_available.return_value = None
+        self.controller._physical.reset_mock()
+        await self.controller.execute_ev(self.options, self.slot)
+        self.assertTrue(self.controller._physical.await_args.args[3]['hold_spare_increase'])
 
         self.slot['battery_command'] = {'operation': 'hold'}
         await self.controller.execute_ev(self.options, self.slot)
         self.assertEqual(self.controller._physical.await_args.args[3]['spare_house_w'], 3500)
         self.assertNotIn('spare_house_w', self.slot)
+
+    async def test_ev_below_supported_current_pauses_switch_and_recovers_plan(self):
+        fixtures.ControllerTests.setUp(self)
+        self.options['device_modes']['$ev'] = 'controlling'
+        self.states['switch.charge'].state = 'on'
+        self.slot.update(ev_target_current_a=10, ev_min_current_a=5, ev_max_current_a=16)
+        self.controller.ev_import_current = AsyncMock(return_value=0)
+        await self.controller.async_start()
+        self.assertEqual(self.states['switch.charge'].state, 'off')
+        self.assertEqual(self.states['number.current'].state, '8')
+        self.assertEqual(self.controller.status['ev']['state'], 'limited')
+        self.controller.ev_import_current.return_value = 10
+        await self.controller.async_tick()
+        self.assertEqual(self.states['switch.charge'].state, 'on')
+        self.assertEqual(float(self.states['number.current'].state), 10)
+
+    async def test_unknown_optional_eligibility_does_not_block_ev_target_stop(self):
+        fixtures.ControllerTests.setUp(self)
+        self.options['device_modes']['$ev'] = 'controlling'
+        self.states['switch.charge'].state = 'on'
+        self.states['number.current'].state = '14'
+        self.states['sensor.ev_soc'].state = '80'
+        self.slot.update(ev_target_current_a=10, ev_min_current_a=5, ev_max_current_a=16,
+            spare_house_w=6000, hold_spare_increase=True)
+        self.controller.ev_import_current = AsyncMock(side_effect=AssertionError('Target check must precede sizing'))
+        await self.controller.async_start()
+        self.assertEqual(self.states['switch.charge'].state, 'off')
+        self.assertEqual(self.states['number.current'].state, '14')
 
     async def test_website_exclusion_restores_even_if_old_plan_remains(self):
         await self.controller.async_start()

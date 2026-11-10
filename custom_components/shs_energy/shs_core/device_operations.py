@@ -402,7 +402,8 @@ class DeviceOperations:
             raise ValueError("EV current control must use amperes")
         return entity, finite(low), finite(high)
 
-    async def ev_import_current(self, entity, switch, current, minimum, *, maximum, spare_house_w):
+    async def ev_import_current(self, entity, switch, current, minimum, *, maximum, spare_house_w,
+                                hold_spare_increase=False):
         return current
 
     async def execute_ev(self, options, slot):
@@ -445,7 +446,15 @@ class DeviceOperations:
                     entity, "Inspect the available current reported by the car.")
             available = float(ceiling)
         admitted = await self.ev_import_current(entity, switch, available, max(low, slot_minimum),
-            maximum=min(high, slot_maximum), spare_house_w=slot.get('spare_house_w'))
+            maximum=min(high, slot_maximum), spare_house_w=slot.get('spare_house_w'),
+            hold_spare_increase=slot.get('hold_spare_increase', False))
+        if admitted == 0:
+            # Zero is a charging pause, not necessarily a supported number
+            # setting. Keep the scheduled target so meter events can resume it.
+            await self.command(switch, 'off')
+            return {'state': 'limited', 'requested_current_a': 0,
+                    'reason': 'House import capacity is below the minimum charging current.',
+                    'decision': {'kind': 'ev', 'charging': False, 'current_a': 0}}
         await self.command(entity, admitted)
         if admitted > current:
             return {"state": "commanded", "requested_current_a": admitted,

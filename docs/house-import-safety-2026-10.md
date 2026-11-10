@@ -105,6 +105,55 @@ thermostat with a valid dedicated meter contributes measured power to standing
 demand. Pending or uncertain writes and new mode starts retain their possible
 draw. The live grid meter can reduce a scheduled battery charge when actual
 import exceeds the target before the house meter catches up. Scheduled heat
-relief waits for actual grid pressure that a connected charging battery cannot
-clear. Waiting for the website import limit after a restart is an admission
+relief waits for actual grid pressure that connected, executable battery and EV
+charging reductions cannot clear together. Waiting for the website import limit after a restart is an admission
 wait, with no equipment fault reported to planning.
+
+Scheduled relay starts and thermostat mode changes use the same partial battery
+relief claim as setpoints. Their real pending watts stay reserved until physical
+confirmation; they do not request an unconditional zero battery charge limit.
+
+An active EV is sized from measured residual demand, with native current steps
+and current equipment limits. The calculation excludes its own measured watts
+before selecting an absolute current ceiling, so delayed readings cannot ratchet
+the current down repeatedly or restore it prematurely. A budget below the
+supported minimum pauses the charging switch. The original plan request remains
+available for automatic recovery; no new persistent cap represents this ordinary
+backoff. Grid, house, EV and battery readings are subscribed before sizing, even
+when the result is a reduction. Missing required readings hold all settings.
+
+Optional EV increases may coexist with a scheduled battery charge once the
+battery's current adopted request fulfills its nominal and authorized recovery
+allocation, or its stored-energy target is complete. The gateway still admits
+the increase against the battery's native and pending envelope. Low measured
+battery power alone is not completion: it can be taper or delayed response.
+Neither charger creates a new charging window or changes a target/deadline.
+The executable contract has no general inter-device priority rank; the controller
+preserves its accepted allocations rather than inventing one.
+If battery-only observations are missing, the EV cannot obtain a new optional
+increase. It may retain its already issued increase while its own measurements
+support it, and still performs measured backoff and its own stop/target checks.
+An unissued prepared command is not a previously granted increase.
+
+EV backoff is driven by subscribed measurements; ordinary battery decisions use
+the existing five-second cadence. Sensor reporting and native response add to
+that latency. The regression trace covers 15.5 kW at 10 A, reduction to 9 A,
+unchanged delayed readings, settled 14.81 kW, and recovery to 10 A as demand falls.
+Those are simulated measurements, not a measured live response-time guarantee.
+
+Live review, 10 November 2026: the installed pair was app beta.167 / companion
+beta.209, newer than the handoff. At 12:24 Stockholm time the accepted plan held
+the battery; grid import was 0 W, house draw 795 W, solar 1,461 W and battery DC
+charge approximately 660 W. The requested native charging ceiling was 8,800 W;
+this was solar absorption in the hold mode, not an unmet grid-charge request.
+The car's accepted instruction was off, with no remaining charging slot that day.
+No live EV boost/backoff result is claimed for this review.
+
+The floor heater's old 4,851.8 W entry was a settled historical record with no
+pending effects. An owned idle thermostat contributes its meter reading, not
+that settled peak. The newer learned startup model applies to new reservations;
+the reviewed history yielded 984.4 W startup and 455.3 W average heating draw.
+At 12:42 the live aggregate external import envelope was 4,615.7 W including
+2,556 W measured house draw, confirming that the old floor-heater peak was not
+being added to the house total. A new physical floor-heater start remains to be
+observed; pending-start arithmetic is covered by the automated shared-meter test.

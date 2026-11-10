@@ -30,6 +30,8 @@ def device_intent(device, operation, plan, slot, *, configuration_revision, poli
                               maximum_a=slot['ev_max_current_a'], models=plan['device_models'])
             if 'spare_house_w' in slot:
                 parameters['spare_house_w'] = slot['spare_house_w']
+            if slot.get('hold_spare_increase'):
+                parameters['hold_spare_increase'] = True
         elif device == 'pool':
             parameters.update(heating_w=pool_requested_w(plan, slot), stop_temperature_c=plan['pool']['stop_temperature_c'],
                               pool_permitted=pool_permission(plan, slot),

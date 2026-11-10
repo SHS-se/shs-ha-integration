@@ -132,10 +132,16 @@ class ScheduledController(DeviceOperations):
 
     async def execute_ev(self, options, slot):
         if self.devices is not None and not self.verifying:
+            spare = True
+            if self.battery_charge_scheduled(options, slot['start']):
+                runtime = getattr(self, 'battery_runtime', None)
+                spare = runtime.ev_spare_capacity_available(slot['start']) if runtime is not None else None
             if (slot.get('ev_target_current_a', 0) > 0 and slot.get('load_w') is not None
-                    and slot.get('ev_w') is not None and not self.battery_charge_scheduled(options, slot['start'])):
+                    and slot.get('ev_w') is not None and spare is not False):
                 house_budget = finite(slot['load_w']) - finite(slot['ev_w']) - finite(slot.get('battery_idle_w', 0))
                 slot = {**slot, 'spare_house_w': max(0.0, house_budget)}
+                if spare is None:
+                    slot['hold_spare_increase'] = True
             return await self._physical('ev', 'apply', options, slot)
         return await super().execute_ev(options, slot)
 

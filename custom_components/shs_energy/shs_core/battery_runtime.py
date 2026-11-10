@@ -253,6 +253,31 @@ class BatteryRuntime:
             return None
         return self._identity
 
+    def ev_spare_capacity_available(self, start) -> bool | None:
+        """Optional EV watts may not displace the accepted battery allocation.
+
+        A settled request already reserves its actual envelope at the gateway.
+        Target completion releases that allocation inside the charging slot;
+        taper and an unapplied request do not. None means unknown optional
+        eligibility: retain existing extra current, subject to live EV limits.
+        """
+        if (self.host is None or self._last_error is not None or self._observation_error or self.host._fault
+                or not self.coordinator.battery_writer.is_current(self._grant, self.identity())):
+            return None
+        state, now = self.host.state, self.now()
+        group, session = state.groups[0], state.execution
+        assessment = session.assessment
+        contract = session.account.contract
+        row = contract.interval(now) if contract is not None else None
+        if (not state.conditions or state.conditions.valid_until_ms <= now
+                or not assessment or assessment.valid_until_ms <= now):
+            return None
+        if (group.mode != 'controlling' or group.status != 'adopted' or session.status != 'active' or row is None
+                or not stamp(start) <= now < stamp(start) + 900000 or row.operation != 'grid_charge'):
+            return False
+        return (assessment.reason in ('stored_target_reached', 'battery_full')
+                or assessment.charge_dc_w >= assessment.nominal_charge_dc_w + assessment.recovery_dc_w)
+
     def snapshot(self, *, include_evidence=False):
         """Current status; with evidence, the journals as immutable Records to encode later."""
         value={**self._status,'loss_model':self._model.wire() if self._model else None,'loss_evidence':self._fits,

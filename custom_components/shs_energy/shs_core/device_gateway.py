@@ -112,7 +112,8 @@ class DeviceGateway(DeviceOperations):
             return False
         try:
             if (self.external_ready(device, entity=entity, value=value, require_battery_release=False)
-                    if thermostat_target or ev_spare else self.external_ready(device, entity=entity, value=value)):
+                    if self.intent.operation == 'apply' and self.capacity is not None
+                    else self.external_ready(device, entity=entity, value=value)):
                 return True
             if ev_spare:
                 raise ControlDeadlineError('Waiting for spare house import capacity')
@@ -155,15 +156,20 @@ class DeviceGateway(DeviceOperations):
             raise GatewayConflict('Device operation changed')
         return self.plan, self.slot
 
-    async def ev_import_current(self, entity, switch, current, minimum, *, maximum, spare_house_w):
+    async def ev_import_current(self, entity, switch, current, minimum, *, maximum, spare_house_w,
+                                hold_spare_increase=False):
         if self.capacity is None:
             return current
+        self.observed_state(self.active_options.get('house_consumption_power_entity'))
+        self.observed_state(self.active_options.get('grid_power_entity'))
+        self.observed_state(self.capacity.describe_import('ev', switch, 'on')['sensor'])
+        for source in self.capacity.battery_capacity_sources():
+            self.observed_state(source)
         admitted = await self.capacity.limit_ev_current(entity, switch, current, minimum)
         if admitted < current or spare_house_w is None or maximum <= current:
             return admitted
-        self.observed_state(self.active_options.get('house_consumption_power_entity'))
-        self.observed_state(self.active_options.get('grid_power_entity'))
-        return self.capacity.ev_spare_current(entity, switch, admitted, maximum, spare_house_w)
+        return self.capacity.ev_spare_current(entity, switch, admitted, maximum, spare_house_w,
+            hold_increase=hold_spare_increase)
 
     def observed_state(self, entity):
         if entity:
@@ -256,10 +262,13 @@ class DeviceGateway(DeviceOperations):
         if intent.device == 'ev':
             required = {'start', 'current_a', 'minimum_a', 'maximum_a', 'models'}
             spare_house_w = finite(p['spare_house_w']) if 'spare_house_w' in p else None
-            if set(p) - {'spare_house_w'} != required or (spare_house_w is not None and spare_house_w < 0):
+            if (set(p) - {'spare_house_w', 'hold_spare_increase'} != required
+                    or (spare_house_w is not None and spare_house_w < 0)
+                    or type(p.get('hold_spare_increase', False)) is not bool):
                 raise ValueError('Invalid EV intention')
             return {'device_models': p['models']}, dict(start=p['start'], ev_target_current_a=p['current_a'],
                 ev_min_current_a=p['minimum_a'], ev_max_current_a=p['maximum_a'], spare_house_w=spare_house_w,
+                hold_spare_increase=p.get('hold_spare_increase', False),
                 device_loads_w={m['key']:0 for m in p['models']})
         if intent.device == 'pool':
             if set(p) != {'start', 'heating_w', 'pool_permitted', 'stop_temperature_c', 'models'}:

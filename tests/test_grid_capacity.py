@@ -14,8 +14,8 @@ from shs_core.grid_capacity import (required_import, import_limit, empty_capacit
     capacity_key, canonicalize_capacity)
 from shs_core.command_journal import Command, NativeAction
 from shs_core.device_draw import DeviceDraw, DrawBinding
-from shs_core.device_operations import ControlDeadlineError
-from shs_core.device_gateway import DeviceIntent
+from shs_core.device_operations import ControlDeadlineError, ControlObservationError, DeviceOperations, checked_state
+from shs_core.device_gateway import DeviceIntent, DeviceGateway
 from shs_core.gateway_journal import AdmissionPending
 from shs_core.native_configuration import native_options
 
@@ -305,10 +305,9 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.source.claim_import(intent, 'switch.room', 'on'))
         view = await self.source.request('battery_capacity', {})
         self.assertEqual(view['external_import_w'], 3400)
-        self.assertTrue(view['grid_charge_hold'])
-        with self.assertRaisesRegex(ControlDeadlineError, 'waiting for battery charging'):
-            await self.native('raise-charge-before-start', 'battery', 'number.charge', 'set_value', 3)
-        self.assertFalse(self.calls)
+        self.assertFalse(view['grid_charge_hold'])
+        await self.native('raise-charge-before-start', 'battery', 'number.charge', 'set_value', 3)
+        self.assertEqual(len(self.calls), 1)
         self.source.import_claims[intent.device]['end'] = now - timedelta(seconds=1)
         view = await self.source.request('battery_capacity', {})
         self.assertEqual(view['external_import_w'], 1000)
@@ -385,8 +384,178 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.rows['sensor.house']['state'] = '12700'
         self.assertEqual(choose(), 10)
         self.rows['sensor.ev']['state'] = 'unavailable'
-        self.assertEqual(choose(), 10)
+        with self.assertRaises(ControlObservationError):
+            choose()
         self.assertEqual(self.source.capacity.get('coordination', {}).get('caps', {}), {})
+
+    def active_ev(self, *, house=15500, grid=15500, ev=6900, current=10):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        options = self.source.options()
+        options['grid_power_entity'] = 'sensor.grid'
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.rows['switch.ev']['state'] = 'on'
+        self.rows['number.ev']['state'] = str(current)
+        self.rows['sensor.ev']['state'] = str(ev)
+        self.rows['sensor.house']['state'] = str(house)
+        self.rows['sensor.grid'] = {**self.rows['sensor.house'], 'state':str(grid)}
+
+    async def test_active_ev_backoff_is_partial_stable_and_recovers(self):
+        self.active_ev()
+        async def choose():
+            return await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5)
+        self.assertEqual(await choose(), 9)
+        self.rows['number.ev']['state'] = '9'
+        self.assertEqual(await choose(), 9, 'Lagging power must not ratchet down again')
+        self.rows['sensor.ev']['state'] = '6210'
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '14810'
+        self.assertEqual(await choose(), 9, 'Settled measurements must not bounce back up')
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '13810'
+        self.assertEqual(await choose(), 10)
+        self.assertEqual(self.source.capacity.get('coordination', {}).get('caps', {}), {})
+
+    async def test_ev_backoff_respects_steps_zero_budget_and_existing_cap(self):
+        self.active_ev(grid=15001, house=15001)
+        self.rows['number.ev']['attributes']['step'] = 2
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 8)
+        identity = self.source.describe_import('ev', 'switch.ev', 'on')['device']
+        self.source.capacity['coordination'] = {'caps':{identity:{'maximum_w':6900}}}
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '19000'
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 0)
+
+    async def test_gross_capacity_keeps_battery_draw_without_an_additional_grid_meter(self):
+        self.active_ev(grid=15000, house=15000)
+        options = self.source.options()
+        options.pop('grid_power_entity')
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        self.rows['number.charge']['state'] = '2'
+        self.rows['sensor.battery']['state'] = '2000'
+        # Gross house is not substituted for grid. This held battery still
+        # consumes capacity even when no extra grid correction is configured.
+        self.assertLess(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 10)
+
+    async def test_ev_holds_on_missing_measured_inputs_then_resumes(self):
+        self.active_ev(current=14, ev=9660, house=12660, grid=12660)
+        for entity in ('sensor.house', 'sensor.grid', 'sensor.ev'):
+            previous = self.rows[entity]['state']
+            self.rows[entity]['state'] = 'unavailable'
+            with self.subTest(entity=entity), self.assertRaises(ControlObservationError) as failure:
+                await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5)
+            self.assertTrue(failure.exception.unavailable)
+            self.rows[entity]['state'] = previous
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 10)
+
+    async def test_relay_and_thermostat_mode_claim_only_partial_battery_relief(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        self.rows['sensor.house']['state'] = '9000'
+        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        self.rows['number.charge']['state'] = '4'
+        for entity, value in (('switch.room', 'on'), ('climate.room', 'heat')):
+            with self.subTest(entity=entity):
+                self.mapped_load('room', entity, 'off', 2400, 'controlling')
+                intent = DeviceIntent('start', 'device:room', 'apply', 1, 1,
+                    {'start':datetime.now(timezone.utc).isoformat()}, False)
+                self.assertTrue(self.source.claim_import(intent, entity, value))
+                capacity = await self.source.request('battery_capacity', {})
+                self.assertEqual(capacity['external_import_w'], 11400)
+                self.assertFalse(capacity['grid_charge_hold'])
+                self.source.clear_import_claim('device:room')
+
+    async def test_ordinary_ev_registers_power_wakes_even_when_reduced(self):
+        self.active_ev()
+        owner = SimpleNamespace(capacity=self.source, active_options=self.source.options(), observed_state=Mock())
+        current = await DeviceGateway.ev_import_current(owner, 'number.ev', 'switch.ev', 10, 5,
+            maximum=16, spare_house_w=None)
+        self.assertEqual(current, 9)
+        reads = {call.args[0] for call in owner.observed_state.call_args_list}
+        self.assertTrue({'sensor.house', 'sensor.grid', 'sensor.ev', 'sensor.battery'} <= reads)
+
+    async def test_unknown_battery_eligibility_preserves_only_previously_issued_ev_boost(self):
+        self.active_ev(current=14, ev=9660, house=11660, grid=11660)
+        owner = SimpleNamespace(capacity=self.source, active_options=self.source.options(), observed_state=Mock())
+        async def choose():
+            return await DeviceGateway.ev_import_current(owner, 'number.ev', 'switch.ev', 10, 5,
+                maximum=16, spare_house_w=6000, hold_spare_increase=True)
+        self.assertEqual(await choose(), 14)
+        self.rows['number.ev']['state'] = '10'
+        self.rows['sensor.ev']['state'] = '6900'
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '8900'
+        effect = self.source.describe_import('ev', 'number.ev', 14.0)
+        prepare_capacity(self.source.capacity, 'boost', effect, 1)
+        self.assertEqual(await choose(), 10, 'An unissued proposal cannot grant an optional increase')
+        dispatch_capacity(self.source.capacity, 'boost', 2)
+        self.assertEqual(await choose(), 14, 'Native readback may lag the already dispatched boost')
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '15500'
+        self.assertEqual(await choose(), 9, 'Optional uncertainty must not block measured backoff')
+        self.rows['sensor.grid']['state'] = 'unavailable'
+        with self.assertRaises(ControlObservationError):
+            await choose()
+
+    async def test_ev_boost_backs_off_one_step_without_collapsing_to_nominal(self):
+        for hold in (False, True):
+            with self.subTest(hold_increase=hold):
+                self.active_ev(current=14, ev=9660, house=15500, grid=15500)
+                owner = SimpleNamespace(capacity=self.source, active_options=self.source.options(), observed_state=Mock())
+                async def choose():
+                    return await DeviceGateway.ev_import_current(owner, 'number.ev', 'switch.ev', 10, 5,
+                        maximum=16, spare_house_w=9000, hold_spare_increase=hold)
+                self.assertEqual(await choose(), 13)
+                self.rows['number.ev']['state'] = '13'
+                self.assertEqual(await choose(), 13, 'Lagging power still requires only one reduction')
+                self.rows['sensor.ev']['state'] = '8970'
+                self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '14810'
+                self.assertEqual(await choose(), 13)
+                self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '13810'
+                self.assertEqual(await choose(), 13 if hold else 14)
+
+    async def test_heat_uses_ev_and_battery_relief_only_with_executable_control(self):
+        self.active_ev()
+        options = self.source.options()
+        options.update(ev_connected_entity='binary_sensor.ev', ev_soc_entity='sensor.ev_soc',
+            ev_target_soc_entity='sensor.ev_target')
+        options['device_control_mappings']['ev']['minimum_value'] = 5
+        self.source.configuration.options = lambda:deepcopy(options)
+        for entity, state, attrs in (
+            ('binary_sensor.ev', 'on', {}), ('sensor.ev_soc', '30', {'unit_of_measurement':'%'}),
+            ('sensor.ev_target', '80', {'unit_of_measurement':'%'})):
+            self.rows[entity] = {'state':state, 'attributes':attrs}
+        def read(entity):
+            row = self.rows.get(entity)
+            return checked_state(SimpleNamespace(state=row['state'], attributes=row['attributes']) if row else None, entity)
+        self.physical.state = self.physical.actuator_state = read
+        self.physical.fraction = lambda entity:DeviceOperations.fraction(self.physical, entity)
+        self.service.authorize_device = Mock()
+        value = dict(request_id='ev-live', device='ev', operation='apply', configuration_revision=1,
+            policy_revision=1, headroom_reserved=False, parameters=dict(
+                start=datetime.now(timezone.utc).isoformat(), current_a=10, minimum_a=5, maximum_a=16, models=[]))
+        self.source.capacity['coordination'] = {'intents':{'ev':value}}
+        self.assertFalse(self.source.scheduled_heating_over_limit(), 'The EV alone can clear 500 W')
+        self.rows['sensor.grid']['state'] = '23500'
+        self.assertTrue(self.source.scheduled_heating_over_limit())
+        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        self.rows['sensor.battery']['state'] = '2000'
+        self.source.capacity['coordination']['withdrawal'] = {
+            'controls': {'select.mode':'Command Charging (PV First)', 'number.charge':4, 'number.discharge':4},
+            'valid_until_ms':self.gateway.now()+1000, 'context':self.gateway.context()}
+        self.assertFalse(self.source.scheduled_heating_over_limit(), 'Both chargers together can clear it')
+        self.rows['sensor.grid']['state'] = '24500'
+        self.assertTrue(self.source.scheduled_heating_over_limit(), 'Chargers cannot clear all of this overload')
+        self.rows['sensor.grid']['state'] = '18000'
+        house = self.rows['sensor.house']['state']
+        self.rows['sensor.house']['state'] = 'unavailable'
+        self.assertTrue(self.source.scheduled_heating_over_limit(), 'Missing EV sizing evidence cannot promise relief')
+        self.rows['sensor.house']['state'] = house
+        step = self.rows['number.ev']['attributes']['step']
+        self.rows['number.ev']['attributes']['step'] = 0
+        self.assertTrue(self.source.scheduled_heating_over_limit(), 'Unusable current metadata cannot promise relief')
+        self.rows['number.ev']['attributes']['step'] = step
+        self.rows['sensor.ev_target']['state'] = 'unavailable'
+        self.assertTrue(self.source.scheduled_heating_over_limit(), 'An EV with missing required data holds')
+        self.rows['sensor.ev_target']['state'] = '80'
+        value['parameters']['start'] = (datetime.now(timezone.utc)-timedelta(minutes=16)).isoformat()
+        self.assertTrue(self.source.scheduled_heating_over_limit(), 'Expired EV intentions cannot promise relief')
 
     async def test_scheduled_heat_responds_only_to_measured_pressure_the_battery_cannot_clear(self):
         self.configure_ev()

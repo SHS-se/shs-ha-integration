@@ -114,9 +114,11 @@ def capacity_bound(device, *, settled_limit=None):
                [effect['peak_w'] for effect in device.get('effects', {}).values()])
 
 
-def commanded_controls(capacity, device):
+def commanded_controls(capacity, device, *, issued_only=False):
     row = capacity['devices'].get(device, {})
     candidates = [*row.get('effects', {}).values(), *([row['settled']] if row.get('settled') else [])]
+    if issued_only:
+        candidates = [effect for effect in candidates if effect.get('dispatch_through') is not None]
     latest = max(candidates, key=lambda e:e['order'], default={})
     return latest.get('controls', {})
 

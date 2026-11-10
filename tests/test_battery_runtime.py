@@ -140,6 +140,24 @@ class Rig:
                                  'last_reported':iso(0)}
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ev_spare_capacity_preserves_battery_request_and_releases_completed_target(self):
+        r = Rig()
+        self.addAsyncCleanup(r.runtime.close)
+        await r.start()
+        await r.advance()
+        self.assertTrue(r.runtime.ev_spare_capacity_available(iso(0)))
+        self.assertFalse(r.runtime.ev_spare_capacity_available(iso(900000)))
+        state = r.runtime.host.state
+        nominal = state.execution.assessment.nominal_charge_dc_w
+        r.runtime.host.state = replace(state, execution=replace(state.execution,
+            assessment=replace(state.execution.assessment, charge_dc_w=nominal-1)))
+        self.assertFalse(r.runtime.ev_spare_capacity_available(iso(0)))
+        r.runtime.host.state = replace(state, execution=replace(state.execution,
+            assessment=replace(state.execution.assessment, charge_dc_w=0, reason='stored_target_reached')))
+        self.assertTrue(r.runtime.ev_spare_capacity_available(iso(0)))
+        r.runtime._observation_error = 'Missing grid meter'
+        self.assertIsNone(r.runtime.ev_spare_capacity_available(iso(0)))
+
     async def test_measured_grid_excess_lowers_charge_before_house_reading_catches_up(self):
         r = Rig()
         self.addAsyncCleanup(r.runtime.close)
