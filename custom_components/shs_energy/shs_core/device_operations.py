@@ -29,6 +29,9 @@ from .heating_overrides import heating_binding, relay_heat, room_temperature
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
 CONFIRM_SECONDS = 15
+# A battery-powered Zigbee thermostat can take this long to act on a lower
+# setting. Until then a pause is not lowered a further step.
+PAUSE_RESPONSE_SECONDS = 60
 # Restarts and reconnects hide an entity for about a minute; longer needs attention.
 OBSERVATION_GRACE_SECONDS = 5 * 60
 
@@ -581,18 +584,51 @@ class DeviceOperations:
         permitted = permission == 'on' and commanded.get(entity,'on') == 'on'
         return heating_permission(planned,permitted,demand)
 
-    async def suspend_thermostat(self, device, options, entity):
+    async def pause_thermostat(self, device, options, entity, accepted=None):
+        """Stop a thermostat's call for heat while it stays in Heat.
+
+        User requirement, 10 November 2026: a controller-driven pause never
+        sends Off, which blanks the display of the laundry, master-bathroom
+        and pool-bathroom thermostats. Only the setpoint moves, to the highest
+        supported step at or below the thermostat's own temperature, so the
+        call for heat ends whatever its dead zone. Scheduled import relief and
+        manual heating-override relief share this routine. `accepted` is the
+        target to return to; the pause keeps the first one it was given.
+        """
         state = self.actuator_state(entity)
-        if not entity.startswith('climate.') or not {'off', 'heat'} <= set(state.attributes.get('hvac_modes', ())):
+        if not entity.startswith('climate.'):
             raise HeatingDeferred('Thermostat cannot pause heating')
-        if state.state not in ('off', 'heat'):
-            raise HeatingDeferred('Thermostat cannot pause its current mode')
         record = self.ownership.records.get(device)
-        if state.state == 'heat' or record and record.get('heating_suspended') == entity:
-            record = await self.capture(device, options, [entity])
-            record['heating_suspended'] = entity
+        if state.state == 'off' and record and record.get('heating_suspended') == entity:
+            # Paused with Off by an earlier version. It is already not
+            # heating; it returns to Heat when the pause clears.
+            return {'state': 'manual', 'reason': 'Making room for a heating override'}
+        if state.state != 'heat':
+            raise HeatingDeferred('Thermostat cannot pause its current mode')
+        attrs = state.attributes
+        try:
+            current, target = finite(attrs['current_temperature']), finite(attrs['temperature'])
+            step, low = finite(attrs.get('target_temp_step', 0.1)), finite(attrs['min_temp'])
+            if step <= 0:
+                raise ValueError('invalid temperature step')
+        except (KeyError, TypeError, ValueError) as error:
+            raise ControlObservationError(f'{entity}: the thermostat does not report the temperature and setting '
+                'a pause needs', entity, 'Check the thermostat’s own temperature and target.') from error
+        pause = low + floor((current - low) / step + 1e-9) * step
+        paused = (record or {}).get('heating_pause')
+        sent = self.command_times.get(entity)
+        if (paused and paused.get('entity') == entity and attrs.get('hvac_action') == 'heating' and target <= pause
+                and (sent is None or datetime.now(timezone.utc) - sent >= timedelta(seconds=PAUSE_RESPONSE_SECONDS))):
+            # The lower setting was acknowledged and the thermostat still
+            # calls for heat: go one more supported step down.
+            pause = target - step
+        pause = max(low, min(pause, target))
+        record = await self.capture(device, options, [entity])
+        if not paused or paused.get('entity') != entity:
+            record['heating_pause'] = {'entity': entity, 'target_c': target if accepted is None else accepted}
             await self.save()
-            await self.command(entity, 'off')
+        if pause < target:
+            await self.command(entity, pause)
         return {'state': 'manual', 'reason': 'Making room for a heating override'}
 
     def shed_scheduled_heat(self, entity, state):
@@ -661,7 +697,7 @@ class DeviceOperations:
         self.check_targets(device, targets)
         record = self.ownership.records.get(device)
         if suspend_heat:
-            return await self.suspend_thermostat(device, options, targets[0])
+            return await self.pause_thermostat(device, options, targets[0])
         model = next(m for m in models if m["key"] == key)
         charge_setback = (target_c is None and kind == 'setpoint' and slot.get('charge_setback')
             and targets[0].startswith('climate.') and model.get('category') in ('heating', 'pool_heating')
@@ -712,7 +748,7 @@ class DeviceOperations:
                     step, origin = finite(state.attributes.get("step", 1)), finite(state.attributes["min"])
                 values[entity] = rounded_setpoint(command["target_c"], origin, step)
             if "room_target_c" in command and self.shed_scheduled_heat(targets[0], self.actuator_state(targets[0])):
-                await self.suspend_thermostat(device, options, targets[0])
+                await self.pause_thermostat(device, options, targets[0], accepted=values[targets[0]])
                 return self.scheduled_heat_limited()
         else:
             if room_relay or (target_c is not None and kind == "switch_schedule"):
@@ -744,6 +780,7 @@ class DeviceOperations:
             await self.command(entity, value)
         record.pop('charge_setback_c', None)
         record.pop('heating_suspended', None)
+        record.pop('heating_pause', None)
         await self.save()
         if kind == "setpoint":
             decision = {"kind": kind, "target_c": sorted(set(values.values()))}

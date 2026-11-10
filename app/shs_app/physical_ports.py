@@ -69,8 +69,9 @@ class RemoteBattery:
     def close(self):
         self.revoke()
 
-    async def import_capacity(self):
-        return await self.gateway.call('source', {'operation':'battery_capacity', 'body':{}})
+    async def import_capacity(self, charge_run=None):
+        return await self.gateway.call('source', {'operation':'battery_capacity',
+            'body':{'charge_run':charge_run} if charge_run else {}})
 
     async def publish_target(self, request):
         if not self.is_current(self.grant,self.runtime.identity()):

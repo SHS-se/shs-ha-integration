@@ -253,6 +253,27 @@ class BatteryRuntime:
             return None
         return self._identity
 
+    def _charge_run(self):
+        """The accepted charging run and what it asks for now, for live priority.
+
+        Home Assistant shares the import budget across the car, this battery
+        and eligible heaters from whole-run summaries. None leaves this
+        battery's sizing to the measured budget alone.
+        """
+        summary = getattr(self.coordinator, 'run_summary', None)
+        try:
+            run = summary('battery', self.controller.options()) if summary is not None else None
+            if not run:
+                return None
+            assessment = self.host.state.execution.assessment if self.host is not None else None
+            want = None
+            if assessment is not None and assessment.valid_until_ms > self.now() and self._model is not None:
+                want = self._model.grid_charge.input(assessment.nominal_charge_dc_w + assessment.recovery_dc_w)
+            return {'run': run, 'want_w': want}
+        except Exception:  # Advisory input; charging never waits for it.
+            _LOGGER.exception('Cannot describe the battery charging run for live priority')
+            return None
+
     def ev_spare_capacity_available(self, start) -> bool | None:
         """Optional EV watts may not displace the accepted battery allocation.
 
@@ -853,7 +874,7 @@ class BatteryRuntime:
             self._grant=await self.coordinator.battery_writer.take_over(self._identity,self.now()+900000)
         if self._grant and self.coordinator.battery_writer.is_current(self._grant,self.identity()):
             await self.host.accept(rt.GrantConfirmed(group.spec.id,self._grant))
-        self._native_capacity=await self.physical.import_capacity() if self.physical is not None else None
+        self._native_capacity=await self.physical.import_capacity(self._charge_run()) if self.physical is not None else None
         for event in await self._observe(group.spec.id):
             await self.host.accept(event)
         account=self.host.state.execution.account
@@ -1109,9 +1130,14 @@ class BatteryRuntime:
             house_basis = self._native_capacity['observed_house_w']
             native_demand += max(0, accounting.house_w - house_basis)
             import_limit = min(import_limit, self._native_capacity['import_limit_w'])
-        external_import = max(accounting.house_w, external_w, native_demand,
+        shared = bool((self._native_capacity or {}).get('priority_shared'))
+        # A shared priority budget already holds the house and grid meters and
+        # says how much of a reduction is this battery's: a less pressing run
+        # may be the one that yields (docs/run-priority.md). House demand
+        # added since that budget was read is still followed above.
+        external_import = max(0 if shared else max(accounting.house_w, external_w), native_demand,
             authority.plant.import_limit_w if self._external_pending else 0)
-        if grid > import_limit:
+        if grid > import_limit and not shared:
             # Back off from actual charging when the grid meter sees a load
             # increase before the gross house measurement reflects it.
             external_import = max(external_import, grid - measured_charge_ac)

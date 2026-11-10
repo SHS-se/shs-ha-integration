@@ -18,6 +18,7 @@ from shs_core.device_operations import ControlDeadlineError, ControlObservationE
 from shs_core.device_gateway import DeviceIntent, DeviceGateway
 from shs_core.gateway_journal import AdmissionPending
 from shs_core.native_configuration import native_options
+from shs_core.run_priority import QUARTER_MS as QUARTER
 
 
 class ImportArithmeticTests(unittest.TestCase):
@@ -510,8 +511,11 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
                 self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '13810'
                 self.assertEqual(await choose(), 13 if hold else 14)
 
-    async def test_heat_uses_ev_and_battery_relief_only_with_executable_control(self):
-        self.active_ev()
+    # ---- Live run priority (user requirement, 10 November 2026) ----
+
+    def executable_ev(self, run=None):
+        """A charging car whose own executor could act on a shared decision."""
+        self.active_ev(house=15400, grid=15400)
         options = self.source.options()
         options.update(ev_connected_entity='binary_sensor.ev', ev_soc_entity='sensor.ev_soc',
             ev_target_soc_entity='sensor.ev_target')
@@ -529,64 +533,252 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.service.authorize_device = Mock()
         value = dict(request_id='ev-live', device='ev', operation='apply', configuration_revision=1,
             policy_revision=1, headroom_reserved=False, parameters=dict(
-                start=datetime.now(timezone.utc).isoformat(), current_a=10, minimum_a=5, maximum_a=16, models=[]))
-        self.source.capacity['coordination'] = {'intents':{'ev':value}}
-        self.assertFalse(self.source.scheduled_heating_over_limit(), 'The EV alone can clear 500 W')
-        self.rows['sensor.grid']['state'] = '23500'
-        self.assertTrue(self.source.scheduled_heating_over_limit())
-        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
-        self.rows['sensor.battery']['state'] = '2000'
-        self.source.capacity['coordination']['withdrawal'] = {
-            'controls': {'select.mode':'Command Charging (PV First)', 'number.charge':4, 'number.discharge':4},
-            'valid_until_ms':self.gateway.now()+1000, 'context':self.gateway.context()}
-        self.assertFalse(self.source.scheduled_heating_over_limit(), 'Both chargers together can clear it')
-        self.rows['sensor.grid']['state'] = '24500'
-        self.assertTrue(self.source.scheduled_heating_over_limit(), 'Chargers cannot clear all of this overload')
-        self.rows['sensor.grid']['state'] = '18000'
-        house = self.rows['sensor.house']['state']
-        self.rows['sensor.house']['state'] = 'unavailable'
-        self.assertTrue(self.source.scheduled_heating_over_limit(), 'Missing EV sizing evidence cannot promise relief')
-        self.rows['sensor.house']['state'] = house
-        step = self.rows['number.ev']['attributes']['step']
-        self.rows['number.ev']['attributes']['step'] = 0
-        self.assertTrue(self.source.scheduled_heating_over_limit(), 'Unusable current metadata cannot promise relief')
-        self.rows['number.ev']['attributes']['step'] = step
-        self.rows['sensor.ev_target']['state'] = 'unavailable'
-        self.assertTrue(self.source.scheduled_heating_over_limit(), 'An EV with missing required data holds')
-        self.rows['sensor.ev_target']['state'] = '80'
-        value['parameters']['start'] = (datetime.now(timezone.utc)-timedelta(minutes=16)).isoformat()
-        self.assertTrue(self.source.scheduled_heating_over_limit(), 'Expired EV intentions cannot promise relief')
+                start=datetime.now(timezone.utc).isoformat(), current_a=10, minimum_a=5, maximum_a=16, models=[],
+                **({'run':run} if run else {})))
+        self.source.capacity.setdefault('coordination', {}).setdefault('intents', {})['ev'] = value
+        return value
 
-    async def test_scheduled_heat_responds_only_to_measured_pressure_the_battery_cannot_clear(self):
-        self.configure_ev()
-        self.service.import_limit_w = 15000
-        self.mapped_load('room', 'climate.room', 'heat', 4000, 'controlling', 2000)
-        options = self.source.configuration.options()
-        options['grid_power_entity'] = 'sensor.grid'
-        self.source.configuration.options = lambda:native_options(options)
-        self.rows['sensor.grid'] = {**self.rows['sensor.house'], 'state': '14500'}
-        self.rows['sensor.house']['state'] = '10000'
+    def scheduled_room(self, *, temperature, floor_c=19.0, measured_w=1000, action='heating'):
+        """A metered room thermostat with a scheduled target and its whole-run summary."""
+        self.mapped_load('room', 'climate.room', 'heat', 2000, 'controlling', measured_w)
+        self.rows['climate.room']['attributes'].update(current_temperature=temperature, hvac_action=action)
+        now = self.now_ms()
+        run = {'kind':'heat', 'floor':[[now-QUARTER, now+8*QUARTER, floor_c]], 'warm_c_per_h':2.0, 'cool_c_per_h':0.5}
+        value = dict(request_id='room-live', device='device:room', operation='apply', configuration_revision=1,
+            policy_revision=1, headroom_reserved=False, parameters=dict(
+                start=datetime.now(timezone.utc).isoformat(), models=[], run=run, commands={'room':{
+                    'type':'setpoint', 'target_c':22, 'room_target_c':22, 'minimum_c':5, 'maximum_c':35}}))
+        self.source.capacity.setdefault('coordination', {}).setdefault('intents', {})['device:room'] = value
+        self.service.authorize_device = Mock()
+
+    @staticmethod
+    def now_ms():
+        return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    def car_run(self, *, hours, planned_w=6900, maximum_w=11040, spare_w=0):
+        now = self.now_ms()
+        return {'kind':'charge', 'id':'plan:ev',
+                'windows':[[now-QUARTER, now+int(hours*3_600_000), planned_w, maximum_w, spare_w]]}
+
+    async def test_overload_takes_from_the_warm_room_when_charging_is_about_to_miss_its_target(self):
+        # 15.4 kW against 15 kW. The car has no capacity left in its window;
+        # the room is 2.5 °C above its comfort floor, heating towards 22 °C.
+        self.executable_ev(self.car_run(hours=.5))
+        self.scheduled_room(temperature=21.5)
+        self.assertTrue(self.source.scheduled_heat_shed('device:room'))
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 10)
+        decision = self.source.priority_last
+        self.assertLess(decision['slack_h']['ev'], decision['slack_h']['device:room'])
+        # The pause frees capacity only once the meter shows the draw gone.
+        self.rows['climate.room']['attributes']['hvac_action'] = 'idle'
+        self.rows['sensor.room_power']['state'] = '0'
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '14400'
+        self.physical.ownership.records['device:room'] = {'options':self.source.options(),
+            'originals':{'climate.room':22}, 'heating_pause':{'entity':'climate.room', 'target_c':22}}
+        self.assertTrue(self.source.scheduled_heat_shed('device:room'), 'The room waits: 600 W cannot start it')
+        # As capacity returns the same calculation restores the room.
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '12900'
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'))
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 10)
+
+    async def test_overload_takes_from_the_charger_when_the_room_is_at_its_comfort_limit(self):
+        # The same overload. The room is 0.1 °C above its floor; the car has
+        # two more authorised hours with unused capacity to recover in.
+        self.executable_ev(self.car_run(hours=2, spare_w=4000))
+        self.scheduled_room(temperature=19.1)
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'))
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9,
+                         'The smallest supported step that clears 400 W')
+        decision = self.source.priority_last
+        self.assertGreater(decision['slack_h']['ev'], decision['slack_h']['device:room'])
+        self.rows['number.ev']['state'] = '9'
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9,
+                         'A command in flight needs no second adjustment')
+        self.rows['sensor.ev']['state'] = '6210'
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '14710'
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9)
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '13900'
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 10)
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'))
+
+    async def test_effectively_equal_impact_keeps_the_current_allocation(self):
+        self.executable_ev(self.car_run(hours=2, spare_w=4000))
+        self.scheduled_room(temperature=19.1)
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9)
+        car = self.source.priority_last['slack_h']['ev']
+        # The room now has marginally more slack than the trimmed car.
+        self.rows['climate.room']['attributes']['current_temperature'] = 19 + (car + .05) * .5 * 1.25
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'), 'No switch for a negligible difference')
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9)
+        self.rows['climate.room']['attributes']['current_temperature'] = 22
+        self.assertTrue(self.source.scheduled_heat_shed('device:room'), 'A clear difference moves the reduction')
+
+    async def test_shortfall_carried_across_quarters_changes_priority_and_requests_a_replan(self):
+        run = self.car_run(hours=1, spare_w=2000)
+        self.executable_ev(run)
+        self.scheduled_room(temperature=19.1)
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9)
+        self.assertFalse(self.source.priority_must_move('ev'), 'The run still fits its authorised window')
+        # Repeated reductions over several quarters: four minutes lost, four times.
+        for _ in range(4):
+            row = self.source.run_progress['ev']
+            self.source.run_progress['ev'] = {**row, 'at_ms':row['at_ms']-240_000, 'measured_w':0}
+            self.source.priority_pass()
+        self.assertAlmostEqual(self.source.run_progress['ev']['shortfall_wh'], 1840, delta=2)
+        self.assertTrue(self.source.scheduled_heat_shed('device:room'), 'The car is now the more pressing run')
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 10)
+        # More is lost than the remaining window can make up: the work must move.
+        row = self.source.run_progress['ev']
+        self.source.run_progress['ev'] = {**row, 'shortfall_wh':2500}
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '16200'
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9)
+        condition = self.source.priority_condition('ev', {'requested_current_a':9})
+        self.assertEqual(condition, {'status':'capacity_limited', 'cause':'house_import_capacity', 'maximum_current_a':9})
+        from shs_core import execution_replan
+        journal = {}
+        slot = {'start':datetime.now(timezone.utc).isoformat(), 'ev_target_current_a':10}
+        self.assertTrue(execution_replan.observe(journal, '$ev', slot, condition), 'The existing replan path takes it')
+        self.assertFalse(execution_replan.observe(journal, '$ev', slot, condition), 'Unchanged evidence does not loop')
+        # A replacement plan is a new reference: its snapshot holds the actuals.
+        self.source.capacity['coordination']['intents']['ev']['parameters']['run'] = {**run, 'id':'next-plan:ev'}
+        self.source.priority_pass()
+        self.assertEqual(self.source.run_progress['ev']['shortfall_wh'], 0)
+
+    def charging_battery(self, *, measured_w=3500, soc='50'):
         self.rows['select.mode']['state'] = 'Command Charging (PV First)'
         self.rows['number.charge']['state'] = '4'
-        self.rows['sensor.battery']['state'] = '3500'
-        self.assertGreater(self.source.import_required(), 15000)
-        self.assertFalse(self.source.scheduled_heating_over_limit())
-        self.rows['sensor.grid']['state'] = '15500'
-        self.assertTrue(self.source.scheduled_heating_over_limit(), 'A held battery cannot make room')
-        self.source.capacity['coordination'] = {'withdrawal': {
+        self.rows['sensor.battery']['state'] = str(measured_w)
+        self.rows['sensor.soc'] = {'state':soc, 'attributes':{'unit_of_measurement':'%'}}
+        options = self.source.options()
+        options['battery_soc_entity'] = 'sensor.soc'
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.source.capacity.setdefault('coordination', {})['withdrawal'] = {
             'controls': {'select.mode':'Command Charging (PV First)', 'number.charge':4, 'number.discharge':4},
-            'valid_until_ms':self.gateway.now()+1000, 'context':self.gateway.context(),
-        }}
-        self.assertFalse(self.source.scheduled_heating_over_limit())
-        self.rows['sensor.grid']['state'] = '20000'
-        self.assertTrue(self.source.scheduled_heating_over_limit())
+            'valid_until_ms':self.gateway.now()+60000, 'context':self.gateway.context()}
+        self.source.refresh_capacity = AsyncMock()  # Keep the coordination staged above.
 
-    async def test_no_grid_meter_binding_does_not_block_scheduled_heat(self):
-        report = self.source.report
-        def read(entity):
-            return report(entity.lower())
-        self.source.report = read
-        self.assertFalse(self.source.scheduled_heating_over_limit())
+    def battery_run(self, *, minutes, target_wh):
+        now = self.now_ms()
+        end = now + minutes * 60_000
+        return {'kind':'charge', 'id':'contract:1', 'windows':[[now-QUARTER, end, 4000, 8800, 0]],
+                'targets':[[now-QUARTER, end, target_wh]], 'capacity_wh':18000, 'efficiency':1.0}
+
+    async def test_nearly_full_battery_keeps_its_charge_when_its_window_is_closing(self):
+        # 9,720 of 9,900 Wh stored and twelve minutes left: the battery cannot
+        # lose power, while the car has two hours and spare capacity.
+        self.executable_ev(self.car_run(hours=2, spare_w=4000))
+        self.charging_battery(soc='54')
+        self.rows['sensor.house']['state'] = '11500'
+        want = self.conversion.grid_charge.input(3500)
+        capacity = await self.source.request('battery_capacity', {'charge_run':{
+            'run':self.battery_run(minutes=12, target_wh=10600), 'want_w':want}})
+        self.assertTrue(capacity['priority_shared'])
+        self.assertAlmostEqual(capacity['external_import_w'], 15000 - want)
+        self.assertLess(self.source.priority_last['slack_h']['battery'], self.source.priority_last['slack_h']['ev'])
+        self.assertLess(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 10,
+                        'This replaces the earlier charger-first rule: the car yields, not the battery')
+
+    async def test_battery_with_time_to_spare_yields_before_the_car_that_is_behind(self):
+        self.executable_ev(self.car_run(hours=.5))
+        self.charging_battery(soc='40')
+        self.rows['sensor.house']['state'] = '11500'
+        want = self.conversion.grid_charge.input(3500)
+        now = self.now_ms()
+        run = {'kind':'charge', 'id':'contract:1', 'windows':[[now-QUARTER, now+16*QUARTER, 4000, 8800, 0]],
+               'targets':[[now-QUARTER, now+16*QUARTER, 9000]], 'capacity_wh':18000, 'efficiency':1.0}
+        capacity = await self.source.request('battery_capacity', {'charge_run':{'run':run, 'want_w':want}})
+        self.assertGreater(capacity['external_import_w'], 15000 - want, 'The battery absorbs the reduction')
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 10)
+
+    async def test_restored_power_needs_measurably_free_capacity(self):
+        # The room outranks the car, but the car's reduction is still in
+        # flight: its measured draw has not fallen, so the room keeps waiting.
+        self.executable_ev(self.car_run(hours=2, spare_w=4000))
+        self.scheduled_room(temperature=19.1, measured_w=0, action='idle')
+        self.physical.ownership.records['device:room'] = {'options':self.source.options(),
+            'originals':{'climate.room':22}, 'heating_pause':{'entity':'climate.room', 'target_c':22}}
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '14900'
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 7,
+                         'The car makes room for the 2 kW start')
+        self.assertTrue(self.source.scheduled_heat_shed('device:room'), 'Not from an unconfirmed reduction')
+        self.rows['number.ev']['state'] = '7'
+        self.assertTrue(self.source.scheduled_heat_shed('device:room'), 'The setting alone frees nothing')
+        self.rows['sensor.ev']['state'] = '4830'
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '12830'
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'), 'The meter shows the watts gone')
+
+    async def test_reduction_that_never_arrives_moves_to_another_run(self):
+        from shs_core.run_priority import RESPONSE_MS
+        self.executable_ev(self.car_run(hours=2, spare_w=4000))
+        self.scheduled_room(temperature=19.1)
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9)
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'), 'The command is in flight')
+        # The charger never responds: its meter still shows 10 A a minute later.
+        self.source.priority_pending['ev']['since_ms'] -= RESPONSE_MS + 1
+        self.assertTrue(self.source.scheduled_heat_shed('device:room'), 'The room now clears the overload')
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9,
+                         'The car is still asked for its reduction')
+        self.assertFalse(self.source.priority_must_move('device:room'))
+        # Once the meter shows it, the car is an ordinary candidate again.
+        self.rows['number.ev']['state'] = '9'
+        self.rows['sensor.ev']['state'] = '6210'
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '14710'
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'))
+        self.assertNotIn('ev', self.source.priority_pending)
+
+    async def test_meter_burst_shares_one_decision_pass(self):
+        self.executable_ev(self.car_run(hours=2, spare_w=4000))
+        self.scheduled_room(temperature=19.1)
+        required = self.source.import_required
+        self.source.import_required = Mock(side_effect=required)
+        for _ in range(20):
+            self.source.scheduled_heat_shed('device:room')
+            await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5)
+        self.assertEqual(self.source.import_required.call_count, 1, 'Every owner reuses the reserved demand')
+        self.rows['sensor.grid']['state'] = '15600'  # The grid meter is applied to the shared result.
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9)
+        self.assertEqual(self.source.import_required.call_count, 1)
+        self.rows['sensor.house']['state'] = '15300'
+        self.source.scheduled_heat_shed('device:room')
+        self.assertEqual(self.source.import_required.call_count, 2)
+
+    async def test_missing_required_readings_hold_and_other_devices_keep_executing(self):
+        self.executable_ev(self.car_run(hours=2, spare_w=4000))
+        self.scheduled_room(temperature=19.1)
+        self.rows['sensor.grid']['state'] = 'unavailable'
+        with self.assertRaises(ControlObservationError) as failure:
+            await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5)
+        self.assertTrue(failure.exception.unavailable, 'The car holds its last setting')
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'),
+                         'No measured overload: the running heater follows its schedule')
+        self.physical.ownership.records['device:room'] = {'options':self.source.options(),
+            'originals':{'climate.room':22}, 'heating_pause':{'entity':'climate.room', 'target_c':22}}
+        with self.assertRaises(ControlObservationError):
+            self.source.scheduled_heat_shed('device:room')  # A paused heater holds its pause.
+        del self.physical.ownership.records['device:room']
+        self.rows['sensor.grid']['state'] = '15400'
+        # The room's own temperature is missing: it holds and promises
+        # nothing, and the car is still sized from its own inputs.
+        self.rows['climate.room']['attributes'].pop('current_temperature')
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'))
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 7,
+                         'Its possible draw stays reserved; the car is sized from its own inputs')
+        # A car whose executor could not act is not counted on to yield.
+        self.rows['climate.room']['attributes']['current_temperature'] = 22
+        self.rows['sensor.ev_target']['state'] = 'unavailable'
+        self.assertTrue(self.source.scheduled_heat_shed('device:room'))
+        self.assertNotIn('ev', self.source.priority_last['granted'])
+
+    async def test_scheduled_heat_yields_to_measured_import_only(self):
+        self.executable_ev(self.car_run(hours=.5))
+        self.scheduled_room(temperature=22.0)
+        self.rows['sensor.grid']['state'] = '14900'
+        self.assertGreater(self.source.import_required(), 15000)
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'), 'Reserved demand alone starts no pause')
+        options = self.source.options()
+        options.pop('grid_power_entity')
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'), 'No grid meter, no heater relief')
 
     async def test_expired_unissued_battery_target_leaves_measured_credit_available(self):
         self.charging_car_at_minimum()

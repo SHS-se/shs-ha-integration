@@ -82,6 +82,9 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
             describe_import=lambda *args:{},
             admit_import=Mock(),
             lowers_heating_target=Mock(return_value=False),
+            scheduled_heat_shed=Mock(return_value=False),
+            priority_sources=lambda: (),
+            priority_condition=lambda *args: None,
         )
         self.physical = DeviceGateway(controller_inputs(self.hass), self.controller.options, self.store,
             self.controller.native_executor, authorize=lambda intent:None, before_external=lambda *args, **kwargs:True,
@@ -130,8 +133,8 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         self.models[0]['control_type'] = 'switch_schedule'
         self.states['switch.heater'] = State('off')
         self.states['sensor.room'] = State('19.9', unit_of_measurement='°C')
-        self.capacity.battery_capacity_sources = lambda: ('sensor.battery',)
-        self.capacity.scheduled_heating_over_limit = Mock(return_value=True)
+        self.capacity.priority_sources = lambda: ('sensor.battery', 'sensor.house')
+        self.capacity.scheduled_heat_shed = Mock(return_value=True)
 
         async def send(domain, service, data, blocking):
             self.calls.append(service)
@@ -139,7 +142,7 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         self.hass.services.async_call = send
 
         def admit(device, entity, value, **kwargs):
-            if self.capacity.scheduled_heating_over_limit.return_value:
+            if self.capacity.scheduled_heat_shed.return_value:
                 raise ControlDeadlineError('Waiting for house import capacity')
             return True
         self.physical.external_ready = admit
@@ -150,23 +153,25 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
             intent = device_intent(OWNER, 'apply', self.plan, slot, configuration_revision=1, policy_revision=1)
             return await self.physical.perform({**intent, 'headroom_reserved': True})
 
+        # Live priority gives this relay no share: it waits without a start.
         denied = await apply()
-        self.assertEqual(denied['error']['kind'], 'deadline')
+        self.assertTrue(denied['result']['heating_curtailed'])
         self.assertEqual(self.calls, [])
         self.assertTrue({'sensor.room', 'sensor.house', 'sensor.battery'} <= set(denied['reads']))
+        self.capacity.scheduled_heat_shed.assert_called_with(OWNER)
 
-        self.capacity.scheduled_heating_over_limit.return_value = False
+        self.capacity.scheduled_heat_shed.return_value = False
         self.assertIsNone((await apply())['error'])
         self.assertEqual(self.calls, ['turn_on'])
 
         self.states['sensor.room'].state = '20.1'
         self.assertTrue((await apply())['result']['decision']['on'])
-        self.capacity.scheduled_heating_over_limit.return_value = True
+        self.capacity.scheduled_heat_shed.return_value = True
         self.assertTrue((await apply())['result']['heating_curtailed'])
         self.assertEqual(self.calls, ['turn_on', 'turn_off'])
 
         self.states['sensor.room'].state = '19.8'
-        self.capacity.scheduled_heating_over_limit.return_value = False
+        self.capacity.scheduled_heat_shed.return_value = False
         self.assertIsNone((await apply())['error'])
         self.assertEqual(self.calls, ['turn_on', 'turn_off', 'turn_on'])
 
@@ -179,24 +184,75 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, ['turn_on', 'turn_off', 'turn_on'])
         self.capacity.make_heating_room.assert_not_awaited()
 
-    async def test_running_native_thermostat_is_paused_and_resumes_at_the_room_target(self):
-        self.capacity.battery_capacity_sources = lambda: ()
-        self.capacity.scheduled_heating_over_limit = Mock(return_value=True)
+    def scheduled_thermostat(self, **attributes):
+        native = self.states['climate.heater']
+        native.attributes.update(target_temp_step=1, **attributes)
         slot = dict(start=datetime.now(timezone.utc).isoformat(), device_commands={'heater': {
-            'type': 'setpoint', 'target_c': 22.5, 'room_target_c': 22, 'minimum_c': 5, 'maximum_c': 35}})
+            'type': 'setpoint', 'target_c': 22, 'room_target_c': 22, 'minimum_c': 5, 'maximum_c': 35}})
 
         async def apply():
             request = device_intent(OWNER, 'apply', self.plan, slot, configuration_revision=1, policy_revision=1)
             return await self.physical.perform({**request, 'headroom_reserved': True})
+        return native, apply
 
+    async def test_pause_moves_only_the_setpoint_and_restores_the_accepted_target(self):
+        # User requirement, 10 November 2026. Master bathroom: 21 °C left the
+        # thermostat idle at 20.5 °C and 22 °C started it; Off blanks its display.
+        native, apply = self.scheduled_thermostat(temperature=22, current_temperature=20.5, hvac_action='heating')
+        self.capacity.scheduled_heat_shed.return_value = True
         limited = await apply()
         self.assertTrue(limited['result']['heating_curtailed'])
-        self.assertEqual(self.states['climate.heater'].state, 'off')
-        self.capacity.scheduled_heating_over_limit.return_value = False
+        self.assertEqual((native.state, native.attributes['temperature']), ('heat', 20))
+        self.assertEqual(self.calls, ['set_temperature'])
+        self.assertEqual(self.physical.ownership.records[OWNER]['heating_pause'],
+                         {'entity': 'climate.heater', 'target_c': 22})
+
+        # The thermostat acknowledged and went idle: nothing more is sent.
+        native.attributes['hvac_action'] = 'idle'
+        await apply()
+        self.assertEqual(self.calls, ['set_temperature'])
+
+        self.capacity.scheduled_heat_shed.return_value = False
         self.assertIsNone((await apply())['error'])
-        self.assertEqual(self.states['climate.heater'].state, 'heat')
-        self.assertEqual(self.states['climate.heater'].attributes['temperature'], 22.5)
+        self.assertEqual((native.state, native.attributes['temperature']), ('heat', 22))
+        self.assertNotIn('heating_pause', self.physical.ownership.records[OWNER])
+        self.assertNotIn('set_hvac_mode', self.calls)
         self.capacity.make_heating_room.assert_not_awaited()
+
+    async def test_pause_steps_lower_only_after_the_thermostat_had_time_to_respond(self):
+        from shs_core.device_operations import PAUSE_RESPONSE_SECONDS
+        native, apply = self.scheduled_thermostat(temperature=22, current_temperature=20.5, hvac_action='heating')
+        self.capacity.scheduled_heat_shed.return_value = True
+        await apply()
+        await apply()
+        self.assertEqual(native.attributes['temperature'], 20, 'A lagging thermostat is not ratcheted down')
+        self.physical.command_times['climate.heater'] -= timedelta(seconds=PAUSE_RESPONSE_SECONDS)
+        await apply()
+        self.assertEqual((native.state, native.attributes['temperature']), ('heat', 19))
+        self.assertEqual(self.physical.ownership.records[OWNER]['heating_pause']['target_c'], 22)
+
+    async def test_pause_holds_when_the_thermostat_does_not_report_its_own_temperature(self):
+        native, apply = self.scheduled_thermostat(temperature=22, hvac_action='heating')
+        self.capacity.scheduled_heat_shed.return_value = True
+        result = await apply()
+        self.assertEqual(result['error']['kind'], 'observation')
+        self.assertEqual(self.calls, [])
+        self.assertEqual((native.state, native.attributes['temperature']), ('heat', 22))
+
+    async def test_unit_paused_with_off_by_the_previous_version_returns_to_heat(self):
+        native, apply = self.scheduled_thermostat(temperature=22, current_temperature=20.5, hvac_action='idle')
+        native.state = 'off'
+        self.physical.ownership.records[OWNER] = {'options': self.options,
+            'originals': {'climate.heater': 21}, 'heating_suspended': 'climate.heater'}
+        self.assertIsNone((await apply())['error'])
+        self.assertEqual((native.state, native.attributes['temperature']), ('heat', 22))
+        self.assertEqual(self.calls[0], 'set_hvac_mode')
+        self.assertNotIn('heating_suspended', self.physical.ownership.records[OWNER])
+        # From here a pause only moves the setpoint.
+        native.attributes['hvac_action'] = 'heating'
+        self.capacity.scheduled_heat_shed.return_value = True
+        await apply()
+        self.assertEqual((native.state, native.attributes['temperature']), ('heat', 20))
 
     async def test_idle_paused_thermostat_does_not_reenable_for_a_charging_setback(self):
         native = self.states['climate.heater']
@@ -438,11 +494,15 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         self.controller.record_execution.assert_not_awaited()
 
     async def test_curtailment_retains_control_and_verification_restores_original_setting(self):
+        # Manual heating-override relief shares the pause routine: Heat stays
+        # selected and only the setpoint moves (10 November 2026).
         self.capacity.heating_cap = lambda owner:{'thermostat':True}
+        self.states['climate.heater'].attributes.update(current_temperature=19.2, hvac_action='heating')
         result = await self.physical.perform(self.intent('apply'))
         self.assertTrue(result['result']['heating_curtailed'])
-        self.assertEqual(self.states['climate.heater'].state, 'off')
-        self.states['climate.heater'].attributes.pop('temperature')
+        self.assertEqual(self.states['climate.heater'].state, 'heat')
+        self.assertEqual(self.states['climate.heater'].attributes['temperature'], 19)
+        self.assertEqual(self.calls, ['set_temperature'])
         self.assertIn(OWNER, self.physical.ownership.records)
         self.options['device_modes']['heater'] = 'control_verification'
         result = await self.physical.perform(self.intent('release'))

@@ -99,6 +99,10 @@ during planned charging. A confirmed Off mode with idle relay status and a
 subsequent valid meter report settles that pause. Standby power remains in the
 metered load partition.
 
+Superseded later on 10 November 2026: [live priority across whole runs](run-priority.md)
+replaces the charger-first order and the `Off` pause described in the rest of
+this section. The measured accounting it describes still applies.
+
 Later on 10 November the user requested measured import backoff. Normal
 charging now preserves scheduled thermostat targets. An acknowledged Heat
 thermostat with a valid dedicated meter contributes measured power to standing

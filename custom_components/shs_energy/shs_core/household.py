@@ -274,6 +274,7 @@ class Household:
         self.last_calculation_error: str | None = None
         self.latest_calculation: dict[str, Any] | None = None
         self.optimisation_plan: dict[str, Any] | None = None
+        self._run_summaries: dict[str, tuple] = {}
         self._plan_contract = PlanContractCache(lambda: self.optimisation_plan)
         self._plan_configuration_changed = False
         self.replan_recommendations: list[dict[str, str]] = []
@@ -4202,6 +4203,28 @@ class Household:
                      if datetime.fromisoformat(slot["start"]) <= now
                      < datetime.fromisoformat(slot["start"]) + timedelta(minutes=15)), None)
         return plan, slot
+
+    def run_summary(self, device, options):
+        """The device's whole-run summary, built once for each accepted plan.
+
+        Live control compares these few rows; it never scans the plan again.
+        """
+        from .operating_modes import scoped_plan
+        from .run_priority import summarize_runs
+        plan = scoped_plan(self.optimisation_plan, options, device)
+        if not plan:
+            return None
+        contract = self.optimisation_plan.get("battery_execution") if device == "battery" else None
+        cached = self._run_summaries.get(device)
+        if cached is None or cached[0] is not plan or cached[1] is not contract:
+            source = {**plan, "battery_execution": contract} if device == "battery" else plan
+            try:
+                runs = summarize_runs(source)
+            except Exception:  # A summary is advisory; execution never depends on it.
+                _LOGGER.exception("Cannot summarise the plan's runs; live priority uses measurements only")
+                runs = {}
+            cached = self._run_summaries[device] = (plan, contract, runs)
+        return cached[2].get(device)
 
     @property
     def reactive_surplus_w(self) -> float | None:

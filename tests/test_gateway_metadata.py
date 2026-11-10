@@ -159,6 +159,12 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
                 native_pool_idle=native_pool_idle,owned_device_sources=owned_device_sources,validate_pool_pause=validate_pool_pause,
                 temperature_available=temperature_available,temperature_metadata=temperature_metadata).items():
             adapter.HomeAssistantSource.report.__globals__[key]=value
+        from math import isfinite
+        from shs_core import run_priority
+        from shs_core.heating_overrides import active_heating, relay_heat, room_temperature
+        adapter.HomeAssistantSource.report.__globals__.update(run_priority=run_priority, isfinite=isfinite,
+            valid_run=run_priority.valid_run, active_heating=active_heating, relay_heat=relay_heat,
+            room_temperature=room_temperature)
         self.source = adapter.HomeAssistantSource(self.hass, entry)
         self.service = GatewayService(self.stream, IDENTITY, self.source)
         self.service.physical, self.service.battery = self.physical, self.gateway

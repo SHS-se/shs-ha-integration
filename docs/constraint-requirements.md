@@ -41,6 +41,15 @@ the accepted settings as demand falls. Pending command effects remain separate
 from settled measured draw. A missing required reading holds the last setting;
 it must not reset a charger from its optional increase to its nominal setting.
 
+User requirement, 10 November 2026 (later): live priority across each whole run
+replaces that charger-first order. The car, the house battery and eligible
+heaters share the measured import limit by how much each run can still give up
+and meet its objective; shortfalls carry across quarters, and work that must
+move uses the existing replan path. A controller-driven thermostat pause keeps
+Heat selected and changes only the setpoint. The hold on missing readings and
+the separation of pending effects from measured draw are unchanged. See
+[live priority across whole runs](run-priority.md).
+
 Process events in the order received. Our own locally generated revisions may
 track that order and identify superseded work. Timestamps from devices or other
 sources must not be used to infer event ordering or reject a later received

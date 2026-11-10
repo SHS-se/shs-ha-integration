@@ -54,6 +54,9 @@ from .shs_core.native_commands import NativeExecutor, finite
 from .shs_core.native_numbers import canonical_metadata, watts as native_watts
 from .shs_core.grid_capacity import capped_intention, ev_current_ceiling
 from .shs_core.connection_health import RetryBackoff
+from .shs_core import run_priority
+from .shs_core.run_priority import valid_run
+from math import isfinite
 
 _LOGGER = logging.getLogger(__name__)
 GATEWAYS = 'shs_energy_gateways'
@@ -96,6 +99,16 @@ class HomeAssistantSource:
         self.draw_refresh = asyncio.Event()
         self.capacity_entities = set()
         self.capacity_refresh_pending = False
+        # Live run priority (docs/run-priority.md): the battery's published
+        # run, carried delivery, and the decision shared by one burst.
+        self.charge_run = None
+        self.run_progress = {}
+        self.run_progress_saved = None
+        self.priority_cache = None
+        self.priority_last = None
+        self.priority_pending = {}
+        self.priority_passes = 0
+        self.observed_serial = 0
         self.intake_counts = {'ordered':0, 'replaceable':0, 'bytes':0}
 
     def report(self, entity, state=None, kind='state_report', *, compact=False):
@@ -256,8 +269,18 @@ class HomeAssistantSource:
             'configure':{'expected_revision','revision','options','digest'},
             'statistics':{'start','end','entities','period','units','kinds'},
             'states':{'start','end','entities','with_attributes'}, 'forecast':{'entity'}}
-        if operation not in fields or type(body) is not dict or set(body) != fields[operation]:
+        if operation == 'battery_capacity' and type(body) is dict and set(body) == {'charge_run'}:
+            published = body['charge_run']
+            if (type(published) is not dict or set(published) != {'run', 'want_w'}
+                    or not valid_run(published['run']) or (published['run'] or {}).get('kind') != 'charge'
+                    or published['want_w'] is not None and (type(published['want_w']) not in (int, float)
+                        or not isfinite(published['want_w']) or published['want_w'] < 0)):
+                raise ValueError('Invalid battery charging run')
+            self.charge_run = published
+        elif operation not in fields or type(body) is not dict or set(body) != fields[operation]:
             raise ValueError('Unsupported source request')
+        elif operation == 'battery_capacity':
+            self.charge_run = None
         if operation == 'credentials':
             return dict(self.entry.data)
         if operation in ('planning_power_bounds', 'planning_device_draws'):
@@ -281,11 +304,23 @@ class HomeAssistantSource:
                 # Size this battery against the same native/device reservations
                 # as dispatch. Its own envelope is supplied by the new target;
                 # older actuator sets remain independent reserved demand.
-                return {'external_import_w': self.import_required(exclude_device=self.battery_capacity_key(),
-                    reserved=[*self.heating_effects().values(), *claims], house_w=house),
-                        'import_limit_w': self.house_import_limit(),
+                limit = self.house_import_limit()
+                external = self.import_required(exclude_device=self.battery_capacity_key(),
+                    reserved=[*self.heating_effects().values(), *claims], house_w=house)
+                result = {'external_import_w': external, 'import_limit_w': limit,
                         'native_load_bounds':self.native_load_bounds(), 'observed_house_w':house,
                         'grid_charge_hold':any(claim['hold_charge'] for claim in claims)}
+                try:
+                    decision = self.priority_pass()
+                except (AdmissionPending, ControlObservationError, ValueError, KeyError, TypeError):
+                    decision = None  # The measured budget above still sizes the charge.
+                if decision is not None and 'battery' in decision['granted']:
+                    # This battery's part of the shared budget. It holds its
+                    # charge while a less pressing load's reduction is in
+                    # flight, and takes more only from confirmed capacity.
+                    result.update(external_import_w=max(0.0, limit - decision['granted']['battery']),
+                                  priority_shared=True)
+                return result
         if operation == 'admission':
             validate_bindings(body['bindings'])
             validate_pool_pause(body['pool_pause'])
@@ -899,20 +934,6 @@ class HomeAssistantSource:
         return tuple(installed[key] for key in ('battery_power_measurement_entity',
             'battery_mode_entity', 'battery_discharge_limit_entity', 'battery_charge_limit_entity'))
 
-    def scheduled_heating_over_limit(self):
-        entity = self.options().get('grid_power_entity')
-        if not entity:
-            return False
-        limit = self.house_import_limit()
-        try:
-            grid, _ = power(self.report(entity), source=entity, signed=True)
-        except (TypeError, ValueError):
-            return False
-        if grid <= limit:
-            return False
-        _, battery_w = self.battery_charge_relief()
-        return grid - battery_w - self.ev_charge_relief() > limit
-
     def measured_control_power(self, entity, *, signed=False):
         report = self.report(entity)
         try:
@@ -922,53 +943,332 @@ class HomeAssistantSource:
                 'Wait for the power reading to return; control resumes automatically.',
                 unavailable=not report or report.get('state') in ('unknown', 'unavailable')) from error
 
-    def battery_charge_relief(self):
-        """Only a current writer can promise to reduce measured battery charge."""
-        battery = self.service.battery
-        if battery.installation is not None and self.active_battery_target() is not None:
-            _, _, conversion, installed = battery.installation
-            if self.report(installed['battery_mode_entity'])['state'] == 'Command Charging (PV First)':
-                measured = self.measured_control_power(installed['battery_power_measurement_entity'], signed=True)
-                return self.battery_capacity_key(installed), conversion.grid_charge.input(max(0, measured))
-        return None, 0.0
+    # ---- Live run priority (user requirement, 10 November 2026) ----
+    # The car, the house battery and eligible heaters share the measured
+    # import budget by how much each whole run can still give up. This
+    # replaces the earlier charger-first relief rule; docs/run-priority.md.
 
-    def ev_charge_relief(self):
-        """An executable scheduled EV request can yield all of its measured draw."""
+    def ev_candidate(self, now_ms, own=None):
+        """The charging car, from its executing request or its accepted intention."""
         options = self.options()
         value = self.capacity.get('coordination', {}).get('intents', {}).get('ev')
-        if device_mode(options, 'ev') != 'controlling' or not value or value['operation'] != 'apply':
-            return 0.0
+        run = None
+        current = False
+        if value and value.get('operation') == 'apply':
+            start = int(datetime.fromisoformat(value['parameters']['start']).timestamp() * 1000)
+            current = start <= now_ms < start + run_priority.QUARTER_MS
+            run = value['parameters'].get('run') if current else None
+        if own is None:
+            # Another owner's decision may count on the car only while its own
+            # executor could act on the result right now.
+            if device_mode(options, 'ev') != 'controlling' or not current or value['parameters']['current_a'] <= 0:
+                return None
+            try:
+                intent = DeviceIntent.parse(value)
+                self.service.authorize_device(intent)
+                physical = self.service.physical
+                if '$ev' in options.get('excluded_device_readings', ()) or not options.get('ev_enabled', True):
+                    return None
+                for override in (options.get('control_override_entity'), options.get('ev_control_override_entity')):
+                    if override and physical.state(override).state != 'off':
+                        return None
+                record = physical.ownership.records.get('ev', {})
+                entity, minimum = self.flexible_ev(options, record)
+                switch = options['ev_charge_switch_entity']
+                physical.actuator_state(entity)
+                ev_current_ceiling(intent.parameters['current_a'] * EV_WATTS_PER_AMP,
+                    self.report(entity)['attributes'], minimum)
+                if physical.actuator_state(switch).state != 'on':
+                    return None
+                # These inputs are required by execute_ev before it can reduce.
+                if physical.state(options['ev_connected_entity']).state not in ('on', 'off', 'true', 'false', 'connected', 'disconnected'):
+                    return None
+                physical.fraction(options['ev_soc_entity'])
+                physical.fraction(options['ev_target_soc_entity'])
+                own = dict(entity=entity, switch=switch, requested=intent.parameters['current_a'], minimum=minimum)
+                return self._ev_candidate(own, run, now_ms)
+            except (AdmissionPending, ControlObservationError, ValueError, KeyError, TypeError):
+                return None  # Missing evidence cannot promise that the car will yield.
+        return self._ev_candidate(own, run, now_ms)
+
+    def _ev_candidate(self, own, run, now_ms):
+        entity, switch = own['entity'], own['switch']
+        native = self.report(entity)
+        effect = self.describe_import('ev', switch, 'on')
+        draw = self.measured_control_power(effect['sensor'])
+        observed = float(canonical_metadata(native['state'], native['attributes']))
+        issued = finite(commanded_controls(self.capacity, effect['device'], issued_only=True).get(entity, observed))
+        # An issued boost belongs to the run until priority reclaims it.
+        wanted = max(own['requested'], min(issued, own.get('maximum', issued)))
+        step = finite(native['attributes'].get('step') or 1)
+        candidate = dict(owner='ev', kind='ev', identity=effect['device'], draw_w=draw, metered=True,
+            want_w=wanted * EV_WATTS_PER_AMP, step_w=step * EV_WATTS_PER_AMP,
+            floor_w=own['minimum'] * EV_WATTS_PER_AMP, present_w=effect['before_w'],
+            sources=(effect['sensor'], entity, switch),
+            key=('ev', native['state'], self.report(switch)['state'], draw, own['requested'], own['minimum'], own.get('maximum')))
+        if run is not None:
+            # Only SHS's own reductions build a shortfall. A car that takes
+            # less than an untrimmed setting allows is limiting itself.
+            delivered = draw if observed < own['requested'] else max(draw, run_priority.planned_now(run, now_ms))
+            progress = self.run_progress['ev'] = run_priority.advance_delivery(
+                self.run_progress.get('ev'), run, now_ms, delivered)
+            candidate['outlook'] = run_priority.charge_outlook(run, now_ms, shortfall_wh=progress['shortfall_wh'])
+        return candidate
+
+    def battery_candidate(self, now_ms):
+        """Only a current writer charging on command can reduce measured battery charge."""
+        battery = self.service.battery
+        if battery.installation is None or self.active_battery_target() is None:
+            return None
+        _, _, conversion, installed = battery.installation
+        mode = self.report(installed['battery_mode_entity'])['state']
+        if mode != 'Command Charging (PV First)':
+            return None
+        sensor = installed['battery_power_measurement_entity']
+        measured = self.measured_control_power(sensor, signed=True)
+        draw = conversion.grid_charge.input(measured) if measured > 0 else 0.0
+        descriptor = self.describe_import('battery', installed['battery_mode_entity'], mode)
+        published = self.charge_run or {}
+        run, want = published.get('run'), published.get('want_w')
+        if want is None:
+            want = max(draw, descriptor['before_w'])
+        limit = self.report(installed['battery_charge_limit_entity'])['state']
+        candidate = dict(owner='battery', kind='battery', identity=descriptor['device'], draw_w=draw, metered=False,
+            want_w=want, step_w=0, floor_w=0.0, present_w=max(draw, descriptor['before_w']),
+            sources=(sensor, installed['battery_mode_entity'], installed['battery_charge_limit_entity']),
+            key=('battery', mode, limit, draw, want))
+        soc_entity = self.options().get('battery_soc_entity')
+        if run is not None and soc_entity:
+            try:
+                soc = self.report(soc_entity)
+                fraction = finite(soc['state']) / 100
+                if soc['attributes'].get('unit_of_measurement') == '%' and 0 <= fraction <= 1:
+                    candidate['outlook'] = run_priority.charge_outlook(
+                        run, now_ms, stored_wh=fraction * run['capacity_wh'])
+                    candidate['sources'] += (soc_entity,)
+            except (KeyError, TypeError, ValueError):
+                pass  # Unknown state of charge leaves the battery without stated slack.
+        return candidate
+
+    def heat_candidates(self, now_ms):
+        """Scheduled room thermostats and relays that draw now or wait to resume."""
+        options = self.options()
+        if not options.get('grid_power_entity'):
+            return []  # Heating yields to measured import only.
+        found = []
+        for owner, value in self.capacity.get('coordination', {}).get('intents', {}).items():
+            if not owner.startswith('device:') or value.get('operation') != 'apply':
+                continue
+            try:
+                candidate = self._heat_candidate(owner, value, options, now_ms)
+            except (AdmissionPending, GatewayConflict, ControlObservationError, ValueError, KeyError, TypeError):
+                continue  # A room with missing evidence holds; it cannot stop healthy owners.
+            if candidate is not None:
+                found.append(candidate)
+        return found
+
+    def _heat_candidate(self, owner, value, options, now_ms):
+        key = owner.removeprefix('device:')
+        parameters = value['parameters']
+        start = int(datetime.fromisoformat(parameters['start']).timestamp() * 1000)
+        if not start <= now_ms < start + run_priority.QUARTER_MS or device_mode(options, owner) != 'controlling':
+            return None
+        command = parameters['commands'][key]
+        thermostat = command['type'] == 'setpoint' and 'room_target_c' in command
+        if not thermostat and command['type'] != 'room_relay':
+            return None
+        mapping = options['device_control_mappings'][key]
+        if key in options.get('excluded_device_readings', ()):
+            return None
+        for override in (options.get('control_override_entity'), mapping.get('control_override_entity')):
+            if override and (self.report(override) or {}).get('state') != 'off':
+                return None
+        heating = self.service.heating
+        if heating is not None and active_heating(heating.value, options, owner, heating.now()):
+            return None  # An explicit room request is not scheduled heat.
+        if self.heating_cap(owner) is not None:
+            return None  # Already yielding to a room's explicit request.
+        self.service.authorize_device(DeviceIntent.parse(value))
+        entity = actuator_targets(mapping)[0]
+        sensor = self.power_source(mapping, key)
+        native = self.report(entity)
+        if not sensor or not native or native['state'] in (None, 'unknown', 'unavailable'):
+            return None
+        draw = power(self.report(sensor), source=sensor)[0]
+        record = self.service.physical.ownership.records.get(owner, {})
+        attrs = native['attributes']
+        if thermostat:
+            if not entity.startswith('climate.') or native['state'] != 'heat':
+                return None
+            temperature = finite(attrs['current_temperature'])
+            running = attrs.get('hvac_action') == 'heating'
+            pause = record.get('heating_pause')
+            waiting = bool(pause) and pause.get('entity') == entity and temperature < finite(pause['target_c'])
+        else:
+            room = mapping['temperature_entity_id']
+            observed = self.report(room)
+            temperature = room_temperature(room, observed['state'], observed['attributes'],
+                                           self.hass.config.units.temperature_unit)
+            running = native['state'] == 'on'
+            waiting = not running and relay_heat(temperature, command['target_c'], native['state']) == 'on'
+        if not running and not waiting:
+            return None  # An idle heater only contributes its measured draw.
+        want = draw if running and draw > 0 else self.mapped_power_bound(mapping)
+        if not want:
+            return None
+        identity = self.describe_import(owner, entity, native['state'])['device']
+        return dict(owner=owner, kind='heat', identity=identity, draw_w=draw, metered=True, want_w=want,
+            step_w=0, floor_w=want, present_w=draw if running else 0.0, running=running,
+            slack_h=run_priority.heat_slack_h(parameters.get('run'), now_ms, temperature),
+            sources=(sensor, entity), key=(owner, native['state'], attrs.get('hvac_action'), attrs.get('temperature'),
+                                         temperature, draw, bool(waiting)))
+
+    def priority_pass(self, ev=None):
+        """One decision over every load that can act now; None when there is none.
+
+        The reserved demand of everything else is the costly part. Owners
+        evaluated on the same readings share it, so a burst of meter reports
+        costs one pass however many devices it wakes. Missing required
+        readings raise, which holds every setting.
+        """
+        options = self.options()
+        limit = self.house_import_limit()
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        candidates = [candidate for candidate in (self.ev_candidate(now_ms, ev), self.battery_candidate(now_ms),
+                      *self.heat_candidates(now_ms)) if candidate is not None]
+        if not candidates:
+            return None
+        house = self.measured_control_power(options['house_consumption_power_entity'])
+        grid_entity = options.get('grid_power_entity')
+        grid = self.measured_control_power(grid_entity, signed=True) if grid_entity else None
+        owners = {candidate['owner'] for candidate in candidates}
+        self.current_import_claims()  # Retire lapsed claims.
+        claims = [row['effect'] for owner, row in self.import_claims.items() if owner not in owners]
+        key = (self.observed_serial, limit, house, self.capacity['revision'], len(claims),
+               tuple(candidate['key'] for candidate in candidates))
+        if self.priority_cache is not None and self.priority_cache[0] == key:
+            reserved = self.priority_cache[1]
+        else:
+            reserved = self.import_required(exclude_devices=[candidate['identity'] for candidate in candidates],
+                reserved=[*self.heating_effects().values(), *claims],
+                house_w=max(0.0, house - sum(c['draw_w'] for c in candidates if c['metered'])))
+            reserved -= self.discharge_credit(import_after_w=reserved + sum(c['want_w'] for c in candidates))
+            self.priority_cache = (key, reserved)
+            self.priority_passes += 1
+        other = reserved
+        if grid is not None:
+            # The grid meter also catches demand ahead of the gross-house
+            # reading. Neither meter replaces the other.
+            other = max(other, grid - sum(c['draw_w'] for c in candidates))
+        budget = limit - other
+
+        # Recovery capacity the plan leaves unused is spent once across runs.
+        outlooks = {c['owner']: c['outlook'] for c in candidates if 'outlook' in c}
+        for owner, slack_wh in run_priority.share_recovery(outlooks).items():
+            candidate = next(c for c in candidates if c['owner'] == owner)
+            candidate['slack_h'] = run_priority.charge_slack_h(slack_wh, max(candidate['draw_w'], candidate['want_w']))
+        previous = self.priority_last or {'granted': {}, 'wants': {}}
+        wants = {c['owner']: c['want_w'] for c in candidates}
+        self.priority_pending = {owner: row for owner, row in self.priority_pending.items() if owner in owners}
+        for candidate in candidates:
+            candidate.setdefault('slack_h', 0.0)
+            owner = candidate['owner']
+            candidate['trimmed'] = (owner in previous['granted']
+                and previous['granted'][owner] < previous['wants'][owner] - 1e-6)
+            waiting = self.priority_pending.get(owner)
+            if waiting and run_priority.responded(candidate['draw_w'], waiting['granted_w']):
+                del self.priority_pending[owner]
+                waiting = None
+            if waiting and now_ms - waiting['since_ms'] > run_priority.RESPONSE_MS:
+                # The reduction never arrived. Keep asking for it, and let
+                # another run absorb what this load measurably still takes.
+                candidate.update(fixed=True, want_w=candidate['draw_w'], step_w=0, floor_w=0.0)
+        shares, left = run_priority.share_budget(budget, candidates)
+        granted = {}
+        for candidate in candidates:
+            owner, share = candidate['owner'], shares[candidate['owner']]
+            if candidate.get('fixed'):
+                granted[owner] = self.priority_pending[owner]['granted_w']
+                continue
+            if share > candidate['present_w']:
+                # An increase is funded only by capacity that is measurably
+                # free: a reduction still in flight has not released its watts.
+                # Until its meter shows the drop, a load still holds the
+                # greater of its setting and its measured draw.
+                room = limit - other - sum(max(c['present_w'], c['draw_w']) for c in candidates if c is not candidate)
+                share = run_priority.step_down(max(candidate['present_w'], min(share, room)), candidate['step_w'])
+                if share < candidate['floor_w']:
+                    share = 0.0
+            granted[owner] = share
+            if run_priority.responded(candidate['draw_w'], share):
+                self.priority_pending.pop(owner, None)
+            else:
+                # A command in flight: no further adjustment while it lands.
+                since = self.priority_pending.get(owner, {}).get('since_ms', now_ms)
+                self.priority_pending[owner] = {'granted_w': share, 'since_ms': since}
+        self.priority_last = dict(at_ms=now_ms, budget_w=budget, left_w=max(0.0, left), granted=granted,
+            wants=wants,
+            slack_h={c['owner']: c['slack_h'] for c in candidates},
+            running={c['owner']: c.get('running', True) for c in candidates},
+            over_limit=grid is not None and grid > limit,
+            sources=sorted({source for c in candidates for source in c['sources'] if source}))
+        self._retain_run_progress(now_ms)
+        return self.priority_last
+
+    def _retain_run_progress(self, now_ms):
+        """Persist carried delivery once a quarter, never on every meter report."""
+        marker = (now_ms // run_priority.QUARTER_MS, tuple(sorted((owner, row['id']) for owner, row in self.run_progress.items())))
+        if marker == self.run_progress_saved or not self.run_progress:
+            return
+        self.run_progress_saved = marker
+        self.entry.async_create_background_task(self.hass,
+            self.service.stream.call('save_record', 'run_progress', dict(self.run_progress)),
+            name='shs_run_progress')
+
+    def priority_sources(self):
+        """Readings whose change can alter the shared decision."""
+        options = self.options()
+        sources = {options.get('house_consumption_power_entity'), options.get('grid_power_entity'),
+                   *self.battery_capacity_sources(), *(self.priority_last or {}).get('sources', ())}
+        return sorted(source for source in sources if source)
+
+    def scheduled_heat_shed(self, owner):
+        """Whether live priority leaves this scheduled heater without power now.
+
+        A pause starts only on measured import above the limit. It lasts
+        until the heater's share returns from capacity that is measurably free.
+        """
+        if not self.options().get('grid_power_entity'):
+            return False
         try:
-            intent = DeviceIntent.parse(value)
-            self.service.authorize_device(intent)
-            start = datetime.fromisoformat(intent.parameters['start'])
-            if not start <= datetime.now(timezone.utc) < start + timedelta(minutes=15):
-                return 0.0
-            if intent.parameters['current_a'] <= 0:
-                return 0.0
-            physical = self.service.physical
-            if '$ev' in options.get('excluded_device_readings', ()) or not options.get('ev_enabled', True):
-                return 0.0
-            for override in (options.get('control_override_entity'), options.get('ev_control_override_entity')):
-                if override and physical.state(override).state != 'off':
-                    return 0.0
-            record = physical.ownership.records.get('ev', {})
-            entity, minimum = self.flexible_ev(options, record)
-            physical.actuator_state(entity)
-            self.measured_control_power(options['house_consumption_power_entity'])
-            ev_current_ceiling(intent.parameters['current_a'] * EV_WATTS_PER_AMP,
-                self.report(entity)['attributes'], minimum)
-            if physical.actuator_state(options['ev_charge_switch_entity']).state != 'on':
-                return 0.0
-            # These inputs are required by execute_ev before it can reduce.
-            if physical.state(options['ev_connected_entity']).state not in ('on', 'off', 'true', 'false', 'connected', 'disconnected'):
-                return 0.0
-            physical.fraction(options['ev_soc_entity'])
-            physical.fraction(options['ev_target_soc_entity'])
-            effect = self.describe_import('ev', entity, self.report(entity)['state'])
-            return self.measured_control_power(effect['sensor'])
-        except (AdmissionPending, ControlObservationError, ValueError, KeyError, TypeError):
-            return 0.0
+            decision = self.priority_pass()
+        except ControlObservationError:
+            # Without the readings there is no evidence of an overload, so a
+            # running heater follows its schedule. One already paused holds
+            # its pause until they return.
+            if self.service.physical.ownership.records.get(owner, {}).get('heating_pause'):
+                raise
+            return False
+        if decision is None or owner not in decision['granted'] or decision['granted'][owner] > 0:
+            return False
+        return decision['over_limit'] or not decision['running'][owner]
+
+    def priority_must_move(self, owner):
+        """Work that no longer fits its authorised windows goes to the replan path."""
+        last = self.priority_last
+        return bool(last and owner in last['granted'] and last['granted'][owner] < last['wants'][owner] - 1e-6
+                    and last['slack_h'][owner] < 0)
+
+    def priority_condition(self, owner, result):
+        """Execution evidence for a limited run that cannot finish where the plan put it."""
+        if not self.priority_must_move(owner):
+            return None
+        if owner == 'ev':
+            current = result.get('requested_current_a') or 0
+            if current > 0:
+                return {'status': 'capacity_limited', 'cause': 'house_import_capacity',
+                        'maximum_current_a': int(current)}
+        return {'status': 'temporarily_absent', 'cause': 'house_import_capacity'}
 
     def active_battery_target(self):
         battery = self.service.battery
@@ -1261,9 +1561,8 @@ class HomeAssistantSource:
                         entity = next(iter(record['originals']), '')
                         native = self.report(entity) or {}
                         sensor = self.power_source(mapping, key)
-                        thermostat = (entity.startswith('climate.') and sensor
-                                      and native.get('state') in ('off', 'heat')
-                                      and {'off', 'heat'} <= set(native.get('attributes', {}).get('hvac_modes', ())))
+                        thermostat = (entity.startswith('climate.') and sensor and (native.get('state') == 'heat'
+                            or native.get('state') == 'off' and record.get('heating_suspended') == entity))
                         if not thermostat:
                             continue
                         try:
@@ -1590,21 +1889,12 @@ class HomeAssistantSource:
         grid_entity = self.options().get('grid_power_entity')
         grid = self.measured_control_power(grid_entity, signed=True) if grid_entity else None
         if self.report(switch)['state'] == 'on':
-            battery, relief = self.battery_charge_relief()
-            reserved = [*self.heating_effects().values(), *self.current_import_claims(exclude_owner='ev')]
-            other = self.import_required(exclude_device=effect['device'], exclude_devices=(battery,),
-                reserved=reserved, house_w=max(0.0, house - ev))
-            credit = self.discharge_credit(import_after_w=other + requested * EV_WATTS_PER_AMP)
-            other -= credit
-            if grid is not None:
-                # A configured grid meter additionally catches demand changes
-                # ahead of the gross-house reading. Never substitute one meter
-                # for the other: native battery demand remains in the gross check.
-                other = max(grid - ev - relief, other)
-            available = ev_current_ceiling(max(0.0, self.house_import_limit() - other),
-                native['attributes'], minimum)
-            # Absolute residual demand stays stable both before and after the
-            # charger meter catches up. Keep the plan target for recovery.
+            # The car's part of the import budget, shared by live priority
+            # with the battery and eligible heaters. Sizing is absolute, so it
+            # stays stable both before and after the charger meter catches
+            # up. Keep the plan target for recovery.
+            decision = self.priority_pass(ev=dict(entity=entity, switch=switch, requested=requested, minimum=minimum))
+            available = ev_current_ceiling(decision['granted']['ev'], native['attributes'], minimum)
             return min(requested, available)
         identity = effect['device']
         if identity in self.capacity.get('coordination', {}).get('caps', {}):
@@ -1665,9 +1955,12 @@ class HomeAssistantSource:
             house = max(0.0, self.house_power() - ev)
             limit = self.house_import_limit()
             reserved = [*self.heating_effects().values(), *self.current_import_claims(exclude_owner='ev')]
-            other = max(grid - ev, self.import_required(
-                exclude_device=identity, reserved=reserved, house_w=house))
-            ceiling = min(maximum * EV_WATTS_PER_AMP, limit - other,
+            # A boost keeps what live priority grants the car plus whatever
+            # the measured budget leaves unused. It is reclaimed first only
+            # while the run stays on track without it.
+            decision = self.priority_pass(ev=dict(entity=entity, switch=switch, requested=scheduled,
+                minimum=scheduled, maximum=maximum))
+            ceiling = min(maximum * EV_WATTS_PER_AMP, decision['granted']['ev'] + decision['left_w'],
                           scheduled * EV_WATTS_PER_AMP + max(0.0, house_budget - house))
             if ceiling <= scheduled * EV_WATTS_PER_AMP:
                 return scheduled
@@ -1703,6 +1996,7 @@ class HomeAssistantSource:
                 return
             entity = event.data['entity_id']
             state = event.data.get('new_state')
+            self.observed_serial += 1
             if state and state.attributes.get('entity_id') and er.async_get(self.hass).async_get(entity):
                 discovered = filter_sources({entity}, self.hass.states.get,
                     lambda key: item.platform if (item := er.async_get(self.hass).async_get(key)) else None)
@@ -1832,6 +2126,7 @@ async def open_gateway(hass, entry):
             source.install_bindings(admission)
         await service.physical.load()
         await source.refresh_capacity()
+        source.run_progress = await stream.call('load_record', 'run_progress') or {}
         retained_limit = await stream.call('load_record', 'house_import_limit')
         if retained_limit is not None:
             service.import_limit_w = import_limit(retained_limit['import_limit_w'])

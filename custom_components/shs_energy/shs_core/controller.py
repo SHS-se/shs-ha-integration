@@ -142,7 +142,7 @@ class ScheduledController(DeviceOperations):
                 slot = {**slot, 'spare_house_w': max(0.0, house_budget)}
                 if spare is None:
                     slot['hold_spare_increase'] = True
-            return await self._physical('ev', 'apply', options, slot)
+            return await self._physical('ev', 'apply', options, self.with_run('ev', options, slot))
         return await super().execute_ev(options, slot)
 
     def battery_charge_scheduled(self, options, start):
@@ -162,8 +162,14 @@ class ScheduledController(DeviceOperations):
             if charging:
                 slot = {**slot, 'charge_setback': True}
         if self.devices is not None and not self.verifying:
-            return await self._physical(device, 'apply', options, slot)
+            return await self._physical(device, 'apply', options, self.with_run(device, options, slot))
         return await super().execute_device(device, options, slot)
+
+    def with_run(self, device, options, slot):
+        """Attach the whole run's summary, prepared when its plan was accepted."""
+        summary = getattr(self.coordinator, 'run_summary', None)
+        run = summary(device, options) if summary is not None else None
+        return {**slot, 'run': run} if run else slot
 
     async def restore(self, device):
         if self.devices is not None and not self.verifying:

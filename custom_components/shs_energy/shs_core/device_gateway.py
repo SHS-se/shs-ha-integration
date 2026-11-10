@@ -25,6 +25,7 @@ from .hot_water import HotWaterConfigurationError, is_hot_water
 from .device_commands import actuator_targets
 from .device_controls import pool_control_mapping
 from .grid_capacity import EV_WATTS_PER_AMP
+from .run_priority import valid_run
 from .gateway_journal import AdmissionPending, GatewayConflict, GatewayRejected, JournalStorageError
 from .command_transport import CommandUncertain
 
@@ -131,19 +132,16 @@ class DeviceGateway(DeviceOperations):
             raise
 
     def shed_scheduled_heat(self, entity, state):
+        """Live priority decides whether this scheduled heater yields its power now."""
         if self.capacity is None:
             return False
-        options = self.active_options
-        self.observed_state(options.get('house_consumption_power_entity'))
-        self.observed_state(options.get('grid_power_entity'))
-        for source in self.capacity.battery_capacity_sources():
-            self.observed_state(source)
-        domain = entity.split('.')[0]
-        running = (state.state == 'on' if domain in ('switch', 'input_boolean') else
-                   domain == 'climate' and state.state == 'heat'
-                   and state.attributes.get('hvac_action', 'heating') == 'heating'
-                   and {'off', 'heat'} <= set(state.attributes.get('hvac_modes', ())))
-        return running and self.capacity.scheduled_heating_over_limit()
+        try:
+            return self.capacity.scheduled_heat_shed(self.device)
+        finally:
+            # Wake on every reading the shared decision used, also when one
+            # of them is missing and this heater holds.
+            for source in self.capacity.priority_sources():
+                self.observed_state(source)
 
     async def load(self):
         await self.ownership.load()
@@ -165,11 +163,15 @@ class DeviceGateway(DeviceOperations):
         self.observed_state(self.capacity.describe_import('ev', switch, 'on')['sensor'])
         for source in self.capacity.battery_capacity_sources():
             self.observed_state(source)
-        admitted = await self.capacity.limit_ev_current(entity, switch, current, minimum)
-        if admitted < current or spare_house_w is None or maximum <= current:
-            return admitted
-        return self.capacity.ev_spare_current(entity, switch, admitted, maximum, spare_house_w,
-            hold_increase=hold_spare_increase)
+        try:
+            admitted = await self.capacity.limit_ev_current(entity, switch, current, minimum)
+            if admitted < current or spare_house_w is None or maximum <= current:
+                return admitted
+            return self.capacity.ev_spare_current(entity, switch, admitted, maximum, spare_house_w,
+                hold_increase=hold_spare_increase)
+        finally:
+            for source in self.capacity.priority_sources():
+                self.observed_state(source)
 
     def observed_state(self, entity):
         if entity:
@@ -262,7 +264,8 @@ class DeviceGateway(DeviceOperations):
         if intent.device == 'ev':
             required = {'start', 'current_a', 'minimum_a', 'maximum_a', 'models'}
             spare_house_w = finite(p['spare_house_w']) if 'spare_house_w' in p else None
-            if (set(p) - {'spare_house_w', 'hold_spare_increase'} != required
+            if (set(p) - {'spare_house_w', 'hold_spare_increase', 'run'} != required
+                    or not valid_run(p.get('run'))
                     or (spare_house_w is not None and spare_house_w < 0)
                     or type(p.get('hold_spare_increase', False)) is not bool):
                 raise ValueError('Invalid EV intention')
@@ -278,7 +281,8 @@ class DeviceGateway(DeviceOperations):
             return {'device_models':p['models'], 'pool':{'stop_temperature_c':p['stop_temperature_c']}}, dict(start=p['start'], pool_w=p['heating_w'], pool_permitted=p['pool_permitted'])
         if intent.device.startswith('device:'):
             key = intent.device.removeprefix('device:')
-            if (set(p) - {'charge_setback'} != {'start', 'commands', 'models'}
+            if (set(p) - {'charge_setback', 'run'} != {'start', 'commands', 'models'}
+                    or not valid_run(p.get('run'))
                     or type(p.get('charge_setback', False)) is not bool or key not in p['commands']):
                 raise ValueError('Invalid mapped device intention')
             return {'device_models':p['models']}, dict(start=p['start'], device_commands=p['commands'],
@@ -399,7 +403,7 @@ class DeviceGateway(DeviceOperations):
             targets = actuator_targets(mapping)
             self.check_targets(owner, targets)
             if cap.get('thermostat'):
-                return await self.suspend_thermostat(owner, options, targets[0])
+                return await self.pause_thermostat(owner, options, targets[0])
             if mapping['control_type'] not in ('switch_schedule', 'permit_inhibit'):
                 raise HeatingDeferred('Device no longer offers heating capacity')
             model = next((item for item in self.plan['device_models'] if item['key'] == key), {})
@@ -493,6 +497,14 @@ class DeviceGateway(DeviceOperations):
                 if condition is not None and result.get('execution_condition') is None:
                     result['capacity_curtailed'] = True
                     result['execution_condition'] = condition
+                elif (result.get('state') == 'limited' and not self.heating_limit
+                        and result.get('execution_condition') is None
+                        and (moved := self.capacity.priority_condition(intent.device, result)) is not None):
+                    # The run can no longer finish inside its authorised
+                    # windows. The existing replan path moves the work; valid
+                    # instructions for other devices keep executing.
+                    result.pop('heating_curtailed', None)
+                    result['execution_condition'] = moved
             response = dict(result=result, error=error, reservation_required=self.reservation_required,
                         reports=self.reports, reads=sorted(self.reads),
                         deadlines=[{'device':d,'name':n,'at':at} for (d,n),at in self.deadlines.items()],

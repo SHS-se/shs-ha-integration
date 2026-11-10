@@ -307,6 +307,33 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(r.runtime.snapshot()['fault_history'], [])
         self.assertTrue(r.calls)
 
+    async def test_shared_priority_budget_decides_this_batterys_part_of_a_grid_overload(self):
+        # User requirement, 10 November 2026: the earlier charger-first rule is
+        # replaced. Home Assistant shares measured import across whole runs; the
+        # battery backs off the full overload only without that shared budget.
+        from unittest.mock import AsyncMock
+        from types import SimpleNamespace
+        r = Rig()
+        self.addAsyncCleanup(r.runtime.close)
+        r.plan['grid']['import_limit_w'] = 15000
+        r.coordinator.run_summary = lambda device, options: {'kind': 'charge', 'id': 'c', 'windows': [[0, 900000, 2000, 4000, 0]]}
+        capacity = {'external_import_w': 12000, 'import_limit_w': 15000, 'native_load_bounds': {},
+                    'observed_house_w': 1000, 'grid_charge_hold': False}
+        r.runtime.physical = SimpleNamespace(import_capacity=AsyncMock(return_value=capacity))
+        await r.start()
+        r.rows['sensor.grid']['state'] = '16000'
+        for _ in range(3):
+            await r.advance(5000)
+        backed_off = r.runtime.host.state.execution.assessment.charge_dc_w
+        published = r.runtime.physical.import_capacity.await_args.args[0]
+        self.assertEqual(published['run']['kind'], 'charge')
+        self.assertGreater(published['want_w'], 0)
+        r.runtime.physical.import_capacity.return_value = {**capacity, 'priority_shared': True}
+        for _ in range(3):
+            await r.advance(5000)
+        held = r.runtime.host.state.execution.assessment.charge_dc_w
+        self.assertGreater(held, backed_off, 'Another run yields; this battery keeps its share')
+
     async def test_obsolete_cached_plan_is_not_offered_while_new_request_is_pending(self):
         from unittest.mock import patch
         from shs_core.home_runtime import ExecutionPlanOffered

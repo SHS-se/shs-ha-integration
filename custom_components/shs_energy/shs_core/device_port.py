@@ -42,6 +42,9 @@ def device_intent(device, operation, plan, slot, *, configuration_revision, poli
                 parameters['charge_setback'] = True
         else:
             raise ValueError('Battery control requires an admitted route')
+        if slot.get('run') and device != 'pool':
+            # The whole run, summarised when the plan was accepted.
+            parameters['run'] = slot['run']
     return compact_device_intent(dict(request_id=uuid4().hex, device=device, operation=operation,
                 configuration_revision=configuration_revision, policy_revision=policy_revision,
                 parameters=parameters, headroom_reserved=False))

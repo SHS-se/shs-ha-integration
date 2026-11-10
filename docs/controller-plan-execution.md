@@ -746,8 +746,12 @@ call for heat waits at the shared import admission boundary. If existing demand
 or reservations exceed the house limit, running scheduled room relays and
 thermostats with an available stop control can pause and later resume through
 the same owner. Enabled native thermostats reserve their possible ON draw.
-Scheduled heating cannot request relief from EV charging or pool heating.
 The explicit manual override retains its configured flexibility order.
+
+User requirement, 10 November 2026: scheduled heating, the car and the house
+battery share the measured import limit by [live priority across whole
+runs](run-priority.md), and a paused thermostat stays in Heat with a lowered
+setpoint. Pool heating is not part of that sharing.
 
 An observation gap or loss of plan or app authority holds the last setting.
 The website already refits rooms from metered heater energy and measured
