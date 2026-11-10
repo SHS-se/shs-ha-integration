@@ -276,7 +276,7 @@ class HomeAssistantSource:
                     reserved=[*self.heating_effects().values(), *claims], house_w=house),
                         'import_limit_w': self.house_import_limit(),
                         'native_load_bounds':self.native_load_bounds(), 'observed_house_w':house,
-                        'grid_charge_hold':bool(claims)}
+                        'grid_charge_hold':any(claim['hold_charge'] for claim in claims)}
         if operation == 'admission':
             validate_bindings(body['bindings'])
             validate_pool_pause(body['pool_pause'])
@@ -771,7 +771,8 @@ class HomeAssistantSource:
             reducing = after >= before
         if reducing:
             return
-        if effect['logical'] == 'battery' and effect['after_w'] > 0 and self.current_import_claims():
+        if (effect['logical'] == 'battery' and effect['after_w'] > 0
+                and any(claim['hold_charge'] for claim in self.current_import_claims())):
             raise ControlDeadlineError('A device is waiting for battery charging to release grid capacity')
         self.admit_import(effect)
 
@@ -805,7 +806,11 @@ class HomeAssistantSource:
             return False
         end = (datetime.fromisoformat(intent.parameters['start']) + timedelta(minutes=15)
                if intent.operation == 'apply' else None)
-        self.import_claims[intent.device] = {'context':self.service.context(), 'end':end, 'effect':effect}
+        # A scheduled thermostat setpoint needs only its own watts. Discrete
+        # starts still use the existing full charge release handshake.
+        thermostat = intent.operation == 'apply' and entity.startswith('climate.') and isinstance(value, float)
+        self.import_claims[intent.device] = {'context':self.service.context(), 'end':end,
+                                            'effect':{**effect, 'hold_charge':not thermostat}}
         return True
 
     def battery_capacity_sources(self):
@@ -849,7 +854,8 @@ class HomeAssistantSource:
     def admit_import(self, effect):
         limit = self.house_import_limit()
         reserved = self.heating_effects()
-        demand = self.import_required(effect=effect, reserved=reserved.values())
+        claims = self.current_import_claims() if effect and effect['logical'] == 'battery' else []
+        demand = self.import_required(effect=effect, reserved=[*reserved.values(), *claims])
         credit = self.discharge_credit(effect, demand)
         required = max(0.0, demand-credit)
         if required > limit:

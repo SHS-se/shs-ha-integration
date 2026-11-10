@@ -326,6 +326,31 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
             self.source.claim_import(intent, 'switch.room', 'on')
         self.assertFalse(self.source.current_import_claims())
 
+    async def test_waiting_thermostat_reserves_watts_without_holding_all_charge(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        self.rows['sensor.house']['state'] = '9000'
+        self.mapped_load('room', 'climate.room', 'heat', 3000, 'controlling')
+        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        self.rows['number.charge']['state'] = '4'
+        owner = 'device:room'
+        intent = DeviceIntent('synthetic-thermostat', owner, 'apply', 1, 1,
+                              {'start':datetime.now(timezone.utc).isoformat()}, False)
+        with self.assertRaisesRegex(ControlDeadlineError, 'house import capacity'):
+            self.source.external_ready(owner, entity='climate.room', value=23.0,
+                                       require_battery_release=False)
+        self.assertTrue(self.source.claim_import(intent, 'climate.room', 23.0))
+        view = await self.source.request('battery_capacity', {})
+        self.assertEqual(view['external_import_w'], 12000)
+        self.assertEqual(view['import_limit_w'], 15000)
+        self.assertFalse(view['grid_charge_hold'])
+
+        self.rows['number.charge']['state'] = '1'
+        await self.native('charge-with-room', 'battery', 'number.charge', 'set_value', 2)
+        with self.assertRaisesRegex(ControlDeadlineError, 'house import capacity'):
+            await self.native('charge-over-room', 'battery', 'number.charge', 'set_value', 4)
+        self.assertEqual(len(self.calls), 1)
+
     async def test_missing_import_policy_is_pending_and_never_sends_an_increase(self):
         self.configure_ev()
         self.service.import_limit_w = None

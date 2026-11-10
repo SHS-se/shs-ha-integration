@@ -31,6 +31,8 @@ the app may use power that the measured house leaves unused in the accepted
 budget. It still observes the import limit, hardware ratings, EV current
 envelope and accepted charge targets. The house battery has priority over an
 optional car increase. Unused capacity never creates a charging slot.
+When a scheduled thermostat change needs import capacity, reserve the
+pending heater draw and reduce battery charging only by the capacity needed.
 
 Process events in the order received. Our own locally generated revisions may
 track that order and identify superseded work. Timestamps from devices or other
