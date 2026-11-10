@@ -16,6 +16,7 @@ from shs_core.command_journal import Command, NativeAction
 from shs_core.device_operations import ControlDeadlineError
 from shs_core.device_gateway import DeviceIntent
 from shs_core.gateway_journal import AdmissionPending
+from shs_core.native_configuration import native_options
 
 
 class ImportArithmeticTests(unittest.TestCase):
@@ -342,7 +343,7 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.mapped_load('room', 'climate.room', 'heat', 4000, 'controlling', 2000)
         options = self.source.configuration.options()
         options['grid_power_entity'] = 'sensor.grid'
-        self.source.configuration.options = lambda:deepcopy(options)
+        self.source.configuration.options = lambda:native_options(options)
         self.rows['sensor.grid'] = {**self.rows['sensor.house'], 'state': '14500'}
         self.rows['sensor.house']['state'] = '10000'
         self.rows['select.mode']['state'] = 'Command Charging (PV First)'
@@ -359,6 +360,13 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.source.scheduled_heating_over_limit())
         self.rows['sensor.grid']['state'] = '20000'
         self.assertTrue(self.source.scheduled_heating_over_limit())
+
+    async def test_no_grid_meter_binding_does_not_block_scheduled_heat(self):
+        report = self.source.report
+        def read(entity):
+            return report(entity.lower())
+        self.source.report = read
+        self.assertFalse(self.source.scheduled_heating_over_limit())
 
     async def test_expired_unissued_battery_target_leaves_measured_credit_available(self):
         self.charging_car_at_minimum()

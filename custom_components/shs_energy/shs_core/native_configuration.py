@@ -7,7 +7,8 @@ Source subscriptions travel separately and confer no control permission.
 from copy import deepcopy
 
 PREFIXES=('battery_','pool_','ev_')
-FIELDS=frozenset({'device_modes','device_control_mappings','control_override_entity','excluded_device_readings','planning_mode','house_consumption_power_entity'})
+FIELDS=frozenset({'device_modes','device_control_mappings','control_override_entity','excluded_device_readings',
+                  'planning_mode','house_consumption_power_entity','grid_power_entity'})
 
 def native_options(options):
     return {key:deepcopy(value) for key,value in options.items() if key in FIELDS or key.startswith(PREFIXES)}

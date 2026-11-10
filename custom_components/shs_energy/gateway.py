@@ -817,8 +817,10 @@ class HomeAssistantSource:
             'battery_mode_entity', 'battery_discharge_limit_entity', 'battery_charge_limit_entity'))
 
     def scheduled_heating_over_limit(self):
-        limit = self.house_import_limit()
         entity = self.options().get('grid_power_entity')
+        if not entity:
+            return False
+        limit = self.house_import_limit()
         try:
             grid, _ = power(self.report(entity), source=entity, signed=True)
         except (TypeError, ValueError):
