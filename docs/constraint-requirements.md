@@ -26,6 +26,12 @@ action when appropriate; it must not cause the controller to give up solely
 because the prediction was wrong. Unmodelled appliances remain part of measured
 house demand.
 
+User requirement, 10 November 2026. In a slot already authorising grid charging,
+the app may use power that the measured house leaves unused in the accepted
+budget. It still observes the import limit, hardware ratings, EV current
+envelope and accepted charge targets. The house battery has priority over an
+optional car increase. Unused capacity never creates a charging slot.
+
 Process events in the order received. Our own locally generated revisions may
 track that order and identify superseded work. Timestamps from devices or other
 sources must not be used to infer event ordering or reject a later received

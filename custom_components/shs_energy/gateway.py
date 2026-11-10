@@ -1489,6 +1489,43 @@ class HomeAssistantSource:
         # The normal admission check explains why even the requested start must wait.
         return requested
 
+    def ev_spare_current(self, entity, switch, scheduled, maximum, house_budget):
+        """Spend only observed spare power after the scheduled car has started."""
+        try:
+            if self.report(switch)['state'] != 'on':
+                return scheduled
+            effect = self.describe_import('ev', switch, 'on')
+            identity, sensor = effect['device'], effect['sensor']
+            if identity in self.capacity.get('coordination', {}).get('caps', {}):
+                return scheduled
+            ev, _ = power(self.report(sensor), source=sensor)
+            grid_entity = self.options().get('grid_power_entity')
+            if ev <= 0 or not grid_entity:
+                return scheduled
+            grid, _ = power(self.report(grid_entity), source=grid_entity, signed=True)
+            house = max(0.0, self.house_power() - ev)
+            limit = self.house_import_limit()
+            reserved = [*self.heating_effects().values(), *self.current_import_claims(exclude_owner='ev')]
+            other = max(grid - ev, self.import_required(
+                exclude_device=identity, reserved=reserved, house_w=house))
+            ceiling = min(maximum * EV_WATTS_PER_AMP, limit - other,
+                          scheduled * EV_WATTS_PER_AMP + max(0.0, house_budget - house))
+            if ceiling <= scheduled * EV_WATTS_PER_AMP:
+                return scheduled
+            available = ev_current_ceiling(ceiling, self.report(entity)['attributes'], scheduled)
+            if available <= scheduled:
+                return scheduled
+            watts = available * EV_WATTS_PER_AMP
+            desired = {**effect, 'after_w':watts, 'possible_w':watts,
+                       'controls':{**effect['controls'], entity:available}}
+            if self.import_required(effect=desired, reserved=reserved) <= limit:
+                return available
+        except (KeyError, TypeError, ValueError):
+            # Optional current needs complete live evidence. The normal
+            # scheduled command still goes through its own admission.
+            pass
+        return scheduled
+
     def attach(self):
         @callback
         def matches(data):

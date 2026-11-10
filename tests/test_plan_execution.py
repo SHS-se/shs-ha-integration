@@ -417,6 +417,22 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(noisy.charge_dc_w, baseline.charge_dc_w)
         self.assertIsNone(noisy.replan_reason)
 
+    def test_scheduled_battery_uses_unused_house_budget_until_its_target(self):
+        account = opening_account()
+        live = replace(self.live, house_w=400, eligible_load_w=400, pending_import_w=100)
+        result = assess_execution(account, live, self.model)
+        self.assertEqual(result.nominal_charge_dc_w, int(self.model.grid_charge.output(2200)))
+        self.assertEqual(result.charge_dc_w, int(self.model.grid_charge.output(2700)))
+        self.assertEqual(result.recovery_dc_w, 0)
+        self.assertEqual(result.reason, 'using_spare_house_capacity')
+        self.assertLess(result.valid_until_ms, QUARTER)
+        capped = assess_execution(account, replace(live, charge_max_dc_w=2300), self.model)
+        self.assertEqual(capped.charge_dc_w, 2300)
+        at_target = assess_execution(account, replace(live, stored_mwh=5_500_000), self.model)
+        self.assertEqual(at_target.charge_dc_w, 0)
+        house_returns = assess_execution(account, self.live, self.model)
+        self.assertEqual(house_returns.charge_dc_w, result.nominal_charge_dc_w)
+
     def test_real_limit_reduces_charge_and_counts_pending_load(self):
         account = opening_account()
         live = replace(self.live, import_limit_w=3000, pending_import_w=1500)

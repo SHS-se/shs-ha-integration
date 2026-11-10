@@ -1314,6 +1314,10 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
     operation, reason, recovery_state, replan, remaining = row.operation, "following_plan", "not_needed", None, None
     surplus = max(0.0, live.pv_w - live.house_w)
     if operation in ("grid_charge", "solar_charge"):
+        objectives = [o for o in contract.objectives
+                      if o.kind == "stored_energy" and o.start_ms <= now < o.deadline_ms]
+        target = min([contract.maximum_mwh, *(o.target_mwh for o in objectives)])
+        spare_ceiling = 0
         if operation == "grid_charge" and not (row.grid_charge_allowed and live.grid_charge_allowed):
             operation, reason, replan = "solar_charge", "grid_source_restricted", "source_permission_changed"
         if operation == "solar_charge":
@@ -1323,8 +1327,13 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
             # Nominal energy defines a constant AC request. It is converted with
             # the retained empirical model, rather than mistaking AC watts for
             # terminal watts or applying a nominal 95% to actual DC counters.
-            ac_w = row.charge_ac_mwh * 3600 / (row.end_ms - row.start_ms)
+            interval_ms = row.end_ms - row.start_ms
+            ac_w = row.charge_ac_mwh * 3600 / interval_ms
             nominal = min(live.charge_max_dc_w, int(conversion.charge_dc(ac_w, live.pv_w, live.house_w)))
+            if ac_w > 0 and objectives and live.stored_mwh < target:
+                budget = row.load_mwh * 3600 / interval_ms
+                spare = max(0, budget - live.house_w - live.pending_import_w)
+                spare_ceiling = int(conversion.charge_dc(ac_w + spare, live.pv_w, live.house_w))
         b = balance(account, now)
         # A state-only discrepancy never fabricates flow debt. Only a proven
         # common positive shortfall can consume discretionary recovery authority.
@@ -1351,17 +1360,10 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
                 replan = "shortfall_without_recovery_authority"
         elif debt is None and state_debt > 0:
             recovery_state = "waiting_for_measurements"
-        for objective in contract.objectives:
-            if objective.kind != "stored_energy" or not objective.start_ms <= now < objective.deadline_ms:
-                continue
-            permitted_remaining = _remaining_charge_capacity(contract, objective, live, conversion)
-            delegated = sum(min(r.max_correction_mwh, int(r.extra_charge_dc_w * charge_efficiency * max(0, r.end_ms - max(now, r.start_ms)) / 3600))
-                            for r in contract.recovery if r.objective_id == objective.id and r.end_ms > now)
-            if objective.target_mwh - live.stored_mwh > permitted_remaining + delegated:
-                recovery_state, replan = "insufficient_capacity", "observed_state_cannot_meet_target"
         # Respect the instantaneous physical import budget, including possible
         # effects of real commands to other devices. Forecast error is no gate.
-        desired = min(live.charge_max_dc_w, nominal + extra)
+        scheduled = min(live.charge_max_dc_w, nominal + extra)
+        desired = min(live.charge_max_dc_w, max(scheduled, spare_ceiling))
         lo, hi = 0, desired
         while lo < hi:
             mid = (lo + hi + 1) // 2
@@ -1378,19 +1380,26 @@ def assess_execution(account: Account, live: LiveState, conversion: Conversion, 
             else:
                 hi = mid - 1
         charge = lo
+        opportunistic = max(0, charge - scheduled)
+        for objective in objectives:
+            permitted_remaining = _remaining_charge_capacity(contract, objective, live, conversion)
+            delegated = sum(min(r.max_correction_mwh, int(r.extra_charge_dc_w * charge_efficiency * max(0, r.end_ms - max(now, r.start_ms)) / 3600))
+                            for r in contract.recovery if r.objective_id == objective.id and r.end_ms > now)
+            spare_now = int(opportunistic * charge_efficiency * (min(until, objective.deadline_ms) - now) / 3600)
+            if objective.target_mwh - live.stored_mwh > permitted_remaining + delegated + spare_now:
+                recovery_state, replan = "insufficient_capacity", "observed_state_cannot_meet_target"
         if live.stored_mwh >= contract.maximum_mwh:
             charge, reason = 0, "battery_full"
-        elif any(o.kind == "stored_energy" and o.start_ms <= now < o.deadline_ms
-                 and live.stored_mwh >= o.target_mwh for o in contract.objectives):
+        elif live.stored_mwh >= target:
             charge, reason = 0, "stored_target_reached"
-        elif charge < desired:
+        elif charge < scheduled:
             reason = "import_headroom_reduced"
+        elif opportunistic:
+            reason = "using_spare_house_capacity"
         if charge:
-            target=min([contract.maximum_mwh, *(o.target_mwh for o in contract.objectives
-                if o.kind=="stored_energy" and o.start_ms<=now<o.deadline_ms)])
             until=min(until,now+max(1,ceil((target-live.stored_mwh)*3600/(charge * charge_efficiency))))
         if extra:
-            extra = max(0, charge - nominal)
+            extra = min(extra, max(0, charge - nominal))
             recovery_state = "executing" if extra else "temporarily_limited"
         # Corrections cannot be advertised as feasible once their remaining
         # delegated capacity cannot cover the known debt before its deadline.
@@ -1479,6 +1488,8 @@ def explain_execution(account: Account, live: LiveState, assessment: Assessment,
         status = "The planned charge level has been reached"
     elif assessment.reason == "import_headroom_reduced":
         status = "Charging is reduced to leave enough power for your home"
+    elif assessment.reason == "using_spare_house_capacity":
+        status = "Charging faster with unused house capacity"
     elif assessment.reason == "import_limit_support":
         status = "Supplying more than planned to keep the house within its import limit"
     now = f"Your home is using {live.house_w / 1000:.2f} kW. Solar is providing {live.pv_w / 1000:.2f} kW."

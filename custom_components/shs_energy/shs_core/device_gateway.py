@@ -18,6 +18,7 @@ from .controller_metrics import ControllerMetrics
 from .device_operations import (DeviceOperations, ControlDeadlineError, ControlObservationError, ControlPlanError, ControlCommandError, PowerHistoryError,
                                 correction_details, HeatingDeferred, PlanChangedError)
 from .heating_overrides import active_heating
+from .native_commands import finite
 from .device_ownership import DeviceOwnership
 from .operating_modes import device_mode
 from .hot_water import HotWaterConfigurationError, is_hot_water
@@ -101,6 +102,8 @@ class DeviceGateway(DeviceOperations):
             raise HeatingDeferred('Making room for the heating override')
         thermostat_target = (self.intent.operation == 'apply' and entity.startswith('climate.')
                              and isinstance(value, float) and self.capacity is not None)
+        ev_spare = (self.intent.operation == 'apply' and device == 'ev' and isinstance(value, float)
+                    and value > finite(self.intent.parameters['current_a']))
         if thermostat_target and self.capacity.lowers_heating_target(entity, value):
             return True
         if self.capacity is None and not self.local_obligation and not self.intent.headroom_reserved:
@@ -109,15 +112,17 @@ class DeviceGateway(DeviceOperations):
             return False
         try:
             if (self.external_ready(device, entity=entity, value=value, require_battery_release=False)
-                    if thermostat_target else self.external_ready(device, entity=entity, value=value)):
+                    if thermostat_target or ev_spare else self.external_ready(device, entity=entity, value=value)):
                 return True
+            if ev_spare:
+                raise ControlDeadlineError('Waiting for spare house import capacity')
             if self.capacity is not None and not self.local_obligation:
                 self.reservation_required = self.capacity.claim_import(self.intent, entity, value)
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
             return False
         except ControlDeadlineError:
             self.device_deadline("battery_headroom", datetime.now(timezone.utc)+timedelta(seconds=5))
-            if self.capacity is not None and not self.local_obligation:
+            if self.capacity is not None and not self.local_obligation and not ev_spare:
                 self.reservation_required = self.capacity.claim_import(self.intent, entity, value)
             raise
         except PowerHistoryError:
@@ -150,10 +155,15 @@ class DeviceGateway(DeviceOperations):
             raise GatewayConflict('Device operation changed')
         return self.plan, self.slot
 
-    async def ev_import_current(self, entity, switch, current, minimum):
+    async def ev_import_current(self, entity, switch, current, minimum, *, maximum, spare_house_w):
         if self.capacity is None:
             return current
-        return await self.capacity.limit_ev_current(entity, switch, current, minimum)
+        admitted = await self.capacity.limit_ev_current(entity, switch, current, minimum)
+        if admitted < current or spare_house_w is None or maximum <= current:
+            return admitted
+        self.observed_state(self.active_options.get('house_consumption_power_entity'))
+        self.observed_state(self.active_options.get('grid_power_entity'))
+        return self.capacity.ev_spare_current(entity, switch, admitted, maximum, spare_house_w)
 
     def observed_state(self, entity):
         if entity:
@@ -245,10 +255,12 @@ class DeviceGateway(DeviceOperations):
             return {'device_models': []}, None
         if intent.device == 'ev':
             required = {'start', 'current_a', 'minimum_a', 'maximum_a', 'models'}
-            if set(p) != required:
+            spare_house_w = finite(p['spare_house_w']) if 'spare_house_w' in p else None
+            if set(p) - {'spare_house_w'} != required or (spare_house_w is not None and spare_house_w < 0):
                 raise ValueError('Invalid EV intention')
             return {'device_models': p['models']}, dict(start=p['start'], ev_target_current_a=p['current_a'],
-                ev_min_current_a=p['minimum_a'], ev_max_current_a=p['maximum_a'], device_loads_w={m['key']:0 for m in p['models']})
+                ev_min_current_a=p['minimum_a'], ev_max_current_a=p['maximum_a'], spare_house_w=spare_house_w,
+                device_loads_w={m['key']:0 for m in p['models']})
         if intent.device == 'pool':
             if set(p) != {'start', 'heating_w', 'pool_permitted', 'stop_temperature_c', 'models'}:
                 raise ValueError('Invalid pool intention')

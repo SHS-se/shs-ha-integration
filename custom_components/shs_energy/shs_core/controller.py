@@ -132,24 +132,29 @@ class ScheduledController(DeviceOperations):
 
     async def execute_ev(self, options, slot):
         if self.devices is not None and not self.verifying:
+            if (slot.get('ev_target_current_a', 0) > 0 and slot.get('load_w') is not None
+                    and slot.get('ev_w') is not None and not self.battery_charge_scheduled(options, slot['start'])):
+                house_budget = finite(slot['load_w']) - finite(slot['ev_w']) - finite(slot.get('battery_idle_w', 0))
+                slot = {**slot, 'spare_house_w': max(0.0, house_budget)}
             return await self._physical('ev', 'apply', options, slot)
         return await super().execute_ev(options, slot)
+
+    def battery_charge_scheduled(self, options, start):
+        if device_mode(options, 'battery') != 'controlling':
+            return False
+        _, slot = self.coordinator.binding_plan_for('battery', options)
+        return bool(slot and slot['start'] == start
+                    and (slot.get('battery_command') or {}).get('operation') == 'grid_charge')
 
     async def execute_device(self, device, options, slot):
         key = device.removeprefix('device:')
         if (slot.get('device_commands') or {}).get(key, {}).get('type') == 'setpoint':
-            for owner in ('battery', 'ev'):
-                if device_mode(options, owner) != 'controlling':
-                    continue
-                _, charging = self.coordinator.binding_plan_for(owner, options)
-                if not charging or charging['start'] != slot['start']:
-                    continue
-                command = charging.get('battery_command') or {}
-                requested = (command.get('operation') == 'grid_charge' if owner == 'battery'
-                             else (charging.get('ev_target_current_a') or 0) > 0)
-                if requested:
-                    slot = {**slot, 'charge_setback': True}
-                    break
+            charging = self.battery_charge_scheduled(options, slot['start'])
+            if not charging and device_mode(options, 'ev') == 'controlling':
+                _, ev = self.coordinator.binding_plan_for('ev', options)
+                charging = bool(ev and ev['start'] == slot['start'] and (ev.get('ev_target_current_a') or 0) > 0)
+            if charging:
+                slot = {**slot, 'charge_setback': True}
         if self.devices is not None and not self.verifying:
             return await self._physical(device, 'apply', options, slot)
         return await super().execute_device(device, options, slot)

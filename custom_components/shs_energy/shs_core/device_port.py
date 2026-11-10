@@ -28,6 +28,8 @@ def device_intent(device, operation, plan, slot, *, configuration_revision, poli
         if device == 'ev':
             parameters.update(current_a=slot['ev_target_current_a'], minimum_a=slot['ev_min_current_a'],
                               maximum_a=slot['ev_max_current_a'], models=plan['device_models'])
+            if 'spare_house_w' in slot:
+                parameters['spare_house_w'] = slot['spare_house_w']
         elif device == 'pool':
             parameters.update(heating_w=pool_requested_w(plan, slot), stop_temperature_c=plan['pool']['stop_temperature_c'],
                               pool_permitted=pool_permission(plan, slot),

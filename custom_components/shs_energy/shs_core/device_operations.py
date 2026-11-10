@@ -402,7 +402,7 @@ class DeviceOperations:
             raise ValueError("EV current control must use amperes")
         return entity, finite(low), finite(high)
 
-    async def ev_import_current(self, entity, switch, current, minimum):
+    async def ev_import_current(self, entity, switch, current, minimum, *, maximum, spare_house_w):
         return current
 
     async def execute_ev(self, options, slot):
@@ -418,7 +418,8 @@ class DeviceOperations:
         if current and not low <= current <= high:
             raise ControlPlanError("planned EV current exceeds reviewed bounds")
         slot_minimum = finite(slot["ev_min_current_a"])
-        if not slot_minimum <= current <= finite(slot["ev_max_current_a"]):
+        slot_maximum = finite(slot["ev_max_current_a"])
+        if not slot_minimum <= current <= slot_maximum:
             raise ControlPlanError("planned EV current exceeds its slot envelope")
         self.check_targets("ev", [entity, switch])
         await self.capture("ev", options, [entity, switch])
@@ -443,8 +444,13 @@ class DeviceOperations:
                 raise ControlObservationError(f"{entity}: the car's available current is below the planned minimum",
                     entity, "Inspect the available current reported by the car.")
             available = float(ceiling)
-        admitted = await self.ev_import_current(entity, switch, available, max(low, slot_minimum))
+        admitted = await self.ev_import_current(entity, switch, available, max(low, slot_minimum),
+            maximum=min(high, slot_maximum), spare_house_w=slot.get('spare_house_w'))
         await self.command(entity, admitted)
+        if admitted > current:
+            return {"state": "commanded", "requested_current_a": admitted,
+                    "reason": f"Using spare house capacity at {admitted:g} A. The plan requests {current:g} A.",
+                    "decision": {"kind": "ev", "charging": True, "current_a": admitted}}
         await self.command(switch, "on")
         if admitted < current:
             reason = (f"House import capacity allows {admitted:g} A. The plan requests {current:g} A."

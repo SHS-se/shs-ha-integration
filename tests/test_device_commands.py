@@ -35,6 +35,20 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.heater'].state, 'on')
         self.assertNotIn('device:heater', self.controller.ownership.records)
 
+    async def test_car_spare_budget_waits_until_the_battery_charge_slot_is_over(self):
+        self.controller.devices = object()
+        self.controller._physical = AsyncMock()
+        self.options['device_modes']['$battery'] = 'controlling'
+        self.slot.update(ev_target_current_a=10, load_w=10500, ev_w=6900, battery_idle_w=100,
+                         battery_command={'operation': 'grid_charge'})
+        await self.controller.execute_ev(self.options, self.slot)
+        self.assertNotIn('spare_house_w', self.controller._physical.await_args.args[3])
+
+        self.slot['battery_command'] = {'operation': 'hold'}
+        await self.controller.execute_ev(self.options, self.slot)
+        self.assertEqual(self.controller._physical.await_args.args[3]['spare_house_w'], 3500)
+        self.assertNotIn('spare_house_w', self.slot)
+
     async def test_website_exclusion_restores_even_if_old_plan_remains(self):
         await self.controller.async_start()
         self.coordinator.async_cached_device_configuration.return_value = []

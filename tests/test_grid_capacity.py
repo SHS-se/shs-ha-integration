@@ -337,6 +337,31 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.service.import_limit_w = 15000
         self.assertTrue(self.source.external_ready('ev', entity='switch.ev', value='on'))
 
+    async def test_car_uses_whole_steps_of_spare_budget_only_while_charging(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        options = self.source.options()
+        options['grid_power_entity'] = 'sensor.grid'
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.rows['sensor.house']['state'] = '9900'
+        self.rows['sensor.grid'] = {**self.rows['sensor.house'], 'state': '9900'}
+        self.rows['sensor.ev']['state'] = '6900'
+        self.rows['number.ev']['state'] = '10'
+        def choose(maximum=16):
+            return self.source.ev_spare_current('number.ev', 'switch.ev', 10, maximum, 6000)
+
+        self.assertEqual(choose(), 10)
+        self.rows['switch.ev']['state'] = 'on'
+        self.assertEqual(choose(), 14)
+        self.assertEqual(choose(maximum=13), 13)
+        self.rows['sensor.grid']['state'] = '14100'
+        self.assertEqual(choose(), 11)
+        self.rows['sensor.house']['state'] = '12700'
+        self.assertEqual(choose(), 10)
+        self.rows['sensor.ev']['state'] = 'unavailable'
+        self.assertEqual(choose(), 10)
+        self.assertEqual(self.source.capacity.get('coordination', {}).get('caps', {}), {})
+
     async def test_scheduled_heat_responds_only_to_measured_pressure_the_battery_cannot_clear(self):
         self.configure_ev()
         self.service.import_limit_w = 15000
