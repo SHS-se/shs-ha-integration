@@ -146,6 +146,17 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(capacity['coordination']['withdrawal']['request_id'], request.id)
         self.assertFalse(self.calls)
 
+    async def test_adopted_target_expiring_at_the_gateway_waits_for_the_next_interval(self):
+        request = self.effect.request
+        self.rig.now = request.valid_until_ms
+
+        with self.assertRaisesRegex(AdmissionPending, 'Waiting for the next battery plan interval'):
+            await self.gateway.publish_target(
+                encode_value(request), encode_value(self.grant), self.gateway.context())
+        capacity = await self.stream.call('load_record', 'grid_capacity')
+        self.assertIsNone((capacity or {}).get('coordination', {}).get('withdrawal'))
+        self.assertFalse(self.calls)
+
     async def test_socket_revocation_during_prepare_is_not_sent(self):
         original = self.journal.prepare_command
         def prepare(command, effect=None):

@@ -237,9 +237,10 @@ class BatteryGateway:
         """Recheck the same live authority before coordination and native send."""
         current = self.options()
         if (runtime_digest(native_options(current)) != grant.config_revision or device_mode(current,'battery') != 'controlling'
-                or not current.get('battery_enabled',True) or '$battery' in current.get('excluded_device_readings',[])
-                or self.now() >= request.valid_until_ms):
-            raise GatewayConflict('Battery request or configuration changed')
+                or not current.get('battery_enabled',True) or '$battery' in current.get('excluded_device_readings',[])):
+            raise GatewayConflict('Battery configuration changed')
+        if self.now() >= request.valid_until_ms:
+            raise AdmissionPending('Waiting for the next battery plan interval')
         for key in ('control_override_entity','battery_control_override_entity'):
             if current.get(key) and (self.reports(current[key]) or {}).get('state') != 'off':
                 raise GatewayConflict('Battery manual override active')
