@@ -318,8 +318,11 @@ class HomeAssistantSource:
                     # This battery's part of the shared budget. It holds its
                     # charge while a less pressing load's reduction is in
                     # flight, and takes more only from confirmed capacity.
-                    result.update(external_import_w=max(0.0, limit - decision['granted']['battery']),
-                                  priority_shared=True)
+                    scheduled_external = max(0.0, limit - decision['granted']['battery'])
+                    # Optional increases must also fit the native reservations
+                    # used by final dispatch. Keep the scheduled share intact.
+                    spare = min(decision['battery_spare_w'], max(0.0, scheduled_external - external))
+                    result.update(external_import_w=scheduled_external - spare, priority_shared=True)
                 return result
         if operation == 'admission':
             validate_bindings(body['bindings'])
@@ -1185,29 +1188,39 @@ class HomeAssistantSource:
                 candidate.update(fixed=True, want_w=candidate['draw_w'], step_w=0, floor_w=0.0)
         shares, left = run_priority.share_budget(budget, candidates)
         granted = {}
+        present = {c['owner']: max(c['present_w'], c['draw_w']) for c in candidates}
+        present_w = sum(present.values())
+        battery_spare_w = 0.0
         for candidate in candidates:
             owner, share = candidate['owner'], shares[candidate['owner']]
             if candidate.get('fixed'):
                 granted[owner] = self.priority_pending[owner]['granted_w']
                 continue
+            room = limit - other - (present_w - present[owner])
             if share > candidate['present_w']:
                 # An increase is funded only by capacity that is measurably
                 # free: a reduction still in flight has not released its watts.
                 # Until its meter shows the drop, a load still holds the
                 # greater of its setting and its measured draw.
-                room = limit - other - sum(max(c['present_w'], c['draw_w']) for c in candidates if c is not candidate)
                 share = run_priority.step_down(max(candidate['present_w'], min(share, room)), candidate['step_w'])
                 if share < candidate['floor_w']:
                     share = 0.0
             granted[owner] = share
-            if run_priority.responded(candidate['draw_w'], share):
+            ceiling = share
+            if owner == 'battery' and 'outlook' in candidate:
+                # The battery runtime decides whether it can use this spare
+                # power within its accepted target. It may use only what is
+                # left after the scheduled allocations and present loads.
+                battery_spare_w = max(0.0, min(left, room - share))
+                ceiling += battery_spare_w
+            if run_priority.responded(candidate['draw_w'], ceiling):
                 self.priority_pending.pop(owner, None)
             else:
                 # A command in flight: no further adjustment while it lands.
                 since = self.priority_pending.get(owner, {}).get('since_ms', now_ms)
-                self.priority_pending[owner] = {'granted_w': share, 'since_ms': since}
+                self.priority_pending[owner] = {'granted_w': ceiling, 'since_ms': since}
         self.priority_last = dict(at_ms=now_ms, budget_w=budget, left_w=max(0.0, left), granted=granted,
-            wants=wants,
+            wants=wants, battery_spare_w=battery_spare_w,
             slack_h={c['owner']: c['slack_h'] for c in candidates},
             running={c['owner']: c.get('running', True) for c in candidates},
             over_limit=grid is not None and grid > limit,

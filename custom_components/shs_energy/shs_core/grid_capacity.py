@@ -222,7 +222,15 @@ def observe_capacity(capacity, ordinal, latest):
                 continue
             if sensor:
                 received, report = latest(sensor)
-                if received < acknowledgement or received <= fence:
+                # A relay meter can report the drop before Home Assistant's
+                # switch state catches up (for example, with a switch group).
+                # Both observations still have to follow dispatch.
+                relay_off = (effect['status'] == 'service_returned'
+                             and effect['logical'].startswith('device:')
+                             and effect['changed'].startswith('switch.')
+                             and effect['after_w'] == 0
+                             and controls.get(effect['changed']) == 'off')
+                if received <= fence or (received < acknowledgement and not relay_off):
                     continue
                 try:
                     watts, _ = power(report, source=sensor, signed=effect['signed'])

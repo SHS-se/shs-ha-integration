@@ -663,6 +663,24 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         return {'kind':'charge', 'id':'contract:1', 'windows':[[now-QUARTER, end, 4000, 8800, 0]],
                 'targets':[[now-QUARTER, end, target_wh]], 'capacity_wh':18000, 'efficiency':1.0}
 
+    async def test_battery_can_use_measured_spare_power_after_scheduled_heat(self):
+        self.active_ev(house=6000, grid=12200)
+        self.rows['switch.ev']['state'] = 'off'
+        self.rows['sensor.ev']['state'] = '0'
+        self.charging_battery()
+        self.scheduled_room(temperature=19.1)
+        want = self.conversion.grid_charge.input(3500)
+        request = {'charge_run': {'run': self.battery_run(minutes=60, target_wh=12000), 'want_w': want}}
+
+        capacity = await self.source.request('battery_capacity', request)
+        self.assertEqual(self.source.priority_last['granted']['device:room'], 1000)
+        self.assertAlmostEqual(capacity['external_import_w'], 12200 - want)
+
+        self.rows['sensor.grid']['state'] = '14500'
+        capacity = await self.source.request('battery_capacity', request)
+        self.assertEqual(self.source.priority_last['granted']['device:room'], 1000)
+        self.assertAlmostEqual(capacity['external_import_w'], 14500 - want)
+
     async def test_nearly_full_battery_keeps_its_charge_when_its_window_is_closing(self):
         # 9,720 of 9,900 Wh stored and twelve minutes left: the battery cannot
         # lose power, while the car has two hours and spare capacity.
@@ -1380,6 +1398,24 @@ class DurableDemandTests(unittest.TestCase):
         self.assertEqual(capacity_bound(self.capacity['devices']['ev']),11040)
         self.report(12,'sensor.ev','0')
         self.assertEqual(capacity_bound(self.capacity['devices']['ev']),0)
+
+    def test_switch_off_accepts_zero_draw_reported_before_acknowledgement(self):
+        effect = {**self.effect(0, 'off'), 'device': 'device@switch.heater', 'logical': 'device:heater',
+                  'before_w': 2008, 'controls': {'switch.heater': 'off'},
+                  'changed': 'switch.heater', 'sensor': 'sensor.heater'}
+        prepare_capacity(self.capacity, 'off', effect, 10)
+        self.report(11, 'sensor.heater', '0')
+        dispatch_capacity(self.capacity, 'off', 11)
+        finish_capacity(self.capacity, 'off', 'service_returned')
+        self.report(12, 'switch.heater', 'off')
+        row = self.capacity['devices'][effect['device']]
+        self.assertEqual(capacity_bound(row), 2008, 'The pre-dispatch meter reading cannot confirm the stop')
+
+        self.report(13, 'switch.heater', 'on')
+        self.report(14, 'sensor.heater', '0')
+        self.assertEqual(capacity_bound(row), 2008, 'The switch must also acknowledge the stop')
+        self.report(15, 'switch.heater', 'off')
+        self.assertEqual(capacity_bound(row), 0)
 
     def test_attributed_thermostat_settles_with_later_shared_circuit_reading(self):
         effect = {**self.effect(1000), 'device':'room', 'logical':'device:room',
