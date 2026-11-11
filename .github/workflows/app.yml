@@ -2,7 +2,7 @@ name: SHS app
 on:
   push:
     branches: [main]
-    paths: ['app/**', 'web/**', 'apps/**', 'repository.yaml', '.dockerignore', '.github/workflows/app.yml', 'scripts/build-companion.py', 'scripts/check-app.py', 'scripts/check-tls-trust.py']
+    paths: ['app/**', 'web/**', 'apps/**', 'repository.yaml', '.dockerignore', 'scripts/build-companion.py', 'scripts/check-app.py', 'scripts/check-tls-trust.py']
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,11 +18,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
+      - name: Key the npm cache by dependencies
+        # App releases change the root version in the lockfile.
+        run: jq -S 'del(.version, .packages[""].version)' web/package-lock.json > web/.ci-npm-lock.json
       - uses: actions/setup-node@v4
         with:
           node-version: '24.22.1'
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: web/.ci-npm-lock.json
       - run: pip install -r app/requirements.txt PyYAML==6.0.3
       - run: python scripts/check-app.py
       - run: python scripts/build-companion.py /tmp/shs-bundle
@@ -58,6 +61,4 @@ jobs:
           push: true
           tags: ghcr.io/shs-se/shs-energy-app:${{ steps.version.outputs.version }}
           build-args: BUILD_VERSION=${{ steps.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
       - run: docker buildx imagetools inspect ghcr.io/shs-se/shs-energy-app:${{ steps.version.outputs.version }}
