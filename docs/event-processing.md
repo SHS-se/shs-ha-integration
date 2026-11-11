@@ -26,8 +26,8 @@ transition must commit its dependent evidence before dispatch. The native journa
 and app inbox retain the uncommitted prefix; only a completed atomic checkpoint
 allows its retirement. Restart replays that prefix. No restart, disconnection,
 missing plan, stale input or fault returns a device to its original settings.
-Explicit handover, including Controlling to Verification, still restores the
-captured settings.
+Switching to Verification cancels commands that have yet to dispatch and
+relinquishes control at the current settings.
 
 Native journal transactions group only facts already adjacent in the queue, with
 FULL durability. Configuration, command and snapshot barriers separate batches.

@@ -20,6 +20,33 @@ from shs_core.receipt_inbox import ReceiptInbox
 from shs_app.gateway_client import GatewayClient, GatewayDisconnected
 
 
+class ConfigurationBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_verification_reaches_ha_while_an_admitted_command_is_pending(self):
+        client = GatewayClient(None, 'fixture', 'fixture-token', IDENTITY, None)
+        command_entered, configuration_entered = asyncio.Event(), asyncio.Event()
+        command_finished, configuration_finished = asyncio.Event(), asyncio.Event()
+
+        async def exchange(operation, body):
+            if operation == 'device':
+                command_entered.set()
+                await command_finished.wait()
+            elif operation == 'source':
+                configuration_entered.set()
+                await configuration_finished.wait()
+            return {}
+
+        with patch.object(client, '_exchange', side_effect=exchange):
+            async with asyncio.timeout(2), asyncio.TaskGroup() as tasks:
+                command = tasks.create_task(client.call('device', {}))
+                await command_entered.wait()
+                change = tasks.create_task(client.call('source', {'operation':'configure'}, cancel_commands=True))
+                await configuration_entered.wait()
+                self.assertFalse(command.done())
+                configuration_finished.set()
+                await change
+                command_finished.set()
+
+
 class ClientTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -195,7 +222,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 active.set();await finish.wait()
             if operation=='source' and body.get('operation')=='configure':
                 installing.set();await installed.wait()
-            if operation=='requests':
+            if operation=='policy':
                 self.assertTrue(installed.is_set(),'A poll reached HA while command admission was revoked')
             return {}
         with patch.object(self.client,'_exchange',side_effect=exchange):
@@ -203,14 +230,15 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             await active.wait()
             change=asyncio.create_task(self.client.call('source',{'operation':'configure'}))
             await asyncio.sleep(0)
-            poll=asyncio.create_task(self.client.call('requests',{}))
+            poll=asyncio.create_task(self.client.call('policy',{}))
             await self.client.call('receipts',{})
+            await self.client.call('requests',{})
             self.assertFalse(installing.is_set())
             finish.set();await command;await installing.wait()
             await self.client.call('source',{'operation':'statistics'})
-            self.assertNotIn('requests',entered)
+            self.assertNotIn('policy',entered)
             installed.set();await change;await poll
-            self.assertEqual(entered,['device','receipts','source','source','requests'])
+            self.assertEqual(entered,['device','receipts','requests','source','source','policy'])
 
     async def test_cancelled_configuration_wait_releases_admission(self):
         active=asyncio.Event();finish=asyncio.Event()

@@ -18,10 +18,12 @@ from test_execution_mode_select import load_adapter
 from shs_core.controller_inputs import configured_entity_ids
 from shs_core.gateway_journal import digest, GatewayConflict
 from shs_core.gateway_service import GatewayService
+from shs_core.execution_configuration import ExecutionConfiguration
 from shs_core.native_readings import power
 from shs_core.grid_capacity import (battery_released, required_import, import_limit,
     empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, observe_setting_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, battery_discharge_ceiling, CHARGING_MODES)
 from shs_core.device_commands import actuator_targets
+from shs_core.device_controls import pool_control_mapping
 from shs_core.device_draw import DrawBinding, HISTORY_WINDOW, REFRESH_INTERVAL, learn_device_draw
 from shs_core.discovery import dashboard_meters, meter_room
 from shs_core.operating_modes import device_mode
@@ -64,6 +66,51 @@ class Hass:
 
 
 class MetadataTests(unittest.IsolatedAsyncioTestCase):
+    async def test_metadata_cannot_reopen_admission_during_a_verification_save(self):
+        started, finish = asyncio.Event(), asyncio.Event()
+        async def persist(_):
+            started.set()
+            await finish.wait()
+        current = self.source.configuration.options()
+        settled = self.source.configuration.value
+        configuration = ExecutionConfiguration(SimpleNamespace(async_save=persist),
+            self.source.invalidate, self.source.capture_configuration)
+        configuration.value = {**settled, 'options':current, 'verification_revisions':{}}
+        self.source.configuration = configuration
+        self.service.installation_pending = configuration.lock.locked
+        self.physical.abandon_verification = AsyncMock()
+        options = deepcopy(current)
+        options['device_modes']['$battery'] = 'control_verification'
+        revision = settled['revision'] + 1
+        async with asyncio.timeout(3), asyncio.TaskGroup() as tasks:
+            tasks.create_task(configuration.install(dict(expected_revision=settled['revision'],
+                revision=revision, options=options, digest=digest(options))))
+            await started.wait()
+            self.service.invalidate_context()
+            await self.source.refresh_configuration()
+            self.assertTrue(self.service.admission_pending())
+            self.assertEqual(self.source.options()['device_modes']['$battery'], 'controlling')
+            finish.set()
+        self.assertFalse(self.service.admission_pending())
+        self.assertEqual(configuration.value['verification_revisions'], {'$battery':revision})
+
+    async def test_remapped_device_shows_previous_relay_until_it_is_off(self):
+        options = self.source.options()
+        options['device_modes']['heater'] = 'control_verification'
+        options['device_control_mappings']['heater'] = {
+            'control_type':'switch_schedule','actuator_entity_ids':['switch.new_heater']}
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.source.report = self.rows.get
+        self.rows['switch.old_heater'] = {'state':'on', 'attributes':{}}
+        self.rows['switch.new_heater'] = {'state':'off', 'attributes':{}}
+        self.source.capacity['devices']['old-heater'] = {'effects':{}, 'settled':{
+            'logical':'device:heater', 'controls':{'switch.old_heater':'on'}}}
+        notices = self.source.control_notices([])
+        self.assertIn('switch.new_heater is off', notices['device:heater'])
+        self.assertIn('Previous control entities still active · switch.old_heater', notices['device:heater'])
+        self.rows['switch.old_heater']['state'] = 'off'
+        self.assertNotIn('switch.old_heater', self.source.control_notices([])['device:heater'])
+
     async def test_device_room_updates_the_exact_energy_dashboard_pair(self):
         energy, power = 'sensor.boiler_energy', 'sensor.boiler_power'
         separate = 'sensor.other_power'
@@ -148,6 +195,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             entity_display_name_by_id=lambda hass:dict(hass.names), area_name_by_id=lambda hass:dict(hass.areas),
             entity_area_id_by_id=lambda hass:dict(getattr(hass, 'entity_areas', {})), RecorderSource=lambda hass:None,
             filter_sources=filter_sources, configured_entity_ids=configured_entity_ids, power=power, battery_released=battery_released,
+            pool_control_mapping=pool_control_mapping,
             required_import=required_import, import_limit=import_limit, SigenAdapter=SigenAdapter,
             ControlDeadlineError=ControlDeadlineError, HeatingDeferred=HeatingDeferred, empty_capacity=empty_capacity, capacity_bound=capacity_bound,
             commanded_controls=commanded_controls, _current=_current, EV_WATTS_PER_AMP=EV_WATTS_PER_AMP, actuator_targets=actuator_targets, device_power_bound=device_power_bound, PowerHistoryError=PowerHistoryError,

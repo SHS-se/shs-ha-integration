@@ -1,9 +1,9 @@
-"""Only the execution-mode select releases control.
+"""Control continuity across interruptions and explicit mode changes.
 
 Restarts, integration updates, unavailable or stale entities, missing plans,
 faults and unrelated configuration changes never change a device's state: it
-keeps the last setting SHS sent, and SHS resumes the plan when it can. Setting
-a device's select to Verification is what hands it back to its own settings.
+keeps the last setting SHS sent, and SHS resumes the plan when it can.
+Verification relinquishes control at the current settings.
 
 On 25 September 2026 the handover assertions below were rewritten to expect no
 write, for a change no requirement asked for; they were restored on 3 October
@@ -16,6 +16,10 @@ old readings retain control; release and no-write assertions still apply.
 18 October 2026: the user explicitly required SHS to own a Controlling device:
 a change made outside SHS is switched back instead of latching the device as
 overridden. Release and handover assertions are unchanged.
+
+11 November 2026: the user explicitly required no writes on entry to
+Verification and approved updating the affected tests. The separate baseline
+handover on explicit removal or override still has coverage.
 """
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -112,10 +116,11 @@ class GenericDeviceTests(Continuity):
         await self.controller.async_tick()
         self.assertEqual(self.calls, [])
         self.assertNotIn('reverted_external_change', self.status())
-        # The select still hands the device back to the baseline captured first.
+        # Verification relinquishes the device at its current setting.
         self.options['device_modes']['heater'] = 'control_verification'
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.heater', 'on')])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.states['switch.heater'].state, 'off')
 
     async def test_a_restart_keeps_the_last_setting_and_resumes_without_handing_back(self):
         await self.start()
@@ -127,7 +132,7 @@ class GenericDeviceTests(Continuity):
         self.assertEqual(self.status(controller)['state'], 'commanded', self.status(controller))
         self.assertEqual(controller.ownership.records['device:heater']['originals'], {'switch.heater': 'on'})
         # The baseline captured before the restart is still what a release returns to.
-        self.options['device_modes']['heater'] = 'control_verification'
+        self.options['device_modes']['heater'] = 'monitoring'
         await controller.async_tick()
         self.assertEqual(self.calls, [('switch.heater', 'on')])
         self.assertNotIn('device:heater', controller.ownership.records)
@@ -279,15 +284,17 @@ class PoolTests(Continuity):
         self.assertEqual(self.calls, [], 'neither switch is touched')
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.pool', 'off')], 'the old switch is handed back')
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.states['switch.pool'].state, 'on')
         self.options['device_modes']['$pool'] = 'controlling'
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.pool', 'off'), ('switch.new_pool', 'on')])
+        self.assertEqual(self.calls, [('switch.new_pool', 'on')])
 
-    async def test_only_the_select_hands_the_heater_back(self):
+    async def test_verification_leaves_the_heater_running(self):
         await self.start()
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.pool', 'off')])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.states['switch.pool'].state, 'on')
         self.assertNotIn('pool', self.controller.ownership.records)
         self.assertEqual(self.controller.status['pool']['state'], 'verified', self.controller.status['pool'])

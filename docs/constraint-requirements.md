@@ -100,9 +100,9 @@ runtime. Preserve raw excluded demand, reconcile eligible supply within the
 existing permission partition, log the discrepancy and show diagnostic attention.
 The scheduled device executor no longer executes battery plans or confirms them
 against source timestamps. Only the durable native battery runtime may write
-battery settings. Explicit mode exit, including Verification, still performs its
-native handover; restart, metadata changes, missing plans and data gaps hold the
-last settings. Retired writer journals are fenced on load, never re-enabled as an
+battery settings. Switching to Verification stops control at the current settings.
+Restart, metadata changes, missing plans and data gaps also hold the last settings.
+Retired writer journals are fenced on load, never re-enabled as an
 alternative executor.
 
 The planner installation address owns location. HA has no competing PV coordinate

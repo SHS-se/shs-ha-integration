@@ -136,6 +136,8 @@ class BatteryRuntime:
         self._options=None;self._devices=[];self._model=None;self._fits={};self._model_sources=None
         self._model_at=0;self._surface=None;self._source_cut=None;self._seeded=False
         self._mode_revision=0;self._mode=None;self._capture_revision=0;self._last_capture=None
+        self._verification_revision=-1
+        self._installed_verification_revision=-1
         self._status={'state':'pending','reason':'Waiting for the battery plan'}
         self._last_error=None;self._external_pending={};self._frame_pending={};self._releasing=False
         self._native_capacity=None
@@ -169,6 +171,9 @@ class BatteryRuntime:
         if restored is not None:
             value, session = restored
             self._processing=value.get('gateway_processing')
+            self._verification_revision=value.get('verification_revision', -1)
+            if type(self._verification_revision) is not int or self._verification_revision < -1:
+                raise ValueError('invalid battery Verification revision')
             if value.get('schema') != 'battery-runtime-v4':
                 raise ValueError('invalid battery runtime journal')
             from .home_runtime_checkpoint import decode_checkpoint
@@ -192,14 +197,19 @@ class BatteryRuntime:
             self._scope=authority.supply_scope
             self._loaded=(state,checkpoint)
 
-    def reconcile(self):
+    def reconcile(self, verification_revision=-1):
         """Read the exact current native surface while remaining dormant."""
         if self._started:
             raise RuntimeError('Battery runtime already started')
+        self._installed_verification_revision=max(self._installed_verification_revision, verification_revision)
         if self._loaded is None:
             return
         state,_ = self._loaded
         authority=state.authority
+        if (self._installed_verification_revision>self._verification_revision
+                or device_mode(self.controller.options(),'battery')=='control_verification'):
+            self._seeded=True
+            return
         reports={e:self.coordinator.ports.battery_report(e) for e in self._control_entities()}
         if any(not row or row.get('state') in ('unknown','unavailable') for row in reports.values()):
             raise NativeReadbackPending('Waiting for configured Sigen controls to become available')
@@ -229,7 +239,10 @@ class BatteryRuntime:
             # Recover local ownership without waiting for a cloud plan. The old
             # configured sources remain available for this exact baseline release.
             try:
-                if self._releasing:
+                if (self._installed_verification_revision>self._verification_revision
+                        or device_mode(self.controller.options(),'battery')=='control_verification'):
+                    await self._stop_for_verification(self._installed_verification_revision)
+                elif self._releasing:
                     await self._release('Recovering previous battery commands')
             except Exception as error:
                 self._status={'state':'fault','reason':f'Battery recovery pending: {error}'}
@@ -509,6 +522,7 @@ class BatteryRuntime:
         with self.profiler.measure('checkpoint_save'):
             await self.store.save({'schema':'battery-runtime-v4','checkpoint':None,
                 'options':None,'devices':[],'model_sources':None,'ratings':None,
+                'verification_revision':self._verification_revision,
                 **({'gateway_processing':self._processing} if self._processing is not None else {})},session)
 
     def validate_plan_response(self,plan):
@@ -583,6 +597,7 @@ class BatteryRuntime:
             await self.store.save({'schema':'battery-runtime-v4','checkpoint':checkpoint,
                 'options':self._options,'devices':self._devices,
                 'model_sources':self._model_sources,'ratings':self._ratings,
+                'verification_revision':self._verification_revision,
                 **({'gateway_processing':processing} if processing is not None else {})},state.execution)
 
     def _report(self,group,reason):
@@ -648,15 +663,17 @@ class BatteryRuntime:
         The choices that remove the battery from its select (demotion,
         exclusion, a disabled battery) and a manual override configured for the
         purpose. An override that cannot be read holds instead of releasing.
-        The select itself releases too: `_retire_changed_configuration` hands
-        the battery back before Verification starts.
+        Verification relinquishes control at the current settings.
 
         These are the only releases. A restart, a lost app, a settings change,
         a missing or expired plan, stale readings and faults hold the last
         settings. Both halves have been broken before: read
         docs/control-continuity.md before changing either.
         """
-        if device_mode(options,'battery') not in ('controlling','control_verification'):
+        mode=device_mode(options,'battery')
+        if mode=='control_verification':
+            return None
+        if mode!='controlling':
             return 'Battery is not set to Controlling'
         if not options.get('battery_enabled',True) or '$battery' in options.get('excluded_device_readings',[]):
             return 'Battery is excluded from SHS'
@@ -684,35 +701,36 @@ class BatteryRuntime:
 
     async def _retire_changed_configuration(self, options):
         """Bind to changed settings without changing what the battery is doing."""
+        if device_mode(options,'battery')=='control_verification':
+            await self._stop_for_verification()
         if not self.host or self._options is None or options==self._options:
             return True
         if self._released(options):
             return True  # That handover completes under the settings it was commanded with.
         await self._record_counters(options)
         group=self.host.state.groups[0]
-        if device_mode(options,'battery')=='control_verification' and (group.owned or group.attempts or group.release_pending):
-            # Leaving Controlling on the select is the release. Verification
-            # starts only after the battery has been handed back.
-            await self._release('Handing the battery back before Verification')
-            group=self.host.state.groups[0]
-            if group.owned or group.attempts or group.release_pending:
-                return False
         if group.owned or group.attempts or group.release_pending:
             # SHS holds the battery: rebinding must not change what it is doing.
             keys=tuple(options.get(k) for k in ('battery_mode_entity','battery_charge_limit_entity','battery_discharge_limit_entity'))
             if keys!=group.spec.control_keys:
-                raise ValueError('The battery control entities changed while SHS controls the battery. '
-                    'Set the battery to Verification, then back to Controlling, to use the new entities')
-            specs=self._meter_specs(options)
-            mapping=digest([asdict(s) for s in specs])
-            if mapping!=self.host.state.ledger.mapping_revision:
-                # Only the meters changed. Keep the command journal and resume it,
-                # exactly as after a restart, against a ledger for the new meters.
-                state=replace(self.host.state,ledger=create_ledger('household-battery-actuals',mapping,specs,max_intervals=256))
-                await self.host.close()
-                self._seeded=False;self._last_capture=None;self._observation_error=None
-                await self._open_host(state,True)
-            return True  # The next authority is installed in place.
+                if group.mode!='control_verification':
+                    raise ValueError('The battery control entities changed while SHS controls the battery. '
+                        'Set the battery to Verification, then back to Controlling, to use the new entities')
+                await self._reconcile_previous_controls(group)
+                if self.host.state.groups[0].attempts:
+                    self._status={'state':'pending', 'reason':'Waiting for the previous battery controls to confirm an issued command'}
+                    return False
+            else:
+                specs=self._meter_specs(options)
+                mapping=digest([asdict(s) for s in specs])
+                if mapping!=self.host.state.ledger.mapping_revision:
+                    # Only the meters changed. Keep the command journal while
+                    # opening a ledger for the new meters.
+                    state=replace(self.host.state,ledger=create_ledger('household-battery-actuals',mapping,specs,max_intervals=256))
+                    await self.host.close()
+                    self._seeded=False;self._last_capture=None;self._observation_error=None
+                    await self._open_host(state,True)
+                return True  # The next authority is installed in place.
         await self.host.close()
         session=self.host.state.execution
         self._bootstrap=session.account
@@ -722,6 +740,45 @@ class BatteryRuntime:
         self._identity=None;self._last_capture=None;self._observation_error=None
         await self._persist_bootstrap()
         return True
+
+    async def _reconcile_previous_controls(self, group):
+        reports={key:self.coordinator.ports.battery_report(key) for key in group.spec.control_keys}
+        catalog=self.host.state.authority.catalog
+        try:
+            surface=native_surface(self._options,reports)
+        except (ValueError, KeyError, TypeError):
+            return
+        if surface['revision']!=catalog.control_surface_revision:
+            return
+        readback=surface['readback']
+        controls=tuple(zip(group.spec.control_keys,
+            (readback['mode'], readback['charge_limit_w'], readback['discharge_limit_w'])))
+        now=self.now()
+        self._capture_revision=max(self._capture_revision,group.observation_revision)+1
+        adapter=SigenAdapter(catalog,self.host.state.authority.plant.conversion)
+        await self.host.accept(rt.Observed(group.spec.id,rt.Observation(
+            self._capture_revision,now,now+CAPTURE_LIFETIME_MS,controls,(),adapter.envelope(controls))))
+
+    def _verification_event(self, revision):
+        self._verification_revision=max(self._verification_revision, revision)
+        self._releasing=False
+        self._grant=None
+        self.coordinator._battery_native_context=None
+        if self.host is not None:
+            group=self.host.state.groups[0]
+            if group.mode!='control_verification' or group.release_pending or group.owned or group.desired is not None:
+                self._mode_revision=group.mode_revision+1
+                self._mode='control_verification'
+                return rt.AuthorityChanged(group.spec.id,self._mode,self._mode_revision,None)
+        return None
+
+    async def _stop_for_verification(self, revision=-1):
+        event=self._verification_event(revision)
+        if 'battery' in self.controller.ownership.records and self.controller.devices is None:
+            async with self.controller.lock:
+                await self.controller.ownership.abandon({'battery'})
+        if event is not None:
+            await self.host.accept(event)
 
     async def _refresh(self):
         options=self.controller.options()
@@ -743,13 +800,6 @@ class BatteryRuntime:
             return
         self._releasing=False
         self._options=options
-        if mode=='control_verification' and 'battery' in self.controller.ownership.records:
-            async with self.controller.lock:
-                if self.controller.devices is not None:
-                    self.controller.adopt_ownership(await self.controller.devices.abandon('battery'))
-                else:
-                    del self.controller.ownership.records['battery']
-                    await self.controller.save()
         if battery_measurement_errors(options):
             raise BatteryMeasurementConfigurationError(options)
         self._devices=await self.coordinator.async_battery_planned_devices()
@@ -967,7 +1017,8 @@ class BatteryRuntime:
         session=rt.ExecutionSession(account=self._bootstrap,captured_feedback=self._bootstrap_captured,
                                     plan_rejection=self._bootstrap_rejection)
         await self.store.save({'schema':'battery-runtime-v4','checkpoint':None,'options':None,
-            'devices':[],'model_sources':None,'ratings':None,'gateway_processing':checkpoint},session)
+            'devices':[],'model_sources':None,'ratings':None,'gateway_processing':checkpoint,
+            'verification_revision':self._verification_revision},session)
         self._processing=checkpoint
 
     async def _consume_receipt(self,identity,receipt,receiver,progress):
@@ -984,6 +1035,13 @@ class BatteryRuntime:
                 raise ValueError('Execution receipt prefix has a gap')
             if previous and (previous['receipt']>ordinal or (previous['receipt']==ordinal and previous['complete'])):
                 return previous
+            if receipt['kind']=='configuration':
+                authority=receipt['payload'].get('configuration_authority', {})
+                revision=authority.get('verification_revisions', {}).get('$battery', -1)
+                event=self._verification_event(revision) if revision>self._verification_revision else None
+                checkpoint=processing_checkpoint(identity,ordinal,0,complete=True)
+                await receiver(event,checkpoint)
+                return checkpoint
             if self.host is None:
                 checkpoint=processing_checkpoint(identity,ordinal,0,complete=True)
                 if self._loaded is not None:
@@ -1322,6 +1380,9 @@ class BatteryRuntime:
         if self._closed or not self.coordinator.battery_writer.is_current(effect.grant,self.identity()):
             return False
         group=self.host.state.groups[0]
+        options=self.controller.options()
+        if device_mode(options,'battery')=='control_verification':
+            return False
         releasing=group.release_pending and group.release and effect.request_id==group.release.id
         if releasing:
             return True
@@ -1332,7 +1393,6 @@ class BatteryRuntime:
             attempt=next((a for a in group.attempts if a.id==effect.attempt_id),None)
             if attempt is None or not attempt.step.relief_id:
                 return False
-        options=self.controller.options()
         if device_mode(options,'battery')!='controlling' or not options.get('battery_enabled',True) or '$battery' in options.get('excluded_device_readings',[]):
             return False
         for key in ('control_override_entity','battery_control_override_entity'):
@@ -1399,6 +1459,9 @@ class BatteryRuntime:
         return battery_released(self._options, self.coordinator.ports.battery_report)
 
     async def _release(self,reason):
+        if device_mode(self.controller.options(),'battery')=='control_verification':
+            await self._stop_for_verification()
+            return
         self._releasing=True
         self._status={'state':'idle','reason':reason}
         if self.host is None:

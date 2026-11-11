@@ -53,6 +53,14 @@ class DeviceOwnership:
     async def save(self):
         await self.store.async_save(self.snapshot())
 
+    async def abandon(self, devices):
+        if not devices:
+            return
+        remaining = {device: record for device, record in self.records.items() if device not in devices}
+        if len(remaining) != len(self.records):
+            await self.store.async_save({**self.snapshot(), 'records': deepcopy(remaining)})
+            self.records = remaining
+
     async def capture(self, device, options, originals):
         if device in self.records:
             return self.records[device]

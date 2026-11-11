@@ -39,7 +39,7 @@ class InProcessClient:
         self.peer = AppConnection(self.service)
         self.connected = None
         self.number = 0
-    async def call(self,operation,body):
+    async def call(self,operation,body,*,cancel_commands=False):
         self.number += 1
         return (await self.peer.request({'id':self.number,'operation':operation,'body':body}))['result']
     async def connect(self):
@@ -853,9 +853,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         await self.service.battery.maintain_obligation()
         self.assertEqual(rig.rows['select.mode']['state'],'Maximum Self Consumption')
 
-    async def test_verification_hands_the_battery_back_through_the_gateway(self):
-        # Leaving Controlling on the select is the release (docs/control-continuity.md).
-        # Home Assistant must admit that handover although Verification writes no schedule.
+    async def test_verification_ends_battery_control_without_gateway_writes(self):
         rig = self.battery_rig()
         socket,client,writer = await self.remote_battery(rig)
         await rig.runtime.open()
@@ -863,6 +861,9 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(rig.runtime.host.idle(),2)
         await rig.advance(5000)
         self.assertEqual(rig.rows['select.mode']['state'],'Command Charging (PV First)')
+        keys=('select.mode','number.charge','number.discharge')
+        retained={key:rig.rows[key]['state'] for key in keys}
+        calls=len(self.native_calls)
         rig.options['device_modes']['$battery'] = 'control_verification'
         self.service.invalidate_configuration()
         self.service.configuration_pending = False  # The settings revision has been captured.
@@ -870,22 +871,22 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             await rig.advance(5000)
             if rig.runtime.host is None:
                 break
-        self.assertEqual((rig.rows['select.mode']['state'],float(rig.rows['number.charge']['state']),
-            float(rig.rows['number.discharge']['state'])),('Maximum Self Consumption',4.0,4.0),str(rig.runtime.snapshot()))
-        calls = len(self.native_calls)
+        await self.service.battery.maintain_obligation()
+        self.assertEqual({key:rig.rows[key]['state'] for key in keys},retained)
+        self.assertFalse(self.service.battery.obligation['pending'])
         for _ in range(3):
             await rig.advance(5000)
         self.assertEqual(len(self.native_calls),calls)  # Verification itself writes nothing.
         self.assertIsNotNone(client.socket)
 
-    async def test_completed_verification_handback_preserves_later_manual_limits(self):
+    async def test_completed_demotion_handback_preserves_later_manual_limits(self):
         rig = self.battery_rig()
         socket,client,writer = await self.remote_battery(rig)
         await rig.runtime.open()
         await rig.runtime.refresh()
         await asyncio.wait_for(rig.runtime.host.idle(),2)
         await rig.advance(5000)
-        rig.options['device_modes']['$battery'] = 'control_verification'
+        rig.options['device_modes']['$battery'] = 'monitoring'
         self.service.invalidate_configuration()
         self.service.configuration_pending = False
         for _ in range(12):

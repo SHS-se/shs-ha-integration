@@ -6,6 +6,6 @@ Configuration version 15 removes the old timer fields through the existing one-t
 
 Native equipment protections remain in the equipment. A running pool may still have an economically preferred continuation candidate, compared against the freely replanned schedule using the existing release margin. That preference is not an actuator timer.
 
-Restart, source loss, stale plans and faults retain the last setting sent. Leaving Controlling, including for Verification, still restores captured settings; no SHS run timer delays that handover. See [control continuity](control-continuity.md).
+Restart, source loss, stale plans and faults retain the last setting sent. Switching to Verification stops control at the current settings. An explicit exclusion or manual override can request a baseline handover without an SHS run timer. See [control continuity](control-continuity.md).
 
 Historical implementation: minimum runs were restored on 25 September in both repositories, including a four-hour pool minimum. This retirement reverses that duration requirement without reversing the later control-continuity corrections.

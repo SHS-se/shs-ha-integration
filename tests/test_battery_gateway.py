@@ -168,6 +168,43 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.step())['status'], 'not_sent')
         self.assertFalse(self.calls)
 
+    async def test_verification_cancels_a_prepared_battery_step(self):
+        original = self.journal.prepare_command
+
+        def prepare(command, effect=None):
+            result = original(command, effect)
+            self.options['device_modes']['$battery'] = 'control_verification'
+            return result
+
+        self.journal.prepare_command = prepare
+        before = deepcopy(self.rows)
+        self.assertEqual((await self.step())['status'], 'not_sent')
+        await self.gateway.maintain_obligation()
+        self.assertEqual(self.rows, before)
+        self.assertEqual(self.calls, [])
+        self.assertFalse(self.gateway.obligation['pending'])
+        self.assertFalse(self.journal.load_record('battery_obligation')['pending'])
+
+    async def test_verification_cancels_handover_and_keeps_an_uncertain_write_fenced(self):
+        async def ambiguous(*args):
+            self.calls.append(args)
+            raise TimeoutError('native response lost')
+
+        self.physical.native_executor.send = ambiguous
+        self.options['device_modes']['$battery'] = 'monitoring'
+        self.gateway.revoke()
+        with self.assertRaises(TimeoutError):
+            await self.gateway.maintain_obligation()
+        uncertain = deepcopy(self.gateway.obligation)
+        self.calls.clear()
+        self.options['device_modes']['$battery'] = 'control_verification'
+        await self.gateway.maintain_obligation()
+        self.assertEqual(self.gateway.obligation, {**uncertain, 'pending':False})
+        self.assertEqual(self.journal.load_record('battery_obligation'), self.gateway.obligation)
+        self.options['device_modes']['$battery'] = 'controlling'
+        self.assertIsNone(self.gateway.identity())
+        self.assertEqual(self.calls, [])
+
     async def test_restart_retains_installation_but_no_writer_grant(self):
         replacement = BatteryGateway(self.stream, self.physical, lambda:self.options,
             lambda entity:self.rows.get(entity), lambda:self.rig.now, authorize=lambda op:None,
@@ -180,7 +217,7 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
         return [(data['entity_id'],data.get('option',data.get('value'))) for _,_,data in self.calls]
 
     async def release_route(self):
-        self.options['device_modes']['$battery'] = 'control_verification'
+        self.options['device_modes']['$battery'] = 'monitoring'
         target = (('select.mode','Maximum Self Consumption'),('number.charge',4000),('number.discharge',4000))
         effect = replace(self.effect, purpose='release', request=rt.Request('release',1,self.rig.now+900000,target,()))
         self.route = await self.gateway.propose(encode_value(effect), encode_value(self.grant))
@@ -228,7 +265,7 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_release_grants_do_not_rearm_completed_handback(self):
         self.gateway.revoke()
-        self.options['device_modes']['$battery'] = 'control_verification'
+        self.options['device_modes']['$battery'] = 'monitoring'
         await self.gateway.maintain_obligation()
         self.assertFalse(self.gateway.obligation['pending'])
         identity = self.gateway.installation[0]
@@ -289,8 +326,7 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.gateway.obligation['pending'])
 
     async def test_leaving_controlling_returns_native_controls_to_baseline(self):
-        for change in (lambda:self.options['device_modes'].update({'$battery':'control_verification'}),
-                       lambda:self.options['device_modes'].update({'$battery':'monitoring'}),
+        for change in (lambda:self.options['device_modes'].update({'$battery':'monitoring'}),
                        lambda:self.options.update(battery_enabled=False),
                        lambda:self.options.update(excluded_device_readings=['$battery'])):
             with self.subTest(options=self.options):

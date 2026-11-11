@@ -76,6 +76,21 @@ class WriterTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.fence.is_current(grant,old))
         self.assertFalse(self.fence.snapshot()['grant_current'])
 
+    async def test_revocation_during_persistence_allows_a_fresh_grant(self):
+        save=self.store.async_save
+        async def revoked(value):
+            await save(value)
+            if value['owner']=='runtime':
+                self.fence.revoke()
+        self.store.async_save=revoked
+        with self.assertRaisesRegex(ValueError,'expired during persistence'):
+            await self.fence.take_over(self.identity,5000)
+        self.assertFalse(self.fence.snapshot()['grant_current'])
+        self.assertIsNone(self.fence.snapshot()['fault'])
+        self.store.async_save=save
+        grant=await self.fence.take_over(self.identity,5000)
+        self.assertTrue(self.fence.is_current(grant,self.identity))
+
     async def test_failed_save_and_shutdown_never_resurrect_old_owner(self):
         self.store.async_save=AsyncMock(side_effect=OSError('uncertain disk write'))
         with self.assertRaises(OSError): await self.fence.take_over(self.identity,5000)

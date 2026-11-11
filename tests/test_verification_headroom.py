@@ -16,12 +16,12 @@ class HandoverHeadroomTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.states['number.current'].state = '16'
         self.controller.before_external_command = Mock(return_value=False)
-        self.options['device_modes']['$ev'] = 'control_verification'
+        self.options['device_modes']['$ev'] = 'monitoring'
         await self.controller.async_tick()
         self.assertEqual(self.states['number.current'].state, '8.0')
         self.assertEqual(self.states['switch.charge'].state, 'off')
         self.assertNotIn('ev', self.controller.ownership.records)
-        self.assertEqual(self.controller.status['ev']['state'], 'verified')
+        self.assertEqual(self.controller.status['ev']['state'], 'monitoring')
         self.controller.before_external_command.assert_not_called()
 
     async def test_ev_stop_is_not_blocked_by_battery_charging(self):
@@ -39,7 +39,7 @@ class HandoverHeadroomTests(unittest.IsolatedAsyncioTestCase):
         self.slot['ev_target_current_a'] = 0
         await self.controller.async_start()
         self.controller.before_external_command = Mock(return_value=False)
-        self.options['device_modes']['$ev'] = 'control_verification'
+        self.options['device_modes']['$ev'] = 'monitoring'
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.charge'].state, 'off')
         self.assertIn('ev', self.controller.ownership.records)
@@ -84,7 +84,7 @@ class GatewayHandoverHeadroomTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['$ev'] = 'controlling'
         await self.gateway.capture('ev', self.options, ['number.current', 'switch.charge'])
         self.states['number.current'].state = '16'
-        self.options['device_modes']['$ev'] = 'control_verification'
+        self.options['device_modes']['$ev'] = 'monitoring'
         self.gateway.external_ready = Mock(return_value=False)
         result = await self.gateway.perform(self.ev_request('release', 'release'))
         self.assertIsNone(result['error'])
@@ -97,7 +97,7 @@ class GatewayHandoverHeadroomTests(unittest.IsolatedAsyncioTestCase):
         self.options['device_modes']['$ev'] = 'controlling'
         await self.gateway.capture('ev', self.options, ['number.current', 'switch.charge'])
         self.states['number.current'].state = '16'
-        self.options['device_modes']['$ev'] = 'control_verification'
+        self.options['device_modes']['$ev'] = 'monitoring'
         prepare = self.gateway.native_executor.transport.journal.prepare
         def charger_starts(command):
             result = prepare(command)

@@ -39,7 +39,8 @@ class AppBatteryRuntime(BatteryRuntime):
             urgent = (receipt['kind'] != 'observation'
                       or (row['entity_id'] in set(self._control_entities()) | overrides and row.get('kind') == 'state_change')
                       or recovering and event is not None)
-            receiver = self.host.accept_received if urgent and not replay else self.host.ingest_received
+            receiver = (self.host.accept_received if urgent and (not replay or receipt['kind']=='configuration' and event is not None)
+                        else self.host.ingest_received)
             await receiver(event, checkpoint)
         self._ingested = await self._consume_receipt(identity, receipt, receive, self.received_checkpoint)
         if not replay and recovering and self._observation_error is None and self.host is not None:

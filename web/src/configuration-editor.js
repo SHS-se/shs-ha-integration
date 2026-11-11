@@ -1237,7 +1237,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<div class="choices">
       ${section === "schedule" ? `<div class="choice-row"><span>Device mode</span><select data-mode="${this._escape(device.mode)}" aria-label="Mode for ${this._escape(device.name)}" data-permission="${this._escape(device.key)}" ${disabled ? "disabled" : ""}>
         ${DEVICE_MODES.map(([value, label]) => `<option data-mode="${value}" value="${value}" ${device.mode === value ? "selected" : ""} ${blocked(value) && ["control_verification", "controlling"].includes(value) && device.mode !== value ? "disabled" : ""}>${label}</option>`).join("")}</select>
-      <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Verification logs proposed commands. Controlling attempts them on the equipment."))}</small></div>` : ""}
+      <small>${this._escape(permission.reason || (this._deviceDirty(device.key) ? "Save setup changes first" : "Verification logs proposed commands and leaves equipment settings as they are. Controlling applies the plan."))}</small></div>` : ""}
     </div>`;
   }
 

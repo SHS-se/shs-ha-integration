@@ -99,7 +99,7 @@ class ControllingTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.calls.clear()
         self.switch('unavailable')
-        self.options['device_modes']['$pool'] = 'control_verification'
+        self.options['device_modes']['$pool'] = 'monitoring'
         await self.controller.async_tick()
         status = self.controller.status['pool']
         self.assertEqual(status['state'], 'pending', status)

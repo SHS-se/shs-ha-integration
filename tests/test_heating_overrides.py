@@ -493,7 +493,7 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         self.assertEqual(self.states['climate.heater'].attributes['temperature'], 24)
         self.controller.record_execution.assert_not_awaited()
 
-    async def test_curtailment_retains_control_and_verification_restores_original_setting(self):
+    async def test_curtailment_retains_control_and_verification_keeps_applied_setting(self):
         # Manual heating-override relief shares the pause routine: Heat stays
         # selected and only the setpoint moves (10 November 2026).
         self.capacity.heating_cap = lambda owner:{'thermostat':True}
@@ -508,7 +508,8 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         result = await self.physical.perform(self.intent('release'))
         self.assertIsNone(result['error'])
         self.assertEqual(self.states['climate.heater'].state, 'heat')
-        self.assertEqual(self.states['climate.heater'].attributes['temperature'], 20)
+        self.assertEqual(self.states['climate.heater'].attributes['temperature'], 19)
+        self.assertEqual(self.calls, ['set_temperature'])
         self.assertNotIn(OWNER, self.physical.ownership.records)
 
 

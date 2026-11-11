@@ -2,6 +2,7 @@
 import asyncio
 from copy import deepcopy
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
@@ -10,6 +11,10 @@ from shs_app.records import RecordStore
 from shs_core.execution_configuration import ExecutionConfiguration
 from shs_core.gateway_journal import digest
 from shs_core.native_configuration import native_options
+from shs_app.gateway_client import GatewayClient
+
+sys.path.append(str(Path(__file__).parents[2]/'tests'))
+from gateway_fixture import IDENTITY
 
 
 class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
@@ -39,6 +44,49 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
         await reopened.load(self.gateway.value,self.credentials)
         self.assertEqual(reopened.options(),self.app.options())
         self.assertEqual(self.credentials_calls,1)
+
+    async def test_verification_promotes_a_waiting_save_and_rebases_only_its_mode(self):
+        await self.app.commit(1, {'device_modes':{'$battery':'controlling'}}, 'start')
+        original_revision = self.app.revision
+        client = GatewayClient(None, 'fixture', 'token', IDENTITY, None)
+        entered, finish = asyncio.Event(), asyncio.Event()
+        async def exchange(operation, body):
+            if operation == 'device':
+                entered.set()
+                await finish.wait()
+            else:
+                return await self.gateway.install(body['body'])
+        client._exchange = exchange
+        self.app.install = lambda body:client.call('source', {'operation':'configure', 'body':body})
+        async with asyncio.timeout(3), asyncio.TaskGroup() as tasks:
+            command = tasks.create_task(client.call('device', {}))
+            await entered.wait()
+            save = tasks.create_task(self.app.commit(original_revision,
+                {**self.app.options(), 'pool_enabled':False}, 'background'))
+            while not client.installing_configuration:
+                await asyncio.sleep(0)
+            async with client.prioritize_configuration():
+                await self.app.commit(original_revision, {}, 'stop',
+                    verification=('$battery', original_revision))
+                await save
+                self.assertFalse(command.done())
+                self.assertEqual(self.gateway.options(), {
+                    'device_modes':{'$battery':'control_verification'}, 'pool_enabled':False})
+                stopped = self.gateway.value['verification_revisions']['$battery']
+            finish.set()
+        await self.app.commit(stopped, {**self.app.options(), 'device_modes':{'$battery':'controlling'}}, 'resume')
+        await self.gateway.load({})
+        self.assertEqual(self.gateway.value['verification_revisions']['$battery'], stopped)
+
+    async def test_existing_gateway_record_is_rewritten_with_verification_revisions(self):
+        previous = {'revision':8, 'options':{'device_modes':{'$battery':'control_verification','$pool':'controlling'}}}
+        previous['digest'] = digest(previous['options'])
+        await self.gateway.record.async_save(previous)
+        await self.gateway.load({})
+        expected = {**previous, 'verification_revisions':{'$battery':8}}
+        self.assertEqual(await self.gateway.record.async_load(), expected)
+        await self.gateway.load({})
+        self.assertEqual(self.gateway.value, expected)
 
     async def test_reload_removes_obsolete_local_import_limit_from_both_records(self):
         options = {**self.app.options(), 'grid_import_limit_w': 13200, 'grid_export_limit_w': 13200}

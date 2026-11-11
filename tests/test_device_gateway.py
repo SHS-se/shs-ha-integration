@@ -85,6 +85,22 @@ class PhysicalGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.pool'].state, 'off')
         self.assertNotIn('switch.pool', result['ownership']['records']['pool'].get('last_commands', {}))
 
+    async def test_verification_cancels_a_prepared_pool_command(self):
+        transport = self.gateway.native_executor.transport
+        original = transport.journal.prepare
+
+        def prepare(command):
+            result = original(command)
+            self.options['device_modes']['$pool'] = 'control_verification'
+            return result
+
+        transport.journal.prepare = prepare
+        result = await self.gateway.perform(self.request())
+        self.assertEqual(result['error']['kind'], 'admission')
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.states['switch.pool'].state, 'off')
+        self.assertEqual((await self.gateway.synchronize(self.models))['records'], {})
+
     async def test_settings_change_during_an_operation_is_an_admission_wait_not_a_rejection(self):
         admitted = []
         def authorize(intent):
@@ -106,24 +122,34 @@ class PhysicalGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
         self.assertFalse(result['ownership']['records'])
 
-    async def test_verification_mode_hands_the_device_back_and_accepts_no_schedule(self):
+    async def test_verification_relinquishes_control_and_accepts_no_schedule(self):
         await self.gateway.perform(self.request())
         self.options['device_modes']['$pool'] = 'control_verification'
         ownership = await self.gateway.synchronize(self.models)
-        self.assertEqual(ownership['records']['pool']['originals'], {'switch.pool':'off'})
+        self.assertEqual(ownership['records'], {})
+        self.calls.clear()
         result = await self.gateway.perform({**self.request(), 'request_id':'after-verification'})
         self.assertIsNotNone(result['error'])
         self.assertEqual(self.states['switch.pool'].state, 'on')
         released = await self.gateway.perform({**self.request('release'), 'request_id':'release'})
         self.assertIsNone(released['error'])
-        self.assertEqual(self.states['switch.pool'].state, 'off')
+        self.assertEqual(self.states['switch.pool'].state, 'on')
+        self.assertEqual(self.calls, [])
         self.assertEqual(released['ownership']['records'], {})
 
-    async def test_verification_handover_is_finished_without_the_app(self):
+    async def test_verification_retires_pending_handover_without_the_app(self):
         await self.gateway.perform(self.request())
+        self.gateway.ownership.records['pool']['restoration_pending'] = True
+        await self.gateway.ownership.save()
+        self.calls.clear()
         self.options['device_modes']['$pool'] = 'control_verification'
+        self.states['switch.pool'].state = 'unavailable'
+        await self.gateway.load()
         await self.gateway.maintain_obligations()
-        self.assertEqual(self.states['switch.pool'].state, 'off')
+        self.states['switch.pool'].state = 'on'
+        await self.gateway.maintain_obligations()
+        self.assertEqual(self.states['switch.pool'].state, 'on')
+        self.assertEqual(self.calls, [])
         self.assertEqual(self.gateway.ownership.records, {})
 
     async def test_retired_minimum_run_allows_early_stop_and_preserves_ownership(self):

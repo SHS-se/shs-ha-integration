@@ -26,9 +26,8 @@ as an estimate of container CPU or disk I/O.
   headroom, native guards and validity window. Historical objective outcome
   reporting affects only replan messages, so it runs for explicit decisions and
   views, rather than repeatedly during physical send checks.
-- The select still owns release. Restart, missing readings, lost plans and faults
-  hold the last sent setting; leaving Controlling for Verification restores the
-  captured baseline.
+- Restart, missing readings, lost plans and faults hold the last sent setting.
+  Switching to Verification ends control at the battery's current settings.
 
 The resource log now reports `decisions/min` and `reducer_events/min` alongside
 process CPU, receipt rate, backlog, checkpoint saves, query groups and kernel

@@ -43,13 +43,27 @@ class GatewayClient:
         self.admission = asyncio.Condition()
         self.installing_configuration = False
         self.admitted_calls = 0
+        self.pending_stops = 0
 
     @asynccontextmanager
-    async def configuration_boundary(self, operation, body):
+    async def prioritize_configuration(self):
+        async with self.admission:
+            self.pending_stops += 1
+            self.admission.notify_all()
+        try:
+            yield
+        finally:
+            async with self.admission:
+                self.pending_stops -= 1
+                self.admission.notify_all()
+
+    @asynccontextmanager
+    async def configuration_boundary(self, operation, body, *, cancel_commands=False):
         installing = operation == 'source' and body.get('operation') == 'configure'
         if not installing and (operation == 'source' or operation in
-                ('connect','receipts','ack_delivery','ack_processed','snapshot','reconcile','activate','resume','updates')):
-            # Recorder/history requests and receipt delivery remain multiplexed.
+                ('connect','receipts','ack_delivery','ack_processed','snapshot','reconcile','activate','resume','updates','requests')):
+            # Deliver HA mode requests while a settings save is waiting for
+            # admitted calls. The request's eventual commands still use admission.
             yield
             return
         if installing:
@@ -57,7 +71,8 @@ class GatewayClient:
                 try:
                     async with self.admission:
                         self.installing_configuration = True
-                        await self.admission.wait_for(lambda: self.admitted_calls == 0)
+                        if not cancel_commands:
+                            await self.admission.wait_for(lambda: self.admitted_calls == 0 or self.pending_stops > 0)
                     yield
                 finally:
                     async with self.admission:
@@ -65,7 +80,7 @@ class GatewayClient:
                         self.admission.notify_all()
         else:
             async with self.admission:
-                await self.admission.wait_for(lambda: not self.installing_configuration)
+                await self.admission.wait_for(lambda: not self.installing_configuration and not self.pending_stops)
                 self.admitted_calls += 1
             try:
                 yield
@@ -131,11 +146,11 @@ class GatewayClient:
             return json.loads(content)
 
     @profiled('gateway_exchange')
-    async def _call(self, operation, body):
+    async def _call(self, operation, body, *, cancel_commands=False):
         # HA revokes command admission while it durably captures a new native
-        # configuration. Finish admitted calls first, then keep app operations
-        # outside that interval until HA acknowledges the installed revision.
-        async with self.configuration_boundary(operation, body):
+        # configuration. Verification sends the change while older calls are
+        # still outstanding so HA can fence any command they have yet to send.
+        async with self.configuration_boundary(operation, body, cancel_commands=cancel_commands):
             return await self._exchange(operation, body)
 
     async def _exchange(self, operation, body):
@@ -170,8 +185,8 @@ class GatewayClient:
                 raise GatewayConflict('Gateway request failed; reconnect explicitly') from error
             raise
 
-    async def call(self, operation, body):
-        return await self._call(operation,body)
+    async def call(self, operation, body, *, cancel_commands=False):
+        return await self._call(operation,body,cancel_commands=cancel_commands)
 
     async def project(self, value):
         with self.profiler.measure('gateway_encode'):

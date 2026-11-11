@@ -56,7 +56,8 @@ class DeviceIntent:
 
 
 class DeviceGateway(DeviceOperations):
-    def __init__(self, inputs, options, ownership_store, native_executor, *, authorize, before_external, operations, capacity=None, heating=None):
+    def __init__(self, inputs, options, ownership_store, native_executor, *, authorize, before_external, operations,
+                 capacity=None, heating=None, configuration_pending=lambda: False, control_notices=lambda models: {}):
         self.inputs, self.options = inputs, options
         self.operations = operations
         self.capacity = capacity
@@ -64,6 +65,8 @@ class DeviceGateway(DeviceOperations):
         self.ownership = DeviceOwnership(ownership_store)
         self.native_executor = native_executor
         self.authorize, self.external_ready = authorize, before_external
+        self.configuration_pending = configuration_pending
+        self.control_notices = control_notices
         self.reservation_required = False
         self.lock = asyncio.Lock()
         self.observation_changed = asyncio.Event()
@@ -192,23 +195,23 @@ class DeviceGateway(DeviceOperations):
         return f'device:{self.intent.request_id}:{self.sequence}'
 
     def check_authority(self):
+        options = self.options()
+        mode = device_mode(options, self.device)
+        if mode == 'control_verification':
+            raise AdmissionPending('Verification ended device control')
         if self.local_obligation:
-            if self.closed or self.options() != self.active_options:
+            if self.closed or self.configuration_pending() or options != self.active_options:
                 raise GatewayConflict('Physical obligation permission changed')
             if not self.restoring:
                 raise GatewayConflict('Only restoration and maximum-inhibit obligations run locally')
             return
         self.authorize(self.intent)
-        if self.closed or self.options() != self.active_options:
+        if self.closed or options != self.active_options:
             raise AdmissionPending('Canonical device configuration changed')
-        mode = device_mode(self.options(), self.device)
-        # Verification writes no schedule, but leaving Controlling for it is the
-        # release and its handover is a real write (docs/control-continuity.md).
         if not self.restoring and mode != 'controlling':
             raise GatewayConflict('Local device control permission is absent')
         if self.restoring:
             return
-        options = self.options()
         if self.device.startswith('device:'):
             key = self.device.removeprefix('device:')
             mapping = options.get('device_control_mappings', {}).get(key, {})
@@ -312,17 +315,20 @@ class DeviceGateway(DeviceOperations):
         """Canonical mode transitions and run clocks, without executing a plan."""
         async with self.lock:
             options = self.options()
+            await self.abandon_verification(options)
             changed = False
-            for device, record in tuple(self.ownership.records.items()):
-                if device == 'battery' and device_mode(options, device) == 'control_verification':
-                    # A pre-runtime battery record holds no settings to return:
-                    # the admitted battery adapter performs that handover.
-                    del self.ownership.records[device]
+            for device, record in self.ownership.records.items():
+                if device_mode(options, device) == 'controlling' and record.pop('restoration_pending', None) is not None:
                     changed = True
-                elif device_mode(options, device) == 'controlling' and record.pop('restoration_pending', None) is not None:
-                    changed = True
+            if changed:
+                await self.ownership.save()
             recoveries = await self.capacity.capacity_recoveries() if self.capacity is not None else []
-            return {**self.ownership.snapshot(), 'capacity_recoveries':recoveries}
+            return {**self.ownership.snapshot(), 'capacity_recoveries':recoveries,
+                    'control_notices':self.control_notices(models)}
+
+    async def abandon_verification(self, options):
+        await self.ownership.abandon({device for device in self.ownership.records
+                                      if device_mode(options, device) == 'control_verification'})
 
     def make_command(self, identity, phase, action):
         if self.local_obligation:
@@ -334,11 +340,13 @@ class DeviceGateway(DeviceOperations):
 
         No schedule is selected here. A lost app session alone does not restore
         ordinary devices; their captured settings survive a restart as before.
-        Leaving Controlling, for Verification too, is a release and is finished
-        here when the app is not doing it (docs/control-continuity.md).
+        Verification relinquishes ownership without restoring settings.
         """
         async with self.lock:
+            if self.configuration_pending():
+                return
             self.active_options = deepcopy(self.options())
+            await self.abandon_verification(self.active_options)
             self.plan, self.slot, self.active_slot = {'device_models':[]}, None, None
             for device,record in tuple(self.ownership.records.items()):
                 if device == 'battery':
@@ -454,11 +462,14 @@ class DeviceGateway(DeviceOperations):
             error, result = None, None
             try:
                 if intent.operation == 'release':
-                    self.restoring = True
-                    self.check_authority()
-                    if self.heating is not None:
-                        await self.heating.retire(self.active_options, released=intent.device)
-                    await self.restore(intent.device)
+                    if device_mode(self.options(), intent.device) == 'control_verification':
+                        await self.ownership.abandon({intent.device})
+                    else:
+                        self.restoring = True
+                        self.check_authority()
+                        if self.heating is not None:
+                            await self.heating.retire(self.active_options, released=intent.device)
+                        await self.restore(intent.device)
                 else:
                     self.check_authority()
                     if intent.operation == 'curtail':

@@ -586,7 +586,7 @@ def _put(state, group):
 
 
 def _request(group, now):
-    if not group.authority_confirmed:
+    if not group.authority_confirmed or group.mode == "control_verification":
         return None, None
     if not group.release_pending and group.mode == "controlling" and group.desired is not None and now < group.desired.valid_until_ms:
         return group.desired, "optimisation"
@@ -1019,7 +1019,8 @@ def _refresh_execution(state, now, effects, *, select=True):
         session = replace(session, request_id=request.id)
     elif group.desired is not None:
         group = replace(_supersede(group), desired=None,
-                        release_pending=group.release_pending or group.owned or bool(group.attempts))
+                        release_pending=group.mode != "control_verification"
+                        and (group.release_pending or group.owned or bool(group.attempts)))
     return replace(_put(state, group), execution=session)
 
 
@@ -1399,14 +1400,15 @@ def reduce_home(state: HomeState, event: Event, now_ms: int) -> tuple[HomeState,
                 raise ValueError("conflicting requested mode revision")
             if event.revision >= group.mode_revision:
                 changed = event.mode != group.mode or event.revision != group.mode_revision
-                # Leaving Controlling, for Verification too, is the release; returning
-                # to it cancels one in progress. See docs/control-continuity.md.
-                pending = event.mode != "controlling" and (group.release_pending or group.owned or any(a.stage != "prepared" for a in group.attempts))
-                group = _supersede(group) if changed else group
+                verifying = event.mode == "control_verification"
+                pending = event.mode in ("monitoring", "planning") and group.mode != "control_verification" and (
+                    group.release_pending or group.owned or any(a.stage != "prepared" for a in group.attempts))
+                group = _supersede(group) if changed or (verifying and (group.release_pending or group.owned)) else group
                 release = event.approved_release if event.approved_release and (group.release is None or event.approved_release.revision > group.release.revision) else group.release
                 group = replace(group, mode=event.mode, mode_revision=event.revision, authority_confirmed=True,
-                                release=release, release_pending=pending,
-                                desired=None if changed and not _is_battery(state, group) else group.desired)
+                                release=release, release_pending=pending, owned=group.owned and not verifying,
+                                transition_work=None if verifying else group.transition_work,
+                                desired=None if verifying or (changed and not _is_battery(state, group)) else group.desired)
         elif isinstance(event, Requested):
             if _is_battery(state, group):
                 raise ValueError("direct request cannot overwrite the scoped battery execution owner")

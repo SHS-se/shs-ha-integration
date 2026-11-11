@@ -16,12 +16,22 @@ class ExecutionConfiguration:
         if self.value is None:
             if initial.get('settings_owner') == 'app':
                 raise GatewayConflict('Installed execution configuration is missing after app adoption')
-            self.value = dict(revision=0, options=deepcopy(initial), digest=digest(initial))
+            self.value = dict(revision=0, options=deepcopy(initial), digest=digest(initial), verification_revisions={})
             await self.record.async_save(self.value)
-        if (set(self.value) != {'revision','options','digest'} or type(self.value['revision']) is not int
+        if (set(self.value) not in ({'revision','options','digest'}, {'revision','options','digest','verification_revisions'})
+                or type(self.value['revision']) is not int
                 or self.value['revision'] < 0 or type(self.value['options']) is not dict
                 or self.value['digest'] != digest(self.value['options'])):
             raise GatewayConflict('Invalid installed SHS execution configuration')
+        if 'verification_revisions' not in self.value:
+            self.value['verification_revisions'] = {owner:self.value['revision']
+                for owner, mode in self.value['options'].get('device_modes', {}).items()
+                if mode == 'control_verification'}
+            await self.record.async_save(self.value)
+        revisions = self.value['verification_revisions']
+        if type(revisions) is not dict or any(type(owner) is not str or type(revision) is not int
+                or not 0 <= revision <= self.value['revision'] for owner, revision in revisions.items()):
+            raise GatewayConflict('Invalid installed Verification revisions')
 
     def options(self):
         return deepcopy(self.value['options'])
@@ -44,6 +54,10 @@ class ExecutionConfiguration:
                     raise GatewayConflict('Execution configuration changed; reconcile the app settings revision')
                 self.invalidate()
                 updated = {key:deepcopy(change[key]) for key in ('revision','options','digest')}
+                previous_modes = self.value['options'].get('device_modes', {})
+                updated['verification_revisions'] = {**self.value['verification_revisions'], **{
+                    owner:change['revision'] for owner, mode in updated['options'].get('device_modes', {}).items()
+                    if mode == 'control_verification' and previous_modes.get(owner) != mode}}
                 await self.record.async_save(updated)
                 self.value = updated
                 await self.capture()

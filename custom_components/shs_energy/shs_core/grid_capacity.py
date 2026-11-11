@@ -192,6 +192,24 @@ def observe_capacity(capacity, ordinal, latest):
                 if actual is not None:
                     row['settled'] = {**settled,'controls':actual[0],'after_w':actual[1],'confirmed':ordinal}
                     changed = True
+        elif settled and settled['after_w'] and settled['sensor']:
+            # Manual OFF after relinquishing control can replace a settled ON
+            # envelope. Each still-issued effect keeps its own reservation.
+            switches = [entity for entity in settled['controls'] if entity.startswith(('switch.', 'input_boolean.'))]
+            if switches:
+                stop = [latest(entity) for entity in switches]
+                received, report = latest(settled['sensor'])
+                if (all(at > settled['confirmed'] and _matches(native, 'off') for at, native in stop)
+                        and received >= max(at for at, _ in stop)):
+                    try:
+                        watts, _ = power(report, source=settled['sensor'])
+                    except (ValueError, KeyError, TypeError):
+                        pass
+                    else:
+                        if watts == 0:
+                            row['settled'] = {**settled, 'controls':{**settled['controls'], **dict.fromkeys(switches, 'off')},
+                                              'after_w':0.0, 'confirmed':ordinal}
+                            changed = True
         for identity, effect in list(row['effects'].items()):
             fence = effect['dispatch_through']
             if fence is None:

@@ -59,11 +59,9 @@ incompatible controller permissions remain disabled.
 Changing participation recommends a manual replan; plans otherwise change only
 on a new price release. Moving between Verification and Controlling changes
 neither the plan nor its recommendations, and does not reload the integration or
-reset unrelated controllers. Leaving controlling first restores settings still owned by SHS;
-that handover can make real service calls and can remain pending on an error.
-Verification begins only after the previous ownership has been released. Leaving
-Controlling on the select is the only release: restarts, unavailable or stale
-readings, missing plans and faults hold the last setting SHS sent (see
+reset unrelated controllers. Switching to Verification relinquishes ownership
+at the current equipment settings and cancels unsent commands. Restarts,
+unavailable readings, missing plans and faults hold the last setting SHS sent (see
 [control continuity](control-continuity.md)).
 
 ## Target authority and remaining mode design
@@ -74,10 +72,8 @@ external changes do not override SHS intent. Monitoring, Planning and Control
 verification grant no optimisation writes. Their hypothetical actions cannot
 count as physical delivery or released headroom for devices under live control.
 
-Leaving Controlling fences new optimisation commands immediately. The existing
-approved handover may still write while release is pending, and late effects from
-already-issued commands remain accounted for. A mode selection must not falsely
-report completed release. The review linked above proposes battery-first
+Switching to Verification fences commands immediately. Late effects from
+already-issued commands remain accounted for. The review linked above proposes battery-first
 replacement semantics for mixed-mode planning, shared-control admission, mode
 entry/rapid changes, release failures and verification isolation. These still need
 implementation and end-to-end tests; wider shared thermal control remains deferred. See the canonical

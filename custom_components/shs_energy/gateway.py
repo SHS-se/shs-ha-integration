@@ -33,6 +33,7 @@ from .shs_core.native_readings import power
 from .shs_core.grid_capacity import (battery_released, required_import, import_limit,
     empty_capacity, capacity_bound, commanded_controls, _current, EV_WATTS_PER_AMP, device_power_bound, observe_power_peak, observe_setting_peak, merge_power_peaks, capacity_key, house_meter_errors, HouseMeterError, GridCapacityConfigurationError, battery_import_bound, battery_discharge_ceiling, CHARGING_MODES)
 from .shs_core.device_commands import actuator_targets
+from .shs_core.device_controls import pool_control_mapping
 from .shs_core.device_draw import DrawBinding, HISTORY_WINDOW, REFRESH_INTERVAL, learn_device_draw
 from .shs_core.discovery import dashboard_meters
 from .shs_core.operating_modes import device_mode
@@ -137,7 +138,8 @@ class HomeAssistantSource:
         registry = er.async_get(h)
         entities = self.entities if entities is None else entities
         return wire(dict(options=self.configuration.options(),
-            configuration_authority={key:self.configuration.value[key] for key in ('revision','digest')},
+            configuration_authority={**{key:self.configuration.value[key] for key in ('revision','digest')},
+                'verification_revisions':self.configuration.value.get('verification_revisions', {})},
             home=dict(latitude=h.config.latitude, longitude=h.config.longitude, language=h.config.language,
                       timezone=h.config.time_zone, temperature_unit=h.config.units.temperature_unit),
             observed_entities=sorted(entities), entity_ids=[s.entity_id for s in h.states.async_all()], entity_names=entity_display_name_by_id(h),
@@ -233,6 +235,16 @@ class HomeAssistantSource:
 
     def invalidate(self):
         self.service.invalidate_configuration()
+
+    async def capture_configuration(self):
+        # Retire ownership before acknowledging the new mode, even if the next
+        # edit returns the device to Controlling before the app evaluates it.
+        async with self.service.physical.lock:
+            options = self.options()
+            await self.service.physical.abandon_verification(options)
+            await self.service.battery.abandon_verification(options)
+        await self.refresh_configuration()
+        self.service.obligation_event.set()
 
     async def refresh_configuration(self):
         async with self.update_lock:
@@ -1340,7 +1352,7 @@ class HomeAssistantSource:
         if matching_withdrawal and 'route_support_w' in withdrawal:
             ceiling = min(ceiling, withdrawal['route_support_w'])
         credit = conversion.discharge.output(min(max(0.0, -measured), ceiling))
-        offer = self.service.battery_cover
+        offer = self.service.current_battery_cover()
         if offer is None or datetime.now(timezone.utc).timestamp() * 1000 >= offer['valid_until_ms']:
             return credit
         house, _ = power(self.report(options['house_consumption_power_entity']), source=options['house_consumption_power_entity'])
@@ -1662,6 +1674,53 @@ class HomeAssistantSource:
             recovered.append(owner.removeprefix('device:') if owner.startswith('device:') else '$'+owner)
         return sorted(set(recovered))
 
+    def control_notices(self, models):
+        options = self.options()
+        mappings = options.get('device_control_mappings', {})
+        targets = {'device:'+key: set(actuator_targets(mapping)) for key, mapping in mappings.items()}
+        _, pool = pool_control_mapping(options, models)
+        targets['pool'] = set(actuator_targets(pool))
+        targets['ev'] = {options.get('ev_charge_switch_entity')} | {
+            m.get('control_entity_id') for m in mappings.values() if m.get('control_type') == 'variable_power'}
+        targets['battery'] = {options.get('battery_'+key+'_entity') for key in ('mode','charge_limit','discharge_limit')}
+        notices = {}
+        for owner, entities in targets.items():
+            entities.discard(None)
+            if device_mode(options, owner) != 'control_verification':
+                continue
+            values = []
+            for entity in sorted(entities):
+                report = self.report(entity) or {}
+                state, attrs = report.get('state'), report.get('attributes', {})
+                if state in (None, 'unknown', 'unavailable'):
+                    continue
+                if entity.startswith('climate.') and attrs.get('temperature') is not None:
+                    values.append(f"{entity} is {state} with target {attrs['temperature']} °C")
+                else:
+                    values.append(f"{entity} is {state} {attrs.get('unit_of_measurement', '')}".rstrip())
+            if values:
+                notices[owner] = ['Current settings · ' + ', '.join(values) + '.']
+        previous = {}
+        for row in self.capacity['devices'].values():
+            effects = [item for item in row['effects'].values() if item['dispatch_through'] is not None]
+            for effect in [*effects, row.get('settled')]:
+                if not effect:
+                    continue
+                owner = effect.get('owner', effect['logical'])
+                current = targets.get(owner)
+                if not current:
+                    continue
+                for entity in effect['controls'].keys() - current:
+                    state = (self.report(entity) or {}).get('state')
+                    if state in ('on', 'heat') or state in CHARGING_MODES or state == 'Command Discharging (PV First)':
+                        previous.setdefault(owner, set()).add(entity)
+        for owner, entities in previous.items():
+            notices.setdefault(owner, []).append('Previous control entities still active · ' + ', '.join(sorted(entities)) + '.')
+        battery_fault = self.service.battery.obligation['fault']
+        if battery_fault:
+            notices.setdefault('battery', []).append(battery_fault)
+        return {owner:' '.join(details) for owner, details in notices.items()}
+
     async def coordinate_battery(self, effect, proposal, route_id, authorize):
         """Withdraw dependent demand through current owners before battery support.
 
@@ -1836,12 +1895,29 @@ class HomeAssistantSource:
                 include(descriptor,self.observed_device_bound(descriptor))
         battery = self.service.battery
         if battery.installation is not None and exclude_device != self.battery_capacity_key(battery.installation[3]):
-            _, _, conversion, installed = battery.installation
+            _, catalog, conversion, installed = battery.installation
             mode = installed['battery_mode_entity']
-            descriptor = self.describe_import('battery', mode, self.report(mode)['state'])
-            measured, _ = power(self.report(installed['battery_power_measurement_entity']),
-                                source=installed['battery_power_measurement_entity'], signed=True)
-            include(descriptor, max(descriptor['before_w'], conversion.grid_charge.input(max(0.0, measured))))
+            sensor = installed['battery_power_measurement_entity']
+            held = (device_mode(options, 'battery') == 'control_verification' or any(
+                options.get(key) != installed[key] for key in (
+                    'battery_mode_entity', 'battery_charge_limit_entity', 'battery_discharge_limit_entity')))
+            try:
+                descriptor = self.describe_import('battery', mode, self.report(mode)['state'])
+                bound = descriptor['before_w']
+            except (ValueError, KeyError, TypeError):
+                if not held:
+                    raise
+                # A former or unowned control surface may become unavailable.
+                # Its commissioned maximum remains in the house budget.
+                descriptor = {'device':self.battery_capacity_key(installed), 'logical':'battery', 'sensor':sensor}
+                bound = conversion.grid_charge.input(catalog.charge_max_w)
+            try:
+                measured, _ = power(self.report(sensor), source=sensor, signed=True)
+            except (ValueError, KeyError, TypeError):
+                if not held:
+                    raise
+                measured = 0.0
+            include(descriptor, max(bound, conversion.grid_charge.input(max(0.0, measured))))
         for row in self.capacity['devices'].values():
             bound = self.reserved_power_bound(row)
             for descriptor in [*row['effects'].values(), *([row['settled']] if row.get('settled') else [])]:
@@ -1887,6 +1963,7 @@ class HomeAssistantSource:
                 self.heating_waiting.discard(device)
                 return True
             return (not require_battery_release or battery.installation is None
+                    or device_mode(self.options(), 'battery') == 'control_verification'
                     or battery_released(battery.installation[3], self.report))
         except (AdmissionPending, ControlDeadlineError, GridCapacityConfigurationError, ControlObservationError):
             raise
@@ -2115,7 +2192,8 @@ async def open_gateway(hass, entry):
     service.heating = HeatingOverrides(GatewayRecord(stream, 'heating_overrides'), service.heating_changed)
     source.service = service
     source.configuration = ExecutionConfiguration(GatewayRecord(stream,'execution_configuration'),
-        source.invalidate, source.refresh_configuration)
+        source.invalidate, source.capture_configuration)
+    service.installation_pending = source.configuration.lock.locked
 
     async def send(domain, action, data):
         await hass.services.async_call(domain, action, data, blocking=True)
@@ -2127,10 +2205,12 @@ async def open_gateway(hass, entry):
         lambda entity:item.platform if (item:=registry.async_get(entity)) else None)
     service.physical = DeviceGateway(inputs, source.options, GatewayRecord(stream,'ownership'), native,
         authorize=service.authorize_device, before_external=source.external_ready,
-        operations=GatewayOperations(stream, service.session), capacity=source, heating=service.heating)
+        operations=GatewayOperations(stream, service.session), capacity=source, heating=service.heating,
+        configuration_pending=service.admission_pending, control_notices=source.control_notices)
     now = lambda:int(datetime.now(timezone.utc).timestamp()*1000)
     service.battery = BatteryGateway(stream,service.physical,source.options,source.report,now,
-        authorize=service.authorize,session=service.session,context=service.context, coordinate=source.coordinate_battery)
+        authorize=service.authorize,session=service.session,context=service.context, coordinate=source.coordinate_battery,
+        configuration_pending=service.admission_pending)
     try:
         await source.configuration.load(dict(entry.options))
         await service.heating.load(source.options())
@@ -2145,7 +2225,7 @@ async def open_gateway(hass, entry):
             service.import_limit_w = import_limit(retained_limit['import_limit_w'])
         await service.battery.open()
         source.attach()
-        await source.refresh_configuration()
+        await source.capture_configuration()
         entry.async_create_background_task(hass, source.learn_device_draws(), name='shs_device_draw')
     except BaseException:
         service.heating.close()

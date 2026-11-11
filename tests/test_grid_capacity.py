@@ -132,6 +132,40 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         # Peak-shave instruction: base supplied, the car's meter excluded.
         self.service.battery_cover = read_cover_offer({'import_target_w':15000, 'discharge_ac_max_w':9600,
             'include_base':True, 'meters':['sensor.ev'], 'valid_until_ms':2**53-1, **changes})
+        self.service.battery_cover_authority = (self.service.context(), self.grant)
+
+    async def test_battery_verification_and_reentry_invalidate_promised_discharge(self):
+        self.charging_car_at_minimum()
+        self.discharging(0)
+        self.cover()
+        effect = self.source.describe_import('ev', 'number.ev', 16.0)
+        self.source.admit_import(effect)
+        options = self.source.options()
+        self.source.configuration.options = lambda:deepcopy(options)
+        options['device_modes']['$battery'] = 'control_verification'
+        self.service.invalidate_configuration()
+        options['device_modes']['$battery'] = 'controlling'
+        self.service.configuration_pending = False
+        with self.assertRaisesRegex(ControlDeadlineError, 'house import capacity'):
+            self.source.admit_import(effect)
+
+    async def test_ev_handover_uses_import_budget_with_battery_in_verification(self):
+        self.configure_ev()
+        self.service.import_limit_w = 15000
+        self.rows['sensor.house']['state'] = '4000'
+        self.rows['number.ev']['state'] = '8'
+        self.rows['select.mode']['state'] = 'Command Charging (PV First)'
+        self.rows['number.charge']['state'] = '3'
+        self.rows['sensor.battery']['state'] = '3000'
+        options = self.source.options()
+        self.source.configuration.options = lambda:deepcopy(options)
+        options['device_modes']['$battery'] = 'control_verification'
+        self.assertTrue(self.source.external_ready('ev', entity='switch.ev', value='on'))
+        self.rows['number.charge']['state'] = 'unavailable'
+        self.assertTrue(self.source.external_ready('ev', entity='switch.ev', value='on'))
+        self.rows['sensor.house']['state'] = '9000'
+        with self.assertRaisesRegex(ControlDeadlineError, 'house import capacity'):
+            self.source.external_ready('ev', entity='switch.ev', value='on')
 
     async def test_peak_shave_promise_admits_the_increase_it_will_cover(self):
         # Capture, 17 October 2026 (evening): nothing discharges below the
@@ -1372,6 +1406,20 @@ class DurableDemandTests(unittest.TestCase):
             attributes={'unit_of_measurement':'W','state_class':'measurement'},
             last_reported='2026-10-17T00:00:00Z'))
         observe_capacity(self.capacity,ordinal,lambda key:self.rows.get(key,(0,None)))
+
+    def test_manual_ev_stop_releases_settled_capacity_after_both_readings(self):
+        prepare_capacity(self.capacity,'on',self.effect(11040),10)
+        dispatch_capacity(self.capacity,'on',10)
+        finish_capacity(self.capacity,'on','service_returned')
+        self.report(11,'switch.ev','on')
+        self.report(12,'sensor.ev','11040')
+        row=self.capacity['devices']['ev']
+        self.assertEqual(capacity_bound(row),11040)
+        self.report(13,'switch.ev','off')
+        self.assertEqual(capacity_bound(row),11040)
+        self.report(14,'sensor.ev','0')
+        self.assertEqual(capacity_bound(row),0)
+        self.assertEqual(required_import(4000, [(0,capacity_bound(row))]),4000)
 
     def test_restored_counter_aliases_keep_only_proven_settlement_and_all_uncertain_effects(self):
         for status, witnessed, expected in (('uncertain', None, 4000),

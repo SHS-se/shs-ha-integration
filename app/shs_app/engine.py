@@ -201,8 +201,16 @@ class AppEngine:
         snapshot = await self.gateway.snapshot()
         self.mirror.install_snapshot(snapshot)
         history = RemoteHistory(self.gateway)
-        self.configuration = Configuration(self.root,self.identity,
-            lambda body:history.source('configure',body),project=self.native_configuration)
+
+        async def install_configuration(body):
+            previous = self.configuration.options().get('device_modes', {})
+            current = body['options'].get('device_modes', {})
+            if any(mode == 'control_verification' and previous.get(owner) == 'controlling'
+                   for owner, mode in current.items()):
+                return await self.gateway.call('source', {'operation':'configure', 'body':body}, cancel_commands=True)
+            return await history.source('configure',body)
+
+        self.configuration = Configuration(self.root,self.identity,install_configuration,project=self.native_configuration)
         await self.configuration.load(dict(snapshot['configuration']['configuration_authority'],
             options=snapshot['configuration']['options']),lambda:history.source('credentials',{}))
         self.backends = Backends(self.root, self.identity)
@@ -269,7 +277,7 @@ class AppEngine:
         self.battery.physical = self.writer
         self.battery.receipt_driven = True
         await self.battery.load()
-        self.battery.reconcile()
+        self.battery.reconcile(self.battery_verification_revision())
         self.checkpoint_digest = await asyncio.to_thread(self.battery.store.checkpoint_digest)
         self.scheduler = ControllerScheduler(controller,self.mirror.subscribe,self.at,self.spawn)
         h.async_add_control_listener(self.scheduler.coordinator_updated)
@@ -283,13 +291,16 @@ class AppEngine:
             await self.gateway.receive()
             establish_delivery = False
 
+    def battery_verification_revision(self):
+        return self.mirror.context['configuration_authority'].get('verification_revisions', {}).get('$battery', -1)
+
     @profiled('runtime_activate')
     async def activate(self):
         """Persist matching activation identities before starting any runtime job."""
         result = await self.gateway.call('reconcile',{'checkpoint_sha256':self.checkpoint_digest})
         reconciliation = result['reconciliation']
         self.mirror.install_snapshot(result['snapshot'])
-        self.battery.reconcile()
+        self.battery.reconcile(self.battery_verification_revision())
         self.controller.adopt_ownership(result['ownership'])
         # The reconciled snapshot can already display the saved plan and source
         # readings. Native projections and commands still wait for accounting.
@@ -414,6 +425,9 @@ class AppEngine:
         after = {'receipts':0, 'requests':0, 'heating':0, 'heating_capacity':0}
         while True:
             changed = await self.gateway.call('updates', {'after':after})
+            if changed['requests'] != after['requests']:
+                for request in await self.gateway.call('requests',{}):
+                    self.spawn(self.answer(request),'shs_app_request_'+request['operation'])
             if changed['heating'] != after['heating']:
                 self.scheduler.request('heating_override')
                 self.wake_projection.set()
@@ -432,9 +446,6 @@ class AppEngine:
                                  (command.get('type') == 'room_relay' or 'room_target_c' in command))
                 if zones:
                     self.scheduler.request('heating_capacity', zones)
-            if changed['requests'] != after['requests']:
-                for request in await self.gateway.call('requests',{}):
-                    self.spawn(self.answer(request),'shs_app_request_'+request['operation'])
             after = changed
 
     async def battery_inputs(self):

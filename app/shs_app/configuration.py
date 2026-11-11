@@ -75,12 +75,13 @@ class Configuration:
             await self.record.async_save(updated)
             self.data = updated
 
-    async def commit(self, expected_revision, options, request_id, *, reviewed=False):
+    async def commit(self, expected_revision, options, request_id, *, reviewed=False, verification=None):
         if type(expected_revision) is not int or type(options) is not dict or type(request_id) is not str or not request_id:
             raise ValueError('A configuration revision, document and request identity are required')
         async with self.lock:
             request_digest = digest(dict(expected_revision=expected_revision, reviewed=reviewed,
-                options={k:v for k,v in options.items() if k!='configuration_reviewed_at'}))
+                options={k:v for k,v in options.items() if k!='configuration_reviewed_at'}
+                if verification is None else {'verification_owner': verification[0]}))
             prior = self.data['requests'].get(request_id)
             if prior:
                 if prior['digest'] != request_digest:
@@ -89,12 +90,21 @@ class Configuration:
                 return {'revision':prior['revision']}
             if self.data['revision'] != self.revision:
                 raise GatewayConflict('A configuration change is still waiting for Home Assistant; reconnect before editing')
-            if expected_revision != self.revision:
+            if expected_revision != (verification[1] if verification is not None else self.revision):
                 raise GatewayConflict('Configuration changed in another window or Home Assistant; refresh before saving')
             revision = self.revision + 1
             requests = dict(list(self.data['requests'].items())[-127:])
             requests[request_id] = dict(digest=request_digest, revision=revision)
-            committed=deepcopy(options)
+            if verification is None:
+                committed=deepcopy(options)
+            else:
+                # Only rebase the explicit stop. A settings save that was
+                # already ahead of it still owns all other fields.
+                owner, _ = verification
+                committed=self.options()
+                if owner not in committed.get('device_modes', {}):
+                    raise GatewayConflict('The device no longer has an execution mode')
+                committed['device_modes'][owner]='control_verification'
             if reviewed:committed['configuration_reviewed_at']=datetime.now(timezone.utc).isoformat()
             updated = dict(self.data, revision=revision, options=committed, requests=requests)
             await self.record.async_save(updated)

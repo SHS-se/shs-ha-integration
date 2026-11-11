@@ -1,5 +1,6 @@
 """App configuration actions and catalogue, shared by the browser and HA controls."""
 from datetime import datetime, timezone
+from contextlib import nullcontext
 
 from shs_core import const as c
 from shs_core.configuration_schema import prepare_options, save_device, resolve_configuration, initialise_device_inclusion
@@ -90,6 +91,24 @@ class ConfigurationEditor:
             await self.engine.replan_all()
         return result
 
+    async def _set_execution_mode(self, body):
+        configuration = self.engine.configuration
+        entered = configuration.revision
+        verifying = body['mode'] == 'control_verification'
+        async with (self.engine.gateway.prioritize_configuration() if verifying else nullcontext()):
+            if not verifying:
+                await self.refresh_catalog()
+            devices = await self.devices()
+            options = execution_mode_options(configuration.options(), devices, body['device_key'], body['mode'])
+            device = next(d for d in devices if d['key'] == body['device_key'])
+            owner = '$' + device['system'] if device.get('system') else device['key']
+            await configuration.commit(body['expected_revision'], options, body['request_id'], reviewed=True,
+                                       verification=(owner, entered) if verifying else None)
+        self.engine.wake_projection.set()
+        await self.engine.household.async_battery_inputs_refresh()
+        await self.engine.controller.async_tick()
+        return await self.view()
+
     async def action(self, operation, body):
         h = self.engine.household
         if operation == 'get':
@@ -107,6 +126,8 @@ class ConfigurationEditor:
             result = await self.view()
             self.engine.request_restart()
             return result
+        if operation == 'control':
+            return await self._set_execution_mode(body)
         await self.refresh_catalog()
         if operation == 'discover':
             return discover_configuration(self.catalog,self.engine.configuration.options())
@@ -117,12 +138,6 @@ class ConfigurationEditor:
             if h.last_optimisation_error: raise ValueError(h.last_optimisation_error)
             return await self.view()
         existing = self.engine.configuration.options()
-        if operation == 'control':
-            options = execution_mode_options(existing,await self.devices(),body['device_key'],body['mode'])
-            await self._commit(options,body,replan=False)
-            await h.async_battery_inputs_refresh()
-            await self.engine.controller.async_tick()
-            return await self.view()
         if operation == 'save':
             incoming = body['configuration']
             if c.OPT_DEVICE_CONTROL_MAPPINGS in incoming:

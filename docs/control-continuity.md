@@ -1,9 +1,8 @@
-# Control continuity: only the select releases
+# Control continuity
 
-**Normative, 21 September 2026; restated by the user on 3 October 2026 for every
-device, the battery included.** Where other documents describe handover on
-restart, on expiry or on faults, or say that Verification leaves a device as it
-is, this document takes precedence.
+**Normative. Updated by the user on 11 November 2026 for every device,
+including the battery.** This document takes precedence where older documents
+describe a different mode transition.
 
 **Do not change either half of this rule without an explicit user requirement.**
 It has been broken twice by unrelated work; read [History](#history) first.
@@ -16,29 +15,34 @@ It has been broken twice by unrelated work; read [History](#history) first.
   SHS sent.
 - SHS MUST NOT toggle a switch or hand a device back to its own settings because
   of a restart or an unavailable entity.
-- A device's execution-mode select (for example
-  `select.smart_home_solutions_pool_heater_execution_mode`) determines its mode.
-  SHS releases control only when that select says so.
+- Switching the execution-mode select from Controlling to Verification ends
+  SHS ownership at the device's current settings. Cancel queued and prepared
+  commands and any pending restoration. Keep tracking effects of commands
+  already sent to Home Assistant.
+- Returning to Controlling starts from the device's current settings.
 
-## What releases control
+An enabled charger, heater or pool relay can keep running. A thermostat keeps
+its current mode and target. The app shows current equipment settings in
+Verification and identifies a previous mapped actuator that is still active.
+SHS accounts for held loads and issued commands when admitting other devices.
+Only a current battery writer can promise discharge for a new load.
 
-Releasing hands the device back to the baseline captured when SHS first took
-control, and is the only time SHS sends a device its own settings.
+## What restores captured settings
+
+These explicit actions can return a device SHS still owns to the baseline
+captured when SHS first took control.
 
 | Trigger | Why it is explicit |
 |---|---|
-| The select set to Verification | The user's choice on the select |
-| The device leaves the select: demoted to Monitoring on the website, excluded in HA, its system disabled, or re-admitted after a change to what it executes (which resets it to Verification): a member joining or leaving its group, or a member driven through another control contract. Re-saving a choice on the website is not one, and nor is a pool member's method, since the pool drives every member as one relay (user requirement, 8 November 2026, after a pool pump's method change switched the pool heater off). | The select no longer offers Controlling |
+| The device leaves the select after website demotion, exclusion in HA, or disabling its system | The device's execution permission was explicitly removed |
 | A configured manual-override entity turns on | A control the user configured for exactly this |
 
 If the actuator is unavailable when a release is due, the handover waits and
 completes as soon as it reports (status `pending`, then `fault` after five
-minutes). A handover that would stop an appliance inside its
-[minimum run time](minimum-run-time.md) waits for that time in the same way.
-Returning the select to Controlling before then cancels it.
+minutes). Returning to Controlling or switching to Verification cancels it.
 
-Verification itself writes no schedule. The handover is the one write that
-leaving Controlling causes, and Verification starts after it.
+Re-admission after a change to what the group executes starts in Verification.
+It follows the same no-write rule as choosing Verification on the select.
 
 ## Changes made outside SHS are switched back
 
@@ -69,7 +73,7 @@ journalled by an older version is discarded on load and control resumes.
 | A fault: setup error, rejected or ambiguous service call, invalid plan | Hold and report. Latched until the plan, slot or configuration changes. |
 | A configuration change that keeps the device Controlling (other devices, admissions, migrations) | No effect on ownership. |
 | A Home Assistant metadata change: an entity renamed, added or moved to another area, another integration reloading, a core setting | No effect on ownership, the battery included (user requirement, 3 October 2026). The gateway refuses commands only until the app has received the new context; it does not revoke the battery writer, so nothing is handed back. That refusal is a wait (`pending`), never a fault. |
-| A changed control entity | Refused with a fault until the select goes to Verification (which hands back the entity SHS owned) and back to Controlling (which captures the new one). |
+| A changed control entity | Refused with a fault until the select goes to Verification and back to Controlling, which captures the new entity. |
 
 When an entity returns, SHS only carries out what the current plan and the select
 already require. If the device is already in the planned state, nothing is sent.
@@ -116,8 +120,8 @@ command deadlines still distinguish a lost app/session from a quiet sensor.
 
 ## Removing the integration
 
-Only the select releases. Set each device to Verification before removing SHS so
-that it is handed back to its own settings.
+Set each device to Verification before removing SHS to stop its commands.
+The device continues with its current settings.
 
 ## Implementation
 
@@ -147,12 +151,13 @@ follow the rule:
 | A settings change that keeps the battery Controlling | The new settings are bound in place. Changed meters keep the command journal. A changed control entity is refused with a fault until the select goes to Verification and back. |
 | A manual-override entity that cannot be read | Hold. |
 
-What hands the battery back to Maximum Self Consumption at its rated limits is
-the same as for every device: its select is set to Verification, it leaves the
-select (demoted on the website, disabled, excluded), or a configured
-manual-override entity turns on. If the app is not connected, Home Assistant
-completes that handover itself. Returning the battery to Controlling before the
-handover finishes cancels it.
+The battery returns to Maximum Self Consumption at its rated limits if it
+leaves the select through demotion, exclusion or disabling, or a configured
+manual override turns on. Home Assistant completes that handover if the app is
+disconnected. Returning to Controlling before it finishes cancels it.
+
+Switching the battery to Verification leaves its current mode and charge and
+discharge limits in place and retires any pending handover.
 
 Consequence accepted with this requirement: a held command cannot follow the
 house. A held grid charge keeps charging at its last limit when the house load
@@ -177,14 +182,15 @@ record so that it is not reimplemented differently again.
 | 27 September 2026 (`014a18e`) | The move of the runtime into the app added a Home Assistant handback of the battery whenever its writer was lost: an app restart or dropped socket, an HA stop, a settings revision, an expired grant. Ordinary devices kept their continuity. Nothing tested the battery against the rule. |
 | 3 October 2026 | A one-second preparation timeout closed the app's gateway session at most quarter-hour boundaries, and the handback above flipped the battery to Maximum Self Consumption and back each time. The user restated the rule: only a control-mode change releases a device, the battery included, and Controlling → Verification hands it back. Both halves were restored for every device (`e97b71a`, `3649055`, `a2be5e3`, `909f5d0` and the commit adding this section). |
 | 18 October 2026 | Another automation (Node-RED) kept switching the water boiler on outside its allowance. SHS latched the boiler as `overridden` 3 seconds after its first planned stop and stopped commanding it for the rest of the day. The user required SHS to own Controlling devices and switch external changes back; the latch was removed. Releases are unchanged. |
+| 11 November 2026 | The user changed the rule for every device. Switching to Verification stops control immediately, cancels any command SHS can still cancel, and leaves external settings as they are. |
 
 What to take from it:
 
 - A restart, a lost app or socket, a settings or metadata change, a missing or
   expired plan, stale readings and faults are never a reason to write to a
   device. Do not add a handback, a fallback target or a "safe default" for them.
-- Leaving Controlling on the select, for Verification too, always hands the
-  device back. Do not turn that into "leave it as it is".
+- Verification always relinquishes control at the current settings. An explicit
+  exclusion or manual override still has its own baseline handover.
 - A change to either needs the user's explicit requirement, an update to this
   document, and the tests listed above and in `tests/test_control_continuity.py`,
   `tests/test_pool_switch_gap.py`, `tests/test_minimum_run.py` and

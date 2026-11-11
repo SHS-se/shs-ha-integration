@@ -24,11 +24,13 @@ class GatewayService:
         self.current = ContextVar('shs_gateway_socket', default=None)
         self.configuration_revision = 0
         self.configuration_pending = True
+        self.installation_pending = lambda: False
         self.policy_revision = 0
         self.policy = None
         self.import_limit_w = None
         # The connected app's promised battery supply; memory only, per session.
         self.battery_cover = None
+        self.battery_cover_authority = None
         self.active = False
         self.physical = None
         self.battery = None
@@ -192,7 +194,7 @@ class GatewayService:
         self.update_event.set()
         self.obligation_event.set()
         self.reconciliation = None
-        self.battery_cover = None
+        self.clear_battery_cover()
         if self.battery:
             self.battery.revoke()
         for request in self.pending.values():
@@ -209,8 +211,21 @@ class GatewayService:
 
     def authorize(self, operation):
         self.require_socket()
-        if not self.active or self.configuration_pending:
+        if not self.active or self.admission_pending():
             raise AdmissionPending('Reconcile and activate the current app session first')
+
+    def admission_pending(self):
+        return self.configuration_pending or self.installation_pending()
+
+    def clear_battery_cover(self):
+        self.battery_cover = self.battery_cover_authority = None
+
+    def current_battery_cover(self):
+        authority = self.battery_cover_authority
+        if (authority is not None and not self.admission_pending() and authority[0] == self.context()
+                and self.battery.fence.is_current(authority[1], self.battery.identity())):
+            return self.battery_cover
+        return None
 
     def authorize_device(self, intent):
         self.authorize('device')
@@ -239,6 +254,7 @@ class GatewayService:
         another integration's entities must never change a device's settings.
         """
         self.configuration_pending = True
+        self.clear_battery_cover()
         self.reconciliation = None
         self.policy = None
         self.policy_revision += 1
@@ -332,7 +348,7 @@ FIELDS = {
     'battery_route': {'effect', 'grant'},
     'battery_target': {'request', 'grant', 'context'},
     'battery_step': {'route_id', 'index', 'send'},
-    'battery_cover': {'offer'},
+    'battery_cover': {'offer', 'grant', 'context'},
     'projection': {'value'},
     'requests': set(),
     'reply': {'request_id', 'result', 'error'},
@@ -386,10 +402,18 @@ class AppConnection(GatewayConnection):
         s = self.service
         if op == 'updates':
             return await s.wait_updates(body['after'])
+        if op == 'requests':
+            if not s.active:
+                raise AdmissionPending('Activate the current app session first')
+            batch = [{'id':key, 'operation':r['operation'], 'body':r['body']}
+                     for key, r in s.pending.items() if not r['offered']]
+            for row in batch:
+                s.pending[row['id']]['offered'] = True
+            return batch
         if op == 'source':
             return await s.source.request(body['operation'], body['body'])
         if op == 'reconcile':
-            if s.configuration_pending or type(body['checkpoint_sha256']) is not str or len(body['checkpoint_sha256']) != 64:
+            if s.admission_pending() or type(body['checkpoint_sha256']) is not str or len(body['checkpoint_sha256']) != 64:
                 raise GatewayConflict('A loaded app checkpoint and settled configuration are required')
             snapshot = await s.stream.call('snapshot', self.session)
             proof = dict(identity=s.identity, configuration_revision=s.configuration_revision,
@@ -400,7 +424,7 @@ class AppConnection(GatewayConnection):
                         ownership=s.physical.ownership.snapshot())
         if op in ('activate', 'resume'):
             r = s.reconciliation
-            if (r is None or r['session'] != self.session or s.configuration_pending
+            if (r is None or r['session'] != self.session or s.admission_pending()
                     or r['proof']['configuration_revision'] != s.configuration_revision
                     or r['proof']['physical_reconciliation_sha256'] != s.physical_proof()):
                 raise GatewayConflict('Physical or configuration reconciliation changed')
@@ -413,7 +437,7 @@ class AppConnection(GatewayConnection):
                     raise GatewayConflict('Reconciliation identity changed')
                 result = await s.stream.call('resume', self.session, r['proof']['configuration_revision'], r['proof']['through'])
             s.require_socket()
-            if s.configuration_pending or r['proof']['physical_reconciliation_sha256'] != s.physical_proof():
+            if s.admission_pending() or r['proof']['physical_reconciliation_sha256'] != s.physical_proof():
                 raise GatewayConflict('Physical state changed during activation')
             s.active = True
             return result
@@ -460,9 +484,18 @@ class AppConnection(GatewayConnection):
             return await s.battery.propose(body['effect'], body['grant'])
         if op == 'battery_cover':
             from .battery_mode import read_cover_offer
+            from .native_records import WriterGrant, GRANT_NOT_CURRENT
+            from .runtime_json import decode_value
+            grant = decode_value(body['grant'], WriterGrant)
+            if (body['context'] != s.context()
+                    or not s.battery.fence.is_current(grant, s.battery.identity())
+                    or device_mode(s.source.options(), 'battery') != 'controlling'):
+                raise AdmissionPending(GRANT_NOT_CURRENT)
             cover = read_cover_offer(body['offer'])
-            if cover != s.battery_cover:
+            authority = (body['context'], grant)
+            if cover != s.battery_cover or authority != s.battery_cover_authority:
                 s.battery_cover = cover
+                s.battery_cover_authority = authority
                 s.wake_heating_capacity()
             return {}
         if op == 'battery_step':
@@ -473,12 +506,6 @@ class AppConnection(GatewayConnection):
             s.projection = deepcopy(body['value'])
             await s.source.publish(s.projection)
             return {}
-        if op == 'requests':
-            batch = [{'id':key, 'operation':r['operation'], 'body':r['body']}
-                     for key, r in s.pending.items() if not r['offered']]
-            for row in batch:
-                s.pending[row['id']]['offered'] = True
-            return batch
         if op == 'reply':
             request = s.pending.get(body['request_id'])
             if request and not request['future'].done():

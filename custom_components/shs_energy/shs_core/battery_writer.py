@@ -81,22 +81,27 @@ class BatteryWriterFence:
             self._record = {"schema": "battery-writer-v1", "owner": "fenced", "epoch": self._record["epoch"] + 1,
                             "surfaces": sorted(set(self._record["surfaces"]) | set(self._surfaces()))}
             try:
-                await self._store.async_save(deepcopy(self._record))
+                await self._persist_writer()
                 if revocation != self._revocation or self._closed or self._now_ms() >= expires_at_ms or identity != self._identity():
                     raise ValueError("writer admission expired during persistence")
                 grant = WriterGrant(identity.owner_id, self._record["epoch"], identity.config_revision,
                                     identity.control_surface_revision, expires_at_ms)
                 self._record = {**self._record, "owner": "runtime"}
-                await self._store.async_save(deepcopy(self._record))
+                await self._persist_writer()
                 if revocation != self._revocation or self._closed or self._now_ms() >= expires_at_ms or identity != self._identity():
                     raise ValueError("writer admission expired during persistence")
                 self._grant = grant
                 return grant
-            except Exception as error:
-                self._grant = None
-                self._record = {**self._record, "owner": "fenced"}
-                self._fault = type(error).__name__
-                raise
+            finally:
+                if self._grant is None:
+                    self._record = {**self._record, "owner": "fenced"}
+
+    async def _persist_writer(self):
+        try:
+            await self._store.async_save(deepcopy(self._record))
+        except Exception as error:
+            self._fault = type(error).__name__
+            raise
 
     def is_current(self, grant, identity):
         return (not self._closed and not self._fault and isinstance(identity, WriterIdentity)

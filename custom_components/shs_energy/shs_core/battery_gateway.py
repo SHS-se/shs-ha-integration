@@ -22,10 +22,12 @@ OWNER = 'shs-household-battery'
 
 
 class BatteryGateway:
-    def __init__(self, stream, physical, options, reports, clock, *, authorize, session, context, coordinate=None):
+    def __init__(self, stream, physical, options, reports, clock, *, authorize, session, context, coordinate=None,
+                 configuration_pending=lambda: False):
         self.stream, self.physical, self.options, self.reports, self.now = stream, physical, options, reports, clock
         self.authorize, self.session, self.context = authorize, session, context
         self.coordinate = coordinate
+        self.configuration_pending = configuration_pending
         self.record = GatewayRecord(stream, 'physical')
         self.obligation_store = GatewayRecord(stream, 'battery_obligation')
         self.obligation = {'pending':False, 'command':None, 'fault':None}
@@ -65,12 +67,13 @@ class BatteryGateway:
 
     async def grant(self, identity_wire, catalog_wire, conversion_wire, expires_at_ms):
         self.authorize('battery_grant')
+        options = self.options()
+        self.check_control_not_ended(options)
         if self.obligation['fault']:
             raise GatewayConflict(self.obligation['fault'])
         identity = decode_value(identity_wire, rt.WriterIdentity)
         catalog = decode_value(catalog_wire, rt.NativeCatalog)
         conversion = Conversion.read(conversion_wire)
-        options = self.options()
         surface = self.surface(options)
         expected = rt.WriterIdentity(OWNER, runtime_digest(native_options(options)), surface['revision'])
         if identity != expected:
@@ -95,6 +98,9 @@ class BatteryGateway:
                 raise GatewayConflict('Configuration changed during battery admission')
             self.installation = identity, catalog, conversion, deepcopy(options)
         grant = await self.fence.take_over(identity, expires_at_ms)
+        if options != self.options():
+            self.fence.revoke()
+            raise GatewayConflict('Configuration changed during battery admission')
         # A grant used only to finish handback must not create another handback
         # after the app has already completed it.
         self.obligation = {'pending':self.obligation['pending'] or not self.released(options),
@@ -109,6 +115,7 @@ class BatteryGateway:
 
     async def propose(self, effect_wire, grant_wire):
         self.authorize('battery_route')
+        self.check_control_not_ended(self.options())
         effect = decode_value(effect_wire, rt.NeedTransition)
         grant = decode_value(grant_wire, rt.WriterGrant)
         if self.installation is None or not self.fence.is_current(grant, self.identity()):
@@ -160,6 +167,7 @@ class BatteryGateway:
             identifiers = {'command_id':command.id, 'attempt_id':send.attempt_id}
             def check():
                 self.authorize('battery_step')
+                self.check_control_not_ended(self.options())
                 if self.context() != payload['context']:
                     raise GatewayConflict('Battery command belongs to an older configuration or policy')
                 if self.now() >= send.send_by_ms:
@@ -268,18 +276,33 @@ class BatteryGateway:
     def released(self, options):
         """Whether the settings themselves hand the battery back.
 
-        The select leaving Controlling (for Verification too), the choices that
-        remove the battery from it, and a manual override configured for the
-        purpose. A lost app session, a restart, a settings revision or an
-        expired grant is none of these: the battery keeps the last settings SHS
-        sent. An unreadable override holds too. Both halves have been broken
-        before; read docs/control-continuity.md before changing either.
+        Removing the battery from its select or enabling its manual override
+        requests a handback. Verification ends control at the current settings.
         """
-        if (device_mode(options,'battery') != 'controlling' or not options.get('battery_enabled', True)
+        mode = device_mode(options, 'battery')
+        if mode == 'control_verification':
+            return False
+        if (mode != 'controlling' or not options.get('battery_enabled', True)
                 or '$battery' in options.get('excluded_device_readings', [])):
             return True
         return any(options.get(key) and (self.reports(options[key]) or {}).get('state') not in ('off','unknown','unavailable',None)
                    for key in ('control_override_entity', 'battery_control_override_entity'))
+
+    @staticmethod
+    def check_control_not_ended(options):
+        if device_mode(options, 'battery') == 'control_verification':
+            raise GatewayConflict('Verification ended battery control')
+
+    async def abandon_verification(self, options):
+        if device_mode(options, 'battery') != 'control_verification':
+            return
+        self.revoke()
+        # End restoration without lifting the fence for a write that may
+        # still arrive at the equipment.
+        if self.obligation['pending']:
+            stopped = {**self.obligation, 'pending':False}
+            await self.obligation_store.async_save(stopped)
+            self.obligation = stopped
 
     @staticmethod
     def release_target(catalog):
@@ -293,6 +316,9 @@ class BatteryGateway:
         Uncertain local writes remain a visible fence rather than being replayed.
         """
         async with self.physical.lock:
+            if self.configuration_pending():
+                return
+            await self.abandon_verification(self.options())
             if not self.obligation['pending'] or self.installation is None:
                 return
             if self.obligation['fault']:
@@ -317,7 +343,8 @@ class BatteryGateway:
             effect = rt.NeedTransition('battery',1,'release',request,observation,catalog.adapter_revision,1,now+900000,controls)
             route = adapter.propose(effect)
             def authorize():
-                if (self.installation != installed or self.fence.snapshot()['grant_current']
+                if (self.configuration_pending() or self.installation != installed
+                        or self.fence.snapshot()['grant_current']
                         or not self.released(self.options())):
                     raise GatewayConflict('Battery handback authority changed')
             for index,step in enumerate(route.steps):

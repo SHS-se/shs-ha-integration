@@ -91,7 +91,7 @@ def scoped_plan(plan, options, device):
 def admission_identity(owner, members):
     """What a group executes: its members and the contract each is driven by.
 
-    A new admission resets the group to Verification, which releases control,
+    A new admission resets the group to Verification, which ends control,
     so only a change to what is executed may start one: a member joining or
     leaving (inclusion, role, exclusion) or a member driven another way. The
     website's choice time is not part of it, since re-saving a choice changes

@@ -90,8 +90,10 @@ device's settings:
   expired plan, stale readings and faults all hold the last setting SHS sent. Do
   not add a handback, fallback or "safe default" write for any of them, in the
   app, the core or the Home Assistant gateway.
-- Leaving Controlling on the select, for Verification too, hands the device back
-  to its captured settings. Do not change that to leaving the device as it is.
+- Switching from Controlling to Verification stops control at the device's
+  current settings, including the battery. Cancel commands that can still be
+  cancelled and retire any pending handover. Explicit exclusion and manual
+  override can still request a baseline handover as described in the contract.
 
 Both halves have been lost before through unrelated work whose tests were
 rewritten to match. A change to when a device is released needs the user's

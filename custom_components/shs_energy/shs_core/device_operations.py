@@ -218,7 +218,7 @@ class DeviceOperations:
                    "value": value, "observed_value": state.state}
         if self.verifying:
             self.verification_commands.append({**command,
-                "trigger": "if control stopped now" if self.restoring else "current binding slot",
+                "trigger": "if a baseline handover is requested" if self.restoring else "current binding slot",
                 "would_call": not equal})
             attributes = dict(state.attributes)
             if domain == "climate":
@@ -324,6 +324,9 @@ class DeviceOperations:
         self.device = device
         record = self.ownership.records.get(device)
         if record is None:
+            return
+        if not self.verifying and device_mode(self.options(), device) == 'control_verification':
+            await self.ownership.abandon({device})
             return
         options, original = record["options"], record["originals"]
         record["restoration_pending"] = True

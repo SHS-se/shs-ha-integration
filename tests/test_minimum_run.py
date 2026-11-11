@@ -56,9 +56,8 @@ class RetiredMinimumRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.pool'].state,'off')
 
 
-    async def test_verification_change_while_restoration_is_saved_still_hands_the_device_back(self):
-        # Exclusion and Verification are both releases: changing from one to the
-        # other in the middle of the handover does not leave the device running.
+    async def test_verification_change_while_restoration_is_saved_cancels_handover(self):
+        # A mode change can cancel the handover while its journal is saving.
         await self.controller.async_start()
         self.calls.clear()
         self.advance(hours=2)
@@ -71,8 +70,8 @@ class RetiredMinimumRunTests(unittest.IsolatedAsyncioTestCase):
         self.store.async_save = change_mode
         await self.controller.async_tick()
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.pool', 'off')])
-        self.assertEqual(self.states['switch.pool'].state, 'off')
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.states['switch.pool'].state, 'on')
         self.assertNotIn('pool', self.controller.ownership.records)
 
 
@@ -97,12 +96,13 @@ class RetiredMinimumRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [('switch.pool', 'off')])
         self.assertNotIn('runs', self.controller.ownership.snapshot())
 
-    async def test_verification_restores_immediately_after_start(self):
+    async def test_verification_stops_control_immediately_after_start(self):
         await self.controller.async_start()
         self.calls.clear()
         self.options['device_modes']['$pool'] = 'control_verification'
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('switch.pool', 'off')])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.states['switch.pool'].state, 'on')
         self.assertNotIn('pool', self.controller.ownership.records)
 
 

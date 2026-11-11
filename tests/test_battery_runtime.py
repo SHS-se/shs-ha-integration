@@ -617,7 +617,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(r.rows['select.mode']['state'],'Maximum Self Consumption')
             await r.advance(80000)  # Acknowledged settings do not expire with the old effect window.
             r.calls.clear()
-            r.options['device_modes']['$battery']='control_verification'
+            r.options['device_modes']['$battery']='monitoring'
             await r.runtime.refresh();await r.runtime.host.idle()
             for _ in range(3):await r.advance(1000)
             self.assertTrue(any(c[2].get('option')=='Maximum Self Consumption' for c in r.calls),r.calls)
@@ -1514,23 +1514,22 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('physical battery group',attributes['explanation'])
         finally:await r.runtime.close()
 
-    async def test_withdrawing_control_releases_before_retiring_old_configuration(self):
+    async def test_verification_without_a_plan_keeps_settings_and_account(self):
         r=Rig();await r.start()
         try:
             for _ in range(4):await r.advance()
             original=r.runtime.host.state.execution.account.contract
+            retained=r.rows['select.mode']['state']
+            calls=deepcopy(r.calls)
             r.options['device_modes']['$battery']='control_verification'
             r.coordinator.binding_plan_for=lambda device,options: ({},None)
             await r.runtime.refresh()
-            # Pending native work must remain journalled until release is confirmed.
-            self.assertIsNotNone(r.runtime.host)
             for _ in range(40):
                 await r.advance(10000)
                 if r.runtime.host is None:break
             self.assertIsNone(r.runtime.host,r.runtime.snapshot())
-            self.assertEqual(r.rows['select.mode']['state'],'Maximum Self Consumption')
+            self.assertEqual(r.rows['select.mode']['state'],retained)
             self.assertEqual(r.runtime._bootstrap.contract,original)
-            calls=deepcopy(r.calls)
             await r.advance()
             self.assertEqual(r.calls,calls)
             self.assertEqual(r.runtime.snapshot()['state'],'idle')

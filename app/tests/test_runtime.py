@@ -300,17 +300,49 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runtime._processing['complete'])
         self.assertIsNotNone(runtime.host.state.conditions)
 
-    async def test_explicit_verification_handover_commits_archived_evidence_before_writing(self):
+    async def test_explicit_demotion_handover_commits_archived_evidence_before_writing(self):
         rig,runtime=await self.archival_runtime()
         rig.now+=1
         rig.rows['sensor.soc']['last_reported']=iso(rig.now)
         await runtime.ingest_receipt(IDENTITY,dict(ordinal=1,kind='observation',
             payload=dict(rig.rows['sensor.soc'],entity_id='sensor.soc',kind='state_report')))
-        rig.options['device_modes']['$battery']='control_verification'
+        rig.options['device_modes']['$battery']='monitoring'
         await runtime.refresh();await runtime.host.idle()
         self.assertEqual(runtime._processing['receipt'],1)
         self.assertEqual(rig.rows['select.mode']['state'],'Maximum Self Consumption')
         self.assertFalse(runtime.host.state.groups[0].owned)
+
+    async def test_rapid_reentry_replays_verification_before_reusing_the_same_settings(self):
+        rig,runtime=await self.archival_runtime()
+        plan=runtime.host.state.execution.account.contract
+        calls=rig.calls[:]
+        # The current options already say Controlling again. The ordered
+        # configuration receipt still retires the older command authority.
+        await runtime.ingest_receipt(IDENTITY,dict(ordinal=1,kind='configuration',
+            payload={'configuration_authority':{'verification_revisions':{'$battery':4}}}))
+        self.assertFalse(runtime.host.state.groups[0].owned)
+        self.assertEqual(runtime.host.state.groups[0].mode, 'control_verification')
+        self.assertEqual(runtime.host.state.execution.account.contract, plan)
+        self.assertEqual(rig.store.saved['verification_revision'], 4)
+        self.assertEqual(rig.calls, calls)
+        await rig.advance(5000)
+        self.assertEqual(runtime.host.state.groups[0].mode, 'controlling')
+
+    async def test_startup_retires_older_battery_authority_with_unavailable_previous_controls(self):
+        rig,runtime=await self.archival_runtime()
+        plan=runtime.host.state.execution.account.contract
+        await runtime.close()
+        rig.rows.pop('number.charge')
+        rig.calls.clear()
+        restarted=AppBatteryRuntime(rig.coordinator,rig.controller,rig.store,lambda:rig.now)
+        await restarted.load()
+        restarted.reconcile(4)
+        await restarted.start()
+        self.addAsyncCleanup(restarted.close)
+        self.assertEqual(restarted.host.state.groups[0].mode, 'control_verification')
+        self.assertFalse(restarted.host.state.groups[0].owned)
+        self.assertEqual(restarted.host.state.execution.account.contract, plan)
+        self.assertEqual(rig.calls, [])
 
     async def test_receipt_before_resume_epoch_commits_counter_but_not_live_observation(self):
         rig = Rig()

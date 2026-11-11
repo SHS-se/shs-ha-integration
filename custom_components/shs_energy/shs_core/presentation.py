@@ -296,7 +296,7 @@ def controller_explanation(device, mode, status, slot=None):
     if device == 'battery' and runtime is not None:
         live = battery_status_text(runtime)
         explanation = runtime.get('explanation') or {}
-        parts = [live['status'], live['plan_warning'], live['now'], live['loss']]
+        parts = [live['status'], status.get('control_notice'), live['plan_warning'], live['now'], live['loss']]
         outlook = [explanation.get(key) for key in ('plan', 'difference', 'next')]
         text = '\n'.join(p for p in parts if p)
         if any(outlook): text += '\n\n' + '\n'.join(p for p in outlook if p)

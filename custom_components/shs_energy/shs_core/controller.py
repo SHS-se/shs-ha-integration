@@ -206,6 +206,8 @@ class ScheduledController(DeviceOperations):
         if device == "pool" and self.ownership.retired_pool_temperature_settings:
             details["retired_temperature_settings"] = deepcopy(self.ownership.retired_pool_temperature_settings)
             details["control_notice"] = "Old temperature control has been removed. Check the heater's own temperature settings; SHS now only uses its switch."
+        if notice := getattr(self.devices, 'control_notices', {}).get(device):
+            details["control_notice"] = " ".join(filter(None, (details.get("control_notice"), notice)))
         if device != "battery":
             # Attention reads these to tell a blocked plan from a device SHS is not operating.
             try:
@@ -291,6 +293,8 @@ class ScheduledController(DeviceOperations):
 
     def check_authority(self):
         if self.restoring:
+            if not self.verifying and device_mode(self.options(), self.device) == "control_verification":
+                raise AdmissionPending("Verification ended control before the handover command")
             return
         options = self.options()
         if options != self.active_options or self.closed:
@@ -607,13 +611,15 @@ class ScheduledController(DeviceOperations):
                     })
                     self.begin_diagnostic_evaluation(device, options, slot, plan, trigger)
                     try:
+                        mode = device_mode(options, device)
+                        if mode == "control_verification":
+                            if self.devices is None:
+                                await self.ownership.abandon({device})
+                            self.failed.pop(device, None)
+                            self.device_deadline("restoration_retry", None)
                         record = self.ownership.records.get(device)
                         inactive = self.inactive_status(device, options)
-                        if record and (inactive or device_mode(options, device) != "controlling"):
-                            # The only handover: the select (Verification included), or a
-                            # setting that removes the device from it. Nothing else hands a
-                            # device back, and Verification must not stop doing so; the
-                            # history of both mistakes is in docs/control-continuity.md.
+                        if record and inactive and mode != "control_verification":
                             await self.restore(device)
                             # The next attempt starts from the handed-back device, not the failed one.
                             self.failed.pop(device, None)
@@ -622,7 +628,7 @@ class ScheduledController(DeviceOperations):
                             del record["restoration_pending"]
                             await self.save()
                         # Verification only logs commands; a missing plan there is a wait, not a blocked plan.
-                        controlling = device_mode(options, device) == "controlling"
+                        controlling = mode == "controlling"
                         if inactive:
                             self.failed.pop(device, None)
                             self.end_gap(device)

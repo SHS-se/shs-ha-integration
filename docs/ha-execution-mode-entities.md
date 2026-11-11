@@ -12,14 +12,13 @@ panel. Controlling is rejected with the same explanation when setup, website
 choices or the current plan do not permit it. Switching an admitted device back
 to Verification remains possible when planning is unavailable. Changing mode
 never changes the plan and requests no new one: Verification and Controlling
-decide only whether SHS writes the retained schedule, through the existing
-controller handover path. A plan or battery reference captured under either mode
+decide only whether SHS writes the retained schedule. A plan or battery
+reference captured under either mode
 is accepted and executed under the other.
 
-The select is the only release. Setting Verification hands the device back to the
-settings captured when SHS took control. Restarts, integration updates, unavailable
-or stale entities, missing plans and faults never do: the device keeps the last
-setting SHS sent until the select says otherwise. See
+Setting Verification stops control at the device's current settings and cancels
+commands SHS can still cancel. Commands already sent to Home Assistant can still
+take effect. See
 [control continuity](control-continuity.md), which also covers the battery.
 
 Automations use Home Assistant's `select.select_option` action. Select the actual

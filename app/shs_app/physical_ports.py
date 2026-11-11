@@ -16,6 +16,7 @@ class RemoteDevices:
         self.wake_battery = wake_battery
         self.policy = None
         self.heating = {}
+        self.control_notices = {}
 
     async def synchronize(self, models):
         # Update the command epoch before returning a physical ownership view.
@@ -26,16 +27,12 @@ class RemoteDevices:
         self.policy = value
         result = await self.gateway.call('synchronize', {'models':models})
         self.heating = result.pop('heating', {})
+        self.control_notices = result.pop('control_notices', {})
         await self.household.async_capacity_recovered(result.pop('capacity_recoveries'))
         return result
 
     async def ownership(self):
         return await self.gateway.call('ownership', {})
-
-    async def abandon(self, device):
-        # Only HA's canonical Verification mode can relinquish captured settings.
-        return await self.synchronize((self.household.optimisation_plan or {}).get('device_models', []))
-
 
     async def perform(self, device, operation, plan, slot, *, heating=None):
         if self.context is None:
@@ -84,9 +81,15 @@ class RemoteBattery:
 
     async def publish_cover(self, offer):
         """Publish the capped instruction's promise to the gateway's final admission."""
-        if offer != self.cover:
-            await self.gateway.call('battery_cover', {'offer': offer})
-            self.cover = offer
+        context = self.context()
+        grant = self.grant
+        if context is None or not self.is_current(grant, self.runtime.identity()):
+            self.cover = self.UNSENT
+            return
+        publication = (context, grant, offer)
+        if publication != self.cover:
+            await self.gateway.call('battery_cover', {'offer':offer, 'context':context, 'grant':encode_value(grant)})
+            self.cover = publication
 
     def is_current(self, grant, identity):
         return bool(self.enabled and self.gateway.connected and grant and grant == self.grant and identity
@@ -114,7 +117,7 @@ class RemoteBattery:
             result = await self.gateway.call('battery_route', {'effect':encode_value(effect), 'grant':encode_value(self.grant)})
         except GatewayRejected as error:
             # HA owns the grant and can end it with this session still open (a
-            # settings revision), then hands the battery back. Forget that grant
+            # settings revision). Forget that grant
             # so the next refresh requests a new one, rather than proposing with
             # it until this side's copy would have expired. Any other refusal,
             # such as HA still settling a metadata capture, leaves it standing.
