@@ -12,7 +12,7 @@ from shs_core import run_priority
 from shs_core.controller import ScheduledController
 from shs_core.device_port import device_intent
 from shs_core.household import Household
-from shs_core.run_priority import (QUARTER_MS, advance_delivery, charge_outlook, charge_slack_h, heat_slack_h,
+from shs_core.run_priority import (QUARTER_MS, ChargeOutlook, RecoveryWindow, advance_delivery, charge_outlook, charge_slack_h, heat_slack_h,
     share_budget, share_recovery, summarize_runs, valid_run)
 
 START = datetime(2026, 11, 10, 1, tzinfo=timezone.utc)
@@ -57,8 +57,8 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(run['capacity_wh'], contract['capacity_mwh'] // 1000)
         self.assertEqual(run['windows'][0][2:4], [8800, 8800], 'Two charging quarters coalesce')
         recovery = contract['recovery'][0]
-        self.assertIn([recovery['start_ms'], recovery['end_ms'], 0, 4180, 4180], run['windows'],
-                      'Authorised recovery adds its own capacity')
+        self.assertIn([recovery['start_ms'], recovery['end_ms'], 0, 4180, 7800], run['windows'],
+                      'Authorised recovery uses the forecast spare from the same quarter')
         self.assertLess(len(run['windows']), len(contract['intervals']))
         self.assertTrue(valid_run(run))
 
@@ -83,7 +83,8 @@ class SlackTests(unittest.TestCase):
                'windows': [[T0, T0 + 8 * QUARTER_MS, 4000, 8800, 2000]], 'targets': [[T0, T0 + 8 * QUARTER_MS, 9900]]}
         closing = charge_outlook(run, T0 + 8 * QUARTER_MS - 6 * 60_000, stored_wh=9500)
         early = charge_outlook(run, T0, stored_wh=5000)
-        self.assertEqual(closing, {'required_wh': 400.0, 'planned_wh': 400.0, 'pool_wh': 200.0})
+        self.assertEqual(closing, ChargeOutlook(400, 400, (RecoveryWindow(
+            T0 + 8 * QUARTER_MS - 6 * 60_000, T0 + 8 * QUARTER_MS, 2000, 2000),)))
         slack = share_recovery({'closing': closing})['closing']
         self.assertLess(charge_slack_h(slack, 4000), .1, '96% full, minutes left')
         self.assertGreater(charge_slack_h(share_recovery({'early': early})['early'], 4000), 1,
@@ -96,8 +97,8 @@ class SlackTests(unittest.TestCase):
             progress = advance_delivery(progress, run, T0 + minute * 60_000, 4140)
         self.assertAlmostEqual(progress['shortfall_wh'], (6900 - 4140) * 36 / 60, places=6)
         outlook = charge_outlook(run, T0 + 40 * 60_000, shortfall_wh=progress['shortfall_wh'])
-        self.assertAlmostEqual(outlook['planned_wh'], 6900 * 5 / 60)
-        self.assertAlmostEqual(outlook['required_wh'], 6900 * 5 / 60 + 1656)
+        self.assertAlmostEqual(outlook.planned_wh, 6900 * 5 / 60)
+        self.assertAlmostEqual(outlook.required_wh, 6900 * 5 / 60 + 1656)
         self.assertLess(share_recovery({'ev': outlook})['ev'], 0, 'More than the contiguous run can still make up')
         # A restart or silent meter is unknown, never measured zero.
         resumed = advance_delivery(progress, run, progress['at_ms'] + run_priority.DELIVERY_GAP_MS + 1, 4140)
@@ -111,24 +112,68 @@ class SlackTests(unittest.TestCase):
     def test_a_run_ends_where_its_authorised_windows_stop(self):
         run = summarize_runs(plan())['ev']
         outlook = charge_outlook(run, T0)
-        self.assertAlmostEqual(outlook['planned_wh'], 6900 * .75, msg='The later block is the planner’s to offer')
-        self.assertEqual(charge_outlook(run, T0 + 3 * QUARTER_MS)['planned_wh'], 0, 'Nothing is authorised now')
+        self.assertAlmostEqual(outlook.planned_wh, 6900 * .75, msg='The later block is the planner’s to offer')
+        self.assertEqual(charge_outlook(run, T0 + 3 * QUARTER_MS).planned_wh, 0, 'Nothing is authorised now')
 
     def test_recovery_capacity_is_spent_once_across_runs(self):
-        need = {'required_wh': 1500.0, 'planned_wh': 1000.0, 'pool_wh': 800.0}
-        slack = share_recovery({'ev': dict(need), 'battery': {**need, 'required_wh': 1200.0}})
+        run = {'windows': [[0, 3_600_000, 1000, 1800, 800]]}
+        slack = share_recovery({'ev': charge_outlook(run, 0, shortfall_wh=500),
+                                'battery': charge_outlook(run, 0, shortfall_wh=200)})
         self.assertEqual(slack, {'ev': 300.0, 'battery': 100.0}, 'The battery sees the pool less what the car needs')
+
+    def test_disjoint_recovery_windows_do_not_compete(self):
+        hour = 3_600_000
+        ev = {'windows': [[0, hour, 1000, 1000, 0], [hour, 2 * hour, 1000, 2000, 1000]]}
+        battery = {'windows': [[0, hour, 1000, 1000, 0], [2 * hour, 3 * hour, 1000, 2000, 1000]],
+                   'targets': [[0, 3 * hour, 2500]], 'efficiency': 1.0}
+        outlooks = {'ev': charge_outlook(ev, 0, shortfall_wh=1000),
+                    'battery': charge_outlook(battery, 0, stored_wh=0)}
+        self.assertEqual(share_recovery(outlooks), {'ev': 0, 'battery': 500})
+
+    def test_recovery_keeps_alternative_windows_available(self):
+        hour = 3_600_000
+        ev = {'windows': [[0, 2 * hour, 1000, 2000, 1000]]}
+        battery = {'windows': [[0, hour, 1000, 2000, 1000]],
+                   'targets': [[0, hour, 1300]], 'efficiency': 1.0}
+        outlooks = {'ev': charge_outlook(ev, 0, shortfall_wh=1500),
+                    'battery': charge_outlook(battery, 0, stored_wh=0)}
+        self.assertEqual(share_recovery(outlooks), {'ev': 500, 'battery': 200})
+
+    def test_overlapping_recovery_offers_share_one_grid_limit(self):
+        hour = 3_600_000
+        ev = {'windows': [[0, hour, 1000, 1800, 1000]]}
+        battery = {'windows': [[0, hour, 1000, 1600, 1000], [0, hour, 0, 500, 1000]],
+                   'targets': [[0, hour, 700]], 'efficiency': 1.0}
+        outlooks = {'ev': charge_outlook(ev, hour // 2, shortfall_wh=350),
+                    'battery': charge_outlook(battery, hour // 2, stored_wh=0)}
+        self.assertEqual(share_recovery(outlooks), {'ev': 50, 'battery': -50})
 
     def test_room_slack_follows_its_floor_and_how_fast_it_recovers(self):
         run = summarize_runs(plan())['device:floor']
-        warm, near = heat_slack_h(run, T0, 21.0), heat_slack_h(run, T0, 19.1)
+        stable = {**run, 'floor': run['floor'][:1]}
+        warm, near = heat_slack_h(stable, T0, 21.0), heat_slack_h(stable, T0, 19.1)
         self.assertAlmostEqual(warm, (2 / .8) / (1 + .8 / 2))
         self.assertLess(near, .1)
         self.assertLess(heat_slack_h(run, T0 + 3 * QUARTER_MS, 20.5), 0, 'Below the later, higher floor')
-        slow = heat_slack_h({**run, 'warm_c_per_h': .4}, T0, 21.0)
+        slow = heat_slack_h({**stable, 'warm_c_per_h': .4}, T0, 21.0)
         self.assertLess(slow, warm, 'A slow room needs longer to recover the same setback')
         self.assertEqual(heat_slack_h(None, T0, 25.0), 0, 'No known floor is no invented margin')
         self.assertEqual(heat_slack_h({**run, 'cool_c_per_h': None}, T0, 25.0), 0)
+
+    def test_rising_comfort_floor_accounts_for_warm_up_time(self):
+        run = {'floor': [[0, 2 * QUARTER_MS, 19]], 'cool_c_per_h': 1, 'warm_c_per_h': 2}
+        self.assertAlmostEqual(heat_slack_h(run, 0, 20), 2 / 3)
+        rising = {**run, 'floor': [[0, QUARTER_MS, 19], [QUARTER_MS, 2 * QUARTER_MS, 21]]}
+        self.assertAlmostEqual(heat_slack_h(rising, 0, 20), -1 / 6)
+        self.assertEqual(heat_slack_h({**rising, 'warm_c_per_h': None}, 0, 20), 0)
+
+    def test_future_floor_only_binds_while_it_is_in_effect(self):
+        quarter = QUARTER_MS
+        run = {'floor': [[0, quarter, 18], [quarter, 2 * quarter, 19.6]],
+               'cool_c_per_h': 1, 'warm_c_per_h': 2}
+        self.assertAlmostEqual(heat_slack_h(run, 0, 20), .4)
+        run['floor'][1][1] = quarter + 300_000
+        self.assertAlmostEqual(heat_slack_h(run, 0, 20), 4 / 3)
 
 
 class BudgetTests(unittest.TestCase):

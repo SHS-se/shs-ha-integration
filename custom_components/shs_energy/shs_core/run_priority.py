@@ -11,12 +11,15 @@ order. Nobody ranks devices by hand.
 Everything here is arithmetic over a handful of rows. It scans no plan,
 reads no history and runs no solver; see docs/run-priority.md.
 """
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from math import floor, isfinite
 
 from .const import EU_AC_PHASE_COUNT, EU_AC_PHASE_VOLTAGE
 
 QUARTER_MS = 900_000
+HOUR_MS = 3_600_000
 EV_WATTS_PER_AMP = EU_AC_PHASE_COUNT * EU_AC_PHASE_VOLTAGE
 # Plan capacity is compared in 100 W steps so neighbouring quarters coalesce.
 SPARE_QUANTUM_W = 100
@@ -92,7 +95,7 @@ def summarize_runs(plan):
     if car:
         runs['ev'] = {'kind': 'charge', 'id': f'{identity}:ev', 'windows': _coalesce(car)}
 
-    battery = _battery_run(plan, spans, spare)
+    battery = _battery_run(plan, spare)
     if battery:
         runs['battery'] = battery
 
@@ -108,13 +111,24 @@ def summarize_runs(plan):
     return runs
 
 
-def _battery_run(plan, spans, spare):
+def _battery_run(plan, spare):
     """The battery's stored-energy objectives and the windows that may serve them."""
     contract = plan.get('battery_execution')
     if not isinstance(contract, dict):
         return None
     try:
-        rating = (plan.get('battery') or {}).get('charge_max_w')
+        battery = plan.get('battery') or {}
+        rating = battery.get('charge_max_w')
+        efficiency = (contract.get('storage') or {}).get('charge_efficiency', battery.get('charge_efficiency', 1.0))
+        efficiency = efficiency if _number(efficiency) and 0 < efficiency <= 1 else 1.0
+        def window_parts(start, end, planned, maximum):
+            # A recipe or nominal interval can straddle forecast quarters.
+            while start < end:
+                quarter = start - start % QUARTER_MS
+                until = min(end, quarter + QUARTER_MS)
+                yield [start, until, planned, maximum, spare.get(quarter, 0)]
+                start = until
+
         windows = []
         for row in contract['intervals']:
             kind = (row.get('instruction') or {}).get('kind', row.get('operation'))
@@ -122,25 +136,24 @@ def _battery_run(plan, spans, spare):
                 continue
             start, end = row['start_ms'], row['end_ms']
             planned = round(row['charge_ac_mwh'] * 3600 / (end - start))
-            quarter = start - start % QUARTER_MS
-            windows.append([start, end, planned, round(max(planned, rating if _number(rating) else 0)),
-                            spare.get(quarter, 0)])
+            windows.extend(window_parts(start, end, planned, round(max(planned, rating if _number(rating) else 0))))
         targets = [[o['start_ms'], o['deadline_ms'], round(o['target_mwh'] / 1000)]
                    for o in contract['objectives'] if o['kind'] == 'stored_energy']
+        recipes = []
         for row in contract.get('recovery') or ():
-            # Recovery authority adds power inside its own window, capped by
-            # the correction the planner allowed. The planner allocated it,
-            # so it does not draw on the capacity other runs share.
-            hours = (row['end_ms'] - row['start_ms']) / 3_600_000
-            extra = round(min(row['extra_charge_dc_w'], row['max_correction_mwh'] / 1000 / hours))
-            windows.append([row['start_ms'], row['end_ms'], 0, extra, extra])
+            # The planner derives recipes from the same forecast grid
+            # headroom. Offer the authorized DC watts as a conservative
+            # estimate of their AC requirement, capped by the stored energy.
+            start, end = row['start_ms'], row['end_ms']
+            hours = (end - start) / HOUR_MS
+            extra = floor(min(row['extra_charge_dc_w'], row['max_correction_mwh'] / (1000 * efficiency * hours)))
+            recipes.extend(window_parts(start, end, 0, extra))
+        windows = sorted([*_coalesce(windows), *_coalesce(sorted(recipes))])
         if not windows or not targets:
             return None
-        storage = contract.get('storage') or {}
-        efficiency = storage.get('charge_efficiency', (plan.get('battery') or {}).get('charge_efficiency', 1.0))
-        return {'kind': 'charge', 'id': contract['id'], 'windows': _coalesce(sorted(windows)),
+        return {'kind': 'charge', 'id': contract['id'], 'windows': windows,
                 'targets': targets, 'capacity_wh': round(contract['capacity_mwh'] / 1000),
-                'efficiency': efficiency if _number(efficiency) and 0 < efficiency <= 1 else 1.0}
+                'efficiency': efficiency}
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return None
 
@@ -213,47 +226,102 @@ def _block(run, now_ms, deadline_ms=None):
     if deadline_ms is not None:
         return [row for row in rows if row[0] < deadline_ms]
     block = []
+    through = now_ms
     for row in rows:
-        if not block and row[0] > now_ms:
-            break  # Nothing is authorised now.
-        if block and row[0] > block[-1][1]:
+        if row[0] > through:
             break
         block.append(row)
+        through = max(through, row[1])
     return block
 
 
-def charge_outlook(run, now_ms, *, shortfall_wh=0.0, stored_wh=None):
+@dataclass(frozen=True, slots=True)
+class RecoveryWindow:
+    start_ms: int
+    end_ms: int
+    owner_w: float
+    shared_w: float
+
+
+@dataclass(frozen=True, slots=True)
+class ChargeOutlook:
+    required_wh: float
+    planned_wh: float
+    windows: tuple[RecoveryWindow, ...]
+
+
+def charge_outlook(run, now_ms, *, shortfall_wh=0.0, stored_wh=None) -> ChargeOutlook:
     """Remaining work and the capacity left in the run's authorised windows (Wh, AC)."""
     target = None
     if stored_wh is not None:
         target = next((row for row in run.get('targets', ()) if row[0] <= now_ms < row[1]), None)
     rows = _block(run, now_ms, target[1] if target else None)
-    planned = pool = 0.0
+    planned = 0.0
+    windows = []
     for start, end, nominal, ceiling, spare in rows:
+        start = max(start, now_ms)
         end = min(end, target[1]) if target else end
-        hours = max(0.0, end - max(start, now_ms)) / 3_600_000
-        planned += nominal * hours
-        pool += min(max(0.0, ceiling - nominal), spare) * hours
+        planned += nominal * (end - start) / HOUR_MS
+        available = min(ceiling - nominal, spare)
+        if available > 0:
+            windows.append(RecoveryWindow(start, end, available, spare))
     if target:
         required = max(0.0, target[2] - stored_wh) / run['efficiency']
     else:
         required = max(0.0, planned + shortfall_wh)
-    return {'required_wh': required, 'planned_wh': planned, 'pool_wh': pool}
+    return ChargeOutlook(required, planned, tuple(windows))
 
 
-def share_recovery(outlooks):
-    """Spend the capacity the plan leaves unused once across the affected runs.
+def _recovery_capacity(outlooks: Mapping[str, ChargeOutlook]) -> tuple[dict[str, float], float]:
+    """Integrate each owner's capacity and the maximum they can use together."""
+    events = []
+    for owner, outlook in outlooks.items():
+        for index, window in enumerate(outlook.windows):
+            events.extend(((window.start_ms, owner, index, window), (window.end_ms, owner, index, None)))
+    active = {owner: {} for owner in outlooks}
+    capacity = dict.fromkeys(outlooks, 0.0)
+    joint = 0.0
+    events.sort()
+    through = events[0][0] if events else 0
+    for at, owner, index, window in events:
+        if at > through:
+            hours = (at - through) / HOUR_MS
+            total_w = shared_w = 0.0
+            for candidate, offers in active.items():
+                # Nominal spare and a recipe are alternate offers to the same
+                # charger. Scoped plans can offer different amounts of spare
+                # on the same connection; each owner keeps its own cap.
+                owner_w = 0.0
+                for offer in offers.values():
+                    owner_w = max(owner_w, offer.owner_w)
+                    shared_w = max(shared_w, offer.shared_w)
+                capacity[candidate] += owner_w * hours
+                total_w += owner_w
+            joint += min(total_w, shared_w) * hours
+            through = at
+        if window is None:
+            del active[owner][index]
+        else:
+            active[owner][index] = window
+    return capacity, joint
 
-    Each run sees the shared pool less what more pressing runs still need from
-    it. Returns each owner's slack in Wh: the capacity it has beyond its work.
+
+def share_recovery(outlooks: Mapping[str, ChargeOutlook]) -> dict[str, float]:
+    """Give the more pressing charger its claim, with Wh still usable by each.
+
+    With two chargers, their individual and joint capacities fully describe
+    what fits. A claim need not pick particular hours, so a charger can still
+    use its other windows when the first can recover elsewhere.
     """
+    assert len(outlooks) <= 2
+    capacity, joint = _recovery_capacity(outlooks)
     slack = {}
     used = 0.0
-    for owner, row in sorted(outlooks.items(), key=lambda item: (
-            item[1]['planned_wh'] + item[1]['pool_wh'] - item[1]['required_wh'], item[0])):
-        pool = max(0.0, row['pool_wh'] - used)
-        used += min(pool, max(0.0, row['required_wh'] - row['planned_wh']))
-        slack[owner] = row['planned_wh'] + pool - row['required_wh']
+    for owner, outlook in sorted(outlooks.items(), key=lambda item: (
+            item[1].planned_wh + capacity[item[0]] - item[1].required_wh, item[0])):
+        available = min(capacity[owner], max(0.0, joint - used))
+        used += min(available, max(0.0, outlook.required_wh - outlook.planned_wh))
+        slack[owner] = outlook.planned_wh + available - outlook.required_wh
     return slack
 
 
@@ -263,7 +331,7 @@ def charge_slack_h(slack_wh, power_w):
 
 
 def heat_slack_h(run, now_ms, temperature_c):
-    """Hours until the room reaches its comfort floor, allowing for its recovery.
+    """How long the room can pause while meeting its accepted comfort floors.
 
     A room that warms slowly needs longer to make up a setback, so the same
     margin buys it less. Without a known floor or cooling rate the room is
@@ -278,8 +346,23 @@ def heat_slack_h(run, now_ms, temperature_c):
     cool, warm = run['cool_c_per_h'], run['warm_c_per_h']
     if cool is None:
         return 0.0 if margin > 0 else margin
-    hours = margin / cool
-    return hours / (1 + cool / warm) if warm and hours > 0 else hours
+    slack = margin / cool
+    if warm and slack > 0:
+        slack /= 1 + cool / warm
+    for start, end, floor_c in run['floor']:
+        if start <= now_ms:
+            continue
+        starts_in = (start - now_ms) / HOUR_MS
+        ends_in = (end - now_ms) / HOUR_MS
+        margin = temperature_c - floor_c
+        crossing = margin / cool
+        if crossing >= ends_in:
+            continue  # Cooling alone keeps the room above this floor.
+        if crossing < starts_in:
+            # At the start, a pause of p leaves T - cool*p + warm*(starts_in-p).
+            crossing = (margin + warm * starts_in) / (cool + warm) if warm else 0.0
+        slack = min(slack, crossing)
+    return slack
 
 
 def step_down(watts, step_w):

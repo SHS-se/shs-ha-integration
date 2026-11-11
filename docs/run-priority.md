@@ -21,12 +21,21 @@ could go without its present power and still meet its accepted objective.
 |---|---|
 | Car | Capacity left in its contiguous authorised windows, less the planned energy still to deliver and the shortfall carried from measured delivery, divided by its present power. |
 | House battery | The same, against its stored-energy objective: target minus measured state of charge, up to the objective's deadline. A nearly full battery is urgent when its window is about to close. |
-| Room heater | The thermostat's own temperature (the room sensor for a relay) above the room's comfort floor, divided by how fast the plan expects the room to cool, and reduced when it warms slowly. A room with no known floor is treated as at its limit. |
+| Room heater | The pause the room can tolerate at its current comfort floor, constrained by future accepted floors. The estimate uses the thermostat's own temperature (the room sensor for a relay), cooling while paused and warming after resuming. A room with no known current floor is treated as at its limit. |
 
 Capacity a run can recover in comes from its own windows at their authorised
 maximum, limited by what the plan leaves unused under the import limit. That
-unused capacity is spent once: each run sees it less what more pressing runs
-still need. Battery recovery windows the planner authorised add their own.
+unused capacity is shared only where the runs' authorised windows overlap.
+The calculation keeps each charger's own capacity and the amount they can
+use together, so a charger with other available windows need not use the
+only one its neighbour can use. The planner's battery recovery recipes are
+offers against the same grid headroom. Overlapping offers for one charger
+count once, using the larger eligible rate.
+
+A rising comfort floor can make heating urgent before the new floor starts.
+The estimate allows a pause only if cooling during the pause and warming
+after it can still meet the accepted floor while it is in effect. Negative
+slack means the room is already behind that estimate.
 
 ## Sharing the import limit
 

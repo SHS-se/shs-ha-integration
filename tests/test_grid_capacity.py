@@ -601,6 +601,20 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 10)
         self.assertFalse(self.source.scheduled_heat_shed('device:room'))
 
+    async def test_an_upcoming_comfort_floor_can_change_who_yields(self):
+        self.executable_ev(self.car_run(hours=.5))
+        self.scheduled_room(temperature=21.5)
+        self.assertTrue(self.source.scheduled_heat_shed('device:room'))
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 10)
+
+        intent = self.source.capacity['coordination']['intents']['device:room']
+        run = intent['parameters']['run']
+        start, end, floor_c = run['floor'][0]
+        next_quarter = self.now_ms() + QUARTER
+        run['floor'] = [[start, next_quarter, floor_c], [next_quarter, end, 22.5]]
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'))
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9)
+
     async def test_effectively_equal_impact_keeps_the_current_allocation(self):
         self.executable_ev(self.car_run(hours=2, spare_w=4000))
         self.scheduled_room(temperature=19.1)
