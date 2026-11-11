@@ -12,7 +12,7 @@ from test_battery_runtime import Rig
 from shs_core import home_runtime as rt
 from shs_core.battery_gateway import BatteryGateway, OWNER
 from shs_core.command_transport import CommandTransport
-from shs_core.gateway_journal import GatewayConflict
+from shs_core.gateway_journal import AdmissionPending, GatewayConflict
 from shs_core.gateway_stream import GatewayStream, GatewayCommands
 from shs_core.native_commands import NativeExecutor
 from shs_core.runtime_json import encode_value, decode_value, runtime_digest
@@ -123,6 +123,28 @@ class BatteryGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.route = await self.gateway.propose(encode_value(self.effect), encode_value(self.grant))
         self.assertEqual((await self.step())['status'], 'service_returned')
         self.assertEqual(len(self.calls), 1)
+
+    async def test_adopted_target_waits_for_current_native_settings(self):
+        request = self.effect.request
+        target = dict(request.target)
+        for entity, value in target.items():
+            self.rows[entity]['state'] = value if entity == 'select.mode' else str(value / 1000)
+        charge = self.rows['number.charge']
+        charge['state'] = str((target['number.charge'] - 1) / 1000)
+
+        async def publish():
+            return await self.gateway.publish_target(
+                encode_value(request), encode_value(self.grant), self.gateway.context())
+
+        with self.assertRaisesRegex(AdmissionPending, 'Waiting for current battery control readings'):
+            await publish()
+        capacity = await self.stream.call('load_record', 'grid_capacity')
+        self.assertIsNone((capacity or {}).get('coordination', {}).get('withdrawal'))
+        charge['state'] = str(target['number.charge'] / 1000)
+        self.assertEqual(await publish(), {})
+        capacity = await self.stream.call('load_record', 'grid_capacity')
+        self.assertEqual(capacity['coordination']['withdrawal']['request_id'], request.id)
+        self.assertFalse(self.calls)
 
     async def test_socket_revocation_during_prepare_is_not_sent(self):
         original = self.journal.prepare_command

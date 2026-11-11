@@ -9,7 +9,7 @@ from .battery_native_adapter import SigenAdapter
 from .battery_writer import BatteryWriterFence
 from .command_journal import NativeAction, RoutedCommand, ObligationCommand
 from .configuration_values import resolve_battery_quantities
-from .gateway_journal import GatewayConflict, digest
+from .gateway_journal import AdmissionPending, GatewayConflict, digest
 from .gateway_stream import GatewayRecord
 from . import native_records as rt
 from .operating_modes import device_mode
@@ -228,7 +228,7 @@ class BatteryGateway:
             actual = {key:(self.reports(key)['state'] if key == mode else
                 native_watts(self.reports(key)['state'],self.reports(key)['attributes'])) for key,_ in request.target}
             if actual != dict(request.target):
-                raise GatewayConflict('Battery adopted target no longer matches native controls')
+                raise AdmissionPending('Waiting for current battery control readings before confirming its settings')
         async with self.physical.lock:
             await self.persist_target(request,authorize)
         return {}
