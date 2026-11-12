@@ -17,6 +17,7 @@ from .const import (
     OPT_BATTERY_MIN_SOC,
     OPT_BATTERY_SOC_ENTITY,
     OPT_DISCOVERY_EVIDENCE,
+    OPT_DEVICE_CATEGORY_OVERRIDES,
     OPT_OUTDOOR_TEMPERATURE_ENTITY,
     OPT_WEATHER_FORECAST_ENTITY,
     OPT_EV_CONNECTED_ENTITY,
@@ -189,7 +190,7 @@ def meter_room(meters, areas, names):
 
 
 def _energy_dashboard_inventory(
-    catalog: DiscoveryCatalog, preferences: dict[str, Any]
+    catalog: DiscoveryCatalog, preferences: dict[str, Any], category_overrides: dict[str, str]
 ) -> list[dict[str, Any]]:
     inventory: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -213,7 +214,7 @@ def _energy_dashboard_inventory(
             value for value in (name, statistic_id, _state_text(state) if state else "")
             if value
         )
-        category = _category_for_device(evidence_text)
+        category = category_overrides.get(statistic_id) or _category_for_device(evidence_text)
         load_type, inference = suggested_load_type(evidence_text, category)
         planning_role, control_type, planning_inference = (
             suggested_device_planning(category, load_type)
@@ -420,7 +421,7 @@ def discover_configuration(
                 mapped.setdefault("battery_discharge", []).append(value)
 
     device_categories: dict[str, list[str]] = {}
-    for device in _energy_dashboard_inventory(catalog, preferences):
+    for device in _energy_dashboard_inventory(catalog, preferences, options.get(OPT_DEVICE_CATEGORY_OVERRIDES, {})):
         device_categories.setdefault(device["category"], []).append(
             device["statistic_id"]
         )

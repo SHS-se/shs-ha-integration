@@ -52,9 +52,7 @@ def website_url(base_url: str, path: str) -> str | None:
     origin = WEBSITE_ORIGIN_BY_ENVIRONMENT.get(str(environment))
     return f"{origin}{path}" if origin else None
 
-# Options: each category maps to a list of energy sensor entity_ids
-# (total / total_increasing kWh sensors). Daily deltas are summed per category.
-CATEGORIES: tuple[str, ...] = (
+DEVICE_CATEGORIES: tuple[str, ...] = (
     "heating",
     "hot_water",
     "cooling",
@@ -62,6 +60,10 @@ CATEGORIES: tuple[str, ...] = (
     "pool_heating",
     "ev_charging",
     "household",
+)
+# Options: each category maps to a list of energy sensor entity_ids
+# (total / total_increasing kWh sensors). Daily deltas are summed per category.
+CATEGORIES: tuple[str, ...] = DEVICE_CATEGORIES + (
     "grid_import",
     "grid_export",
     "solar_production",
@@ -74,6 +76,7 @@ OPTIMISATION_EXTRA_CATEGORIES: tuple[str, ...] = (
 CONFIGURABLE_CATEGORIES = CATEGORIES + OPTIMISATION_EXTRA_CATEGORIES
 
 OPT_PREFIX_ENTITIES = "entities_"  # e.g. options["entities_heating"] = [...]
+OPT_DEVICE_CATEGORY_OVERRIDES = "device_category_overrides"
 
 # Price-forecast slot length. Swedish settlement moved to quarter-hours, and an
 # optimiser wants the series on its own timestep, so this is configurable.

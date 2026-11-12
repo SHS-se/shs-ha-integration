@@ -679,9 +679,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (!button) return;
     const action = button.dataset.action;
     if (!action) return;
-    if (action === "device-room") {
+    if (action === "device-settings") {
       event.preventDefault();
-      this._openDeviceRoom(button);
+      this._openDeviceSettings(button);
       return;
     }
     if (action === "pair-backend") this._backendAction("pair_backend", button.dataset.environment);
@@ -975,68 +975,102 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _canPoll() {
     return this._entryId && !this._loading && !this._saving && !this._savingDeviceKey
-      && !this._replanning && !this._roomDialog && !document.hidden;
+      && !this._replanning && !this._deviceSettingsDialog && !document.hidden;
   }
 
-  _openDeviceRoom(button) {
-    if (this._roomDialog) return;
+  _openDeviceSettings(button) {
+    if (this._deviceSettingsDialog || this._saving || this._savingDeviceKey) return;
     const device = this._data.devices.find(row => row.key === button.dataset.deviceKey);
     const room = device.meter_room;
     const areas = Object.entries(this._data.rooms || {}).sort((a, b) => a[1].localeCompare(b[1]));
     const dialog = document.createElement("dialog");
-    dialog.className = "room-dialog";
-    dialog.setAttribute("aria-labelledby", "device-room-title");
+    dialog.className = "device-settings-dialog";
+    dialog.setAttribute("aria-labelledby", "device-settings-title");
     dialog.innerHTML = `
-      <h2 id="device-room-title">Room for ${this._escape(device.name)}</h2>
-      <p>${room.meters.length === 2 ? "Assigns the power and energy sensors selected for this device in Home Assistant Energy." : "Assigns the energy sensor selected for this device in Home Assistant Energy."}</p>
-      ${room.different_areas ? "<p>The meters currently have different room assignments.</p>" : ""}
+      <h2 id="device-settings-title">Settings for ${this._escape(device.name)}</h2>
       <form>
-        ${room.editable && areas.length ? `<label>Room<select required autofocus>
+        <label>Category<select name="category">
+          ${this._data.device_categories.map(category => `<option value="${this._escape(category)}" ${category === device.category ? "selected" : ""}>${this._escape(this._label(category))}</option>`).join("")}
+        </select></label>
+        ${room.editable && areas.length ? `<label>Room<select name="room">
           <option value="" disabled ${room.area_id ? "" : "selected"}>Choose a room</option>
           ${areas.map(([id, name]) => `<option value="${this._escape(id)}" ${id === room.area_id ? "selected" : ""}>${this._escape(name)}</option>`).join("")}
-        </select></label>` : `<p>${room.editable ? "Create a room in Home Assistant first." : "Each configured meter needs a Home Assistant entity before its room can be assigned."}</p>`}
-        <p role="alert" class="inline-error" hidden></p>
-        <div class="room-actions">
-          <button type="button" class="text">${room.editable && areas.length ? "Cancel" : "Close"}</button>
-          ${room.editable && areas.length ? '<button type="submit" class="primary">Save room</button>' : ""}
+        </select></label><small>${room.different_areas ? "The meters currently have different room assignments." : "Assigns this device’s meters to a room in Home Assistant."}</small>`
+          : `<p>${room.editable ? "Create a room in Home Assistant to assign this device." : "Each configured meter needs a Home Assistant entity before its room can be assigned."}</p>`}
+        <p id="device-settings-error" role="alert" class="inline-error" hidden></p>
+        <div class="device-settings-actions">
+          <button type="button" class="text">Cancel</button>
+          <button type="submit" class="primary" disabled>Save</button>
         </div>
       </form>`;
     const form = dialog.querySelector("form");
     const cancel = dialog.querySelector('button[type="button"]');
     const save = dialog.querySelector('button[type="submit"]');
+    const error = form.querySelector('[role="alert"]');
+    const category = form.elements.namedItem("category");
+    const area = form.elements.namedItem("room");
+    const edits = [
+      { field: category, saved: device.category, action: "device_category", body: () => ({ category: category.value }) },
+      ...(area ? [{ field: area, saved: room.area_id || "", action: "device_room",
+        body: () => ({ meters: room.meters, area_id: area.value }) }] : []),
+    ];
+    const pending = () => edits.filter(edit => edit.field.value !== edit.saved);
+    let saving = false;
+    let savedChanges = false;
+    form.addEventListener("change", () => { save.disabled = !pending().length; });
     cancel.addEventListener("click", () => dialog.close());
-    dialog.addEventListener("cancel", event => { if (save?.disabled) event.preventDefault(); });
+    dialog.addEventListener("cancel", event => { if (saving) event.preventDefault(); });
     dialog.addEventListener("close", () => {
-      if (this._roomDialog !== dialog) return;
-      this._roomDialog = null;
+      this._deviceSettingsDialog = null;
       dialog.remove();
-      button.focus();
+      if (!savedChanges) {
+        button.focus();
+        return;
+      }
+      const current = this._data.devices.find(row => row.key === device.key);
+      if (current && this._category && this._category !== current.category) this._category = "";
+      if (current && this._room && this._room !== current.room_name) this._room = "";
+      this._render();
+      this.shadowRoot.querySelector(`[data-action="device-settings"][data-device-key="${CSS.escape(device.key)}"]`)?.focus();
     });
     form.addEventListener("submit", async event => {
       event.preventDefault();
-      const select = form.querySelector("select");
-      if (!save || save.disabled || !select.value) return;
-      const error = form.querySelector('[role="alert"]');
+      if (saving || !pending().length) return;
       error.hidden = true;
-      select.disabled = cancel.disabled = save.disabled = true;
-      try {
-        const result = await this._request({ action: "device_room", config_entry: this._entryId,
-          device_key: device.key, meters: room.meters, area_id: select.value });
-        this._pollRevision = (this._pollRevision || 0) + 1;
-        this._mergePanel(result);
-        this._roomDialog = null;
-        dialog.close();
-        this._render();
-        this.shadowRoot.querySelector(`[data-action="device-room"][data-device-key="${CSS.escape(device.key)}"]`)?.focus();
-      } catch (err) {
-        error.textContent = err.message;
-        error.hidden = false;
-        select.disabled = cancel.disabled = save.disabled = false;
-        select.focus();
+      saving = cancel.disabled = save.disabled = true;
+      for (const { field } of edits) {
+        field.disabled = true;
+        field.removeAttribute("aria-invalid");
+        field.removeAttribute("aria-describedby");
       }
+      let failed;
+      for (const edit of pending()) {
+        try {
+          const result = await this._request({ action: edit.action, config_entry: this._entryId,
+            device_key: device.key, ...edit.body() });
+          this._pollRevision = (this._pollRevision || 0) + 1;
+          this._mergePanel(result);
+          edit.saved = edit.field.value;
+          savedChanges = true;
+        } catch (err) {
+          failed = edit.field;
+          error.textContent = err.message;
+          error.hidden = false;
+          failed.closest("label").after(error);
+          failed.setAttribute("aria-invalid", "true");
+          failed.setAttribute("aria-describedby", error.id);
+          break;
+        }
+      }
+      saving = cancel.disabled = false;
+      for (const { field } of edits) field.disabled = false;
+      if (failed) {
+        save.disabled = false;
+        failed.focus();
+      } else dialog.close();
     });
     this._inspectedEntity = null;
-    this._roomDialog = dialog;
+    this._deviceSettingsDialog = dialog;
     this.shadowRoot.append(dialog);
     dialog.showModal();
   }
@@ -1259,7 +1293,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<details class="card device-card" data-open-key="${this._escape(id)}" ${edit ? "open" : ""}>
       <summary><div><strong>${this._escape(title)}</strong><small>${this._escape(description)}</small></div>
         <div class="device-header-actions"><span class="badge warning" data-field-count ${issueCount ? "" : "hidden"}>${issueCount} field${issueCount === 1 ? "" : "s"} need${issueCount === 1 ? "s" : ""} attention</span><span data-setup-status ${issueCount ? "hidden" : ""}>${planning ? `<span class="badge">${device.planned ? "Planned" : device.included ? "Monitoring" : "Excluded"}</span>` : this._statusBadge(device.included ? device.mapping_status : "base_load", device.included && device.mapping_status === "ready" ? "Controls configured" : undefined)}</span>
-        ${!planning && device.meter_room ? `<button type="button" class="icon-button room-button" data-action="device-room" data-device-key="${this._escape(device.key)}" title="Set room" aria-label="Set room for ${this._escape(device.name)}"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.7 7.7 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.8-1L15 3h-4l-.4 3a7.4 7.4 0 0 0-1.8 1l-2.4-1-2 3.4 2 1.6a7.7 7.7 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 1.8 1l.4 3h4l.4-3a7.4 7.4 0 0 0 1.8-1l2.4 1 2-3.4zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg></button>` : ""}</div></summary>
+        ${!planning && device.meter_room ? `<button type="button" class="icon-button device-settings-button" data-action="device-settings" data-device-key="${this._escape(device.key)}" title="Device settings" aria-haspopup="dialog" aria-label="Settings for ${this._escape(device.name)}"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.7 7.7 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.8-1L15 3h-4l-.4 3a7.4 7.4 0 0 0-1.8 1l-2.4-1-2 3.4 2 1.6a7.7 7.7 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 1.8 1l.4 3h4l.4-3a7.4 7.4 0 0 0 1.8-1l2.4 1 2-3.4zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg></button>` : ""}</div></summary>
       <div class="device-body">
         ${!planning ? `<div class="choice-row"><span>${included ? "Included" : "Excluded"}</span><label class="switch"><input type="checkbox" aria-label="Include ${this._escape(device.name)}" data-share="${this._escape(device.key)}" ${this._refreshing || this._saving || this._savingDeviceKey ? "disabled" : ""} ${included ? "checked" : ""}><span></span></label></div>
         <p class="muted">${included ? "Shares device data with SHS and allows planning and control when configured." : "Sends no individual readings, profiles or metadata to SHS and cannot be planned or controlled. Consumption stays in household totals."}</p>` : ""}
@@ -1654,7 +1688,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _render({ expandedCard } = {}) {
-    if (!this.shadowRoot || this._roomDialog) return;
+    if (!this.shadowRoot || this._deviceSettingsDialog) return;
     const active = this.shadowRoot.activeElement;
     const focusKey = active?.dataset.fieldKey;
     const focusDevice = active?.dataset.deviceKey;
@@ -1853,13 +1887,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .device-card summary > div:first-child { display:flex; flex-direction:column; min-width:0; }
       .device-card summary small { color:var(--secondary-text-color); overflow:hidden; text-overflow:ellipsis; }
       .device-header-actions { display:flex; align-items:center; gap:6px; }
-      .room-button { display:grid; place-items:center; flex:none; }
-      .room-dialog { width:min(420px, calc(100vw - 32px)); padding:22px; border:1px solid var(--divider-color); border-radius:14px; background:var(--card-background-color); color:var(--primary-text-color); }
-      .room-dialog::backdrop { background:#0008; }
-      .room-dialog h2 { margin-top:0; }
-      .room-dialog label { display:grid; gap:6px; }
-      .room-dialog select:focus-visible { outline:3px solid var(--primary-color); outline-offset:3px; }
-      .room-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+      .device-settings-button { display:grid; place-items:center; flex:none; }
+      .device-settings-dialog { width:min(420px, calc(100vw - 32px)); padding:22px; border:1px solid var(--divider-color); border-radius:14px; background:var(--card-background-color); color:var(--primary-text-color); }
+      .device-settings-dialog::backdrop { background:#0008; }
+      .device-settings-dialog h2 { margin-top:0; }
+      .device-settings-dialog form { display:grid; gap:12px; }
+      .device-settings-dialog label { display:grid; gap:6px; }
+      .device-settings-dialog select:focus-visible { outline:3px solid var(--primary-color); outline-offset:3px; }
+      .device-settings-actions { display:flex; justify-content:flex-end; gap:8px; }
       .device-body { border-top:1px solid var(--divider-color); padding:22px; }
       .device-save-row { display:flex; justify-content:flex-end; align-items:center; gap:16px; margin-top:24px; padding-top:18px; border-top:1px solid var(--divider-color); }
       .device-save-row span { color:var(--secondary-text-color); font-size:13px; }

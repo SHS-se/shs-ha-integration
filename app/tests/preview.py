@@ -12,6 +12,7 @@ from shs_app.server import create_app
 from shs_app.profiling import AppProfiler
 from shs_core.app_projection import schedule
 from shs_core.configuration_fields import _configuration_sections, LABELS
+from shs_core.const import DEVICE_CATEGORIES
 from shs_core.configuration_schema import resolve_configuration
 
 plan = json.loads((ROOT / "tests/fixtures/schema-9-mixed-mode-plan.json").read_text())["plan"]
@@ -29,7 +30,7 @@ class Editor:
             return dict(saved=True,refreshing=False,revision=self.revision)
         if action!='get':raise ValueError('Unsupported fixture action')
         return dict(revision=self.revision,state='applied',configuration=resolve_configuration(self.options,59,18),
-            configured_keys=list(self.options),labels=LABELS,sections=_configuration_sections(),devices=[],entities=[],
+            configured_keys=list(self.options),labels=LABELS,device_categories=DEVICE_CATEGORIES,sections=_configuration_sections(),devices=[],entities=[],
             entry=dict(entry_id='test-home',title='Test home',state='loaded'),attention=[],readiness={},thermal={},
             portal=dict(status='synchronised'),operation=entry['operation'],diagnostics={},meter_inventory=[],
             replan_recommendations=[],measurement_issues=[],locale=dict(language='en',timezone='Europe/Stockholm'),

@@ -20,7 +20,7 @@ OPTION_FIELDS = {
 # Internal scheduling resolution is fixed, not another editable setting.
 OPTION_KEYS = frozenset(OPTION_FIELDS)
 METADATA_KEYS = frozenset({"configuration_reviewed_at", "discovery_evidence", "_migration_report"})
-PERSISTED_KEYS = OPTION_KEYS | METADATA_KEYS | {"device_control_mappings", "rooms", "automatic_setup", "forecast_resolution_minutes", "device_modes", "planning_admissions", "_device_inclusion_initialised"}
+PERSISTED_KEYS = OPTION_KEYS | METADATA_KEYS | {"device_control_mappings", "rooms", "automatic_setup", "forecast_resolution_minutes", "device_modes", "planning_admissions", "_device_inclusion_initialised", c.OPT_DEVICE_CATEGORY_OVERRIDES}
 ROOM_AREA_FIELD = c.ROOM_AREA_FIELD
 # Derived from the same catalogue the cards render, across every path a method
 # can be routed to, so a field cannot appear on a card and be rejected on save.

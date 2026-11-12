@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import re
 from .optimisation import validate_plan_contract, OptimisationInputError
 from .configuration_fields import _configuration_sections, _control_fields, LABELS
+from .const import OPT_DEVICE_CATEGORY_OVERRIDES
 from .device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_control_errors
 from .device_commands import execution_setup_errors, slot_command
 from .hot_water import FINISH_HEATING_W, is_hot_water, hot_water_setup_errors
@@ -139,10 +140,16 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         device["room_name"] = area_names.get(device.get("mapping", {}).get("room_area_id")) or device.get("mapping_summary", {}).get("room_name") or "No room"
     owners = system_device_keys(devices, options)
     members = system_member_keys(devices, options)
+    category_overrides = options.get(OPT_DEVICE_CATEGORY_OVERRIDES, {})
     for system in ("ev", "pool"):
         category = {"ev": "ev_charging", "pool": "pool_heating"}[system]
         if not equipment_present(options, system, devices, configured_keys):
-            devices = [d for d in devices if d.get("category") != category or planning_path(d.get("control_type"), category) == "room"]
+            # Keep the editor for a manually categorized meter if the system is absent.
+            devices = [
+                d for d in devices if d.get("category") != category
+                or d["key"] in category_overrides
+                or planning_path(d.get("control_type"), category) == "room"
+            ]
             continue
         candidates = [d for d in devices if owners.get(d["key"]) == system]
         if candidates:

@@ -30,7 +30,8 @@ class ConfigurationEditor:
     async def inventory(self):
         await self.refresh_catalog()
         meters = dashboard_meters(self.catalog.preferences)
-        devices = _energy_dashboard_inventory(self.catalog,self.catalog.preferences)
+        overrides = self.engine.configuration.options().get(c.OPT_DEVICE_CATEGORY_OVERRIDES, {})
+        devices = _energy_dashboard_inventory(self.catalog, self.catalog.preferences, overrides)
         for device in devices:
             device['meter_room'] = meter_room(meters[device['key']], self.meter_areas,
                                              self.context['area_names'])
@@ -80,8 +81,8 @@ class ConfigurationEditor:
     def prepare(self, existing, incoming):
         return prepare_options(existing,incoming,self.read,latitude=self.catalog.latitude,longitude=self.catalog.longitude)
 
-    async def _commit(self, options, body, *, replan):
-        result = await self.engine.configuration.commit(body['expected_revision'],options,body['request_id'],reviewed=True)
+    async def _commit(self, options, body, *, replan, reviewed=True):
+        result = await self.engine.configuration.commit(body['expected_revision'],options,body['request_id'],reviewed=reviewed)
         h = self.engine.household
         # Canonical commit and gateway acknowledgement precede all policy work.
         # The ordered configuration receipt triggers subscription/plan handling.
@@ -138,6 +139,15 @@ class ConfigurationEditor:
             if h.last_optimisation_error: raise ValueError(h.last_optimisation_error)
             return await self.view()
         existing = self.engine.configuration.options()
+        if operation == 'device_category':
+            key, category = body['device_key'], body['category']
+            if key not in dashboard_meters(self.catalog.preferences):
+                raise ValueError('This device is no longer in Home Assistant Energy')
+            if category not in c.DEVICE_CATEGORIES:
+                raise ValueError('Choose a device category from the list')
+            existing.setdefault(c.OPT_DEVICE_CATEGORY_OVERRIDES, {})[key] = category
+            await self._commit(existing, body, replan=True, reviewed=False)
+            return await self.view()
         if operation == 'save':
             incoming = body['configuration']
             if c.OPT_DEVICE_CONTROL_MAPPINGS in incoming:

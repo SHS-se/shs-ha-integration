@@ -252,6 +252,63 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         source.publish.assert_awaited_once()
         self.assertFalse(self.native_calls)
 
+    async def test_category_save_updates_inventory_and_fields_for_a_renamed_meter(self):
+        from aiohttp.test_utils import TestClient, TestServer
+        from shs_app.server import create_app
+        from unittest.mock import AsyncMock
+
+        engine = self.engine()
+        await engine.load()
+        await engine.activate()
+        engine.gateway.connected['contract'] = {'companion_version': 'companion'}
+        dashboard = self.dashboard(engine)
+        key = 'sensor.boiler_energy'
+        meter = {'stat_consumption': key, 'name': 'Boiler'}
+        source = self.service.source
+        request = source.request
+
+        async def catalog(operation, body):
+            if operation == 'catalog':
+                return dict(context=self.context, states={}, meter_areas={},
+                            preferences={'device_consumption': [meter]})
+            return await request(operation, body)
+
+        source.request = catalog
+        mapping = {'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.boiler']}
+        options = {**engine.configuration.options(),
+                   'device_control_mappings': {key: mapping},
+                   '_device_inclusion_initialised': [key],
+                   'excluded_device_readings': [key]}
+        await engine.configuration.commit(engine.configuration.revision, options, 'fixture-device')
+
+        def device(data):
+            return next(row for row in data['devices'] if row['key'] == key)
+
+        with patch.object(engine, 'replan_all', AsyncMock()) as replan:
+            async with TestClient(TestServer(create_app(dashboard, self.root, trusted_peer='127.0.0.1'))) as client:
+                response = await client.post('/api/configuration/get', json={})
+                before = await response.json()
+                self.assertEqual(response.status, 200, before)
+                self.assertEqual(device(before)['category'], 'hot_water')
+                self.assertNotIn('temperature_entity_id', {field['key'] for field in device(before)['fields']})
+                edit = {'device_key': key, 'expected_revision': before['revision'], 'request_id': 'category-edit'}
+                response = await client.post('/api/configuration/device_category', json={**edit, 'category': 'battery'})
+                self.assertEqual(response.status, 409, await response.json())
+                self.assertEqual(engine.configuration.options(), options)
+                response = await client.post('/api/configuration/device_category', json={**edit, 'category': 'heating'})
+                saved = await response.json()
+                self.assertEqual(response.status, 200, saved)
+                self.assertEqual(device(saved)['category'], 'heating')
+                self.assertIn('temperature_entity_id', {field['key'] for field in device(saved)['fields']})
+                self.assertFalse(device(saved)['included'])
+                self.assertEqual(engine.configuration.options(), {**options, 'device_category_overrides': {key: 'heating'}})
+                self.assertNotIn('device_category_overrides', self.configuration.options())
+                meter['name'] = 'Pool power'
+                response = await client.post('/api/configuration/get', json={})
+                self.assertEqual(device(await response.json())['category'], 'heating')
+        replan.assert_awaited_once()
+        self.assertFalse(self.native_calls)
+
     async def test_background_failure_is_visible_during_startup_and_a_replacement_clears_it(self):
         engine=self.engine();dashboard=self.dashboard(engine)
         async def broken():raise ValueError('Receipt ingestion stopped')

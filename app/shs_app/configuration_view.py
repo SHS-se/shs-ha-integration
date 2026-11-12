@@ -85,6 +85,7 @@ async def configuration_payload(editor, *, refresh_roles):
                     "updated_at": state.last_updated.isoformat()})
     return {
         "labels": LABELS,
+        "device_categories": shs_const.DEVICE_CATEGORIES,
         "operation": operation,
         "replan_recommendations": getattr(coordinator, "replan_recommendations", []),
         # The same list the website shows: devices this plan leaves out.
