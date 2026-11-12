@@ -1,5 +1,13 @@
 # House import safety review — 17 October 2026
 
+For current operation, see [live run priority](run-priority.md) and the
+[replan admission rules](authoritative-plan-contract.md#mandatory-automatic-trigger).
+The configured aggregate import limit governs SHS command admission and live
+power adjustments. The electrical protection is rated per phase. For three
+25 A phases at 230 V, 17.25 kW is the balanced equivalent. A single phase can
+exceed its rating at lower aggregate import. Ordinary local power adjustments
+and a forced replan have separate criteria.
+
 The supplied capture exposed real command-admission defects, so it was not justified to describe the previous controls as fuse-proof. A code review and tests cannot assign a defensible numerical probability of a fuse trip. The changes below close specific reproducible software paths; they do not establish an absolute electrical protection guarantee.
 
 The scope is total house import, as requested. The captured website cap was 15,000 W. The retired local 13,200 W setting was an inverter figure, not authority for the house cap. The tariff endpoint now resolves the website's chosen limit against the house fuse using the same helper as planning. The app removes the obsolete local field and saved value, and passes that resolved authority to HA separately from the plan. Missing authority admits no increases. Export configuration remains independent.

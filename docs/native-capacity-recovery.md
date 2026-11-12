@@ -65,11 +65,12 @@ a delayed excluded meter cannot turn new EV demand into eligible house base load
 The same prepared command is still checked against current house measurements;
 no historical base-load floor or frozen promise bypasses final admission.
 
-Curtailed service enters the existing owner-scoped replanning record as temporary
-absence for the current opportunity; future quarters remain available. A feasible
-new current intention clears the cap even if the old larger target remains
-infeasible. Independent
-capacity evidence is returned during synchronization, even when the accepted plan
-has suppressed that owner's executable instruction. Only the matching capacity
-episode can recover; the gateway sends no device setting and claims no delivery
-while producing that evidence. A new current intention must still pass admission.
+An admitted capacity episode is scoped to the affected opportunity. A positive
+EV ceiling is reported as `capacity_limited`, and a blocked opportunity can be
+reported as `temporarily_absent`. Ordinary live trims use the
+[run-priority thresholds](run-priority.md). A feasible reduced intention can
+keep executing while the cap remains active. Independent headroom evidence for
+the original demand is returned during synchronization, including when the
+accepted plan suppresses the owner's instruction. The gateway reports that
+evidence without issuing a setting or claiming delivery. A resumed intention
+must still pass admission.

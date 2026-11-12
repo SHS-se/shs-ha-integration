@@ -181,3 +181,10 @@ the remaining work can still run, whatever its size. When battery work cannot ru
 least 100 Wh. This 100 Wh threshold is that explicit requirement. Battery planning
 efficiency is measured from the data, not a hard-coded or configured constant; see
 [controller plan execution](controller-plan-execution.md).
+
+User requirement, 12 November 2026. Hold accepted settings through short
+source gaps. Returning readings trigger ordinary evaluation against the
+accepted plan. Only qualifying blocked work or recovery of previously
+suppressed work may force a replacement. See the
+[admission rules](authoritative-plan-contract.md#mandatory-automatic-trigger)
+and [live capacity thresholds](run-priority.md).

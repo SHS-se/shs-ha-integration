@@ -71,14 +71,14 @@ The following requirements remain authoritative within their stated scope:
 
 User requirement, 23 October 2026: [execution-failure replanning and selective
 commitment release](authoritative-plan-contract.md#execution-failure-replanning-and-selective-commitment-release)
-is mandatory across EV, pool, battery and other scheduled services. When a
-scheduled request is unexecutable and needs moving, force a household replan;
-release only the affected owner's commitments needed to move that work,
+is mandatory across EV, pool, battery and other scheduled services. When
+[admitted evidence](authoritative-plan-contract.md#mandatory-automatic-trigger)
+shows scheduled work is unexecutable and needs moving, force a household replan.
+Release only the affected owner's commitments needed to move that work,
 including source and destination slots, while preserving every other owner's
 next-hour commands. This supersedes manual-only recovery for that case,
 including the historical example in section 8. Being unplugged now does not erase
-future EV charging planning. This amendment specifies required behaviour and
-does not claim the existing executors already implement it.
+future EV charging planning.
 
 This design covers the common controller responsibility. The first implementation
 slice is the home battery. EV and other device executors retain their existing
@@ -93,7 +93,8 @@ APIs and a notification framework remain separate work.
 | Plan calls for household supply | Follow actual eligible net demand within the authorised operation and real limits. Forecast watts are not a cap on household demand. |
 | Demand exceeds the forecast | Account for the resulting energy difference. Reduce charging when real headroom requires it; do not defer merely because the forecast was wrong. |
 | Solar is below forecast | Preserve the charging objective using permitted sources where possible. Solar-only permission remains solar-only; grid permission is not inferred. |
-| A temporary interruption prevents planned delivery | Record the shortfall and its evidence, apply only authorised local recovery, and force a replan when scheduled work needs moving. Release only affected commitments; preserve other owners' next-hour commands. For the battery, only work that cannot run forces this replan, and only when its blocked quarter schedules at least 100 Wh (user requirement, 26 October 2026). |
+| A required reading drops out briefly | Hold the last setting. Re-evaluate the accepted work when usable readings return. |
+| An admitted failure prevents planned delivery | Record the evidence and apply authorised local recovery where possible. Replan only affected commitments under the [admission rules](authoritative-plan-contract.md#mandatory-automatic-trigger). Preserve other owners' next-hour commands. |
 | Recovery cannot meet the original purpose or deadline | Expose the shortfall in the objective outcome and the replan feedback, and report it through the input-accuracy battery check. Raise no replan banner (user requirement, 19 October 2026). Do not promise automatic recovery next quarter. |
 | Lower demand or additional solar leaves more stored energy | Record a credit. Do not discharge simply to reduce accounting variance. |
 | Battery is full | Respect saturation. Do not treat a charging command as delivered energy or accumulate a recoverable obligation to charge above capacity. |
@@ -314,10 +315,10 @@ For each relevant event or deadline, the controller MUST:
    resources and its original deadline. Record the correction separately.
 6. Reconcile the resulting request through the existing actuator-group owner and
    publish accounting evidence. Automatically request forced replanning when
-   scheduled work is unexecutable and needs moving, under the selective
-   commitment-release requirement. Local recovery authority does not make that
-   request optional. Request replanning for other strategic changes according to
-   their stated trigger policy.
+   admitted evidence shows scheduled work is unexecutable and needs moving.
+   Use the [replan admission rules](authoritative-plan-contract.md#mandatory-automatic-trigger)
+   and release only the affected commitments. Request replanning for other
+   strategic changes according to their stated trigger policy.
 
 Protective changes required by real equipment limits take effect without waiting
 for a replan. Their energy consequences remain accounted for. Loss of a recovery
@@ -330,8 +331,9 @@ nominal execution, grant new permissions or extend plan validity.
 The household execution journal owns forced-replan deduplication and retry,
 shared by EV, pool, battery and mapped-device controllers. Controller results
 carry structured absence; faults carry the observed source interval and stable
-cause. The journal retains unresolved availability separately from pending
-changes. Snapshot captures always include unresolved `execution_availability`,
+cause. The journal retains source gaps separately from admitted availability
+and pending changes. Snapshot captures include unresolved admitted
+`execution_availability`,
 while the immutable `execution_replan` envelope names changed owner evidence and
 the exact HA-accepted plan. The API requires the common durable planning receipt;
 submission recovery, job delivery and exact plan acknowledgement retain their
@@ -640,13 +642,13 @@ do not require the existing generic runtime framework or its checkpoint schema.
 | --- | --- |
 | Nominal cheap charging with ordinary forecast noise | Charging purpose retained; measured variance explained; no independent future-score reversal. |
 | Large load change with sufficient import headroom | No deferral solely because forecast and measurement differ. |
-| Real import limit interrupts charging | Immediate feasible reduction, measured debt and explicit recovery route or replan. |
+| Real import limit interrupts charging | Adjust immediately and track measured delivery. Replan when the relevant [admission threshold](authoritative-plan-contract.md#mandatory-automatic-trigger) is met. |
 | Lower solar with and without grid-charge permission | Objective preserved where permitted; source restrictions never widened. |
 | Demand-following load spike | Actual eligible demand can exceed forecast; real limits and supply scope still hold. |
 | Recovery across quarters | Stored/AC conversion, remaining duration and nominal-plus-correction power reconcile. No debt reset at the boundary. |
 | Nonzero opening balance | With 0.50 kWh opening debt, 0.50 kWh nominal increment and 1.00 kWh actual increment, closing debt is zero; test the corresponding credit case and explicit reference amendment. |
-| Recovery becomes impossible or cheap window closes | Visible remaining shortfall and replan; no endless postponement or unapproved expensive purchase. |
-| Scheduled EV, pool or battery work becomes unexecutable | Automatic forced replan; release only the evidenced affected owner/interval commitments and preserve every unaffected owner's next-hour commands, including OFF requests. |
+| Recovery becomes impossible or a cheap window closes | Show the remaining shortfall and retain its original deadline. Apply the service's admission rule. |
+| Scheduled EV, pool or battery work becomes unexecutable | Apply the admission rule, release only the evidenced affected owner and intervals, and preserve every unaffected owner's next-hour commands. |
 | EV is unplugged before a future conditional charging opportunity | Retain future charging planning and false cable telemetry; do not force a replan solely for current disconnection. |
 | Credit, full battery and lower-than-forecast demand | No forced disposal, fake charge delivery or pointless cycling; clear objective disposition. |
 | Equal charge/discharge net effect | Gross throughput, conversion losses and cost retained. |

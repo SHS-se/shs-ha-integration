@@ -97,15 +97,21 @@ itself evidence of execution failure.
 
 ### Mandatory automatic trigger
 
-When observed absence, equipment unavailability or an evidenced command/response
-failure makes a scheduled request unexecutable and requires moving that work or
-revising its shared resource allocation, the system MUST request a forced
-household replan automatically. It MUST NOT wait for a new price release, a manual
-click, four completed quarters of deviation, or a recommendation being accepted.
-An unplugged car with only a later conditional charging opportunity does not
-trigger merely because it is unplugged now. A car still unavailable when its
-scheduled charging becomes due does trigger; local recovery authority does not
-make this forced replan optional.
+When admitted execution evidence shows that scheduled work cannot run and needs
+to move, the app MUST request a forced household replan automatically.
+
+| Evidence | Admission rule |
+| --- | --- |
+| Usable EV connection reading shows disconnection | Admit immediately if accepted charging is due. Future charging remains conditional on connection. |
+| Required command fails, is rejected, or cannot be confirmed | Report the observed failure. Admit it if qualifying work is due. |
+| A required sensor or actuator reading is unavailable | Hold the last setting and show attention after five minutes. Admit a temporary absence if a fresh check still finds the same source unavailable after 15 minutes and it blocks due work. A room relay waiting on its temperature reading holds its accepted target locally. |
+| Battery work is blocked | Admit only when the blocked quarter schedules at least 100 Wh. A shortfall against otherwise executable battery work is diagnostic. |
+| An operating load is trimmed for import capacity | Use the service-specific evidence in [live run priority](run-priority.md). A gateway capacity episode can independently report a supported ceiling for the affected opportunity. |
+
+A short gap remains local. The returning reading starts ordinary evaluation of
+the current accepted instruction. If the work can resume, it continues on the
+same plan. Recovery of work suppressed by an admitted failure can require a
+replacement.
 
 The request MUST name the affected physical owner(s), affected absolute command
 intervals, observed cause, current availability/state and relevant outstanding
@@ -123,7 +129,9 @@ otherwise the existing executable schedule resumes under current authority.
 snapshot capture, pending submissions, planning receipts and acknowledgements
 under the existing exchange lock. `shs_core.execution_replan` merges evidence by
 physical owner and absolute missed opportunity, independently of replacement
-plan IDs. `DeviceOperations` reports structured inability through
+plan IDs. It stores missing-source clocks separately from admitted availability
+and pending requests. Only admitted evidence reaches a planner capture.
+`DeviceOperations` reports structured inability through
 `ScheduledController`; the native battery runtime uses its existing notification
 queue so receipt/observation locks never wait on the household exchange lock.
 Only Controlling execution can request this forced path. Verification, rejected
@@ -134,7 +142,9 @@ The ingest field `execution_replan` contains `request_id` (UUID),
 `accepted_plan_id` (UUID), `observed_at` (ISO timestamp), and `changes`. Each
 change contains `owner`, `status`, `cause` and absolute `blocked_intervals` with
 `start`/`end`. Owners are `$ev`, `$pool`, `$battery`, or the raw planned-device key
-from `operating_scope`. Status is `temporarily_absent`, `faulted`, or `recovered`.
+from `operating_scope`. Status is `temporarily_absent`, `faulted`, `recovered`, or
+`capacity_limited`. A positive EV `capacity_limited` change carries
+`maximum_current_a` for the affected opportunity.
 A blocked request names its due accepted source interval; recovery has no blocked
 interval. This envelope accompanies one captured snapshot and is carried through
 its durable submission/job receipt, including lost-reply recovery. A forced

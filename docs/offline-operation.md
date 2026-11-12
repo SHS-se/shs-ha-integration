@@ -39,7 +39,10 @@ One startup exchange follows the existing 60-second wait for HA entity providers
 Subsequent exchanges use a 15-minute interval measured from integration setup,
 not shared quarter-hour boundaries. There is no one-minute cloud recovery loop.
 Price sensors and controllers still advance on local market quarters without
-network traffic. Explicit configuration changes send a fresh snapshot and record a replan recommendation; the server solves only for a new price release or a manual replan.
+network traffic. Explicit configuration changes can send a fresh snapshot and
+record a recommendation. A new price release, a manual request, or
+[admitted execution evidence](authoritative-plan-contract.md#mandatory-automatic-trigger)
+can start a solve.
 The existing plan storage is retained; no new plan-persistence mechanism is added.
 
 The website polls Supabase every 30 seconds while visible. Its authenticated

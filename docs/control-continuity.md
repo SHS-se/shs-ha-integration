@@ -78,6 +78,12 @@ journalled by an older version is discarded on load and control resumes.
 When an entity returns, SHS only carries out what the current plan and the select
 already require. If the device is already in the planned state, nothing is sent.
 
+The five-minute status threshold calls for attention. The separate
+[replan admission rule](authoritative-plan-contract.md#mandatory-automatic-trigger)
+requires a fresh observation of the same missing source after 15 minutes and
+due work that it blocks. When the reading returns, the app evaluates the
+current accepted work using the new observation.
+
 ## Pool intervals without a new instruction
 
 User requirement, 25 October 2026: if missing pool observations prevent a new
@@ -147,7 +153,8 @@ follow the rule:
 |---|---|
 | The app stops, restarts, crashes or loses its connection; HA stops or restarts; the integration reloads | Nothing is written. HA fences the writer, so no stale command can be sent, and leaves the settings alone. The runtime resumes from them when it returns. |
 | No current plan or slot, a plan without battery instructions, an expired plan reference | Hold, status `idle` with the reason. |
-| Missing/unavailable measurements, a failing refresh | Hold, status `limited` or `fault` with the reason. |
+| A required reading becomes unavailable | Hold. Show `pending` for five minutes, then `fault` with the reason. |
+| A refresh fails for another reason | Hold and show the failure with its reason. |
 | A settings change that keeps the battery Controlling | The new settings are bound in place. Changed meters keep the command journal. A changed control entity is refused with a fault until the select goes to Verification and back. |
 | A manual-override entity that cannot be read | Hold. |
 
