@@ -1455,6 +1455,29 @@ class DurableDemandTests(unittest.TestCase):
         self.assertEqual(capacity_bound(row),0)
         self.assertEqual(required_import(4000, [(0,capacity_bound(row))]),4000)
 
+    def test_acknowledged_ev_reduction_settles_with_power_above_nominal(self):
+        for measured in (3600, 4000):
+            with self.subTest(measured=measured):
+                self.capacity = empty_capacity()
+                self.rows.clear()
+                self.report(1, 'switch.ev', 'on')
+                for order, amps in ((10, 16), (20, 5)):
+                    effect = self.effect(690 * amps)
+                    effect['controls']['number.ev'] = amps
+                    effect['changed'] = 'number.ev'
+                    command = str(order)
+                    prepare_capacity(self.capacity, command, effect, order)
+                    dispatch_capacity(self.capacity, command, order)
+                    finish_capacity(self.capacity, command, 'service_returned')
+                    self.report(order + 1, 'number.ev', str(amps))
+                    self.report(order + 2, 'sensor.ev', '11040')
+
+                row = self.capacity['devices']['ev']
+                self.assertEqual(capacity_bound(row), 11040, 'An old high draw still holds its reservation')
+                self.report(23, 'sensor.ev', str(measured))
+                self.assertEqual(capacity_bound(row), 3450)
+                self.assertEqual(required_import(measured + 2000, [(measured, capacity_bound(row))]), measured + 2000)
+
     def test_restored_counter_aliases_keep_only_proven_settlement_and_all_uncertain_effects(self):
         for status, witnessed, expected in (('uncertain', None, 4000),
                                              ('uncertain', 17, 0),

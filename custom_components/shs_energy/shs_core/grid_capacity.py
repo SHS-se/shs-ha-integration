@@ -6,6 +6,9 @@ from .native_numbers import equal as numbers_equal
 from .const import EU_AC_PHASE_COUNT, EU_AC_PHASE_VOLTAGE
 
 EV_WATTS_PER_AMP = EU_AC_PHASE_COUNT * EU_AC_PHASE_VOLTAGE
+# EN 50160 allows the supply voltage to run 10% above nominal. This is
+# response evidence after acknowledgement; admission still counts metered watts.
+EV_VOLTAGE_RESPONSE_FACTOR = 1.10
 CHARGING_MODES = frozenset(('Command Charging (PV First)', 'Command Charging (Grid First)'))
 NON_GRID_MODES = frozenset(('Standby', 'Maximum Self Consumption',
     'Command Discharging (PV First)', 'Command Discharging (Battery First)'))
@@ -264,7 +267,15 @@ def observe_capacity(capacity, ordinal, latest):
                     # acknowledged thermostat also supplies its relay state.
                     thermostat_attributed = (effect.get('draw_power_w') is not None
                         and actuator.get('state') == 'heat' and activity in ('heating', 'idle'))
-                    if not (thermostat_off or thermostat_attributed) and watts > effect['after_w'] + effect['response_tolerance_w']:
+                    response_limit = effect['after_w'] + effect['response_tolerance_w']
+                    if effect['logical'] == 'ev':
+                        voltage_limit = effect['after_w'] * EV_VOLTAGE_RESPONSE_FACTOR
+                        response_limit = max(response_limit, voltage_limit)
+                        # Some charger telemetry is rounded to whole kW,
+                        # including when converted to W by a power sensor.
+                        if watts % 1000 == 0:
+                            response_limit = max(response_limit, round(voltage_limit / 1000) * 1000)
+                    if not (thermostat_off or thermostat_attributed) and watts > response_limit:
                         continue
                 except (ValueError, KeyError, TypeError):
                     continue
