@@ -594,6 +594,40 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         return {'kind':'charge', 'id':'plan:ev',
                 'windows':[[now-QUARTER, now+int(hours*3_600_000), planned_w, maximum_w, spare_w]]}
 
+    async def test_waiting_pool_start_reclaims_optional_ev_current(self):
+        ev = self.executable_ev(self.car_run(hours=2, planned_w=3450))
+        ev['parameters']['current_a'] = 5
+        self.mapped_load('pool', 'switch.pool', 'off', 6000, 'controlling')
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '11800'
+        intent = DeviceIntent('pool-live', 'pool', 'apply', 1, 1,
+                              {'start':ev['parameters']['start']}, False)
+
+        def pool_ready():
+            return self.source.external_ready('pool', entity='switch.pool', value='on', require_battery_release=False)
+
+        self.assertEqual(self.source.ev_spare_current('number.ev', 'switch.ev', 5, 16, 15000), 14)
+        with self.assertRaises(ControlDeadlineError):
+            pool_ready()
+        self.assertTrue(self.source.claim_import(intent, 'switch.pool', 'on'))
+        self.assertEqual(self.source.ev_spare_current('number.ev', 'switch.ev', 5, 16, 15000), 5)
+        with self.assertRaises(ControlDeadlineError):
+            pool_ready()
+
+        self.rows['number.ev']['state'] = '5'
+        with self.assertRaises(ControlDeadlineError):
+            pool_ready()
+        self.rows['sensor.ev']['state'] = '3450'
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '8350'
+        self.assertTrue(pool_ready())
+
+    async def test_waiting_pool_cannot_claim_scheduled_ev_current(self):
+        ev = self.executable_ev()
+        ev['parameters']['current_a'] = 5
+        self.mapped_load('pool', 'switch.pool', 'off', 6000, 'controlling')
+        intent = DeviceIntent('pool-live', 'pool', 'apply', 1, 1,
+                              {'start':ev['parameters']['start']}, False)
+        self.assertFalse(self.source.claim_import(intent, 'switch.pool', 'on'))
+
     async def test_overload_takes_from_the_warm_room_when_charging_is_about_to_miss_its_target(self):
         # 15.4 kW against 15 kW. The car has no capacity left in its window;
         # the room is 2.5 °C above its comfort floor, heating towards 22 °C.

@@ -918,27 +918,45 @@ class HomeAssistantSource:
         return [row['effect'] for owner,row in self.import_claims.items() if owner != exclude_owner]
 
     def clear_import_claim(self, owner):
-        self.import_claims.pop(owner, None)
+        if self.import_claims.pop(owner, None) is not None:
+            self.priority_cache = None
 
     def claim_import(self, intent, entity, value):
         """Retain only feasible, described demand that is waiting for charging to yield."""
         battery = self.service.battery
-        if (battery.installation is None or device_mode(self.options(), 'battery') != 'controlling'
-                or not battery.fence.snapshot()['grant_current']):
-            return False
+        can_release_battery = (battery.installation is not None
+            and device_mode(self.options(), 'battery') == 'controlling'
+            and battery.fence.snapshot()['grant_current'])
         effect = self.describe_import(intent.device, entity, value)
         if effect is None:
             return False
-        claims = self.current_import_claims(exclude_owner=intent.device)
-        if self.import_required(effect=effect, exclude_device=self.battery_capacity_key(),
-                reserved=[*self.heating_effects().values(), *claims]) > self.house_import_limit():
-            return False
+        excluded_battery = self.battery_capacity_key() if can_release_battery else None
+        reserved = [*self.heating_effects().values(), *self.current_import_claims(exclude_owner=intent.device)]
+        limit = self.house_import_limit()
+        if not can_release_battery or self.import_required(effect=effect, exclude_device=excluded_battery,
+                                                           reserved=reserved) > limit:
+            if intent.operation != 'apply' or intent.device == 'ev':
+                return False
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            ev = self.ev_candidate(now_ms)
+            if ev is None or max(ev['present_w'], ev['want_w'], ev['draw_w']) <= ev['scheduled_w']:
+                return False
+            # Reserve a scheduled start that fits after optional EV current
+            # yields. Native admission still waits for the measured reduction.
+            house_without_ev = max(0.0, self.house_power() - ev['draw_w'])
+            required = self.import_required(effect=effect, exclude_device=excluded_battery,
+                exclude_devices=(ev['identity'],), reserved=reserved, house_w=house_without_ev)
+            if required + ev['scheduled_w'] > limit:
+                return False
         end = (datetime.fromisoformat(intent.parameters['start']) + timedelta(minutes=15)
                if intent.operation == 'apply' else None)
         # Every described scheduled start needs only its incremental watts.
         # Keep the full-release handshake for explicit heating overrides.
-        self.import_claims[intent.device] = {'context':self.service.context(), 'end':end,
-                                            'effect':{**effect, 'hold_charge':intent.operation != 'apply'}}
+        claim = {'context':self.service.context(), 'end':end,
+                 'effect':{**effect, 'hold_charge':intent.operation != 'apply'}}
+        if self.import_claims.get(intent.device) != claim:
+            self.import_claims[intent.device] = claim
+            self.priority_cache = None
         return True
 
     def battery_capacity_sources(self):
@@ -1018,6 +1036,7 @@ class HomeAssistantSource:
         step = finite(native['attributes'].get('step') or 1)
         candidate = dict(owner='ev', kind='ev', identity=effect['device'], draw_w=draw, metered=True,
             want_w=wanted * EV_WATTS_PER_AMP, step_w=step * EV_WATTS_PER_AMP,
+            scheduled_w=own['requested'] * EV_WATTS_PER_AMP,
             floor_w=own['minimum'] * EV_WATTS_PER_AMP, present_w=effect['before_w'],
             sources=(effect['sensor'], entity, switch),
             key=('ev', native['state'], self.report(switch)['state'], draw, own['requested'], own['minimum'], own.get('maximum')))
