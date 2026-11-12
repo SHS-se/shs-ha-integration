@@ -1,7 +1,7 @@
 """Switch-aware validity of device demand, independent of control authority."""
 from dataclasses import dataclass
 
-from .native_readings import BatteryPowerReadingError, power
+from .native_readings import BatteryObservationGap, BatteryPowerReadingError, power
 
 
 def planned_switch_bindings(options, devices):
@@ -37,6 +37,8 @@ def read_device_power(source, switches, read_entity, *, now_ms, capture_lifetime
     for entity in switches:
         report = read_entity(entity)
         state = report.get('state') if isinstance(report, dict) else None
+        if state in (None, 'unknown', 'unavailable'):
+            raise BatteryObservationGap([entity])
         if state not in ('on', 'off'):
             raise BatteryPowerReadingError(f'{entity}: device power requires an available on/off switch state')
         states.append((entity, state))

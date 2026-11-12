@@ -32,6 +32,7 @@ CAUSE_REASON_CHARS = 200
 # User requirement, 26 October 2026: battery work that cannot run forces a
 # replan only when the blocked quarter schedules at least this much energy.
 BATTERY_REPLAN_MIN_WH = 100
+OBSERVATION_REPLAN_DELAY = timedelta(minutes=15)
 
 
 def fault_cause(error):
@@ -74,12 +75,33 @@ def requested(owner, slot):
                 or command.get('type') in ('setpoint', 'room_relay') or slot.get('device_loads_w', {}).get(owner, 0))
 
 
+def observe_gap(journal, owner, slot, cause, entities, now):
+    """Record missing sources separately from evidence the planner can act on."""
+    gaps = journal.setdefault('observation_gaps', {})
+    previous = {entity: datetime.fromisoformat(since) for entity, since in gaps.get(owner, {}).items()}
+    clocks = {entity: min(previous.get(entity, now), now) for entity in entities}
+    recorded = {entity: since.isoformat() for entity, since in clocks.items()}
+    gaps[owner] = recorded
+    deadline = min(clocks.values()) + OBSERVATION_REPLAN_DELAY
+    if now < deadline:
+        return deadline
+    if requested(owner, slot) and journal.get('owners', {}).get(owner, {}).get('status') != 'faulted':
+        mature = sorted(entity for entity, since in clocks.items() if now - since >= OBSERVATION_REPLAN_DELAY)
+        observe(journal, owner, slot, {'status': 'temporarily_absent', 'cause': cause,
+                                      'recover_when_entities': mature})
+        # The normal evidence path clears gaps on a positive observation. The
+        # current reading is still missing, so keep tracking these clocks.
+        gaps[owner] = recorded
+    return None
+
+
 def observe(journal, owner, slot, condition, *, recovery_requires_replan=False):
     """Merge evidence; return whether there is a newly blocked/recovered service.
 
     Temporary absence blocks its absolute opportunity only. Faults remain
     unresolved until a real successful observation, regardless of slot/plan ID.
     """
+    journal.get('observation_gaps', {}).pop(owner, None)
     rows = journal.setdefault('owners', {})
     pending = journal.setdefault('pending', {})
     previous = rows.get(owner)
@@ -165,7 +187,7 @@ def failed(journal, changes):
 
 def retain_authority(journal, owners):
     """Explicit authority exit ends an episode, without claiming physical recovery."""
-    for field in ('owners', 'pending', 'recovery_sources', 'recovery_configuration'):
+    for field in ('owners', 'pending', 'recovery_sources', 'recovery_configuration', 'observation_gaps'):
         if field in journal:
             journal[field] = {owner: value for owner, value in journal[field].items() if owner in owners}
     if not journal.get('pending'):

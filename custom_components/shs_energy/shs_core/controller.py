@@ -332,7 +332,7 @@ class ScheduledController(DeviceOperations):
             raise ValueError("control disabled or manually overridden")
 
 
-    def report_gap(self, device, error, purpose=None, slot=None, plan=None):
+    def report_gap(self, device, error, purpose=None, slot=None, plan=None, recheck=None):
         """Hold through a restart, reconnect or reading gap; only a long one needs attention.
 
         Nothing is written or handed back meanwhile, so the device keeps the last
@@ -345,6 +345,9 @@ class ScheduledController(DeviceOperations):
         previous = self.status.get(device, {}).get("unavailable_since")
         since = datetime.fromisoformat(previous) if previous else now
         deadline = since + timedelta(seconds=OBSERVATION_GRACE_SECONDS)
+        if self.scheduler is not None:
+            deadlines = [at for at in (deadline, recheck) if at is not None and now < at]
+            self.scheduler.device_deadline(device, "observation_gap", min(deadlines, default=None))
         if purpose is None:
             purpose = "hand it back" if self.ownership.records.get(device, {}).get("restoration_pending") else "resume the plan"
         hold = "SHS holds the last setting it sent and will" if device in self.ownership.records else "SHS will"
@@ -353,8 +356,6 @@ class ScheduledController(DeviceOperations):
         details = {"retry_automatically": True, "execution_blocked": blocked, "unavailable_since": since.isoformat(),
                    **({"plan_id": plan.get("plan_id"), "slot_start": slot["start"]} if slot and plan else {})}
         if now < deadline:
-            if self.scheduler is not None:
-                self.scheduler.device_deadline(device, "observation_gap", deadline)
             self.report(device, "pending", reason=f"{error}. {hold} {purpose} as soon as it reports again.",
                         **details, **correction_details(error))
         else:
@@ -368,7 +369,7 @@ class ScheduledController(DeviceOperations):
             return
         observer = getattr(self.coordinator, "async_execution_observed", None)
         if observer is not None:
-            await observer(device, plan, slot, condition)
+            return await observer(device, plan, slot, condition)
 
     def end_gap(self, device):
         if self.scheduler is not None:
@@ -718,19 +719,22 @@ class ScheduledController(DeviceOperations):
                         room_temperature_gap = (isinstance(err, ControlObservationError) and err.unavailable
                             and command.get("type") == "room_relay" and err.entity
                             == options.get("device_control_mappings", {}).get(owner, {}).get("temperature_entity_id"))
-                        if (not heating and not room_temperature_gap
-                                and isinstance(err, (ControlObservationError, GatewayRejected, ControlCommandError, CommandUncertain))
-                                and execution_evidence.requested(owner, slot)):
-                            await self.record_execution(device, plan, slot, {"status": "faulted",
-                                "cause": execution_evidence.fault_cause(err),
-                                **({"recover_when_entities": [err.entity]} if isinstance(err, ControlObservationError)
-                                    and err.unavailable and err.entity else {})})
                         if isinstance(err, ControlObservationError) and err.transient:
                             # Nothing is written or handed back while an entity is away. A
                             # handover the select already asked for stays queued for its return.
+                            recheck = None
+                            if not heating and not room_temperature_gap and err.entity:
+                                recheck = await self.record_execution(device, plan, slot, {
+                                    "status": "observation_gap", "cause": execution_evidence.fault_cause(err),
+                                    "entities": [err.entity]})
                             self.failed.pop(device, None)
-                            self.report_gap(device, err, slot=slot, plan=plan)
+                            self.report_gap(device, err, slot=slot, plan=plan,
+                                            recheck=recheck if isinstance(recheck, datetime) else None)
                             continue
+                        if (not heating and isinstance(err, (ControlObservationError, GatewayRejected,
+                                ControlCommandError, CommandUncertain)) and execution_evidence.requested(owner, slot)):
+                            await self.record_execution(device, plan, slot, {"status": "faulted",
+                                "cause": execution_evidence.fault_cause(err)})
                         # Faults never release control; the device keeps the last setting SHS sent.
                         # A new observation can repair this fault without a new plan.
                         retry = isinstance(err, ControlObservationError)

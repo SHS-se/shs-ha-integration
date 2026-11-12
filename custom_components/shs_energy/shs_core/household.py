@@ -3630,21 +3630,24 @@ class Household:
         self._planning_job_wake.set()
         self.async_update_listeners()
 
-    async def async_execution_observed(self, device, plan, slot, condition) -> None:
+    async def async_execution_observed(self, device, plan, slot, condition) -> datetime | None:
         """Journal Controlling evidence; the existing delivery owner replans it."""
         if not self.control_authority or device_mode(self.resolved_options(), device) != "controlling":
             return
         if not plan or not plan.get("plan_id") or not slot:
             return
+        deadline = None
         async with self._push_lock:
             current = await self._store.async_read() or {}
             journal = deepcopy(current.get("execution_replanning", {}))
             owner = execution_evidence.owner_key(device)
+            gap = condition is not None and condition.get("status") == "observation_gap"
             if condition is not None and "available_entities" in condition:
-                required = journal.get("recovery_sources", {}).get(owner, [])
+                required = set(journal.get("recovery_sources", {}).get(owner, ()))
+                required.update(journal.get("observation_gaps", {}).get(owner, ()))
                 row = journal.get("owners", {}).get(owner)
                 if required:
-                    if not set(required).issubset(condition["available_entities"]):
+                    if not required.issubset(condition["available_entities"]):
                         return
                 elif (row is None or row["status"] != "faulted"
                         or journal.get("recovery_configuration", {}).get(owner) == self._execution_configuration()):
@@ -3656,15 +3659,22 @@ class Household:
             elif (condition is not None and condition["status"] == "faulted" and not owner.startswith("$")
                     and not condition.get("recover_when_entities")):
                 condition = {**condition, "recover_when_configuration": self._execution_configuration()}
-            recovery_required = owner in self._suppressed_execution_owners(current)
-            execution_evidence.observe(journal, owner, slot, condition, recovery_requires_replan=recovery_required)
+            if gap:
+                deadline = execution_evidence.observe_gap(journal, owner, slot, condition["cause"],
+                    condition["entities"], self.ports.utcnow())
+            else:
+                recovery_required = owner in self._suppressed_execution_owners(current)
+                execution_evidence.observe(journal, owner, slot, condition, recovery_requires_replan=recovery_required)
             if journal == current.get("execution_replanning", {}):
-                return
+                return deadline
+            pending_changed = journal.get("pending", {}) != current.get("execution_replanning", {}).get("pending", {})
             stored = await self._store.async_load() or {}
             stored["execution_replanning"] = journal
             await self._store.async_save(stored)
-        self._planning_job_wake.set()
+        if not gap or pending_changed:
+            self._planning_job_wake.set()
         self.async_update_listeners()
+        return deadline
 
     async def async_planning_delivery(self) -> None:
         """One owner schedules due outbox, job, ACK and fresh-capture work."""

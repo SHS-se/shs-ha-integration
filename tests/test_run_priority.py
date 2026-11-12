@@ -20,6 +20,20 @@ T0 = int(START.timestamp() * 1000)
 FIXTURE = Path(__file__).parent / 'fixtures/schema-10-mixed-mode-plan.json'
 
 
+class CapacityEvidenceTests(unittest.TestCase):
+    def test_small_trim_is_local_and_a_full_current_step_quarter_can_move(self):
+        step = run_priority.EV_WATTS_PER_AMP
+        car = {'kind': 'ev', 'want_w': 10 * step, 'step_w': step, 'slack_wh': -4.25}
+        self.assertFalse(run_priority.material_capacity_shortfall(car, 9 * step))
+        self.assertTrue(run_priority.material_capacity_shortfall({**car, 'slack_wh': -step / 4}, 9 * step))
+        self.assertFalse(run_priority.material_capacity_shortfall({**car, 'slack_wh': -step / 4}, 10 * step))
+
+    def test_room_recovery_uses_one_quarter_of_thermal_slack(self):
+        room = {'kind': 'heat', 'want_w': 1500, 'slack_h': -0.02}
+        self.assertFalse(run_priority.material_capacity_shortfall(room, 0))
+        self.assertTrue(run_priority.material_capacity_shortfall({**room, 'slack_h': -0.25}, 0))
+
+
 def slot(index, **values):
     return {'start': (START + timedelta(minutes=15 * index)).isoformat().replace('+00:00', 'Z'),
             'ev_target_current_a': 0, 'ev_max_current_a': 0, 'ev_w': 0, 'grid_import_w': 2000, **values}

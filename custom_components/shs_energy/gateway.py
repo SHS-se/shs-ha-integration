@@ -1200,6 +1200,7 @@ class HomeAssistantSource:
         outlooks = {c['owner']: c['outlook'] for c in candidates if 'outlook' in c}
         for owner, slack_wh in run_priority.share_recovery(outlooks).items():
             candidate = next(c for c in candidates if c['owner'] == owner)
+            candidate['slack_wh'] = slack_wh
             candidate['slack_h'] = run_priority.charge_slack_h(slack_wh, max(candidate['draw_w'], candidate['want_w']))
         previous = self.priority_last or {'granted': {}, 'wants': {}}
         wants = {c['owner']: c['want_w'] for c in candidates}
@@ -1250,9 +1251,13 @@ class HomeAssistantSource:
                 # A command in flight: no further adjustment while it lands.
                 since = self.priority_pending.get(owner, {}).get('since_ms', now_ms)
                 self.priority_pending[owner] = {'granted_w': ceiling, 'since_ms': since}
+        previous_material = previous.get('material_since_ms', {})
+        material_since = {c['owner']: min(previous_material.get(c['owner'], now_ms), now_ms) for c in candidates
+                          if run_priority.material_capacity_shortfall(c, granted[c['owner']])}
         self.priority_last = dict(at_ms=now_ms, budget_w=budget, left_w=max(0.0, left), granted=granted,
             wants=wants, battery_spare_w=battery_spare_w,
             slack_h={c['owner']: c['slack_h'] for c in candidates},
+            material_since_ms=material_since,
             running={c['owner']: c.get('running', True) for c in candidates},
             over_limit=grid is not None and grid > limit,
             sources=sorted({source for c in candidates for source in c['sources'] if source}))
@@ -1300,8 +1305,17 @@ class HomeAssistantSource:
     def priority_must_move(self, owner):
         """Work that no longer fits its authorised windows goes to the replan path."""
         last = self.priority_last
-        return bool(last and owner in last['granted'] and last['granted'][owner] < last['wants'][owner] - 1e-6
-                    and last['slack_h'][owner] < 0)
+        since = last.get('material_since_ms', {}).get(owner) if last else None
+        # An EV's material deficit is already based on carried delivery. A
+        # room's thermal outlook is instantaneous, so allow the response window.
+        return since is not None and (owner == 'ev' or last['at_ms'] - since >= run_priority.RESPONSE_MS)
+
+    def priority_recheck(self, owner):
+        last = self.priority_last
+        since = last.get('material_since_ms', {}).get(owner) if last else None
+        if since is not None and owner != 'ev' and not self.priority_must_move(owner):
+            return datetime.fromtimestamp((since + run_priority.RESPONSE_MS) / 1000, timezone.utc)
+        return None
 
     def priority_condition(self, owner, result):
         """Execution evidence for a limited run that cannot finish where the plan put it."""

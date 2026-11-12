@@ -509,13 +509,13 @@ class DeviceGateway(DeviceOperations):
                     result['capacity_curtailed'] = True
                     result['execution_condition'] = condition
                 elif (result.get('state') == 'limited' and not self.heating_limit
-                        and result.get('execution_condition') is None
-                        and (moved := self.capacity.priority_condition(intent.device, result)) is not None):
-                    # The run can no longer finish inside its authorised
-                    # windows. The existing replan path moves the work; valid
-                    # instructions for other devices keep executing.
-                    result.pop('heating_curtailed', None)
-                    result['execution_condition'] = moved
+                        and result.get('execution_condition') is None):
+                    if (recheck := self.capacity.priority_recheck(intent.device)) is not None:
+                        self.device_deadline('capacity_recheck', recheck)
+                    if (moved := self.capacity.priority_condition(intent.device, result)) is not None:
+                        # Move the blocked run while other accepted work continues.
+                        result.pop('heating_curtailed', None)
+                        result['execution_condition'] = moved
             response = dict(result=result, error=error, reservation_required=self.reservation_required,
                         reports=self.reports, reads=sorted(self.reads),
                         deadlines=[{'device':d,'name':n,'at':at} for (d,n),at in self.deadlines.items()],

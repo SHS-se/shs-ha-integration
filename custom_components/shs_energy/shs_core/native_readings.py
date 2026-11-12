@@ -13,9 +13,16 @@ class BatteryPowerReadingError(ValueError):
     fix = {'kind': 'diagnostics'}
     next_step = 'Inspect the named power sensor for an unavailable value, invalid number or incorrect unit. Control retries automatically when it is usable.'
 
+
+class BatteryObservationGap(BatteryPowerReadingError):
+    def __init__(self, entities):
+        self.entities = sorted(entities)
+        super().__init__('Waiting for battery control readings: ' + ', '.join(self.entities))
+
+
 def power(report, *, source, signed=False):
-    if not isinstance(report,dict):
-        raise BatteryPowerReadingError(f'{source}: configured power source is unavailable')
+    if not isinstance(report, dict) or report.get('state') in (None, 'unknown', 'unavailable'):
+        raise BatteryObservationGap([source])
     attrs=report['attributes'];unit=attrs.get('unit_of_measurement')
     if attrs.get('state_class')!='measurement' or unit not in ('W','kW'):
         raise BatteryPowerReadingError(f'{source}: instantaneous W or kW power required')

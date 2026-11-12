@@ -36,10 +36,11 @@ from .configuration_values import resolve_battery_quantities
 from .planning_warnings import planning_warning
 from .energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
 from .device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
+from .device_operations import OBSERVATION_GRACE_SECONDS
 from .operating_modes import device_mode
 from .presentation import battery_status_text
 
-from .native_readings import stamp, power, BatteryPowerReadingError
+from .native_readings import stamp, power, BatteryObservationGap, BatteryPowerReadingError
 CAPTURE_LIFETIME_MS=30000
 # Entities, the mode select and controller status all read one refresh's account.
 ACCOUNTING_REUSE_MS=1000
@@ -54,6 +55,7 @@ _LOGGER=logging.getLogger(__name__)
 
 class NativeReadbackPending(Exception):
     """The provider has not published its configured controls during startup."""
+
 
 # Only `idle` is inert: it neither spends stored energy nor absorbs surplus.
 # `hold` also declines to spend, but stays in the automatic mode so real surplus
@@ -146,6 +148,8 @@ class BatteryRuntime:
         self._execution_observations=[]
         self._execution_condition=object()  # First real observation reconciles persisted household availability.
         self._execution_had_work=False
+        self._execution_gap_check_ms=None
+        self._observation_gap_since_ms=None
         self._planning_reason=None
         self._publish_runtime_pending=False
         self._bootstrap_rejection=None;self._bootstrap_captured=None
@@ -369,7 +373,9 @@ class BatteryRuntime:
                 technical_error=str(self.host._fault),fix={'kind':'diagnostics'},retry_automatically=False,
                 next_step='Download controller diagnostics and report this software error. Restart Home Assistant after installing the fix.')
         elif self._observation_error:
-            value.update(state='fault',reason=self._observation_error)
+            since = self._observation_gap_since_ms
+            pending = since is not None and self.now() - since < OBSERVATION_GRACE_SECONDS * 1000
+            value.update(state='pending' if pending else 'fault', reason=self._observation_error)
         elif any(a.stage=='ambiguous' for a in group.attempts):
             reason=next((f['reason'] for f in reversed(self._fault_history) if 'send failed' in f['reason'] or 'Modbus' in f['reason']), 'The battery has not confirmed its settings; waiting for fresh readings')
             value.update(state='fault',reason=reason)
@@ -632,6 +638,10 @@ class BatteryRuntime:
             except AdmissionPending as error:
                 self._last_error=None
                 self._status={'state':'pending','reason':str(error),'retry_automatically':True}
+            except BatteryObservationGap as error:
+                self._last_error=None
+                self._status={'state':'pending','reason':str(error),'retry_automatically':True,
+                              'fix':error.fix, 'next_step':error.next_step}
             except Exception as error:
                 self._last_error=f'{type(error).__name__}: {error}'
                 if self._record_fault('refresh',self._last_error):
@@ -1093,12 +1103,20 @@ class BatteryRuntime:
         async with self._observe_lock:
             try:
                 events=await self._observe_batch(group_id)
+            except BatteryObservationGap as error:
+                if self._observation_gap_since_ms is None:
+                    self._observation_gap_since_ms = self.now()
+                self._observation_error = str(error)
+                if self.host and self.host.state.execution.account.contract is not None:
+                    self._queue_execution({'status': 'observation_gap', 'cause': 'battery_observation_unavailable',
+                                           'entities': error.entities})
+                raise
             except Exception as error:
+                self._observation_gap_since_ms = None
                 self._observation_error=f'{type(error).__name__}: {error}'
                 self._record_fault('observation',self._observation_error)
-                if self.host and self.host.state.execution.account.contract is not None:
-                    self._queue_execution({'status': 'faulted', 'cause': 'battery_observation_unavailable'})
                 raise
+            self._observation_gap_since_ms = None
             self._observation_error=None
             if self.host and self.host.state.execution.account.contract is not None:
                 group=self.host.state.groups[0]
@@ -1121,6 +1139,12 @@ class BatteryRuntime:
         if None in entities:
             raise ValueError('house, solar, signed grid/battery, SOC and Planned power bindings are required')
         reports={entity:read(entity) for entity in entities}
+        required = (*self._control_entities(), *(options[key] for key in (
+            'house_consumption_power_entity', 'solar_production_power_entity',
+            'battery_power_measurement_entity', 'battery_soc_entity', 'grid_power_entity')))
+        missing = {entity for entity in required if (reports.get(entity) or {}).get('state') in (None, 'unknown', 'unavailable')}
+        if missing:
+            raise BatteryObservationGap(missing)
         # This is a local response window, not a sensor report-age gate. Expiry
         # changes the capture identity even when every source is unchanged.
         self._external_pending={key:until for key,until in self._external_pending.items() if now<until}
@@ -1140,6 +1164,8 @@ class BatteryRuntime:
             accounting,evidence=observe_supply(scope,options,self._devices,reports.get,at_ms=now,capture_lifetime_ms=CAPTURE_LIFETIME_MS,
                 boundary='configured_household_reported_power',membership_revision=source,expected_membership_revision=self._model_sources,
                 members=members, excluded_bounds=(self._native_capacity or {}).get('native_load_bounds', {}))
+        except BatteryObservationGap:
+            raise
         except ValueError as error:
             raise BatteryPowerReadingError(str(error)) from error
         battery,_=power(reports[options['battery_power_measurement_entity']],source=options['battery_power_measurement_entity'],signed=True)
@@ -1324,12 +1350,15 @@ class BatteryRuntime:
                 'battery_discharge_w': energy['discharge'] / 250}
         plan = {'plan_id': contract.plan_id}
         has_work=execution_evidence.requested('$battery',slot)
-        if condition == self._execution_condition and (condition is None or self._execution_had_work or not has_work):
+        check_gap = (condition is not None and condition['status'] == 'observation_gap'
+                     and self._execution_gap_check_ms is not None and now >= self._execution_gap_check_ms)
+        if not check_gap and condition == self._execution_condition and (condition is None or self._execution_had_work or not has_work):
             if self._replan_pending and (self._replan_task is None or self._replan_task.done()):
                 self._notify_planning(self._planning_reason, publish=self._publish_runtime_pending)
             return
         if condition != self._execution_condition:
             self._execution_had_work=False
+        self._execution_gap_check_ms = None
         self._execution_condition=condition
         self._execution_had_work=self._execution_had_work or has_work
         self._execution_observations.append((plan,slot,condition))
@@ -1352,7 +1381,9 @@ class BatteryRuntime:
                 try:
                     while self._execution_observations:
                         plan,slot,condition=self._execution_observations[0]
-                        await self.coordinator.async_execution_observed('battery',plan,slot,condition)
+                        deadline = await self.coordinator.async_execution_observed('battery',plan,slot,condition)
+                        if condition == self._execution_condition and isinstance(deadline, datetime):
+                            self._execution_gap_check_ms = int(deadline.timestamp() * 1000)
                         self._execution_observations.pop(0)
                     if reason not in (None,'plan_handover_rejected',*rt.EXECUTION_SHORTFALLS):
                         # Expiry/configuration remains a recommendation; it is

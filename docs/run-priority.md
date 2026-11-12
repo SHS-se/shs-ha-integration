@@ -66,10 +66,13 @@ heater on or off). The same calculation restores power as capacity returns.
 
 A shortfall is carried across quarter boundaries and recalculated from measured
 delivery. Only SHS's own reductions build it. A replacement plan starts a new
-reference, because its snapshot already holds the measured state. When a
-limited run can no longer finish inside its authorised windows, the device
-reports `capacity_limited` or `temporarily_absent` with cause
-`house_import_capacity` through the
+reference, because its snapshot already holds the measured state. Local power
+adjustments apply whenever needed. A trimmed car requests a new plan once its
+unrecoverable energy reaches one native current step for one quarter. With a
+1 A step across three 230 V phases, that is 172.5 Wh. A trimmed room requests a
+new plan when the comfort shortfall reaches one 15-minute allocation and
+remains after the 60-second equipment response window. The device reports
+`capacity_limited` or `temporarily_absent` with cause `house_import_capacity` through the
 [existing replan path](controller-plan-execution.md#implemented-forced-replan-transport).
 Other devices keep executing. The planner decides whether a later window makes
 sense. The battery keeps its own replan rule.

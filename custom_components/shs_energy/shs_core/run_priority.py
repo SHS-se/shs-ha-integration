@@ -330,6 +330,19 @@ def charge_slack_h(slack_wh, power_w):
     return slack_wh / max(power_w, 1.0)
 
 
+def material_capacity_shortfall(candidate, granted_w):
+    """Use the smallest useful planning change for the run being trimmed."""
+    if granted_w >= candidate['want_w'] - 1e-6:
+        return False
+    if candidate['kind'] == 'heat':
+        # The planner can move a heater by a quarter. A smaller comfort
+        # deficit can be monitored while the room continues to resume locally.
+        return candidate['slack_h'] <= -QUARTER_MS / HOUR_MS
+    if candidate['kind'] == 'ev' and 'slack_wh' in candidate:
+        return -candidate['slack_wh'] >= candidate['step_w'] * QUARTER_MS / HOUR_MS
+    return False  # Battery shortfalls are diagnosed by its execution account.
+
+
 def heat_slack_h(run, now_ms, temperature_c):
     """How long the room can pause while meeting its accepted comfort floors.
 

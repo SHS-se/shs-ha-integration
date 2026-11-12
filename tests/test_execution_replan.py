@@ -37,6 +37,33 @@ class ExecutionReplanTests(unittest.IsolatedAsyncioTestCase):
         await self.h.async_execution_observed(device, self.h.optimisation_plan, slot or self.slot,
             {'status': status, 'cause': cause})
 
+    async def test_short_source_gap_and_recovery_never_enter_a_capture(self):
+        gap = {'status': 'observation_gap', 'cause': 'source_missing', 'entities': ['switch.charger']}
+        deadline = await self.h.async_execution_observed('ev', self.plan, self.slot, gap)
+        self.assertEqual(deadline, self.rig.now + timedelta(minutes=15))
+        self.rig.now += timedelta(seconds=78)
+        await self.h.async_execution_observed('ev', self.plan, self.slot, None)
+        journal = (await self.h._store.async_read())['execution_replanning']
+        self.assertFalse(journal['observation_gaps'])
+        self.assertFalse(journal['pending'])
+        self.assertFalse(journal['owners'])
+
+    async def test_only_the_same_source_matures_after_fifteen_minutes(self):
+        first = {'status': 'observation_gap', 'cause': 'source_missing', 'entities': ['switch.charger']}
+        second = {**first, 'entities': ['sensor.charger']}
+        await self.h.async_execution_observed('ev', self.plan, self.slot, first)
+        self.rig.now += timedelta(minutes=14)
+        await self.h.async_execution_observed('ev', self.plan, self.slot, second)
+        self.rig.now += timedelta(minutes=1)
+        await self.h.async_execution_observed('ev', self.plan, self.slot, second)
+        journal = (await self.h._store.async_read())['execution_replanning']
+        self.assertFalse(journal.get('pending'))
+        self.rig.now += timedelta(minutes=14)
+        await self.h.async_execution_observed('ev', self.plan, self.slot, second)
+        journal = (await self.h._store.async_read())['execution_replanning']
+        self.assertEqual(journal['pending']['$ev']['status'], 'temporarily_absent')
+        self.assertEqual(journal['recovery_sources']['$ev'], ['sensor.charger'])
+
     async def test_absence_is_durable_and_deduplicated_across_plan_ids_but_new_opportunity_replans(self):
         await self.observe()
         await self.h.async_optimisation_push()
@@ -492,7 +519,7 @@ class ControllerEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.coordinator.async_execution_observed.reset_mock()
         await self.controller.async_tick()
         conditions = [call.args for call in self.coordinator.async_execution_observed.call_args_list]
-        self.assertTrue(any(device == 'pool' and condition['status'] == 'faulted'
+        self.assertTrue(any(device == 'pool' and condition['status'] == 'observation_gap'
             for device, plan, slot, condition in conditions if condition))
         self.assertEqual(self.states['switch.charge'].state, 'on')
         self.assertEqual(self.states['switch.pool'].state, 'unavailable')

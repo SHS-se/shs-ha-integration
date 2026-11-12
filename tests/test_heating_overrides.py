@@ -85,6 +85,7 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
             scheduled_heat_shed=Mock(return_value=False),
             priority_sources=lambda: (),
             priority_condition=lambda *args: None,
+            priority_recheck=lambda owner: None,
         )
         self.physical = DeviceGateway(controller_inputs(self.hass), self.controller.options, self.store,
             self.controller.native_executor, authorize=lambda intent:None, before_external=lambda *args, **kwargs:True,
