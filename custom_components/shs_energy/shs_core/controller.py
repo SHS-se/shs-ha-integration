@@ -15,7 +15,7 @@ from time import perf_counter
 from uuid import uuid4
 
 from .command_journal import Command
-from .gateway_journal import AdmissionPending, GatewayRejected, critical_gateway_error
+from .gateway_journal import AdmissionPending, ConfigurationPending, GatewayRejected, critical_gateway_error
 from .command_transport import CommandUncertain
 from . import execution_replan as execution_evidence
 from .native_commands import finite, native_command
@@ -109,6 +109,8 @@ class ScheduledController(DeviceOperations):
             if error['kind'] == 'deadline':
                 raise ControlDeadlineError(error['message'])
             if error['kind'] == 'admission':
+                if error['details'].get('configuration_pending'):
+                    raise ConfigurationPending(error['message'])
                 raise AdmissionPending(error['message'])
             if error['kind'] == 'plan':
                 raise ControlPlanError(error['message'])
@@ -573,7 +575,7 @@ class ScheduledController(DeviceOperations):
                 # even if it was discovered during one device's sensor event.
                 devices = None
             if self.devices is not None:
-                self.adopt_ownership(await self.devices.synchronize(requested))
+                self.adopt_ownership(await self.devices.synchronize(requested, options=options))
             # Hash shared inputs once, excluding unused future-plan slots.
             metrics_context = fingerprint({
                 "options": options, "slot": slot,
@@ -676,6 +678,9 @@ class ScheduledController(DeviceOperations):
                         elif not result.get("heating_curtailed"):
                             await self.record_execution(device, plan, slot, result.get("execution_condition"))
                         self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"))
+                    except ConfigurationPending:
+                        # Start again with one settings snapshot for the entire evaluation.
+                        raise
                     except Exception as err:
                         if not isinstance(err, (ControlObservationError, ControlPlanError, PlanChangedError,
                                 ControlDeadlineError, AdmissionPending, HotWaterConfigurationError,

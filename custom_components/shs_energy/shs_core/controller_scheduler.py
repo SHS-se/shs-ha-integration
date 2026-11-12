@@ -4,16 +4,19 @@ import logging
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from .source_admission import pool_paused, pool_temperature_sources, temperature_available, temperature_metadata
-from .gateway_journal import critical_gateway_error
+from .gateway_journal import ConfigurationPending, critical_gateway_error
 
 _LOGGER = logging.getLogger(__name__)
+CONFIGURATION_GRACE = timedelta(seconds=30)
 
 
 class ControllerScheduler:
-    def __init__(self, controller, subscribe, at, spawn, *, now=None):
+    def __init__(self, controller, subscribe, at, spawn, *, now=None, configuration_attention=None):
         self.controller = controller
         self.subscribe, self.at, self.spawn = subscribe, at, spawn
         self.now = now or (lambda: datetime.now(timezone.utc))
+        self.configuration_attention = configuration_attention
+        self.configuration_wait_since = None
         self.watchers = {}
         self.dependencies = {}
         self.reads = {}
@@ -59,23 +62,48 @@ class ControllerScheduler:
             try:
                 await self.controller.async_tick(trigger=trigger, devices=devices)
                 self.cancel((None, 'tick_retry'))
+                self.configuration_wait(None)
             except Exception as error:
                 if critical_gateway_error(error):
                     raise
+                configuration_applied = 'configuration_applied' in self.reasons
                 # A shared admission failure must not lose the event that
                 # requested evaluation. Restart also reevaluates every owner.
                 for device, received in self.dispatched.items():
                     self.pending.setdefault(device, received)
                 self.reasons.update(reasons)
-                for device in (devices if devices is not None else self.controller.status):
-                    self.controller.report(device, 'pending', reason=str(error),
-                        retry_automatically=True, execution_blocked=True, fix={'kind': 'diagnostics'})
-                _LOGGER.exception('Controller evaluation interrupted; retaining queued work')
-                self._schedule((None, 'tick_retry'), self.now() + timedelta(seconds=5),
+                retry_seconds = 1
+                if isinstance(error, ConfigurationPending):
+                    self.configuration_wait(error)
+                    _LOGGER.debug('Waiting to evaluate the current settings: %s', error)
+                    if configuration_applied:
+                        continue
+                else:
+                    self.configuration_wait(None)
+                    for device in (devices if devices is not None else self.controller.status):
+                        self.controller.report(device, 'pending', reason=str(error),
+                            retry_automatically=True, execution_blocked=True, fix={'kind': 'diagnostics'})
+                    _LOGGER.exception('Controller evaluation interrupted; retaining queued work')
+                    retry_seconds = 5
+                self._schedule((None, 'tick_retry'), self.now() + timedelta(seconds=retry_seconds),
                                lambda: self.request('timer'))
                 return
             finally:
                 self.dispatched = {}
+
+    def configuration_wait(self, error):
+        if error is None:
+            if self.configuration_wait_since is None:
+                return
+            self.configuration_wait_since = None
+        else:
+            now = self.now()
+            if self.configuration_wait_since is None:
+                self.configuration_wait_since = now
+            if now - self.configuration_wait_since < CONFIGURATION_GRACE:
+                return
+        if self.configuration_attention is not None:
+            self.configuration_attention(error)
 
     def begin_device(self, device):
         self.reads[device] = set()

@@ -100,6 +100,13 @@ Ordinary Verification, deliberately stopped devices and unchanged available
 sensor timestamps do not create failure notices. Failed command/deadline waits
 are visible immediately; their reporting does not change control or handover.
 
+A settings save can briefly interrupt admission while Home Assistant and the app
+settle the same configuration. Keep existing device statuses and commands during
+this transition. Reevaluate queued work as soon as the app acknowledges the
+settings, with a timed retry if needed. A synchronization wait is quiet for 30
+seconds. If it continues, show one app-level issue until evaluation recovers.
+Validated field errors continue to show their correction actions immediately.
+
 ## Transient connection failures — 17 October 2026
 
 Log transport and remote-availability failures immediately. Show connection attention only after 3,600 seconds of continuously observed failure; verified success of that same connection resets the episode and clears its notice. Keep backend and connection lanes independent. Preserve observed time across restart without counting unobserved downtime. Retry with capped jittered backoff. Quiet notifications count as recovered only after a verified subscription and durable read.

@@ -106,7 +106,7 @@ class ConfigurationEditor:
                                        verification=(owner, entered) if verifying else None)
         self.engine.wake_projection.set()
         await self.engine.household.async_battery_inputs_refresh()
-        await self.engine.controller.async_tick()
+        await self.engine.evaluate_controller()
         return await self.view()
 
     async def action(self, operation, body):

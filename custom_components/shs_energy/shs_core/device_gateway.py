@@ -26,7 +26,7 @@ from .device_commands import actuator_targets
 from .device_controls import pool_control_mapping
 from .grid_capacity import EV_WATTS_PER_AMP
 from .run_priority import valid_run
-from .gateway_journal import AdmissionPending, GatewayConflict, GatewayRejected, JournalStorageError
+from .gateway_journal import AdmissionPending, ConfigurationPending, GatewayConflict, GatewayRejected, JournalStorageError
 from .command_transport import CommandUncertain
 
 
@@ -198,7 +198,7 @@ class DeviceGateway(DeviceOperations):
         options = self.options()
         mode = device_mode(options, self.device)
         if mode == 'control_verification':
-            raise AdmissionPending('Verification ended device control')
+            raise ConfigurationPending('Verification ended device control')
         if self.local_obligation:
             if self.closed or self.configuration_pending() or options != self.active_options:
                 raise GatewayConflict('Physical obligation permission changed')
@@ -207,7 +207,7 @@ class DeviceGateway(DeviceOperations):
             return
         self.authorize(self.intent)
         if self.closed or options != self.active_options:
-            raise AdmissionPending('Canonical device configuration changed')
+            raise ConfigurationPending('Canonical device configuration changed')
         if not self.restoring and mode != 'controlling':
             raise GatewayConflict('Local device control permission is absent')
         if self.restoring:
@@ -493,7 +493,9 @@ class DeviceGateway(DeviceOperations):
                     raise
                 error = {'message':str(exception), 'kind':'heating' if isinstance(exception, HeatingDeferred) else 'plan' if isinstance(exception, ControlPlanError) else 'deadline' if isinstance(exception, ControlDeadlineError) else 'observation' if isinstance(exception, ControlObservationError) else 'configuration' if isinstance(exception, HotWaterConfigurationError) else 'admission' if isinstance(exception, AdmissionPending) else 'rejected' if isinstance(exception, (GatewayConflict, GatewayRejected, ControlCommandError, CommandUncertain)) else 'internal',
                          'details':correction_details(exception)}
-                if isinstance(exception, PlanChangedError):
+                if isinstance(exception, ConfigurationPending):
+                    error['details']['configuration_pending'] = True
+                elif isinstance(exception, PlanChangedError):
                     error.update(kind='plan_changed', message=exception.message)
                 elif isinstance(exception, ControlObservationError):
                     error.update(entity=exception.entity, unavailable=exception.unavailable)

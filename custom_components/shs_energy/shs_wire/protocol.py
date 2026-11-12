@@ -14,6 +14,7 @@ CAPABILITIES = frozenset({
     'ev-current-capacity-v1', 'typed-device-plan-errors-v1', 'room-heating-overrides-v1',
     'battery-refusal-reasons-v1',
     'attributed-device-draw-v1',
+    'execution-configuration-pending-v1',
 })
 
 

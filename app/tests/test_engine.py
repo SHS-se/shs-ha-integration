@@ -16,7 +16,7 @@ from shs_app.migration_import import import_export
 from shs_app.gateway_seed import seed_gateway
 from shs_app.engine import AppEngine, seconds_until_aligned
 from shs_core.const import CONF_BASE_URL, CONF_DEVICE_TOKEN
-from shs_core.gateway_journal import AdmissionPending, GatewayJournal, GatewayConflict
+from shs_core.gateway_journal import AdmissionPending, ConfigurationPending, GatewayJournal, GatewayConflict, digest
 from shs_core.gateway_service import GatewayService, AppConnection
 from shs_core.gateway_stream import GatewayStream, GatewayRecord, GatewayOperations, GatewayCommands
 from shs_core.device_gateway import DeviceGateway
@@ -92,6 +92,7 @@ class LoopbackSocket:
         except (ValueError,KeyError,TypeError,RuntimeError) as error:
             stale = self.peer.closed or self.peer.service.connection is not self.peer
             reply = dict(success=False,error=dict(code='shs_gateway_stale' if stale else
+                'shs_gateway_configuration_pending' if isinstance(error, ConfigurationPending) else
                 'shs_gateway_admission' if isinstance(error, AdmissionPending) else 'shs_gateway_rejected',message=str(error)))
         self.replies.put_nowait(dict(id=value['id'],type='result',**reply))
     async def close(self):
@@ -380,6 +381,60 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine._source_admission['revision'],revision+1)
         self.assertEqual(engine.configuration.options()['pool_volume_m3'],25)
         self.assertFalse(self.native_calls)
+
+    async def test_room_sensor_save_retries_stale_execution_without_room_warnings(self):
+        from shs_app.gateway_client import GatewayClient
+        from shs_core.native_configuration import native_options
+
+        engine = self.engine()
+        socket = LoopbackSocket(self.service)
+
+        async def connect(*args, **kwargs):
+            return socket
+
+        engine.http = SimpleNamespace(ws_connect=connect)
+        with patch('shs_app.engine.GatewayClient', GatewayClient):
+            await engine.load()
+        engine.controller.verification = None
+        await engine.activate()
+        self.assertTrue(engine.controller.initialized, engine.controller.status)
+        dashboard = self.dashboard(engine)
+        revision = engine.configuration.revision
+        applied, finish = asyncio.Event(), asyncio.Event()
+        save = engine.configuration.record.async_save
+
+        async def delayed_save(value):
+            if value['applied_revision'] > revision:
+                applied.set()
+                await finish.wait()
+            await save(value)
+
+        engine.configuration.record.async_save = delayed_save
+        mark, guest = 'sensor.marks_heater_energy', 'sensor.guest_heater_energy'
+        engine.controller.report('device:' + mark, 'commanded')
+        engine.controller.report('device:' + guest, 'commanded')
+        previous = deepcopy(engine.controller.status)
+        options = engine.configuration.options()
+        options['device_control_mappings'] = {mark: {'temperature_entity_id': 'sensor.marks_new_temperature'}}
+        edit = asyncio.create_task(engine.configuration.commit(revision, options, 'room-temperature'))
+        try:
+            await asyncio.wait_for(applied.wait(), 2)
+            engine.scheduler.request('test')
+            await asyncio.wait_for(engine.scheduler.task, 2)
+            self.assertEqual(engine.controller.status, previous)
+            self.assertTrue(engine.scheduler.pending)
+            self.assertIsNone(self.service.policy)
+            self.assertFalse([item for item in dashboard.payload()['attention']
+                              if item['stage'] in ('execution', 'configuration_sync')])
+            self.assertFalse(self.native_calls)
+        finally:
+            finish.set()
+            await edit
+        await asyncio.wait_for(engine.scheduler.task, 2)
+        self.assertEqual(self.service.policy['options'], digest(native_options(engine.household.resolved_options())))
+        self.assertEqual(engine.controller.status['device:' + guest], previous['device:' + guest])
+        self.assertFalse(engine.scheduler.pending)
+        self.assertNotIn((None, 'tick_retry'), engine.scheduler.deadlines)
 
     async def test_sensor_projection_shares_calculations_only_within_one_pass(self):
         from contextlib import ExitStack

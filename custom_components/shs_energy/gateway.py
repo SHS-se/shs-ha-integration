@@ -43,7 +43,7 @@ from .shs_core.command_transport import CommandTransport
 from .shs_core.controller_inputs import ControllerInputs
 from .shs_core.device_gateway import DeviceGateway, DeviceIntent
 from .shs_core.device_operations import ControlDeadlineError, ControlObservationError, PowerHistoryError, HeatingDeferred
-from .shs_core.gateway_journal import AdmissionPending, GatewayJournal, GatewayConflict, digest
+from .shs_core.gateway_journal import AdmissionPending, ConfigurationPending, GatewayJournal, GatewayConflict, digest
 from .shs_core.gateway_service import GatewayService, AppConnection
 from .shs_core.heating_overrides import (HeatingOverrides, active_heating, heating_binding,
     heating_members, relay_heat, room_temperature)
@@ -2322,6 +2322,7 @@ async def websocket_gateway(hass, connection, msg):
     except (ValueError, KeyError, TypeError, RuntimeError) as error:
         stale = peer is None or peer.closed or peer.service.connection is not peer
         connection.send_error(msg['id'],'shs_gateway_stale' if stale else
+            'shs_gateway_configuration_pending' if isinstance(error, ConfigurationPending) else
             'shs_gateway_admission' if isinstance(error, AdmissionPending) else 'shs_gateway_rejected',str(error))
 
 

@@ -9,10 +9,11 @@ from .records import RecordStore
 
 
 class Configuration:
-    def __init__(self, root, identity, install, *, project):
+    def __init__(self, root, identity, install, *, project, on_applied=None):
         self.record = RecordStore(root / 'configuration.json')
         self.identity, self.install = identity, install
         self.project = project
+        self.on_applied = on_applied
         self.lock = asyncio.Lock()
         self.data = None
 
@@ -74,6 +75,8 @@ class Configuration:
             updated = dict(desired, applied_revision=desired['revision'], applied_options=deepcopy(desired['options']))
             await self.record.async_save(updated)
             self.data = updated
+            if self.on_applied is not None:
+                self.on_applied()
 
     async def commit(self, expected_revision, options, request_id, *, reviewed=False, verification=None):
         if type(expected_revision) is not int or type(options) is not dict or type(request_id) is not str or not request_id:

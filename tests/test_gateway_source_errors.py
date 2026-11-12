@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import sys
 sys.path.append(str(Path(__file__).parents[1]/'custom_components/shs_energy'))
 from shs_core.household_ports import HouseholdReadError, ConfigurationChanged
-from shs_core.gateway_journal import AdmissionPending, GatewayConflict
+from shs_core.gateway_journal import AdmissionPending, ConfigurationPending, GatewayConflict
 
 class SourceErrorTests(unittest.IsolatedAsyncioTestCase):
     async def test_only_source_read_failure_has_unavailable_wire_identity(self):
@@ -17,13 +17,14 @@ class SourceErrorTests(unittest.IsolatedAsyncioTestCase):
         node.decorator_list=[]
         scope=dict(SOCKETS='sockets',HouseholdReadError=HouseholdReadError,
                    ConfigurationChanged=ConfigurationChanged,GatewayConflict=GatewayConflict,
-                   AdmissionPending=AdmissionPending)
+                   AdmissionPending=AdmissionPending, ConfigurationPending=ConfigurationPending)
         exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),scope)
         for error,code in ((HouseholdReadError('recorder failed'),'shs_source_unavailable'),
                            (ValueError('programming error'),'shs_gateway_rejected'),
                            (GatewayConflict('Interrupted device operation'),'shs_gateway_rejected'),
-                           (AdmissionPending('Device intention belongs to an older configuration or policy'),
-                            'shs_gateway_admission')):
+                           (AdmissionPending('Waiting for device admission'),'shs_gateway_admission'),
+                           (ConfigurationPending('Device intention belongs to an older configuration or policy'),
+                            'shs_gateway_configuration_pending')):
             connection=Mock();peer=SimpleNamespace(request=AsyncMock(side_effect=error),closed=False)
             peer.service=SimpleNamespace(connection=peer)
             hass=SimpleNamespace(data={'sockets':{connection:peer}})

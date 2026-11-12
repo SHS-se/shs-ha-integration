@@ -4,12 +4,13 @@ import asyncio
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 import unittest
 
 import test_controller as fixtures
 from shs_core.controller import ScheduledController
 from shs_core.controller_scheduler import ControllerScheduler
+from shs_core.gateway_journal import ConfigurationPending
 from shs_core.verification import VerificationJournal
 
 
@@ -96,7 +97,6 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.calls.clear()
 
     async def test_shared_failure_keeps_queued_work_and_retries_without_a_new_sensor_event(self):
-        from unittest.mock import AsyncMock
         self.controller.initialized = True
         self.controller._async_tick = AsyncMock(side_effect=[RuntimeError('Synthetic policy admission'), None])
         self.scheduler.request('manual', {'ev'})
@@ -109,6 +109,35 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller._async_tick.await_count, 2)
         self.assertFalse(self.scheduler.pending)
         self.assertNotIn((None, 'tick_retry'), self.scheduler.deadlines)
+
+    async def test_only_persistent_configuration_wait_needs_attention_and_recovers(self):
+        await self.start_live_pool()
+        self.slot['pool_w'] = 3300
+        attention = []
+        self.scheduler.configuration_attention = attention.append
+        pending = ConfigurationPending('Home Assistant is applying the current settings')
+        tick = self.controller._async_tick
+        self.controller._async_tick = AsyncMock(side_effect=pending)
+        self.controller.report('ev', 'fault', reason='Existing charger fault')
+        previous = deepcopy(self.controller.status)
+        self.scheduler.request('configuration_update')
+        await self.drain()
+        for _ in range(29):
+            self.advance(1)
+            await self.drain()
+        self.assertEqual(attention, [])
+        self.assertEqual(self.controller.status, previous)
+        self.advance(1)
+        await self.drain()
+        self.assertEqual(attention, [pending])
+        self.assertEqual(self.controller.status, previous)
+        self.assertEqual(self.calls, [])
+        self.controller._async_tick = tick
+        self.advance(1)
+        await self.drain()
+        self.assertEqual(attention, [pending, None])
+        self.assertFalse(self.scheduler.pending)
+        self.assertEqual(self.states['switch.pool'].state, 'on')
 
     async def test_owner_binding_retry_recovers_with_the_same_plan_and_no_new_reading(self):
         from unittest.mock import AsyncMock

@@ -14,6 +14,7 @@ STAGES = {
     'pool_inputs': ('Pool observations could not be collected', 'Inspect the reported source. Other household data can still be sent.'),
     'upload': ('Planning data could not be sent', 'Check the server connection. A new plan cannot be requested until the upload succeeds.'),
     'configuration': ('Server configuration could not be confirmed', 'Refresh website choices and inspect the reported configuration problem.'),
+    'configuration_sync': ('Execution settings have not synchronized', 'SHS retries automatically. Inspect app diagnostics if this continues.'),
     'planning_retry': ('The server is retrying planning', 'SHS retries the same accepted planning job automatically. The previous accepted plan remains subject to its existing validity.'),
     'planning': ('The server could not create a plan', 'Inspect the reported planning failure. The previous accepted plan remains subject to its existing validity.'),
     'delivery': ('The new plan could not be received', 'SHS retries delivery automatically. The previous accepted plan remains subject to its existing validity.'),

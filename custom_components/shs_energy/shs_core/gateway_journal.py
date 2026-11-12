@@ -79,6 +79,10 @@ class AdmissionPending(GatewayConflict, GatewayRejected):
     """
 
 
+class ConfigurationPending(AdmissionPending):
+    """Execution must be reevaluated against the newly installed configuration."""
+
+
 def critical_gateway_error(error):
     """Integrity and lost session authority cannot be repaired as one device refusal."""
     return (isinstance(error, (JournalStorageError, sqlite3.DatabaseError))

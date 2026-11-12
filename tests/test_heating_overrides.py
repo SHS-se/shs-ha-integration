@@ -486,7 +486,7 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         self.controller.devices = SimpleNamespace(
             heating=self.book.value, perform=perform,
             ownership=AsyncMock(side_effect=self.physical.ownership.snapshot),
-            synchronize=AsyncMock(side_effect=lambda models:self.physical.ownership.snapshot()),
+            synchronize=AsyncMock(side_effect=lambda models, *, options:self.physical.ownership.snapshot()),
         )
         self.controller.record_execution = AsyncMock()
         await self.controller.async_start()

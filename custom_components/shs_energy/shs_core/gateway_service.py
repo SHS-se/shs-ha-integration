@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 from uuid import uuid4
 
-from .gateway_journal import AdmissionPending, GatewayConflict, digest
+from .gateway_journal import AdmissionPending, ConfigurationPending, GatewayConflict, digest
 from .native_configuration import native_options
 from .gateway_stream import GatewayConnection
 from .command_transport import settled, settle_task
@@ -212,6 +212,8 @@ class GatewayService:
     def authorize(self, operation):
         self.require_socket()
         if not self.active or self.admission_pending():
+            if self.active and operation in ('policy', 'synchronize', 'device'):
+                raise ConfigurationPending('Home Assistant is applying the current settings')
             raise AdmissionPending('Reconcile and activate the current app session first')
 
     def admission_pending(self):
@@ -230,7 +232,7 @@ class GatewayService:
     def authorize_device(self, intent):
         self.authorize('device')
         if (intent.configuration_revision != self.configuration_revision or intent.policy_revision != self.policy_revision):
-            raise AdmissionPending('Device intention belongs to an older configuration or policy')
+            raise ConfigurationPending('Device intention belongs to an older configuration or policy')
 
     async def configuration_changed(self, value):
         # Host invalidates synchronously before it creates this coroutine.
@@ -443,23 +445,27 @@ class AppConnection(GatewayConnection):
             return result
         s.authorize(op)
         if op == 'policy':
-            if type(body['value']) is not dict or body['value'].get('options') != digest(native_options(s.source.options())):
-                raise ValueError('Policy identity must be an object')
+            value = body['value']
+            if (type(value) is not dict or set(value) != {'plan', 'import_limit_w', 'options'}
+                    or type(value['plan']) is not str or type(value['options']) is not str):
+                raise ValueError('Invalid execution policy identity')
             from .grid_capacity import import_limit
             # A session can collect inputs before its first website response.
             # Missing authority grants no headroom: final native checks refuse
             # every increase until a resolved house limit is admitted.
-            raw_limit = body['value']['import_limit_w']
+            raw_limit = value['import_limit_w']
             limit = None if raw_limit is None else import_limit(raw_limit)
+            if value['options'] != digest(native_options(s.source.options())):
+                raise ConfigurationPending('The app and Home Assistant are synchronizing execution settings')
             context = s.context()
             if limit is not None and s.import_limit_w != limit:
                 await s.stream.call('save_record', 'house_import_limit', {'import_limit_w':limit})
             s.authorize(op)
             if s.context() != context:
-                raise GatewayConflict('House import policy changed during admission')
+                raise ConfigurationPending('House import policy changed during admission')
             s.import_limit_w = limit
-            if s.policy != body['value']:
-                s.policy = deepcopy(body['value'])
+            if s.policy != value:
+                s.policy = deepcopy(value)
                 s.policy_revision += 1
             return s.context()
         if op == 'ownership':

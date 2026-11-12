@@ -21,7 +21,7 @@ from shs_core.controller_inputs import ControllerInputs
 from shs_core.controller_scheduler import ControllerScheduler
 from shs_core.durable_record import DurableRecord
 from shs_core.execution_storage import ExecutionStorage
-from shs_core.gateway_journal import AdmissionPending, GatewayConflict, critical_gateway_error, validate_identity
+from shs_core.gateway_journal import AdmissionPending, ConfigurationPending, GatewayConflict, critical_gateway_error, validate_identity
 from shs_core.household import Household
 from shs_core.household_ports import HouseholdPorts
 from shs_core.receipt_inbox import ReceiptInbox
@@ -155,7 +155,8 @@ class AppEngine:
         if error is None:
             self.operation_errors.pop(key, None)
         else:
-            self.operation_errors[key] = pipeline_issue(stage, f'{key}: {type(error).__name__}: {error}', key='app:'+key)
+            detail = str(error) if stage == 'configuration_sync' else f'{key}: {type(error).__name__}: {error}'
+            self.operation_errors[key] = pipeline_issue(stage, detail, key='app:'+key)
         if previous != self.operation_errors.get(key):
             self.wake_projection.set()
 
@@ -210,7 +211,8 @@ class AppEngine:
                 return await self.gateway.call('source', {'operation':'configure', 'body':body}, cancel_commands=True)
             return await history.source('configure',body)
 
-        self.configuration = Configuration(self.root,self.identity,install_configuration,project=self.native_configuration)
+        self.configuration = Configuration(self.root,self.identity,install_configuration,project=self.native_configuration,
+                                           on_applied=self.configuration_applied)
         await self.configuration.load(dict(snapshot['configuration']['configuration_authority'],
             options=snapshot['configuration']['options']),lambda:history.source('credentials',{}))
         self.backends = Backends(self.root, self.identity)
@@ -279,7 +281,9 @@ class AppEngine:
         await self.battery.load()
         self.battery.reconcile(self.battery_verification_revision())
         self.checkpoint_digest = await asyncio.to_thread(self.battery.store.checkpoint_digest)
-        self.scheduler = ControllerScheduler(controller,self.mirror.subscribe,self.at,self.spawn)
+        self.scheduler = ControllerScheduler(controller,self.mirror.subscribe,self.at,self.spawn,
+            configuration_attention=lambda error: self.operation_error('configuration_sync', error,
+                                                                         stage='configuration_sync'))
         h.async_add_control_listener(self.scheduler.coordinator_updated)
         h.async_add_battery_listener(controller.publish_battery_status)
         controller.add_listener(self.wake_projection.set)
@@ -351,7 +355,8 @@ class AppEngine:
         if self.battery._processing != self.battery.received_checkpoint():
             raise GatewayConflict('Startup accounting prefix is not durably committed')
         self.writer.enabled = True
-        await self.devices.synchronize((self.household.optimisation_plan or {}).get('device_models',[]))
+        await self.devices.synchronize((self.household.optimisation_plan or {}).get('device_models',[]),
+                                       options=self.household.resolved_options())
         self.started = True
         await self.controller.async_start(reason='app_migration_or_restart')
         await self.admit_sources()
@@ -468,6 +473,16 @@ class AppEngine:
         home=self.mirror.context['home']
         resolved=resolve_configuration(options,home['latitude'],home['longitude'])
         return {**native_options(resolved),'_observed_entities':sorted(configured_entity_ids(resolved))}
+
+    def configuration_applied(self):
+        if self.started:
+            self.scheduler.request('configuration_applied')
+
+    async def evaluate_controller(self):
+        try:
+            await self.controller.async_tick()
+        except ConfigurationPending:
+            self.scheduler.request('configuration_update')
 
     @profiled('projection')
     async def project(self):
@@ -721,7 +736,7 @@ class AppEngine:
                 await self.consume()
                 if body.get('configuration_changed'): h._plan_configuration_changed = True
                 await h.async_battery_inputs_refresh()
-                result = await self.controller.async_tick()
+                await self.evaluate_controller()
             elif op == 'optimisation': result = await h.async_optimisation_push(force_plan=body['force_plan'])
             elif op == 'runtime_report': result = await h.async_report_runtime()
             elif op == 'profile':

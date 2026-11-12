@@ -10,7 +10,7 @@ import aiohttp
 
 from shs_core.command_transport import settled
 from shs_core.household_ports import HouseholdReadError
-from shs_core.gateway_journal import AdmissionPending, GatewayConflict, GatewayRejected, validate_identity
+from shs_core.gateway_journal import AdmissionPending, ConfigurationPending, GatewayConflict, GatewayRejected, validate_identity
 from shs_wire.protocol import admit, hello
 from .profiling import AppProfiler, profiled
 
@@ -127,6 +127,8 @@ class GatewayClient:
                     future.set_exception(GatewayRejected(reply['error'].get('message','Gateway rejected the request')))
                 elif reply.get('error',{}).get('code') == 'shs_gateway_admission':
                     future.set_exception(AdmissionPending(reply['error'].get('message','Gateway awaits the current settings')))
+                elif reply.get('error',{}).get('code') == 'shs_gateway_configuration_pending':
+                    future.set_exception(ConfigurationPending(reply['error']['message']))
                 else:
                     future.set_exception(GatewayConflict('Gateway session rejected; reconnect explicitly'))
                     raise GatewayConflict('Gateway session is no longer current')

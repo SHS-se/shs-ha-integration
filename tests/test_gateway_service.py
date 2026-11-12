@@ -12,7 +12,7 @@ from command_fixture import controller_inputs
 from gateway_fixture import IDENTITY, seed
 from shs_core.command_transport import CommandTransport
 from shs_core.device_gateway import DeviceGateway
-from shs_core.gateway_journal import GatewayConflict, digest
+from shs_core.gateway_journal import ConfigurationPending, GatewayConflict, digest
 from shs_core.gateway_service import GatewayService, AppConnection
 from shs_core.gateway_stream import GatewayStream, GatewayRecord, GatewayCommands, GatewayOperations
 from shs_core.heating_overrides import HeatingOverrides
@@ -97,6 +97,20 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         self.peer.disconnected()
         with self.assertRaises(GatewayConflict):await waiting
+
+    async def test_policy_distinguishes_a_settings_revision_from_an_invalid_payload(self):
+        await self.activate()
+        policy = self.service.policy
+        for invalid in (None, {**policy, 'options': None}, {**policy, 'import_limit_w': -1}):
+            with self.assertRaises(ValueError) as caught:
+                await self.call('policy', {'value': invalid})
+            self.assertNotIsInstance(caught.exception, ConfigurationPending)
+        self.options['device_control_mappings'] = {'sensor.bedroom_energy': {
+            'temperature_entity_id': 'sensor.new_bedroom_temperature'}}
+        with self.assertRaises(ConfigurationPending):
+            await self.call('policy', {'value': policy})
+        self.assertEqual(self.service.policy, policy)
+        self.assertFalse(self.calls)
 
     def intention(self):
         return dict(request_id='pool-operation',device='pool',operation='apply',headroom_reserved=True,
