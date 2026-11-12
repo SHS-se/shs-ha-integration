@@ -1145,7 +1145,8 @@ class DeviceQuarterUploadTests(unittest.TestCase):
         quality = {"aggregation": "sum_of_recorder_5minute_changes", "duration_seconds": 900}
         household = [{"start": "2026-11-06T19:45:00+00:00", "total_load_kwh": .5, "quality": quality}]
         devices = [
-            {"start": "2026-11-06T19:45:00+00:00", "device_energy_kwh": {"pool": .2}, "quality": quality},
+            {"start": "2026-11-06T19:45:00+00:00", "device_energy_kwh": {"pool": .2, "room": .1},
+             "device_weather_heating": {"room": "climate.room|sensor.power|sensor.energy"}, "quality": quality},
             {"start": "2026-11-06T20:00:00+00:00", "device_energy_kwh": {"pool": .9}, "quality": quality},
             {"start": "2026-11-06T20:15:00+00:00", "device_energy_kwh": {}, "quality": quality},
         ]
@@ -1153,6 +1154,7 @@ class DeviceQuarterUploadTests(unittest.TestCase):
         self.assertEqual([row["start"] for row in merged],
                          ["2026-11-06T19:45:00+00:00", "2026-11-06T20:00:00+00:00"])
         self.assertEqual(merged[0]["total_load_kwh"], .5)
-        self.assertEqual(merged[0]["device_energy_kwh"], {"pool": .2})
+        self.assertEqual(merged[0]["device_energy_kwh"], {"pool": .2, "room": .1})
+        self.assertEqual(merged[0]["device_weather_heating"], devices[0]["device_weather_heating"])
         self.assertNotIn("total_load_kwh", merged[1])
         self.assertEqual(with_device_quarters([], devices[1:2]), devices[1:2])

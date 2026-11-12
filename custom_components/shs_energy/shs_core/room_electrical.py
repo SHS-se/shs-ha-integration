@@ -5,6 +5,7 @@ bucket was observed heating. Neither current standby watts, a mixed-duty mean,
 nor the gateway's reservation maximum identifies that operating point.
 """
 from bisect import bisect_right
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from math import isfinite
@@ -93,6 +94,46 @@ def _spans(entity, rows, end):
             changes.append((at, value))
     return ([at for at, _ in changes], [(at, changes[i+1][0] if i+1 < len(changes) else end, value)
             for i, (at, value) in enumerate(changes)])
+
+
+def weather_heating_bindings(devices, mappings, read_state, *, pool_water_entity=None):
+    """Identify dedicated reversible inverter thermostats using the existing mapping."""
+    meters = Counter(m.get("power") for m in mappings.values()
+                     if isinstance(m, dict) and isinstance(m.get("power"), str))
+    bindings = {}
+    for device in devices:
+        key = str(device["key"])
+        mapping = mappings.get(key) or {}
+        if (device.get("control_type") != "setpoint" or
+                device.get("load_type", device.get("suggested_load_type")) != "inverter" or
+                mapped_planning_path(device, mapping, pool_water_entity) != "room"):
+            continue
+        targets = actuator_targets(mapping)
+        power = mapping.get("power")
+        if len(targets) != 1 or not isinstance(power, str) or meters[power] != 1:
+            continue
+        entity = targets[0]
+        state = read_state(entity) if entity.startswith("climate.") else None
+        modes = state.attributes.get("hvac_modes") if state is not None else None
+        if isinstance(modes, (tuple, list)) and "heat" in modes and "cool" in modes:
+            bindings[key] = (entity, f"{entity}|{power}|{device['statistic_id']}")
+    return bindings
+
+
+def heating_quarters(entity, rows, start, end):
+    """Only complete, explicitly heating quarters identify running meter draw."""
+    _, spans = _spans(entity, [(at, state, attrs if state == "heat" else None)
+                               for at, state, attrs in rows], end)
+    quarter = timedelta(minutes=15)
+    result = set()
+    for left, right, heating in spans:
+        if heating is not True:
+            continue
+        at = start + max(0, -((start - left) // quarter)) * quarter
+        while at + quarter <= min(right, end):
+            result.add(at.isoformat())
+            at += quarter
+    return result
 
 
 def room_on_power(*, conditions, power_means, actuator_rows, start, end):

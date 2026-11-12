@@ -135,6 +135,7 @@ from .optimisation import (
     validate_plan_contract,
 )
 from .measurements import device_measurement_issues
+from .room_electrical import heating_quarters, weather_heating_bindings
 from .input_accuracy import MEASUREMENT_WINDOW, input_accuracy, prune_quarters, quarter_completeness, report_due
 from .planning import (
     build_device_models,
@@ -2559,6 +2560,22 @@ class Household:
             sorted(set(statistic_by_key.values()) | set(heat.values())), start, end, "5minute"
         )
         quarters = self._device_changes(statistic_by_key, statistics)
+        bindings = self._weather_heating_bindings(devices)
+        if bindings:
+            try:
+                history = await self._state_history(
+                    [entity for entity, _ in bindings.values()], start, end, with_attributes=True
+                )
+            except HouseholdReadError as err:
+                _LOGGER.debug("Heating activity unavailable for weather learning: %s", err)
+            else:
+                heating = {key: heating_quarters(entity, history.get(entity, []), start, end)
+                           for key, (entity, _) in bindings.items()}
+                for row in quarters:
+                    evidence = {key: bindings[key][1] for key in row["device_energy_kwh"]
+                                if row["start"] in heating.get(key, ())}
+                    if evidence:
+                        row["device_weather_heating"] = evidence
         if not observed:
             return quarters
         settings: dict[str, dict[str, float]] = {}
@@ -2581,6 +2598,13 @@ class Household:
         mappings = options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
         return device_observation_entities(devices, mappings if isinstance(mappings, dict) else {},
                                          options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY))
+
+    def _weather_heating_bindings(self, devices):
+        options = self.resolved_options()
+        return weather_heating_bindings(
+            devices, options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}), self.ports.read_state,
+            pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
+        )
 
     def _device_statistics(self, devices):
         from .configuration_schema import shared_devices
@@ -2930,7 +2954,10 @@ class Household:
         # Native state is read at capture, independently of historical models.
         from .heating_overrides import heating_binding
         from .planning import thermostat_facts
+        weather_bindings = self._weather_heating_bindings(devices)
         for model in device_models:
+            if model["key"] in weather_bindings:
+                model["weather_heating_binding"] = weather_bindings[model["key"]][1]
             if model["control_type"] == "setpoint" and model.get("planning_service") != "pool":
                 model["thermostat"] = thermostat_facts(control_mappings.get(model["key"], {}), self.ports.read_state)
             if model["control_type"] == "switch_schedule" and model.get("category") == "heating" and model.get("planning_service") != "pool":
@@ -3853,7 +3880,10 @@ class Household:
                 # suppressed readings that the recorder had already finished.
                 complete_end = quarter_start(self.ports.utcnow())
                 accepted = stored.get("optimisation_actuals_accepted_until")
-                observation_signature_now = observation_signature(self._device_observations(devices))
+                observations = self._device_observations(devices)
+                for key, (_, binding) in self._weather_heating_bindings(devices).items():
+                    observations.setdefault(key, {})["weather_heating"] = binding
+                observation_signature_now = observation_signature(observations)
                 if accepted:
                     # Re-offer the recent quarters behind the watermark. The
                     # database upsert keeps the unique row count at 96/day,

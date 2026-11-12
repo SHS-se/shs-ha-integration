@@ -9,11 +9,32 @@ from types import SimpleNamespace
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from shs_core.household_ports import HouseholdReadError, ConfigurationChanged
 from shs_core.room_electrical import OnCondition, attributed_device_quarters, capture_room_on_power, room_on_power
+from shs_core.room_electrical import heating_quarters, weather_heating_bindings
 from shs_core.device_draw import DrawBinding, learn_device_draw
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 def at(minutes): return START+timedelta(minutes=minutes)
 def row(minutes, action): return (at(minutes), 'heat', {'hvac_action': action})
+
+
+class WeatherHeatingTests(unittest.TestCase):
+    def test_only_complete_heating_quarters_are_qualified(self):
+        states = [row(-5, 'heating'), row(6, 'idle'), row(12, 'heating'),
+                  (at(31), 'fan_only', {'hvac_action': 'heating'}), row(45, 'heating'),
+                  (at(60), 'unavailable', {}), row(76, 'heating')]
+        self.assertEqual(heating_quarters('climate.room', states, START, at(95)),
+                         {at(15).isoformat(), at(45).isoformat()})
+
+    def test_weather_learning_uses_a_dedicated_reversible_thermostat_mapping(self):
+        device = {'key': 'meter', 'control_type': 'setpoint', 'category': 'cooling',
+                  'load_type': 'inverter', 'statistic_id': 'sensor.energy'}
+        mapping = {'actuator_entity_ids': ['climate.room'], 'power': 'sensor.power'}
+        read = lambda _entity: SimpleNamespace(attributes={'hvac_modes': ['off', 'heat', 'cool']})
+        self.assertEqual(weather_heating_bindings([device], {'meter': mapping}, read),
+                         {'meter': ('climate.room', 'climate.room|sensor.power|sensor.energy')})
+        self.assertEqual(weather_heating_bindings([device], {'meter': mapping, 'shared': mapping}, read), {})
+        self.assertEqual(weather_heating_bindings([{**device, 'control_type': 'switch_schedule'}],
+                                                   {'meter': mapping}, read), {})
 
 class AttributedDrawTests(unittest.TestCase):
     def test_change_only_meter_can_measure_constant_load_cycles(self):

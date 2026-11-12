@@ -502,6 +502,8 @@ def with_device_quarters(
         row = by_start.get(quarter["start"])
         if row is not None:
             row["device_energy_kwh"] = quarter["device_energy_kwh"]
+            if "device_weather_heating" in quarter:
+                row["device_weather_heating"] = quarter["device_weather_heating"]
         elif quarter["device_energy_kwh"]:
             merged.append(dict(quarter))
     return sorted(merged, key=lambda row: row["start"])
