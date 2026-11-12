@@ -799,6 +799,8 @@ class AppEngine:
                 self.spawn(self.periodic(self.battery_inputs,5,wake=self.wake_battery),'battery_inputs'),
                 self.spawn(self.periodic(self.resources,60),'runtime_resources'),self.spawn(self.calendar(),'calendar'),
                 self.spawn(self.restart(),'backend_restart')]
+            self.spawn(self.cloud_job(self.environment, self.editor.import_device_setups, stage='website_choices'),
+                       'device_settings_import')
             for environment, h in self.households.items():
                 operations = [('planning','upload',lambda h=h:self.planning(h)),
                     ('cloud_refresh','cloud_status',lambda h=h:self.periodic(h.async_request_refresh,60)),

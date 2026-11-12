@@ -1,8 +1,7 @@
-"""Local entity mappings for website-requested controllable devices.
+"""Local entity mappings for devices selected for planning.
 
-The website owns the requested planning role. Home Assistant owns entity ids
-and installation-specific limits. A device is effective as controllable only
-when both sides name the same control type and this local mapping is complete.
+The website owns participation. The app owns the control method and its
+reviewed Home Assistant bindings. A device needs a complete mapping to plan.
 """
 
 from __future__ import annotations
@@ -103,7 +102,7 @@ def room_thermal_zones(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return the planned device views that feed a room heat model.
 
     The views also hold the $battery, $ev and $pool system entries, which carry
-    no website control type and may lack a planning role.
+    no device control method and may lack a planning role.
     """
     return [
         device
@@ -120,8 +119,8 @@ def room_thermal_zones(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def planning_path(control_type: str | None, category: str | None) -> str | None:
     """Return which planning model owns one controllable device.
 
-    This is the single authority on that routing. The website offers every
-    control type for every meter category, so a category never implies a
+    This is the single authority on that routing. The app offers every
+    control method for every meter category, so a category never implies a
     control contract: a pool-room floor heater metered as ``pool_heating`` but
     asked to hold a setpoint belongs to its room's heat model, not to the pool
     service. Callers that assumed the reverse turned one such pairing into a
@@ -180,7 +179,7 @@ def apply_planner_support(
         "mapping_error": (
             f"the planner has no model for {str(control_type).replace('_', ' ')} "
             f"control of a {str(category or 'unknown').replace('_', ' ')} meter; "
-            "choose another control type on the website or leave this meter in "
+            "choose another control method in the device settings or leave this meter in "
             "base load"
         ),
     }
@@ -524,13 +523,15 @@ def apply_requested_configuration(
     for device in devices:
         configuration = requested.get(device["key"], {})
         requested_role = configuration.get("planning_role", "base_load")
-        requested_control = configuration.get("control_type")
+        setup = device.get("app_setup")
+        requested_control = setup["control_type"] if setup else configuration.get("control_type")
+        reviewed_control = requested_control if setup or requested_role == "controllable" else None
         category = str(
             device.get("category") or configuration.get("category") or ""
         )
         report = apply_planner_support(
             mapping_report(
-                requested_control if requested_role == "controllable" else None,
+                reviewed_control,
                 mappings.get(device["key"]),
                 known_entity_ids,
                 entity_names,
@@ -540,10 +541,10 @@ def apply_requested_configuration(
                 pool_control=mapped_planning_path({"category": category, "control_type": requested_control}, mappings.get(device["key"], {}), pool_water_entity) == "pool",
                 pool_water_entity=pool_water_entity,
             ),
-            requested_control if requested_role == "controllable" else None,
+            reviewed_control,
             category,
         )
-        device["load_type"] = configuration.get(
+        device["load_type"] = (setup or configuration).get(
             "load_type", device["suggested_load_type"]
         )
         ready = requested_role == "controllable" and report["mapping_status"] == "ready"

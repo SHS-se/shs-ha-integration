@@ -304,19 +304,8 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(unplanned_services(options, set(), meters), [])
 
     def test_real_exchange_preserves_choice_timestamps_and_clears_excluded_warnings(self):
-        import ast
         from types import SimpleNamespace
-        from typing import Any
-        from shs_core.device_controls import planning_path
-        tree = ast.parse((Path(__file__).parents[1] / 'custom_components/shs_energy/shs_core/household.py').read_text())
-        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'Household')
-        function = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '_record_device_exchange')
-        for node in ast.walk(function):
-            if isinstance(node, ast.ImportFrom): node.level = 0; node.module = "shs_core." + node.module
-        module = ast.Module(body=[function], type_ignores=[])
-        namespace = {'Any': Any, 'datetime': datetime, 'timezone': timezone, 'ShsApiError': ValueError,
-                     'resolved_options': lambda hass, options: options, 'planning_path': planning_path, 'unplanned_services': unplanned_services}
-        exec(compile(module, 'shs_core/household.py', 'exec'), namespace)
+        from shs_core.household import Household
         import asyncio
         from unittest.mock import AsyncMock
         calls = {}
@@ -330,7 +319,7 @@ class PresentationTests(unittest.TestCase):
         fake.ports = SimpleNamespace(options=lambda: self.options, utcnow=lambda: self.now, admit=AsyncMock())
         fake.resolved_options = lambda: self.options
         stored = {}
-        asyncio.run(namespace['_record_device_exchange'](fake, stored, [{'key': 'pool', 'active_power_w': 1000, 'profile_sample_count': 10, 'inference': {}}],
+        asyncio.run(Household._record_device_exchange(fake, stored, [{'key': 'pool', 'active_power_w': 1000, 'profile_sample_count': 10, 'inference': {}}],
             {'device_configuration': [device], 'home_configuration': {'battery': {'included': False, 'choice_at': self.now.isoformat()}}}))
         self.assertEqual(stored['optimisation_device_configuration']['pool']['planning_choice_at'], self.now.isoformat())
         self.assertEqual(fake.optimisation_degraded_devices, [])

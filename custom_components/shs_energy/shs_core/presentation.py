@@ -202,7 +202,7 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         else:
             errors = execution_setup_errors(mapping) + water_gaps
             if device.get("control_type") not in {"setpoint", "switch_schedule", "permit_inhibit"}:
-                errors = [LABELS.get(device.get("control_type"), "The method") + " selected on the website is not supported for this device"]
+                errors = [LABELS.get(device.get("control_type"), "The method") + " is not supported for this device"]
             if errors:
                 reason = "; ".join(errors)
             elif device.get("mapping_status") != "ready":
@@ -215,6 +215,8 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
             device['mapping_error'] = '; '.join(filter(None,[device.get('mapping_error'),shared_reason]))
             reason = '; '.join(filter(None,[reason,shared_reason]))
         verification_reason = reason
+        if planned and device.get("method_sync_pending") and not member and not reason:
+            reason = "Waiting for the website to receive the control method"
         mode = device_mode(options, controller_id)
         device["mode"] = mode
         device["permission"] = {"enabled": mode == "controlling", "reason": reason, "verification_reason": verification_reason, "controller_id": controller_id}

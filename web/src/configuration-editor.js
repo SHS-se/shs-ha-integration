@@ -983,15 +983,22 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const device = this._data.devices.find(row => row.key === button.dataset.deviceKey);
     const room = device.meter_room;
     const areas = Object.entries(this._data.rooms || {}).sort((a, b) => a[1].localeCompare(b[1]));
+    const setupReady = this._data.device_setups_ready;
+    const select = (key, label, choices, value, placeholder = "") => `<label>${label}
+      <select name="${key}" ${key !== "category" && !setupReady ? "disabled" : ""}>
+        ${placeholder ? `<option value="" disabled ${value ? "" : "selected"}>${placeholder}</option>` : ""}
+        ${choices.map(choice => `<option value="${this._escape(choice)}" ${choice === value ? "selected" : ""}>${this._escape(this._label(choice))}</option>`).join("")}
+      </select></label>`;
     const dialog = document.createElement("dialog");
     dialog.className = "device-settings-dialog";
     dialog.setAttribute("aria-labelledby", "device-settings-title");
     dialog.innerHTML = `
       <h2 id="device-settings-title">Settings for ${this._escape(device.name)}</h2>
       <form>
-        <label>Category<select name="category">
-          ${this._data.device_categories.map(category => `<option value="${this._escape(category)}" ${category === device.category ? "selected" : ""}>${this._escape(this._label(category))}</option>`).join("")}
-        </select></label>
+        ${select("category", "Category", this._data.device_categories, device.category)}
+        ${select("control_type", "Control method", this._data.device_control_types, device.control_type, "Choose a method")}
+        ${select("load_type", "Load characteristic", this._data.device_load_types, device.load_type, "Choose a characteristic")}
+        ${setupReady ? "" : "<small>Waiting for the website to transfer your existing device settings.</small>"}
         ${room.editable && areas.length ? `<label>Room<select name="room">
           <option value="" disabled ${room.area_id ? "" : "selected"}>Choose a room</option>
           ${areas.map(([id, name]) => `<option value="${this._escape(id)}" ${id === room.area_id ? "selected" : ""}>${this._escape(name)}</option>`).join("")}
@@ -1007,14 +1014,20 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const cancel = dialog.querySelector('button[type="button"]');
     const save = dialog.querySelector('button[type="submit"]');
     const error = form.querySelector('[role="alert"]');
-    const category = form.elements.namedItem("category");
     const area = form.elements.namedItem("room");
+    const settings = ["category", "control_type", "load_type"].map(name => form.elements.namedItem(name))
+      .filter(field => !field.disabled);
     const edits = [
-      { field: category, saved: device.category, action: "device_category", body: () => ({ category: category.value }) },
-      ...(area ? [{ field: area, saved: room.area_id || "", action: "device_room",
+      { fields: settings, action: "device_settings", body: fields => ({
+        settings: Object.fromEntries(fields.map(field => [field.name, field.value])),
+      }) },
+      ...(area ? [{ fields: [area], action: "device_room",
         body: () => ({ meters: room.meters, area_id: area.value }) }] : []),
     ];
-    const pending = () => edits.filter(edit => edit.field.value !== edit.saved);
+    const fields = edits.flatMap(edit => edit.fields);
+    const saved = new Map(fields.map(field => [field, field.value]));
+    const pending = () => edits.map(edit => ({ ...edit, fields: edit.fields.filter(field => field.value !== saved.get(field)) }))
+      .filter(edit => edit.fields.length);
     let saving = false;
     let savedChanges = false;
     form.addEventListener("change", () => { save.disabled = !pending().length; });
@@ -1030,7 +1043,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       const current = this._data.devices.find(row => row.key === device.key);
       if (current && this._category && this._category !== current.category) this._category = "";
       if (current && this._room && this._room !== current.room_name) this._room = "";
-      this._render();
+      this._render({ expandedCard: current?.control_type !== device.control_type ? "controls:" + device.key : undefined });
       this.shadowRoot.querySelector(`[data-action="device-settings"][data-device-key="${CSS.escape(device.key)}"]`)?.focus();
     });
     form.addEventListener("submit", async event => {
@@ -1038,7 +1051,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       if (saving || !pending().length) return;
       error.hidden = true;
       saving = cancel.disabled = save.disabled = true;
-      for (const { field } of edits) {
+      for (const field of fields) {
         field.disabled = true;
         field.removeAttribute("aria-invalid");
         field.removeAttribute("aria-describedby");
@@ -1047,13 +1060,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
       for (const edit of pending()) {
         try {
           const result = await this._request({ action: edit.action, config_entry: this._entryId,
-            device_key: device.key, ...edit.body() });
+            device_key: device.key, ...edit.body(edit.fields) });
           this._pollRevision = (this._pollRevision || 0) + 1;
           this._mergePanel(result);
-          edit.saved = edit.field.value;
+          for (const field of edit.fields) saved.set(field, field.value);
           savedChanges = true;
         } catch (err) {
-          failed = edit.field;
+          failed = edit.fields.find(field => err.field_errors?.[field.name]) || edit.fields[0];
           error.textContent = err.message;
           error.hidden = false;
           failed.closest("label").after(error);
@@ -1063,7 +1076,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         }
       }
       saving = cancel.disabled = false;
-      for (const { field } of edits) field.disabled = false;
+      for (const field of fields) field.disabled = false;
       if (failed) {
         save.disabled = false;
         failed.focus();
@@ -1305,7 +1318,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
           { fields: systemFields, values: this._draft, scope: "configuration", deviceKey: device.key },
         ])}
         ${!planning && Object.keys(device.suggested_mapping || {}).some(k => k !== "control_type" && !this._present(mapping[k])) ? `<button class="text" data-action="use-suggestions" data-device-key="${this._escape(device.key)}">Review suggested setup</button>` : ""}
-        ${mappingFields.length || systemFields.length ? `<div class="device-save-row"><span>${dirty ? "Unsaved changes" : "Saved"}</span><button class="text" data-action="cancel-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty ? "" : "disabled"}>Cancel</button><button class="primary" data-action="save-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty && !this._refreshing && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>Save ${section}</button></div>` : `<p>Choose how this device runs on the website to set it up here.</p>`}
+        ${mappingFields.length || systemFields.length ? `<div class="device-save-row"><span>${dirty ? "Unsaved changes" : "Saved"}</span><button class="text" data-action="cancel-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty ? "" : "disabled"}>Cancel</button><button class="primary" data-action="save-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty && !this._refreshing && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>Save ${section}</button></div>` : `<p>Choose a control method in the device settings.</p>`}
         ${this._choices(device, section)}
         ${!planning ? `<small class="muted">${this._escape(device.statistic_id || "Equipment settings")}</small>` : ""}
       </div></details>`;

@@ -5,11 +5,19 @@ from contextlib import nullcontext
 from shs_core import const as c
 from shs_core.configuration_schema import prepare_options, save_device, resolve_configuration, initialise_device_inclusion
 from shs_core.configuration_view import execution_device_views
+from shs_core.device_controls import CONTROL_TYPES
+from shs_core.device_setup import DEVICE_SETUPS, LOAD_TYPES, read_device_setups
 from shs_core.discovery import (CatalogState, DiscoveryCatalog, discover_configuration,
                                 _energy_dashboard_inventory, dashboard_meters, meter_room)
-from shs_core.operating_modes import execution_mode_options
+from shs_core.operating_modes import admission_identity, execution_mode_options, reconcile_admissions
 from shs_core.presentation import system_fields
 from .configuration_view import configuration_payload
+
+
+class DeviceSettingsError(ValueError):
+    def __init__(self, field, message):
+        super().__init__(message)
+        self.field_errors = {field: message}
 
 
 class ConfigurationEditor:
@@ -36,6 +44,24 @@ class ConfigurationEditor:
             device['meter_room'] = meter_room(meters[device['key']], self.meter_areas,
                                              self.context['area_names'])
         return devices
+
+    async def import_device_setups(self):
+        """Adopt the selected backend's choices without changing live admission."""
+        configuration = self.engine.configuration
+        if DEVICE_SETUPS in configuration.options():
+            self.publish_device_settings()
+            return
+        choices = read_device_setups(await self.engine.household.client.read_device_setups())
+        existing = configuration.options()
+        if DEVICE_SETUPS not in existing:
+            await configuration.admit(existing, {**existing, DEVICE_SETUPS: choices})
+            self.publish_device_settings()
+
+    def publish_device_settings(self):
+        for environment, household in self.engine.households.items():
+            self.engine.spawn(self.engine.cloud_job(environment,
+                household.async_refresh_device_configuration, stage='website_choices'),
+                'device_settings_sync_' + environment)
 
     def resolved_options(self):
         return resolve_configuration(self.engine.configuration.options(),self.catalog.latitude,self.catalog.longitude)
@@ -117,10 +143,7 @@ class ConfigurationEditor:
         if operation == 'device_room':
             await self.engine.gateway.call('source', dict(operation=operation,
                 body={key: body[key] for key in ('device_key', 'meters', 'area_id')}))
-            for environment, household in self.engine.households.items():
-                self.engine.spawn(self.engine.cloud_job(environment,
-                    household.async_refresh_device_configuration, stage='website_choices'),
-                    'device_room_sync_' + environment)
+            self.publish_device_settings()
             return await self.view()
         if operation in ('pair_backend','select_backend'):
             await getattr(self.engine,operation)(body)
@@ -139,14 +162,50 @@ class ConfigurationEditor:
             if h.last_optimisation_error: raise ValueError(h.last_optimisation_error)
             return await self.view()
         existing = self.engine.configuration.options()
-        if operation == 'device_category':
-            key, category = body['device_key'], body['category']
+        if operation == 'device_settings':
+            key = body['device_key']
             if key not in dashboard_meters(self.catalog.preferences):
                 raise ValueError('This device is no longer in Home Assistant Energy')
-            if category not in c.DEVICE_CATEGORIES:
-                raise ValueError('Choose a device category from the list')
-            existing.setdefault(c.OPT_DEVICE_CATEGORY_OVERRIDES, {})[key] = category
-            await self._commit(existing, body, replan=True, reviewed=False)
+            edits = body['settings']
+            if not isinstance(edits, dict) or not edits or set(edits) - {'category', 'control_type', 'load_type'}:
+                raise ValueError('Choose valid device settings')
+            for field, values, label in (
+                ('category', c.DEVICE_CATEGORIES, 'device category'),
+                ('control_type', CONTROL_TYPES, 'control method'),
+                ('load_type', LOAD_TYPES, 'load characteristic'),
+            ):
+                if field in edits and edits[field] not in values:
+                    raise DeviceSettingsError(field, f'Choose a {label} from the list')
+            if ('control_type' in edits or 'load_type' in edits) and DEVICE_SETUPS not in existing:
+                raise ValueError('Wait for the app to retrieve your existing device settings')
+            choices = await h.async_cached_planning_configuration()
+            device = next((d for d in choices['devices'] if d['key'] == key), None)
+            if device is None:
+                raise ValueError('This device is no longer in Home Assistant Energy')
+            old_groups = reconcile_admissions(existing, choices['devices'], choices['home'])['planning_admissions']
+            if 'category' in edits:
+                existing.setdefault(c.OPT_DEVICE_CATEGORY_OVERRIDES, {})[key] = edits['category']
+            if 'control_type' in edits or 'load_type' in edits:
+                previous = existing[DEVICE_SETUPS].get(key, {})
+                method = device['control_type']
+                if not previous and method is None:
+                    method = existing.get(c.OPT_DEVICE_CONTROL_MAPPINGS, {}).get(key, {}).get('control_type')
+                existing[DEVICE_SETUPS][key] = {
+                    'control_type': edits.get('control_type', method),
+                    'load_type': edits.get('load_type', device['load_type']),
+                    'revision': max(previous.get('revision', 0), self.engine.configuration.revision) + 1,
+                }
+            changed = [{**d, **edits} if d['key'] == key else d for d in choices['devices']]
+            new_groups = reconcile_admissions(existing, changed, choices['home'])['planning_admissions']
+            # Keep a former owner in Verification until HA acknowledges abandonment,
+            # even when its new planning path will subsequently remove the owner.
+            modes = existing.get('device_modes', {})
+            for owner in modes:
+                if (modes[owner] == 'controlling' and
+                        admission_identity(owner, old_groups.get(owner)) != admission_identity(owner, new_groups.get(owner))):
+                    modes[owner] = 'control_verification'
+            await self._commit(existing, body, replan=False, reviewed=False)
+            self.publish_device_settings()
             return await self.view()
         if operation == 'save':
             incoming = body['configuration']
@@ -168,7 +227,7 @@ class ConfigurationEditor:
                 raise ValueError('These settings belong to another device')
             options = self.prepare(existing,incoming)
             if device is not None:
-                if device.get('planning_role') != 'controllable':
+                if device.get('planning_role') != 'controllable' and not device.get('app_setup'):
                     saved = self.resolved_options().get('device_control_mappings',{}).get(device['key'],{})
                     device = {**device,'control_type':saved.get('control_type')}
                 options = save_device(options,device['key'],body['mapping'],device,self.read,

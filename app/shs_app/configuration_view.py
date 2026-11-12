@@ -3,7 +3,8 @@ from shs_core import const as shs_const
 from shs_core.api import ShsApiError, ShsConnectionError
 from shs_core.configuration_fields import LABELS, _configuration_sections
 from shs_core.presentation import timeline, system_fields, device_name, device_readiness
-from shs_core.device_controls import room_thermal_zones
+from shs_core.device_controls import CONTROL_TYPES, room_thermal_zones
+from shs_core.device_setup import DEVICE_SETUPS, LOAD_TYPES
 from shs_core.operational_attention import execution_attention, merge_attention
 
 async def configuration_payload(editor, *, refresh_roles):
@@ -86,6 +87,9 @@ async def configuration_payload(editor, *, refresh_roles):
     return {
         "labels": LABELS,
         "device_categories": shs_const.DEVICE_CATEGORIES,
+        "device_control_types": CONTROL_TYPES,
+        "device_load_types": LOAD_TYPES,
+        "device_setups_ready": DEVICE_SETUPS in options,
         "operation": operation,
         "replan_recommendations": getattr(coordinator, "replan_recommendations", []),
         # The same list the website shows: devices this plan leaves out.

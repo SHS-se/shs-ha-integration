@@ -263,6 +263,11 @@ class ShsApiClient:
         """Fetch subscription status for the paired customer."""
         return await self._request("GET", "integration-status")
 
+    async def read_device_setups(self) -> list[dict]:
+        """Read saved choices, including retired rows, for the paired home."""
+        result = await self._request("GET", "energy-optimisation-ingest")
+        return result["device_setups"]
+
     async def report_runtime(self, runtime: dict[str, Any], *, input_accuracy: dict[str, Any] | None = None) -> dict[str, Any]:
         """Report current local readiness, independently of plan acceptance.
 

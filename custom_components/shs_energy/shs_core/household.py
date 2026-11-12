@@ -136,6 +136,7 @@ from .optimisation import (
 )
 from .measurements import device_measurement_issues
 from .room_electrical import heating_quarters, weather_heating_bindings
+from .device_setup import DEVICE_SETUPS, with_device_setup
 from .input_accuracy import MEASUREMENT_WINDOW, input_accuracy, prune_quarters, quarter_completeness, report_due
 from .planning import (
     build_device_models,
@@ -1069,6 +1070,7 @@ class Household:
         live_keys = {
             OPT_CONFIGURATION_REVIEWED_AT,
             OPT_DEVICE_CONTROL_MAPPINGS,
+            DEVICE_SETUPS,
             "rooms",
             "device_modes",
         }
@@ -1226,8 +1228,11 @@ class Household:
     ) -> list[dict[str, Any]]:
         """Hydrate Energy Dashboard devices with server requests and local status."""
         devices = await self.ports.inventory()
+        setups = self.ports.options().get(DEVICE_SETUPS, {})
         stored_metadata = stored.get("optimisation_device_metadata", {})
         for device in devices:
+            if device["key"] in setups:
+                device["app_setup"] = setups[device["key"]]
             metadata = stored_metadata.get(device["key"], {})
             for field in ("active_power_w", "profile_sample_count", "inference"):
                 if field in metadata:
@@ -1300,20 +1305,21 @@ class Household:
             raise ShsApiError("Website planning choices are unavailable; update the website first")
         from .operating_modes import reconcile_admissions
         expected = dict(self.ports.options())
-        admitted = reconcile_admissions(expected, list(configuration.values()), home)
+        effective = {key: with_device_setup(device, expected) for key, device in configuration.items()}
+        admitted = reconcile_admissions(expected, list(effective.values()), home)
         if self.control_authority and admitted != expected:
             await self.ports.admit(expected, admitted)
             self._plan_configuration_changed = stored["plan_configuration_changed"] = True
         stored["home_planning_configuration"] = home
         stored["planning_configuration_refreshed_at"] = self.ports.utcnow().isoformat()
         stored["optimisation_device_configuration"] = configuration
-        self._sync_device_control_issue(configuration, mappings)
-        included_keys = {key for key, value in configuration.items() if value.get("planning_role") == "controllable"}
+        self._sync_device_control_issue(effective, mappings)
+        included_keys = {key for key, value in effective.items() if value.get("planning_role") == "controllable"}
         self.optimisation_degraded_devices = [device for device in self.optimisation_degraded_devices if device.get("key", device.get("statistic_id")) in included_keys]
         self._sync_degraded_device_issue()
         options = self.resolved_options()
-        paths = {planning_path(value.get("control_type"), value.get("category")) for key, value in configuration.items() if key in included_keys}
-        self.optimisation_unplanned_services = unplanned_services(options, paths, configuration)
+        paths = {planning_path(value.get("control_type"), value.get("category")) for key, value in effective.items() if key in included_keys}
+        self.optimisation_unplanned_services = unplanned_services(options, paths, effective)
         self._sync_unplanned_service_issue()
         self._sync_battery_control_issue(options, included=home["battery"]["included"])
         self._sync_pool_control_issue(options, included="pool" in paths)
@@ -1398,7 +1404,10 @@ class Household:
         configuration = stored.get("optimisation_device_configuration", {})
         if not isinstance(configuration, dict):
             return []
-        return requested_controllable_devices(configuration)
+        options = self.ports.options()
+        return requested_controllable_devices({
+            key: with_device_setup(device, options) for key, device in configuration.items()
+        })
 
     async def async_cached_home_configuration(self) -> dict[str, Any]:
         """Read household ownership without rebuilding device editors and inventory."""
@@ -1415,6 +1424,9 @@ class Household:
                 # Website intent is independent of whether local controls are ready.
                 for key in ("planning_role", "control_type", "planning_choice_at"):
                     device[key] = requested[device["key"]].get(key)
+            if setup := device.get("app_setup"):
+                device.update(control_type=setup["control_type"], load_type=setup["load_type"])
+                device["method_sync_pending"] = requested.get(device["key"], {}).get("control_type") != setup["control_type"]
         return {"devices": devices, "home": stored.get("home_planning_configuration", {}),
                 "refreshed_at": stored.get("planning_configuration_refreshed_at")}
 
@@ -3488,7 +3500,15 @@ class Household:
                     return 0
                 record = stored[record_key]
                 if recovering_submission and error.code == "planning_job_not_found":
-                    if (record.get("recapture_required") or "body" not in record or record["body"].get("planning_exchange_version") == 2):
+                    options = self.ports.options()
+                    excluded = set(options.get("excluded_device_readings", []))
+                    setups = options.get(DEVICE_SETUPS, {})
+                    settings_changed = any(
+                        row["key"] in excluded or row.get("app_setup") != setups.get(row["key"])
+                        for row in record.get("devices", [])
+                    )
+                    if (record.get("recapture_required") or "body" not in record
+                            or record["body"].get("planning_exchange_version") == 2 or settings_changed):
                         # One-way migration: old releases lacked replayable bytes
                         # or captured a retired exchange contract.
                         # A confirmed missing receipt permits a NEW capture, never

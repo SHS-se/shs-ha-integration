@@ -284,7 +284,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         def device(data):
             return next(row for row in data['devices'] if row['key'] == key)
 
-        with patch.object(engine, 'replan_all', AsyncMock()) as replan:
+        with patch.object(engine, 'cloud_job', AsyncMock()) as sync:
             async with TestClient(TestServer(create_app(dashboard, self.root, trusted_peer='127.0.0.1'))) as client:
                 response = await client.post('/api/configuration/get', json={})
                 before = await response.json()
@@ -292,10 +292,10 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(device(before)['category'], 'hot_water')
                 self.assertNotIn('temperature_entity_id', {field['key'] for field in device(before)['fields']})
                 edit = {'device_key': key, 'expected_revision': before['revision'], 'request_id': 'category-edit'}
-                response = await client.post('/api/configuration/device_category', json={**edit, 'category': 'battery'})
+                response = await client.post('/api/configuration/device_settings', json={**edit, 'settings': {'category': 'battery'}})
                 self.assertEqual(response.status, 409, await response.json())
                 self.assertEqual(engine.configuration.options(), options)
-                response = await client.post('/api/configuration/device_category', json={**edit, 'category': 'heating'})
+                response = await client.post('/api/configuration/device_settings', json={**edit, 'settings': {'category': 'heating'}})
                 saved = await response.json()
                 self.assertEqual(response.status, 200, saved)
                 self.assertEqual(device(saved)['category'], 'heating')
@@ -306,7 +306,81 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
                 meter['name'] = 'Pool power'
                 response = await client.post('/api/configuration/get', json={})
                 self.assertEqual(device(await response.json())['category'], 'heating')
-        replan.assert_awaited_once()
+        sync.assert_awaited_once()
+        self.assertFalse(self.native_calls)
+
+    async def test_device_setup_import_and_edits_preserve_choices_and_fence_changed_control(self):
+        from unittest.mock import AsyncMock
+
+        engine = self.engine()
+        await engine.load()
+        await engine.activate()
+        active, retired = 'sensor.heater_energy', 'sensor.spare_energy'
+        source = self.service.source
+        request = source.request
+
+        async def catalog(operation, body):
+            if operation == 'catalog':
+                return dict(context=self.context, states={}, meter_areas={},
+                            preferences={'device_consumption': [
+                                {'stat_consumption': active, 'name': 'Heater'},
+                                {'stat_consumption': retired, 'name': 'Spare heater'},
+                            ]})
+            return await request(operation, body)
+
+        source.request = catalog
+        household = engine.household
+        home = {'battery': {'included': False}}
+        selected = dict(key=active, statistic_id=active, name='Heater', category='heating',
+                        control_type='switch_schedule', load_type='fixed_full_load',
+                        planning_role='controllable', planning_choice_at=None)
+        await household._store.async_save({'optimisation_device_configuration': {active: selected},
+                                         'home_planning_configuration': home})
+        mapping = {'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.heater']}
+        initial = {**engine.configuration.options(),
+                   'device_control_mappings': {active: mapping},
+                   'device_modes': {active: 'controlling'},
+                   'planning_admissions': {active: [[active, None, 'switch_schedule']]},
+                   '_device_inclusion_initialised': [active, retired], 'excluded_device_readings': [retired]}
+        await engine.configuration.commit(engine.configuration.revision, initial, 'fixture-setup')
+        imported = [
+            {'key': active, 'control_type': 'switch_schedule', 'load_type': 'fixed_full_load', 'revision': 1},
+            {'key': retired, 'control_type': 'setpoint', 'load_type': 'inverter', 'revision': 3},
+        ]
+        with (patch.object(household.client, 'read_device_setups', AsyncMock(return_value=imported)) as download,
+              patch.object(engine.editor, 'publish_device_settings')):
+            await engine.editor.import_device_setups()
+            await engine.editor.import_device_setups()
+            download.assert_awaited_once()
+            self.assertEqual(engine.configuration.options()['device_modes'], {active: 'controlling'})
+            choices = await household.async_cached_planning_configuration()
+            self.assertEqual(next(d for d in choices['devices'] if d['key'] == retired)['control_type'], 'setpoint')
+
+            async def edit(settings, request_id):
+                return await engine.editor.action('device_settings', {
+                    'device_key': active, 'settings': settings, 'request_id': request_id,
+                    'expected_revision': engine.configuration.revision,
+                })
+
+            await edit({'load_type': 'inverter'}, 'change-load')
+            self.assertEqual(engine.configuration.options()['device_modes'], {active: 'controlling'})
+            saved = await edit({'control_type': 'setpoint'}, 'change-method')
+            view = next(d for d in saved['devices'] if d['key'] == active)
+            self.assertEqual((view['control_type'], view['load_type']), ('setpoint', 'inverter'))
+            self.assertEqual(view['mode'], 'control_verification')
+            self.assertIn('temperature_entity_id', {field['key'] for field in view['fields']})
+            self.assertEqual(engine.configuration.options()['device_control_mappings'][active], mapping)
+            self.assertEqual(self.configuration.options()['device_modes'], {active: 'control_verification'})
+
+            stored = await household._store.async_read()
+            inventory = await household._prepared_device_inventory(stored)
+            self.assertEqual([row['key'] for row in inventory], [active])
+            self.assertEqual(inventory[0]['app_setup']['control_type'], 'setpoint')
+            await household._record_device_exchange(stored, inventory, {
+                'device_configuration': [selected], 'home_configuration': home,
+            })
+            self.assertEqual(engine.configuration.options()['planning_admissions'][active][0][2], 'setpoint')
+            self.assertEqual(engine.configuration.options()['device_modes'], {active: 'control_verification'})
         self.assertFalse(self.native_calls)
 
     async def test_background_failure_is_visible_during_startup_and_a_replacement_clears_it(self):

@@ -20,7 +20,9 @@ def execution_device_views(catalog, context, explicit, choices, coordinator, *, 
     entity_area_ids = context['entity_areas']
     devices = []
     for device in requested:
-        control_type = str(device.get("control_type") or (mappings.get(device["key"]) or {}).get("control_type") or "")
+        setup = device.get("app_setup")
+        control_type = (setup["control_type"] if setup else
+                        device.get("control_type") or (mappings.get(device["key"]) or {}).get("control_type")) or ""
         saved = mappings.get(device["key"])
         path = mapped_planning_path({**device, "control_type": control_type}, saved if isinstance(saved, dict) else {},
                                     options.get("pool_water_temperature_entity"))
@@ -58,6 +60,7 @@ def execution_device_views(catalog, context, explicit, choices, coordinator, *, 
                 "planning_role": device.get("planning_role"),
                 "planning_choice_at": device.get("planning_choice_at"),
                 "control_type": control_type,
+                "method_sync_pending": device.get("method_sync_pending", False),
                 "mapping": saved_mapping,
                 "meter_room": device.get("meter_room"),
                 "stale_mapping_control_type": (

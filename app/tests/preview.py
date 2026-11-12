@@ -13,6 +13,8 @@ from shs_app.profiling import AppProfiler
 from shs_core.app_projection import schedule
 from shs_core.configuration_fields import _configuration_sections, LABELS
 from shs_core.const import DEVICE_CATEGORIES
+from shs_core.device_controls import CONTROL_TYPES
+from shs_core.device_setup import LOAD_TYPES
 from shs_core.configuration_schema import resolve_configuration
 
 plan = json.loads((ROOT / "tests/fixtures/schema-9-mixed-mode-plan.json").read_text())["plan"]
@@ -30,7 +32,9 @@ class Editor:
             return dict(saved=True,refreshing=False,revision=self.revision)
         if action!='get':raise ValueError('Unsupported fixture action')
         return dict(revision=self.revision,state='applied',configuration=resolve_configuration(self.options,59,18),
-            configured_keys=list(self.options),labels=LABELS,device_categories=DEVICE_CATEGORIES,sections=_configuration_sections(),devices=[],entities=[],
+            configured_keys=list(self.options),labels=LABELS,device_categories=DEVICE_CATEGORIES,
+            device_control_types=CONTROL_TYPES,device_load_types=LOAD_TYPES,device_setups_ready=True,
+            sections=_configuration_sections(),devices=[],entities=[],
             entry=dict(entry_id='test-home',title='Test home',state='loaded'),attention=[],readiness={},thermal={},
             portal=dict(status='synchronised'),operation=entry['operation'],diagnostics={},meter_inventory=[],
             replan_recommendations=[],measurement_issues=[],locale=dict(language='en',timezone='Europe/Stockholm'),

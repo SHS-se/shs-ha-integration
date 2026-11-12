@@ -69,8 +69,8 @@ test('changes the category from the cogwheel even when the room cannot be edited
     }];
     await route.fulfill({json: data});
   });
-  await page.route('**/api/configuration/device_category', async route => {
-    expect(route.request().postDataJSON()).toMatchObject({device_key: key, category: 'heating'});
+  await page.route('**/api/configuration/device_settings', async route => {
+    expect(route.request().postDataJSON()).toMatchObject({device_key: key, settings: {category: 'heating'}});
     if (++writes === 1) {
       await route.fulfill({status: 409, json: {message: 'Choose a device category from the list'}});
       return;
@@ -108,4 +108,55 @@ test('changes the category from the cogwheel even when the room cannot be edited
   await cogwheel.click();
   await expect(select).toHaveValue('heating');
   expect(writes).toBe(2);
+});
+
+test('the device cogwheel saves the method and load characteristic together', async ({page}) => {
+  const key = 'sensor.heater_energy';
+  let data: Record<string, any>;
+  await page.route('**/api/configuration/get', async route => {
+    data = await (await route.fetch()).json();
+    data.devices = [{
+      key, name: 'Heater', category: 'heating', included: true, room_name: 'No room',
+      mapping_status: 'ready', control_type: 'switch_schedule', load_type: 'fixed_full_load',
+      meter_room: {meters: [key], editable: false, area_id: null},
+    }];
+    await route.fulfill({json: data});
+  });
+  let writes = 0;
+  await page.route('**/api/configuration/device_settings', async route => {
+    const settings = {control_type: 'setpoint', load_type: 'inverter'};
+    expect(route.request().postDataJSON()).toMatchObject({device_key: key, settings});
+    writes++;
+    if (writes === 1) {
+      await route.fulfill({status: 409, json: {message: 'Choose a load characteristic from the list',
+        field_errors: {load_type: 'Choose a load characteristic from the list'}}});
+      return;
+    }
+    Object.assign(data.devices[0], settings, {
+      fields: [{key: 'temperature_entity_id', label: 'Room temperature', kind: 'entity', required: true}],
+    });
+    await route.fulfill({json: data});
+  });
+  await page.goto('./#settings');
+  const editor = page.locator('shs-configuration-editor');
+  await editor.getByRole('button', {name: 'Devices', exact: true}).click();
+  const cogwheel = editor.getByRole('button', {name: 'Settings for Heater'});
+  await cogwheel.click();
+  const dialog = editor.getByRole('dialog', {name: 'Settings for Heater'});
+  const method = dialog.getByRole('combobox', {name: 'Control method'});
+  const load = dialog.getByRole('combobox', {name: 'Load characteristic'});
+  await expect(method).toHaveValue('switch_schedule');
+  await expect(load).toHaveValue('fixed_full_load');
+  await method.selectOption('setpoint');
+  await load.selectOption('inverter');
+  const save = dialog.getByRole('button', {name: 'Save', exact: true});
+  await save.click();
+  await expect(load).toBeFocused();
+  await expect(load).toHaveAttribute('aria-invalid', 'true');
+  await save.click();
+  await expect(dialog).toHaveCount(0);
+  await expect(editor.getByRole('combobox', {name: 'Room temperature'})).toBeVisible();
+  await cogwheel.click();
+  await expect(method).toHaveValue('setpoint');
+  await expect(load).toHaveValue('inverter');
 });
