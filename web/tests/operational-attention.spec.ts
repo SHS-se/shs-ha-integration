@@ -78,10 +78,35 @@ test('source inspection works from Settings and startup failures need no snapsho
   await page.getByRole('link',{name:'Inspect source entity',exact:true}).click();
   await expect(page.getByRole('dialog',{name:'Source entity'})).toBeVisible();
   await expect(page.getByRole('dialog')).toContainText('sensor.forecast');
-  source=false;await page.reload();
+  await page.getByRole('dialog').getByRole('button',{name:'Close',exact:true}).click();
+  source=false;await page.goto('./#settings');await page.reload();
   await expect(page.getByRole('alert',{name:'SHS needs attention'})).toContainText('Receipt ingestion stopped');
   await page.getByRole('link',{name:'System',exact:true}).click();
   await expect(page.getByRole('alert',{name:'SHS needs attention'})).toContainText('Receipt ingestion stopped');
+});
+
+test('a suspected stuck temperature links to the source and clears after recovery',async({page})=>{
+  await page.clock.install();
+  let flat=true;
+  const entity='sensor.tv_room_temperature';
+  const warning={key:`room_temperature_flatline:${entity}`,severity:'warning',stage:'sensor_diagnostics',
+    title:'TV room temperature: temperature may be stuck',detail:'Home Assistant recorded 22.05 °C for 24 hours without a change.',
+    fix:{kind:'entity',entity_id:entity}};
+  await page.route('**/api/state',async route=>{
+    const data=await(await route.fetch()).json();
+    data.attention=flat?[warning]:[];
+    await route.fulfill({json:data});
+  });
+  await page.goto('./');
+  const notice=page.getByRole('status',{name:'SHS needs attention'});
+  await expect(notice).toContainText(warning.detail);
+  await expect(page.locator('.connection')).toHaveText('Connected');
+  await notice.getByRole('link',{name:'Inspect source entity'}).click();
+  await expect(page.getByRole('dialog',{name:'Source entity'})).toContainText(entity);
+  await page.getByRole('dialog').getByRole('button',{name:'Close',exact:true}).click();
+  flat=false;
+  await page.clock.fastForward(15000);
+  await expect(notice).toHaveCount(0);
 });
 
 test('execution replanning is automatic and future car charging stays conditional',async({page})=>{

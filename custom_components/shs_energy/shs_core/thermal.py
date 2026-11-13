@@ -46,6 +46,7 @@ from .optimisation import quarter_start
 
 SLOT = timedelta(minutes=15)
 SLOT_SECONDS = int(SLOT.total_seconds())
+ROOM_TEMPERATURE_FLATLINE_HOURS = 24
 
 # A zone whose sensors were unavailable for most of a quarter describes
 # nothing. Below this share of known seconds the quarter is dropped rather
@@ -93,6 +94,29 @@ def numeric_value(state: Any, attributes: dict[str, Any] | None = None) -> float
     if isinstance(state, str) and state.strip().lower() in UNUSABLE_STATES:
         return None
     return _as_float(state)
+
+
+def flat_room_temperature(rows: Sequence[dict[str, Any]], end: datetime) -> float | None:
+    """Find a constant recorded temperature across a full day of hourly extrema."""
+    hour = timedelta(hours=1)
+    expected = {(end - hour * offset).timestamp() for offset in range(1, ROOM_TEMPERATURE_FLATLINE_HOURS + 1)}
+    values = set()
+    for row in rows:
+        at = row.get("start")
+        if isinstance(at, datetime):
+            at = at.timestamp()
+        elif not isinstance(at, (int, float)):
+            continue
+        if at not in expected:
+            continue
+        minimum, maximum = numeric_value(row.get("min")), numeric_value(row.get("max"))
+        if minimum is None or minimum != maximum:
+            return None
+        values.add(minimum)
+        if len(values) > 1:
+            return None
+        expected.remove(at)
+    return values.pop() if not expected else None
 
 
 def actuator_value(state: Any, attributes: dict[str, Any] | None = None) -> float | None:

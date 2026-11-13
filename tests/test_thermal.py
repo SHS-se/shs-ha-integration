@@ -14,6 +14,7 @@ from shs_core.thermal import (  # noqa: E402
     cooling_value,
     build_thermal_slots,
     energy_duty,
+    flat_room_temperature,
     interpolate_hourly_forecast,
     merge_thermal_slots,
     numeric_value,
@@ -44,6 +45,13 @@ class QuarterMeansTests(unittest.TestCase):
     def test_ignores_samples_off_the_five_minute_grid(self) -> None:
         rows = [(at(0), 20.0), (at(3), 30.0), (at(5), 22.0)]
         self.assertEqual(quarter_means(rows), {START: 21.0})
+
+    def test_flat_room_temperature_needs_all_hours_and_detects_variation_within_an_hour(self):
+        rows = [{'start': START - timedelta(hours=h), 'min': 22.05, 'max': 22.05} for h in range(1, 25)]
+        self.assertEqual(flat_room_temperature(rows, START), 22.05)
+        self.assertIsNone(flat_room_temperature(rows[:-1], START))
+        rows[-1]['max'] = 22.06
+        self.assertIsNone(flat_room_temperature(rows, START))
 
 
 class TimeWeightedTests(unittest.TestCase):

@@ -1702,6 +1702,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _render({ expandedCard } = {}) {
     if (!this.shadowRoot || this._deviceSettingsDialog) return;
+    const inspectorOpen = this._inspectedEntity && this.shadowRoot.querySelector("dialog[open]");
     const active = this.shadowRoot.activeElement;
     const focusKey = active?.dataset.fieldKey;
     const focusDevice = active?.dataset.deviceKey;
@@ -1756,6 +1757,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const target = fields.find(el => focusFilter ? el.dataset.filter === focusFilter : focusKey && el.dataset.fieldKey === focusKey && el.dataset.deviceKey === focusDevice);
     if (focusMode !== null) this.shadowRoot.querySelector(`[data-action="schedule-mode"][data-mode="${focusMode}"]`)?.focus();
     if (target) { target.focus(); if (selection !== null && target.type === "text") target.setSelectionRange(selection, selection); }
+    if (inspectorOpen) this.shadowRoot.querySelector("dialog")?.showModal();
   }
 
   _styles() {

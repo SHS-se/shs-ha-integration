@@ -153,11 +153,13 @@ from .planning import (
 from .readings import daily_category_readings, usable_change
 from .thermal import (
     HOUSE_HISTORY_KEY,
+    ROOM_TEMPERATURE_FLATLINE_HOURS,
     SLOT,
     actuator_value,
     cooling_value,
     build_thermal_slots,
     energy_duty,
+    flat_room_temperature,
     house_temperature_entities,
     house_temperature_quarters,
     merge_thermal_slots,
@@ -296,6 +298,7 @@ class Household:
         self.optimisation_missing_fix: dict[str, Any] | None = None
         self.optimisation_unplanned_services: list[str] = []
         self._attention: dict[str, dict[str, Any]] = {}
+        self._flat_room_temperatures: dict[str, float] = {}
         self.connection_health = ConnectionHealth(connection_store, ports.publish)
         client.connection_progress = self.connection_health.progress
         self.device_control_mapping_gaps: list[str] = []
@@ -484,11 +487,20 @@ class Household:
                 self._attention['pipeline:'+lane] = pipeline_issue(lane, episode['detail'])
         order = {"error": 0, "warning": 1}
         blocked = {item['covered_by']:item['stage'] for item in self._attention.values() if item.get('covered_by')}
-        return sorted(
-            ({**item,'severity':'error','stage':blocked[item['key']]} if item['key'] in blocked else item
-             for item in self._attention.values() if item.get('covered_by') not in self._attention),
-            key=lambda item: (order.get(item["severity"], 2), item["title"]),
-        )
+        items = [{**item,'severity':'error','stage':blocked[item['key']]} if item['key'] in blocked else item
+                 for item in self._attention.values() if item.get('covered_by') not in self._attention]
+        for entity, value in self._flat_room_temperatures.items():
+            state = self.ports.read_state(entity)
+            if state is None or numeric_value(state.state) != value:
+                continue
+            name = state.attributes.get("friendly_name") or entity
+            unit = state.attributes.get("unit_of_measurement") or ""
+            items.append({"key": f"room_temperature_flatline:{entity}", "stage": "sensor_diagnostics",
+                          "severity": "warning", "title": f"{name}: temperature may be stuck",
+                          "detail": f"Home Assistant recorded {value:g} {unit} for {ROOM_TEMPERATURE_FLATLINE_HOURS} hours without a change.",
+                          "next_step": "Check the sensor battery and connection, then look for a new temperature in Home Assistant.",
+                          "fix": {"kind": "entity", "entity_id": entity}})
+        return sorted(items, key=lambda item: (order.get(item["severity"], 2), item["title"]))
 
     def _pipeline_error(self, stage, error, *, fix=None, covered_by=None):
         """Each serialized stage clears only the failure its own success proves."""
@@ -1667,6 +1679,7 @@ class Household:
         )
         if start >= end:
             return []
+        await self._check_room_temperature_flatlines(zones, end)
         if not zones:
             # No room is modelled here, but the pool still loses heat to the
             # same air and its fit needs that series. Outdoor temperature is a
@@ -1710,6 +1723,26 @@ class Household:
                 sent_from[key] = min(sent_from[key], history_start)
         self.pending_room_history = {key: value.isoformat() for key, value in sent_from.items()}
         return slots
+
+    async def _check_room_temperature_flatlines(self, zones, end):
+        """Use recorded value variation for advice, independent of report age."""
+        entities = {zone["temperature_entity_id"] for zone in zones.values()}
+        end = end.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        start = end - timedelta(hours=ROOM_TEMPERATURE_FLATLINE_HOURS)
+        previous = self._flat_room_temperatures
+        try:
+            # Recorder diagnostics must leave the routine exchange time to finish.
+            async with asyncio.timeout(3):
+                history = await self.ports.history.statistics(start, end, entities, "hour", None, {"min", "max"}) if entities else {}
+        except (HouseholdReadError, TimeoutError) as error:
+            _LOGGER.debug("Room temperature diagnostics unavailable: %s", error)
+            current = {entity: value for entity, value in previous.items() if entity in entities}
+        else:
+            current = {entity: value for entity in entities
+                       if (value := flat_room_temperature(history.get(entity, ()), end)) is not None}
+        if current != previous:
+            self._flat_room_temperatures = current
+            self.ports.publish()
 
     async def _zone_thermal_slots(
         self,

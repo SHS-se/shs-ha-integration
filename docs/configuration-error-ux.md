@@ -70,6 +70,11 @@ requirement, 15 October 2026). They must not create field errors, source-repair
 warnings, readiness failures, verification faults or planning exclusions. An
 available unchanged reading does not need periodic reports to remain usable.
 
+Room temperature diagnostics can advise that a configured sensor may be stuck
+when a complete day of recorded hourly minima and maxima shows the same value
+and the current reading still matches. The advisory links to the source entity
+and is independent of the sensor's report timestamps, planning and control.
+
 ## Required regression coverage
 
 Configuration changes must test the entire correction path, not just exception
