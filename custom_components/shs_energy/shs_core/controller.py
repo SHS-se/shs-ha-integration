@@ -22,6 +22,7 @@ from .native_commands import finite, native_command
 from .device_ownership import DeviceOwnership, decode_ownership
 from .api_contract import INTEGRATION_VERSION
 from .operating_modes import device_mode, EXECUTING_MODES
+from .operational_attention import execution_issue
 from .verification import OPERATIONS, operation_name, evaluation_record, observation
 from .controller_metrics import ControllerMetrics, fingerprint, record_time
 from .battery_commands import validate_battery_command, battery_mode_key
@@ -202,7 +203,7 @@ class ScheduledController(DeviceOperations):
         self.listeners.add(subscription)
         return lambda: self.listeners.discard(subscription)
 
-    def report(self, device, state, **details):
+    def report(self, device, state, *, needs_attention=False, capacity_shortfall=False, **details):
         if self.verifying:
             return
         if device == "pool" and self.ownership.retired_pool_temperature_settings:
@@ -210,14 +211,19 @@ class ScheduledController(DeviceOperations):
             details["control_notice"] = "Old temperature control has been removed. Check the heater's own temperature settings; SHS now only uses its switch."
         if notice := getattr(self.devices, 'control_notices', {}).get(device):
             details["control_notice"] = " ".join(filter(None, (details.get("control_notice"), notice)))
-        if device != "battery":
-            # Attention reads these to tell a blocked plan from a device SHS is not operating.
+        if "battery_runtime" not in details:
             try:
                 details["mode"] = device_mode(self.active_options or self.options(), device)
             except ValueError:
                 details["mode"] = None
             details["holding"] = device in self.ownership.records
         value = {"state": state, **details}
+        if runtime := details.get("battery_runtime"):
+            if runtime.get("attention"):
+                value["attention"] = runtime["attention"]
+        elif needs_attention or capacity_shortfall or state in ("fault", "unsupported") or details.get("handover_pending"):
+            if issue := self._execution_notice(device, value, capacity_shortfall):
+                value["attention"] = [issue]
         if self.status.get(device) == value:
             return
         self.status[device] = value
@@ -228,6 +234,20 @@ class ScheduledController(DeviceOperations):
                     listener()
             except Exception:
                 _LOGGER.exception("Cannot notify a %s status listener; control continues", device)
+
+    def _execution_notice(self, device, status, capacity_shortfall):
+        if status["mode"] in (None, "controlling") or status["holding"]:
+            if capacity_shortfall:
+                return execution_issue(device, status, title="scheduled work needs to move", severity="warning",
+                                       next_step="SHS requests a revised plan for the affected work.")
+            return execution_issue(device, status)
+        if status["mode"] == "control_verification":
+            if status.get("handover_pending"):
+                return execution_issue(device, status, title="handover verification incomplete",
+                                       severity="warning", verification=True)
+            if status["state"] == "fault":
+                return execution_issue(device, status, title="control verification needs attention", verification=True)
+        return None
 
     def publish_battery_status(self):
         """Mirror the battery owner's own status without evaluating other devices."""
@@ -638,7 +658,8 @@ class ScheduledController(DeviceOperations):
                             self.report(device, **inactive)
                             continue
                         if hold := self.hold_reason(device, options):
-                            self.report(device, "idle", reason=self.holding(device, hold), execution_blocked=controlling)
+                            self.report(device, "idle", reason=self.holding(device, hold), execution_blocked=controlling,
+                                        needs_attention=controlling)
                             continue
                         if heating:
                             if self.failed.get(device) == key:
@@ -651,7 +672,8 @@ class ScheduledController(DeviceOperations):
                         supported = (plan.get("schema_version", 0) >= 7 and device.removeprefix("device:") in slot.get("device_commands", {})
                                      if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device))
                         if not slot or not supported:
-                            self.report(device, "idle", reason=self.holding(device, "No current plan for this device"), execution_blocked=controlling)
+                            self.report(device, "idle", reason=self.holding(device, "No current plan for this device"),
+                                        execution_blocked=controlling, needs_attention=controlling)
                             continue
                         if device == "pool" and pool_permission(plan, slot) is None:
                             self.failed.pop(device, None)
@@ -677,7 +699,12 @@ class ScheduledController(DeviceOperations):
                                     {"available_entities": result["execution_available_entities"]})
                         elif not result.get("heating_curtailed"):
                             await self.record_execution(device, plan, slot, result.get("execution_condition"))
-                        self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"))
+                        condition = result.get("execution_condition")
+                        capacity_shortfall = (not result.get("heating_curtailed") and condition is not None
+                            and condition["cause"] == "house_import_capacity"
+                            and execution_evidence.requested(execution_evidence.owner_key(device), slot))
+                        self.report(device, **result, slot_start=slot["start"], plan_id=plan.get("plan_id"),
+                                    capacity_shortfall=capacity_shortfall)
                     except ConfigurationPending:
                         # Start again with one settings snapshot for the entire evaluation.
                         raise

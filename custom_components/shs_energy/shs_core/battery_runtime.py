@@ -34,6 +34,7 @@ from .device_power import planned_switch_bindings
 from .configuration_schema import METADATA_KEYS
 from .configuration_values import resolve_battery_quantities
 from .planning_warnings import planning_warning
+from .operational_attention import execution_issue, pipeline_issue
 from .energy_ledger import MeterSpec, CounterSample, create_ledger, mark_retained_actuals
 from .device_controls import battery_measurement_errors, BatteryMeasurementConfigurationError
 from .device_operations import OBSERVATION_GRACE_SECONDS
@@ -384,6 +385,8 @@ class BatteryRuntime:
         elif group.mode=='controlling' and session.status=='active' and self._last_error is None:
             if group.status=='adopted':
                 value.update(state='controlling',runtime_reason=None)
+            elif group.status=='physical_scope_blocked':
+                value.update(state='pending',reason='Waiting for capacity to apply the planned battery settings')
             else:
                 value.update(state='pending',reason='Applying the planned battery settings')
         if value['state']=='fault' and 'fix' not in value:
@@ -436,7 +439,32 @@ class BatteryRuntime:
                     'plan':'Previously accepted plan: ' + value['explanation']['plan'],
                     'next':'Waiting for a corrected plan; the rejected update is not being used.'}
         value['display'] = battery_status_text(value)
+        if attention := self._execution_attention(value, rejection):
+            value['attention'] = attention
         return value
+
+    def _execution_attention(self, value, rejection):
+        attention = [
+            pipeline_issue('inputs', detail, fix={'kind':'entity', 'entity_id':entity}, key='battery-input:'+entity)
+            for entity, detail in self._counter_errors.items()
+        ]
+        if self._replan_error:
+            attention.append(pipeline_issue('failure_report', self._replan_error, key='battery-planning'))
+        mode, holding = value['mode'], value.get('holding')
+        # Normal capacity adjustments and waits are visible in status. A
+        # native guard refusal or exhausted command journal needs investigation.
+        failed = (value['state'] == 'fault' or value.get('execution_blocked')
+                  or value.get('command_state') in ('native_guard_blocked', 'attempt_limit', 'journal_fault'))
+        if mode == 'controlling' or holding:
+            if rejection:
+                attention.append(execution_issue('battery', value, title='new plan could not be accepted',
+                                                 detail=rejection.reason))
+            elif failed:
+                attention.append(execution_issue('battery', value))
+        elif mode == 'control_verification' and (rejection or failed):
+            attention.append(execution_issue('battery', value, title='control verification needs attention',
+                                             detail=rejection.reason if rejection else None, verification=True))
+        return attention
 
     async def _capture_loss_model(self, options, devices):
         """One model owner serves planning capture and controller refresh."""

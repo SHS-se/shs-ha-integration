@@ -71,8 +71,6 @@ class Dashboard:
                 'operation':operation, 'schedule':schedule(values['optimisation_plan'],operation),
                 'controllers':value['controllers'] if engine.started else {}, 'attention':attention_links(values['attention_items'],engine.identity['entry_id'],engine.household.client.base_url),
                 'measurements':{}}
-            entry['attention'] = merge_attention(entry['attention'], execution_attention(
-                value['controllers'], value['battery'], value['cached']['devices']))
             if not engine.started and self.snapshot:
                 retained = next((item['attention'] for item in self.snapshot['entries'] if item['id']==entry['id']), [])
                 entry['attention'] = merge_attention(retained, entry['attention'])
@@ -216,10 +214,7 @@ class Dashboard:
             if engine.started:
                 # Read current owners even if building/publishing a snapshot
                 # failed. Recovery removes only that owner's active failure.
-                controllers = engine.controller.status
-                battery = controllers.get('battery',{})
-                battery = battery.get('battery_runtime',battery)
-                attention = execution_attention(controllers,battery,engine.cached.get('devices',[]))
+                attention = execution_attention(engine.controller.status, None, engine.cached.get('devices',[]))
                 operation = engine.household.operational_status
                 if operation['state'] in ('unavailable','expired','not_configured'):
                     attention.append(pipeline_issue('plan', operation['reason']))

@@ -168,7 +168,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         r.rows['sensor.grid']['state'] = '6000'
         await r.start()
 
-        assessment = r.runtime.snapshot()['assessment']
+        status = r.runtime.snapshot()
+        self.assertNotIn('attention', status)
+        assessment = status['assessment']
         self.assertEqual(assessment['reason'], 'import_headroom_reduced')
         curve = r.runtime._model.grid_charge
         self.assertAlmostEqual(assessment['charge_dc_w'], int(curve.output(curve.input(1800) - 1000)), delta=1)
@@ -933,6 +935,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(status['fix']['kind'],'fields')
             self.assertEqual({f['key'] for f in status['fix']['fields']},
                 {'house_consumption_power_entity','solar_production_power_entity','grid_power_entity'})
+            issue, = status['attention']
+            self.assertEqual(issue['fix'], status['fix'])
             self.assertTrue(status['retry_automatically'])
             self.assertEqual(r.calls,[])
             self.assertIsNone(r.runtime.host)
@@ -1188,6 +1192,9 @@ class ExecutionCutoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(r.calls,r.runtime.snapshot())
             self.assertFalse(any('Write not sent' in fault['reason'] for fault in r.runtime.snapshot()['fault_history']))
             self.assertEqual(r.runtime.snapshot()['state'],'controlling')
+            issue, = r.runtime.snapshot()['attention']
+            self.assertEqual(issue['title'], 'new plan could not be accepted')
+            self.assertIn('explicit retained amendment', issue['detail'])
         finally:await r.runtime.close()
 
     async def test_plan_arriving_after_charge_deadline_is_admitted_and_executes_future_supply(self):

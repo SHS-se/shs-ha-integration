@@ -632,8 +632,14 @@ const poolFaultPanel = () => {
         reason: 'sensor.water is stale (last reported 2026-09-11T15:00:00+00:00; maximum age 120 seconds)',
         next_step: 'Check the sensor reporting interval.', retry_automatically: true, fix: { kind: 'entity', entity_id: 'sensor.water' },
         plan_id: 'plan-123', slot_start: '2026-09-11T15:00:00+00:00' } }],
-    attention: [{ key: 'power', title: 'Running power needed', severity: 'warning', detail: 'Configure Power.',
-      fix: { kind: 'devices', device_keys: ['sensor.pool'] } }],
+    attention: [
+      { key: 'power', title: 'Running power needed', severity: 'warning', detail: 'Configure Power.',
+        fix: { kind: 'devices', device_keys: ['sensor.pool'] } },
+      { key: 'controller:pool', title: 'Pool heater: control verification needs attention', severity: 'error',
+        detail: 'sensor.water is unavailable', next_step: 'Check the water temperature sensor.',
+        fix: { kind: 'entity', entity_id: 'sensor.water' }, verification: true, device_key: 'sensor.pool',
+        plan_id: 'plan-123', slot_start: '2026-09-11T15:00:00+00:00' },
+    ],
   });
   return panel;
 };
@@ -646,12 +652,11 @@ test('controller warnings share counts, destinations and visible evidence with i
   for (const key of ['controller:pool', 'power']) {
     assert.ok(html.indexOf(`data-attention-key="${key}"`) < html.indexOf('<details'));
   }
-  assert.match(html, /sensor.water is stale/);
+  assert.match(html, /sensor.water is unavailable/);
   assert.match(html, /What to do:/);
-  assert.match(html, /Check the sensor reporting interval/);
-  assert.match(html, /Verification retries automatically/);
+  assert.match(html, /Check the water temperature sensor/);
   assert.match(html, /data-action="inspect-entity" data-entity-id="sensor.water"/);
-  assert.match(html, /data-action="edit-device" data-device-key="sensor.pool"/);
+  assert.equal((html.match(/data-action="edit-device" data-device-key="sensor.pool"/g) || []).length, 1);
   assert.match(html, /Download verification log/);
   assert.match(html, /Plan plan-123/);
   assert.equal(panel._attentionForTab('status').length, 2);
@@ -678,27 +683,33 @@ test('a recovered device loses its warning, link and badge without losing other 
   const panel = poolFaultPanel();
   const devices = JSON.parse(JSON.stringify(panel._data.devices));
   devices[0].execution_status = { state: 'verified', reason: 'Commands logged' };
-  panel._mergePanel({ ...panel._data, devices });
+  panel._mergePanel({ ...panel._data, devices, attention: panel._data.attention.filter(item => item.key !== 'controller:pool') });
   assert.equal(panel._attentionForTab('status').length, 1);
-  assert.doesNotMatch(panel._renderAttention(), /sensor.water is stale/);
+  assert.doesNotMatch(panel._renderAttention(), /sensor.water is unavailable/);
   panel._data.attention = [];
   assert.equal(panel._attentionForTab('status').length, 0);
   assert.match(panel._renderStatus(), /badge ready">Ready/);
 });
 
-test('unsupported, overridden, limited and pending handovers retain visible reasons and evidence', () => {
+test('a controller capacity pause stays in device status without a warning', () => {
+  const panel = poolFaultPanel();
+  panel._data.attention = [];
+  panel._data.devices[0].execution_status = {
+    state: 'limited', reason: 'Scheduled heating paused for the house import limit',
+  };
+  assert.equal(panel._attentionForTab('status').length, 0);
+  assert.match(panel._renderStatus(), /Scheduled heating paused for the house import limit/);
+  assert.doesNotMatch(panel._renderStatus(), /Needs attention/);
+});
+
+test('device outcomes alone do not create warnings, including a pending verification handover', () => {
   const panel = poolFaultPanel();
   panel._data.attention = [];
   for (const state of ['fault', 'unsupported', 'overridden', 'limited', 'verified']) {
     panel._data.devices[0].execution_status = { state, reason: `Specific ${state} reason`, handover_pending: state === 'verified' };
-    const html = panel._renderAttention();
-    assert.match(html, new RegExp(`Specific ${state} reason`));
-    assert.match(html, /Download verification log/);
-    assert.equal(panel._attentionForTab('status').length, 1);
+    assert.equal(panel._attentionForTab('status').length, 0);
+    assert.match(panel._renderStatus(), new RegExp(`Specific ${state} reason`));
   }
-  panel._data.devices[0].mode = 'controlling';
-  assert.match(panel._renderAttention(), /Download diagnostics/);
-  assert.doesNotMatch(panel._renderAttention(), /Verification retries automatically/);
 });
 
 test('every supported fix names a real action; retired tabs create no dead-end button', () => {
@@ -826,12 +837,13 @@ test('controller diagnostics download saves the gzip file Home Assistant built w
 });
 
 
-test('live sensor faults explain automatic recovery without promising retries for permanent faults', () => {
+test('Status displays retry guidance supplied by the controller', () => {
   const panel = poolFaultPanel();
-  panel._data.devices[0].mode = 'controlling';
-  assert.match(panel._renderStatus(), /Control retries automatically after the problem is corrected/);
-  panel._data.devices[0].execution_status.retry_automatically = false;
-  assert.doesNotMatch(panel._renderStatus(), /retries automatically/);
+  const notice = panel._data.attention.find(item => item.key === 'controller:pool');
+  notice.next_step = 'Control resumes when the sensor reports again.';
+  assert.match(panel._renderStatus(), /Control resumes when the sensor reports again/);
+  delete notice.next_step;
+  assert.doesNotMatch(panel._renderStatus(), /Control resumes/);
 });
 
 test('schedule uses the same system instruction for its colour and detail', () => {
@@ -875,6 +887,8 @@ test('a pool pump runs with the pool: no selector of its own, pool schedule, one
   assert.equal(panel._scheduleCommand(pump, { pool_w: 0, execution_owners: ['$pool'], execution: { pool_w: 2072 } }).text, 'Runs with pool heating');
   panel._data.timeline.capabilities.pool = false;
   assert.equal(panel._scheduleCommand(pump, slot).text, 'No instruction');
+  panel._data.attention = [{ key: 'controller:pool', title: 'Pool heater: control verification needs attention',
+    severity: 'error', detail: fault.reason, fix: { kind: 'diagnostics' } }];
   const items = panel._attention().filter(item => item.key === 'controller:pool');
   assert.equal(items.length, 1);
   assert.match(items[0].title, /^Pool heater: /);
@@ -1232,8 +1246,9 @@ test('battery measurement errors open and highlight the Energy fields, not the d
 
 test('battery policy service failure offers diagnostics without an actuator setup link', () => {
   const panel = splitPanel();
-  panel._data.devices[0].execution_status = { state: 'fault', reason: 'Battery policy service returned an invalid response [request_id=request-123]',
-    next_step: 'The service response needs investigation.', fix: { kind: 'diagnostics' } };
+  panel._data.attention = [{ key: 'controller:battery', severity: 'error', title: 'House battery needs attention',
+    detail: 'Battery policy service returned an invalid response [request_id=request-123]',
+    next_step: 'The service response needs investigation.', fix: { kind: 'diagnostics' } }];
   const html = panel._renderAttention();
   assert.match(html, /request-123/);
   assert.match(html, /service response needs investigation/);
@@ -1241,19 +1256,21 @@ test('battery policy service failure offers diagnostics without an actuator setu
   assert.equal((html.match(/Download diagnostics/g) || []).length, 1);
 });
 
-test('stale battery power sensor identifies its source and warning clears on recovery', () => {
+test('unavailable battery power sensor identifies its source and warning clears on recovery', () => {
   const panel = splitPanel();
   const battery = panel._data.devices[0];
-  battery.execution_status = { state: 'fault', reason: 'sensor.grid: power source is invalid or stale',
+  panel._data.attention = [{ key: 'controller:battery', severity: 'error', title: 'House battery needs attention',
+    detail: 'sensor.grid: power source is unavailable',
     next_step: 'Check that the named power sensor is reporting current measurements. Control retries automatically when fresh readings arrive.',
-    fix: { kind: 'diagnostics' }, retry_automatically: true };
+    fix: { kind: 'diagnostics' } }];
   const html = panel._renderAttention();
   assert.match(html, /sensor.grid/);
   assert.match(html, /retries automatically when fresh readings arrive/);
   assert.doesNotMatch(html, /Edit .* setup|data-action="edit-device"|mapped controls/);
   assert.equal((html.match(/Download diagnostics/g) || []).length, 1);
   battery.execution_status = { state: 'controlling', reason: 'Live battery policy connected' };
-  assert.doesNotMatch(panel._renderAttention(), /sensor.grid|power source is invalid or stale/);
+  panel._data.attention = [];
+  assert.doesNotMatch(panel._renderAttention(), /sensor.grid|power source is unavailable/);
 });
 
 test('diagnostic summary retains fault reasons, correction steps and recovered history', () => {
@@ -1267,11 +1284,14 @@ test('diagnostic summary retains fault reasons, correction steps and recovered h
     fix: { kind: 'diagnostics' }, retry_automatically: true };
   battery.battery_runtime = { state: 'fault', reason, fault_history: [{ at: '2026-09-16T19:15:01Z', reason }],
     pending_commands: [{ entity_id: 'number.charge', value: 73, stage: 'ambiguous' }] };
+  panel._data.attention = [{ key: 'controller:battery', severity: 'error', title: 'House battery needs attention',
+    detail: reason, next_step: 'Check the inverter connection.', fix: { kind: 'diagnostics' } }];
   let summary = panel._diagnosticSummary();
   assert.equal(summary.devices[0].reason, reason);
   assert.equal(summary.devices[0].next_step, 'Check the inverter connection.');
   assert.equal(summary.attention.find(x => x.detail === reason).severity, 'error');
   battery.execution_status = { state: 'controlling', reason: 'Battery settings confirmed' };
+  panel._data.attention = [];
   summary = panel._diagnosticSummary();
   assert.equal(summary.devices[0].battery_runtime.fault_history[0].reason, reason);
 });
@@ -1377,12 +1397,16 @@ test('rejected plan appears on Status with diagnostics and clears after acceptan
     mode: 'control_verification', execution_status: {state: 'fault', plan_status: 'rejected',
       reason: 'A new battery plan could not be accepted.', fix: {kind: 'diagnostics'},
       next_step: 'Waiting for a corrected plan.', retry_automatically: true}}];
-  const issue = panel._attention().find(row => row.key === 'controller:$battery');
+  panel._data.attention = [{ key: 'controller:battery', severity: 'error', title: 'House battery needs attention',
+    detail: 'A new battery plan could not be accepted.', next_step: 'Waiting for a corrected plan.',
+    fix: { kind: 'diagnostics' } }];
+  const issue = panel._attention().find(row => row.key === 'controller:battery');
   assert.equal(issue.fix.kind, 'diagnostics');
   assert.match(issue.detail, /new battery plan could not be accepted/);
   assert.match(issue.next_step, /Waiting for a corrected plan/);
   panel._data.devices[0].execution_status = {state: 'verified', plan_status: 'accepted'};
-  assert.equal(panel._attention().some(row => row.key === 'controller:$battery'), false);
+  panel._data.attention = [];
+  assert.equal(panel._attention().some(row => row.key === 'controller:battery'), false);
 });
 
 

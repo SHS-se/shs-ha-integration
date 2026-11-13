@@ -81,6 +81,7 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states['switch.charge'].state, 'off')
         self.assertEqual(self.states['number.current'].state, '8')
         self.assertEqual(self.controller.status['ev']['state'], 'limited')
+        self.assertNotIn('attention', self.controller.status['ev'])
         self.controller.ev_import_current.return_value = 10
         await self.controller.async_tick()
         self.assertEqual(self.states['switch.charge'].state, 'on')

@@ -105,6 +105,15 @@ Ordinary Verification, deliberately stopped devices and unchanged available
 sensor timestamps do not create failure notices. Failed command/deadline waits
 are visible immediately; their reporting does not change control or handover.
 
+The controller decides when its execution outcome needs attention and publishes
+the notice with the affected device, reason and correction action. The global
+banner and Status display those notices without classifying controller states
+themselves. Normal import-limit adjustments, waits for capacity and short
+observation gaps remain visible in the controller's status. When the controller
+finds that capacity prevents scheduled work from fitting and requests a revised
+plan, it can report that separately. Verification findings can appear in Status
+without becoming a global execution alarm.
+
 A settings save can briefly interrupt admission while Home Assistant and the app
 settle the same configuration. Keep existing device statuses and commands during
 this transition. Reevaluate queued work as soon as the app acknowledges the

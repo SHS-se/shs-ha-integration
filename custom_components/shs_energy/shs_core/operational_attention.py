@@ -64,31 +64,36 @@ def merge_attention(*groups):
     return sorted(items.values(), key=lambda item: (0 if item['severity']=='error' else 1, item['key']))
 
 
-def execution_attention(controllers, battery, devices):
-    names = {d.get('permission',{}).get('controller_id'):d.get('name',d['key']) for d in devices}
-    names.update(battery='House battery', pool='Pool heating', ev='Car charging')
-    results = [pipeline_issue('inputs',detail,fix={'kind':'entity','entity_id':entity},key='battery-input:'+entity)
-               for entity,detail in battery.get('input_errors',{}).items()]
-    if battery.get('planning_error'):
-        results.append(pipeline_issue('failure_report',battery['planning_error'],key='battery-planning'))
-    for key, status in {**controllers, 'battery':battery}.items():
-        if status.get('mode') not in (None, 'controlling') and status.get('holding') is False:
-            # Monitoring and Verification change nothing, so no plan execution can be blocked.
-            # A device SHS still holds after leaving Controlling keeps its alarms.
-            continue
-        failed = (status.get('state') in ('fault','unsupported','limited')
-                  or status.get('execution_blocked') or status.get('plan_rejection')
-                  or status.get('command_state') in ('physical_scope_blocked','native_guard_blocked','attempt_limit','journal_fault'))
-        if not failed:
-            continue
-        rejection = status.get('plan_rejection')
-        reason = (rejection.get('reason') or rejection.get('code')) if rejection else status.get('reason')
-        if status.get('command_state') == 'physical_scope_blocked':
-            reason = 'The battery command is blocked by the available grid capacity. '+(reason or '')
-        results.append(dict(key='controller:'+key, stage='execution', severity='error',
-            title=f"{names.get(key,key.removeprefix('device:'))}: plan execution is blocked",
-            detail=reason or 'The controller cannot carry out its current instructions.',
-            next_step=status.get('next_step') or 'Inspect the controller and source readings. SHS holds the last setting it sent.',
-            fix=deepcopy(status.get('fix') or {'kind':'diagnostics'}),
-            plan_id=status.get('plan_id'), slot_start=status.get('slot_start')))
-    return results
+def execution_issue(owner, status, *, title='plan execution is blocked', severity='error',
+                    detail=None, next_step=None, verification=False):
+    """Build a notice when an execution owner explicitly asks for one."""
+    return dict(key='controller:'+owner, owner=owner, stage='execution', severity=severity, title=title,
+        detail=detail or status.get('reason') or 'The controller cannot carry out its current instructions.',
+        next_step=next_step or status.get('next_step') or 'Inspect the controller and source readings.',
+        fix=deepcopy(status.get('fix') or {'kind':'diagnostics'}), verification=verification,
+        plan_id=status.get('plan_id'), slot_start=status.get('slot_start'))
+
+
+def execution_attention(controllers, battery, devices, *, include_verification=False):
+    """Present notices already issued by the execution owners."""
+    names = {d.get('permission',{}).get('controller_id'):d for d in devices if not d.get('system_member')}
+    system_names = {'battery':'House battery', 'pool':'Pool heating', 'ev':'Car charging'}
+    results = {}
+    statuses = [status for owner, status in controllers.items()
+                if battery is None or owner != 'battery' or 'battery_runtime' not in status]
+    if battery is not None:
+        statuses.insert(0, battery)
+    for status in statuses:
+        for issue in status.get('attention', ()):
+            if issue.get('verification') and not include_verification:
+                continue
+            item = deepcopy(issue)
+            if owner := item.pop('owner', None):
+                device = names.get(owner, {})
+                name = system_names.get(owner, owner.removeprefix('device:'))
+                name = device.get('name', device.get('key', name))
+                item['title'] = f"{name}: {item['title']}"
+                if device:
+                    item['device_key'] = device['key']
+            results[item['key']] = item
+    return list(results.values())

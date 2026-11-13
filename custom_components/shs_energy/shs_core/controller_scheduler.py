@@ -82,7 +82,8 @@ class ControllerScheduler:
                     self.configuration_wait(None)
                     for device in (devices if devices is not None else self.controller.status):
                         self.controller.report(device, 'pending', reason=str(error),
-                            retry_automatically=True, execution_blocked=True, fix={'kind': 'diagnostics'})
+                            retry_automatically=True, execution_blocked=True, needs_attention=True,
+                            fix={'kind': 'diagnostics'})
                     _LOGGER.exception('Controller evaluation interrupted; retaining queued work')
                     retry_seconds = 5
                 self._schedule((None, 'tick_retry'), self.now() + timedelta(seconds=retry_seconds),

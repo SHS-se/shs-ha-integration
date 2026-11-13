@@ -154,3 +154,33 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
                 connection_health=SimpleNamespace(snapshot=lambda:dict(state='connected',retry_at=None,persistent=False)),
                 client=SimpleNamespace(base_url='https://test.smarthomesolutions.se'))
             self.assertIsNone(dashboard.payload()['recovery'])
+
+    async def test_dashboard_displays_live_controller_notices_with_correction_links(self):
+        from types import SimpleNamespace
+        from shs_core.operational_attention import execution_issue
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'bundle.json').write_text(json.dumps({'protocol':2,'integration_version':'paired'}))
+            (root/'app.json').write_text('{"version":"app"}')
+            dashboard = Dashboard(root, root)
+            status = {'device:heater': {'state':'limited', 'reason':'Paused for the house import limit'}}
+            household = SimpleNamespace(operational_status={'state':'ready'},
+                connection_health=SimpleNamespace(snapshot=lambda: {}),
+                client=SimpleNamespace(base_url='https://test.smarthomesolutions.se'))
+            dashboard.engine = SimpleNamespace(started=True, identity={'entry_id':'home'}, household=household,
+                operational_attention=lambda: [], controller=SimpleNamespace(status=status),
+                cached={'devices':[{'key':'heater', 'name':'Bathroom heater',
+                                    'permission':{'controller_id':'device:heater'}}]})
+            self.assertEqual(dashboard.payload()['attention'], [])
+
+            fault = {'state':'fault', 'reason':'Choose the switch that controls the heater',
+                'fix':{'kind':'fields', 'fields':[{'key':'actuator_entity_ids', 'scope':'mapping',
+                                                 'device_key':'heater'}]}}
+            status['device:heater'] = {**fault, 'attention':[execution_issue('device:heater', fault)]}
+            item, = dashboard.payload()['attention']
+            self.assertEqual(item['title'], 'Bathroom heater: plan execution is blocked')
+            self.assertEqual(item['fix']['fields'][0]['url'],
+                             '#settings?config_entry=home&field=actuator_entity_ids&scope=mapping&device=heater')
+
+            status['device:heater'] = {'state':'commanded', 'reason':'Heater on'}
+            self.assertEqual(dashboard.payload()['attention'], [])

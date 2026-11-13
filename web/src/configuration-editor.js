@@ -1570,21 +1570,6 @@ class ShsEnergyConfigPanel extends HTMLElement {
           title: `${device.name}: setup needs attention`, detail: "Complete the highlighted settings before enabling control.",
           fix: { kind: "fields", fields }, device_key: device.key });
       }
-      const status = device.execution_status || {};
-      if (device.system === "battery" && status.fix?.kind === "fields" && items.some(item => item.key === "battery_control")) continue;
-      if (!["fault", "unsupported", "overridden", "limited"].includes(status.state) && !status.handover_pending) continue;
-      const key = "controller:" + (device.permission?.controller_id || device.key);
-      if (items.some(item => item.key === key)) continue;
-      const verification = device.mode === "control_verification";
-      items.push({ key, severity: status.state === "fault" ? "error" : "warning",
-        title: `${device.name}: ${status.handover_pending ? "handover verification incomplete" : verification ? "control verification needs attention" : "device control needs attention"}`,
-        detail: status.reason || "The controller did not provide a reason. Download its evidence and report this missing diagnostic.",
-        next_step: (status.next_step || (status.state === "overridden"
-          ? "Turn off the configured manual override to let SHS resume control of this device."
-          : "Review this device's mapped controls and operating settings. If they match the equipment, download the controller evidence and report the reason above for investigation.")) + (status.retry_automatically ? ` ${verification ? "Verification" : "Control"} retries automatically after the problem is corrected.` : ""),
-        fix: status.fix || { kind: "device" }, device_key: device.key,
-        verification, slot_start: status.slot_start, plan_id: status.plan_id,
-      });
     }
     if (this._data?.portal?.error) items.push({ key: "website_refresh", severity: "warning", title: "Website choices could not be refreshed", detail: this._data.portal.error, next_step: "Refresh website choices to retry. The last received choices remain in use.", fix: { kind: "refresh_choices" } });
     if (this._refreshWarning()) items.push({ key: "status_refresh", severity: "error", title: "Current status could not be refreshed",

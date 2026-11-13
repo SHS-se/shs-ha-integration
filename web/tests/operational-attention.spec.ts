@@ -1,7 +1,7 @@
 import {test,expect} from '@playwright/test';
 
 const upload={key:'pipeline:upload',severity:'error',stage:'upload',title:'Planning data could not be sent',detail:'The server rejected the planning upload.',next_step:'Check the server connection.',fix:{kind:'diagnostics'}};
-const pool={key:'controller:pool',severity:'error',stage:'execution',title:'Pool heating: plan execution is blocked',detail:'Waiting for battery charging to release grid capacity',next_step:'SHS retries automatically.',fix:{kind:'diagnostics'}};
+const pool={key:'controller:pool',severity:'error',stage:'execution',title:'Pool heating: plan execution is blocked',detail:'Home Assistant could not confirm the pool heater switch.',next_step:'Inspect the controller diagnostics.',fix:{kind:'diagnostics'}};
 
 test('failures stay prominent on every screen while a retained plan remains available',async({page},info)=>{
   await page.route('**/api/state',async route=>{

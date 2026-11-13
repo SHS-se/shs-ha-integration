@@ -3,7 +3,7 @@ from copy import deepcopy
 from contextlib import asynccontextmanager
 import json
 from types import SimpleNamespace
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import unittest
 import asyncio
 import test_controller as controller_tests
@@ -439,6 +439,7 @@ class ControllerEvidenceTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_start()
         self.coordinator.async_execution_observed.assert_not_awaited()
         self.assertEqual(self.controller.status['ev']['state'], 'pending')
+        self.assertNotIn('attention', self.controller.status['ev'])
         self.assertNotIn('ev', self.controller.failed)
         self.controller.devices.perform = AsyncMock(return_value=dict(ownership=empty, deadlines=[], reads=[],
             diagnostics={'commands': [], 'observations': {}}, result=None, reservation_required=False, reports={},
@@ -493,14 +494,23 @@ class ControllerEvidenceTests(unittest.IsolatedAsyncioTestCase):
         status = self.controller.status[owner]
         self.assertEqual(status['state'], 'pending')
         self.assertTrue(status['execution_blocked'])
+        self.assertNotIn('attention', status)
         self.assertEqual(status['fix']['entity_id'], 'sensor.room')
         self.coordinator.async_execution_observed.assert_not_awaited()
         self.assertEqual(self.calls, [])
         self.assertEqual(self.states['switch.heater'].state, 'on')
 
+        since = datetime.now(timezone.utc) - timedelta(minutes=6)
+        status['unavailable_since'] = since.isoformat()
+        await self.controller.async_tick(devices={owner}, trigger='timer')
+        issue, = self.controller.status[owner]['attention']
+        self.assertEqual(issue['fix'], {'kind':'entity', 'entity_id':'sensor.room'})
+        self.assertEqual(self.calls, [])
+
         self.states['sensor.room'].state = '21'
         await self.controller.async_tick(devices={owner}, trigger='state_changed')
         self.assertEqual(self.calls, [('switch.heater', 'off')])
+        self.assertNotIn('attention', self.controller.status[owner])
         self.assertEqual(self.coordinator.async_execution_observed.await_args.args,
                          (owner, self.coordinator.optimisation_plan, self.slot, None))
         self.assertIs(self.slot['device_commands']['heater'], command)

@@ -134,7 +134,7 @@ async def configuration_payload(editor, *, refresh_roles):
                 ),
             }
             for item in merge_attention(coordinator.attention_items,execution_attention(
-                coordinator.controller.status,coordinator.battery_runtime.snapshot(),devices))
+                coordinator.controller.status,coordinator.battery_runtime.snapshot(),devices,include_verification=True))
         ],
         "readiness": {
             "planning_mode": options.get(shs_const.OPT_PLANNING_MODE),

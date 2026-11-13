@@ -3,6 +3,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 
 import test_device_commands as device_fixtures
@@ -115,6 +116,43 @@ class DeviceCommandIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status['device:broken']['state'], 'idle')
         self.assertTrue(self.controller.status['device:broken']['execution_blocked'])
 
+    async def test_room_import_pause_is_status_only_until_scheduled_work_needs_to_move(self):
+        owner = 'device:heater'
+        self.hass.config = SimpleNamespace(units=SimpleNamespace(temperature_unit='°C'))
+        self.options['device_control_mappings']['heater'] = {
+            'control_type':'switch_schedule', 'actuator_entity_ids':['switch.heater'],
+            'power':750, 'room_area_id':'bathroom', 'temperature_entity_id':'sensor.bathroom',
+        }
+        model = {'key':'heater', 'control_type':'switch_schedule', 'category':'heating'}
+        self.coordinator.optimisation_plan['device_models'][0] = model
+        self.coordinator.async_cached_device_configuration.return_value[0] = model
+        self.slot['device_commands']['heater'] = {'type':'room_relay', 'room_key':'bathroom', 'target_c':21}
+        self.states['sensor.bathroom'] = device_fixtures.State(20, unit_of_measurement='°C')
+        shed = True
+        self.controller.shed_scheduled_heat = lambda *_: shed
+        await self.controller.async_start()
+        self.assertEqual(self.states['switch.heater'].state, 'off', self.controller.status[owner])
+        self.assertEqual(self.controller.status[owner]['state'], 'limited')
+        self.assertNotIn('attention', self.controller.status[owner])
+
+        # A gateway decision to replan the affected work is distinct from the normal pause.
+        execute = self.controller.execute_device
+        async def shortfall(*args):
+            result = await execute(*args)
+            result.pop('heating_curtailed')
+            result['execution_condition'] = {'status':'temporarily_absent', 'cause':'house_import_capacity'}
+            return result
+        self.controller.execute_device = shortfall
+        await self.controller.async_tick(devices={owner})
+        issue, = self.controller.status[owner]['attention']
+        self.assertEqual((issue['severity'], issue['title']), ('warning', 'scheduled work needs to move'))
+
+        self.controller.execute_device = execute
+        shed = False
+        await self.controller.async_tick(devices={owner})
+        self.assertEqual(self.states['switch.heater'].state, 'on')
+        self.assertNotIn('attention', self.controller.status[owner])
+
     async def test_missing_device_command_in_verification_is_not_an_execution_alarm(self):
         del self.slot['device_commands']['broken']
         self.options['device_modes']['broken'] = 'control_verification'
@@ -141,6 +179,8 @@ class DeviceCommandIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((status['mode'], status['holding']), ('control_verification', False))
         self.assertFalse(any(i['key']=='controller:device:heater'
                              for i in execution_attention(self.controller.status, {}, [])))
+        self.assertTrue(any(i['key']=='controller:device:heater' and i['verification']
+                            for i in execution_attention(self.controller.status, {}, [], include_verification=True)))
         self.options['device_modes']['heater'] = 'controlling'
         await self.controller.async_tick()
         self.assertTrue(any(i['key']=='controller:device:heater'
