@@ -71,3 +71,29 @@ class CensusTests(unittest.TestCase):
         self.assertEqual(self.census.details,{})
         self.statements.clear();self.sample()
         self.assertTrue(any('dbstat' in sql for sql in self.statements))
+
+    def test_hourly_refresh_skips_full_scans_on_live_rollback_journals(self):
+        stores = self.root/'stores'
+        stores.mkdir()
+        path = stores/'shs_energy.execution.home.sqlite'
+        self.path.rename(path)
+        self.census.inspect_database(path, 'Operational accounting')
+        self.now = 3600
+        self.statements.clear()
+        with closing(sqlite3.connect(path)) as writer:
+            writer.execute('PRAGMA busy_timeout=0')
+            writer.execute('UPDATE transport SET high=9')
+            result, = self.census.sample(self.root, runtime=self.root, entry='home', ha_config=self.root)['databases']
+            writer.commit()
+        self.assertEqual(result['journal_mode'], 'delete')
+        self.assertEqual(result['receipts']['received_through'], 4)
+        self.assertNotIn('tables', result)
+        self.assertNotIn(path.resolve(), self.census.details)
+        self.assertFalse(any('dbstat' in sql or 'count(*)' in sql for sql in self.statements))
+
+    def test_live_wal_database_keeps_detailed_measurements(self):
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute('PRAGMA journal_mode=WAL').fetchone()[0], 'wal')
+        result = self.census.inspect_database(self.path, 'HA companion', live_runtime=True)
+        self.assertEqual(result['journal_mode'], 'wal')
+        self.assertEqual({table['name'] for table in result['tables']}, {'transport', 'resource_samples'})

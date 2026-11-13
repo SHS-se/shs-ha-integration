@@ -171,11 +171,34 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         # Capture, 17 October 2026 (evening): nothing discharges below the
         # target, so measured discharge alone could never admit the car's 16 A.
         self.charging_car_at_minimum()
+        options = native_options(self.source.options())
+        self.source.configuration.options = lambda:deepcopy(options)
         self.discharging(0)
         self.cover()
         self.assertTrue(self.source.external_ready('ev', entity='number.ev', value=16.0))
         await self.native('ev-full', 'ev', 'number.ev', 'set_value', 16)
         self.assertEqual(len(self.calls), 1)
+
+    async def test_solar_reading_gap_only_withdraws_promised_discharge(self):
+        self.charging_car_at_minimum()
+        options = native_options(self.source.options())
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.cover()
+        effect = self.source.describe_import('ev', 'number.ev', 16.0)
+        pv = self.rows[options['solar_production_power_entity']]
+        original = pv['state']
+        self.discharging(1000)
+        for state in ('unavailable', 'invalid'):
+            with self.subTest(state=state):
+                pv['state'] = state
+                self.assertEqual(self.source.discharge_credit(effect, 16590), self.conversion.discharge.output(1000))
+                with self.assertRaisesRegex(ControlDeadlineError, 'house import capacity'):
+                    self.source.admit_import(effect)
+        self.discharging(3000)
+        self.source.admit_import(effect)
+        self.discharging(1000)
+        pv['state'] = original
+        self.source.admit_import(effect)
 
     async def test_prepared_reservation_is_not_yet_causal_but_final_check_reads_live_house(self):
         self.charging_car_at_minimum()

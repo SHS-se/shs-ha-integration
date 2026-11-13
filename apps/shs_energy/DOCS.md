@@ -76,8 +76,10 @@ The HA companion journal retains operational command identities, admissions and
 exact retry results. Those records have a separate lifetime from diagnostics.
 Schema 3 losslessly compresses their bulky JSON bodies; its first startup upgrades
 existing records and reclaims pages without discarding evidence. Routine storage
-samples update file sizes and receipt lag each minute. Exact table counts, sizes
-and history ranges refresh hourly, with their measurement time shown in System.
+samples update file sizes and receipt lag each minute. System shows hourly table
+counts, sizes and history ranges for the dashboard database and live databases
+that use write-ahead logging. Live databases that use rollback journals expose
+the minute gauges so detailed scans cannot delay controller commits.
 
 ## Logs and profiling
 

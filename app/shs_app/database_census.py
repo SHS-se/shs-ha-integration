@@ -13,7 +13,7 @@ class DatabaseCensus:
         self.clock = clock
         self.details = {}
 
-    def inspect_database(self, path, label):
+    def inspect_database(self, path, label, *, live_runtime=False):
         started, now = perf_counter(), self.clock()
         stat = path.stat()
         result = dict(name=label, file_bytes=stat.st_size,
@@ -35,6 +35,12 @@ class DatabaseCensus:
                 result['receipts'] = dict(processed_through=floor, received_through=high, pending=high-floor)
             if 'indexed_evidence_schema' in names:
                 result['evidence_schema'], result['evidence_verified'] = db.execute('SELECT version,verified FROM indexed_evidence_schema').fetchone()
+            # A full scan in a rollback-journal transaction can prevent the
+            # controller from committing its next command or receipt.
+            if live_runtime and result['journal_mode'] != 'wal':
+                self.details.pop(key, None)
+                result['census_ms'] = (perf_counter()-started)*1000
+                return result
             previous = self.details.get(key)
             if previous is None or previous[0] != identity or now-previous[1] >= 3600:
                 self.details.pop(key, None)
@@ -56,7 +62,8 @@ class DatabaseCensus:
         return result
 
     def sample(self, data, runtime=None, entry=None, ha_config=Path('/homeassistant')):
-        active = [(data/'diagnostics.sqlite3','Dashboard resources')]
+        diagnostics = data/'diagnostics.sqlite3'
+        active = [(diagnostics,'Dashboard resources')]
         if runtime is not None and entry:
             active += [(runtime/'receipts.sqlite','App transport'),
                 (runtime/'stores'/f'shs_energy.execution.{entry}.sqlite','Operational accounting'),
@@ -68,7 +75,7 @@ class DatabaseCensus:
         for path,label in active:
             if path.exists():
                 try:
-                    databases.append(self.inspect_database(path,label))
+                    databases.append(self.inspect_database(path,label,live_runtime=path != diagnostics))
                 except (sqlite3.Error,OSError) as error:
                     self.details.pop(path.resolve(), None)
                     databases.append(dict(name=label,error=str(error)))

@@ -1368,7 +1368,6 @@ class HomeAssistantSource:
         sensor = installed['battery_power_measurement_entity']
         measured, _ = power(self.report(sensor), source=sensor, signed=True)
         mode, limit = installed['battery_mode_entity'], installed['battery_discharge_limit_entity']
-        unit = self.report(limit)['attributes']['unit_of_measurement']
         controls = {key:(self.report(key)['state'] if key == mode else _current(self.report(key)['state']))
                     for key in (mode, installed['battery_charge_limit_entity'], limit)}
         row = self.capacity['devices'].get(capacity_key('battery', controls), {})
@@ -1388,10 +1387,14 @@ class HomeAssistantSource:
         offer = self.service.current_battery_cover()
         if offer is None or datetime.now(timezone.utc).timestamp() * 1000 >= offer['valid_until_ms']:
             return credit
-        house, _ = power(self.report(options['house_consumption_power_entity']), source=options['house_consumption_power_entity'])
-        pv, _ = power(self.report(options['solar_production_power_entity']), source=options['solar_production_power_entity'])
-        bounds = self.native_load_bounds() if offer['include_base'] else {}
+        house_entity = options.get('house_consumption_power_entity')
+        solar_entity = options.get('solar_production_power_entity')
+        if not house_entity or not solar_entity:
+            return credit
         try:
+            house, _ = power(self.report(house_entity), source=house_entity)
+            pv, _ = power(self.report(solar_entity), source=solar_entity)
+            bounds = self.native_load_bounds() if offer['include_base'] else {}
             loads = sum(max(power(self.report(meter), source=meter)[0], bounds.get(meter,0)) for meter in offer['meters'])
         except ValueError:
             return credit  # The observed discharge does not depend on the promised load partition.

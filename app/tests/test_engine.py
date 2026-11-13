@@ -774,16 +774,18 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         from shs_core.native_configuration import native_options
         def previous_projection(options):
             return {key: value for key, value in native_options(options).items()
-                    if key != 'house_consumption_power_entity'}
+                    if key not in ('house_consumption_power_entity', 'solar_production_power_entity')}
         engine = self.engine()
         with (patch('shs_app.engine.native_options', previous_projection),
               patch('shs_app.physical_ports.native_options', previous_projection),
               patch('shs_core.gateway_service.native_options', previous_projection)):
             await engine.load()
             await engine.configuration.commit(engine.configuration.revision,
-                dict(engine.configuration.options(), house_consumption_power_entity='sensor.house_power'),
-                'saved-house-power')
+                dict(engine.configuration.options(), house_consumption_power_entity='sensor.house_power',
+                     solar_production_power_entity='sensor.solar_power'),
+                'saved-power-sensors')
             await engine.activate()
+            self.assertNotIn('solar_production_power_entity', self.service.source.options())
         saved = deepcopy(engine.configuration.options())
         revision = engine.configuration.revision
         activation = engine.activation['activation_id']
@@ -794,6 +796,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         await replacement.activate()
         self.assertEqual(replacement.configuration.revision, revision + 1)
         self.assertEqual(replacement.configuration.options(), saved)
+        self.assertEqual(self.service.source.options()['solar_production_power_entity'], 'sensor.solar_power')
         self.assertEqual(replacement.activation['activation_id'], activation)
         self.assertEqual(self.service.physical.ownership.records, ownership)
         self.assertFalse(self.native_calls)
