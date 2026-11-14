@@ -122,6 +122,27 @@ export const midpointLinePath = (
   `${offset === 0 ? 'M' : 'L'}${fmt(x(run.start + offset + 0.5))},${fmt(y(value))}`,
 ).join('')).join('');
 
+/**
+ * The area between two levels drawn as midpoint lines, such as a store and
+ * the level it would have had without an estimated withdrawal. Only quarters
+ * where both levels are known are drawn, so a gap in either is a gap here.
+ */
+export const midpointBandPath = (
+  lower: readonly (number | null)[],
+  upper: readonly (number | null)[],
+  x: Scale,
+  y: Scale,
+): string => runs(upper.map((value, index) => isDrawable(value) && isDrawable(lower[index]) ? value : null))
+  .map(run => {
+    const top = run.values.map((value, offset) =>
+      `${offset === 0 ? 'M' : 'L'}${fmt(x(run.start + offset + 0.5))},${fmt(y(value))}`).join('');
+    let bottom = '';
+    for (let index = run.start + run.values.length - 1; index >= run.start; index -= 1) {
+      bottom += `L${fmt(x(index + 0.5))},${fmt(y(lower[index]!))}`;
+    }
+    return `${top}${bottom}Z`;
+  }).join('');
+
 /** Running [lower, upper] pairs, bottom series first. */
 export const stackBands = (
   series: ReadonlyArray<readonly number[]>,

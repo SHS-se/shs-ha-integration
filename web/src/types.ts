@@ -13,6 +13,8 @@ export type Slot = {
   grid_import_w: number|null; grid_export_w: number|null;
   battery_charge_w: number|null; battery_discharge_w: number|null;
   battery_soc: number|null; ev_soc: number|null;
+  /** The car with the same charging and none of the planner's estimated driving. */
+  ev_soc_from_charging?: number|null;
   temperatures_c: Record<string,number|null>;
   import_cost_sek: number|null; export_revenue_sek: number|null;
   device_loads_w: Record<string,number>|null;

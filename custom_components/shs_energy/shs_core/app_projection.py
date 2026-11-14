@@ -7,7 +7,7 @@ SLOT_FIELDS = (
     "start", "duration_hours", "binding", "pv_w", "base_w", "load_w",
     "shadow_import_sek_per_kwh", "shadow_export_sek_per_kwh",
     "grid_import_w", "grid_export_w", "battery_charge_w", "battery_discharge_w",
-    "battery_soc", "ev_soc", "import_cost_sek", "export_revenue_sek",
+    "battery_soc", "ev_soc", "ev_soc_from_charging", "import_cost_sek", "export_revenue_sek",
     "device_loads_w", "device_commands", "battery_command", "ev_w", "pool_w",
     "boiler_expected_w", "room_heating_w",
 )

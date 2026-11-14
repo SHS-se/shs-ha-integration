@@ -13,7 +13,7 @@
 import {useMemo, useRef, useState} from 'react';
 import type {KeyboardEvent, PointerEvent, ReactNode} from 'react';
 import {
-  linearScale, midpointLinePath, niceTicks, placeBandLabels, stackBands,
+  linearScale, midpointBandPath, midpointLinePath, niceTicks, placeBandLabels, stackBands,
   stepAreaPath, stepBandPath, stepLinePath, type BandLabelPlacement, type Scale,
 } from './geometry';
 import {PRICE_RAMP_STEPS, priceBands, priceGradientStops} from './price-bands';
@@ -40,6 +40,12 @@ const FLOW_NAMES = ['Solar', 'Battery out', 'Grid in', 'Battery in', 'Grid out']
 
 const kw = (watts: number | null): number | null =>
   watts === null || !Number.isFinite(watts) ? null : watts / 1_000;
+/** Percentage points of estimated car use below which nothing is drawn or listed. */
+const EV_USAGE_SHOWN = 0.5;
+const EV_USAGE_HATCH = 'plan-ev-usage-hatch';
+/** The HTML counterpart of the chart's hatch, for the interval details. */
+const hatchBackground = (colour: string) =>
+  `repeating-linear-gradient(135deg, ${colour} 0 1.5px, transparent 1.5px 3.5px)`;
 const percent = (fraction: number | null): number | null =>
   fraction === null || !Number.isFinite(fraction) ? null : fraction * 100;
 const startOf = (slot: Slot): number => new Date(slot.start).getTime();
@@ -126,9 +132,9 @@ function InlineLabel({placement, children}: {placement: BandLabelPlacement; chil
 }
 
 /** A swatch carries the identity; the text stays in ink. */
-function Reading({name, value, colour}: {name: string; value: string; colour?: string}) {
+function Reading({name, value, colour, swatch}: {name: string; value: string; colour?: string; swatch?: string}) {
   return <div className="pc-reading">
-    <span><i style={{backgroundColor: colour ?? 'transparent'}} aria-hidden="true"/><b>{name}</b></span>
+    <span><i style={swatch ? {background: swatch} : {backgroundColor: colour ?? 'transparent'}} aria-hidden="true"/><b>{name}</b></span>
     <span>{value}</span>
   </div>;
 }
@@ -182,9 +188,12 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
     const x = timeScale(edges);
     const homeSoc = rows.map(row => percent(row.battery_soc));
     const evSoc = rows.map(row => percent(row.ev_soc));
+    // The car without the driving the planner estimated, where it estimated any.
+    const evWithoutUse = rows.map((row, index) => evSoc[index] === null ? null : percent(row.ev_soc_from_charging ?? null));
     const showHome = homeSoc.some(value => value !== null);
     const showEv = evSoc.some(value => value !== null);
     const showSoc = showHome || showEv;
+    const showEvUsage = showEv && evWithoutUse.some((value, index) => value !== null && value - evSoc[index]! >= EV_USAGE_SHOWN);
 
     // Room above the first heading for the NOW flag, which in a plan-only window
     // sits at the left edge, exactly where the headings are.
@@ -260,7 +269,7 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
     });
 
     return {
-      rows, edges, x, axisY, height: axisY + 42, showSoc, showHome, showEv, homeSoc, evSoc,
+      rows, edges, x, axisY, height: axisY + 42, showSoc, showHome, showEv, homeSoc, evSoc, evWithoutUse, showEvUsage,
       price, priceY, priceMax, buy, sell, bands, quotedBuy, modelledBuy,
       hasModelledPrice: modelledBuy.some(value => value !== null),
       flow, flowY, flowMin, flowMax, supply, disposal, flowLabels,
@@ -270,7 +279,7 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
   }, [clock, from, plan.temperatures, slots, to, whole]);
 
   const {
-    rows, edges, x, axisY, height, showSoc, showHome, showEv, homeSoc, evSoc,
+    rows, edges, x, axisY, height, showSoc, showHome, showEv, homeSoc, evSoc, evWithoutUse, showEvUsage,
     price, priceY, priceMax, buy, sell, bands, quotedBuy, modelledBuy, hasModelledPrice,
     flow, flowY, flowMin, flowMax, supply, disposal, flowLabels,
     load, loadY, loadMax, loadBands, loadLabels, series, base,
@@ -354,8 +363,13 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
         onPointerMove={handleMove} onPointerDown={handleMove} onPointerLeave={() => { setHover(null); setPointer(null); }}
         onKeyDown={handleKey}
         onClick={event => { const index = intervalAt(event.clientX) ?? hover; if (index !== null) onSelect?.(from + index); }}>
-        {bands && <defs>
-          <linearGradient id={gradientId} gradientUnits="userSpaceOnUse" x1={MARGIN_LEFT} y1={0} x2={RIGHT} y2={0}>
+        <defs>
+          {/* Estimated car use: a hatch, because dashes already mean modelled prices. */}
+          <pattern id={EV_USAGE_HATCH} patternUnits="userSpaceOnUse" width={5} height={5} patternTransform="rotate(45)">
+            <rect width={5} height={5} fill={COLOURS.ev} fillOpacity={0.08}/>
+            <line x1={0} y1={0} x2={0} y2={5} stroke={COLOURS.ev} strokeWidth={2} strokeOpacity={0.55}/>
+          </pattern>
+          {bands && <linearGradient id={gradientId} gradientUnits="userSpaceOnUse" x1={MARGIN_LEFT} y1={0} x2={RIGHT} y2={0}>
             {priceGradientStops(
               // The ramp is laid out in time, so an interval of uneven length
               // still changes colour exactly at its own edges.
@@ -365,8 +379,8 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
               const offset = (x(share) - MARGIN_LEFT) / PLOT_W * 100;
               return <stop key={`${index}-${stops.length}`} offset={`${offset.toFixed(3)}%`} stopColor={`var(--plan-price-${stop.step})`}/>;
             })}
-          </linearGradient>
-        </defs>}
+          </linearGradient>}
+        </defs>
 
         {/* Everything right of now is still to come. Said once, across every
             panel, rather than as a faint tint inside one of them. */}
@@ -424,12 +438,17 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
 
         {/* -------------------------------------------------- Storage --- */}
         {showSoc && <>
-          <PanelHeading title="Storage" unit="%" y={soc.top - 14}/>
+          <PanelHeading title="Storage" unit={showEvUsage ? '% · hatched = estimated driving' : '%'} y={soc.top - 14}/>
           <Gridlines ticks={[0, 50, 100]} y={socY} format={tick => String(tick)}/>
           {showHome && <>
             <path d={stepAreaPath(homeSoc, x, socY, 0)} fill={COLOURS.battery} fillOpacity={0.2}/>
             <path d={stepLinePath(homeSoc, x, socY)} fill="none" stroke={COLOURS.battery} strokeWidth={2}/>
           </>}
+          {showEvUsage && <g data-ev-usage="">
+            <title>Estimated driving: the car without driving above, the plan below</title>
+            <path d={midpointBandPath(evSoc, evWithoutUse, x, socY)} fill={`url(#${EV_USAGE_HATCH})`}/>
+            <path d={midpointLinePath(evWithoutUse, x, socY)} fill="none" stroke={COLOURS.ev} strokeWidth={1} strokeOpacity={0.45}/>
+          </g>}
           {showEv && <path d={midpointLinePath(evSoc, x, socY)} fill="none" stroke={COLOURS.ev} strokeWidth={2}/>}
           {homeSoc[n - 1] !== null && <EndLabel y={socY(homeSoc[n - 1]!)} colour={COLOURS.battery}>{`home ${Math.round(homeSoc[n - 1]!)}%`}</EndLabel>}
           {evSoc[n - 1] !== null && <EndLabel y={socY(evSoc[n - 1]!)} colour={COLOURS.ev}>{`car ${Math.round(evSoc[n - 1]!)}%`}</EndLabel>}
@@ -491,7 +510,9 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
       row={hovered} label={`${clock.dayMonth(startOf(hovered))}, ${clock.time(startOf(hovered))}`}
       elapsed={endOf(hovered) <= now} currency={plan.currency}
       series={series.map(entry => ({...entry, value: entry.values[hover!] ?? 0}))}
-      base={base[hover!]} homeSoc={homeSoc[hover!]} evSoc={evSoc[hover!]} temperatures={temperatures.map(entry => ({...entry, value: entry.values[hover!]}))}
+      base={base[hover!]} homeSoc={homeSoc[hover!]} evSoc={evSoc[hover!]}
+      evUsage={evSoc[hover!] !== null && evWithoutUse[hover!] !== null && evWithoutUse[hover!]! - evSoc[hover!]! >= EV_USAGE_SHOWN
+        ? evWithoutUse[hover!]! - evSoc[hover!]! : null} temperatures={temperatures.map(entry => ({...entry, value: entry.values[hover!]}))}
       left={pointer.left} top={pointer.top} bounds={wrapRef.current?.getBoundingClientRect() ?? null}/>}
   </div>;
 }
@@ -501,10 +522,12 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
  * was drawn in. A reader matching a band to a number should not have to count
  * bands, or read past a column of zeroes to find the two devices running.
  */
-function PlanTooltip({row, label, elapsed, currency, series, base, homeSoc, evSoc, temperatures, left, top, bounds}: {
+function PlanTooltip({row, label, elapsed, currency, series, base, homeSoc, evSoc, evUsage, temperatures, left, top, bounds}: {
   row: Slot; label: string; elapsed: boolean; currency: string;
   series: {key: string; name: string; slot: number; value: number}[];
   base: number | null; homeSoc: number | null; evSoc: number | null;
+  /** Percentage points the car is below its charge-only level because of estimated driving. */
+  evUsage: number | null;
   temperatures: (Temperature & {colour: string; value: number | null})[];
   left: number; top: number; bounds: DOMRect | null;
 }) {
@@ -546,6 +569,7 @@ function PlanTooltip({row, label, elapsed, currency, series, base, homeSoc, evSo
     <div className="pc-tooltip-group">
       {homeSoc !== null && <Reading name="Home battery" colour={COLOURS.battery} value={`${Math.round(homeSoc)} %`}/>}
       {evSoc !== null && <Reading name="Car battery" colour={COLOURS.ev} value={`${Math.round(evSoc)} %`}/>}
+      {evUsage !== null && <Reading name="Estimated driving" swatch={hatchBackground(COLOURS.ev)} value={`−${Math.round(evUsage)} %`}/>}
       {row.shadow_import_sek_per_kwh !== null &&
         <Reading name={row.binding ? 'Buy' : 'Buy (estimated)'} value={price(row.shadow_import_sek_per_kwh)}/>}
       {row.shadow_export_sek_per_kwh !== null &&

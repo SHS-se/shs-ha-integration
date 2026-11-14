@@ -26,6 +26,11 @@ class AppProjectionTests(unittest.TestCase):
         self.assertIsNone(result["household"][0]["battery_soc"])
         self.assertEqual(result["household"][0]["load_w"], 9999999)
 
+    def test_estimated_driving_reaches_the_app_only_where_the_planner_estimated_it(self):
+        plan = {"plans": {"priority": {"slots": [{"ev_soc": 0.7, "ev_soc_from_charging": 0.75}, {"ev_soc": 0.7}]}}}
+        result = schedule(plan, {"state": "ready"})
+        self.assertEqual([slot["ev_soc_from_charging"] for slot in result["household"]], [0.75, None])
+
     def test_published_temperatures_keep_scope_gaps_and_owner_target(self):
         plan = {"pool": {"water_temperature_c": 25, "stop_temperature_c": 32},
                 "resolved_value_stores": [{"key": "pool", "derivation": {"source": "comfort"}}],

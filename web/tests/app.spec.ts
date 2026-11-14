@@ -226,6 +226,26 @@ test('schedule chart explains an interval, selects it and narrows to one day',as
 });
 
 
+test('estimated driving is hatched above the car and named in the interval details',async({page},info)=>{
+  await page.route('**/api/state',async route=>{
+    const response=await route.fetch();const data=await response.json();
+    const schedule=data.snapshot.entries[0].schedule,first=schedule.household[1],start=Date.now()-2*3600000;
+    // Synthetic: no charging, and estimated use of one percentage point per interval.
+    schedule.household=Array.from({length:96},(_,i)=>({...first,
+      start:new Date(Math.floor(start/900000)*900000+i*900000).toISOString(),duration_hours:.25,
+      ev_soc:Math.max(.2,.8-(i+1)/100),ev_soc_from_charging:.8}));
+    await route.fulfill({json:data});
+  });
+  await page.goto('./#plan');
+  const chart=page.getByRole('img',{name:/Price, power flows, consumption, storage and temperature/});
+  await expect(chart.getByText('% · hatched = estimated driving')).toBeVisible();
+  await expect(chart.locator('[data-ev-usage] path').first()).toHaveAttribute('fill','url(#plan-ev-usage-hatch)');
+  await chart.focus();
+  for(let i=0;i<12;i++)await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tooltip')).toContainText(/Estimated driving−\d+ %/);
+  await page.screenshot({path:`test-results/${info.project.name}-estimated-driving.png`,fullPage:true});
+});
+
 test('temperature forecast gaps stay gaps and a missing forecast is explicit',async({page})=>{
   let missing=false;
   await page.route('**/api/state',async route=>{
