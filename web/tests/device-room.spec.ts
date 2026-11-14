@@ -145,6 +145,12 @@ test('the device cogwheel saves the method and load characteristic together', as
   const dialog = editor.getByRole('dialog', {name: 'Settings for Heater'});
   const method = dialog.getByRole('combobox', {name: 'Control method'});
   const load = dialog.getByRole('combobox', {name: 'Load characteristic'});
+  await expect(method.locator('option:not(:disabled)')).toHaveText([
+    'On/off schedule', 'Variable power', 'Permit/inhibit', 'Setpoint',
+  ]);
+  await expect(load.locator('option:not(:disabled)')).toHaveText([
+    'Fixed full load', 'Variable full load', 'Thermostat / duty cycle', 'Inverter load',
+  ]);
   await expect(method).toHaveValue('switch_schedule');
   await expect(load).toHaveValue('fixed_full_load');
   await method.selectOption('setpoint');
