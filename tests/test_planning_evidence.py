@@ -41,7 +41,7 @@ class PlanningEvidenceTests(unittest.IsolatedAsyncioTestCase):
                         categories['total_consumption'] = ['sensor.total_a', 'sensor.total_b']
                     async def statistics(query_start, query_end, entities, period, units, kinds):
                         self.assertEqual((query_start, query_end, period, units, kinds),
-                                         (start, end, '5minute', {'energy': 'kWh'}, {'change'}))
+                                         (start - timedelta(minutes=5), end, '5minute', {'energy': 'kWh'}, {'change', 'state'}))
                         return {entity: series[entity] for entity in entities}
                     rig.history.statistics.side_effect = statistics
                     h._measured_soc_quarters = AsyncMock(return_value={} if excluded_battery else {

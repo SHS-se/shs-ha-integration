@@ -5,8 +5,12 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components/shs_energy"))
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 from shs_core.device_observations import (
-    device_observation_entities, observation_signature, quarter_settings, with_device_observations,
+    current_power_setting, device_observation_entities, history_resend_window, observation_signature,
+    quarter_settings, with_device_observations,
 )
 from household_fixture import Rig
 
@@ -44,6 +48,15 @@ class QuarterSettingTests(unittest.TestCase):
         self.assertEqual(quarter_settings([(at(-30), "unavailable", None)], at(0), at(30)), {})
         self.assertEqual(quarter_settings([(at(20), "12", None)], at(0), at(45)), {iso(30): 12.0})
         self.assertEqual(quarter_settings([], at(0), at(30)), {})
+
+    def test_a_change_during_an_outage_is_unknown_for_every_quarter_it_touches(self):
+        """Turned down while the entity was unavailable: when, nobody saw."""
+        states = [(at(-30), "100", None), (at(20), "unavailable", None), (at(50), "80", None)]
+        self.assertEqual(quarter_settings(states, at(0), at(75)), {iso(0): 100.0, iso(60): 80.0})
+        # The same value on both sides of an outage held through it.
+        states = [(at(-30), "100", None), (at(20), "unavailable", None), (at(50), "100", None)]
+        self.assertEqual(quarter_settings(states, at(0), at(60)),
+                         {iso(0): 100.0, iso(15): 100.0, iso(30): 100.0, iso(45): 100.0})
 
     def test_a_repeated_value_does_not_split_the_span(self):
         states = [(at(-30), "80", None), (at(5), "80", None)]
@@ -97,6 +110,33 @@ class EntityTests(unittest.TestCase):
         self.assertEqual(observation_signature(one), observation_signature({"heater": {"setting": "number.nibe"}}))
         self.assertNotEqual(observation_signature(one), observation_signature({}))
 
+    def test_quarters_sent_before_the_merge_was_fixed_are_sent_again_once(self):
+        """The identity an earlier release stored no longer matches, so history is re-sent."""
+        one = {"heater": {"setting": "number.nibe"}}
+        self.assertNotEqual(observation_signature(one), '{"heater":{"setting":"number.nibe"}}')
+        # A home that observes nothing has nothing to send again.
+        self.assertEqual(observation_signature({}), "{}")
+
+    def test_the_resend_walks_back_one_stretch_at_a_time_to_what_the_website_accepts(self):
+        signature, end = observation_signature({"heater": {"setting": "number.nibe"}}), at(0)
+        window = lambda before, sig=signature: history_resend_window(
+            {"signature": sig, "before": before.isoformat()} if before else None, signature, end,
+            chunk=timedelta(hours=72), reach=timedelta(hours=191))
+        self.assertEqual(window(end - timedelta(hours=72)), (end - timedelta(hours=144), end - timedelta(hours=72)))
+        self.assertEqual(window(end - timedelta(hours=144)), (end - timedelta(hours=191), end - timedelta(hours=144)))
+        self.assertIsNone(window(end - timedelta(hours=191)))
+        self.assertIsNone(window(None))
+        # A cursor left by a re-send that was superseded is not continued.
+        self.assertIsNone(window(end - timedelta(hours=72), "other"))
+
+    def test_the_snapshot_says_what_each_setting_holds_now(self):
+        states = {"number.nibe": SimpleNamespace(state="12.0"), "number.pump": SimpleNamespace(state="unavailable")}
+        self.assertEqual(current_power_setting("number.nibe", states.get), {"value": 12.0})
+        # Unreadable now is not the same as a device with no setting of its own.
+        self.assertEqual(current_power_setting("number.pump", states.get), {"value": None})
+        self.assertEqual(current_power_setting("number.gone", states.get), {"value": None})
+        self.assertIsNone(current_power_setting(None, states.get))
+
 
 class AttachTests(unittest.TestCase):
     def test_setting_and_heat_ride_only_on_quarters_with_that_devices_energy(self):
@@ -108,10 +148,18 @@ class AttachTests(unittest.TestCase):
             {"heater": {iso(0): 12.0, iso(15): 12.0}, "pump": {iso(15): 80.0}},
             [{"start": iso(0), "device_energy_kwh": {"heater": 3.0}},
              {"start": iso(15), "device_energy_kwh": {"heater": 3.1}}])
-        self.assertEqual(result[0]["device_power_setting"], {"heater": 12.0})
+        # A setting that was read says what it found, a value or none.
+        self.assertEqual(result[0]["device_power_setting"], {"heater": 12.0, "pump": None})
         self.assertEqual(result[0]["device_heat_kwh"], {"heater": 3.0})
         self.assertEqual(result[1]["device_power_setting"], {"pump": 80.0})
         self.assertNotIn("device_heat_kwh", result[1])
+
+    def test_a_setting_that_was_not_read_says_nothing(self):
+        quarters = [{"start": iso(0), "device_energy_kwh": {"heater": .75, "pump": .1}}]
+        result = with_device_observations(quarters, {"pump": {iso(0): 80.0}}, [])
+        self.assertEqual(result[0]["device_power_setting"], {"pump": 80.0})
+        self.assertNotIn("device_power_setting", with_device_observations(
+            [{"start": iso(0), "device_energy_kwh": {"heater": .75}}], {}, [])[0])
 
 
 def five_minute(entity_values, start, quarters):
@@ -149,8 +197,9 @@ class HouseholdUploadTests(unittest.IsolatedAsyncioTestCase):
         rows = await rig.household._device_actual_quarters(self.devices, at(0), at(30))
         self.assertEqual(rig.history.statistics.await_args.args[2],
                          {"sensor.heater_energy", "sensor.pump_energy", "sensor.heat"})
+        # The pump's capacity changed in the second quarter: read, and none held.
         self.assertEqual([row["device_power_setting"] for row in rows],
-                         [{"heater": 12.0, "pump": 100.0}, {"heater": 12.0}])
+                         [{"heater": 12.0, "pump": 100.0}, {"heater": 12.0, "pump": None}])
         self.assertEqual(rows[0]["device_heat_kwh"], {"heater": 3.0})
         self.assertNotIn("device_heat_kwh", rows[1])
         self.assertEqual(rows[1]["device_energy_kwh"], {"heater": .75, "pump": .105})
@@ -166,6 +215,31 @@ class HouseholdUploadTests(unittest.IsolatedAsyncioTestCase):
         rows = await rig.household._device_actual_quarters(self.devices, at(0), at(15))
         self.assertEqual(rows[0]["device_energy_kwh"], {"heater": .75, "pump": .105})
         self.assertNotIn("device_power_setting", rows[0])
+
+
+    async def test_heating_activity_is_stated_when_read_and_left_out_when_not(self):
+        """A reversible unit: heating identifies its draw, and unread is not idle."""
+        from shs_core.household_ports import HouseholdReadError
+        rig = self.rig()
+        series = five_minute({"sensor.heater_energy": .25}, at(0), 2)
+        async def statistics(start, end, entities, period, units, kinds):
+            return {entity: series[entity] for entity in entities if entity in series}
+        rig.history.statistics.side_effect = statistics
+        rig.history.states.return_value = {"number.nibe": [(at(-60), "12.0", None)]}
+        rig.household._weather_heating_bindings = lambda devices: {"heater": ("climate.unit", "climate.unit|p|e")}
+        rig.household._state_history = AsyncMock(return_value={"climate.unit": [
+            (at(-60), "heat", {"hvac_action": "heating"}), (at(15), "heat", {"hvac_action": "idle"})]})
+        rows = await rig.household._device_actual_quarters(self.devices[:1], at(0), at(30))
+        self.assertEqual([row["device_weather_heating"] for row in rows],
+                         [{"heater": "climate.unit|p|e"}, {"heater": None}])
+        # Recorder did not answer for the unit: nothing is said about its heating.
+        rig.household._state_history = AsyncMock(return_value={})
+        rows = await rig.household._device_actual_quarters(self.devices[:1], at(0), at(30))
+        self.assertTrue(all("device_weather_heating" not in row for row in rows))
+        rig.household._state_history = AsyncMock(side_effect=HouseholdReadError("recorder busy"))
+        rows = await rig.household._device_actual_quarters(self.devices[:1], at(0), at(30))
+        self.assertEqual([row["device_energy_kwh"] for row in rows], [{"heater": .75}, {"heater": .75}])
+        self.assertTrue(all("device_weather_heating" not in row for row in rows))
 
 
 if __name__ == "__main__":

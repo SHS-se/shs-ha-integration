@@ -165,7 +165,10 @@ class HouseholdTests(unittest.IsolatedAsyncioTestCase):
         ]}
         self.assertEqual(await rig.household._statistics_changes(['sensor.energy'], start, end, 'hour'),
                          {'sensor.energy': [(start, 1.2)]})
-        rig.history.statistics.assert_awaited_once_with(start, end, {'sensor.energy'}, 'hour', {'energy': 'kWh'}, {'change'})
+        # One period before the window and each period's last reading: a change
+        # Recorder synthesised from a counter that went backwards is not energy.
+        rig.history.statistics.assert_awaited_once_with(
+            start - timedelta(hours=1), end, {'sensor.energy'}, 'hour', {'energy': 'kWh'}, {'change', 'state'})
         self.assertEqual(await rig.household._statistics_changes([], start, end, 'hour'), {})
         self.assertEqual(rig.history.statistics.await_count, 1)
 

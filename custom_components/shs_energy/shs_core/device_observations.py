@@ -9,7 +9,9 @@ quarters it already learns electricity from.
 
 Setting values are read from Recorder states; heat from the same five-minute
 statistics as device energy. A quarter whose setting changed, or that has no
-known value, is sent without one: unknown is not the previous value.
+known value, is sent as having none: unknown is not the previous value. A
+setting that could not be read at all is not sent, which is a different
+statement: the website then keeps what it has.
 """
 from __future__ import annotations
 
@@ -58,9 +60,56 @@ def device_observation_entities(
     return result
 
 
+# Raised when quarters already sent need sending again because what they carry
+# changed. 2: every quarter that shared its start with a household row was sent
+# without its setting and heat.
+OBSERVATION_REVISION = 2
+
+
 def observation_signature(entities: dict[str, dict[str, str]]) -> str:
-    """Identity of what is observed; a change re-sends the retained history once."""
-    return json.dumps(entities, sort_keys=True, separators=(",", ":"))
+    """Identity of what is observed; a change re-sends the retained history once.
+
+    A home that observes nothing has nothing to send again, at any revision.
+    """
+    identity: dict[str, Any] = {"revision": OBSERVATION_REVISION, "observed": entities} if entities else {}
+    return json.dumps(identity, sort_keys=True, separators=(",", ":"))
+
+
+def history_resend_window(
+    cursor: Any, signature: str, complete_end: datetime, *, chunk: timedelta, reach: timedelta,
+) -> tuple[datetime, datetime] | None:
+    """The next older stretch of retained quarters to send again, or ``None``.
+
+    ``cursor`` records how far back the current re-send has reached. It walks
+    back one ``chunk`` per exchange until ``reach``, the oldest quarter the
+    website still accepts, so one exchange never carries more than the first
+    backfill does. A cursor for another signature is stale: the re-send it
+    belonged to was superseded.
+    """
+    if not isinstance(cursor, dict) or cursor.get("signature") != signature:
+        return None
+    try:
+        before = _utc(datetime.fromisoformat(str(cursor.get("before"))))
+    except ValueError:
+        return None
+    before = min(before, _utc(complete_end))
+    floor = _utc(complete_end) - reach
+    start = max(floor, before - chunk)
+    return (start, before) if start < before else None
+
+
+def current_power_setting(entity: str | None, read_state) -> dict[str, float | None] | None:
+    """What a device's own power setting holds now, for the planning snapshot.
+
+    The website learns each device's draw per setting; which of them the
+    equipment is at now is a reading. ``None`` is a device with no setting of
+    its own, which is not the same as ``{"value": None}``, a setting that
+    cannot be read at the moment.
+    """
+    if not entity:
+        return None
+    text = power_setting_value(getattr(read_state(entity), "state", None))
+    return {"value": float(text) if text is not None else None}
 
 
 def _utc(value: datetime) -> datetime:
@@ -73,20 +122,32 @@ def quarter_settings(
     """The setting that held through each whole quarter in ``[start, end)``.
 
     ``states`` are Recorder rows with the state at ``start`` included. An
-    unavailable or unknown blip is no setting at all, so it neither ends nor
-    changes the value around it. A quarter that saw two different values, or
-    none, is left out.
+    unavailable or unknown blip with the same value on both sides is no
+    setting at all, so it neither ends nor changes the value around it. When
+    the value differs after it, the change happened somewhere inside the
+    blip: every quarter the blip touches is left out, rather than labelled
+    with the value from before or after. A quarter that saw two different
+    values, or none, is left out.
     """
     start, end = _utc(start), _utc(end)
     known: list[tuple[datetime, float]] = []
+    # Spans in which the value changed at a moment that was not observed.
+    unobserved: list[tuple[datetime, datetime]] = []
+    lost_at: datetime | None = None
     for at, state, _attributes in sorted(states, key=lambda row: _utc(row[0])):
+        moment = max(start, _utc(at))
         text = power_setting_value(state)
         if text is None:
+            lost_at = lost_at or moment
             continue
         value = float(text)
         if known and known[-1][1] == value:
+            lost_at = None
             continue
-        known.append((max(start, _utc(at)), value))
+        if known and lost_at is not None:
+            unobserved.append((lost_at, moment))
+        lost_at = None
+        known.append((moment, value))
     result: dict[str, float] = {}
     if not known:
         return result
@@ -98,7 +159,8 @@ def quarter_settings(
             index += 1
         begins, value = known[index]
         changed = index + 1 < len(known) and known[index + 1][0] < finish
-        if begins <= quarter and not changed and isfinite(value):
+        unseen = any(lost < finish and found > quarter for lost, found in unobserved)
+        if begins <= quarter and not changed and not unseen and isfinite(value):
             result[quarter.isoformat()] = value
         quarter = finish
     return result
@@ -113,12 +175,17 @@ def with_device_observations(
 
     The website stores both on the device's own quarter, so neither is sent
     for a quarter whose electricity is incomplete.
+
+    ``settings`` holds only the devices whose setting history was read. Such a
+    device's quarter always says what was found: the value that held, or
+    ``None`` when none did. A device left out of ``settings`` was not read, and
+    its quarters say nothing, so the website keeps what it already stored: an
+    unreadable Recorder must not erase an observation an earlier upload made.
     """
     heat = {row["start"]: row["device_energy_kwh"] for row in heat_quarters}
     for row in device_quarters:
         energy = row.get("device_energy_kwh") or {}
-        held = {key: by_start[row["start"]] for key, by_start in settings.items()
-                if key in energy and row["start"] in by_start}
+        held = {key: by_start.get(row["start"]) for key, by_start in settings.items() if key in energy}
         metered = {key: kwh for key, kwh in heat.get(row["start"], {}).items() if key in energy}
         if held:
             row["device_power_setting"] = held

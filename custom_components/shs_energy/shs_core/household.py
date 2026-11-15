@@ -92,6 +92,7 @@ from .const import (
     PLANNING_MODE_DISABLED,
     PLANNING_MODE_LIVE,
     OPTIMISATION_ACTUAL_BACKFILL_HOURS,
+    OPTIMISATION_HISTORY_RESEND_HOURS,
     OPTIMISATION_ACTUAL_RESWEEP_HOURS,
     OPTIMISATION_HORIZON_HOURS,
     OPTIMISATION_PROFILE_DAYS,
@@ -110,7 +111,11 @@ from .device_controls import (
     requested_controllable_devices,
 )
 from .hot_water import RUNNING_PEAK_MIN_W, is_hot_water, hot_water_setup_errors
-from .device_observations import device_observation_entities, observation_signature, quarter_settings, with_device_observations
+from .device_observations import (
+    current_power_setting, device_observation_entities, history_resend_window, observation_signature,
+    quarter_settings,
+    with_device_observations,
+)
 from .optimisation import (
     with_device_quarters,
     OptimisationInputError,
@@ -150,6 +155,7 @@ from .planning import (
     pool_electrical_history,
     unplanned_services,
 )
+from .counter_changes import CounterRow, judge_counter_rows, settled_energy
 from .readings import daily_category_readings, usable_change
 from .thermal import (
     HOUSE_HISTORY_KEY,
@@ -1491,42 +1497,90 @@ class Household:
         end: datetime,
         period: str,
     ) -> dict[str, list[tuple[datetime, float]]]:
-        """Read non-negative recorder changes with UTC-aware timestamps."""
+        """Read the energy each counter really recorded, with UTC-aware timestamps.
+
+        A change Recorder synthesised from a counter that went backwards, or
+        one that spans a period it skipped, is not that period's energy. Those
+        samples are settled from the counter's own readings or left out; a
+        sample left out is unknown, never zero. See ``counter_changes``.
+        """
         if not entity_ids:
             return {}
-        end_utc = end.astimezone(timezone.utc)
+        start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+        # The period before the window says whether the window's first change
+        # is its own. Calendar periods have no fixed length to step back by.
+        lookback = {"5minute": timedelta(minutes=5), "hour": timedelta(hours=1)}.get(period)
         stats = await self.ports.history.statistics(
-            start.astimezone(timezone.utc),
+            start_utc - lookback if lookback else start_utc,
             end_utc,
             set(entity_ids),
             period,
             {"energy": "kWh"},
-            {"change"},
+            {"change", "state"},
         )
+        judged = {entity_id: judge_counter_rows(rows, start_utc if lookback else None)
+                  for entity_id, rows in stats.items()}
+        settled = await self._settled_counter_energy(judged, start_utc, end_utc)
 
         result: dict[str, list[tuple[datetime, float]]] = {}
-        for entity_id, rows in stats.items():
+        for entity_id, rows in judged.items():
             values: list[tuple[datetime, float]] = []
             for row in rows:
-                start_value = row.get("start")
-                change = row.get("change")
-                if start_value is None or change is None:
-                    continue
-                energy = usable_change(change)
-                if energy is None:
-                    continue
-                if isinstance(start_value, datetime):
-                    start_utc = start_value.astimezone(timezone.utc)
-                else:
-                    start_utc = datetime.fromtimestamp(float(start_value), timezone.utc)
                 # The recorder returns the bucket that starts exactly on end,
                 # so the still-running current day/hour would otherwise be
                 # pushed as if it were complete. Keep the window half-open.
-                if start_utc >= end_utc:
+                if row.start >= end_utc or (lookback and row.start < start_utc):
                     continue
-                values.append((start_utc, energy))
+                if row.verdict == "unknown":
+                    continue
+                energy = (settled.get((entity_id, row.start)) if row.verdict == "suspect"
+                          else usable_change(row.change))
+                if energy is None:
+                    continue
+                values.append((row.start, energy))
             result[entity_id] = values
         return result
+
+    async def _settled_counter_energy(
+        self, judged: dict[str, list[CounterRow]], start: datetime, end: datetime,
+    ) -> dict[tuple[str, datetime], float]:
+        """Settle the rows Recorder synthesised from the counters' own readings.
+
+        Rare, so the readings are fetched only for the counters and the span
+        that need them. Readings that cannot be read leave the rows unknown.
+        """
+        suspects = {entity_id: [row for row in rows if row.verdict == "suspect"
+                                and start <= row.start < end and row.end is not None]
+                    for entity_id, rows in judged.items()}
+        suspects = {entity_id: rows for entity_id, rows in suspects.items() if rows}
+        if not suspects:
+            return {}
+        first = min(row.start for rows in suspects.values() for row in rows)
+        last = max(row.end for rows in suspects.values() for row in rows)
+        try:
+            states = await self.ports.history.states(first, last, sorted(suspects), with_attributes=False)
+        except HouseholdReadError as err:
+            _LOGGER.warning("Counter readings could not be read; affected periods stay unknown: %s", err)
+            return {}
+        settled: dict[tuple[str, datetime], float] = {}
+        for entity_id, rows in suspects.items():
+            readings: list[tuple[datetime, float]] = []
+            for at, state, _attributes in states.get(entity_id, ()):
+                try:
+                    value = float(state)
+                except (TypeError, ValueError):
+                    continue
+                if isfinite(value) and isinstance(at, datetime):
+                    readings.append((at.astimezone(timezone.utc), value))
+            readings.sort()
+            for row in rows:
+                energy = settled_energy(row, readings)
+                _LOGGER.info("Counter %s went backwards in the period from %s: %s", entity_id,
+                             row.start.isoformat(),
+                             "energy unknown" if energy is None else f"{energy:.3f} kWh from its readings")
+                if energy is not None:
+                    settled[(entity_id, row.start)] = energy
+        return settled
 
     async def _statistics_means(
         self, entity_ids: list[str], start: datetime, end: datetime
@@ -2614,11 +2668,14 @@ class Household:
             except HouseholdReadError as err:
                 _LOGGER.debug("Heating activity unavailable for weather learning: %s", err)
             else:
-                heating = {key: heating_quarters(entity, history.get(entity, []), start, end)
-                           for key, (entity, _) in bindings.items()}
+                # A unit whose activity was read says what was found for each
+                # quarter, heating or not. One Recorder did not answer for says
+                # nothing, and the website keeps what it already has.
+                heating = {key: heating_quarters(entity, history[entity], start, end)
+                           for key, (entity, _) in bindings.items() if entity in history}
                 for row in quarters:
-                    evidence = {key: bindings[key][1] for key in row["device_energy_kwh"]
-                                if row["start"] in heating.get(key, ())}
+                    evidence = {key: bindings[key][1] if row["start"] in heating[key] else None
+                                for key in row["device_energy_kwh"] if key in heating}
                     if evidence:
                         row["device_weather_heating"] = evidence
         if not observed:
@@ -2627,14 +2684,17 @@ class Household:
         setting_entities = sorted({entry["setting"] for entry in observed.values() if "setting" in entry})
         if setting_entities:
             # A setting is an observation like any other: unreadable history
-            # leaves the quarters without one, it does not withhold the energy.
+            # does not withhold the energy. It also says nothing about the
+            # setting, so only the entities Recorder answered for are attached:
+            # the website keeps a setting it already has for the rest.
             try:
                 states = await self.ports.history.states(start, end, setting_entities, with_attributes=False)
             except HouseholdReadError as err:
                 _LOGGER.warning("Device power settings could not be read: %s", err)
                 states = {}
-            settings = {key: quarter_settings(states.get(entry["setting"], []), start, end)
-                        for key, entry in observed.items() if "setting" in entry}
+            settings = {key: quarter_settings(states[entry["setting"]], start, end)
+                        for key, entry in observed.items()
+                        if "setting" in entry and entry["setting"] in states}
         return with_device_observations(quarters, settings, aggregate_device_changes(
             {key: statistics.get(entity, []) for key, entity in heat.items()}))
 
@@ -3000,7 +3060,13 @@ class Household:
         from .heating_overrides import heating_binding
         from .planning import thermostat_facts
         weather_bindings = self._weather_heating_bindings(devices)
+        observed_settings = self._device_observations(devices)
         for model in device_models:
+            if model.get("planning_service") == "pool":
+                # The website learns each pool device's draw per power setting
+                # and needs to know which of them the equipment is at now.
+                model["power_setting"] = current_power_setting(
+                    observed_settings.get(model["key"], {}).get("setting"), self.ports.read_state)
             if model["key"] in weather_bindings:
                 model["weather_heating_binding"] = weather_bindings[model["key"]][1]
             if model["control_type"] == "setpoint" and model.get("planning_service") != "pool":
@@ -3949,11 +4015,13 @@ class Household:
                     )
                     # A newly observed power setting or heat meter is learned from
                     # the retained quarters too, not only from those to come.
-                    if observation_signature_now != stored.get(
+                    observations_changed = observation_signature_now != stored.get(
                         "optimisation_device_observations_sent", observation_signature({})
-                    ):
+                    )
+                    if observations_changed:
                         start = complete_end - timedelta(hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS)
                 else:
+                    observations_changed = False
                     start = complete_end - timedelta(
                         hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS
                     )
@@ -3976,6 +4044,20 @@ class Household:
                     # household meter, still uploads its device quarters.
                     actuals = with_device_quarters(
                         actuals, await self._device_actual_quarters(devices, start, complete_end))
+                # The older retained quarters of a changed observation follow,
+                # one stretch per routine exchange. They ride on the upload
+                # only: the calibration and completeness ledgers below have
+                # already seen them, and a replan the household is waiting for
+                # is not made to carry them.
+                resend = None if observations_changed or replan_request_id is not None else history_resend_window(
+                    stored.get("optimisation_history_resend"), observation_signature_now, complete_end,
+                    chunk=timedelta(hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS),
+                    reach=timedelta(hours=OPTIMISATION_HISTORY_RESEND_HOURS))
+                resent_actuals: list[dict[str, Any]] = []
+                if resend and devices:
+                    resent_actuals = with_device_quarters(
+                        await self._actual_quarters(entities, *resend) if measured else [],
+                        await self._device_actual_quarters(devices, *resend))
                 # Consume forecast/actual pairs on every quarter-hour exchange,
                 # not only during the hourly replan. Otherwise three out of
                 # four observations would pass the upload watermark before the
@@ -4132,6 +4214,9 @@ class Household:
                         await self._store.async_save(stored)
                     self.async_update_listeners()
                     return
+                # Everything measured above has used this exchange's own
+                # quarters; the upload also carries the older stretch.
+                actuals = [*resent_actuals, *actuals]
                 body = ShsApiClient.prepare_optimisation_submission(
                     actuals,
                     snapshot,
@@ -4231,6 +4316,16 @@ class Household:
                     "actuals_accepted_until"
                 ]
                 stored["optimisation_device_observations_sent"] = observation_signature_now
+                if observations_changed:
+                    stored["optimisation_history_resend"] = {
+                        "signature": observation_signature_now,
+                        "before": (complete_end - timedelta(hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS)).isoformat()}
+                elif resend:
+                    stored["optimisation_history_resend"] = {
+                        "signature": observation_signature_now, "before": resend[0].isoformat()}
+                elif stored.get("optimisation_history_resend") and replan_request_id is None:
+                    # Reached the oldest quarter the website accepts, or superseded.
+                    stored.pop("optimisation_history_resend")
             if result.get("thermal_slots_accepted_until"):
                 stored["thermal_slots_accepted_until"] = result[
                     "thermal_slots_accepted_until"

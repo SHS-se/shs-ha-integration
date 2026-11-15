@@ -207,6 +207,11 @@ OPTIMISATION_ACTUAL_BACKFILL_HOURS = 72
 # Electrical quarters behind the accepted watermark are re-offered for this
 # long, so a quarter whose statistics settled late is filled rather than lost.
 OPTIMISATION_ACTUAL_RESWEEP_HOURS = 2
+# A changed observation (a newly named power setting or heat meter, or a
+# corrected upload) is sent again for the retained quarters, one backfill-sized
+# stretch per exchange, as far back as the website accepts history: eight days,
+# less an hour for the time an exchange takes to arrive.
+OPTIMISATION_HISTORY_RESEND_HOURS = 8 * 24 - 1
 OPTIMISATION_PROFILE_DAYS = 10
 
 # Thermal history rides the same quarter-hour grid as electrical actuals. The

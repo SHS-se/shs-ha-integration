@@ -494,16 +494,21 @@ def aggregate_device_changes(
 def with_device_quarters(
     actuals: list[dict[str, Any]], device_quarters: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Attach each quarter's device energy to its household row, and keep the
-    device quarters that have no household row as rows of their own."""
+    """Attach each quarter's device observations to its household row, and keep
+    the device quarters that have no household row as rows of their own.
+
+    Every ``device_*`` field travels, not a named few: a quarter that shares
+    its start with a household row carries the same evidence as one that
+    travels alone. Naming the fields here once dropped each device's power
+    setting and metered heat from every quarter the household meter covered.
+    """
     by_start = {row["start"]: row for row in actuals}
     merged = list(actuals)
     for quarter in device_quarters:
         row = by_start.get(quarter["start"])
         if row is not None:
-            row["device_energy_kwh"] = quarter["device_energy_kwh"]
-            if "device_weather_heating" in quarter:
-                row["device_weather_heating"] = quarter["device_weather_heating"]
+            row.update({field: value for field, value in quarter.items()
+                        if field.startswith("device_")})
         elif quarter["device_energy_kwh"]:
             merged.append(dict(quarter))
     return sorted(merged, key=lambda row: row["start"])

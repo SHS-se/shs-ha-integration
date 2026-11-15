@@ -128,7 +128,9 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         async def statistics(begin, end, entities, period, units, kinds):
             # Recent quarters behind the watermark are re-offered, so a late
             # statistic fills its quarter instead of becoming a permanent hole.
-            self.assertEqual((begin, end, period), (boundary - timedelta(hours=2), boundary, '5minute'))
+            # The read starts one period early: the first change is judged against its neighbour.
+            self.assertEqual((begin, end, period),
+                             (boundary - timedelta(hours=2, minutes=5), boundary, '5minute'))
             return {entity: [{'start': (start + timedelta(minutes=5*i)).timestamp(),
                               'change': .1 if entity == 'sensor.synthetic_grid' else (0 if i < 3 else .3)}
                              for i in range(6)] for entity in entities}
@@ -142,6 +144,106 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
                          [start.isoformat(), (start + timedelta(minutes=15)).isoformat()])
         self.assertEqual([row['device_energy_kwh']['synthetic_pool'] for row in actuals], [0, .9])
         self.assertEqual([row['quality']['duration_seconds'] for row in actuals], [900, 900])
+
+    async def test_a_device_quarter_beside_a_household_row_keeps_its_setting_and_heat(self):
+        """Synthetic meters through the real exchange.
+
+        Every quarter the household meter covers also carries the heater's
+        power setting and metered heat. They were once dropped exactly there,
+        and kept only on quarters the household meter had missed.
+        """
+        from datetime import timezone
+        boundary = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
+        self.rig.now = boundary + timedelta(minutes=3)
+        self.rig.records.saved['optimisation_actuals_accepted_until'] = (boundary - timedelta(minutes=15)).isoformat()
+        self.h._configured_entities = lambda: {'grid_import': ['sensor.synthetic_grid']}
+        self.h._prepared_device_inventory.return_value = [{
+            'key': 'synthetic_heater', 'statistic_id': 'sensor.synthetic_heater',
+            'category': 'pool_heating', 'planning_role': 'controllable'}]
+        self.h._device_observations = lambda devices: {
+            'synthetic_heater': {'setting': 'number.synthetic_output', 'heat': 'sensor.synthetic_heat'}}
+        first = boundary - timedelta(hours=2, minutes=5)
+        per_period = {'sensor.synthetic_grid': .1, 'sensor.synthetic_heater': .25, 'sensor.synthetic_heat': 1.0}
+
+        async def statistics(begin, end, entities, period, units, kinds):
+            rows = {}
+            for entity in entities:
+                # The household meter misses the last quarter; the device does not.
+                periods = 25 - (3 if entity == 'sensor.synthetic_grid' else 0)
+                rows[entity] = [{'start': (first + timedelta(minutes=5 * i)).timestamp(),
+                                 'end': (first + timedelta(minutes=5 * i + 5)).timestamp(),
+                                 'state': 100 + per_period[entity] * (i + 1), 'change': per_period[entity]}
+                                for i in range(periods)]
+            return rows
+
+        self.rig.history.statistics.side_effect = statistics
+        self.rig.history.states.return_value = {
+            'number.synthetic_output': [(boundary - timedelta(days=1), '12.0', None)]}
+        await self.h.async_optimisation_push()
+        actuals = self.h.client.submit_optimisation.call_args.args[0]['actual_slots']
+        self.assertEqual(len(actuals), 8)
+        for row in actuals:
+            self.assertEqual(row['device_energy_kwh'], {'synthetic_heater': .75})
+            self.assertEqual(row['device_power_setting'], {'synthetic_heater': 12.0})
+            self.assertEqual(row['device_heat_kwh'], {'synthetic_heater': 3.0})
+        self.assertEqual([row.get('grid_import_kwh') for row in actuals], [.3] * 7 + [None])
+
+    async def test_changed_observations_are_resent_back_to_what_the_website_accepts(self):
+        """Seventy-two hours at once, then one older stretch per routine exchange."""
+        from datetime import timezone
+        boundary = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
+        self.rig.now = boundary + timedelta(minutes=3)
+        self.rig.records.saved['optimisation_actuals_accepted_until'] = (boundary - timedelta(minutes=15)).isoformat()
+        self.h._prepared_device_inventory.return_value = [{
+            'key': 'synthetic_pump', 'statistic_id': 'sensor.synthetic_pump',
+            'category': 'pool_heating', 'planning_role': 'controllable'}]
+        self.h.client.submit_optimisation.return_value = {
+            **self.h.client.submit_optimisation.return_value, 'actuals_accepted_until': boundary.isoformat()}
+        self.h._device_observations = lambda devices: {'synthetic_pump': {'setting': 'number.synthetic_capacity'}}
+        windows = []
+
+        async def statistics(begin, end, entities, period, units, kinds):
+            windows.append((round((boundary - begin - timedelta(minutes=5)) / timedelta(hours=1)),
+                            round((boundary - end) / timedelta(hours=1))))
+            return {}
+
+        self.rig.history.statistics.side_effect = statistics
+        await self.h.async_optimisation_push()
+        self.assertEqual(windows, [(72, 0)])
+        del windows[:]
+        # The exchanges that follow carry history only, so the website starts no job.
+        self.h.client.submit_optimisation.return_value = {'actuals_accepted_until': boundary.isoformat()}
+        for _ in range(4):
+            await self.h.async_optimisation_push()
+        # Hours before the boundary: the routine two-hour sweep, then one older
+        # stretch, until the website's eight-day window less an hour is reached.
+        self.assertEqual(windows, [(2, 0), (144, 72), (2, 0), (191, 144), (2, 0), (2, 0)])
+        self.assertNotIn('optimisation_history_resend', await self.h._store.async_load())
+
+    async def test_a_requested_replan_does_not_carry_the_older_stretch(self):
+        from datetime import timezone
+        boundary = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
+        self.rig.now = boundary + timedelta(minutes=3)
+        self.rig.records.saved['optimisation_actuals_accepted_until'] = (boundary - timedelta(minutes=15)).isoformat()
+        self.h._prepared_device_inventory.return_value = [{
+            'key': 'synthetic_pump', 'statistic_id': 'sensor.synthetic_pump',
+            'category': 'pool_heating', 'planning_role': 'controllable'}]
+        self.h.client.submit_optimisation.return_value = {
+            **self.h.client.submit_optimisation.return_value, 'actuals_accepted_until': boundary.isoformat()}
+        self.h._device_observations = lambda devices: {'synthetic_pump': {'setting': 'number.synthetic_capacity'}}
+        begins = []
+
+        async def statistics(begin, end, entities, period, units, kinds):
+            begins.append(round((boundary - begin - timedelta(minutes=5)) / timedelta(hours=1)))
+            return {}
+
+        self.rig.history.statistics.side_effect = statistics
+        await self.h.async_optimisation_push()
+        await self.h.async_optimisation_push(force_plan=True, replan_request_id='synthetic-manual')
+        self.assertEqual(begins, [72, 2])
+        stored = await self.h._store.async_load()
+        self.assertEqual(stored['optimisation_history_resend']['before'],
+                         (boundary - timedelta(hours=72)).isoformat())
 
     async def test_a_newly_observed_device_setting_resends_the_retained_quarters_once(self):
         """Naming a power setting or heat meter is learned from history too."""
@@ -159,7 +261,7 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         begins = []
 
         async def statistics(begin, end, entities, period, units, kinds):
-            begins.append(begin)
+            begins.append(begin + timedelta(minutes=5))  # each read starts one period early
             return {}
 
         self.rig.history.statistics.side_effect = statistics
