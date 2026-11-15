@@ -1533,13 +1533,39 @@ class DurableDemandTests(unittest.TestCase):
         self.assertNotEqual(capacity_key('device:new_counter', ('switch.other_water',)), identity)
 
     def test_successful_reduction_waits_for_native_and_physical_response(self):
+        self.report(9,'sensor.ev','5520')
         prepare_capacity(self.capacity,'off',self.effect(0,'off'),10)
         dispatch_capacity(self.capacity,'off',10)
         finish_capacity(self.capacity,'off','service_returned')
         self.report(11,'switch.ev','off')
         self.assertEqual(capacity_bound(self.capacity['devices']['ev']),11040)
-        self.report(12,'sensor.ev','0')
+        self.report(12,'sensor.ev','unavailable')
+        self.assertEqual(capacity_bound(self.capacity['devices']['ev']),11040)
+        self.report(13,'sensor.ev','0')
         self.assertEqual(capacity_bound(self.capacity['devices']['ev']),0)
+
+    def test_successful_ev_stop_reconciles_when_meter_reaches_zero_before_dispatch(self):
+        # The car stops drawing power before SHS dispatches charger OFF.
+        # A meter that only reports changes may never repeat the zero.
+        start = {**self.effect(5520), 'controls': {'switch.ev': 'on', 'number.ev': 8}}
+        prepare_capacity(self.capacity, 'on', start, 10)
+        dispatch_capacity(self.capacity, 'on', 10)
+        finish_capacity(self.capacity, 'on', 'service_returned')
+        self.report(11, 'switch.ev', 'on')
+        self.report(12, 'number.ev', '8')
+        self.report(13, 'sensor.ev', '5520')
+        self.report(14, 'sensor.ev', '0')
+        stop = {**start, 'before_w': 5520, 'after_w': 0, 'possible_w': 0,
+                'controls': {'switch.ev': 'off', 'number.ev': 8},
+                'acknowledgements': {'switch.ev': 'off'}}
+        prepare_capacity(self.capacity, 'off', stop, 15)
+        dispatch_capacity(self.capacity, 'off', 15)
+        finish_capacity(self.capacity, 'off', 'service_returned')
+        row = self.capacity['devices']['ev']
+        self.assertEqual(capacity_bound(row), 5520)
+        self.report(16, 'switch.ev', 'off')
+        self.assertFalse(row['effects'])
+        self.assertEqual(capacity_bound(row), 0)
 
     def test_switch_off_accepts_zero_draw_reported_before_acknowledgement(self):
         effect = {**self.effect(0, 'off'), 'device': 'device@switch.heater', 'logical': 'device:heater',

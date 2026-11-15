@@ -243,15 +243,18 @@ def observe_capacity(capacity, ordinal, latest):
                 continue
             if sensor:
                 received, report = latest(sensor)
-                # A relay meter can report the drop before Home Assistant's
-                # switch state catches up (for example, with a switch group).
-                # Both observations still have to follow dispatch.
-                relay_off = (effect['status'] == 'service_returned'
-                             and effect['logical'].startswith('device:')
-                             and effect['changed'].startswith('switch.')
-                             and effect['after_w'] == 0
-                             and controls.get(effect['changed']) == 'off')
-                if received <= fence or (received < acknowledgement and not relay_off):
+                successful_switch_off = (effect['status'] == 'service_returned'
+                    and effect['changed'].startswith('switch.')
+                    and effect['after_w'] == 0
+                    and controls.get(effect['changed']) == 'off')
+                # The car can stop drawing before SHS disables the charger.
+                # A post-dispatch OFF acknowledgement and the current zero
+                # reading prove the stop, even if the meter never repeats zero.
+                ev_off = successful_switch_off and effect['logical'] == 'ev'
+                # Other relay stops still need a response after dispatch, but
+                # the power reading can precede switch acknowledgement.
+                relay_off = successful_switch_off and effect['logical'].startswith('device:')
+                if not ev_off and (received <= fence or (received < acknowledgement and not relay_off)):
                     continue
                 try:
                     watts, _ = power(report, source=sensor, signed=effect['signed'])
