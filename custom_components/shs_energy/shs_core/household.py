@@ -155,7 +155,7 @@ from .planning import (
     pool_electrical_history,
     unplanned_services,
 )
-from .counter_changes import CounterRow, judge_counter_rows, settled_energy
+from .counter_changes import CounterRow, judge_counter_rows, retract_catch_ups, settled_energy
 from .readings import daily_category_readings, usable_change
 from .thermal import (
     HOUSE_HISTORY_KEY,
@@ -287,6 +287,11 @@ class Household:
         self._run_summaries: dict[str, tuple] = {}
         self._plan_contract = PlanContractCache(lambda: self.optimisation_plan)
         self._plan_configuration_changed = False
+        # The most each energy counter's equipment can draw, W, and the newest
+        # catch-up whose stall may reach back past the quarters just read.
+        self._counter_bounds_w: dict[str, float] = {}
+        self._counter_bounds_at: tuple[Any, frozenset[tuple[str, str, str]]] | None = None
+        self._open_catch_up: datetime | None = None
         self.replan_recommendations: list[dict[str, str]] = []
         self.last_optimisation_push: str | None = None
         self.last_optimisation_attempt: str | None = None
@@ -1538,8 +1543,84 @@ class Household:
                 if energy is None:
                     continue
                 values.append((row.start, energy))
+            bound_w = self._counter_bounds_w.get(entity_id)
+            if bound_w and lookback:
+                # A counter that stalled and caught up: more in one period than
+                # the equipment can draw. The total is real, its timing is not.
+                seconds = lookback.total_seconds()
+                values, stalls, open_ended = retract_catch_ups(values, bound_w / 1000 * seconds / 3600, seconds)
+                for first, caught_up, energy in stalls:
+                    _LOGGER.warning(
+                        "Counter %s stalled from %s and caught up %.3f kWh at %s (most it can use in "
+                        "one period: %.3f kWh); those periods are left unmeasured", entity_id,
+                        first.isoformat(), energy, caught_up.isoformat(), bound_w / 1000 * seconds / 3600)
+                if open_ended and (self._open_catch_up is None or open_ended > self._open_catch_up):
+                    self._open_catch_up = open_ended
             result[entity_id] = values
         return result
+
+    async def _refresh_counter_bounds(self, entities_by_category, devices) -> None:
+        """Learn what each energy counter's equipment can draw, from evidence the home holds.
+
+        A solar or house meter is bounded by the greatest power its own power
+        sensor has ever recorded, the grid meters by the greatest import and
+        export the grid power sensor has recorded, a device by that of its
+        mapped power sensor, and the battery by its rated charge and discharge
+        power. Nothing is configured for this. A counter with no such evidence
+        has no bound and is read as before; an unreadable history changes
+        nothing either.
+        """
+        options = self.resolved_options()
+        # (counter, power sensor, which extreme of the sensor bounds the counter)
+        sensors: set[tuple[str, str, str]] = set()
+        for category, option, extreme in (
+                ("solar_production", "solar_production_power_entity", "max"),
+                ("total_consumption", "house_consumption_power_entity", "max"),
+                # Signed: import is positive, export negative.
+                ("grid_import", "grid_power_entity", "max"),
+                ("grid_export", "grid_power_entity", "min")):
+            sensor = options.get(option)
+            if isinstance(sensor, str) and "." in sensor:
+                sensors.update((counter, sensor, extreme) for counter in entities_by_category.get(category) or ())
+        mappings = options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
+        for device in devices:
+            mapping = mappings.get(str(device.get("key"))) if isinstance(mappings, dict) else None
+            sensor = mapping.get("power") if isinstance(mapping, dict) else None
+            if isinstance(sensor, str) and "." in sensor and device.get("statistic_id"):
+                sensors.add((str(device["statistic_id"]), sensor, "max"))
+        bounds: dict[str, float] = {}
+        for category, option in (("battery_charge", OPT_BATTERY_CHARGE_MAX_W),
+                                 ("battery_discharge", OPT_BATTERY_DISCHARGE_MAX_W)):
+            rating = options.get(option)
+            if type(rating) in (int, float) and isfinite(rating) and rating > 0:
+                bounds.update((counter, float(rating)) for counter in entities_by_category.get(category) or ())
+        now = self.ports.utcnow()
+        cached = self._counter_bounds_at
+        if cached and cached[1] == frozenset(sensors) and now - cached[0] < timedelta(hours=1):
+            self._counter_bounds_w = {**self._counter_bounds_w, **bounds}
+            return
+        peaks: dict[tuple[str, str], float] = {}
+        if sensors:
+            try:
+                rows = await self.ports.history.statistics(
+                    now - timedelta(days=400), now, {sensor for _, sensor, _ in sensors}, "month",
+                    {"power": "W"}, {"max", "min"})
+            except HouseholdReadError as err:
+                _LOGGER.debug("Recorded power peaks unavailable; counters are read without a bound: %s", err)
+                return
+            for sensor, months in rows.items():
+                for extreme, sign in (("max", 1), ("min", -1)):
+                    values = [row.get(extreme) for row in months]
+                    values = [sign * float(value) for value in values
+                              if type(value) in (int, float) and isfinite(value) and sign * value > 0]
+                    if values:
+                        peaks[(sensor, extreme)] = max(values)
+        for counter, sensor, extreme in sensors:
+            if (sensor, extreme) in peaks:
+                # Several counters behind one sensor are each at most its peak.
+                bounds[counter] = max(bounds.get(counter, 0.0), peaks[(sensor, extreme)])
+        self._counter_bounds_w = bounds
+        self._counter_bounds_at = (now, frozenset(sensors))
 
     async def _settled_counter_energy(
         self, judged: dict[str, list[CounterRow]], start: datetime, end: datetime,
@@ -3025,6 +3106,7 @@ class Household:
         profile_start = profile_end - timedelta(
             days=OPTIMISATION_PROFILE_DAYS
         )
+        await self._refresh_counter_bounds(entities_by_category, devices)
         profile_actuals, device_profile_actuals = await self._planning_actual_quarters(
             entities_by_category, devices, profile_start, profile_end
         )
@@ -4018,10 +4100,15 @@ class Household:
                     observations_changed = observation_signature_now != stored.get(
                         "optimisation_device_observations_sent", observation_signature({})
                     )
-                    if observations_changed:
+                    # A counter caught up for a stall that began before the
+                    # quarters last read. The stall and its catch-up are only
+                    # recognised together, so the retained quarters are read
+                    # again as one stretch and the stalled ones replaced.
+                    catch_up_reread = bool(stored.get("optimisation_catch_up_pending"))
+                    if observations_changed or catch_up_reread:
                         start = complete_end - timedelta(hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS)
                 else:
-                    observations_changed = False
+                    observations_changed = catch_up_reread = False
                     start = complete_end - timedelta(
                         hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS
                     )
@@ -4034,6 +4121,8 @@ class Household:
                 # quarters before the server prepares the new plan.
                 measured = bool(entities.get("total_consumption") or entities.get("grid_import")) \
                     and start < complete_end
+                await self._refresh_counter_bounds(entities, devices)
+                self._open_catch_up = None
                 actuals = await self._actual_quarters(entities, start, complete_end) if measured else []
                 if measured:
                     self.measured_quarters = prune_quarters({**self.measured_quarters,
@@ -4053,6 +4142,13 @@ class Household:
                     stored.get("optimisation_history_resend"), observation_signature_now, complete_end,
                     chunk=timedelta(hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS),
                     reach=timedelta(hours=OPTIMISATION_HISTORY_RESEND_HOURS))
+                # A counter that caught up for a stall reaching back past these
+                # quarters: the quarters before them were sent as zeros nobody
+                # measured. Once per catch-up, the next exchange reads the
+                # retained quarters again. A stall longer than those is left.
+                stalled_before = self._open_catch_up
+                if stalled_before and stalled_before.isoformat() <= str(stored.get("optimisation_catch_up_resent", "")):
+                    stalled_before = None
                 resent_actuals: list[dict[str, Any]] = []
                 if resend and devices:
                     resent_actuals = with_device_quarters(
@@ -4326,6 +4422,11 @@ class Household:
                 elif stored.get("optimisation_history_resend") and replan_request_id is None:
                     # Reached the oldest quarter the website accepts, or superseded.
                     stored.pop("optimisation_history_resend")
+                if catch_up_reread:
+                    stored.pop("optimisation_catch_up_pending", None)
+                if stalled_before:
+                    stored["optimisation_catch_up_resent"] = stalled_before.isoformat()
+                    stored["optimisation_catch_up_pending"] = True
             if result.get("thermal_slots_accepted_until"):
                 stored["thermal_slots_accepted_until"] = result[
                     "thermal_slots_accepted_until"

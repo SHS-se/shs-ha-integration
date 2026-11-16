@@ -22,9 +22,18 @@ reading between two good ones keeps their difference, and anything else is
 unknown. Unknown is never zero: the sample is left out, so the quarter that
 needs it stays incomplete.
 
-Not found here, because nothing in the counter contradicts it: a counter that
-stalls and later catches up in one step, and a replaced meter that starts
-higher than the old one.
+A counter can also stall: the source keeps its last reading while the link to
+the equipment is down, then catches up in one step. Nothing in the counter
+contradicts itself, so the stored readings cannot show it. What can is the
+equipment: a period's energy above what it can draw at its greatest recorded
+power is not that period's own. ``retract_catch_ups`` leaves such a sample
+out, together with the run of zero samples before it. The total across the
+stall was really used; when, nobody measured, and a zero from a counter that
+did not move is not a measurement of zero.
+
+Not found here, because nothing contradicts it: a stall whose catch-up stays
+under that power, a counter with no power reading to bound it, and a replaced
+meter that starts higher than the old one.
 """
 from __future__ import annotations
 
@@ -181,3 +190,34 @@ def settled_energy(row: CounterRow, readings: list[tuple[datetime, float]]) -> f
             return None
         level = reading
     return (energy + since_fall) * scale
+
+
+def retract_catch_ups(
+    samples: list[tuple[datetime, float]], limit_kwh: float, period_seconds: float,
+) -> tuple[list[tuple[datetime, float]], list[tuple[datetime, datetime, float]], datetime | None]:
+    """Leave out each sample above ``limit_kwh`` and the zero samples it caught up for.
+
+    ``samples`` are one counter's trusted ``(start, kWh)`` samples in time
+    order; ``limit_kwh`` is what the equipment can use in one period at its
+    greatest recorded power. Returns the samples kept, each stall as
+    ``(first start, catch-up start, kWh)`` and, when a stall reaches the first
+    sample given, that catch-up's start: the stall may have begun before the
+    samples do.
+    """
+    if not (isfinite(limit_kwh) and limit_kwh > 0):
+        return samples, [], None
+    dropped: set[int] = set()
+    stalls: list[tuple[datetime, datetime, float]] = []
+    open_ended: datetime | None = None
+    for index, (start, energy) in enumerate(samples):
+        if not energy > limit_kwh:
+            continue
+        first = index
+        while first > 0 and samples[first - 1][1] == 0 and first - 1 not in dropped \
+                and (samples[first][0] - samples[first - 1][0]).total_seconds() == period_seconds:
+            first -= 1
+        dropped.update(range(first, index + 1))
+        stalls.append((samples[first][0], start, energy))
+        if first == 0:
+            open_ended = start
+    return [sample for index, sample in enumerate(samples) if index not in dropped], stalls, open_ended

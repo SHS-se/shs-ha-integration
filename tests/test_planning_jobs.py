@@ -220,6 +220,70 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(windows, [(2, 0), (144, 72), (2, 0), (191, 144), (2, 0), (2, 0)])
         self.assertNotIn('optimisation_history_resend', await self.h._store.async_load())
 
+    async def test_a_counter_that_caught_up_has_its_stalled_quarters_sent_again_once(self):
+        """Synthetic grid meter: silent from 08:00, then everything at 11:30.
+
+        The routine exchange only reads the last two hours, so the zeros it
+        sent for 08:00-10:00 were never measured. The retained quarters are
+        sent again once, without the stalled ones.
+        """
+        from datetime import timezone
+        boundary = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
+        self.rig.now = boundary + timedelta(minutes=3)
+        self.rig.options['grid_power_entity'] = 'sensor.synthetic_grid_power'
+        self.rig.records.saved['optimisation_actuals_accepted_until'] = (boundary - timedelta(minutes=15)).isoformat()
+        self.h._configured_entities = lambda: {'grid_import': ['sensor.synthetic_grid']}
+        self.h._prepared_device_inventory.return_value = [{
+            'key': 'synthetic_pump', 'statistic_id': 'sensor.synthetic_pump',
+            'category': 'pool_heating', 'planning_role': 'controllable'}]
+        self.h.client.submit_optimisation.return_value = {'actuals_accepted_until': boundary.isoformat()}
+        stall, caught_up = boundary - timedelta(hours=4), boundary - timedelta(minutes=30)
+        origin = boundary - timedelta(hours=80)
+        windows = []
+
+        def energy(start):
+            if stall <= start < caught_up:
+                return 0.0
+            return 4.3 if start == caught_up else .1
+
+        async def statistics(begin, end, entities, period, units, kinds):
+            if period == 'month':
+                # Never more than 12 kW through the grid meter: 1 kWh in five minutes.
+                return {'sensor.synthetic_grid_power': [{'max': 12000.0, 'min': -500.0}]}
+            windows.append(round((boundary - begin - timedelta(minutes=5)) / timedelta(hours=1)))
+            rows, reading, start = [], 500.0, origin
+            while start < end:
+                reading += energy(start)
+                if start >= begin:
+                    rows.append({'start': start.timestamp(), 'end': (start + timedelta(minutes=5)).timestamp(),
+                                 'state': reading, 'change': energy(start)})
+                start += timedelta(minutes=5)
+            return {'sensor.synthetic_grid': rows} if 'sensor.synthetic_grid' in entities else {}
+
+        self.rig.history.statistics.side_effect = statistics
+        sent = lambda: [row['start'] for row in self.h.client.submit_optimisation.call_args.args[0]['actual_slots']
+                        if 'grid_import_kwh' in row]
+        quarter = lambda hours: (boundary - timedelta(hours=hours)).isoformat()
+        await self.h.async_optimisation_push()
+        # Of the last two hours only the quarter after the catch-up was measured.
+        self.assertEqual(sent(), [quarter(.25)])
+        del windows[:]
+        await self.h.async_optimisation_push()
+        resent = sent()
+        # One 72-hour stretch (household and device meters), less the stalled
+        # quarters and the one that caught up.
+        self.assertEqual(set(windows), {72})
+        self.assertEqual(len(resent), 72 * 4 - 15)
+        self.assertEqual(len(set(resent)), len(resent))
+        self.assertIn(quarter(4.25), resent)
+        self.assertFalse({quarter(4), quarter(2.25), quarter(2), quarter(.5)} & set(resent))
+        # The same catch-up, still inside the two-hour sweep, does not start over.
+        del windows[:]
+        for _ in range(3):
+            await self.h.async_optimisation_push()
+        self.assertEqual(set(windows), {2})
+        self.assertNotIn('optimisation_catch_up_pending', await self.h._store.async_load())
+
     async def test_a_requested_replan_does_not_carry_the_older_stretch(self):
         from datetime import timezone
         boundary = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)

@@ -11,7 +11,7 @@ import sys
 import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components/shs_energy"))
-from shs_core.counter_changes import judge_counter_rows, settled_energy
+from shs_core.counter_changes import judge_counter_rows, retract_catch_ups, settled_energy
 from shs_core.household_ports import HouseholdReadError
 from shs_core.optimisation import aggregate_device_changes
 from household_fixture import Rig
@@ -143,6 +143,48 @@ class CounterJudgementTests(unittest.TestCase):
         self.assertEqual(judge_counter_rows(rows, T0 + PERIOD)[1].verdict, "trusted")
 
 
+class CatchUpTests(unittest.TestCase):
+    """A counter that stalls keeps its last reading, then books the whole stall at once."""
+
+    def samples(self, *energies):
+        return [(at(5 * index), energy) for index, energy in enumerate(energies)]
+
+    def test_the_catch_up_and_the_zeros_it_caught_up_for_are_left_out(self):
+        """A 13.2 kW plant uses at most 1.1 kWh in five minutes; 9.2 kWh is a stall catching up."""
+        samples = self.samples(.4, .5, 0, 0, 0, 9.2, .6)
+        kept, stalls, open_ended = retract_catch_ups(samples, 1.1, 300)
+        self.assertEqual(kept, [samples[0], samples[1], samples[6]])
+        self.assertEqual(stalls, [(at(10), at(25), 9.2)])
+        self.assertIsNone(open_ended)
+
+    def test_a_stall_that_reaches_the_first_sample_may_have_begun_earlier(self):
+        samples = self.samples(0, 0, 9.2, .6)
+        kept, stalls, open_ended = retract_catch_ups(samples, 1.1, 300)
+        self.assertEqual((kept, open_ended), ([samples[3]], at(10)))
+
+    def test_only_zeros_right_before_the_catch_up_belong_to_it(self):
+        """Zeros before the counter last moved were measured; so was a sample across a gap."""
+        samples = self.samples(0, 0, .3, 0, 9.2)
+        self.assertEqual(retract_catch_ups(samples, 1.1, 300)[0], samples[:3])
+        gapped = [(at(0), 0.0), (at(5), 0.0), (at(15), 9.2)]
+        self.assertEqual(retract_catch_ups(gapped, 1.1, 300)[0], gapped[:2])
+
+    def test_energy_the_equipment_can_use_is_kept(self):
+        samples = self.samples(0, 0, 1.1, 1.0)
+        self.assertEqual(retract_catch_ups(samples, 1.1, 300), (samples, [], None))
+        # No evidence of what the equipment can draw: nothing is judged.
+        lump = self.samples(0, 0, 50.0)
+        self.assertEqual(retract_catch_ups(lump, float("nan"), 300)[0], lump)
+        self.assertEqual(retract_catch_ups(lump, 0, 300)[0], lump)
+
+    def test_two_stalls_are_each_retracted(self):
+        samples = self.samples(0, 5.0, .2, 0, 0, 7.0, .1)
+        kept, stalls, open_ended = retract_catch_ups(samples, 1.1, 300)
+        self.assertEqual(kept, [samples[2], samples[6]])
+        self.assertEqual([stall[:2] for stall in stalls], [(at(0), at(5)), (at(15), at(25))])
+        self.assertEqual(open_ended, at(5))
+
+
 class HouseholdReadTests(unittest.IsolatedAsyncioTestCase):
     """The whole read: Recorder rows in, quarters out, one device's fault kept to itself."""
 
@@ -190,6 +232,75 @@ class HouseholdReadTests(unittest.IsolatedAsyncioTestCase):
         changes = await rig.household._statistics_changes(["sensor.glitch"], at(0), at(30), "5minute")
         quarters = aggregate_device_changes({"glitch": changes["sensor.glitch"]})
         self.assertEqual([row["device_energy_kwh"] for row in quarters], [{"glitch": .7}])
+
+
+class StalledPlantTests(unittest.IsolatedAsyncioTestCase):
+    """Synthetic plant: the link drops, the counters hold, then catch up in one step."""
+
+    def rig(self):
+        options = {"planning_mode": "live", "solar_production_power_entity": "sensor.pv_power",
+                   "grid_power_entity": "sensor.grid_power", "battery_charge_max_w": 8800,
+                   "device_control_mappings": {"heater": {"power": "sensor.heater_power"}}}
+        rig = Rig(now=at(60), options=options)
+        rig.household.resolved_options = lambda: options
+        self.peak_reads = 0
+        async def statistics(start, end, entities, period, units, kinds):
+            if period == "month":
+                self.peak_reads += 1
+                self.assertEqual((units, kinds), ({"power": "W"}, {"max", "min"}))
+                recorded = {"sensor.pv_power": [{"max": 9100.0, "min": 0.0}, {"max": 13200.0, "min": 0.0}],
+                            "sensor.grid_power": [{"max": 15000.0, "min": -7000.0}],
+                            "sensor.heater_power": [{"max": 3400.0, "min": 0.0}]}
+                return {entity: recorded[entity] for entity in entities if entity in recorded}
+            return {entity: [row for row in self.rows[entity] if row["start"] >= start.timestamp()]
+                    for entity in entities}
+        rig.history.statistics.side_effect = statistics
+        return rig
+
+    def counter(self, per_period):
+        """Readings every five minutes from 08:55, as ``(minute, reading)``."""
+        reading, readings = 1000.0, [(-5, 1000.0)]
+        for index, energy in enumerate(per_period):
+            reading += energy
+            readings.append((5 * index + 4, reading))
+        return recorder_rows(readings, len(per_period) + 1, start=at(-5))
+
+    async def test_a_stalled_solar_counter_is_left_unmeasured_and_the_rest_is_kept(self):
+        rig = self.rig()
+        # Solar: steady, then nothing for 25 minutes, then 5.5 kWh at once.
+        self.rows = {"sensor.pv": self.counter([.9, .9, .9, 0, 0, 0, 0, 0, 5.5, .9, .9, .9]),
+                     "sensor.grid": self.counter([.1] * 12),
+                     "sensor.heater_energy": self.counter([.25] * 12),
+                     "sensor.charge": self.counter([.5] * 12)}
+        categories = {"solar_production": ["sensor.pv"], "grid_import": ["sensor.grid"],
+                      "battery_charge": ["sensor.charge"]}
+        devices = [{"key": "heater", "statistic_id": "sensor.heater_energy"}]
+        await rig.household._refresh_counter_bounds(categories, devices)
+        self.assertEqual(rig.household._counter_bounds_w, {
+            "sensor.pv": 13200.0, "sensor.grid": 15000.0, "sensor.heater_energy": 3400.0, "sensor.charge": 8800.0})
+        rows = await rig.household._actual_quarters(categories, at(0), at(60))
+        # The stall covers 09:15-09:45; its quarters keep the grid and battery, without solar.
+        self.assertEqual([row.get("solar_production_kwh") for row in rows], [2.7, None, None, 2.7])
+        self.assertEqual([row["grid_import_kwh"] for row in rows], [.3] * 4)
+        self.assertEqual([row["battery_charge_kwh"] for row in rows], [1.5] * 4)
+        # The stall lies inside these quarters, so nothing older needs sending again.
+        self.assertIsNone(rig.household._open_catch_up)
+        # The bounds are evidence that rarely changes: read once an hour.
+        await rig.household._refresh_counter_bounds(categories, devices)
+        self.assertEqual(self.peak_reads, 1)
+
+    async def test_a_counter_with_no_power_evidence_is_read_as_before(self):
+        rig = self.rig()
+        self.rows = {"sensor.unbounded": self.counter([.1, 0, 0, 40.0, .1, .1])}
+        await rig.household._refresh_counter_bounds({"total_consumption": ["sensor.unbounded"]}, [])
+        changes = await rig.household._statistics_changes(["sensor.unbounded"], at(0), at(30), "5minute")
+        self.assertEqual([round(energy, 6) for _, energy in changes["sensor.unbounded"]], [.1, 0, 0, 40.0, .1, .1])
+
+    async def test_unreadable_peaks_change_nothing(self):
+        rig = self.rig()
+        rig.history.statistics.side_effect = HouseholdReadError("recorder busy")
+        await rig.household._refresh_counter_bounds({"solar_production": ["sensor.pv"]}, [])
+        self.assertEqual(rig.household._counter_bounds_w, {})
 
 
 if __name__ == "__main__":
