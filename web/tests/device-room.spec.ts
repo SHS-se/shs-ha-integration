@@ -364,3 +364,54 @@ test('loads settings and saves projected device fields without crypto.randomUUID
   await expect(temperature).toHaveValue('sensor.room');
   expect(writes).toBe(2);
 });
+
+test('shows saved connections from both rooms and corrects a rejected standalone probe', async ({page}) => {
+  const home = '00000000-0000-4000-8000-000000000001';
+  const probe = 'sensor.synthetic_hall_temperature';
+  let data: Record<string, unknown>;
+  let writes = 0;
+  await page.route('**/api/configuration/get', async route => {
+    data = {
+      ...await (await route.fetch()).json(),
+      rooms: {hall: 'Hall', office: 'Office'},
+      devices: [],
+      entities: [{entity_id: probe, name: 'Hall probe', domain: 'sensor', area_id: 'hall',
+        device_class: 'temperature', state_class: 'measurement', unit: '°C'}],
+      room_connections: {environment: 'test',
+        url: `https://test-smart-home-solutions.pages.dev/portal/home-profile?section=room-connections&home=${home}`,
+        connections: [{rooms: ['hall', 'office'], mode: 'varies'}]},
+    };
+    await route.fulfill({json: data});
+  });
+  await page.route('**/api/configuration/save_room_probe', async route => {
+    expect(route.request().postDataJSON()).toMatchObject({room_key: 'hall', temperature_entity_id: probe});
+    if (++writes === 1) {
+      await route.fulfill({status: 409, json: {message: 'Probe could not be saved',
+        field_errors: {temperature_entity_id: ['Check the probe configuration.']}}});
+      return;
+    }
+    await route.fulfill({json: {...data, revision: 2,
+      configuration: {...data.configuration as object, rooms: {hall: {temperature_entity_id: probe}}}}});
+  });
+  await page.goto('./#settings');
+  const editor = page.locator('shs-configuration-editor');
+  await editor.getByRole('button', {name: 'Rooms', exact: true}).click();
+  const connections = editor.locator('.room-connections');
+  await expect(connections.getByText('Office', {exact: true})).toBeVisible();
+  await expect(connections.getByRole('link')).toHaveAttribute('href', new RegExp(`home=${home}&room=hall$`));
+  await editor.getByRole('button', {name: 'Office', exact: true}).click();
+  await expect(connections.getByText('Hall', {exact: true})).toBeVisible();
+  await editor.getByRole('button', {name: 'Hall', exact: true}).click();
+
+  const picker = editor.getByRole('combobox', {name: 'Room temperature probe'});
+  await picker.selectOption(probe);
+  const save = editor.getByRole('button', {name: 'Save probe'});
+  await save.click();
+  await expect(editor.getByText('Check the probe configuration.')).toBeVisible();
+  await expect(picker).toBeFocused();
+  await expect(picker).toHaveAttribute('aria-invalid', 'true');
+  await save.click();
+  await expect(picker).toHaveValue(probe);
+  await expect(save).toBeDisabled();
+  await expect(editor.getByText('Check the probe configuration.')).toHaveCount(0);
+});

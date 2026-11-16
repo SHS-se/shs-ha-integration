@@ -10,6 +10,7 @@ STAGES = {
     'price_sensors': ('Electricity price sensors could not be updated', 'Inspect the reported app error. SHS retries the sensor update automatically.'),
     'inputs': ('Planning data could not be collected', 'Inspect the reported source. SHS needs usable inputs to request a plan.'),
     'collection': ('Household readings could not be collected', 'Inspect the reported source. The next upload needs usable readings.'),
+    'room_observations': ('Room readings could not be shared', 'Check the Room connections and temperature probe in Settings.'),
     'thermal_inputs': ('Room observations could not be collected', 'Inspect the reported source. Other household data can still be sent.'),
     'pool_inputs': ('Pool observations could not be collected', 'Inspect the reported source. Other household data can still be sent.'),
     'upload': ('Planning data could not be sent', 'Check the server connection. A new plan cannot be requested until the upload succeeds.'),

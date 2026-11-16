@@ -7,6 +7,7 @@ from .planning_warnings import merge_warnings, planning_warning
 import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from hashlib import sha256
 from datetime import date, datetime, time, timedelta, timezone
 import hashlib
 import json
@@ -301,6 +302,8 @@ class Household:
         self.last_actual_slots_accepted = 0
         self.actuals_accepted_until: str | None = None
         self.last_thermal_slots_accepted = 0
+        self.room_connections: list[dict[str, Any]] | None = None
+        self._room_observation_basis = None
         self.pending_room_history: dict[str, str] | None = None
         self.optimisation_missing_inputs: list[str] = []
         self.optimisation_degraded_devices: list[dict[str, str]] = []
@@ -1724,6 +1727,50 @@ class Household:
             start.astimezone(timezone.utc), end.astimezone(timezone.utc),
             sorted(set(entity_ids)), with_attributes=with_attributes,
         )
+
+    @property
+    def room_observations_supported(self) -> bool:
+        return bool(self.data and self.data.get("room_observations") is True and self.data.get("subscription_active"))
+
+    async def async_room_observations(self) -> None:
+        """Share room catalogue and completed probe means independently of planning."""
+        if not self.room_observations_supported:
+            return
+        options = self.resolved_options()
+        rooms = {key: {"name": name, "source_key": None} for key, name in self.ports.area_names().items()}
+        sources = {}
+        for key, bindings in options.get("rooms", {}).items():
+            entity = bindings.get("temperature_entity_id")
+            if key not in rooms or not entity:
+                continue
+            rooms[key]["source_key"] = sha256(entity.encode()).hexdigest()
+            source = self.ports.read_state(entity)
+            if source is not None and source.attributes.get("unit_of_measurement") == "°C":
+                sources[key] = entity
+        end = quarter_start(self.ports.utcnow())
+        basis = (end, rooms, sources)
+        if self._room_observation_basis == basis:
+            return
+        start = end - timedelta(hours=3)
+        try:
+            statistics = await self._statistics_means(sorted(set(sources.values())), start, end)
+            slots = [
+                {"room_key": room, "start": quarter.isoformat(), "temperature_c": temperature}
+                for room, entity in sources.items()
+                for quarter, temperature in quarter_means(statistics.get(entity, ())).items()
+                if start <= quarter < end
+            ]
+            reply = await self.client.upload_room_observations(rooms, slots)
+            if not isinstance(reply.get("connections"), list):
+                raise ValueError("The website did not confirm room data storage")
+            if reply.get("readings_ignored"):
+                raise ValueError("The website ignored some invalid room temperature readings")
+        except (HouseholdReadError, ShsApiError, ValueError) as error:
+            self._pipeline_error("room_observations", error)
+            return
+        self.room_connections = reply["connections"]
+        self._room_observation_basis = basis
+        self._pipeline_error("room_observations", None)
 
     async def _outdoor_temperature_quarters(
         self, options: dict[str, Any], start: datetime, end: datetime

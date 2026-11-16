@@ -82,7 +82,7 @@ class ConfigurationEditor:
             a = state.attributes
             result.append(dict(entity_id=key,name=a.get('friendly_name') or key,domain=key.split('.')[0],
                 state=state.state[:120],unit=a.get('unit_of_measurement'),last_updated=state.last_updated.isoformat(),
-                device_class=a.get('device_class'),minimum=a.get('min'),maximum=a.get('max'),options=a.get('options',[]),
+                device_class=a.get('device_class'),state_class=a.get('state_class'),minimum=a.get('min'),maximum=a.get('max'),options=a.get('options',[]),
                 area_id=area,area_name=self.context['area_names'].get(area)))
         return result
 
@@ -157,6 +157,8 @@ class ConfigurationEditor:
             return result
         if operation == 'control':
             return await self._set_execution_mode(body)
+        if operation == 'save_room_probe':
+            return await self._save_room_probe(body)
         if operation == 'save_device':
             return await self._save_device(body)
         await self.refresh_catalog()
@@ -176,6 +178,34 @@ class ConfigurationEditor:
             raise ValueError('Device mappings must be saved from their own card')
         result = await self._commit(self.prepare(existing, incoming), body, replan=True)
         return {**result, 'saved': True, 'refreshing': False}
+
+    async def _save_room_probe(self, body):
+        await self.refresh_catalog()
+        room, source = body['room_key'], body['temperature_entity_id']
+        if room not in self.context['area_names']:
+            raise ConfigurationFieldErrors({'temperature_entity_id': ['This room is no longer in Home Assistant.']})
+        if source:
+            state = self.catalog.states.get(source)
+            if (not state or not source.startswith('sensor.') or self.context['entity_areas'].get(source) != room
+                    or state.attributes.get('unit_of_measurement') != '°C'
+                    or state.attributes.get('device_class') != 'temperature'
+                    or state.attributes.get('state_class') != 'measurement'):
+                raise ConfigurationFieldErrors({'temperature_entity_id': ['Choose a Celsius temperature sensor in this room with recorder statistics.']})
+
+        def set_probe(existing):
+            if any(mapping.get(c.ROOM_AREA_FIELD) == room for mapping in existing.get(c.OPT_DEVICE_CONTROL_MAPPINGS, {}).values()):
+                raise ConfigurationFieldErrors({'temperature_entity_id': ['Edit this room probe through its device settings.']})
+            rooms = dict(existing.get('rooms', {}))
+            if source:
+                rooms[room] = {'temperature_entity_id': source}
+            else:
+                rooms.pop(room, None)
+            return {**existing, 'rooms': rooms}
+
+        await self.engine.configuration.commit(body['expected_revision'], set_probe, body['request_id'],
+            intent={'room_key': room, 'temperature_entity_id': source})
+        self.engine.wake_projection.set()
+        return await self.view()
 
     async def _save_device(self, body):
         configuration = self.engine.configuration

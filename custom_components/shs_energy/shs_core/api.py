@@ -263,6 +263,9 @@ class ShsApiClient:
         """Fetch subscription status for the paired customer."""
         return await self._request("GET", "integration-status")
 
+    async def upload_room_observations(self, rooms: dict, slots: list) -> dict[str, Any]:
+        return await self._request("POST", "energy-room-observations", {"rooms": rooms, "slots": slots})
+
     async def read_device_setups(self) -> list[dict]:
         """Read saved choices, including retired rows, for the paired home."""
         result = await self._request("GET", "energy-optimisation-ingest")

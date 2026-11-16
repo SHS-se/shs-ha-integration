@@ -775,6 +775,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._render();
       return;
     }
+    if (element.dataset.standaloneProbe !== undefined) {
+      const room = element.dataset.roomKey;
+      this._standaloneProbeDraft = {room, source: element.value, revision: this._data.revision};
+      this._standaloneProbeError = null;
+      this._render();
+      this.shadowRoot.querySelector("[data-standalone-probe]")?.focus();
+      return;
+    }
     if (element.dataset.doorwayField && this._doorwayForm) {
       this._doorwayForm[element.dataset.doorwayField] = element.value;
       this._render();
@@ -873,6 +881,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._tab = "rooms";
       this._render();
       this.shadowRoot.querySelector(".workspace-detail h2")?.focus();
+    }
+    else if (action === "save-room-probe") {
+      void this._saveRoomProbe(button.dataset.roomKey);
     }
     else if (action === "open-doorway-form") {
       this._doorwayForm = { room: button.dataset.roomKey, connectedRoom: "", mode: "usually_open" };
@@ -1673,8 +1684,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const devices = this._sortedDevices().filter(device => this._deviceRoom(device) === room);
     const target = this._fieldLocations().find(location => location.scope === "mapping" &&
       location.field.key === "temperature_entity_id" && devices.some(device => device.key === location.deviceKey));
-    const probe = target && (this._mapping(target.deviceKey)?.temperature_entity_id
-      || devices.find(device => device.key === target.deviceKey)?.mapping?.temperature_entity_id);
+    const probe = this._data.configuration?.rooms?.[room]?.temperature_entity_id ??
+      (target && this._mapping(target.deviceKey)?.temperature_entity_id);
     const comfort = room && this._data.comfort_website_url ? new URL(this._data.comfort_website_url) : null;
     if (comfort) comfort.searchParams.set("room", room);
     return `<div class="settings-workspace">
@@ -1685,13 +1696,53 @@ class ShsEnergyConfigPanel extends HTMLElement {
         <header class="workspace-heading"><h2 tabindex="-1">${this._escape(name || "Rooms")}</h2>
           ${comfort ? `<a href="${this._escape(comfort.href)}" target="_blank" rel="noopener noreferrer">Edit comfort on website</a>` : ""}</header>
         ${room ? `<div class="workspace-panel"><h3>Temperature probe</h3>
-          <p>${this._escape(probe || "No room temperature probe shown")}</p>
-          ${target ? `<button type="button" class="text" data-action="edit-field" data-field-token="${this._escape(target.token)}">Edit room temperature probe</button>` : ""}</div>
+          ${target ? `<p>${this._escape(probe || "No room temperature probe shown")}</p>
+            <button type="button" class="text" data-action="edit-field" data-field-token="${this._escape(target.token)}">Edit room temperature probe</button>`
+            : this._data.room_connections ? this._renderStandaloneRoomProbe(room, probe)
+            : `<p>${this._escape(probe || "No room temperature probe shown")}</p>`}</div>
           ${this._renderRoomConnections(room, rooms)}
           <div class="workspace-panel"><h3>Devices</h3>
           ${devices.length ? devices.map(device => `<button type="button" class="text" data-action="edit-device" data-device-key="${this._escape(device.key)}">${this._escape(device.name)}</button>`).join("") : "<p>No SHS devices in this room.</p>"}</div>`
           : "<p>No Home Assistant rooms found.</p>"}
       </section></div>`;
+  }
+
+  _renderStandaloneRoomProbe(room, probe) {
+    const choices = (this._data.entities || []).filter(entity => entity.area_id === room &&
+      entity.domain === "sensor" && entity.device_class === "temperature" &&
+      entity.state_class === "measurement" && entity.unit === "°C");
+    const current = this._standaloneProbeDraft?.room === room ? this._standaloneProbeDraft.source : probe || "";
+    const error = this._standaloneProbeError?.room === room ? this._standaloneProbeError.message : "";
+    const selected = choice => choice === current ? "selected" : "";
+    return `<div class="field"><label>Room temperature probe
+      <select data-standalone-probe data-room-key="${this._escape(room)}" ${error ? 'aria-invalid="true" aria-describedby="room-probe-error"' : ""}>
+        <option value="">No probe</option>
+        ${probe && !choices.some(item => item.entity_id === probe) ? `<option value="${this._escape(probe)}" ${selected(probe)}>${this._escape(probe)} · Unavailable</option>` : ""}
+        ${choices.map(entity => `<option value="${this._escape(entity.entity_id)}" ${selected(entity.entity_id)}>${this._escape(entity.name)}</option>`).join("")}
+      </select></label></div>
+      ${error ? `<p id="room-probe-error" role="alert">${this._escape(error)}</p>` : ""}
+      <button type="button" class="primary" data-action="save-room-probe" data-room-key="${this._escape(room)}"
+        ${this._saving || current === (probe || "") ? "disabled" : ""}>Save probe</button>`;
+  }
+
+  async _saveRoomProbe(room) {
+    const draft = this._standaloneProbeDraft;
+    if (this._saving || draft?.room !== room) return;
+    this._saving = true;
+    this._standaloneProbeError = null;
+    this._render();
+    try {
+      const data = await this._request({action: "save_room_probe", config_entry: this._entryId,
+        expected_revision: draft.revision, room_key: room, temperature_entity_id: draft.source});
+      this._standaloneProbeDraft = null;
+      this._acceptRefresh(data);
+    } catch (error) {
+      this._standaloneProbeError = {room, message: error.field_errors?.temperature_entity_id?.[0] || this._errorMessage(error)};
+    } finally {
+      this._saving = false;
+      this._render();
+      this.shadowRoot.querySelector("[data-standalone-probe]")?.focus();
+    }
   }
 
   _availableDoorwayRooms(room) {
@@ -1701,6 +1752,19 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _renderRoomConnections(room, rooms) {
     const names = this._data.rooms;
+    const saved = this._data.room_connections;
+    if (saved) {
+      const profile = new URL(saved.url);
+      profile.searchParams.set("room", room);
+      const connections = (saved.connections ?? []).filter(edge => edge.rooms.includes(room));
+      const website = saved.environment === "test" ? "test website" : "website";
+      return `<div class="workspace-panel room-connections"><h3>Room connections</h3>
+        ${connections.length ? `<ul class="doorway-list">${connections.map(({rooms: pair, mode}) => {
+          const other = pair.find(key => key !== room);
+          return `<li><div><strong>${this._escape(names[other] ?? other)}</strong><span class="muted">${DOORWAY_MODES[mode]}</span></div></li>`;
+        }).join("")}</ul>` : `<p class="muted">${saved.connections ? "No saved doorways." : "Waiting for saved doorways."}</p>`}
+        <a href="${this._escape(profile.href)}" target="_blank" rel="noopener noreferrer">Edit room connections on ${website}</a></div>`;
+    }
     const available = this._availableDoorwayRooms(room);
     const form = this._doorwayForm?.room === room ? this._doorwayForm : null;
     const connections = (this._doorways || []).map(({rooms: pair, mode}, index) => {
