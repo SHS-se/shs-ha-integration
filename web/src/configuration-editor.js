@@ -29,6 +29,15 @@ function activeDeviceMapping(fields, controlType, draft) {
 const FRONTEND_VERSION = "app-configuration-v1";
 const PANEL_ELEMENT = "shs-configuration-editor";
 
+function newRequestId() {
+  // getRandomValues is also available to Home Assistant served over local HTTP.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 class ShsEnergyConfigPanel extends HTMLElement {
   constructor() {
     super();
@@ -72,7 +81,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   async _request(message) {
     const result = await this._backend.request({ ...message,
       expected_revision: message.expected_revision ?? this._data?.revision,
-      request_id: message.request_id ?? crypto.randomUUID() });
+      request_id: message.request_id ?? newRequestId() });
     if (result?.revision && ["save", "save_device"].includes(message.action) && this._data) {
       this._data.revision = result.revision;
     }
@@ -402,7 +411,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       config_entry: this._entryId,
       device_key: deviceKey,
       expected_revision: draft?.revision ?? this._data.revision,
-      request_id: crypto.randomUUID(),
+      request_id: newRequestId(),
       configuration,
       ...(section === "planning" ? {} : {
         ...(draft && {settings: draft.settings}),

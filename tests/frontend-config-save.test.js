@@ -1,11 +1,12 @@
 const assert = require('node:assert/strict');
+const { webcrypto } = require('node:crypto');
 const { readFileSync } = require('node:fs');
 const { test } = require('node:test');
 const vm = require('node:vm');
 const frontendVersion = 'app-configuration-v1';
 const frontendSource = readFileSync('web/src/configuration-editor.js', 'utf8');
 const loadPanel = (registry, version = frontendVersion) => {
-  const context = vm.createContext({ URL, performance, setTimeout: () => 0, clearTimeout() {}, crypto: {randomUUID: () => "test-request"}, HTMLElement: class {}, customElements: registry });
+  const context = vm.createContext({ URL, performance, setTimeout: () => 0, clearTimeout() {}, crypto: webcrypto, HTMLElement: class {}, customElements: registry });
   const moduleUrl = `https://ha.example/shs_energy_frontend/shs-energy-config-panel.js?v=${version}`;
   vm.runInContext(frontendSource.replaceAll('import.meta.url', JSON.stringify(moduleUrl))
     + '\nObject.assign(globalThis, { Panel: ShsEnergyConfigPanel, projectDeviceFields, activeDeviceMapping });', context);

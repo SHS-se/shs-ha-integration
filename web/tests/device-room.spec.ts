@@ -101,9 +101,14 @@ test('edits a category without writing until Save even when its room is read-onl
   expect(writes).toBe(2);
 });
 
-test('projects fields locally, preserves compatible values and saves selectors with bindings once', async ({page}) => {
+test('loads settings and saves projected device fields without crypto.randomUUID', async ({page}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window.crypto, 'randomUUID', { value: undefined });
+  });
   const key = 'sensor.heater_energy';
   const original = {control_type: 'switch_schedule', power: 1230, actuator_entity_ids: ['switch.heater']};
+  const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  const requestIds = new Set<string>();
   let data: Record<string, any>;
   let writes = 0;
   const fieldsFor = (method: string) => {
@@ -111,6 +116,9 @@ test('projects fields locally, preserves compatible values and saves selectors w
     return catalog.rows['heating:' + method].fields.map((index: number) => catalog.fields[index]);
   };
   await page.route('**/api/configuration/get', async route => {
+    const {request_id} = route.request().postDataJSON();
+    expect(request_id).toMatch(uuidV4);
+    requestIds.add(request_id);
     data = await (await route.fetch()).json();
     data.configuration.device_control_mappings = {[key]: original};
     data.devices = [{
@@ -124,6 +132,9 @@ test('projects fields locally, preserves compatible values and saves selectors w
   await page.route('**/api/configuration/save_device', async route => {
     const settings = {control_type: 'setpoint', load_type: 'inverter'};
     const body = route.request().postDataJSON();
+    expect(body.request_id).toMatch(uuidV4);
+    expect(requestIds.has(body.request_id)).toBe(false);
+    requestIds.add(body.request_id);
     expect(body).toMatchObject({device_key: key, settings, mapping: {
       control_type: 'setpoint', power: 1230, actuator_entity_ids: ['switch.heater'],
     }});
@@ -140,6 +151,7 @@ test('projects fields locally, preserves compatible values and saves selectors w
   });
   await page.goto('./#settings');
   const editor = page.locator('shs-configuration-editor');
+  await expect(editor.getByRole('heading', {name: 'Energy and device settings'})).toBeVisible({timeout: 5000});
   await editor.getByRole('button', {name: 'Devices', exact: true}).click();
   const card = editor.locator('details.device-card').filter({hasText: 'Heater'});
   const views = editor.getByRole('navigation', {name: 'Device views'});
