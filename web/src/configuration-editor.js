@@ -28,6 +28,7 @@ function activeDeviceMapping(fields, controlType, draft) {
 
 const FRONTEND_VERSION = "app-configuration-v1";
 const PANEL_ELEMENT = "shs-configuration-editor";
+const DOORWAY_MODES = { usually_open: "Usually open", varies: "Door varies" };
 
 function newRequestId() {
   // getRandomValues is also available to Home Assistant served over local HTTP.
@@ -53,7 +54,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._category = "";
     this._scheduleSearch = this._scheduleRoom = this._scheduleCategory = this._scheduleMode = "";
     this._showExcluded = false;
-    this._expanded = new Set();
+    this._expanded = new Set(["room-connections"]);
     this._added = new Set();
     this._fullHorizon = false;
     this._selectedSlot = null;
@@ -63,6 +64,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._savingDeviceKey = "";
     this._deviceErrors = {};
     this._roomDrafts = new Map();
+    this._doorways = [];
     this._error = "";
     this._notice = "";
     this._entryId = new URLSearchParams(window.location.search).get("config_entry");
@@ -204,6 +206,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return (section !== "planning" && Object.keys(this._deviceDrafts?.get(deviceKey)?.settings || {}).length > 0)
       || (section !== "planning" && JSON.stringify(this._draft?.[MAPPINGS_KEY]?.[deviceKey]) !== JSON.stringify(this._savedDraft?.[MAPPINGS_KEY]?.[deviceKey]))
       || Object.keys(this._patch(this._systemFields(device, section))).length > 0;
+  }
+
+  _deviceFormDirty(key, section) {
+    return this._deviceDirty(key, section) || (section !== "planning" && this._roomDrafts?.has(key));
   }
 
   _entityLabel(entityId) {
@@ -363,12 +369,15 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (progress) progress.innerHTML = this._refreshBanner();
     for (const button of this.shadowRoot.querySelectorAll("button[data-action]")) {
       const { action, deviceKey, section } = button.dataset;
+      if (action === "save" || action === "discard") button.hidden = this._tab !== "energy" && !this._configurationDirty;
       if (action === "save") button.disabled = !this._configurationDirty || this._refreshing || this._saving || Boolean(this._savingDeviceKey);
       else if (action === "discard") button.disabled = !this._dirty || this._saving || Boolean(this._savingDeviceKey);
       else if (action === "refresh" || action === "discover") button.disabled = this._loading || this._refreshing || this._saving || Boolean(this._savingDeviceKey);
       else if (action === "save-device" || action === "cancel-device") {
-        button.disabled = !this._deviceDirty(deviceKey, section) || (action === "save-device" && (this._refreshing || this._saving || Boolean(this._savingDeviceKey)));
-        button.closest(".device-save-row").querySelector("span").textContent = this._deviceDirty(deviceKey, section) ? "Unsaved changes" : "Saved";
+        const dirty = this._deviceFormDirty(deviceKey, section);
+        button.disabled = !dirty || this._saving || Boolean(this._savingDeviceKey)
+          || (action === "save-device" ? this._loading || this._refreshing : Boolean(this._deviceSaveRequests?.has(deviceKey)));
+        button.closest(".device-save-row").querySelector("span").textContent = dirty ? "Unsaved changes" : "Saved";
       }
     }
     for (const input of this.shadowRoot.querySelectorAll("[data-permission], [data-share]")) {
@@ -415,8 +424,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   async _saveDevice(deviceKey, section) {
+    const roomDraft = section !== "planning" && this._roomDrafts?.get(deviceKey);
+    const controlsDirty = this._deviceDirty(deviceKey, section);
     if (
-      !this._deviceDirty(deviceKey, section) ||
+      (!controlsDirty && !roomDraft) || this._loading ||
       this._savingDeviceKey ||
       this._refreshing || this._saving ||
       !this._entryId
@@ -427,6 +438,19 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._error = "";
     this._notice = "";
     this._render();
+    try {
+      if (controlsDirty && !(await this._saveDeviceConfiguration(deviceKey, section))) return;
+      if (roomDraft && !this._refreshing) await this._commitDeviceRoom(deviceKey, roomDraft, controlsDirty);
+    } finally {
+      this._savingDeviceKey = "";
+      this._render();
+      const first = this._deviceErrorTargets(deviceKey)[0];
+      if (first && first.scope !== "configuration") this._openField(first.token);
+      else if (roomDraft?.error) this._focusRoomSetting(deviceKey);
+    }
+  }
+
+  async _saveDeviceConfiguration(deviceKey, section) {
     const device = this._data.devices.find(d => d.key === deviceKey);
     const fields = this._systemFields(device, section);
     const draft = this._deviceDrafts?.get(deviceKey);
@@ -496,6 +520,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         : mapping
         ? `${device?.name || deviceKey} setup saved.`
         : `${device?.name || deviceKey} settings saved.`;
+      return true;
     } catch (error) {
       if (error?.code === "refresh_in_progress") this._refreshing = true;
       else {
@@ -508,11 +533,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
           if (error?.field_errors) (this._deviceFieldErrors ||= new Map()).set(deviceKey, error.field_errors);
         }
       }
-    } finally {
-      this._savingDeviceKey = "";
-      this._render();
-      const first = this._deviceErrorTargets(deviceKey)[0];
-      if (first && first.scope !== "configuration") this._openField(first.token);
+      return false;
     }
   }
 
@@ -754,6 +775,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._render();
       return;
     }
+    if (element.dataset.doorwayField && this._doorwayForm) {
+      this._doorwayForm[element.dataset.doorwayField] = element.value;
+      this._render();
+      return;
+    }
     if (element.dataset.permission) {
       this._control(element.dataset.permission, element.value); return;
     }
@@ -842,10 +868,31 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this.shadowRoot.querySelector(`[data-view="${this._deviceView}"]`)?.focus();
     }
     else if (action === "open-room") {
+      this._doorwayForm = null;
       this._selectedRoom = button.dataset.roomKey;
       this._tab = "rooms";
       this._render();
       this.shadowRoot.querySelector(".workspace-detail h2")?.focus();
+    }
+    else if (action === "open-doorway-form") {
+      this._doorwayForm = { room: button.dataset.roomKey, connectedRoom: "", mode: "usually_open" };
+      this._render();
+      this.shadowRoot.querySelector('[data-doorway-field="connectedRoom"]')?.focus();
+    }
+    else if (action === "add-doorway" || action === "cancel-doorway") {
+      if (action === "add-doorway") {
+        const {room, connectedRoom, mode} = this._doorwayForm;
+        if (!this._availableDoorwayRooms(room).includes(connectedRoom)) return;
+        this._doorways.push({rooms: [room, connectedRoom], mode});
+      }
+      this._doorwayForm = null;
+      this._render();
+      this.shadowRoot.querySelector('[data-action="open-doorway-form"]:enabled, [data-action="remove-doorway"]')?.focus();
+    }
+    else if (action === "remove-doorway") {
+      this._doorways.splice(Number(button.dataset.index), 1);
+      this._render();
+      this.shadowRoot.querySelector('[data-action="open-doorway-form"]')?.focus();
     }
     else if (action === "add-field") { this._added.add(button.dataset.token); this._render(); }
     else if (action === "remove-field") this._removeField(button.dataset.scope, button.dataset.fieldKey, button.dataset.deviceKey);
@@ -853,12 +900,6 @@ class ShsEnergyConfigPanel extends HTMLElement {
     else if (action === "back") this._goBack();
     else if (action === "save") this._save();
     else if (action === "save-device") this._saveDevice(button.dataset.deviceKey, button.dataset.section);
-    else if (action === "save-device-room") this._saveDeviceRoom(button.dataset.deviceKey);
-    else if (action === "cancel-device-room") {
-      this._roomDrafts.delete(button.dataset.deviceKey);
-      this._render();
-      this._focusRoomSetting(button.dataset.deviceKey);
-    }
     else if (action === "discard") this._discard();
     else if (action === "refresh" && !this._refreshing) this._load(true);
     else if (action === "retry") this._load(false);
@@ -1161,11 +1202,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this.shadowRoot.querySelector(`[data-room-setting][data-device-key="${CSS.escape(key)}"]`)?.focus();
   }
 
-  async _saveDeviceRoom(key) {
-    const draft = this._roomDrafts.get(key);
-    if (!draft || this._roomEditBusy(key)) return;
-    this._pollRevision = (this._pollRevision || 0) + 1;
-    this._savingDeviceKey = key;
+  async _commitDeviceRoom(key, draft, controlsSaved) {
     delete draft.error;
     this._render();
     try {
@@ -1175,13 +1212,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._roomDrafts.delete(key);
       const current = result.devices.find(device => device.key === key);
       if (this._selectedDevice === key && this._room && current && this._room !== current.room_name) this._room = "";
+      this._notice = `${current?.name || key} settings saved.`;
     } catch (error) {
       if (error?.code === "refresh_in_progress") this._refreshing = true;
-      else draft.error = this._errorMessage(error);
-    } finally {
-      this._savingDeviceKey = "";
-      this._render();
-      this._focusRoomSetting(key);
+      else {
+        this._notice = "";
+        draft.error = (controlsSaved ? "Other device settings were saved. " : "") + this._errorMessage(error);
+      }
     }
   }
 
@@ -1271,8 +1308,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _cancelDevice(key, section) {
-    if (this._deviceSaveRequests?.has(key)) return;
-    if (section !== "planning") this._deviceDrafts?.delete(key);
+    if (this._deviceSaveRequests?.has(key) || this._saving || this._savingDeviceKey) return;
+    if (section !== "planning") {
+      this._deviceDrafts?.delete(key);
+      this._roomDrafts?.delete(key);
+    }
     this._deviceConflicts?.delete(key);
     if (section !== "planning" && this._draft[MAPPINGS_KEY]) this._draft[MAPPINGS_KEY][key] = this._clone(this._savedDraft[MAPPINGS_KEY]?.[key]);
     for (const field of this._systemFields(this._data.devices.find(d => d.key === key), section)) {
@@ -1486,10 +1526,6 @@ class ShsEnergyConfigPanel extends HTMLElement {
       </select>
       <small class="field-help" id="${id}-help">${help}</small>
       ${draft?.error ? `<span id="${id}-error" role="alert" class="field-problems">${this._escape(draft.error)}</span>` : ""}
-      ${draft ? `<div class="room-setting-actions">
-        <button type="button" class="text" data-action="cancel-device-room" data-device-key="${key}" ${disabled}>Cancel room change</button>
-        <button type="button" class="secondary" data-action="save-device-room" data-device-key="${key}" ${disabled}>Save room</button>
-      </div>` : ""}
     </div>`;
   }
 
@@ -1497,7 +1533,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const planning = section === "planning";
     const included = !(this._draft.excluded_device_readings || []).includes(device.key);
     const mapping = this._mapping(device.key) || {};
-    const dirty = this._deviceDirty(device.key, section);
+    const dirty = this._deviceFormDirty(device.key, section);
     const id = section + ":" + device.key;
     const edit = workspace || this._expanded.has(id) || dirty;
     const systemFields = this._systemFields(device, section);
@@ -1536,8 +1572,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         ])}
         </fieldset>
         ${!planning && !retrying && !dirty && Object.keys(device.suggested_mapping || {}).some(k => k !== "control_type" && !this._present(mapping[k])) ? `<button class="text" data-action="use-suggestions" data-device-key="${this._escape(device.key)}">Review suggested setup</button>` : ""}
-        ${selectors || mappingFields.length || systemFields.length ? `<div class="device-save-row"><span>${dirty ? "Unsaved changes" : "Saved"}</span><button class="text" data-action="cancel-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty ? "" : "disabled"}>Cancel</button><button class="primary" data-action="save-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty && !this._refreshing && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>${retrying ? "Retry save" : "Save " + section}</button></div>` : `<p>Choose a control method in the device settings.</p>`}
-        ${this._choices(device, section)}
+        ${selectors || mappingFields.length || systemFields.length ? `<div class="device-save-row"><span>${dirty ? "Unsaved changes" : "Saved"}</span><button class="secondary" data-action="cancel-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty && !retrying && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>Discard</button><button class="primary" data-action="save-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty && !this._loading && !this._refreshing && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>${retrying ? "Retry save" : "Save"}</button></div>` : `<p>Choose a control method in the device settings.</p>`}
         ${!planning ? `<small class="muted">${this._escape(device.statistic_id || "Equipment settings")}</small>` : ""}
       </div></details>`;
   }
@@ -1583,7 +1618,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         <nav class="workspace-list" aria-label="Device list">${filtered.map(item =>
           `<button type="button" data-action="edit-device" data-device-key="${this._escape(item.key)}"
             ${item.key === device?.key ? 'aria-current="true"' : ""}>${this._escape(item.name)}
-            ${this._deviceDirty(item.key) || this._roomDrafts?.has(item.key) ? "<small>Unsaved changes</small>" : item.included && item.mapping_status === "invalid" ? "<small>Needs setup</small>" : ""}</button>`).join("")}</nav>
+            ${this._deviceFormDirty(item.key) ? "<small>Unsaved changes</small>" : item.included && item.mapping_status === "invalid" ? "<small>Needs setup</small>" : ""}</button>`).join("")}</nav>
         <section class="workspace-detail" aria-label="Selected device">
         ${device ? `<header class="workspace-heading"><div><h2>${this._escape(device.name)}</h2>
           <p>${this._escape(this._label(device.category))} · ${this._escape(device.room_name || "No room")}</p></div>
@@ -1652,10 +1687,45 @@ class ShsEnergyConfigPanel extends HTMLElement {
         ${room ? `<div class="workspace-panel"><h3>Temperature probe</h3>
           <p>${this._escape(probe || "No room temperature probe shown")}</p>
           ${target ? `<button type="button" class="text" data-action="edit-field" data-field-token="${this._escape(target.token)}">Edit room temperature probe</button>` : ""}</div>
+          ${this._renderRoomConnections(room, rooms)}
           <div class="workspace-panel"><h3>Devices</h3>
           ${devices.length ? devices.map(device => `<button type="button" class="text" data-action="edit-device" data-device-key="${this._escape(device.key)}">${this._escape(device.name)}</button>`).join("") : "<p>No SHS devices in this room.</p>"}</div>`
           : "<p>No Home Assistant rooms found.</p>"}
       </section></div>`;
+  }
+
+  _availableDoorwayRooms(room) {
+    const connected = new Set((this._doorways || []).filter(connection => connection.rooms.includes(room)).flatMap(connection => connection.rooms));
+    return Object.keys(this._data.rooms || {}).filter(key => key !== room && !connected.has(key));
+  }
+
+  _renderRoomConnections(room, rooms) {
+    const names = this._data.rooms;
+    const available = this._availableDoorwayRooms(room);
+    const form = this._doorwayForm?.room === room ? this._doorwayForm : null;
+    const connections = (this._doorways || []).map(({rooms: pair, mode}, index) => {
+      if (!pair.includes(room)) return "";
+      const other = pair.find(key => key !== room);
+      if (!names[other]) return "";
+      return `<li><div><strong>${this._escape(names[other])}</strong><span class="muted">${DOORWAY_MODES[mode]}</span></div>
+        <button type="button" class="text" data-action="remove-doorway" data-index="${index}" aria-label="Remove doorway to ${this._escape(names[other])}">Remove</button></li>`;
+    }).filter(Boolean);
+    return `<details class="workspace-panel room-connections" data-open-key="room-connections" ${this._expanded.has("room-connections") ? "open" : ""}>
+      <summary>Room connections</summary>
+      <div class="section-head doorway-heading"><div><h3>Doorways</h3><p class="muted">Add doorways that let heat move between rooms.</p></div>
+        ${form ? "" : `<button type="button" class="secondary" data-action="open-doorway-form" data-room-key="${this._escape(room)}" ${available.length ? "" : "disabled"}>Add doorway</button>`}</div>
+      ${connections.length ? `<ul class="doorway-list">${connections.join("")}</ul>` : '<p class="muted">No doorways added.</p>'}
+      ${form ? `<div class="doorway-form"><div class="field-grid">
+        <label class="field">Connected room<select data-doorway-field="connectedRoom" data-field-key="doorway-room">
+          <option value="">Choose a room</option>${rooms.filter(([key]) => available.includes(key)).map(([key, name]) =>
+            `<option value="${this._escape(key)}" ${key === form.connectedRoom ? "selected" : ""}>${this._escape(name)}</option>`).join("")}
+        </select></label>
+        <label class="field">Doorway<select data-doorway-field="mode" data-field-key="doorway-mode">${Object.entries(DOORWAY_MODES).map(([mode, label]) =>
+          `<option value="${mode}" ${form.mode === mode ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
+        <div class="doorway-actions"><button type="button" class="primary" data-action="add-doorway" ${available.includes(form.connectedRoom) ? "" : "disabled"}>Add connection</button>
+        <button type="button" class="secondary" data-action="cancel-doorway">Cancel</button></div></div>` : ""}
+      <p class="muted">Preview only. Connections reset when you reload the app.</p>
+    </details>`;
   }
 
   _scheduleSlot(device, slot) {
@@ -2010,6 +2080,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       return;
     }
 
+    const hideGeneralActions = this._tab !== "energy" && !this._configurationDirty ? "hidden" : "";
     this.shadowRoot.innerHTML = `${this._styles()}
       <main class="shell">
         <header class="topbar">
@@ -2018,8 +2089,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
           <div class="toolbar">
             <button type="button" class="secondary" data-action="refresh" ${this._loading || this._refreshing || this._saving || this._savingDeviceKey ? "disabled" : ""}>${this._loading ? "Refreshing…" : "Refresh website choices"}</button>
             <button type="button" class="secondary" data-action="discover" ${this._loading || this._refreshing || this._saving || this._savingDeviceKey ? "disabled" : ""}>Review sources from HA Energy</button>
-            <button type="button" class="text" data-action="discard" ${this._dirty && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>Discard</button>
-            <button type="button" class="primary" data-action="save" ${this._configurationDirty && !this._refreshing && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>${this._saving ? "Saving…" : "Save changes"}</button>
+            <button type="button" class="secondary" data-action="discard" ${hideGeneralActions} ${this._dirty && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>Discard</button>
+            <button type="button" class="primary" data-action="save" ${hideGeneralActions} ${this._configurationDirty && !this._refreshing && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>${this._saving ? "Saving…" : "Save changes"}</button>
           </div>
         </header>
         <nav class="tabs" aria-label="Configuration sections">${TABS.map(([id, label]) => { const count = this._attentionForTab(id).length; return `<button type="button" data-action="tab" data-tab="${id}" class="${this._tab === id ? "active" : ""}${count ? " needs-attention" : ""}">${label}${this._attentionBadge(count)}</button>`; }).join("")}</nav>
@@ -2184,12 +2255,13 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .device-header-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:4px 12px; }
       .device-inclusion { display:inline-flex; flex:none; align-items:center; gap:8px; min-height:44px; cursor:pointer; }
       .device-inclusion:has(input:disabled) { cursor:default; }
-      .room-setting-actions { display:flex; flex-wrap:wrap; gap:6px; }
-      .room-setting-actions button { min-height:44px; }
       .device-fieldset { display: contents; }
-  .device-body { border-top:1px solid var(--divider-color); padding:22px; }
-      .device-save-row { display:flex; justify-content:flex-end; align-items:center; gap:16px; margin-top:24px; padding-top:18px; border-top:1px solid var(--divider-color); }
+      .device-body { border-top:1px solid var(--divider-color); padding:22px; }
+      .device-body > .choices:first-child { border-top:0; margin-top:0; padding-top:0; }
+      .device-save-row { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:12px; margin-top:24px; padding-top:18px; border-top:1px solid var(--divider-color); }
       .device-save-row span { color:var(--secondary-text-color); font-size:13px; }
+      .device-save-row button, .room-connections button { min-height:44px; }
+      button[data-action="cancel-device"]:enabled, button[data-action="discard"]:enabled { border-color:var(--primary-color); background:var(--secondary-background-color); }
       .inline-warning { padding:11px 13px; margin:10px 0; border-radius:9px; color:var(--warning-color); background:color-mix(in srgb, var(--warning-color) 10%, transparent); }
       .inline-error { display:flex; gap:10px; align-items:center; padding:11px 13px; margin:10px 0; border-radius:9px; color:var(--error-color); background:color-mix(in srgb, var(--error-color) 10%, transparent); }
       .inline-error span { flex:1; }
@@ -2233,6 +2305,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .workspace-panel { padding:14px; border:1px solid var(--divider-color); border-radius:10px; margin:10px 0; }
       .workspace-panel h3 { margin:0 0 8px; }
       .workspace-panel p { overflow-wrap:anywhere; }
+      .room-connections > summary { cursor:pointer; font-weight:600; padding-block:4px; }
+      .doorway-heading { flex-wrap:wrap; align-items:flex-start; margin-top:16px; }
+      .doorway-heading p { margin:0; }
+      .doorway-list { list-style:none; margin:12px 0; padding:0; }
+      .doorway-list li { display:flex; align-items:center; justify-content:space-between; gap:8px; border-top:1px solid var(--divider-color); }
+      .doorway-list li span { display:block; }
+      .doorway-form { padding:14px; border:1px solid var(--divider-color); border-radius:10px; background:var(--secondary-background-color); }
+      .doorway-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
       .workspace-card.card { border:0; padding:0; box-shadow:none; }
       @media (max-width:700px) {
         .settings-workspace { grid-template-columns:minmax(0,1fr); }
