@@ -80,7 +80,7 @@ test('links the selected room to the paired home on the test website', async ({p
   await expect(link).toHaveAttribute('href', 'https://test-smart-home-solutions.pages.dev/portal/energy-modeling?tab=comfort&home=00000000-0000-4000-8000-000000000001&room=greenhouse');
 });
 
-test('sets the room on the dashboard meter pair from the selected device', async ({page}) => {
+test('saves the dashboard meter pair from the inline room editor', async ({page}) => {
   const energy = 'sensor.water_boiler_energy';
   const power = 'sensor.water_boiler_power';
   let data: Record<string, any>;
@@ -113,26 +113,78 @@ test('sets the room on the dashboard meter pair from the selected device', async
   const editor = page.locator('shs-configuration-editor');
   await editor.getByRole('button', {name: 'Devices', exact: true}).click();
   const card = editor.locator('details.device-card').filter({hasText: 'Water boiler'});
-  const button = card.getByRole('button', {name: 'Room for Water boiler'});
-  const dialog = editor.getByRole('dialog', {name: 'Room for Water boiler'});
+  const room = card.getByRole('combobox', {name: 'Room', exact: true});
+  const saveRoom = card.getByRole('button', {name: 'Save room', exact: true});
   await expect(card).toContainText('Controls configured');
-  await button.click();
-  await expect(dialog).toContainText('different room assignments');
+  await expect(card).toContainText('different room assignments');
   await expect(card).toHaveAttribute('open', '');
-  await dialog.getByRole('button', {name: 'Cancel'}).click();
-  await expect(dialog).toHaveCount(0);
-  await expect(button).toBeFocused();
-  expect(writes).toBe(0);
-  await button.click();
-  const room = dialog.getByRole('combobox', {name: 'Room'});
-  await room.selectOption('laundry');
-  await dialog.getByRole('button', {name: 'Save room', exact: true}).click();
-  await expect(dialog.getByRole('alert')).toHaveText('Choose an existing Home Assistant room.');
+  await expect(card.getByRole('button', {name: 'Room for Water boiler'})).toHaveCount(0);
+  await expect(room).toHaveValue('');
+  await room.selectOption('garage');
+  await card.getByRole('button', {name: 'Cancel room change'}).click();
+  await expect(room).toHaveValue('');
   await expect(room).toBeFocused();
-  await dialog.getByRole('button', {name: 'Save room', exact: true}).click();
-  await expect(dialog).toHaveCount(0);
+  expect(writes).toBe(0);
+  const category = card.getByRole('combobox', {name: 'Category'});
+  await category.selectOption('heating');
+  await room.selectOption('laundry');
+  expect(writes).toBe(0);
+  await saveRoom.click();
+  await expect(card.getByRole('alert')).toHaveText('Choose an existing Home Assistant room.');
+  await expect(room).toHaveAttribute('aria-invalid', 'true');
+  await expect(room).toBeFocused();
+  await saveRoom.click();
+  await expect(saveRoom).toHaveCount(0);
   await expect(card.locator('summary')).toContainText('Laundry');
-  await expect(button).toBeFocused();
+  await expect(room).toHaveValue('laundry');
+  await expect(room).toBeFocused();
+  await expect(category).toHaveValue('heating');
+  await expect(card.getByRole('button', {name: 'Save controls'})).toBeEnabled();
+  await editor.getByRole('button', {name: 'View room'}).click();
+  await expect(editor.getByRole('heading', {name: 'Laundry'})).toBeVisible();
+});
+
+test('the device header switch shows the persisted inclusion state', async ({page}) => {
+  const key = 'sensor.example_load_energy';
+  let excluded = false;
+  let attempts = 0;
+  await page.route('**/api/configuration/get', async route => {
+    const data = await (await route.fetch()).json();
+    data.configuration.excluded_device_readings = excluded ? [key] : [];
+    data.devices = [{key, name: 'Example load', included: !excluded, category: 'household', mapping_status: 'ready'}];
+    await route.fulfill({json: data});
+  });
+  await page.route('**/api/configuration/save', async route => {
+    const {configuration} = route.request().postDataJSON();
+    expect(configuration).toEqual({excluded_device_readings: excluded ? [] : [key]});
+    if (++attempts === 1) {
+      await route.fulfill({status: 409, json: {message: 'Could not update device inclusion.'}});
+      return;
+    }
+    excluded = configuration.excluded_device_readings.includes(key);
+    await route.fulfill({json: {saved: true}});
+  });
+  await page.goto('./#settings');
+  const editor = page.locator('shs-configuration-editor');
+  await editor.getByRole('button', {name: 'Devices', exact: true}).click();
+  const summary = editor.locator('details.device-card > summary');
+  const toggle = summary.getByRole('switch', {name: 'Include Example load'});
+  await expect(toggle).toBeChecked();
+  await expect(summary.getByText('Included', {exact: true})).toBeVisible();
+  await toggle.press('Space');
+  await expect(editor.getByText('Could not update device inclusion.')).toBeVisible();
+  await expect(toggle).toBeChecked();
+  await expect(toggle).toBeFocused();
+  await summary.getByText('Included', {exact: true}).click();
+  await expect(summary.getByText('Excluded', {exact: true})).toBeVisible();
+  await expect(toggle).not.toBeChecked();
+  await expect(toggle).toBeEnabled();
+  await expect(editor.getByRole('checkbox', {name: 'Show excluded devices'})).toBeChecked();
+  await expect(editor.getByText(/Consumption stays in household totals/)).toBeVisible();
+  await toggle.press('Space');
+  await expect(summary.getByText('Included', {exact: true})).toBeVisible();
+  await expect(toggle).toBeChecked();
+  await expect.poll(() => attempts).toBe(3);
 });
 
 test('edits a category without writing until Save even when its room is read-only', async ({page}) => {
