@@ -20,7 +20,7 @@ import json
 from math import isfinite
 from typing import Any
 
-from .device_controls import mapped_planning_path
+from .device_controls import device_planning_path
 from .grid_capacity import power_setting_value
 
 QUARTER = timedelta(minutes=15)
@@ -34,7 +34,7 @@ def _entity(value: Any) -> str | None:
 
 
 def device_observation_entities(
-    devices: list[dict[str, Any]], mappings: dict[str, Any], pool_water_entity: str | None,
+    devices: list[dict[str, Any]], mappings: dict[str, Any],
 ) -> dict[str, dict[str, str]]:
     """``{device_key: {"setting": entity, "heat": entity}}`` for every pool or
     variable-power device that has either.
@@ -48,7 +48,7 @@ def device_observation_entities(
         mapping = mappings.get(str(device.get("key"))) if isinstance(mappings, dict) else None
         if not isinstance(mapping, dict):
             continue
-        pool = mapped_planning_path(device, mapping, pool_water_entity) == "pool"
+        pool = device_planning_path(device) == "pool"
         variable = (device.get("control_type") or mapping.get("control_type")) == "variable_power"
         if not (pool or variable):
             continue

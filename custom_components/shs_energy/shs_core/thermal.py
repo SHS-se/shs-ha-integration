@@ -41,7 +41,7 @@ from math import isfinite
 from statistics import median
 from typing import Any
 
-from .device_controls import mapped_planning_path
+from .device_controls import device_planning_path
 from .optimisation import quarter_start
 
 SLOT = timedelta(minutes=15)
@@ -464,8 +464,6 @@ def merge_thermal_slots(*batches: Iterable[dict[str, Any]]) -> list[dict[str, An
 def thermal_zone_inputs(
     devices: Sequence[dict[str, Any]],
     mappings: dict[str, Any],
-    *,
-    pool_water_entity: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Group website-selected thermal devices into Home Assistant rooms.
 
@@ -480,8 +478,7 @@ def thermal_zone_inputs(
     inputs: dict[str, dict[str, Any]] = {}
     for device in devices:
         control_type = device.get("control_type")
-        if mapped_planning_path(device, mappings.get(str(device["key"])) or {},
-                                pool_water_entity) != "room":
+        if device_planning_path(device) != "room":
             continue
         if device.get("planning_role") != "controllable":
             continue

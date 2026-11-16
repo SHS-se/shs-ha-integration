@@ -93,9 +93,7 @@ def _present(value: Any) -> bool:
 
 def is_room_thermal_control(control_type: str | None, category: str | None) -> bool:
     """Return whether one requested device belongs to a room heat model."""
-    return control_type == "setpoint" or (
-        control_type == "switch_schedule" and category in ("heating", "cooling")
-    )
+    return planning_path(control_type, category) == "room"
 
 
 def room_thermal_zones(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -117,31 +115,11 @@ def room_thermal_zones(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def planning_path(control_type: str | None, category: str | None) -> str | None:
-    """Return which planning model owns one controllable device.
-
-    This is the single authority on that routing. The app offers every
-    control method for every meter category, so a category never implies a
-    control contract: a pool-room floor heater metered as ``pool_heating`` but
-    asked to hold a setpoint belongs to its room's heat model, not to the pool
-    service. Callers that assumed the reverse turned one such pairing into a
-    whole-plan failure.
-
-    ``None`` means no model can plan the pairing, which keeps the meter in
-    base load instead of leaving it silently unscheduled.
-    """
-    if is_room_thermal_control(control_type, category):
+    """Route a device by its category and control method."""
+    if category == "pool_heating" and control_type in ("switch_schedule", "variable_power", "setpoint"):
+        return "pool"
+    if control_type == "setpoint" or (control_type == "switch_schedule" and category in ("heating", "cooling")):
         return "room"
-    if control_type == "switch_schedule" and category == "pool_heating":
-        return "pool"
-    # A heat pump with its own power dial is still the pool's heater. Without
-    # this pair the routing returned None the moment the customer chose that
-    # method, so the device stopped being a pool device mid-edit: the card lost
-    # its "Pool room" heading, fell through to the generic number contract, and
-    # the save failed with "this method is not supported for this device".
-    # Still a declared pair, never a category default — a pool-room floor heater
-    # metered as pool_heating is caught by the room rule above and stays there.
-    if control_type == "variable_power" and category == "pool_heating":
-        return "pool"
     if control_type == "permit_inhibit" and category == "hot_water":
         return "boiler"
     if control_type == "variable_power" and category == "ev_charging":
@@ -149,17 +127,7 @@ def planning_path(control_type: str | None, category: str | None) -> str | None:
     return None
 
 
-def mapped_planning_path(
-    device: dict[str, Any], mapping: dict[str, Any], pool_water_entity: str | None,
-) -> str | None:
-    """Resolve pool water heating by its sensor, not its room or meter name."""
-    if (
-        device.get("category") == "pool_heating"
-        and device.get("control_type") == "setpoint"
-        and pool_water_entity
-        and mapping.get("temperature_entity_id") == pool_water_entity
-    ):
-        return "pool"
+def device_planning_path(device: dict[str, Any]) -> str | None:
     return planning_path(device.get("control_type"), device.get("category"))
 
 
@@ -538,7 +506,7 @@ def apply_requested_configuration(
                 area_names,
                 entity_area_ids,
                 room_control=is_room_thermal_control(requested_control, category),
-                pool_control=mapped_planning_path({"category": category, "control_type": requested_control}, mappings.get(device["key"], {}), pool_water_entity) == "pool",
+                pool_control=planning_path(requested_control, category) == "pool",
                 pool_water_entity=pool_water_entity,
             ),
             reviewed_control,
@@ -668,7 +636,7 @@ def pool_control_errors(options, mapping=None, *, field_errors=None):
 def pool_control_mapping(options, devices):
     """Resolve the same physical owner as the pool card, without a second binding."""
     from .operating_modes import system_device_keys
-    owners = system_device_keys(devices, options)
+    owners = system_device_keys(devices)
     key = next((key for key, system in owners.items() if system == "pool"), None)
     return key, options.get("device_control_mappings", {}).get(key, {})
 

@@ -22,7 +22,7 @@ from .controller_metrics import ControllerMetrics, fingerprint, record_time
 from .battery_commands import validate_battery_command, battery_mode_key
 from .device_commands import actuator_targets, execution_setup_errors, slot_command
 from .hot_water import is_hot_water, heating_permission, hot_water_setup_errors, HotWaterConfigurationError
-from .device_controls import mapped_planning_path, pool_control_errors, pool_control_mapping, planning_path
+from .device_controls import device_planning_path, pool_control_errors, pool_control_mapping, planning_path
 from .device_controls import pool_requested_w, pool_permission
 from .heating_overrides import heating_binding, relay_heat, room_temperature
 
@@ -703,8 +703,8 @@ class DeviceOperations:
             return await self.pause_thermostat(device, options, targets[0])
         model = next(m for m in models if m["key"] == key)
         charge_setback = (target_c is None and kind == 'setpoint' and slot.get('charge_setback')
-            and targets[0].startswith('climate.') and model.get('category') in ('heating', 'pool_heating')
-            and mapped_planning_path(model, mapping, options.get('pool_water_temperature_entity')) == 'room')
+            and targets[0].startswith('climate.') and model.get('category') == 'heating'
+            and device_planning_path(model) == 'room')
         if record and (entity := record.get('heating_suspended')):
             state = self.actuator_state(entity)
             if state.state == 'off':

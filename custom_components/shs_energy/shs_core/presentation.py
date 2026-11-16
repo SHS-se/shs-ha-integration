@@ -5,7 +5,7 @@ import re
 from .optimisation import validate_plan_contract, OptimisationInputError
 from .configuration_fields import _configuration_sections, _control_fields, LABELS
 from .const import OPT_DEVICE_CATEGORY_OVERRIDES
-from .device_controls import planning_path, mapped_planning_path, battery_control_errors, pool_control_errors
+from .device_controls import planning_path, device_planning_path, battery_control_errors, pool_control_errors
 from .device_commands import execution_setup_errors, slot_command
 from .hot_water import FINISH_HEATING_W, is_hot_water, hot_water_setup_errors
 
@@ -138,8 +138,8 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         key = device.get("statistic_id") or device["key"]
         device["name"] = device_name(entity_names.get(key) or device.get("name") or key)
         device["room_name"] = area_names.get(device.get("mapping", {}).get("room_area_id")) or device.get("mapping_summary", {}).get("room_name") or "No room"
-    owners = system_device_keys(devices, options)
-    members = system_member_keys(devices, options)
+    owners = system_device_keys(devices)
+    members = system_member_keys(devices)
     category_overrides = options.get(OPT_DEVICE_CATEGORY_OVERRIDES, {})
     for system in ("ev", "pool"):
         category = {"ev": "ev_charging", "pool": "pool_heating"}[system]
@@ -247,9 +247,7 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
             "reason": "Inactive by operating mode" if mode in {"monitoring", "planning"} else reason or planning_reason}
         device["system_fields"] = system_fields(system) if system else []
         device["planning_fields"] = [field for field in device["system_fields"] if field["key"] in PLANNING_FIELDS]
-        device["planning_system"] = mapped_planning_path(
-            device, mapping, options.get("pool_water_temperature_entity")
-        )
+        device["planning_system"] = device_planning_path(device)
         # A pool member's card is the pool's contract too: its switch, power and
         # observed setting, whatever method the website shows.
         if system == "pool" or device["planning_system"] == "pool" or is_hot_water(device):

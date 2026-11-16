@@ -20,26 +20,24 @@ def device_mode(options, device):
     return mode
 
 
-def _system_candidates(devices, options):
+def _system_candidates(devices):
     """Each pool/EV system's devices, its actuator owner first."""
-    from .device_controls import mapped_planning_path
+    from .device_controls import device_planning_path
     result = {}
     for system in ("pool", "ev"):
-        candidates = [device for device in devices if mapped_planning_path(
-            device, device.get("mapping", options.get("device_control_mappings", {}).get(device["key"], {})),
-            options.get("pool_water_temperature_entity")) == system]
+        candidates = [device for device in devices if device_planning_path(device) == system]
         candidates.sort(key=lambda d: (d.get("control_type") != "setpoint", d["key"]))
         result[system] = candidates
     return result
 
 
-def system_device_keys(devices, options):
+def system_device_keys(devices):
     """The single card owning each physical pool/EV controller."""
     return {candidates[0]["key"]: system
-            for system, candidates in _system_candidates(devices, options).items() if candidates}
+            for system, candidates in _system_candidates(devices).items() if candidates}
 
 
-def system_member_keys(devices, options):
+def system_member_keys(devices):
     """Every Planned device a pool/EV system runs, keyed to that system.
 
     The planner sizes a system's service from all of its members and splits the
@@ -51,7 +49,7 @@ def system_member_keys(devices, options):
     the pump's share.
     """
     return {device["key"]: system
-            for system, candidates in _system_candidates(devices, options).items() for device in candidates
+            for system, candidates in _system_candidates(devices).items() for device in candidates
             if device.get("planning_role") == "controllable"}
 
 
@@ -115,7 +113,7 @@ def reconcile_admissions(options, devices, home):
     """
     result = deepcopy(options)
     excluded = set(options.get("excluded_device_readings", []))
-    owners = system_member_keys(devices, options)
+    owners = system_member_keys(devices)
     groups = {}
     for device in devices:
         if device["key"] in excluded or device.get("planning_role") != "controllable":

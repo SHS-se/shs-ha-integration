@@ -69,7 +69,7 @@ class CurrentConfigurationTests(unittest.TestCase):
         states = {'sensor.water': {'state': '29', 'attributes': {'unit_of_measurement': '°C'}},
                   'switch.pool': {'state': 'off', 'attributes': {}}}
         mapping = {'control_type': 'setpoint', 'actuator_entity_ids': ['switch.pool'],
-                   'power': 2000, 'temperature_entity_id': 'sensor.water',
+                   'power': 2000,
                    'setpoint_entity_id': 'number.obsolete', 'minimum_temperature_c': 24}
         saved = save_device(existing, 'pool', mapping,
             {'control_type': 'setpoint', 'category': 'pool_heating', 'name': 'Pool'}, states.get,
@@ -83,7 +83,7 @@ class CurrentConfigurationTests(unittest.TestCase):
         states = {'sensor.water': {'state': '29', 'attributes': {'unit_of_measurement': '°C'}},
                   'sensor.new_water': {'state': '28', 'attributes': {'unit_of_measurement': '°C'}},
                   'switch.pool': {'state': 'on', 'attributes': {}}}
-        for kind in ('variable_power', 'permit_inhibit', 'switch_schedule', 'setpoint'):
+        for kind in ('variable_power', 'switch_schedule', 'setpoint'):
             with self.subTest(kind=kind):
                 device = {'control_type': kind, 'category': 'pool_heating', 'system': 'pool', 'name': 'Pool'}
                 def save_pool(options, mapping):

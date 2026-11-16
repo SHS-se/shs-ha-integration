@@ -4,7 +4,7 @@ from . import const as shs_const
 from .configuration_schema import resolve_configuration
 from .configuration_fields import _control_fields
 from .discovery import suggest_device_control_mapping
-from .device_controls import apply_planner_support, mapping_report, is_room_thermal_control, mapped_planning_path, pool_mapping
+from .device_controls import apply_planner_support, mapping_report, is_room_thermal_control, device_planning_path, pool_mapping
 from .presentation import complete_device_views
 
 def execution_device_views(catalog, context, explicit, choices, coordinator, *, include_suggestions=True):
@@ -24,8 +24,7 @@ def execution_device_views(catalog, context, explicit, choices, coordinator, *, 
         control_type = (setup["control_type"] if setup else
                         device.get("control_type") or (mappings.get(device["key"]) or {}).get("control_type")) or ""
         saved = mappings.get(device["key"])
-        path = mapped_planning_path({**device, "control_type": control_type}, saved if isinstance(saved, dict) else {},
-                                    options.get("pool_water_temperature_entity"))
+        path = device_planning_path({**device, "control_type": control_type})
         if path == "pool":
             saved = pool_mapping(saved, control_type)
         saved_mapping = (
@@ -42,7 +41,7 @@ def execution_device_views(catalog, context, explicit, choices, coordinator, *, 
                 area_names,
                 entity_area_ids,
                 pool_water_entity=options.get("pool_water_temperature_entity"),
-                pool_control=mapped_planning_path(device, saved_mapping, options.get("pool_water_temperature_entity")) == "pool",
+                pool_control=path == "pool",
                 room_control=is_room_thermal_control(
                     control_type, str(device.get("category") or "")
                 ),

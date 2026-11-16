@@ -133,6 +133,7 @@ def _category_for_device(name: str) -> str:
     ):
         return "ev_charging"
     rules = (
+        ("heating", ("floor heater", "floor heating", "golvvärme")),
         ("pool_heating", ("pool", "bassäng")),
         (
             "hot_water",
@@ -156,7 +157,7 @@ def _category_for_device(name: str) -> str:
             ),
         ),
         ("cooling", ("aircon", "air conditioning", "cooling")),
-        ("heating", ("heater", "floor heating", "towel rack", "radiator")),
+        ("heating", ("heater", "towel rack", "radiator")),
         ("property_energy", ("ftx", "ventilation", "extractor fan")),
     )
     for category, tokens in rules:

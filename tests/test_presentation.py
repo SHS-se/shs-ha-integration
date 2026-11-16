@@ -248,8 +248,8 @@ class PresentationTests(unittest.TestCase):
         views = self.view(configured_keys=['pool_enabled'])
         self.assertEqual([d['key'] for d in views], ['sensor.laundry_energy', '$pool'])
 
-    def test_pool_category_room_heater_survives_a_home_without_pool(self):
-        self.device['category'] = 'pool_heating'
+    def test_recategorized_room_heater_survives_a_home_without_pool(self):
+        self.device['category'] = 'heating'
         self.assertEqual(self.view()[0]['key'], self.device['key'])
 
     def test_exclusion_keeps_setup_and_permission_but_clears_setup_warning(self):
@@ -297,10 +297,10 @@ class PresentationTests(unittest.TestCase):
         state = operational_status(None, 'live', [], self.now)
         self.assertEqual(timeline(None, state), {'slots': [], 'capabilities': {}, 'reason': 'Waiting for a plan'})
 
-    def test_excluded_pool_is_not_confused_with_a_room_heater_in_pool_category(self):
+    def test_excluded_pool_is_not_confused_with_a_room_heater(self):
         options = {'pool_enabled': True, 'pool_water_temperature_entity': 'sensor.pool'}
         meters = {'pool': {'category': 'pool_heating', 'planning_role': 'base_load', 'planning_choice_at': self.now.isoformat()},
-                  'floor': {'category': 'pool_heating', 'planning_role': 'controllable', 'control_type': 'setpoint'}}
+                  'floor': {'category': 'heating', 'planning_role': 'controllable', 'control_type': 'setpoint'}}
         self.assertEqual(unplanned_services(options, set(), meters), [])
 
     def test_real_exchange_preserves_choice_timestamps_and_clears_excluded_warnings(self):

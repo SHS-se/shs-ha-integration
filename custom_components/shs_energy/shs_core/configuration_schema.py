@@ -10,7 +10,7 @@ from .configuration_values import resolve_quantity
 from .device_commands import execution_setup_errors
 from . import const as c
 from .configuration_fields import _configuration_sections, _control_fields, section_fields, CONTROL_FIELDS, local_contract, mapping_keys
-from .device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_control_errors, mapped_planning_path
+from .device_controls import mapping_report, is_room_thermal_control, battery_control_errors, pool_control_errors, device_planning_path
 from .device_setup import DEVICE_SETUPS
 
 OPTION_FIELDS = {
@@ -36,8 +36,7 @@ def validate_mapping_keys(mapping, *, pool=False):
     control_type = mapping.get("control_type")
     if control_type not in MAPPING_KEYS:
         raise ValueError("unsupported control type")
-    # Pool mappings persist the shared water source as planner routing metadata,
-    # regardless of the device model's control type. It is not a device editor.
+    # Pool mappings may carry the shared water source, regardless of control type.
     allowed = MAPPING_KEYS[control_type] | ({"temperature_entity_id"} if pool else set())
     unknown = set(mapping) - allowed - RETIRED_MAPPING_KEYS
     if unknown:
@@ -324,12 +323,10 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
     kind = device["control_type"]
     if submitted.get("control_type") != kind:
         raise ValueError(f"{device['name']}: configuration belongs to a different control type")
-    pool = (device.get("system") == "pool" or device.get("planning_system") == "pool"
-            or mapped_planning_path(device, submitted, existing.get("pool_water_temperature_entity")) == "pool")
+    path = device_planning_path(device)
+    pool = path == "pool"
     validate_mapping_keys(submitted, pool=pool)
-    device = {**device, "planning_system": "pool" if pool else mapped_planning_path(device, submitted, existing.get("pool_water_temperature_entity"))}
-    if pool:
-        device = {**device, "system": "pool"}
+    device = {**device, "planning_system": path}
     mapping = {"control_type": kind}
     if stored.get(key, {}).get(ROOM_AREA_FIELD):
         mapping[ROOM_AREA_FIELD] = stored[key][ROOM_AREA_FIELD]
@@ -343,7 +340,7 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
         if errors:
             raise ValueError(f"{device['name']}: " + "; ".join(errors))
     if pool:
-        # Keep the existing planner's sensor routing metadata, never a writable target.
+        # Record the shared water sensor with the pool mapping.
         mapping["temperature_entity_id"] = existing.get("pool_water_temperature_entity")
         mapping.pop(ROOM_AREA_FIELD, None)
         errors = pool_control_errors(existing, mapping)

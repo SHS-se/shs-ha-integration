@@ -104,7 +104,7 @@ from .const import (
 from .device_controls import (
     apply_requested_configuration,
     battery_control_errors, battery_measurement_errors, BatteryMeasurementConfigurationError,
-    pool_control_errors, mapped_planning_path,
+    pool_control_errors, device_planning_path,
     is_room_thermal_control,
     mapping_report,
     planning_path,
@@ -1044,8 +1044,7 @@ class Household:
                     device.get("control_type"), device.get("category")
                 ),
                 pool_water_entity=self.resolved_options().get("pool_water_temperature_entity"),
-                pool_control=mapped_planning_path(device, active_mappings.get(device["key"], {}),
-                    self.resolved_options().get("pool_water_temperature_entity")) == "pool",
+                pool_control=device_planning_path(device) == "pool",
             )
             if is_hot_water(device):
                 fields = {}
@@ -1277,14 +1276,12 @@ class Household:
         )
         if not isinstance(active_mappings, dict):
             active_mappings = {}
-        from .device_controls import mapped_planning_path
         for device in prepared:
             if device["key"] in self.ports.options().get("excluded_device_readings", []):
                 continue
             mapping = active_mappings.get(device["key"], {})
             watts = self._mapped_power_w(mapping)
-            if watts is not None and not is_hot_water(device) and mapped_planning_path(
-                    device, mapping, self.resolved_options().get("pool_water_temperature_entity")) != "room":
+            if watts is not None and not is_hot_water(device) and device_planning_path(device) != "room":
                 device["active_power_w"] = round(watts, 1)
         from .configuration_schema import shared_devices
         return shared_devices(prepared, self.ports.options()) if included_only else prepared
@@ -1810,7 +1807,6 @@ class Household:
         self.pending_room_history = None
         zones = thermal_zone_inputs(
             shared_devices(devices, options), options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
-            pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
         )
         if start >= end:
             return []
@@ -2782,14 +2778,12 @@ class Household:
     def _device_observations(self, devices: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
         options = self.resolved_options()
         mappings = options.get(OPT_DEVICE_CONTROL_MAPPINGS, {})
-        return device_observation_entities(devices, mappings if isinstance(mappings, dict) else {},
-                                         options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY))
+        return device_observation_entities(devices, mappings if isinstance(mappings, dict) else {})
 
     def _weather_heating_bindings(self, devices):
         options = self.resolved_options()
         return weather_heating_bindings(
             devices, options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}), self.ports.read_state,
-            pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
         )
 
     def _device_statistics(self, devices):
@@ -2991,8 +2985,7 @@ class Household:
 
     async def _pool_capture_history(self, models, mappings, pool_state, captured):
         """Acquire electrical evidence independently of switch availability."""
-        pool_entity = pool_state["source_entity_ids"]["water_temperature"]
-        actuators = pool_heating_actuators(models, mappings, pool_water_entity=pool_entity)
+        actuators = pool_heating_actuators(models, mappings)
         history = await self.ports.history.states(
             captured - timedelta(hours=2), captured, sorted(actuators), with_attributes=False,
         ) if actuators else {}
@@ -3121,7 +3114,7 @@ class Household:
         device_profile_actuals = attributed_device_quarters(device_profile_actuals, learned_draws,
                                                              profile_start, profile_end)
         room_on_power = await capture_room_on_power(self.ports.history, devices, control_mappings,
-            profile_start, profile_end, pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
+            profile_start, profile_end,
             learned_draws=learned_draws)
         electrical_bounds = await self.ports.electrical_power_bounds(control_mappings)
         device_models, degraded_devices = build_device_models(
@@ -3133,7 +3126,6 @@ class Household:
             pool_power_w=electrical_bounds,
             room_on_power=room_on_power,
             local_tz=self.ports.home().timezone,
-            pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY),
             boiler_running_power_w=await self._boiler_running_power_w(
                 devices, control_mappings, profile_start, captured,
             ),
@@ -3364,7 +3356,6 @@ class Household:
                 "heating_running": pool_heating_running(
                     device_models, control_mappings,
                     lambda entity: getattr(self.ports.read_state(entity), "state", None),
-                    pool_water_entity=pool_entity,
                 ),
                 "source_entity_ids": {"water_temperature": pool_entity},
             }

@@ -30,7 +30,7 @@ from .configuration_values import resolve_battery_quantities, resolve_quantity
 from .device_commands import actuator_targets, execution_setup_errors, validate_commands
 from .hot_water import HotWaterConfigurationError
 from .grid_capacity import GridCapacityConfigurationError
-from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, mapped_planning_path, planning_path, pool_permission
+from .device_controls import battery_control_errors, pool_control_errors, pool_control_mapping, device_planning_path, planning_path, pool_permission
 
 _LOGGER = logging.getLogger(__name__)
 from .device_operations import (DeviceOperations, ControlObservationError, ActuatorUnavailableError,
@@ -501,7 +501,7 @@ class ScheduledController(DeviceOperations):
                 # System owners use the same identity selection as the panel.
                 for system in DEVICES:
                     if equipment_present(options, system, devices):
-                        if system not in system_device_keys(devices, options).values():
+                        if system not in system_device_keys(devices).values():
                             devices.append({"key": "$" + system, "system": system, "name": system})
                 rows, _unassigned = diagnostic_inventory(devices, [], options)
                 await self.verification.sample(options, rows, self.inputs.read,
@@ -580,7 +580,7 @@ class ScheduledController(DeviceOperations):
                 try:
                     requested = await self.coordinator.async_cached_device_configuration()
                     self.requested_types = {item["key"]: item.get("control_type") for item in requested}
-                    self.requested_systems = {mapped_planning_path(item, mappings.get(item["key"], {}), options.get("pool_water_temperature_entity")) for item in requested if item["key"] not in options.get("excluded_device_readings", [])}
+                    self.requested_systems = {device_planning_path(item) for item in requested if item["key"] not in options.get("excluded_device_readings", [])}
                     home = await self.coordinator.async_cached_home_configuration()
                     if home.get("battery", {}).get("included") is True:
                         self.requested_systems.add("battery")

@@ -15,7 +15,7 @@ import asyncio
 import logging
 
 from .device_commands import actuator_targets
-from .device_controls import mapped_planning_path
+from .device_controls import device_planning_path
 from .household_ports import ConfigurationChanged, HouseholdReadError
 
 _LOGGER = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ def _spans(entity, rows, end):
             for i, (at, value) in enumerate(changes)])
 
 
-def weather_heating_bindings(devices, mappings, read_state, *, pool_water_entity=None):
+def weather_heating_bindings(devices, mappings, read_state):
     """Identify dedicated reversible inverter thermostats using the existing mapping."""
     meters = Counter(m.get("power") for m in mappings.values()
                      if isinstance(m, dict) and isinstance(m.get("power"), str))
@@ -106,7 +106,7 @@ def weather_heating_bindings(devices, mappings, read_state, *, pool_water_entity
         mapping = mappings.get(key) or {}
         if (device.get("control_type") != "setpoint" or
                 device.get("load_type", device.get("suggested_load_type")) != "inverter" or
-                mapped_planning_path(device, mapping, pool_water_entity) != "room"):
+                device_planning_path(device) != "room"):
             continue
         targets = actuator_targets(mapping)
         power = mapping.get("power")
@@ -164,14 +164,14 @@ def room_on_power(*, conditions, power_means, actuator_rows, start, end):
     return result
 
 
-async def capture_room_on_power(history, devices, mappings, start, end, *, pool_water_entity=None,
+async def capture_room_on_power(history, devices, mappings, start, end, *,
                                 learned_draws=None):
     """Batch the existing history ports; numerical ownership stays in this module."""
     captured, conditions = {}, {}
     for device in devices:
         key = str(device["key"])
         mapping = mappings.get(key, {})
-        if mapped_planning_path(device, mapping, pool_water_entity) != "room":
+        if device_planning_path(device) != "room":
             continue
         power = mapping.get("power")
         if type(power) in (int, float) and isfinite(power) and power > 0:

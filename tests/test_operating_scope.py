@@ -230,7 +230,7 @@ class PoolMembershipTests(unittest.TestCase):
              'planning_choice_at': '2026-09-20T17:02:12.654464+00:00', 'control_type': 'variable_power'},
             {'key': 'sensor.pool_pump_energy', 'category': 'pool_heating', 'planning_role': 'controllable',
              'planning_choice_at': '2026-09-21T08:34:38.644113+00:00', 'control_type': 'switch_schedule'},
-            {'key': 'sensor.pool_room_floor_heater_energy', 'category': 'pool_heating', 'planning_role': 'base_load',
+            {'key': 'sensor.pool_room_floor_heater_energy', 'category': 'heating', 'planning_role': 'base_load',
              'planning_choice_at': '2026-09-16T11:26:32.634673+00:00', 'control_type': 'setpoint'},
             {'key': 'sensor.car_charging_total_energy', 'category': 'ev_charging', 'planning_role': 'controllable',
              'planning_choice_at': '2026-09-10T19:39:05.799467+00:00', 'control_type': 'variable_power'},
@@ -259,7 +259,7 @@ class PoolMembershipTests(unittest.TestCase):
 
     def test_the_heater_remains_the_only_actuator_the_pool_drives(self):
         from shs_core.device_controls import pool_control_mapping
-        self.assertEqual(system_device_keys(self.devices, self.options),
+        self.assertEqual(system_device_keys(self.devices),
                          {'sensor.pool_heater_energy': 'pool', 'sensor.car_charging_total_energy': 'ev'})
         key, mapping = pool_control_mapping(self.options, self.devices)
         self.assertEqual((key, mapping['actuator_entity_ids']), ('sensor.pool_heater_energy', ['switch.pool_heater']))

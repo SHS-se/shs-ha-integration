@@ -65,12 +65,12 @@ def daily(**meters: float) -> dict[str, dict[str, float]]:
 
 
 class PoolServiceTests(unittest.TestCase):
-    """The bug: a meter category never dictates the control contract."""
+    """Room heating and pool equipment have separate service membership."""
 
     pool_switch = device("sensor.pool_heater_energy", "pool_heating", "switch_schedule")
     pool_pump = device("sensor.pool_pump_energy", "pool_heating", "switch_schedule")
     pool_room = device(
-        "sensor.pool_room_floor_heater_energy", "pool_heating", "setpoint", watts=800
+        "sensor.pool_room_floor_heater_energy", "heating", "setpoint", watts=800
     )
     mappings = {
         "sensor.pool_heater_energy": {
@@ -119,13 +119,13 @@ class PoolServiceTests(unittest.TestCase):
             HORIZON, [heater, pump, floor], read_entity=lambda _: None, local_tz=timezone.utc,
         )
         self.assertEqual(services[0]["control"]["power_w"], 1920)
-        # A different temperature is a room, even with exactly the same category.
+        # Changing a sensor does not change which equipment the pool owns.
         mappings["water-heater"]["temperature_entity_id"] = "sensor.room_air"
         services, _, _ = build_services(
             {"pool_water_temperature_entity": "sensor.pool_water", "device_control_mappings": mappings},
             HORIZON, [heater, pump, floor], read_entity=lambda _: None, local_tz=timezone.utc,
         )
-        self.assertEqual(services[0]["control"]["power_w"], 764)
+        self.assertEqual(services[0]["control"]["power_w"], 1920)
 
     def test_a_setpoint_heater_in_the_pool_category_does_not_break_the_plan(
         self,
@@ -435,20 +435,19 @@ def complete_history(*keys: str, kwh: float = 0.25) -> list[dict[str, object]]:
 
 
 class DeviceModelTests(unittest.TestCase):
-    def test_pool_membership_is_exported_from_sensor_mapping_with_little_history(self):
+    def test_pool_membership_is_exported_from_category_and_method_with_little_history(self):
         devices = [inventory_device(key, "controllable", kind) for key, kind in
                    [("pump", "switch_schedule"), ("heater", "setpoint"), ("floor", "setpoint")]]
-        for item in devices:
-            item["category"] = "pool_heating"
-        mappings = {"heater": {"temperature_entity_id": "sensor.water"},
-                    "floor": {"temperature_entity_id": "sensor.floor"}}
+        for device in devices:
+            device["category"] = "heating" if device["key"] == "floor" else "pool_heating"
+        mappings = {"floor": {"temperature_entity_id": "sensor.floor"}}
         actuals = [{"start": start.isoformat(), "device_energy_kwh":
                     {"pump": .191, "heater": .289, "floor": .2}} for start in HORIZON[:4]]
         models, degraded = build_device_models(
             devices, actuals, HORIZON, mappings, mapped_power_w=lambda _: None,
             pool_power_w={"pump":764, "heater":1156},
             room_on_power={"floor":OnPowerEvidence(800,0,0,"configured")},
-            local_tz=timezone.utc, pool_water_entity="sensor.water",
+            local_tz=timezone.utc,
         )
         self.assertEqual(degraded, [])
         by_key = {model["key"]: model for model in models}

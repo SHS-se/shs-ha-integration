@@ -43,7 +43,7 @@ from .const import (
 from .const import (
     OPTIMISATION_PROFILE_DAYS,
 )
-from .device_controls import CONTROL_TYPES, planning_path, mapped_planning_path, pool_mapping
+from .device_controls import CONTROL_TYPES, planning_path, device_planning_path, pool_mapping
 from .optimisation import (
     OptimisationInputError,
     REMEDY_DEFECT,
@@ -91,15 +91,11 @@ def _positive_option(
 def pool_heating_actuators(
     models: list[dict[str, Any]],
     mappings: dict[str, Any],
-    *,
-    pool_water_entity: str | None = None,
 ) -> set[str]:
     """Native switches that together enable the pool's mapped heater."""
     entities: set[str] = set()
     for model in models:
-        if model.get("planning_role") != "controllable" or mapped_planning_path(
-            model, mappings.get(model["key"]) or {}, pool_water_entity
-        ) != "pool":
+        if model.get("planning_role") != "controllable" or device_planning_path(model) != "pool":
             continue
         mapping = mappings.get(model["key"], {})
         actuators = mapping.get("actuator_entity_ids", [])
@@ -110,9 +106,9 @@ def pool_heating_actuators(
     return entities
 
 
-def pool_heating_running(models, mappings, entity_state, *, pool_water_entity=None) -> bool | None:
+def pool_heating_running(models, mappings, entity_state) -> bool | None:
     """Whether the mapped heating switches are already enabled, never inferred from watts."""
-    entities = pool_heating_actuators(models, mappings, pool_water_entity=pool_water_entity)
+    entities = pool_heating_actuators(models, mappings)
     if not entities:
         return None
     states = [entity_state(entity) for entity in sorted(entities)]
@@ -330,15 +326,13 @@ def build_services(
     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
         """Return the models one planning model owns, with their mappings.
 
-        Selection is by control contract, never by meter category: the same
-        category may hold both a deferrable service and a room heater.
+        Selection uses the same category and control method as device setup.
         """
         if path in switched_off:
             return []
         pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for model in device_models:
-            if mapped_planning_path(model, raw_mappings.get(str(model["key"])) or {},
-                                    options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY)) != path:
+            if device_planning_path(model) != path:
                 continue
             control_type = model["control_type"]
             mapping = raw_mappings.get(str(model["key"]))
@@ -758,7 +752,6 @@ def build_device_models(
     pool_power_w: dict[str, float | None],
     room_on_power: dict[str, OnPowerEvidence],
     local_tz: tzinfo,
-    pool_water_entity: str | None = None,
     boiler_running_power_w: dict[str, float] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Build control models independently of historical profile readiness.
@@ -803,7 +796,7 @@ def build_device_models(
         # Named apart from the `mapped_power_w` reader deliberately: binding the
         # result to the reader's own name works for the first device and then
         # calls a float on the second.
-        path = mapped_planning_path(device, mapping, pool_water_entity)
+        path = device_planning_path(device)
         reviewed_power_w = mapped_power_w(
             mapping if isinstance(mapping, dict) else {}
         )
@@ -892,7 +885,7 @@ def build_operating_scope(options, devices, device_models, device_actuals, horiz
     """
     from .operating_modes import operating_mode_identity, system_member_keys
     from math import isfinite
-    owners = system_member_keys(devices, options)
+    owners = system_member_keys(devices)
     model_owners = {model["key"]: "$" + owners[model["key"]] if model["key"] in owners else model["key"]
                     for model in device_models}
     modes = operating_mode_identity(options, model_owners.values())

@@ -277,8 +277,8 @@ class ZoneInputTests(unittest.TestCase):
             "control_type": "setpoint", "temperature_entity_id": "sensor.water",
             "actuator_entity_ids": ["climate.pool"],
         }}
-        self.assertEqual(thermal_zone_inputs(devices, mappings, pool_water_entity="sensor.water"), {})
-        self.assertTrue(thermal_zone_inputs(devices, mappings, pool_water_entity="sensor.other"))
+        self.assertEqual(thermal_zone_inputs(devices, mappings), {})
+        self.assertTrue(thermal_zone_inputs([{**devices[0], "category": "heating"}], mappings))
 
     def test_reads_a_matching_setpoint_mapping(self) -> None:
         mappings = {

@@ -141,15 +141,10 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(planning_path("variable_power", "pool_heating"), "pool")
         self.assertEqual(planning_path("switch_schedule", "pool_heating"), "pool")
 
-    def test_the_room_rule_still_wins_for_a_pool_room_floor_heater(self):
-        """A category must never imply a control contract.
-
-        A floor heater metered as `pool_heating` but asked to hold a setpoint
-        belongs to its room's heat model. Assuming otherwise once turned a
-        single bad pairing into a whole-plan failure.
-        """
+    def test_setpoint_routes_by_category(self):
         from shs_core.device_controls import planning_path
-        self.assertEqual(planning_path("setpoint", "pool_heating"), "room")
+        self.assertEqual(planning_path("setpoint", "pool_heating"), "pool")
+        self.assertEqual(planning_path("setpoint", "heating"), "room")
         self.assertEqual(planning_path("switch_schedule", "heating"), "room")
 
     def test_no_other_meter_gains_a_pool_route(self):

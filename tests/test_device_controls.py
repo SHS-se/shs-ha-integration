@@ -192,10 +192,15 @@ class DeviceControlMappingTests(unittest.TestCase):
 
 
 class PlanningPathTests(unittest.TestCase):
-    def test_a_meter_category_never_dictates_the_control_contract(self) -> None:
-        # A floor heater metered as pool heating but asked to hold a setpoint
-        # belongs to its room, not to the pool service.
-        self.assertEqual(planning_path("setpoint", "pool_heating"), "room")
+    def test_floor_heat_in_a_pool_room_is_discovered_as_heating(self) -> None:
+        from shs_core.discovery import _category_for_device
+        self.assertEqual(_category_for_device("Pool room floor heater"), "heating")
+        self.assertEqual(_category_for_device("Pool heater"), "pool_heating")
+        self.assertEqual(_category_for_device("Pool pump"), "pool_heating")
+
+    def test_planning_path_uses_category_and_method(self) -> None:
+        self.assertEqual(planning_path("setpoint", "pool_heating"), "pool")
+        self.assertEqual(planning_path("setpoint", "heating"), "room")
         self.assertEqual(planning_path("switch_schedule", "pool_heating"), "pool")
         self.assertEqual(planning_path("switch_schedule", "heating"), "room")
         self.assertEqual(planning_path("permit_inhibit", "hot_water"), "boiler")
@@ -209,7 +214,7 @@ class PlanningPathTests(unittest.TestCase):
     def test_a_setpoint_pool_room_heater_stays_ready(self) -> None:
         devices = [{
             "key": "sensor.pool_room_floor_heater_energy",
-            "category": "pool_heating",
+            "category": "heating",
             "suggested_load_type": "fixed_full_load",
         }]
         requested = {

@@ -39,7 +39,7 @@ def diagnostic_inventory(devices, meters, options):
     rows = {row["key"]: {**deepcopy(row), "inventory_origin": "device_inventory"} for row in devices}
     for meter in meters:
         rows.setdefault(meter["key"], {**deepcopy(meter), "inventory_origin": "meter_inventory"})
-    owners = {**system_member_keys(list(rows.values()), options), **system_device_keys(list(rows.values()), options)}
+    owners = {**system_member_keys(list(rows.values())), **system_device_keys(list(rows.values()))}
     excluded = set(options.get("excluded_device_readings", []))
     for key, row in rows.items():
         identity = row.get("permission", {}).get("controller_id") or row.get("system") or owners.get(key) or "device:" + key

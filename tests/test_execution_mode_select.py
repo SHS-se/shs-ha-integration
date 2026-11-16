@@ -269,7 +269,6 @@ class SelectTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_schedule_view_removes_website_monitoring_and_local_exclusion(self):
         from shs_core.presentation import complete_device_views
-        from shs_core.device_controls import apply_planner_support, mapping_report, is_room_thermal_control, mapped_planning_path
         from shs_core.configuration_fields import _control_fields
         from test_device_controls import _battery
         r=Rig();r.entry.options.update(_battery())

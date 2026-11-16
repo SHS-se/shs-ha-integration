@@ -288,7 +288,7 @@ def planning_path_of(device: dict[str, Any]) -> str | None:
     """The planning service this card is being drawn for.
 
     Read, never re-derived. Callers set `planning_system` from
-    `mapped_planning_path`, which is the single routing authority, and `system`
+    `device_planning_path`, which is the single routing authority, and `system`
     is that same answer already resolved for the system cards.
     """
     for key in ("planning_system", "system"):

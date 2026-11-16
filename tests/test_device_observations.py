@@ -76,11 +76,11 @@ class EntityTests(unittest.TestCase):
             "pump": {"power_setting_entity_id": "number.pump"},
             "floor": {"power_setting_entity_id": "number.floor"},
         }
-        self.assertEqual(device_observation_entities(self.devices, mappings, None), {
+        self.assertEqual(device_observation_entities(self.devices, mappings), {
             "heater": {"setting": "number.nibe", "heat": "sensor.heat"},
             "pump": {"setting": "number.pump"},
         })
-        self.assertEqual(device_observation_entities(self.devices, {"pump": {"power_setting_entity_id": ""}}, None), {})
+        self.assertEqual(device_observation_entities(self.devices, {"pump": {"power_setting_entity_id": ""}}), {})
 
     def test_every_variable_power_device_is_observed_at_its_own_control(self):
         """A charger's current, or a heat pump's output dial, is its setting."""
@@ -98,12 +98,12 @@ class EntityTests(unittest.TestCase):
             "pool_pump": {"control_type": "variable_power", "control_entity_id": "number.ignored"},
             "relay": {"control_type": "switch_schedule", "heat_energy_entity_id": "sensor.not_variable"},
         }
-        self.assertEqual(device_observation_entities(devices, mappings, None), {
+        self.assertEqual(device_observation_entities(devices, mappings), {
             "charger": {"setting": "number.charger_current"},
             "heat_pump": {"setting": "number.output", "heat": "sensor.produced_heat"},
         })
         mappings["heat_pump"]["power_setting_entity_id"] = "number.own_dial"
-        self.assertEqual(device_observation_entities(devices, mappings, None)["heat_pump"]["setting"], "number.own_dial")
+        self.assertEqual(device_observation_entities(devices, mappings)["heat_pump"]["setting"], "number.own_dial")
 
     def test_signature_follows_what_is_observed(self):
         one = {"heater": {"setting": "number.nibe"}}

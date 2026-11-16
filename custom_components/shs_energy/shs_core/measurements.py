@@ -32,7 +32,7 @@ from .const import (
     OPT_POOL_STOP_TEMPERATURE_ENTITY,
     OPT_POOL_WATER_TEMPERATURE_ENTITY,
 )
-from .device_controls import mapped_planning_path
+from .device_controls import device_planning_path
 
 UNREADABLE = frozenset({"unknown", "unavailable"})
 POOL_WATER_RANGE_C = (-5.0, 60.0)
@@ -156,12 +156,11 @@ def _battery(readings: _Readings, options: dict[str, Any]) -> None:
 def _vehicle(readings: _Readings, options: dict[str, Any], devices: list[dict[str, Any]],
              known_capacity_kwh: float | None) -> None:
     mappings = options.get("device_control_mappings") or {}
-    pool_entity = options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY)
     for control in sorted({
         str((mappings.get(device["key"]) or {}).get("control_entity_id") or "")
         for device in devices
         if device.get("planning_role") == "controllable"
-        and mapped_planning_path(device, mappings.get(device["key"]) or {}, pool_entity) == "ev"
+        and device_planning_path(device) == "ev"
     } - {""}):
         readings.state("ev", "charge_current", control, "charging current control")
     connected = readings.state("ev", "connected", options.get(OPT_EV_CONNECTED_ENTITY), "cable connection")
