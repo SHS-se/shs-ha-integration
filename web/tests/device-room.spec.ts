@@ -1,5 +1,17 @@
 import {expect, test} from '@playwright/test';
 
+test('links the selected room to the paired home on the test website', async ({page}) => {
+  await page.route('**/api/configuration/get', async route => {
+    const data = await (await route.fetch()).json();
+    await route.fulfill({json: {...data, rooms: {greenhouse: 'Greenhouse'}}});
+  });
+  await page.goto('./#settings');
+  const editor = page.locator('shs-configuration-editor');
+  await editor.getByRole('button', {name: 'Rooms', exact: true}).click();
+  const link = editor.getByRole('link', {name: 'Edit comfort on website'});
+  await expect(link).toHaveAttribute('href', 'https://test-smart-home-solutions.pages.dev/portal/energy-modeling?tab=comfort&home=00000000-0000-4000-8000-000000000001&room=greenhouse');
+});
+
 test('sets the room on the dashboard meter pair from the selected device', async ({page}) => {
   const energy = 'sensor.water_boiler_energy';
   const power = 'sensor.water_boiler_power';

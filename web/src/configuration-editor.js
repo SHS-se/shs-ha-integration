@@ -1549,8 +1549,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
       location.field.key === "temperature_entity_id" && devices.some(device => device.key === location.deviceKey));
     const probe = target && (this._mapping(target.deviceKey)?.temperature_entity_id
       || devices.find(device => device.key === target.deviceKey)?.mapping?.temperature_entity_id);
-    const comfort = room && this._data.website_url ? new URL(this._data.website_url) : null;
-    if (comfort) comfort.search = new URLSearchParams({tab: "comfort", room}).toString();
+    const comfort = room && this._data.comfort_website_url ? new URL(this._data.comfort_website_url) : null;
+    if (comfort) comfort.searchParams.set("room", room);
     return `<div class="settings-workspace">
       <nav class="workspace-list" aria-label="Room list">${rooms.map(([key, label]) =>
         `<button type="button" data-action="open-room" data-room-key="${this._escape(key)}"

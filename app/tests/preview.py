@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "app"), str(ROOT / "custom_components/shs_energy")]
 from shs_app.server import create_app
 from shs_app.profiling import AppProfiler
+from shs_app.backends import URLS
+from shs_app.configuration_view import comfort_website_url
 from shs_core.app_projection import schedule
 from shs_core.configuration_fields import _configuration_sections, device_field_catalog, LABELS
 from shs_core.const import DEVICE_CATEGORIES
@@ -26,6 +28,7 @@ entry = {"id": "test-home", "title": "Test home", "state": "loaded", "operation"
 parser = argparse.ArgumentParser(description="Preview the SHS app with sample data")
 parser.add_argument("--devices", action="store_true", help="Show the sample device workspace")
 parser.add_argument("--port", type=int, default=8098)
+parser.add_argument("--home-id", default="00000000-0000-4000-8000-000000000001", help="Test website home for the comfort link")
 preview = parser.parse_args()
 app_version = json.loads((ROOT / "web/package.json").read_text())["version"] if preview.devices else "0.1.0-beta.1"
 
@@ -106,6 +109,7 @@ class Editor:
             device_field_catalog=device_field_catalog(),
             sections=_configuration_sections(),devices=devices,entities=self.preview_entities(),
             rooms={ROOM: "Guest Room", "laundry": "Laundry"} if preview.devices else {},
+            comfort_website_url=comfort_website_url(URLS['test'], preview.home_id),
 
             entry=dict(entry_id='test-home',title='Test home',state='loaded'),attention=attention,readiness={},thermal={},
             portal=dict(status='synchronised'),operation=entry['operation'],diagnostics={},meter_inventory=[],
