@@ -1,5 +1,73 @@
 import {expect, test} from '@playwright/test';
 
+test('shows device meters once and keeps standalone meter edits safe to save', async ({page}) => {
+  const heater = 'sensor.synthetic_heater_energy';
+  const cooler = 'sensor.synthetic_cooler_energy';
+  const appliance = 'sensor.synthetic_appliance_energy';
+  const standalone = 'sensor.synthetic_standalone_energy';
+  const grid = 'sensor.synthetic_grid_energy';
+  const configuration = {
+    entities_heating: [heater], entities_cooling: [cooler],
+    entities_household: [appliance, standalone], entities_grid_import: [grid],
+  };
+  let saves = 0;
+  await page.route('**/api/configuration/get', async route => {
+    const data = await (await route.fetch()).json();
+    const meter = (id: string, name: string, category: string, included = true) => ({
+      key: id, statistic_id: id, name, category, included,
+      mapping_status: 'not_configured', meter_room: {meters: [id], editable: true},
+    });
+    await route.fulfill({json: {
+      ...data,
+      configuration: {...data.configuration, ...configuration},
+      devices: [meter(heater, 'Example heater', 'heating'), meter(cooler, 'Example cooler', 'cooling', false),
+        meter(appliance, 'Example appliance', 'household')],
+    }});
+  });
+  await page.route('**/api/configuration/save', async route => {
+    const patch = route.request().postDataJSON().configuration;
+    if (++saves === 1) expect(patch).toEqual({entities_grid_import: [grid, 'sensor.synthetic_second_grid_energy']});
+    else expect(patch).toEqual({entities_household: [appliance]});
+    Object.assign(configuration, patch);
+    await route.fulfill({json: {saved: true, refreshing: false}});
+  });
+  await page.route('**/api/configuration/discover', route => route.fulfill({json: {
+    configuration: {...configuration, entities_heating: []},
+  }}));
+  await page.goto('./#settings');
+  const editor = page.locator('shs-configuration-editor');
+  const card = editor.locator('details[data-open-key="section:metering"]');
+  await card.locator('summary').first().click();
+  await expect(card.getByRole('button', {name: `Remove ${grid}`, exact: true})).toBeVisible();
+  await expect(card.getByRole('button', {name: `Remove ${standalone}`, exact: true})).toBeVisible();
+  await expect(card.getByText(/Heating energy|Cooling energy/)).toHaveCount(0);
+  await expect(card.getByRole('button', {name: `Remove ${appliance}`, exact: true})).toHaveCount(0);
+  const readings = editor.locator('details').filter({has: page.locator('summary', {hasText: 'Current readings'})});
+  await readings.locator('summary').click();
+  await expect(readings.getByText(standalone, {exact: true})).toBeVisible();
+  for (const id of [appliance, cooler, heater]) await expect(readings.getByText(id, {exact: true})).toHaveCount(0);
+
+  await card.getByRole('combobox', {name: 'Add Grid import'}).fill('sensor.synthetic_second_grid_energy');
+  await card.locator('button[data-action="add-multi"][data-field-key="entities_grid_import"]').click();
+  await editor.getByRole('button', {name: 'Save changes'}).click();
+  await expect.poll(() => saves).toBe(1);
+  await card.getByRole('button', {name: 'Remove Household energy', exact: true}).click();
+  await editor.getByRole('button', {name: 'Save changes'}).click();
+  await expect.poll(() => saves).toBe(2);
+  expect(configuration.entities_heating).toEqual([heater]);
+  expect(configuration.entities_cooling).toEqual([cooler]);
+
+  await editor.getByRole('button', {name: 'Review sources from HA Energy'}).click();
+  await expect(editor.getByText('Device meters added: 0, removed: 1')).toBeVisible();
+  await expect(editor.getByText(heater, {exact: true})).toHaveCount(0);
+  await editor.getByRole('button', {name: 'Discard', exact: true}).click();
+  expect(saves).toBe(2);
+  await editor.getByRole('button', {name: 'Devices', exact: true}).click();
+  await editor.getByRole('button', {name: 'Example heater', exact: true}).click();
+  await editor.getByRole('button', {name: 'Measurements', exact: true}).click();
+  await expect(editor.getByText(`Energy meter · ${heater}`, {exact: true})).toBeVisible();
+});
+
 test('links the selected room to the paired home on the test website', async ({page}) => {
   await page.route('**/api/configuration/get', async route => {
     const data = await (await route.fetch()).json();

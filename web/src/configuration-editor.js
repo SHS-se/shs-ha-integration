@@ -150,6 +150,36 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .filter(f => !owned.has(f.key) && !f.key.endsWith("_control_enabled"));
   }
 
+  _deviceMeterIds() {
+    return new Set((this._data.devices || []).filter(device => device.meter_room).map(device => device.statistic_id));
+  }
+
+  _isIndividualMeterField(key) {
+    return (this._data.device_categories || []).some(category => key === `entities_${category}`);
+  }
+
+  _energyValue(key, value, deviceMeters) {
+    return this._isIndividualMeterField(key) && Array.isArray(value)
+      ? value.filter(id => !deviceMeters.has(id)) : value;
+  }
+
+  _energySourceSections() {
+    return this._data.sections.filter(section => section.tab === "energy" && section.id !== "sharing");
+  }
+
+  _energySections(deviceMeters) {
+    const deviceCategories = new Set((this._data.devices || []).filter(device => device.meter_room).map(device => `entities_${device.category}`));
+    return this._energySourceSections().map(section => {
+      if (section.id !== "metering") return section;
+      const fields = section.fields.filter(({key}) => {
+        if (!this._isIndividualMeterField(key)) return true;
+        const meters = [this._savedDraft[key], this._draft[key]].flatMap(value => Array.isArray(value) ? value : []);
+        return meters.some(id => !deviceMeters.has(id)) || (!meters.length && !deviceCategories.has(key));
+      });
+      return {...section, fields, description: "Whole-home and standalone energy meters. Individual Energy Dashboard meters are listed under Devices."};
+    });
+  }
+
   _patch(fields) {
     return Object.fromEntries(fields.filter(f => JSON.stringify(this._draft[f.key]) !== JSON.stringify(this._savedDraft[f.key]))
       .map(f => [f.key, this._draft[f.key] ?? null]));
@@ -492,7 +522,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         action: "discover",
         config_entry: this._entryId,
       });
-      const sources = this._data.sections.filter(s => s.tab === "energy" && s.id !== "sharing").flatMap(s => s.fields);
+      const sources = this._energySourceSections().flatMap(s => s.fields);
       for (const field of sources) {
         if (JSON.stringify(this._draft[field.key]) !== JSON.stringify(this._savedDraft[field.key])) continue;
         if (field.key in result.configuration) this._draft[field.key] = this._clone(result.configuration[field.key]);
@@ -591,7 +621,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _removeField(scope, key, deviceKey = "") {
     const target = scope === "mapping" ? this._mapping(deviceKey, true) : this._draft;
-    target[key] = null;
+    const deviceMeters = scope === "configuration" && this._isIndividualMeterField(key) ? this._deviceMeterIds() : null;
+    const retained = deviceMeters && Array.isArray(target[key]) ? target[key].filter(id => deviceMeters.has(id)) : [];
+    target[key] = retained.length ? retained : null;
     if (scope === "configuration" && key === "battery_mode_entity") {
       for (const mode of ["charge", "discharge", "idle", "baseline"]) {
         target[`battery_mode_${mode}`] = null;
@@ -606,6 +638,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _addMulti(scope, key, value, deviceKey) {
     const entityId = String(value || "").trim();
     if (!entityId) return;
+    if (scope === "configuration" && this._isIndividualMeterField(key) && this._deviceMeterIds().has(entityId)) {
+      this._notice = "This meter is already listed under Devices.";
+      this._render();
+      return;
+    }
     const target = scope === "mapping" ? this._mapping(deviceKey, true) : this._draft;
     const current = Array.isArray(target[key]) ? [...target[key]] : [];
     if (!current.includes(entityId)) current.push(entityId);
@@ -898,8 +935,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
       for (const section of ["controls", "planning"]) for (const field of this._systemFields(device, section)) add(field, "configuration", device.key, "devices", section + ":" + device.key, this._deviceTitle(device, section));
     }
     const owned = new Set(locations.filter(l => l.scope === "configuration").map(l => l.field.key));
-    for (const section of this._data?.sections || []) for (const field of section.fields) {
-      if (!owned.has(field.key)) add(field, "configuration", "", section.id === "electrical_limits" ? "schedule" : section.tab, "section:" + section.id);
+    const metering = this._data?.sections && this._energySections(this._deviceMeterIds()).find(section => section.id === "metering");
+    for (const section of this._data?.sections || []) {
+      const fields = section.id === "metering" && metering ? metering.fields : section.fields;
+      for (const field of fields) {
+        if (!owned.has(field.key)) add(field, "configuration", "", section.id === "electrical_limits" ? "schedule" : section.tab, "section:" + section.id);
+      }
     }
     return locations;
   }
@@ -907,9 +948,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _fieldTargets(item) {
     const fix = item.fix || {};
     const configuration = this._data.configuration || this._savedDraft || {};
+    const deviceMeters = this._deviceMeterIds();
     return this._fieldLocations().flatMap(location => {
       const match = fix.fields?.find(target => target.key === location.field.key && (target.scope || "configuration") === location.scope && (!target.device_key || target.device_key === location.deviceKey));
-      const value = location.scope === "mapping" ? configuration.device_control_mappings?.[location.deviceKey]?.[location.field.key] : configuration[location.field.key];
+      const value = location.scope === "mapping" ? configuration.device_control_mappings?.[location.deviceKey]?.[location.field.key]
+        : this._energyValue(location.field.key, configuration[location.field.key], deviceMeters);
       const entityMatches = fix.kind === "entity" && fix.entity_id && (value === fix.entity_id || (Array.isArray(value) && value.includes(fix.entity_id)));
       return match || entityMatches ? [{ ...location, message: match?.message || item.items?.join("; ") || item.detail, issue: item }] : [];
     });
@@ -1318,10 +1361,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<div class="field-grid">${visible.join("")}</div>${optional.length ? `<details class="compact" data-open-key="optional:${this._escape(scope + deviceKey + fields[0]?.key)}"><summary>Add a setting</summary>${optional.join("")}</details>` : ""}`;
   }
 
-  _renderSection(section) {
+  _renderSection(section, values = this._draft) {
     const fields = section.fields;
-    const summary = fields.filter(f => this._present(this._draft[f.key])).map(f => {
-      const value = this._draft[f.key];
+    const summary = fields.filter(f => this._present(values[f.key])).map(f => {
+      const value = values[f.key];
       return Array.isArray(value) ? `${f.label}: ${value.length}` : f.label;
     }).join(" · ") || "No settings configured";
     const issueCount = fields.filter(f => this._fieldProblems(f.key).length).length;
@@ -1329,26 +1372,47 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<details class="card compact" data-open-key="${id}" ${this._expanded.has(id) ? "open" : ""}>
       <summary>${this._escape(section.title)}<span class="badge warning" data-field-count ${issueCount ? "" : "hidden"}>${issueCount} field${issueCount === 1 ? "" : "s"} need${issueCount === 1 ? "s" : ""} attention</span><span>${this._escape(summary)}</span></summary>
       ${section.description ? `<p class="description">${this._escape(section.description)}</p>` : ""}
-      ${this._fields(fields, this._draft)}
+      ${this._fields(fields, values)}
     </details>`;
   }
 
   _renderEnergy() {
-    const sections = this._data.sections.filter(s => s.tab === "energy" && s.id !== "sharing");
-    const changes = this._patch(sections.flatMap(s => s.fields));
+    const deviceMeters = this._deviceMeterIds();
+    const sections = this._energySections(deviceMeters);
+    const values = Object.fromEntries(sections.flatMap(s => s.fields).map(({key}) => [key, this._energyValue(key, this._draft[key], deviceMeters)]));
     const selected = sections.flatMap(s => s.fields).flatMap(field => {
-      const value = this._draft[field.key];
+      const value = values[field.key];
       return (Array.isArray(value) ? value : typeof value === "string" && value.includes(".") ? [value] : [])
         .map(id => ({ field, id, entity: this._data.entities.find(e => e.entity_id === id) }));
     });
     return `<div class="page-intro"><h2>Energy shared with SHS</h2><p>Daily energy totals, completed 15-minute readings, device profiles and room temperatures help SHS predict demand. Devices remain counted within the household total.</p></div>
-      ${this._discovery ? `<section class="card"><h2>Review proposed source changes</h2>${Object.keys(changes).length ? `<ul>${Object.entries(changes).map(([key, value]) => {
-        const field = sections.flatMap(s => s.fields).find(f => f.key === key);
-        return `<li><strong>${this._escape(field?.label || "Source")}</strong>: ${this._escape(JSON.stringify(this._savedDraft[key] ?? []))} → ${this._escape(JSON.stringify(value))}</li>`;
-      }).join("")}</ul>` : "No source changes proposed."}<p>Save changes to apply, or Cancel to retain your current sources.</p></section>` : ""}
-      ${sections.map(s => this._renderSection(s)).join("")}
+      ${this._discovery ? this._renderSourceReview(deviceMeters) : ""}
+      ${sections.map(s => this._renderSection(s, values)).join("")}
       <p class="muted">Planning weather and location use the installation address saved on the SHS website.</p>
       <details class="card compact"><summary>Current readings · ${selected.length} selected sources</summary><div class="table-wrap"><table><thead><tr><th>Source</th><th>Used for</th><th>Reading</th><th>Last update</th><th>Selected in</th></tr></thead><tbody>${selected.map(({ field, entity, id }) => `<tr><td>${this._escape(entity?.name || id)}</td><td>${this._escape(field.label)}</td><td>${this._escape(entity ? `${entity.state} ${entity.unit || ""}` : "Unavailable")}</td><td>${this._time(entity?.last_updated)}</td><td>${this._data.configured_keys?.includes(field.key) ? "SHS configuration" : "HA Energy / discovery"}</td></tr>`).join("")}</tbody></table></div></details>`;
+  }
+
+  _renderSourceReview(deviceMeters) {
+    const fields = this._energySourceSections().flatMap(s => s.fields);
+    const changes = this._patch(fields);
+    const rows = fields.filter(({key}) => key in changes).map(({key, label}) => {
+      const before = this._savedDraft[key] ?? [];
+      const after = changes[key];
+      const oldVisible = JSON.stringify(this._energyValue(key, before, deviceMeters));
+      const newVisible = JSON.stringify(this._energyValue(key, after ?? [], deviceMeters));
+      const details = [];
+      if (oldVisible !== newVisible) details.push(`${oldVisible} → ${newVisible}`);
+      if (this._isIndividualMeterField(key)) {
+        const oldMeters = Array.isArray(before) ? before : [];
+        const newMeters = Array.isArray(after) ? after : [];
+        const added = newMeters.filter(id => deviceMeters.has(id) && !oldMeters.includes(id)).length;
+        const removed = oldMeters.filter(id => deviceMeters.has(id) && !newMeters.includes(id)).length;
+        if (added || removed) details.push(`Device meters added: ${added}, removed: ${removed}`);
+      }
+      if (!details.length) return "";
+      return `<li><strong>${this._escape(label)}</strong> · ${this._escape(details.join(" · "))}</li>`;
+    }).filter(Boolean);
+    return `<section class="card"><h2>Review proposed source changes</h2>${rows.length ? `<ul>${rows.join("")}</ul>` : "No source changes proposed."}<p>Save changes to apply, or Discard to retain your current sources.</p></section>`;
   }
 
   async _saveInclusion() {
