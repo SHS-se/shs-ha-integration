@@ -204,12 +204,14 @@ EV_CHARGE_EFFICIENCY = 0.92
 DEFAULT_EV_KWH_PER_KM = 0.16
 
 OPTIMISATION_ACTUAL_BACKFILL_HOURS = 72
+# Wire limit for a single electrical actuals upload, including older resends.
+MAX_ACTUAL_SLOTS_PER_PUSH = 288
 # Electrical quarters behind the accepted watermark are re-offered for this
 # long, so a quarter whose statistics settled late is filled rather than lost.
 OPTIMISATION_ACTUAL_RESWEEP_HOURS = 2
 # A changed observation (a newly named power setting or heat meter, or a
-# corrected upload) is sent again for the retained quarters, one backfill-sized
-# stretch per exchange, as far back as the website accepts history: eight days,
+# corrected upload) is sent again for the retained quarters using space left
+# in each exchange, as far back as the website accepts history: eight days,
 # less an hour for the time an exchange takes to arrive.
 OPTIMISATION_HISTORY_RESEND_HOURS = 8 * 24 - 1
 OPTIMISATION_PROFILE_DAYS = 10

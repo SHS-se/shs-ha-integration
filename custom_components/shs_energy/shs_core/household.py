@@ -55,6 +55,7 @@ from .const import (
     ISSUE_OPTIMISATION_CONFIGURATION,
     ISSUE_OPTIMISATION_PLAN_REFUSED,
     ISSUE_SUBSCRIPTION_INACTIVE,
+    MAX_ACTUAL_SLOTS_PER_PUSH,
     MAX_THERMAL_SLOTS_PER_PUSH,
     THERMAL_BACKFILL_HOURS,
     THERMAL_ROOM_HISTORY_HOURS,
@@ -4129,9 +4130,10 @@ class Household:
                 # only: the calibration and completeness ledgers below have
                 # already seen them, and a replan the household is waiting for
                 # is not made to carry them.
+                resend_budget = MAX_ACTUAL_SLOTS_PER_PUSH - len(actuals)
                 resend = None if observations_changed or replan_request_id is not None else history_resend_window(
                     stored.get("optimisation_history_resend"), observation_signature_now, complete_end,
-                    chunk=timedelta(hours=OPTIMISATION_ACTUAL_BACKFILL_HOURS),
+                    chunk=timedelta(minutes=15 * resend_budget),
                     reach=timedelta(hours=OPTIMISATION_HISTORY_RESEND_HOURS))
                 # A counter that caught up for a stall reaching back past these
                 # quarters: the quarters before them were sent as zeros nobody
@@ -4410,7 +4412,7 @@ class Household:
                 elif resend:
                     stored["optimisation_history_resend"] = {
                         "signature": observation_signature_now, "before": resend[0].isoformat()}
-                elif stored.get("optimisation_history_resend") and replan_request_id is None:
+                elif resend_budget > 0 and stored.get("optimisation_history_resend") and replan_request_id is None:
                     # Reached the oldest quarter the website accepts, or superseded.
                     stored.pop("optimisation_history_resend")
                 if catch_up_reread:

@@ -220,6 +220,56 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(windows, [(2, 0), (144, 72), (2, 0), (191, 144), (2, 0), (2, 0)])
         self.assertNotIn('optimisation_history_resend', await self.h._store.async_load())
 
+    async def test_recent_and_resent_quarters_share_the_ingest_limit(self):
+        from datetime import timezone
+        from shs_core.device_observations import observation_signature
+
+        boundary = datetime(2026, 11, 10, 12, tzinfo=timezone.utc)
+        quarter = timedelta(minutes=15)
+        self.rig.now = boundary + timedelta(minutes=3)
+        key = 'synthetic_pump'
+        self.h._prepared_device_inventory.return_value = [{
+            'key': key, 'statistic_id': 'sensor.synthetic_pump',
+            'category': 'pool_heating', 'planning_role': 'controllable',
+        }]
+        observed = {key: {'setting': 'number.synthetic_capacity'}}
+        self.h._device_observations = lambda devices: observed
+        signature = observation_signature(observed)
+        before = boundary - 288 * quarter
+        stored = self.rig.records.saved
+        stored.update(
+            optimisation_actuals_accepted_until=(boundary - quarter).isoformat(),
+            optimisation_device_observations_sent=signature,
+            optimisation_history_resend={'signature': signature, 'before': before.isoformat()},
+            optimisation_catch_up_pending=True,
+        )
+
+        async def device_quarters(devices, start, end):
+            return [{'start': (start + index * quarter).isoformat(), 'device_energy_kwh': {key: .1}}
+                    for index in range((end - start) // quarter)]
+
+        async def submit(body):
+            actuals = body['actual_slots']
+            self.assertLessEqual(len(actuals), 288)
+            return {'actuals_accepted_until': actuals[-1]['start']}
+
+        self.h._device_actual_quarters = AsyncMock(side_effect=device_quarters)
+        self.h.client.submit_optimisation.side_effect = submit
+        starts = lambda: [row['start'] for row in self.h.client.submit_optimisation.call_args.args[0]['actual_slots']]
+
+        await self.h.async_optimisation_push()
+        self.assertEqual(starts(), [(before + index * quarter).isoformat() for index in range(288)])
+        stored = await self.h._store.async_load()
+        self.assertEqual(stored['optimisation_history_resend']['before'], before.isoformat())
+        self.assertNotIn('optimisation_catch_up_pending', stored)
+
+        await self.h.async_optimisation_push()
+        first = before - 280 * quarter
+        self.assertEqual(starts(), [(first + index * quarter).isoformat() for index in range(280)]
+                         + [(boundary - (8 - index) * quarter).isoformat() for index in range(8)])
+        stored = await self.h._store.async_load()
+        self.assertEqual(stored['optimisation_history_resend']['before'], first.isoformat())
+
     async def test_a_counter_that_caught_up_has_its_stalled_quarters_sent_again_once(self):
         """Synthetic grid meter: silent from 08:00, then everything at 11:30.
 

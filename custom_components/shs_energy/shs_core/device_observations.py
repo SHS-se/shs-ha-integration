@@ -81,10 +81,9 @@ def history_resend_window(
     """The next older stretch of retained quarters to send again, or ``None``.
 
     ``cursor`` records how far back the current re-send has reached. It walks
-    back one ``chunk`` per exchange until ``reach``, the oldest quarter the
-    website still accepts, so one exchange never carries more than the first
-    backfill does. A cursor for another signature is stale: the re-send it
-    belonged to was superseded.
+    back by up to the available upload space (``chunk``) per exchange until
+    ``reach``, the oldest quarter the website still accepts. A cursor for
+    another signature belongs to a superseded re-send.
     """
     if not isinstance(cursor, dict) or cursor.get("signature") != signature:
         return None
