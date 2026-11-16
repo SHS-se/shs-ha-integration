@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 from shs_app.backends import Backends, URLS
 from shs_app.records import RecordStore
-from shs_app.engine import AppEngine
+from shs_app.engine import AppEngine, OPTIMISATION_STARTUP_DELAY_SECONDS, PLAN_EXCHANGE_INTERVAL_MINUTES
 from shs_core.gateway_journal import GatewayConflict
 from shs_core.household_ports import HouseholdRefreshError
 
@@ -226,6 +226,44 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             await engine.planning(h)
         h.client.request_replan.assert_awaited_once()
         h.async_optimisation_push.assert_not_awaited()
+
+    async def test_observer_without_a_replacement_plan_uploads_at_quarter_cadence(self):
+        engine, _ = await self.selected_engine()
+        await self.backends.settled()
+        engine.operation_error = lambda *args: None
+        elapsed = 0
+        captures = []
+
+        async def upload(*, force_plan):
+            nonlocal elapsed
+            captures.append((elapsed, force_plan))
+            elapsed += 6
+            # Ingest accepts telemetry but keeps the published plan. The
+            # observer's configuration therefore stays flagged as changed.
+
+        async def poll():
+            await upload(force_plan=False)
+
+        async def sleep(seconds):
+            nonlocal elapsed
+            if len(captures) == 3:
+                raise asyncio.CancelledError
+            elapsed += seconds
+
+        observer = SimpleNamespace(_plan_configuration_changed=True,
+            async_optimisation_push=upload, async_replan_poll=poll)
+        quarter = PLAN_EXCHANGE_INTERVAL_MINUTES * 60
+        offset = OPTIMISATION_STARTUP_DELAY_SECONDS
+        with (patch('shs_app.engine.asyncio.sleep', side_effect=sleep),
+              patch('shs_app.engine.time.time', side_effect=lambda: elapsed),
+              patch('shs_app.engine.random.uniform', return_value=offset),
+              self.assertRaises(asyncio.CancelledError)):
+            await engine.planning(observer)
+
+        self.assertEqual(captures, [
+            (offset, False), (offset + quarter, False), (offset + 2 * quarter, False),
+        ])
+        self.assertTrue(observer._plan_configuration_changed)
 
     async def test_configuration_replan_preserves_selected_job_and_updates_observer(self):
         engine,h=await self.selected_engine()

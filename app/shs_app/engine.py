@@ -599,7 +599,10 @@ class AppEngine:
     async def planning(self, household):
         await asyncio.sleep(OPTIMISATION_STARTUP_DELAY_SECONDS)
         await self.complete_backend_selection(household)
-        while household._plan_configuration_changed:
+        # Only the selected backend can request a replacement here. An
+        # observer's recommendation leaves its plan in place, so continue on
+        # the regular exchange cadence while waiting for a new plan.
+        while household is self.household and household._plan_configuration_changed:
             await self.request_plan(household)
             if household._plan_configuration_changed:
                 await asyncio.sleep(5)
