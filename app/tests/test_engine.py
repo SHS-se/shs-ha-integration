@@ -292,10 +292,10 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(device(before)['category'], 'hot_water')
                 self.assertNotIn('temperature_entity_id', {field['key'] for field in device(before)['fields']})
                 edit = {'device_key': key, 'expected_revision': before['revision'], 'request_id': 'category-edit'}
-                response = await client.post('/api/configuration/device_settings', json={**edit, 'settings': {'category': 'battery'}})
+                response = await client.post('/api/configuration/save_device', json={**edit, 'settings': {'category': 'battery'}})
                 self.assertEqual(response.status, 409, await response.json())
                 self.assertEqual(engine.configuration.options(), options)
-                response = await client.post('/api/configuration/device_settings', json={**edit, 'settings': {'category': 'heating'}})
+                response = await client.post('/api/configuration/save_device', json={**edit, 'settings': {'category': 'heating'}})
                 saved = await response.json()
                 self.assertEqual(response.status, 200, saved)
                 self.assertEqual(device(saved)['category'], 'heating')
@@ -321,7 +321,21 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
 
         async def catalog(operation, body):
             if operation == 'catalog':
-                return dict(context=self.context, states={}, meter_areas={},
+                entities = {
+                    'switch.heater': ('off', {}),
+                    'climate.heater': ('heat', {}),
+                    'sensor.room': ('20', {'unit_of_measurement': '°C'}),
+                    'sensor.house': ('1000', {'unit_of_measurement': 'W', 'state_class': 'measurement'}),
+                }
+                states = {key: dict(entity_id=key, state=value, attributes=attributes,
+                                    last_updated=datetime.now(timezone.utc).isoformat())
+                          for key, (value, attributes) in entities.items()}
+                context = {**self.context,
+                    'entity_names': {key: key for key in entities},
+                    'entity_areas': {'climate.heater': 'room', 'sensor.room': 'room'},
+                    'area_names': {'room': 'Room'},
+                }
+                return dict(context=context, states=states, meter_areas={},
                             preferences={'device_consumption': [
                                 {'stat_consumption': active, 'name': 'Heater'},
                                 {'stat_consumption': retired, 'name': 'Spare heater'},
@@ -339,6 +353,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         mapping = {'control_type': 'switch_schedule', 'actuator_entity_ids': ['switch.heater']}
         initial = {**engine.configuration.options(),
                    'device_control_mappings': {active: mapping},
+                   'house_consumption_power_entity': 'sensor.house',
                    'device_modes': {active: 'controlling'},
                    'planning_admissions': {active: [[active, None, 'switch_schedule']]},
                    '_device_inclusion_initialised': [active, retired], 'excluded_device_readings': [retired]}
@@ -356,20 +371,39 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             choices = await household.async_cached_planning_configuration()
             self.assertEqual(next(d for d in choices['devices'] if d['key'] == retired)['control_type'], 'setpoint')
 
-            async def edit(settings, request_id):
-                return await engine.editor.action('device_settings', {
+            async def edit(settings, request_id, **rest):
+                return await engine.editor.action('save_device', {
                     'device_key': active, 'settings': settings, 'request_id': request_id,
-                    'expected_revision': engine.configuration.revision,
+                    'expected_revision': engine.configuration.revision, **rest,
                 })
 
             await edit({'load_type': 'inverter'}, 'change-load')
             self.assertEqual(engine.configuration.options()['device_modes'], {active: 'controlling'})
-            saved = await edit({'control_type': 'setpoint'}, 'change-method')
+            working = engine.configuration.options()
+            revision = engine.configuration.revision
+            with self.assertRaises(ValueError) as rejected:
+                await edit({'control_type': 'setpoint'}, 'change-method', mapping={'control_type': 'setpoint'})
+            self.assertIn('actuator_entity_ids', rejected.exception.field_errors)
+            self.assertIn('temperature_entity_id', rejected.exception.field_errors)
+            self.assertEqual(engine.configuration.options(), working)
+            self.assertEqual(engine.configuration.revision, revision)
+            submitted = {'control_type': 'setpoint', 'actuator_entity_ids': ['climate.heater'],
+                         'temperature_entity_id': 'sensor.room', 'power': 1000}
+            intent = {'device_key': active, 'settings': {'control_type': 'setpoint'}, 'request_id': 'change-method',
+                      'expected_revision': revision, 'mapping': submitted}
+            saved = await engine.editor.action('save_device', intent)
+            self.assertEqual(engine.configuration.revision, revision + 1)
+            await engine.editor.action('save_device', intent)
+            self.assertEqual(engine.configuration.revision, revision + 1)
+            self.assertEqual(engine.configuration.options()['rooms']['room']['temperature_entity_id'], 'sensor.room')
             view = next(d for d in saved['devices'] if d['key'] == active)
             self.assertEqual((view['control_type'], view['load_type']), ('setpoint', 'inverter'))
             self.assertEqual(view['mode'], 'control_verification')
             self.assertIn('temperature_entity_id', {field['key'] for field in view['fields']})
-            self.assertEqual(engine.configuration.options()['device_control_mappings'][active], mapping)
+            stored_mapping = engine.configuration.options()['device_control_mappings'][active]
+            self.assertEqual(stored_mapping['control_type'], 'setpoint')
+            self.assertEqual(stored_mapping['actuator_entity_ids'], ['climate.heater'])
+            self.assertEqual(stored_mapping['power'], 1000)
             self.assertEqual(self.configuration.options()['device_modes'], {active: 'control_verification'})
 
             stored = await household._store.async_read()
@@ -394,6 +428,39 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         async def restored():return None
         await engine.spawn(restored(),'receipt-fixture');await asyncio.sleep(0)
         self.assertEqual(dashboard.payload()['attention'],[])
+
+    async def test_device_intent_retries_an_installed_revision_after_lost_acknowledgement(self):
+        engine = self.engine()
+        await engine.load()
+        await engine.activate()
+        configuration = engine.configuration
+        basis = configuration.revision
+        install = configuration.install
+        preparations = []
+
+        async def prepare(options):
+            preparations.append(basis)
+            return {**options, 'device_category_overrides': {'sensor.fixture': 'heating'}}
+
+        async def lose_reply(body):
+            await install(body)
+            raise TimeoutError('Synthetic lost acknowledgement')
+
+        intent = {'device_key': 'sensor.fixture', 'settings': {'category': 'heating'}}
+        with patch.object(configuration, 'install', lose_reply):
+            with self.assertRaises(TimeoutError):
+                await configuration.commit(basis, prepare, 'device-fixture', intent=intent)
+        self.assertEqual(configuration.status()['state'], 'pending')
+        self.assertNotIn('device_category_overrides', configuration.options())
+        await configuration.commit(basis, prepare, 'device-fixture', intent=intent)
+        self.assertEqual(configuration.revision, basis + 1)
+        await configuration.commit(configuration.revision, configuration.options(), 'later-fixture')
+        await configuration.commit(basis, prepare, 'device-fixture', intent=intent)
+        self.assertEqual(configuration.revision, basis + 2)
+        self.assertEqual(preparations, [basis])
+        with self.assertRaises(GatewayConflict):
+            await configuration.commit(basis, prepare, 'device-fixture', intent={**intent, 'settings': {}})
+        self.assertFalse(self.native_calls)
 
     async def test_a_superseded_task_failure_cannot_overwrite_its_successful_replacement(self):
         engine=self.engine();dashboard=self.dashboard(engine)

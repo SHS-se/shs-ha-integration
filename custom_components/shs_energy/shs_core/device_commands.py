@@ -62,7 +62,7 @@ def actuator_targets(mapping):
     return list(targets)
 
 
-def execution_setup_errors(mapping, contract=None):
+def execution_setup_errors(mapping, contract=None, *, field_errors=None):
     """Whether a local executor can drive this mapping.
 
     `contract` is what the executor actually runs, which is not always the
@@ -72,24 +72,35 @@ def execution_setup_errors(mapping, contract=None):
     label it cannot interpret — which is what made saving a variable-power pool
     fail with "this method is not supported for this device".
     """
+    def failure(key, message):
+        if field_errors is not None:
+            field_errors.setdefault(key, []).append(message)
+        return [message]
+
     kind = contract or mapping.get('control_type')
     if kind not in ('setpoint', 'switch_schedule', 'permit_inhibit'):
-        return ['this method is not supported for this device']
+        return failure('control_type', 'this method is not supported for this device')
     if mapping.get('companion_actuator_entity_ids'):
-        return ['configure combined switching in Home Assistant using one control entity']
+        return failure('actuator_entity_ids', 'configure combined switching in Home Assistant using one control entity')
     if len(mapping.get('actuator_entity_ids', [])) > 1:
-        return ['choose exactly one control entity']
+        return failure('actuator_entity_ids', 'choose exactly one control entity')
     targets = actuator_targets(mapping)
     if not targets:
-        return ['choose the switch or temperature control SHS should use']
+        return failure('actuator_entity_ids', 'choose the switch or temperature control SHS should use')
     if kind == 'setpoint':
         # Each command carries its own bounds from the room's website schedule;
         # a second local range would only repeat or contradict them.
-        if mapping.get('companion_actuator_entity_ids') or any(mapping.get(k) for k in ('permit_entity_id', 'mode_entity_id', 'offset_entity_id')):
-            return ['this combination of temperature controls is not supported yet']
+        separate = [key for key in ('permit_entity_id', 'mode_entity_id', 'offset_entity_id') if mapping.get(key)]
+        if separate:
+            message = 'this combination of temperature controls is not supported yet'
+            if field_errors is not None:
+                for key in separate:
+                    failure(key, message)
+            return [message]
         if any(t.split('.')[0] not in ('climate', 'number', 'input_number') for t in targets):
-            return ['choose a thermostat or a writable temperature target']
+            return failure('setpoint_entity_id' if mapping.get('setpoint_entity_id') else 'actuator_entity_ids',
+                           'choose a thermostat or a writable temperature target')
     else:
         if any(t.split('.')[0] not in ('switch', 'input_boolean') for t in targets):
-            return ['choose an on/off switch']
+            return failure('actuator_entity_ids', 'choose an on/off switch')
     return []

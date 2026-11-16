@@ -3,21 +3,19 @@ from datetime import datetime, timezone
 from contextlib import nullcontext
 
 from shs_core import const as c
-from shs_core.configuration_schema import prepare_options, save_device, resolve_configuration, initialise_device_inclusion
+from shs_core.configuration_schema import (
+    ConfigurationFieldErrors, prepare_options, save_device, resolve_configuration, initialise_device_inclusion,
+)
 from shs_core.configuration_view import execution_device_views
-from shs_core.device_controls import CONTROL_TYPES
+from shs_core.device_controls import CONTROL_TYPES, device_planning_path
+from shs_core.hot_water import hot_water_setup_errors
 from shs_core.device_setup import DEVICE_SETUPS, LOAD_TYPES, read_device_setups
 from shs_core.discovery import (CatalogState, DiscoveryCatalog, discover_configuration,
                                 _energy_dashboard_inventory, dashboard_meters, meter_room)
 from shs_core.operating_modes import admission_identity, execution_mode_options, reconcile_admissions
+from shs_core.grid_capacity import house_meter_errors
 from shs_core.presentation import system_fields
 from .configuration_view import configuration_payload
-
-
-class DeviceSettingsError(ValueError):
-    def __init__(self, field, message):
-        super().__init__(message)
-        self.field_errors = {field: message}
 
 
 class ConfigurationEditor:
@@ -57,11 +55,18 @@ class ConfigurationEditor:
             await configuration.admit(existing, {**existing, DEVICE_SETUPS: choices})
             self.publish_device_settings()
 
-    def publish_device_settings(self):
+    async def _publish_and_replan(self, environment, household):
+        await household.async_refresh_device_configuration()
+        if household.resolved_options()[c.OPT_PLANNING_MODE] == c.PLANNING_MODE_LIVE:
+            household._plan_configuration_changed = True
+            self.engine.spawn(self.engine.cloud_job(environment, lambda: self.engine.request_plan(household), stage='upload'),
+                              'configuration_replan_' + environment)
+
+    def publish_device_settings(self, *, replan=False):
         for environment, household in self.engine.households.items():
-            self.engine.spawn(self.engine.cloud_job(environment,
-                household.async_refresh_device_configuration, stage='website_choices'),
-                'device_settings_sync_' + environment)
+            operation = (lambda e=environment, h=household: self._publish_and_replan(e, h)) if replan else household.async_refresh_device_configuration
+            self.engine.spawn(self.engine.cloud_job(environment, operation, stage='website_choices'),
+                              'device_settings_sync_' + environment)
 
     def resolved_options(self):
         return resolve_configuration(self.engine.configuration.options(),self.catalog.latitude,self.catalog.longitude)
@@ -152,6 +157,8 @@ class ConfigurationEditor:
             return result
         if operation == 'control':
             return await self._set_execution_mode(body)
+        if operation == 'save_device':
+            return await self._save_device(body)
         await self.refresh_catalog()
         if operation == 'discover':
             return discover_configuration(self.catalog,self.engine.configuration.options())
@@ -162,80 +169,128 @@ class ConfigurationEditor:
             if h.last_optimisation_error: raise ValueError(h.last_optimisation_error)
             return await self.view()
         existing = self.engine.configuration.options()
-        if operation == 'device_settings':
-            key = body['device_key']
-            if key not in dashboard_meters(self.catalog.preferences):
-                raise ValueError('This device is no longer in Home Assistant Energy')
-            edits = body['settings']
-            if not isinstance(edits, dict) or not edits or set(edits) - {'category', 'control_type', 'load_type'}:
-                raise ValueError('Choose valid device settings')
-            for field, values, label in (
-                ('category', c.DEVICE_CATEGORIES, 'device category'),
-                ('control_type', CONTROL_TYPES, 'control method'),
-                ('load_type', LOAD_TYPES, 'load characteristic'),
-            ):
-                if field in edits and edits[field] not in values:
-                    raise DeviceSettingsError(field, f'Choose a {label} from the list')
+        if operation != 'save':
+            raise ValueError('Unsupported configuration action')
+        incoming = body['configuration']
+        if c.OPT_DEVICE_CONTROL_MAPPINGS in incoming:
+            raise ValueError('Device mappings must be saved from their own card')
+        result = await self._commit(self.prepare(existing, incoming), body, replan=True)
+        return {**result, 'saved': True, 'refreshing': False}
+
+    async def _save_device(self, body):
+        configuration = self.engine.configuration
+        intent = {key: body[key] for key in ('device_key', 'settings', 'mapping', 'configuration', 'room_key') if key in body}
+        result = await configuration.commit(
+            body['expected_revision'], lambda existing: self._prepare_device_save(existing, intent),
+            body['request_id'], intent=intent,
+        )
+        if not result.get('replayed'):
+            self.publish_device_settings(replan=True)
+        response = await self.view()
+        return {**response, 'saved': True, 'refreshing': False}
+
+    async def _prepare_device_save(self, existing, intent):
+        household = self.engine.household
+        choices = await household.async_cached_planning_configuration()
+        await self.refresh_catalog()
+        catalog, context = self.catalog, self.context
+        key = intent['device_key']
+        device = next((row for row in choices['devices'] if row['key'] == key), None)
+        incoming = intent.get('configuration', {})
+        edits = intent.get('settings', {})
+        if not isinstance(edits, dict) or not isinstance(incoming, dict):
+            raise ValueError('Choose valid device settings')
+        fields = {
+            'category': (c.DEVICE_CATEGORIES, 'device category'),
+            'control_type': (CONTROL_TYPES, 'control method'),
+            'load_type': (LOAD_TYPES, 'load characteristic'),
+        }
+        if set(edits) - set(fields):
+            raise ValueError('Choose valid device settings')
+        errors = {field: [f'Choose a {label} from the list'] for field, (values, label) in fields.items()
+                  if field in edits and edits[field] not in values}
+        if errors:
+            raise ConfigurationFieldErrors(errors)
+        if device is None:
+            if key not in ('$battery', '$ev', '$pool') or edits or intent.get('mapping'):
+                raise ValueError('This device is no longer in the website inventory')
+            allowed = {field['key'] for field in system_fields(key[1:])}
+        else:
             if ('control_type' in edits or 'load_type' in edits) and DEVICE_SETUPS not in existing:
                 raise ValueError('Wait for the app to retrieve your existing device settings')
-            choices = await h.async_cached_planning_configuration()
-            device = next((d for d in choices['devices'] if d['key'] == key), None)
-            if device is None:
-                raise ValueError('This device is no longer in Home Assistant Energy')
-            old_groups = reconcile_admissions(existing, choices['devices'], choices['home'])['planning_admissions']
-            if 'category' in edits:
-                existing.setdefault(c.OPT_DEVICE_CATEGORY_OVERRIDES, {})[key] = edits['category']
-            if 'control_type' in edits or 'load_type' in edits:
-                previous = existing[DEVICE_SETUPS].get(key, {})
-                method = device['control_type']
-                if not previous and method is None:
-                    method = existing.get(c.OPT_DEVICE_CONTROL_MAPPINGS, {}).get(key, {}).get('control_type')
-                existing[DEVICE_SETUPS][key] = {
-                    'control_type': edits.get('control_type', method),
-                    'load_type': edits.get('load_type', device['load_type']),
-                    'revision': max(previous.get('revision', 0), self.engine.configuration.revision) + 1,
+            views = execution_device_views(catalog, context, existing, choices, household, include_suggestions=False)
+            view = next((row for row in views if row['key'] == key), {})
+            allowed = {field['key'] for field in view.get('system_fields', [])}
+            if view.get('system') and view['system'] != device_planning_path({**device, **edits}):
+                allowed = set()
+        if set(incoming) - allowed:
+            raise ValueError('These settings belong to another device')
+
+        def read(entity):
+            state = catalog.states.get(entity)
+            return dict(state=state.state, attributes=state.attributes) if state else None
+
+        options = prepare_options(existing, incoming, read, latitude=catalog.latitude, longitude=catalog.longitude)
+        if device is None:
+            return options
+
+        old_mapping = resolve_configuration(existing).get(c.OPT_DEVICE_CONTROL_MAPPINGS, {}).get(key, {})
+        method = device.get('control_type') or old_mapping.get('control_type')
+        proposed = {**device, 'control_type': method, **edits}
+        mapping = intent.get('mapping')
+        planned = (device.get('planning_role') == 'controllable' and
+                   key not in existing.get('excluded_device_readings', ()))
+        changed_contract = (method != proposed['control_type']
+                            or device_planning_path({**device, 'control_type': method}) != device_planning_path(proposed))
+        if 'control_type' in edits and mapping is None:
+            raise ConfigurationFieldErrors({'control_type': ['Complete the fields for the selected control method']})
+        if planned and 'mapping' in intent and mapping is None:
+            raise ConfigurationFieldErrors({'control_type': ['Keep a complete setup while this device is Planned']})
+        errors = {}
+        if planned and (mapping is not None or changed_contract):
+            errors = house_meter_errors(resolve_configuration(options))
+            if device_planning_path(proposed) is None:
+                errors['control_type'] = ['Choose a control method supported for this category']
+            elif device_planning_path(proposed) == 'ev' and not options.get('ev_charge_switch_entity'):
+                errors['ev_charge_switch_entity'] = ['Choose the EV charging start/stop switch']
+            elif device_planning_path(proposed) == 'boiler' and mapping is not None:
+                hot_water_setup_errors(mapping, field_errors=errors)
+        if 'category' in edits:
+            options.setdefault(c.OPT_DEVICE_CATEGORY_OVERRIDES, {})[key] = edits['category']
+        if 'mapping' in intent:
+            try:
+                options = save_device(options, key, mapping, proposed, read, entity_names=context['entity_names'],
+                                      area_names=context['area_names'], entity_area_ids=context['entity_areas'])
+            except ConfigurationFieldErrors as error:
+                errors = {**error.field_errors, **errors}
+            if errors:
+                raise ConfigurationFieldErrors(errors)
+            new_room = options.get(c.OPT_DEVICE_CONTROL_MAPPINGS, {}).get(key, {}).get(c.ROOM_AREA_FIELD)
+            if (intent.get('room_key') is not None and mapping and mapping.get('temperature_entity_id')
+                    and new_room != intent['room_key']):
+                raise ConfigurationFieldErrors({'temperature_entity_id': ['The room assignment changed. Refresh and review the room probe.']})
+        if errors:
+            raise ConfigurationFieldErrors(errors)
+        if DEVICE_SETUPS in options and (edits or 'mapping' in intent):
+            rooms = existing.get('rooms', {})
+            changed_rooms = {room for room, bindings in options.get('rooms', {}).items() if bindings != rooms.get(room)}
+            mappings = options.get(c.OPT_DEVICE_CONTROL_MAPPINGS, {})
+            for row in choices['devices']:
+                device_key = row['key']
+                if device_key != key and mappings.get(device_key, {}).get(c.ROOM_AREA_FIELD) not in changed_rooms:
+                    continue
+                setup = proposed if device_key == key else row
+                previous = options[DEVICE_SETUPS].get(device_key, {})
+                options[DEVICE_SETUPS][device_key] = {
+                    'control_type': setup.get('control_type'),
+                    'load_type': setup['load_type'],
+                    'revision': max(previous.get('revision', 0) + 1, self.engine.configuration.revision + 1),
                 }
-            changed = [{**d, **edits} if d['key'] == key else d for d in choices['devices']]
-            new_groups = reconcile_admissions(existing, changed, choices['home'])['planning_admissions']
-            # Keep a former owner in Verification until HA acknowledges abandonment,
-            # even when its new planning path will subsequently remove the owner.
-            modes = existing.get('device_modes', {})
-            for owner in modes:
-                if (modes[owner] == 'controlling' and
-                        admission_identity(owner, old_groups.get(owner)) != admission_identity(owner, new_groups.get(owner))):
-                    modes[owner] = 'control_verification'
-            await self._commit(existing, body, replan=False, reviewed=False)
-            self.publish_device_settings()
-            return await self.view()
-        if operation == 'save':
-            incoming = body['configuration']
-            if c.OPT_DEVICE_CONTROL_MAPPINGS in incoming:
-                raise ValueError('Device mappings must be saved from their own card')
-            options = self.prepare(existing,incoming)
-        elif operation == 'save_device':
-            choices = await h.async_cached_planning_configuration()
-            device = next((d for d in choices['devices'] if d['key']==body['device_key']),None)
-            view = next((d for d in await self.devices(choices) if d['key']==body['device_key']),None)
-            incoming = body.get('configuration',{})
-            if device is None:
-                if body['device_key'] not in ('$battery','$ev','$pool') or body.get('mapping'):
-                    raise ValueError('This device is no longer in the website inventory')
-                allowed = {f['key'] for f in system_fields(body['device_key'][1:])}
-            else:
-                allowed = {f['key'] for f in (view or {}).get('system_fields',[])}
-            if set(incoming)-allowed:
-                raise ValueError('These settings belong to another device')
-            options = self.prepare(existing,incoming)
-            if device is not None:
-                if device.get('planning_role') != 'controllable' and not device.get('app_setup'):
-                    saved = self.resolved_options().get('device_control_mappings',{}).get(device['key'],{})
-                    device = {**device,'control_type':saved.get('control_type')}
-                options = save_device(options,device['key'],body['mapping'],device,self.read,
-                    entity_names=self.context['entity_names'],area_names=self.context['area_names'],
-                    entity_area_ids=self.context['entity_areas'])
-        else:
-            raise ValueError('Unsupported configuration action')
-        result = await self._commit(options,body,replan=True)
-        if operation == 'save_device' and device is not None:
-            await h.async_report_device_mapping(device['key'],options.get(c.OPT_DEVICE_CONTROL_MAPPINGS,{}))
-        return {**result,'saved':True,'refreshing':False}
+        if changed_contract:
+            old_groups = reconcile_admissions(existing, choices['devices'], choices['home'])['planning_admissions']
+            changed = [proposed if row['key'] == key else row for row in choices['devices']]
+            new_groups = reconcile_admissions(options, changed, choices['home'])['planning_admissions']
+            for owner, mode in options.get('device_modes', {}).items():
+                if mode == 'controlling' and admission_identity(owner, old_groups.get(owner)) != admission_identity(owner, new_groups.get(owner)):
+                    options['device_modes'][owner] = 'control_verification'
+        return options

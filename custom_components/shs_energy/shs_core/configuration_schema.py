@@ -313,6 +313,12 @@ def prepare_options(existing, incoming, read_entity, *, latitude=0.0, longitude=
     return result
 
 
+class ConfigurationFieldErrors(ValueError):
+    def __init__(self, errors):
+        self.field_errors = errors
+        super().__init__("; ".join(message for messages in errors.values() for message in messages))
+
+
 def save_device(existing, key, submitted, device, read_entity, *, entity_names, area_names, entity_area_ids):
     """Save one device and its shared room source; unrelated records survive."""
     result = deepcopy(existing)
@@ -330,25 +336,31 @@ def save_device(existing, key, submitted, device, read_entity, *, entity_names, 
     mapping = {"control_type": kind}
     if stored.get(key, {}).get(ROOM_AREA_FIELD):
         mapping[ROOM_AREA_FIELD] = stored[key][ROOM_AREA_FIELD]
+    field_errors = {}
     for field in _control_fields(device):
-        value = normalise_field_value(read_entity, field, submitted.get(field["key"]), context=device["name"])
-        if value is not None or (field["key"] in submitted and submitted[field["key"]] is None):
-            mapping[field["key"]] = value
-    if resolve_configuration(existing).get("device_modes", {}).get(key) in ("controlling", "control_verification"):
-        errors = execution_setup_errors(
-            mapping, local_contract(kind, "pool" if pool else None))
-        if errors:
-            raise ValueError(f"{device['name']}: " + "; ".join(errors))
+        field_key = field["key"]
+        try:
+            value = normalise_field_value(read_entity, field, submitted.get(field_key), context=device["name"])
+        except ValueError as error:
+            field_errors[field_key] = [str(error)]
+            continue
+        if value is not None or (field_key in submitted and submitted[field_key] is None):
+            mapping[field_key] = value
+    if path != "ev" and (device.get("planning_role") == "controllable"
+            or resolve_configuration(existing).get("device_modes", {}).get(key) in ("controlling", "control_verification")):
+        execution_setup_errors(mapping, local_contract(kind, path), field_errors=field_errors)
     if pool:
         # Record the shared water sensor with the pool mapping.
         mapping["temperature_entity_id"] = existing.get("pool_water_temperature_entity")
         mapping.pop(ROOM_AREA_FIELD, None)
-        errors = pool_control_errors(existing, mapping)
-        if errors:
-            raise ValueError(f"{device['name']}: " + "; ".join(errors))
+        pool_control_errors(existing, mapping, field_errors=field_errors)
     report = mapping_report(kind, mapping, set(entity_names), entity_names, area_names, entity_area_ids,
                             room_control=is_room_thermal_control(kind, device.get("category")), pool_control=pool,
                             pool_water_entity=existing.get("pool_water_temperature_entity"))
+    for field_key, messages in report["field_errors"].items():
+        field_errors.setdefault(field_key, messages)
+    if field_errors:
+        raise ConfigurationFieldErrors(field_errors)
     if report["mapping_status"] != "ready":
         raise ValueError(f"{device['name']}: {report['mapping_error']}")
     room = report["mapping_summary"].get("room_key")

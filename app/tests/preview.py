@@ -11,7 +11,7 @@ sys.path[:0] = [str(ROOT / "app"), str(ROOT / "custom_components/shs_energy")]
 from shs_app.server import create_app
 from shs_app.profiling import AppProfiler
 from shs_core.app_projection import schedule
-from shs_core.configuration_fields import _configuration_sections, LABELS
+from shs_core.configuration_fields import _configuration_sections, device_field_catalog, LABELS
 from shs_core.const import DEVICE_CATEGORIES
 from shs_core.device_controls import CONTROL_TYPES
 from shs_core.device_setup import LOAD_TYPES
@@ -34,6 +34,7 @@ class Editor:
         return dict(revision=self.revision,state='applied',configuration=resolve_configuration(self.options,59,18),
             configured_keys=list(self.options),labels=LABELS,device_categories=DEVICE_CATEGORIES,
             device_control_types=CONTROL_TYPES,device_load_types=LOAD_TYPES,device_setups_ready=True,
+            device_field_catalog=device_field_catalog(),
             sections=_configuration_sections(),devices=[],entities=[],
             entry=dict(entry_id='test-home',title='Test home',state='loaded'),attention=[],readiness={},thermal={},
             portal=dict(status='synchronised'),operation=entry['operation'],diagnostics={},meter_inventory=[],

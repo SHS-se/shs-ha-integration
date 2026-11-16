@@ -282,7 +282,8 @@ def create_app(observer, static, *, trusted_peer="172.30.32.2"):
                 await runtime.project()
             return web.json_response(result,headers={'Cache-Control':'no-store'})
         except (ValueError,TypeError,KeyError) as error:
-            return web.json_response(dict(code='invalid_configuration',message=str(error),
+            code = 'configuration_conflict' if isinstance(error, GatewayConflict) else 'invalid_configuration'
+            return web.json_response(dict(code=code,message=str(error),
                 field_errors=getattr(error,'field_errors',{}),configuration=runtime.configuration.status()),
                 status=409,headers={'Cache-Control':'no-store'})
 

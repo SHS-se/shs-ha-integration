@@ -512,6 +512,10 @@ def apply_requested_configuration(
             reviewed_control,
             category,
         )
+        if report["field_errors"]:
+            report["mapping_summary"]["setup_fields"] = sorted(report["field_errors"])
+        elif report["mapping_status"] == "invalid" and planning_path(requested_control, category) is None:
+            report["mapping_summary"]["setup_fields"] = ["control_type"]
         device["load_type"] = (setup or configuration).get(
             "load_type", device["suggested_load_type"]
         )

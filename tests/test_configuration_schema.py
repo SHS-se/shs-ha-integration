@@ -8,7 +8,9 @@ import unittest
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components/shs_energy'))
 from shs_core.configuration_schema import prepare_options, resolve_configuration, save_device, initialise_device_inclusion
 from migration import migrate_options
-from shs_core.configuration_fields import _control_fields
+from shs_core.configuration_fields import _control_fields, device_field_catalog
+from shs_core.device_controls import CONTROL_TYPES, planning_path
+from shs_core.const import DEVICE_CATEGORIES
 from shs_core.presentation import system_fields
 from shs_core.device_commands import execution_setup_errors
 
@@ -24,6 +26,22 @@ def save(existing, key, mapping):
 
 
 class ConfigurationReaderTests(unittest.TestCase):
+    def test_editor_catalog_projects_the_current_save_contract_for_every_selector(self):
+        catalog = device_field_catalog()
+        self.assertEqual(len(catalog["rows"]), len(DEVICE_CATEGORIES) * (len(CONTROL_TYPES) + 1))
+        for category in DEVICE_CATEGORIES:
+            for method in ("", *CONTROL_TYPES):
+                with self.subTest(category=category, method=method):
+                    path = planning_path(method, category)
+                    row = catalog["rows"][f"{category}:{method}"]
+                    self.assertEqual(row["path"], path)
+                    actual = [catalog["fields"][index] for index in row["fields"]]
+                    self.assertEqual(
+                        [{k: v for k, v in field.items() if k != "show_for_load"} for field in actual],
+                        list(_control_fields({"control_type": method, "category": category, "planning_system": path})),
+                    )
+        self.assertLess(len(catalog["fields"]), sum(len(row["fields"]) for row in catalog["rows"].values()))
+
     def test_removed_export_toggle_is_not_an_editor_or_runtime_option(self):
         from shs_core.configuration_schema import OPTION_KEYS
         self.assertNotIn("battery_export_enabled", OPTION_KEYS)

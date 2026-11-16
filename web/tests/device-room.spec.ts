@@ -33,8 +33,8 @@ test('sets the room on the dashboard meter pair from a collapsed device card', a
   const editor = page.locator('shs-configuration-editor');
   await editor.getByRole('button', {name: 'Devices', exact: true}).click();
   const card = editor.locator('details.device-card').filter({hasText: 'Water boiler'});
-  const button = card.getByRole('button', {name: 'Settings for Water boiler'});
-  const dialog = editor.getByRole('dialog', {name: 'Settings for Water boiler'});
+  const button = card.getByRole('button', {name: 'Room for Water boiler'});
+  const dialog = editor.getByRole('dialog', {name: 'Room for Water boiler'});
   await expect(card).toContainText('Controls configured');
   await button.click();
   await expect(dialog).toContainText('different room assignments');
@@ -46,16 +46,16 @@ test('sets the room on the dashboard meter pair from a collapsed device card', a
   await button.click();
   const room = dialog.getByRole('combobox', {name: 'Room'});
   await room.selectOption('laundry');
-  await dialog.getByRole('button', {name: 'Save', exact: true}).click();
+  await dialog.getByRole('button', {name: 'Save room', exact: true}).click();
   await expect(dialog.getByRole('alert')).toHaveText('Choose an existing Home Assistant room.');
   await expect(room).toBeFocused();
-  await dialog.getByRole('button', {name: 'Save', exact: true}).click();
+  await dialog.getByRole('button', {name: 'Save room', exact: true}).click();
   await expect(dialog).toHaveCount(0);
   await expect(card.locator('summary')).toContainText('Laundry');
   await expect(button).toBeFocused();
 });
 
-test('changes the category from the cogwheel even when the room cannot be edited', async ({page}) => {
+test('edits a category without writing until Save even when its room is read-only', async ({page}) => {
   const key = 'sensor.boiler_energy';
   let category = 'hot_water';
   let writes = 0;
@@ -65,14 +65,16 @@ test('changes the category from the cogwheel even when the room cannot be edited
     data.devices = [{
       key, name: 'Boiler', statistic_id: key, category,
       room_name: 'No room', mapping_status: 'not_configured', included: false, mapping: {},
-      meter_room: {meters: [key], editable: false, area_id: null, different_areas: false},
+      meter_room: {meters: [key], editable: false, area_id: null},
     }];
     await route.fulfill({json: data});
   });
-  await page.route('**/api/configuration/device_settings', async route => {
+  await page.route('**/api/configuration/save_device', async route => {
     expect(route.request().postDataJSON()).toMatchObject({device_key: key, settings: {category: 'heating'}});
     if (++writes === 1) {
-      await route.fulfill({status: 409, json: {message: 'Choose a device category from the list'}});
+      await route.fulfill({status: 409, json: {
+        message: 'Choose a device category from the list', field_errors: {category: ['Choose a device category from the list']},
+      }});
       return;
     }
     category = 'heating';
@@ -83,86 +85,85 @@ test('changes the category from the cogwheel even when the room cannot be edited
   const editor = page.locator('shs-configuration-editor');
   await editor.getByRole('button', {name: 'Devices', exact: true}).click();
   await editor.getByRole('checkbox', {name: 'Show excluded devices'}).press('Space');
-  const typeFilter = editor.getByRole('combobox', {name: 'All types'});
-  await typeFilter.selectOption('hot_water');
   const card = editor.locator('details.device-card').filter({hasText: 'Boiler'});
-  const cogwheel = card.getByRole('button', {name: 'Settings for Boiler'});
-  await cogwheel.click();
-  const dialog = editor.getByRole('dialog', {name: 'Settings for Boiler'});
-  const select = dialog.getByRole('combobox', {name: 'Category'});
+  await card.locator('summary strong').click();
+  const select = card.getByRole('combobox', {name: 'Category'});
+  const save = card.getByRole('button', {name: 'Save controls'});
   await expect(select).toHaveValue('hot_water');
-  await expect(select.getByRole('option')).toHaveCount(7);
-  await expect(dialog.getByRole('combobox', {name: 'Room'})).toHaveCount(0);
-  const save = dialog.getByRole('button', {name: 'Save', exact: true});
   await expect(save).toBeDisabled();
   await select.selectOption('heating');
+  expect(writes).toBe(0);
+  await expect(card.locator('summary')).toContainText('Hot water');
   await save.click();
-  await expect(dialog.getByRole('alert')).toHaveText('Choose a device category from the list');
   await expect(select).toHaveAttribute('aria-invalid', 'true');
   await expect(select).toBeFocused();
   await save.click();
-  await expect(dialog).toHaveCount(0);
-  await expect(typeFilter).toHaveValue('');
-  await expect(card).toContainText('Heating');
-  await expect(cogwheel).toBeFocused();
-  await cogwheel.click();
-  await expect(select).toHaveValue('heating');
+  await expect(card.locator('summary')).toContainText('Heating');
   expect(writes).toBe(2);
 });
 
-test('the device cogwheel saves the method and load characteristic together', async ({page}) => {
+test('projects fields locally, preserves compatible values and saves selectors with bindings once', async ({page}) => {
   const key = 'sensor.heater_energy';
+  const original = {control_type: 'switch_schedule', power: 1230, actuator_entity_ids: ['switch.heater']};
   let data: Record<string, any>;
+  let writes = 0;
+  const fieldsFor = (method: string) => {
+    const catalog = data.device_field_catalog;
+    return catalog.rows['heating:' + method].fields.map((index: number) => catalog.fields[index]);
+  };
   await page.route('**/api/configuration/get', async route => {
     data = await (await route.fetch()).json();
+    data.configuration.device_control_mappings = {[key]: original};
     data.devices = [{
-      key, name: 'Heater', category: 'heating', included: true, room_name: 'No room',
+      key, name: 'Heater', category: 'heating', included: true, room_name: 'Room',
       mapping_status: 'ready', control_type: 'switch_schedule', load_type: 'fixed_full_load',
+      fields: fieldsFor('switch_schedule'), mapping: original,
       meter_room: {meters: [key], editable: false, area_id: null},
     }];
     await route.fulfill({json: data});
   });
-  let writes = 0;
-  await page.route('**/api/configuration/device_settings', async route => {
+  await page.route('**/api/configuration/save_device', async route => {
     const settings = {control_type: 'setpoint', load_type: 'inverter'};
-    expect(route.request().postDataJSON()).toMatchObject({device_key: key, settings});
-    writes++;
-    if (writes === 1) {
-      await route.fulfill({status: 409, json: {message: 'Choose a load characteristic from the list',
-        field_errors: {load_type: 'Choose a load characteristic from the list'}}});
+    const body = route.request().postDataJSON();
+    expect(body).toMatchObject({device_key: key, settings, mapping: {
+      control_type: 'setpoint', power: 1230, actuator_entity_ids: ['switch.heater'],
+    }});
+    if (++writes === 1) {
+      await route.fulfill({status: 409, json: {
+        message: 'Choose a room sensor', field_errors: {temperature_entity_id: ['Choose a room sensor']},
+      }});
       return;
     }
-    Object.assign(data.devices[0], settings, {
-      fields: [{key: 'temperature_entity_id', label: 'Room temperature', kind: 'entity', required: true}],
-    });
+    expect(body.mapping.temperature_entity_id).toBe('sensor.room');
+    data.configuration.device_control_mappings[key] = body.mapping;
+    Object.assign(data.devices[0], settings, {fields: fieldsFor('setpoint'), mapping: body.mapping});
     await route.fulfill({json: data});
   });
   await page.goto('./#settings');
   const editor = page.locator('shs-configuration-editor');
   await editor.getByRole('button', {name: 'Devices', exact: true}).click();
-  const cogwheel = editor.getByRole('button', {name: 'Settings for Heater'});
-  await cogwheel.click();
-  const dialog = editor.getByRole('dialog', {name: 'Settings for Heater'});
-  const method = dialog.getByRole('combobox', {name: 'Control method'});
-  const load = dialog.getByRole('combobox', {name: 'Load characteristic'});
-  await expect(method.locator('option:not(:disabled)')).toHaveText([
-    'On/off schedule', 'Variable power', 'Permit/inhibit', 'Setpoint',
-  ]);
-  await expect(load.locator('option:not(:disabled)')).toHaveText([
-    'Fixed full load', 'Variable full load', 'Thermostat / duty cycle', 'Inverter load',
-  ]);
-  await expect(method).toHaveValue('switch_schedule');
-  await expect(load).toHaveValue('fixed_full_load');
+  const card = editor.locator('details.device-card').filter({hasText: 'Heater'});
+  await card.locator('summary strong').click();
+  const method = card.getByRole('combobox', {name: 'Control method'});
+  const load = card.getByRole('combobox', {name: 'Load characteristic'});
+  const temperature = card.getByRole('combobox', {name: 'Room temperature'});
   await method.selectOption('setpoint');
   await load.selectOption('inverter');
-  const save = dialog.getByRole('button', {name: 'Save', exact: true});
+  await temperature.fill('sensor.room');
+  await method.selectOption('variable_power');
+  await expect(temperature).toHaveCount(0);
+  await expect(card.getByRole('combobox', {name: 'Power or current control'})).toBeVisible();
+  await expect(card.getByRole('combobox', {name: 'Power', exact: true})).toHaveValue('1230');
+  await method.selectOption('setpoint');
+  await expect(temperature).toHaveValue('sensor.room');
+  await expect(card.getByRole('combobox', {name: 'Control entity', exact: true})).toHaveValue('switch.heater');
+  expect(writes).toBe(0);
+  const save = card.getByRole('button', {name: 'Save controls'});
   await save.click();
-  await expect(load).toBeFocused();
-  await expect(load).toHaveAttribute('aria-invalid', 'true');
+  await expect(temperature).toBeFocused();
+  await expect(temperature).toHaveAttribute('aria-invalid', 'true');
   await save.click();
-  await expect(dialog).toHaveCount(0);
-  await expect(editor.getByRole('combobox', {name: 'Room temperature'})).toBeVisible();
-  await cogwheel.click();
-  await expect(method).toHaveValue('setpoint');
-  await expect(load).toHaveValue('inverter');
+  await expect(save).toBeDisabled();
+  await expect(temperature).toHaveValue('sensor.room');
+  expect(writes).toBe(2);
 });

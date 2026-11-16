@@ -78,23 +78,28 @@ class Configuration:
             if self.on_applied is not None:
                 self.on_applied()
 
-    async def commit(self, expected_revision, options, request_id, *, reviewed=False, verification=None):
-        if type(expected_revision) is not int or type(options) is not dict or type(request_id) is not str or not request_id:
+    async def commit(self, expected_revision, options, request_id, *, reviewed=False, verification=None, intent=None):
+        if (type(expected_revision) is not int or type(request_id) is not str or not request_id
+                or (not callable(options) if intent is not None else type(options) is not dict)):
             raise ValueError('A configuration revision, document and request identity are required')
         async with self.lock:
-            request_digest = digest(dict(expected_revision=expected_revision, reviewed=reviewed,
+            request_digest = digest(dict(expected_revision=expected_revision, intent=intent)) if intent is not None else digest(dict(expected_revision=expected_revision, reviewed=reviewed,
                 options={k:v for k,v in options.items() if k!='configuration_reviewed_at'}
                 if verification is None else {'verification_owner': verification[0]}))
             prior = self.data['requests'].get(request_id)
             if prior:
                 if prior['digest'] != request_digest:
                     raise GatewayConflict('Configuration request identity reused with different values')
-                await self._apply()
-                return {'revision':prior['revision']}
+                pending = self.revision < prior['revision']
+                if pending:
+                    await self._apply()
+                return {'revision':prior['revision'], 'replayed':not pending}
             if self.data['revision'] != self.revision:
                 raise GatewayConflict('A configuration change is still waiting for Home Assistant; reconnect before editing')
             if expected_revision != (verification[1] if verification is not None else self.revision):
                 raise GatewayConflict('Configuration changed in another window or Home Assistant; refresh before saving')
+            if intent is not None:
+                options = await options(self.options())
             revision = self.revision + 1
             requests = dict(list(self.data['requests'].items())[-127:])
             requests[request_id] = dict(digest=request_digest, revision=revision)

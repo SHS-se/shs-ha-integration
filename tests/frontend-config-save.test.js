@@ -7,10 +7,33 @@ const frontendSource = readFileSync('web/src/configuration-editor.js', 'utf8');
 const loadPanel = (registry, version = frontendVersion) => {
   const context = vm.createContext({ URL, performance, setTimeout: () => 0, clearTimeout() {}, crypto: {randomUUID: () => "test-request"}, HTMLElement: class {}, customElements: registry });
   const moduleUrl = `https://ha.example/shs_energy_frontend/shs-energy-config-panel.js?v=${version}`;
-  vm.runInContext(frontendSource.replaceAll('import.meta.url', JSON.stringify(moduleUrl)) + '\nglobalThis.Panel = ShsEnergyConfigPanel;', context);
+  vm.runInContext(frontendSource.replaceAll('import.meta.url', JSON.stringify(moduleUrl))
+    + '\nObject.assign(globalThis, { Panel: ShsEnergyConfigPanel, projectDeviceFields, activeDeviceMapping });', context);
   return context;
 };
 const context = loadPanel({ define() {}, get() {} });
+
+test('projecting another method parks inapplicable values and preserves shared values', () => {
+  const catalog = {
+    fields: [{key: 'power'}, {key: 'actuator_entity_ids'}, {key: 'temperature_entity_id'},
+      {key: 'control_entity_id'}, {key: 'minimum_value'}, {key: 'offset_entity_id', show_for_load: 'inverter'}],
+    rows: {
+      'heating:setpoint': {fields: [0, 1, 2, 5]},
+      'heating:variable_power': {fields: [0, 3, 4]},
+    },
+  };
+  const draft = Object.freeze({power: 1200, actuator_entity_ids: ['climate.example'],
+    temperature_entity_id: 'sensor.room', offset_entity_id: 'number.adjust', minimum_value: 0});
+  const select = (control_type, load_type) =>
+    context.projectDeviceFields(catalog, {category: 'heating', control_type, load_type});
+  const variable = context.activeDeviceMapping(select('variable_power'), 'variable_power', draft);
+  assert.deepEqual(JSON.parse(JSON.stringify(variable)), {control_type: 'variable_power', power: 1200, minimum_value: 0});
+  const setpoint = select('setpoint', 'inverter');
+  assert.equal(setpoint.find(field => field.key === 'offset_entity_id').promoted, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.activeDeviceMapping(setpoint, 'setpoint', draft))),
+    {control_type: 'setpoint', power: 1200, actuator_entity_ids: ['climate.example'],
+      temperature_entity_id: 'sensor.room', offset_entity_id: 'number.adjust'});
+});
 
 test('the editor registers once per app page', () => {
   const elements = new Map();
@@ -177,7 +200,7 @@ test('system fields are saved with their device and excluded from general saves'
   assert.equal(panel._configurationDirty, false); assert.equal(panel._deviceDirty('$battery'), true);
   let sent; panel._backend = { request: async m => { sent = m; return { mapping_status: 'ready' }; } };
   await panel._saveDevice('$battery');
-  assert.equal(sent.configuration.battery_capacity_kwh, 12); assert.equal(sent.mapping, null);
+  assert.equal(sent.configuration.battery_capacity_kwh, 12); assert.equal(sent.mapping, undefined);
   assert.equal(panel._deviceDirty('$battery'), false);
 });
 
@@ -260,7 +283,7 @@ test('saving Planning preserves unsaved Controls and sends only planning propert
   panel._backend = { request: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
   await panel._saveDevice('pool', 'planning');
   assert.deepEqual(JSON.parse(JSON.stringify(sent.configuration)), { pool_volume_m3: 60 });
-  assert.deepEqual(JSON.parse(JSON.stringify(sent.mapping.actuator_entity_ids)), ['switch.pool']);
+  assert.equal(sent.mapping, undefined);
   assert.equal(panel._draft.device_control_mappings.pool.actuator_entity_ids[0], 'switch.other');
   assert.equal(panel._draft.pool_water_temperature_entity, 'sensor.other');
   assert.equal(panel._deviceDirty('pool', 'planning'), false);
@@ -282,7 +305,7 @@ test('saving Controls and cancelling Planning retain edits in the other section'
   assert.equal(panel._draft.pool_permission_entity, 'switch.third');
 });
 
-test('one pool water selector updates the heater mapping when Controls is saved', async () => {
+test('pool water source is sent to its canonical system setting', async () => {
   const panel = splitPanel();
   const device = panel._data.devices.find(d => d.key === 'pool');
   device.control_type = 'setpoint';
@@ -292,10 +315,12 @@ test('one pool water selector updates the heater mapping when Controls is saved'
   }
   panel._draft.pool_water_temperature_entity = 'sensor.new_water';
   let sent;
-  panel._backend = { request: async payload => { sent = payload; return { mapping_status: 'ready' }; } };
+  panel._backend = { request: async payload => { sent = payload; return { mapping_status: 'ready', configuration: { device_control_mappings: {
+    pool: { ...payload.mapping, temperature_entity_id: 'sensor.new_water' },
+  } } }; } };
   await panel._saveDevice('pool', 'controls');
   assert.equal(sent.configuration.pool_water_temperature_entity, 'sensor.new_water');
-  assert.equal(sent.mapping.temperature_entity_id, 'sensor.new_water');
+  assert.equal(sent.mapping.temperature_entity_id, undefined);
   assert.equal(panel._draft.device_control_mappings.pool.temperature_entity_id, 'sensor.new_water');
   assert.equal(panel._deviceDirty('pool', 'controls'), false);
 });

@@ -1251,7 +1251,9 @@ class Household:
     ) -> list[dict[str, Any]]:
         """Hydrate Energy Dashboard devices with server requests and local status."""
         devices = await self.ports.inventory()
-        setups = self.ports.options().get(DEVICE_SETUPS, {})
+        options = self.ports.options()
+        resolved = resolve_configuration(options)
+        setups = options.get(DEVICE_SETUPS, {})
         stored_metadata = stored.get("optimisation_device_metadata", {})
         for device in devices:
             if device["key"] in setups:
@@ -1265,20 +1267,20 @@ class Household:
             stored.get("optimisation_device_configuration", {}),
             mappings
             if mappings is not None
-            else self.resolved_options().get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
+            else resolved.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
             self.ports.entity_ids(),
             self.ports.entity_names(),
             self.ports.area_names(),
             self.ports.entity_areas(),
-            pool_water_entity=self.resolved_options().get("pool_water_temperature_entity"),
+            pool_water_entity=resolved.get("pool_water_temperature_entity"),
         )
-        active_mappings = mappings if mappings is not None else self.resolved_options().get(
+        active_mappings = mappings if mappings is not None else resolved.get(
             OPT_DEVICE_CONTROL_MAPPINGS, {}
         )
         if not isinstance(active_mappings, dict):
             active_mappings = {}
         for device in prepared:
-            if device["key"] in self.ports.options().get("excluded_device_readings", []):
+            if device["key"] in options.get("excluded_device_readings", []):
                 continue
             mapping = active_mappings.get(device["key"], {})
             watts = self._mapped_power_w(mapping)

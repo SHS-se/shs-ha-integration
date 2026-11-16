@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Any
 from . import const as shs_const
-from .device_controls import is_room_thermal_control
+from .device_controls import CONTROL_TYPES, is_room_thermal_control, planning_path
 
 LABELS = {
     "monitoring": "Monitoring", "planning": "Planning", "control_verification": "Control verification",
@@ -347,6 +347,28 @@ def _control_fields(device: dict[str, Any]) -> tuple[dict[str, Any], ...]:
         planning_path_of(device),
         str(device.get("category") or ""),
     )
+
+
+def device_field_catalog() -> dict[str, Any]:
+    """Compile selector rows from the same catalog and route used by device saves."""
+    fields = []
+    rows = {}
+    for category in shs_const.DEVICE_CATEGORIES:
+        for method in ("", *CONTROL_TYPES):
+            path = planning_path(method, category)
+            promoted = {"room": "power", "pool": "power_setting_entity_id"}.get(path)
+            if path == "room" and method != "setpoint":
+                promoted = None
+            indexes = []
+            for field in control_fields(method, path, category):
+                descriptor = {**field}
+                if field["key"] == promoted:
+                    descriptor["show_for_load"] = "inverter"
+                if descriptor not in fields:
+                    fields.append(descriptor)
+                indexes.append(fields.index(descriptor))
+            rows[f"{category}:{method}"] = {"fields": indexes, "path": path}
+    return {"fields": fields, "rows": rows}
 
 
 def section_fields(section: dict[str, Any]) -> list[dict[str, Any]]:
