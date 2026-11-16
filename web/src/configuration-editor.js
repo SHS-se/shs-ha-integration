@@ -1445,7 +1445,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const filtered = this._filterDevices(visible);
     const equipment = this._data.sections.filter(s => s.toggle && ["battery_enabled", "pool_enabled", "ev_enabled"].includes(s.toggle.key));
     const excludedCount = devices.filter(d => !d.included).length;
-    return `<div class="page-intro"><h2>Devices in your home</h2><p>Connect your equipment in Controls, then configure its model in Planning.</p>
+    return `<div class="page-intro"><h2>Devices in your home</h2><p>Open a device under Controls to edit its category, control method, load characteristic and bindings.</p>
       <div class="choice-row"><span>Show excluded devices${excludedCount ? ` (${excludedCount})` : ""}</span><label class="switch"><input type="checkbox" aria-label="Show excluded devices" data-filter="showExcluded" ${this._showExcluded ? "checked" : ""}><span></span></label></div></div>
       <section aria-labelledby="controls-heading"><h2 id="controls-heading">Controls</h2><p>Measurements, actions, operating limits and permission to operate your equipment.</p>
       ${this._renderDeviceFilters(visible)}
@@ -1642,7 +1642,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       <p>Details show the plan first and add a differing controller decision. Battery requests follow live demand within their limits. Controller tests are hypothetical. Requests do not prove delivery.</p></div>
       <div class="card"><h2>Controller diagnostics</h2><p>Download every Included device, with its current mode, configuration, readings, plan and controller status. Retained runtime evaluations and real service calls are separate from simulated verification commands and coverage. Verification does not prove physical response. The file contains local entity IDs and configuration. Observations are sampled about once a minute in every mode, with up to 720 samples retained. Energy-counter differences are labelled as interval averages, with missing or stale readings identified. Current-session checks and coverage are summarised separately from older evidence. Repeated checks are grouped; up to 2,000 groups of each kind are retained. Battery execution includes its complete accounting journal and its latest 8,192 execution traces. Downloads are gzip-compressed JSON.</p><button class="secondary" data-action="verification">Download controller diagnostics</button></div>
       ${this._data.sections.filter(s => s.id === "electrical_limits").map(s => this._renderSection({ ...s, title: "House electrical limits", fields: s.fields.filter(f => f.key.startsWith("grid_")) })).join("")}
-      <p class="muted">Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
+      <p class="muted">Set each device to Monitoring or Planned on the website. Set it to Verification or Controlling here. Website choices last received ${this._time(this._data.portal.refreshed_at)}.</p>
       ${!devices.length ? '<p role="status">No devices match these filters.</p>' : ""}
       ${devices.map(d => `<article class="card schedule-device"><div class="status-heading"><h2>${this._escape(d.name)}</h2><button class="text" data-action="edit-device" data-device-key="${this._escape(d.key)}">Edit setup</button></div>${this._choices(d)}<div class="device-field-issues">${this._deviceFieldButtons(d)}</div>${d.readings?.length ? `<p class="muted">Observed: ${d.readings.map(r => `<span title="${this._escape(r.name + ", updated " + this._time(r.updated_at))}">${this._escape(r.value + " " + r.unit)}</span>`).join(" · ")}</p>` : ""}<small class="muted">${this._escape(this._label(d.execution_status?.state))}${d.execution_status?.reason ? ` · ${this._escape(d.execution_status.reason)}` : ""}${slots[1] && d.included && d.system !== "battery" ? ` · Next quarter ${this._time(slots[1].start)}: ${this._escape(this._scheduleCommand(d, slots[1]).text)}` : ""}</small>${this._batteryLiveInputs(d)}${d.system === "battery" ? this._batteryOutlook(d) : this._controllerDetails(d)}</article>`).join("")}`;
   }
@@ -1825,7 +1825,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
           ${this._notice ? `<div class="alert notice"><span>${this._escape(this._notice)}</span></div>` : ""}
           ${this._renderBackends()}${this._renderMeasurementIssues()}${this._renderExecutionReplanning()}${this._renderReplanRecommendations()}${this._renderBody()}
         </section>
-        <footer aria-live="polite"><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span><span>Website choices define the planning method. The website owns Monitoring or Planned. Execution here is Verification or Controlling.</span></footer>
+        <footer aria-live="polite"><span>${this._dirty ? "Unsaved changes" : "All changes saved"}</span></footer>
         ${this._inspectedEntity ? this._entityInspector() : ""}
         ${this._renderDatalist()}
       </main>`;
