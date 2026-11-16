@@ -1,6 +1,6 @@
 import {expect, test} from '@playwright/test';
 
-test('sets the room on the dashboard meter pair from a collapsed device card', async ({page}) => {
+test('sets the room on the dashboard meter pair from the selected device', async ({page}) => {
   const energy = 'sensor.water_boiler_energy';
   const power = 'sensor.water_boiler_power';
   let data: Record<string, any>;
@@ -38,7 +38,7 @@ test('sets the room on the dashboard meter pair from a collapsed device card', a
   await expect(card).toContainText('Controls configured');
   await button.click();
   await expect(dialog).toContainText('different room assignments');
-  await expect(card).not.toHaveAttribute('open', '');
+  await expect(card).toHaveAttribute('open', '');
   await dialog.getByRole('button', {name: 'Cancel'}).click();
   await expect(dialog).toHaveCount(0);
   await expect(button).toBeFocused();
@@ -86,7 +86,6 @@ test('edits a category without writing until Save even when its room is read-onl
   await editor.getByRole('button', {name: 'Devices', exact: true}).click();
   await editor.getByRole('checkbox', {name: 'Show excluded devices'}).press('Space');
   const card = editor.locator('details.device-card').filter({hasText: 'Boiler'});
-  await card.locator('summary strong').click();
   const select = card.getByRole('combobox', {name: 'Category'});
   const save = card.getByRole('button', {name: 'Save controls'});
   await expect(select).toHaveValue('hot_water');
@@ -143,7 +142,12 @@ test('projects fields locally, preserves compatible values and saves selectors w
   const editor = page.locator('shs-configuration-editor');
   await editor.getByRole('button', {name: 'Devices', exact: true}).click();
   const card = editor.locator('details.device-card').filter({hasText: 'Heater'});
-  await card.locator('summary strong').click();
+  const views = editor.getByRole('navigation', {name: 'Device views'});
+  await views.getByRole('button', {name: 'Plan', exact: true}).click();
+  await expect(editor.getByRole('heading', {name: 'Not in the plan'})).toBeVisible();
+  await expect(editor.getByText('This device is set to Monitoring on the website.')).toBeVisible();
+  await views.getByRole('button', {name: 'Configuration', exact: true}).click();
+  await expect(editor.getByRole('button', {name: 'Heater', exact: true})).toHaveAttribute('aria-current', 'true');
   const method = card.getByRole('combobox', {name: 'Control method'});
   const load = card.getByRole('combobox', {name: 'Load characteristic'});
   const temperature = card.getByRole('combobox', {name: 'Room temperature'});

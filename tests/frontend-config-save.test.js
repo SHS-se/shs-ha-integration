@@ -253,15 +253,19 @@ const splitPanel = () => {
   return panel;
 };
 
-test('Devices stacks Controls above Planning and excludes equipment until explicitly shown', () => {
+test('Devices shows the selected setup view and hides excluded equipment until requested', () => {
   const panel = splitPanel();
   const html = panel._renderDevices();
-  assert.ok(html.indexOf('id="controls-heading"') < html.indexOf('id="planning-heading"'));
-  const [controls, planning] = html.split('<section aria-labelledby="planning-heading">');
-  assert.match(controls, /<strong>Pool pump<\/strong>/);
-  assert.doesNotMatch(controls, /<strong>Pool<\/strong>/);
+  assert.match(html, /aria-label="Device list"/);
+  panel._selectedDevice = panel._data.devices.find(device => device.name === "Pool pump").key;
+  const controls = panel._renderDevices();
+  assert.match(controls, /Pool pump/);
   assert.match(controls, /Pool water temperature/);
   assert.doesNotMatch(controls, /Pool volume/);
+  const owner = panel._data.devices.find(device => device.system === "pool");
+  panel._selectedDevice = owner.key;
+  panel._deviceView = "planning";
+  const planning = panel._renderDevices();
   assert.match(planning, /Pool volume/);
   assert.doesNotMatch(planning, /Pool water temperature/);
   assert.match(planning, /<strong>Pool<\/strong>/);
@@ -518,7 +522,8 @@ for (const [name, controlType] of [['Pool pump', 'switch_schedule'], ['Pool heat
       { key: 'power', label: 'Power', kind: 'power', help: 'Choose a power sensor, or enter reviewed watts directly.' },
     ] });
     for (const draft of [panel._draft, panel._savedDraft]) draft.device_control_mappings.pool.control_type = controlType;
-    const [controls, planning] = panel._renderDevices().split('<section aria-labelledby="planning-heading">');
+    const controls = panel._renderDevice(device, "controls", true);
+    const planning = panel._renderDevice(device, "planning", true);
     assert.match(controls, /data-field-key="power" data-scope="mapping" data-device-key="pool" value=""/);
     assert.match(controls, /Power entity or watts/);
     assert.doesNotMatch(controls, /Add power/);
@@ -1192,12 +1197,14 @@ test('device inclusion lives in Controls cards with state-dependent explanations
   const panel = splitPanel();
   panel._draft.excluded_device_readings = ['excluded'];
   panel._showExcluded = true;
+  panel._selectedDevice = "pool";
   let html = panel._renderDevices();
   assert.doesNotMatch(html, /<summary>Included devices/);
   assert.equal((html.match(/data-share="pool"/g) || []).length, 1);
   assert.match(html, /data-share="pool"[^>]*checked/);
   assert.match(html, /Shares device data with SHS/);
-  assert.match(html, /Sends no individual readings, profiles or metadata/);
+  panel._selectedDevice = "excluded";
+  assert.match(panel._renderDevices(), /Sends no individual readings, profiles or metadata/);
   panel._draft.excluded_device_readings.push('pool');
   html = panel._renderDevice(panel._data.devices[0]);
   assert.doesNotMatch(html, /data-share="pool"[^>]*checked/);
