@@ -28,7 +28,6 @@ function activeDeviceMapping(fields, controlType, draft) {
 
 const FRONTEND_VERSION = "app-configuration-v1";
 const PANEL_ELEMENT = "shs-configuration-editor";
-const DOORWAY_MODES = { usually_open: "Usually open", varies: "Door varies" };
 
 function newRequestId() {
   // getRandomValues is also available to Home Assistant served over local HTTP.
@@ -886,15 +885,15 @@ class ShsEnergyConfigPanel extends HTMLElement {
       void this._saveRoomProbe(button.dataset.roomKey);
     }
     else if (action === "open-doorway-form") {
-      this._doorwayForm = { room: button.dataset.roomKey, connectedRoom: "", mode: "usually_open" };
+      this._doorwayForm = { room: button.dataset.roomKey, connectedRoom: "" };
       this._render();
       this.shadowRoot.querySelector('[data-doorway-field="connectedRoom"]')?.focus();
     }
     else if (action === "add-doorway" || action === "cancel-doorway") {
       if (action === "add-doorway") {
-        const {room, connectedRoom, mode} = this._doorwayForm;
+        const {room, connectedRoom} = this._doorwayForm;
         if (!this._availableDoorwayRooms(room).includes(connectedRoom)) return;
-        this._doorways.push({rooms: [room, connectedRoom], mode});
+        this._doorways.push({rooms: [room, connectedRoom]});
       }
       this._doorwayForm = null;
       this._render();
@@ -1759,19 +1758,19 @@ class ShsEnergyConfigPanel extends HTMLElement {
       const connections = (saved.connections ?? []).filter(edge => edge.rooms.includes(room));
       const website = saved.environment === "test" ? "test website" : "website";
       return `<div class="workspace-panel room-connections"><h3>Room connections</h3>
-        ${connections.length ? `<ul class="doorway-list">${connections.map(({rooms: pair, mode}) => {
+        ${connections.length ? `<ul class="doorway-list">${connections.map(({rooms: pair}) => {
           const other = pair.find(key => key !== room);
-          return `<li><div><strong>${this._escape(names[other] ?? other)}</strong><span class="muted">${DOORWAY_MODES[mode]}</span></div></li>`;
+          return `<li><div><strong>${this._escape(names[other] ?? other)}</strong></div></li>`;
         }).join("")}</ul>` : `<p class="muted">${saved.connections ? "No saved doorways." : "Waiting for saved doorways."}</p>`}
         <a href="${this._escape(profile.href)}" target="_blank" rel="noopener noreferrer">Edit room connections on ${website}</a></div>`;
     }
     const available = this._availableDoorwayRooms(room);
     const form = this._doorwayForm?.room === room ? this._doorwayForm : null;
-    const connections = (this._doorways || []).map(({rooms: pair, mode}, index) => {
+    const connections = (this._doorways || []).map(({rooms: pair}, index) => {
       if (!pair.includes(room)) return "";
       const other = pair.find(key => key !== room);
       if (!names[other]) return "";
-      return `<li><div><strong>${this._escape(names[other])}</strong><span class="muted">${DOORWAY_MODES[mode]}</span></div>
+      return `<li><div><strong>${this._escape(names[other])}</strong></div>
         <button type="button" class="text" data-action="remove-doorway" data-index="${index}" aria-label="Remove doorway to ${this._escape(names[other])}">Remove</button></li>`;
     }).filter(Boolean);
     return `<details class="workspace-panel room-connections" data-open-key="room-connections" ${this._expanded.has("room-connections") ? "open" : ""}>
@@ -1783,9 +1782,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         <label class="field">Connected room<select data-doorway-field="connectedRoom" data-field-key="doorway-room">
           <option value="">Choose a room</option>${rooms.filter(([key]) => available.includes(key)).map(([key, name]) =>
             `<option value="${this._escape(key)}" ${key === form.connectedRoom ? "selected" : ""}>${this._escape(name)}</option>`).join("")}
-        </select></label>
-        <label class="field">Doorway<select data-doorway-field="mode" data-field-key="doorway-mode">${Object.entries(DOORWAY_MODES).map(([mode, label]) =>
-          `<option value="${mode}" ${form.mode === mode ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
+        </select></label></div>
         <div class="doorway-actions"><button type="button" class="primary" data-action="add-doorway" ${available.includes(form.connectedRoom) ? "" : "disabled"}>Add connection</button>
         <button type="button" class="secondary" data-action="cancel-doorway">Cancel</button></div></div>` : ""}
       <p class="muted">Preview only. Connections reset when you reload the app.</p>

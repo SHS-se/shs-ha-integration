@@ -180,15 +180,13 @@ test('previews doorway connections from both rooms and removes them', async ({pa
   await connections.getByRole('button', {name: 'Add doorway'}).click();
   const room = connections.getByRole('combobox', {name: 'Connected room'});
   await expect(room.getByRole('option', {name: 'Hall', exact: true})).toHaveCount(0);
-  const doorway = connections.getByRole('combobox', {name: 'Doorway', exact: true});
-  await expect(doorway).toHaveValue('usually_open');
+  await expect(connections.getByRole('combobox')).toHaveCount(1);
   await room.selectOption('studio');
-  await doorway.selectOption('varies');
   await connections.getByRole('button', {name: 'Add connection'}).click();
-  await expect(connections.getByRole('listitem')).toHaveText(/Studio.*Door varies/s);
+  await expect(connections.getByRole('listitem')).toHaveText(/Studio.*Remove/s);
   await expect(connections.getByRole('button', {name: 'Add doorway'})).toBeDisabled();
   await editor.getByRole('navigation', {name: 'Room list'}).getByRole('button', {name: 'Studio'}).click();
-  await expect(connections.getByRole('listitem')).toHaveText(/Hall.*Door varies/s);
+  await expect(connections.getByRole('listitem')).toHaveText(/Hall.*Remove/s);
   await connections.getByRole('button', {name: 'Remove doorway to Hall'}).click();
   await expect(connections.getByText('No doorways added.')).toBeVisible();
 });
