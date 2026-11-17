@@ -195,8 +195,10 @@ test('the device header switch shows the persisted inclusion state', async ({pag
   const key = 'sensor.example_load_energy';
   let excluded = false;
   let attempts = 0;
+  let fixture: Promise<Record<string, any>> | undefined;
   await page.route('**/api/configuration/get', async route => {
-    const data = await (await route.fetch()).json();
+    fixture ??= route.fetch().then(response => response.json());
+    const data = structuredClone(await fixture);
     data.configuration.excluded_device_readings = excluded ? [key] : [];
     data.devices = [{key, name: 'Example load', included: !excluded, category: 'household', mapping_status: 'ready'}];
     await route.fulfill({json: data});
