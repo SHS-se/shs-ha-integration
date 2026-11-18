@@ -369,6 +369,8 @@ class ShsApiClient:
         pool_slots: list[dict[str, Any]] | None = None,
         *,
         device_inventory_complete: bool = False,
+        heating_observations: list[dict[str, Any]] | None = None,
+        heating_probe_observations: list[dict[str, Any]] | None = None,
         replan_request_id: str | None = None,
         replan_recommendation: str | None = None,
         execution_replan: ExecutionReplan | None = None,
@@ -397,6 +399,10 @@ class ShsApiClient:
         # Optional quarter series are omitted when this is only a device
         # inventory exchange; an explicitly complete empty inventory remains
         # meaningful through device_inventory_complete.
+        if heating_observations is not None:
+            body["heating_observations"] = heating_observations
+        if heating_probe_observations is not None:
+            body["heating_probe_observations"] = heating_probe_observations
         if thermal_slots:
             body["thermal_slots"] = thermal_slots
         if price_slots:

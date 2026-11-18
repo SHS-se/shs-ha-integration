@@ -4,13 +4,16 @@ from pathlib import Path
 import sys
 import unittest
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from types import SimpleNamespace
+import json
+from copy import deepcopy
 sys.path.append(str(Path(__file__).parents[1] / 'custom_components' / 'shs_energy'))
 from shs_core.household_ports import HouseholdReadError, ConfigurationChanged
 from shs_core.room_electrical import OnCondition, attributed_device_quarters, capture_room_on_power, room_on_power
 from shs_core.room_electrical import heating_quarters, weather_heating_bindings
 from shs_core.device_draw import DrawBinding, learn_device_draw
+from shs_core.room_electrical import OnPowerEvidence, retain_running_power_model
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 def at(minutes): return START+timedelta(minutes=minutes)
@@ -190,3 +193,149 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
                 h=self.history();h.states.side_effect=error
                 with self.assertRaises(type(error)):
                     await capture_room_on_power(h,[self.device()],{'room':self.mapping()},START,at(15))
+
+
+class InventoryEvidenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_real_capture_uploads_learned_power_without_copying_planning_preferences(self):
+        """Synthetic idle/ON readings cross the actual snapshot/inventory copy boundary."""
+        from household_fixture import Rig
+        from shs_core.api import ShsApiClient
+        from shs_core.operating_modes import planning_devices
+        rig = Rig(now=at(15))
+        mappings = {'room': {'control_type':'setpoint', 'power':'sensor.power',
+                            'actuator_entity_ids':['climate.room']}}
+        options = {'planning_mode':'live', 'device_control_mappings':mappings}
+        inventory = [{'key':'room', 'statistic_id':'sensor.energy', 'name':'Synthetic room heater',
+            'category':'heating', 'control_type':'setpoint', 'planning_role':'controllable',
+            'suggested_load_type':'duty_cycle', 'load_type':'duty_cycle', 'mapping_status':'ready',
+            'active_power_w':None, 'profile_sample_count':0, 'inference':{'method':'synthetic_discovery'}}]
+        rig.history.statistics.return_value = {'sensor.power':[
+            {'start':START.timestamp(),'mean':1100}, {'start':at(5).timestamp(),'mean':1300},
+            {'start':at(10).timestamp(),'mean':2}]}
+        rig.history.states.return_value = {'climate.room':[row(0,'heating'),row(10,'idle')]}
+        rig.household._refresh_counter_bounds = AsyncMock()
+        rig.household._planning_actual_quarters = AsyncMock(return_value=([],[
+            {'start':START.isoformat(),'device_energy_kwh':{'room':.2}}]))
+        rig.household._boiler_running_power_w = AsyncMock(return_value={})
+        rig.household._supplier_price_catalog = lambda: {
+            'configuration':{'price_area':'synthetic'},'issued_at':START.isoformat()}
+        def scoped(devices, options):
+            copied = planning_devices(devices, options)
+            copied[0]['name'] = 'Planning-only name'
+            copied[0]['load_type'] = 'fixed_full_load'
+            return copied
+        class Captured(Exception):
+            pass
+        # Stop after the real model capture, before unrelated house forecasts.
+        with patch('shs_core.operating_modes.planning_devices', scoped), \
+                patch('shs_core.household.supplier_price_forecast', return_value={}), \
+                patch('shs_core.household.build_base_load_model', side_effect=Captured):
+            with self.assertRaises(Captured):
+                await rig.household._build_optimisation_snapshot(options,{},[],{},inventory)
+        uploaded = ShsApiClient.prepare_optimisation_submission([],None,inventory)['devices'][0]
+        self.assertEqual(uploaded['active_power_w'],1200)
+        self.assertEqual(uploaded['profile_sample_count'],1)
+        self.assertEqual(uploaded['inference']['on_power']['expected_w'],1200)
+        self.assertEqual(uploaded['inference']['on_power']['intervals'],2)
+        self.assertEqual(uploaded['inference']['method'],'synthetic_discovery')
+        self.assertEqual(uploaded['name'],'Synthetic room heater')
+        self.assertEqual(uploaded['load_type'],'duty_cycle')
+        self.assertEqual(uploaded['planning_role'],'controllable')
+
+
+class RetainedRunningPowerTests(unittest.TestCase):
+    """Synthetic seasonal transitions use the same durable inventory as uploads."""
+    def setUp(self):
+        self.device = {'key':'heater','statistic_id':'sensor.energy','name':'Synthetic heater',
+            'category':'heating','control_type':'setpoint','planning_role':'controllable',
+            'suggested_load_type':'duty_cycle','load_type':'duty_cycle',
+            'active_power_w':9000,'inference':{'method':'synthetic_discovery'}}
+        self.mappings = {'heater':{'control_type':'setpoint','power':'sensor.power',
+                                   'actuator_entity_ids':['climate.room']}}
+
+    def observed(self, watts=1200):
+        power = self.mappings['heater']['power']
+        actuator = self.mappings['heater']['actuator_entity_ids'][0]
+        return room_on_power(conditions={'heater':OnCondition(power,(actuator,),())},
+            power_means={power:[(START,watts),(at(5),watts)]},
+            actuator_rows={actuator:[row(0,'heating'),row(10,'idle')]},
+            start=START,end=at(15))['heater']
+
+    def build(self, evidence):
+        from shs_core.planning import build_device_models
+        # No energy profile can supply running watts; a current standby sensor
+        # and an unrelated descriptive previous rating cannot either.
+        models,_ = build_device_models([self.device],[],[at(15)],self.mappings,
+            mapped_power_w=lambda _:2,pool_power_w={},room_on_power={'heater':evidence},local_tz=timezone.utc)
+        return models[0]
+
+    def test_summer_no_on_retains_fitted_source_and_training_provenance_after_restart(self):
+        from shs_core.api import ShsApiClient
+        fitted = self.build(self.observed())
+        artifact = deepcopy(fitted['inference']['on_power'])
+        snapshot = {'snapshot_id':'synthetic', 'device_models':[fitted]}
+        body = ShsApiClient.prepare_optimisation_submission([],snapshot,[self.device])
+        artifact_source = {'revision':artifact['revision'],'binding':artifact['binding']}
+        self.assertEqual(body['snapshot']['device_models'][0]['running_power_model'],artifact_source)
+        # This is the shape round-tripped by optimisation_device_metadata.
+        self.device = json.loads(json.dumps(self.device))
+        for source in ('no_on_coverage','source_unavailable'):
+            model = self.build(OnPowerEvidence(None,0,0,source))
+            selected = model['inference']['on_power']
+            self.assertEqual(model['active_power_w'],1200)
+            self.assertTrue(selected['retained'])
+            self.assertEqual(selected['revision'],artifact['revision'])
+            self.assertEqual(selected['observed_from'],START.isoformat())
+            self.assertEqual(selected['observed_to'],at(10).isoformat())
+            self.assertEqual(selected['latest_attempt']['source'],source)
+            self.assertEqual(model['running_power_model'],
+                {'revision':artifact['revision'],'binding':artifact['binding']})
+            self.assertNotIn('running_power_unknown',{w['code'] for w in model['planning_warnings']})
+        # A new identified measurement replaces this source's constant fit.
+        updated = self.build(self.observed(1500))
+        self.assertEqual(updated['active_power_w'],1500)
+        self.assertFalse(updated['inference']['on_power']['retained'])
+        self.assertNotEqual(updated['inference']['on_power']['revision'],artifact['revision'])
+        self.assertEqual(len(updated['inference']['on_power_models']),1)
+
+    def test_changed_meter_or_actuator_cannot_reuse_fit_and_preserves_old_source_archive(self):
+        old = self.build(self.observed())['inference']['on_power']
+        retained = deepcopy(self.device)
+        replacements = [({'power':'sensor.new_power'},None),
+                        ({'actuator_entity_ids':['climate.new_heater']},None),
+                        ({},'sensor.new_energy')]
+        for changes,statistic in replacements:
+            with self.subTest(changes=changes,statistic=statistic):
+                self.device = deepcopy(retained)
+                self.mappings['heater'] = {'control_type':'setpoint','power':'sensor.power',
+                    'actuator_entity_ids':['climate.room'],**changes}
+                if statistic:
+                    self.device['statistic_id'] = statistic
+                result = self.build(OnPowerEvidence(None,0,0,'no_on_coverage'))
+                self.assertIsNone(result['active_power_w'])
+                self.assertNotIn('running_power_model',result)
+                self.assertEqual(result['inference']['on_power_models'][old['binding']]['revision'],old['revision'])
+                fresh = self.build(self.observed(1600))
+                self.assertEqual(len(fresh['inference']['on_power_models']),2)
+
+    def test_shared_meter_contract_change_and_unqualified_previous_rating_stay_unknown(self):
+        self.device['running_power_model'] = {'revision':'stale','binding':'stale'}
+        unknown = self.build(OnPowerEvidence(None,0,0,'no_on_coverage'))
+        self.assertIsNone(unknown['active_power_w'])
+        self.assertNotIn('running_power_model',unknown)
+        old = self.build(self.observed())['inference']['on_power']
+        self.mappings['other'] = {'control_type':'setpoint','power':'sensor.power',
+                                 'actuator_entity_ids':['climate.other']}
+        result = self.build(OnPowerEvidence(None,0,0,'shared_meter_unknown'))
+        self.assertIsNone(result['active_power_w'])
+        self.assertIn(old['binding'],result['inference']['on_power_models'])
+
+    def test_identical_observations_keep_revision_and_numeric_configuration_is_not_archived(self):
+        first = self.build(self.observed())['inference']['on_power']
+        second = self.build(self.observed())['inference']['on_power']
+        self.assertEqual(first['revision'],second['revision'])
+        configured = OnPowerEvidence(1800,0,0,'configured')
+        self.mappings['heater']['power'] = 1800
+        watts,metadata = retain_running_power_model(self.device,self.mappings,configured)
+        self.assertEqual(watts,1800)
+        self.assertEqual(len(metadata['on_power_models']),1)

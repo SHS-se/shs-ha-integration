@@ -6,7 +6,7 @@ import unittest
 from household_fixture import Rig
 from shs_core.const import MAX_THERMAL_SLOTS_PER_PUSH, THERMAL_ROOM_HISTORY_HOURS
 from shs_core.thermal import (
-    MIN_HOUSE_AREAS, build_thermal_slots, house_temperature_entities, house_temperature_quarters,
+    MIN_HOUSE_AREAS, build_thermal_slots, configured_room_air_probes, house_temperature_quarters,
     merge_thermal_slots,
 )
 
@@ -20,20 +20,14 @@ def sensor(device_class='temperature', state_class='measurement', unit='°C'):
 
 
 class HouseSourcesTests(unittest.TestCase):
-    def test_only_indoor_temperature_measurements_in_an_area(self):
-        states = {
-            'sensor.kitchen_temperature': sensor(),
-            'sensor.kitchen_humidity': sensor(device_class='humidity', unit='%'),
-            'sensor.kitchen_daily_mean': sensor(state_class=None),
-            'sensor.hall_fahrenheit': sensor(unit='°F'),
-            'sensor.outdoor_temperature': sensor(),
-            'sensor.pool_water': sensor(),
-            'climate.kitchen': sensor(),
-            'sensor.unplaced_temperature': sensor(),
-        }
-        areas = {entity: 'kitchen' for entity in states if entity != 'sensor.unplaced_temperature'}
-        found = house_temperature_entities(areas, states.get, ('sensor.outdoor_temperature', 'sensor.pool_water', None))
-        self.assertEqual(found, {'sensor.kitchen_temperature': 'kitchen'})
+    def test_only_explicit_room_air_assignments_are_selected(self):
+        rooms = {"kitchen": {"temperature_entity_id": "sensor.kitchen_air"},
+                 "hall": {"temperature_entity_id": "sensor.hall_air"},
+                 "pool": {"temperature_entity_id": "sensor.pool_water"},
+                 "outside": {"temperature_entity_id": "sensor.outdoors"},
+                 "empty": {}, "invalid": {"temperature_entity_id": None}}
+        found = configured_room_air_probes(rooms, ("sensor.outdoors", "sensor.pool_water"))
+        self.assertEqual(found, {"kitchen": "sensor.kitchen_air", "hall": "sensor.hall_air"})
 
 
 class HouseQuartersTests(unittest.TestCase):
@@ -70,6 +64,7 @@ DEVICE = {'key': HEATER, 'statistic_id': HEATER, 'planning_role': 'controllable'
           'control_type': 'setpoint', 'category': 'heating', 'active_power_w': 680.0,
           'mapping_summary': {'room_key': 'master_bathroom'}}
 OPTIONS = {'planning_mode': 'live', 'outdoor_temperature_entity': 'sensor.outdoor',
+           'rooms': {room: {'temperature_entity_id': 'sensor.' + room} for room in ('kitchen', 'hall', 'bedroom')},
            'device_control_mappings': {HEATER: {
                'control_type': 'setpoint', 'temperature_entity_id': 'sensor.bathroom_temperature',
                'actuator_entity_ids': ['climate.bathroom_floor']}}}

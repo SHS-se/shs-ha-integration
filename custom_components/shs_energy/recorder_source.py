@@ -17,6 +17,12 @@ class RecorderSource:
     def __init__(self, hass):
         self.hass = hass
 
+    async def probe_sources(self, entities):
+        from homeassistant.helpers import entity_registry, device_registry
+        from .shs_core.probe_evidence import probe_source_topology
+        return probe_source_topology(entities, entity_registry.async_get(self.hass).entities,
+            device_registry.async_get(self.hass).devices, self.hass.states.get)
+
     async def power_peaks(self, entities):
         """Aggregate all retained short/long-term maxima, normalized by Recorder."""
         def read():

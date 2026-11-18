@@ -58,7 +58,7 @@ class Rig:
         self.records = Store(stored)
         self.battery_store = Store()
         self.client = Mock(status=AsyncMock(return_value=cloud_status(subscription_active=False)))
-        self.history = Mock(statistics=AsyncMock(return_value={}), states=AsyncMock(return_value={}), hourly_forecast=AsyncMock(return_value=[]))
+        self.history = Mock(statistics=AsyncMock(return_value={}), states=AsyncMock(return_value={}), hourly_forecast=AsyncMock(return_value=[]), probe_sources=AsyncMock(return_value={}))
         self.repairs = []
         self.published = []
         self.spawned = []

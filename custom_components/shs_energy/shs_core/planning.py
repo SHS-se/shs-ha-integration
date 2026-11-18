@@ -20,7 +20,7 @@ from typing import Any, Callable, Optional
 from math import isfinite
 
 from .planning_warnings import planning_warning
-from .room_electrical import OnPowerEvidence
+from .room_electrical import OnPowerEvidence, RUNNING_POWER_MODEL_METHOD, retain_running_power_model
 
 from .const import (
     EV_CHARGE_EFFICIENCY,
@@ -815,7 +815,11 @@ def build_device_models(
             # watts remain observations, never replacements for that bound.
             active_power_w = pool_power_w.get(str(device["key"]))
         if path == "room":
-            active_power_w = room_on_power[str(device["key"])].expected_w
+            evidence = room_on_power[str(device["key"])]
+            if device.get("category") == "heating":
+                active_power_w, room_inference = retain_running_power_model(device, control_mappings, evidence)
+            else:
+                active_power_w, room_inference = evidence.expected_w, {"on_power": evidence.as_inference()}
         if path == "boiler":
             # Quarter means describe energy, not an element's running draw.
             # Preserve observed on-cycle power while its live sensor is idle.
@@ -836,7 +840,7 @@ def build_device_models(
                 for weekday, profile in empirical["by_weekday"].items()
             },
             **({"running_power_w": active_power_w} if path == "boiler" else {}),
-            **({"on_power": room_on_power[str(device["key"])].as_inference()} if path == "room" else {}),
+            **(room_inference if path == "room" else {}),
         }
         if planning_role == "base_load":
             continue
@@ -861,7 +865,7 @@ def build_device_models(
             forecast_w.append(empirical["by_weekday"][local.weekday()][
                 local.hour * 4 + local.minute // 15
             ])
-        device_models.append({
+        model = {
             **device,
             "load_type": device.get(
                 "load_type", device["suggested_load_type"]
@@ -870,7 +874,16 @@ def build_device_models(
             "control_type": control_type,
             "forecast_w_by_slot": forecast_w,
             **({"planning_service": "pool"} if path == "pool" else {}),
-        })
+        }
+        model.pop("running_power_model", None)
+        selected = device["inference"].get("on_power")
+        if (path == "room" and device.get("category") == "heating" and isinstance(selected, dict)
+                and selected.get("model_method") == RUNNING_POWER_MODEL_METHOD
+                and all(isinstance(selected.get(field), str) and selected[field] for field in ("revision", "binding"))
+                and type(active_power_w) in (int, float) and isfinite(active_power_w) and active_power_w > 0
+                and selected.get("expected_w") == active_power_w):
+            model["running_power_model"] = {field: selected[field] for field in ("revision", "binding")}
+        device_models.append(model)
     if device_gaps:
         raise OptimisationInputError(*device_gaps, remedy=REMEDY_DEFECT)
     return device_models, degraded

@@ -59,6 +59,17 @@ def _number(value: Any) -> float | None:
     return float(value) if isfinite(value) else None
 
 
+class CounterIntervals(dict[str, list[tuple[datetime, float]]]):
+    """Measured intervals plus explicit cleaner withdrawals, never read failures.
+
+    Existing readers consume the mapping unchanged. Learning capture can also
+    retract an earlier observation when later counter evidence disproves it.
+    """
+    def __init__(self):
+        super().__init__()
+        self.invalidated: dict[str, set[datetime]] = {}
+
+
 @dataclass
 class CounterRow:
     """One Recorder statistics row of a counter, judged against its neighbour."""
@@ -71,6 +82,7 @@ class CounterRow:
     # "suspect": Recorder synthesised it; the readings decide.
     # "unknown": the change is not this period's energy.
     verdict: str = "trusted"
+    invalidated: bool = False
 
 
 def _consistent(change: float, before: float, after: float) -> bool:
@@ -108,18 +120,21 @@ def judge_counter_rows(
         if previous.end != row.start:
             # Recorder skipped a period, so this change covers that time too.
             row.verdict = "unknown"
+            row.invalidated = True
             continue
         if row.state is None or previous.state is None:
             continue
         row.previous_state = previous.state
         if not _consistent(row.change, previous.state, row.state):
             row.verdict = "suspect"
+            row.invalidated = True
             if row.state < previous.state - MAX_NEGATIVE_CHANGE_KWH:
                 fell_from = max(previous.state, fell_from if fell_from is not None else previous.state)
                 _retract_excursion(judged, index, row.state)
             continue
         if fell_from is not None and previous.state < fell_from <= row.state:
             row.verdict = "unknown"
+            row.invalidated = True
             fell_from = None
     return judged
 
@@ -135,6 +150,7 @@ def _retract_excursion(judged: list[CounterRow], fall: int, level: float) -> Non
         if row.previous_state <= level + MAX_NEGATIVE_CHANGE_KWH:
             for excursion in judged[index:fall]:
                 excursion.verdict = "unknown"
+                excursion.invalidated = True
             return
 
 

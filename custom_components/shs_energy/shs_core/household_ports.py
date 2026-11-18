@@ -38,6 +38,8 @@ class HomeFacts:
 
 
 class HistorySource(Protocol):
+    async def probe_sources(self, entities: set[str]) -> dict: ...
+
     async def statistics(self, start: datetime, end: datetime, entities: set[str],
                          period: str, units: dict | None, kinds: set[str]) -> dict: ...
 

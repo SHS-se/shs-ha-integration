@@ -66,6 +66,15 @@ class Hass:
 
 
 class MetadataTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_topology_request_is_targeted_read_only(self):
+        facts = {'sensor.air':{'companions':['sensor.humidity'],'cohort_key':None}}
+        self.source.history = SimpleNamespace(probe_sources=AsyncMock(return_value=facts))
+        result = await self.source.request('probe_sources', {'entities':['sensor.air']})
+        self.assertEqual(result, facts)
+        self.source.history.probe_sources.assert_awaited_once_with({'sensor.air'})
+        with self.assertRaises(ValueError):
+            await self.source.request('probe_sources', {'entities':'sensor.air'})
+
     async def test_metadata_cannot_reopen_admission_during_a_verification_save(self):
         started, finish = asyncio.Event(), asyncio.Event()
         async def persist(_):

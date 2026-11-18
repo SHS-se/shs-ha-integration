@@ -13,6 +13,8 @@ from statistics import median
 from time import perf_counter
 import asyncio
 import logging
+import hashlib
+import json
 
 from .device_commands import actuator_targets
 from .device_controls import device_planning_path
@@ -21,6 +23,7 @@ from .household_ports import ConfigurationChanged, HouseholdReadError
 _LOGGER = logging.getLogger(__name__)
 PERIOD = timedelta(minutes=5)
 ATTRIBUTED_CYCLE_METHOD = "room_attributed_cycle_energy_v1"
+RUNNING_POWER_MODEL_METHOD = "room_running_power_constant_v1"
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,13 @@ class OnCondition:
     power: str
     on: tuple[str, ...]
     off: tuple[str, ...]
+
+
+def _on_condition(key, mappings):
+    mapping = mappings[key]
+    other = [m for k, m in mappings.items() if k != key and m.get("power") == mapping.get("power")]
+    return OnCondition(mapping.get("power"), tuple(actuator_targets(mapping)),
+        tuple(sorted({entity for m in other for entity in actuator_targets(m)})))
 
 
 @dataclass(frozen=True)
@@ -38,6 +48,8 @@ class OnPowerEvidence:
     source: str
     condition: OnCondition | None = None
     cycles: int | None = None
+    observed_from: str | None = None
+    observed_to: str | None = None
 
     def as_inference(self):
         values = asdict(self)
@@ -46,6 +58,48 @@ class OnPowerEvidence:
             values.pop("cycles")
             method = "room_observed_on_power_median_v1"
         return {"method": method, **values}
+
+
+def retain_running_power_model(device, mappings, evidence):
+    """Publish measured constant draw per source, retaining fitted summer knowledge.
+
+    The inventory's existing inference is the durable owner. A descriptive
+    active_power_w or duty-average profile is never promoted into this model.
+    """
+    key = str(device["key"])
+    mapping = mappings.get(key, {})
+    power = mapping.get("power")
+    previous = (device.get("inference") or {}).get("on_power_models")
+    models = dict(previous) if isinstance(previous, dict) else {}
+    attempt = evidence.as_inference()
+    binding = None
+    if isinstance(power, str) and actuator_targets(mapping):
+        identity = {"device_key": key, "statistic_id": device.get("statistic_id"),
+            "power": power, "consumers": {k: {"control_type": m.get("control_type"),
+                "actuators": sorted(actuator_targets(m))} for k, m in mappings.items()
+                if m.get("power") == power}}
+        binding = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    prior = models.get(binding)
+    valid_prior = (isinstance(prior, dict) and prior.get("model_method") == RUNNING_POWER_MODEL_METHOD
+                   and prior.get("binding") == binding and isinstance(prior.get("revision"), str)
+                   and type(prior.get("expected_w")) in (int, float)
+                   and isfinite(prior["expected_w"]) and prior["expected_w"] > 0)
+    identified = (binding is not None and isinstance(device.get("statistic_id"), str)
+                  and bool(device["statistic_id"]) and evidence.condition == _on_condition(key, mappings)
+                  and type(evidence.expected_w) in (int, float)
+                  and isfinite(evidence.expected_w) and evidence.expected_w > 0
+                  and evidence.source in ("recorded_on_intervals", "attributed_cycles")
+                  and evidence.observed_from is not None and evidence.observed_to is not None)
+    if identified:
+        model = {**attempt, "model_method": RUNNING_POWER_MODEL_METHOD, "binding": binding}
+        model["revision"] = hashlib.sha256(json.dumps(model, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        models[binding] = model
+        selected = {**model, "retained": False}
+    elif valid_prior:
+        selected = {**prior, "retained": True, "latest_attempt": attempt}
+    else:
+        selected = {**attempt, "binding": binding, "retained": False}
+    return selected["expected_w"], {"on_power": selected, "on_power_models": models}
 
 
 def attributed_device_quarters(rows, draws, start, end):
@@ -149,6 +203,7 @@ def room_on_power(*, conditions, power_means, actuator_rows, start, end):
     result = {}
     for key, condition in conditions.items():
         observed = []
+        observed_at = []
         for at, watts in power_means.get(condition.power, []):
             finish = at + PERIOD
             if at < start or finish > end or type(watts) not in (float, int) or not isfinite(watts) or watts < 0:
@@ -158,9 +213,12 @@ def room_on_power(*, conditions, power_means, actuator_rows, start, end):
             if not all(covers(e, at, finish, False) for e in condition.off):
                 continue
             observed.append(watts)
+            observed_at.append(at)
         hours = len(observed) * PERIOD.total_seconds() / 3600
         result[key] = OnPowerEvidence(median(observed) if observed else None, hours, len(observed),
-                                     "recorded_on_intervals" if observed else "no_on_coverage", condition)
+            "recorded_on_intervals" if observed else "no_on_coverage", condition,
+            observed_from=min(observed_at).isoformat() if observed_at else None,
+            observed_to=(max(observed_at) + PERIOD).isoformat() if observed_at else None)
     return result
 
 
@@ -177,12 +235,14 @@ async def capture_room_on_power(history, devices, mappings, start, end, *,
         if type(power) in (int, float) and isfinite(power) and power > 0:
             captured[key] = OnPowerEvidence(float(power), 0, 0, "configured")
         elif draw := (learned_draws or {}).get(key):
+            quarters = sorted((draw.get("quarter_kwh") or {}).keys())
             captured[key] = OnPowerEvidence(draw["running_w"], draw["on_seconds"] / 3600,
-                                            0, "attributed_cycles", cycles=draw["cycles"])
+                0, "attributed_cycles", _on_condition(key, mappings), cycles=draw["cycles"],
+                observed_from=quarters[0] if quarters else None,
+                observed_to=(datetime.fromisoformat(quarters[-1]) + timedelta(minutes=15)).isoformat() if quarters else None)
         elif isinstance(power, str):
             other = [m for k, m in mappings.items() if k != key and m.get("power") == power]
-            conditions[key] = OnCondition(power, tuple(actuator_targets(mapping)),
-                tuple(sorted({entity for m in other for entity in actuator_targets(m)})))
+            conditions[key] = _on_condition(key, mappings)
             # A shared meter without another mapping's observable actuator is ambiguous.
             if any(not actuator_targets(m) for m in other):
                 captured[key] = OnPowerEvidence(None, 0, 0, "shared_meter_unknown", conditions.pop(key))

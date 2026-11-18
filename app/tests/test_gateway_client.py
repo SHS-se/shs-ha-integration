@@ -7,7 +7,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 import aiohttp
 
@@ -21,6 +21,13 @@ from shs_app.gateway_client import GatewayClient, GatewayDisconnected
 
 
 class ConfigurationBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_registry_port_preserves_shared_topology(self):
+        history = RemoteHistory.__new__(RemoteHistory)
+        topology = {'sensor.air':{'companions':['sensor.humidity'],'cohort_key':None}}
+        history.source = AsyncMock(return_value=topology)
+        self.assertEqual(await history.probe_sources({'sensor.air'}), topology)
+        history.source.assert_awaited_once_with('probe_sources', {'entities':['sensor.air']})
+
     async def test_verification_reaches_ha_while_an_admitted_command_is_pending(self):
         client = GatewayClient(None, 'fixture', 'fixture-token', IDENTITY, None)
         command_entered, configuration_entered = asyncio.Event(), asyncio.Event()

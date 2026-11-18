@@ -275,7 +275,7 @@ class HomeAssistantSource:
     async def request(self, operation, body):
         fields = {'credentials':set(),
             'admission':{'revision','bindings','pool_pause'}, 'live':{'after'},
-            'catalog':set(), 'device_room':{'device_key','meters','area_id'},
+            'catalog':set(), 'probe_sources':{'entities'}, 'device_room':{'device_key','meters','area_id'},
             'battery_capacity':set(), 'planning_power_bounds':{'mappings'},
             'planning_device_draws':{'mappings'},
             'configure':{'expected_revision','revision','options','digest'},
@@ -295,6 +295,10 @@ class HomeAssistantSource:
             self.charge_run = None
         if operation == 'credentials':
             return dict(self.entry.data)
+        if operation == 'probe_sources':
+            if not isinstance(body['entities'], list) or any(not isinstance(entity, str) for entity in body['entities']):
+                raise ValueError('Invalid probe source entities')
+            return await self.history.probe_sources(set(body['entities']))
         if operation in ('planning_power_bounds', 'planning_device_draws'):
             # Planning and final dispatch share the same retained electrical
             # evidence. A quiet/currently limited sensor is not an ON rating.

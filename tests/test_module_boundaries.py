@@ -59,7 +59,7 @@ PURE_MODULES = (
     "shs_core.readings", "shs_core.counter_changes",
     "shs_core.supplier",
     "shs_core.tariff",
-    "shs_core.thermal",
+    "shs_core.thermal", "shs_core.heating_history", "shs_core.heating_lineage", "shs_core.probe_evidence",
 )
 
 # Thin by design: they wire Home Assistant to the modules above.

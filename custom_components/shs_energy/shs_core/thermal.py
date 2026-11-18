@@ -304,31 +304,18 @@ def interpolate_hourly_forecast(
     return result
 
 
-def house_temperature_entities(
-    entity_areas: dict[str, str],
-    read_state: Callable[[str], Any],
-    excluded: Iterable[str | None] = (),
-) -> dict[str, str]:
-    """Every indoor temperature sensor with statistics, and its area.
+def configured_room_air_probes(rooms, excluded: Iterable[str | None] = ()) -> dict[str, str]:
+    """Explicit room-air assignments, shared by planning and native learning.
 
-    Only sensors in an area count: an area is how Home Assistant says a sensor
-    is in the house. The outdoor and pool water sensors are in areas too, so
-    the ones this home configured are left out by name.
+    Equipment temperatures and derived/unassigned sensors do not become room
+    air simply because Home Assistant gives them a temperature device class.
     """
     skip = {entity for entity in excluded if entity}
-    result: dict[str, str] = {}
-    for entity_id, area in entity_areas.items():
-        if not entity_id.startswith("sensor.") or entity_id in skip or not area:
-            continue
-        state = read_state(entity_id)
-        attributes = getattr(state, "attributes", None) or {}
-        if (
-            attributes.get("device_class") == "temperature"
-            and attributes.get("state_class") == "measurement"
-            and attributes.get("unit_of_measurement") == "°C"
-        ):
-            result[entity_id] = area
-    return result
+    return {room: configuration["temperature_entity_id"] for room, configuration in rooms.items()
+            if isinstance(configuration, dict)
+            and isinstance(configuration.get("temperature_entity_id"), str)
+            and configuration["temperature_entity_id"]
+            and configuration["temperature_entity_id"] not in skip}
 
 
 def house_temperature_quarters(

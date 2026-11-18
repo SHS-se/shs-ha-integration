@@ -143,6 +143,9 @@ class RemoteHistory:
         return await self.source('statistics', dict(start=start.isoformat(), end=end.isoformat(),
             entities=sorted(entities), period=period, units=units, kinds=sorted(kinds)))
 
+    async def probe_sources(self, entities):
+        return await self.source('probe_sources', {'entities':sorted(entities)})
+
     async def states(self, start, end, entities, *, with_attributes):
         rows = await self.source('states', dict(start=start.isoformat(), end=end.isoformat(),
             entities=entities, with_attributes=with_attributes))

@@ -7,6 +7,7 @@ from .planning_warnings import merge_warnings, planning_warning
 import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from dataclasses import replace
 from hashlib import sha256
 from datetime import date, datetime, time, timedelta, timezone
 import hashlib
@@ -157,8 +158,11 @@ from .planning import (
     pool_electrical_history,
     unplanned_services,
 )
-from .counter_changes import CounterRow, judge_counter_rows, retract_catch_ups, settled_energy
+from .counter_changes import CounterIntervals, CounterRow, judge_counter_rows, retract_catch_ups, settled_energy
 from .readings import daily_category_readings, usable_change
+from .heating_history import (capture_heating_history, HeatingRoomBinding, HeatingHistoryCapture,
+                              HeatingHistorySources, heating_history_sources, heating_history_window, heating_recent_window, accepted_heating_cursor, queue_probe_repair, next_probe_repair, probe_repair_windows)
+from .heating_lineage import validate_heating_lineage, heating_source_segments, heating_lineage_revision, matching_heating_assignments
 from .thermal import (
     HOUSE_HISTORY_KEY,
     ROOM_TEMPERATURE_FLATLINE_HOURS,
@@ -168,7 +172,7 @@ from .thermal import (
     build_thermal_slots,
     energy_duty,
     flat_room_temperature,
-    house_temperature_entities,
+    configured_room_air_probes,
     house_temperature_quarters,
     merge_thermal_slots,
     interpolate_hourly_forecast,
@@ -1300,6 +1304,11 @@ class Household:
         mappings: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Persist one authoritative website configuration response."""
+        if "heating_history_sources" in result:
+            try:
+                stored["heating_history_sources"] = validate_heating_lineage(result["heating_history_sources"])
+            except (ValueError, TypeError) as error:
+                _LOGGER.warning("Historical heating source configuration unavailable: %s", error)
         configurations = result.get("device_configuration")
         if not isinstance(configurations, list) or len(configurations) != len(devices):
             raise ShsApiError("website returned an incomplete device configuration")
@@ -1504,7 +1513,7 @@ class Household:
         start: datetime,
         end: datetime,
         period: str,
-    ) -> dict[str, list[tuple[datetime, float]]]:
+    ) -> CounterIntervals:
         """Read the energy each counter really recorded, with UTC-aware timestamps.
 
         A change Recorder synthesised from a counter that went backwards, or
@@ -1513,7 +1522,7 @@ class Household:
         sample left out is unknown, never zero. See ``counter_changes``.
         """
         if not entity_ids:
-            return {}
+            return CounterIntervals()
         start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
         # The period before the window says whether the window's first change
         # is its own. Calendar periods have no fixed length to step back by.
@@ -1530,9 +1539,10 @@ class Household:
                   for entity_id, rows in stats.items()}
         settled = await self._settled_counter_energy(judged, start_utc, end_utc)
 
-        result: dict[str, list[tuple[datetime, float]]] = {}
+        result = CounterIntervals()
         for entity_id, rows in judged.items():
             values: list[tuple[datetime, float]] = []
+            invalidated: set[datetime] = set()
             for row in rows:
                 # The recorder returns the bucket that starts exactly on end,
                 # so the still-running current day/hour would otherwise be
@@ -1540,10 +1550,14 @@ class Household:
                 if row.start >= end_utc or (lookback and row.start < start_utc):
                     continue
                 if row.verdict == "unknown":
+                    if row.invalidated:
+                        invalidated.add(row.start)
                     continue
                 energy = (settled.get((entity_id, row.start)) if row.verdict == "suspect"
                           else usable_change(row.change))
                 if energy is None:
+                    if row.invalidated or row.verdict == "trusted":
+                        invalidated.add(row.start)
                     continue
                 values.append((row.start, energy))
             bound_w = self._counter_bounds_w.get(entity_id)
@@ -1551,7 +1565,9 @@ class Household:
                 # A counter that stalled and caught up: more in one period than
                 # the equipment can draw. The total is real, its timing is not.
                 seconds = lookback.total_seconds()
+                before = {at for at, _ in values}
                 values, stalls, open_ended = retract_catch_ups(values, bound_w / 1000 * seconds / 3600, seconds)
+                invalidated.update(before - {at for at, _ in values})
                 for first, caught_up, energy in stalls:
                     _LOGGER.warning(
                         "Counter %s stalled from %s and caught up %.3f kWh at %s (most it can use in "
@@ -1560,6 +1576,8 @@ class Household:
                 if open_ended and (self._open_catch_up is None or open_ended > self._open_catch_up):
                     self._open_catch_up = open_ended
             result[entity_id] = values
+            if invalidated:
+                result.invalidated[entity_id] = invalidated
         return result
 
     async def _refresh_counter_bounds(self, entities_by_category, devices) -> None:
@@ -1772,6 +1790,105 @@ class Household:
         self._room_observation_basis = basis
         self._pipeline_error("room_observations", None)
 
+    async def capture_heating_history(
+        self, *, bindings: list[HeatingRoomBinding], device_statistics: dict[str, str],
+        room_air_probes: dict[str, str], outdoor_entity: str | None,
+        start: datetime, end: datetime,
+        probe_topology=None,
+    ) -> HeatingHistoryCapture:
+        """Native learning evidence, using the normal counter settlement owner."""
+        return await capture_heating_history(
+            history=self.ports.history, read_energy=self._statistics_changes,
+            bindings=bindings, device_statistics=device_statistics,
+            room_air_probes=room_air_probes, outdoor_entity=outdoor_entity,
+            start=start, end=end, probe_topology=probe_topology,
+        )
+
+    async def _heating_history_upload(self, options, devices, end, cursor, *, include_history=True, lineage=None):
+        """Capture native heating evidence without modifying legacy actuals."""
+        from .configuration_schema import shared_devices
+        sources = heating_history_sources(
+            shared_devices(devices, options), options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}),
+            options.get("rooms", {}), self.ports.read_state,
+            outdoor_entity=options.get(OPT_OUTDOOR_TEMPERATURE_ENTITY),
+            pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY))
+        if not sources.bindings:
+            return None, None, None
+        lineage = validate_heating_lineage(lineage) if lineage is not None else None
+        sources = replace(sources, lineage_revision=heating_lineage_revision(sources, lineage))
+        previous = cursor.get("rooms", {}) if isinstance(cursor, dict) else {}
+        pending = {"rooms": {}}
+        windows = {}
+        for binding in sources.bindings:
+            room_sources = sources.for_room(binding)
+            room_cursor = previous.get(binding.room_key)
+            recent_start, recent_end = heating_recent_window(
+                room_sources, room_cursor, end, room_count=len(sources.bindings))
+            windows.setdefault((recent_start, recent_end), []).append(binding)
+            next_cursor = {"source_key": binding.source_key, "signature": room_sources.signature,
+                           "accepted_until": recent_end.isoformat(),
+                           "before": room_cursor["before"] if isinstance(room_cursor, dict)
+                           and room_cursor.get("signature") == room_sources.signature
+                           and isinstance(room_cursor.get("before"), str) else recent_start.isoformat()}
+            window = heating_history_window(room_sources, room_cursor, end,
+                room_count=len(sources.bindings)) if include_history and lineage is not None else None
+            if window:
+                windows.setdefault(window, []).append(binding)
+                next_cursor["before"] = window[0].isoformat()
+            pending["rooms"][binding.room_key] = next_cursor
+        rows, probe_rows = {}, {}
+        old_evidence = cursor.get("probe_evidence", {}) if isinstance(cursor, dict) else {}
+        evidence = dict(old_evidence)
+        probe_repair_windows(evidence)
+        topology = {}
+        topology_available = False
+        try:
+            # Resolve the complete configured source roster, not just this
+            # chunk's epochs, so the fingerprint stays stable while paging.
+            topology = await self.ports.history.probe_sources(set(sources.room_air_probes.values()) |
+                {row["observed_temperature_entity_id"] for row in matching_heating_assignments(sources, lineage)})
+            signature = sha256(json.dumps(topology, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            topology_available = True
+            if previous and signature != evidence.get("topology_signature"):
+                queue_probe_repair(evidence, (end.replace(minute=0, second=0, microsecond=0)-timedelta(days=400)).isoformat(),
+                    end.replace(minute=0, second=0, microsecond=0).isoformat())
+            evidence["topology_signature"] = signature
+        except HouseholdReadError as error:
+            _LOGGER.warning("Heating probe topology unavailable: %s", error)
+        repair_window = None
+        if include_history and topology_available:
+            hours = max(1, min(24, 256 // (4 * len(sources.bindings))))
+            repair = next_probe_repair(evidence, end, hours)
+            if repair:
+                repair_start, repair_end = repair
+                repair_window = [repair_start.isoformat(), repair_end.isoformat()]
+                windows.setdefault((repair_start, repair_end), []).extend(sources.bindings)
+        pending["probe_evidence"] = evidence
+        failed_windows = []
+        pending["probe_capture"] = {"windows":[[start.isoformat(),finish.isoformat()] for start,finish in windows],
+            "read_failed_windows":failed_windows, "repair_window":repair_window}
+        segments = [(segment, {binding.room_key for binding in bindings}, [start.isoformat(),finish.isoformat()])
+            for (start, finish), bindings in windows.items()
+            for segment in heating_source_segments(sources, lineage, start, finish)]
+        # Rooms sharing a cursor share Recorder reads. A rejected source can
+        # retry its own range while accepted rooms continue the backfill.
+        for segment, selected_rooms, window in segments:
+            resolved = segment.sources
+            bindings = [binding for binding in resolved.bindings if binding.room_key in selected_rooms]
+            captured = await self.capture_heating_history(
+                bindings=bindings, device_statistics={key: resolved.device_statistics[key]
+                    for binding in bindings for key in binding.device_keys if key in resolved.device_statistics},
+                room_air_probes=resolved.room_air_probes, outdoor_entity=resolved.outdoor_entity,
+                start=segment.start, end=segment.end, probe_topology=topology)
+            for row in captured.observations:
+                rows[(row["room_key"],row["source_key"],row["start"],row["duration_s"])] = row
+            if not topology_available or captured.diagnostics.get("probe_evidence_read_failures"):
+                if window not in failed_windows:
+                    failed_windows.append(window)
+            for row in captured.probe_observations:
+                probe_rows[(row["start"], row["duration_s"])] = row
+        return list(rows.values()), list(probe_rows.values()), pending
+
     async def _outdoor_temperature_quarters(
         self, options: dict[str, Any], start: datetime, end: datetime
     ) -> dict[datetime, float]:
@@ -1783,19 +1900,28 @@ class Household:
         return quarter_means(statistics.get(entity_id, []))
 
     async def _house_temperature_quarters(
-        self, options: dict[str, Any], start: datetime, end: datetime
+        self, options: dict[str, Any], start: datetime, end: datetime, *, devices=()
     ) -> dict[datetime, float]:
-        """The house every room sits in, from the indoor sensors in its areas."""
-        sources = house_temperature_entities(
-            self.ports.entity_areas(), self.ports.read_state,
-            (options.get(OPT_OUTDOOR_TEMPERATURE_ENTITY), options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY)),
-        )
-        if not sources:
+        """The same configured room-air boundary used by native learning."""
+        probes = configured_room_air_probes(options.get("rooms", {}),
+            (options.get(OPT_OUTDOOR_TEMPERATURE_ENTITY), options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY)))
+        if not probes:
             return {}
-        statistics = await self._statistics_means(sorted(sources), start, end)
-        return house_temperature_quarters(
-            {entity_id: quarter_means(rows) for entity_id, rows in statistics.items()}, sources,
-        )
+        stored = await self._store.async_read() or {}
+        lineage = stored.get("heating_history_sources")
+        from .configuration_schema import shared_devices
+        sources = (heating_history_sources(shared_devices(devices, options),
+            options.get(OPT_DEVICE_CONTROL_MAPPINGS, {}), options.get("rooms", {}), self.ports.read_state,
+            outdoor_entity=options.get(OPT_OUTDOOR_TEMPERATURE_ENTITY),
+            pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY)) if devices else
+            HeatingHistorySources([], {}, probes, options.get(OPT_OUTDOOR_TEMPERATURE_ENTITY)))
+        result = {}
+        for segment in heating_source_segments(sources, lineage, start, end):
+            areas = {entity: room for room, entity in sorted(segment.sources.room_air_probes.items())}
+            statistics = await self._statistics_means(sorted(areas), segment.start, segment.end)
+            result.update(house_temperature_quarters(
+                {entity: quarter_means(rows) for entity, rows in statistics.items()}, areas))
+        return result
 
     async def _outdoor_forecast(
         self, options: dict[str, Any], horizon: list[datetime]
@@ -2047,7 +2173,7 @@ class Household:
             series[key] = zone_series
 
         temperatures_outdoor = await self._outdoor_temperature_quarters(options, start, end) if outdoor else {}
-        temperatures_house = (await self._house_temperature_quarters(options, start, end)
+        temperatures_house = (await self._house_temperature_quarters(options, start, end, devices=devices)
                               if (outdoor if house is None else house) else {})
         return build_thermal_slots(series, temperatures_outdoor, temperatures_house)
 
@@ -3180,6 +3306,15 @@ class Household:
                 devices, control_mappings, profile_start, captured,
             ),
         )
+        # planning_devices isolates hypothetical planning changes. The three
+        # learned metadata fields still belong to the original inventory that
+        # this exchange uploads and persists; otherwise every upload repeats
+        # discovery-time watts while the snapshot alone has the fitted draw.
+        learned = {device["key"]: device for device in devices}
+        for device in scope_devices:
+            for field in ("active_power_w", "profile_sample_count", "inference"):
+                if field in learned.get(device["key"], {}):
+                    device[field] = deepcopy(learned[device["key"]][field])
         # Native state is read at capture, independently of historical models.
         from .heating_overrides import heating_binding
         from .planning import thermostat_facts
@@ -4232,6 +4367,19 @@ class Household:
                 else:
                     if replan_request_id is None:
                         self._pipeline_error('thermal_inputs', None)
+                heating_observations, heating_probe_observations, pending_heating_history = None, None, None
+                try:
+                    # Optional learning capture cannot stall planning while a
+                    # Recorder query is unavailable. The cursor remains put.
+                    async with asyncio.timeout(8):
+                        heating_observations, heating_probe_observations, pending_heating_history = await self._heating_history_upload(
+                            thermal_options, devices, complete_end, stored.get("heating_history_cursor"),
+                            include_history=replan_request_id is None, lineage=stored.get("heating_history_sources"))
+                except (HouseholdReadError, OptimisationInputError, ValueError, KeyError, TypeError, TimeoutError) as err:
+                    _LOGGER.warning("Native heating observations unavailable: %s", err)
+                    self._pipeline_error('heating_inputs', err, fix=getattr(err, 'fix', None))
+                else:
+                    self._pipeline_error('heating_inputs', None)
                 try:
                     pool_slots = (await self._pool_quarters(
                         thermal_options, thermal_start, complete_end
@@ -4345,6 +4493,7 @@ class Household:
                     and not thermal_slots
                     and not price_slots
                     and not pool_slots
+                    and heating_observations is None
                 ):
                     self.last_optimisation_error = snapshot_error
                     if snapshot_error and stored.get("optimisation_requested_replan"):
@@ -4363,6 +4512,8 @@ class Household:
                     price_slots,
                     pool_slots,
                     device_inventory_complete=True,
+                    heating_observations=heating_observations,
+                    heating_probe_observations=heating_probe_observations,
                     replan_request_id=replan_request_id,
                     replan_recommendation=(replan_reason or "Integration configuration or controller conditions changed. Review the retained schedule and consider a manual replan.")
                         if force_plan and replan_request_id is None and execution_request is None else None,
@@ -4469,6 +4620,19 @@ class Household:
                 if stalled_before:
                     stored["optimisation_catch_up_resent"] = stalled_before.isoformat()
                     stored["optimisation_catch_up_pending"] = True
+            accepted_cursor = accepted_heating_cursor(result, heating_observations, pending_heating_history,
+                stored.get("heating_history_cursor"), probe_observations=heating_probe_observations)
+            if accepted_cursor is not None:
+                stored["heating_history_cursor"] = accepted_cursor
+            if pending_heating_history is not None and heating_observations is not None:
+                complete = (accepted_cursor is not None and accepted_cursor.get("rooms") == pending_heating_history.get("rooms")
+                            and type(result.get("heating_observations_accepted")) is int
+                            and result["heating_observations_accepted"] == len(heating_observations)
+                            and type(result.get("heating_probe_observations_accepted")) is int
+                            and result["heating_probe_observations_accepted"] == len(heating_probe_observations or [])
+                            and not pending_heating_history.get("probe_capture", {}).get("read_failed_windows"))
+                self._pipeline_error("heating_inputs", None if complete else ValueError(
+                    "Some heating history sources were not accepted; those rooms will be retried."))
             if result.get("thermal_slots_accepted_until"):
                 stored["thermal_slots_accepted_until"] = result[
                     "thermal_slots_accepted_until"
