@@ -21,6 +21,7 @@ sys.path.append(str(PACKAGE))
 
 # Every module holding decisions rather than plumbing.
 PURE_MODULES = (
+    "shs_core.accuracy_report_cache",
     "shs_core.operational_attention", "shs_core.planning_warnings", "shs_core.input_accuracy",
     "shs_core.source_admission", "shs_core.grid_capacity", "shs_core.run_priority", "shs_core.native_numbers",
     "gateway_wire", "shs_core.entity_views", "shs_core.native_configuration", "shs_wire.entity_modes",

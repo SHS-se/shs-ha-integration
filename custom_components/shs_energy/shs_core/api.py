@@ -15,6 +15,7 @@ from uuid import uuid4
 import aiohttp
 import certifi
 
+from .accuracy_report_cache import AccuracyReportCache
 from .network_traffic import NetworkTraffic
 from .command_journal import encoded
 
@@ -97,6 +98,7 @@ class ShsApiClient:
         # it beside the plan HA reports, next to the core's own version.
         self._app_version = app_version
         self.traffic = NetworkTraffic()
+        self._accuracy_reports = AccuracyReportCache()
         self.connection_progress = lambda state: None
 
     async def _request(
@@ -259,9 +261,18 @@ class ShsApiClient:
         validate_server_contract(status)
         return status.get("pending_replan_request_id")
 
+    async def _status_request(self, method: str, json_body: dict[str, Any] | None = None) -> dict[str, Any]:
+        request, revision = self._accuracy_reports.begin()
+        path = 'integration-status'
+        if revision is not None:
+            path += '?' + urlencode({'known_forecast_accuracy_revision': revision})
+        options = {'json_body': json_body} if json_body is not None else {}
+        status = await self._request(method, path, **options)
+        return self._accuracy_reports.apply(status, request)
+
     async def status(self) -> dict[str, Any]:
         """Fetch subscription status for the paired customer."""
-        return await self._request("GET", "integration-status")
+        return await self._status_request("GET")
 
     async def upload_room_observations(self, rooms: dict, slots: list) -> dict[str, Any]:
         return await self._request("POST", "energy-room-observations", {"rooms": rooms, "slots": slots})
@@ -280,7 +291,7 @@ class ShsApiClient:
         body = {"api_version": API_VERSION, "runtime": runtime}
         if input_accuracy is not None:
             body["input_accuracy"] = input_accuracy
-        result = await self._request("POST", "integration-status", json_body=body)
+        result = await self._status_request("POST", json_body=body)
         if result.get("runtime_received") is not True:
             raise ShsApiError("Website did not confirm storing the current HA status")
         return result
@@ -307,9 +318,8 @@ class ShsApiClient:
         it the website has nothing to show but a spinner, because a snapshot
         this house cannot build is not something the server can discover.
         """
-        return await self._request(
+        return await self._status_request(
             "POST",
-            "integration-status",
             json_body={
                 "replan_request_id": replan_request_id,
                 # The server caps this; sending more would be refused outright
